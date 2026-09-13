@@ -77,8 +77,7 @@ export function capabilitiesFor(agent: CapabilityRow): AgentCapabilities {
  *   desktop holds no credential for it; OpenCode's is paid for by a credential
  *   in Settings, which is not an auth state a user is ever asked about here.
  *
- * A launcher this build has no implementation for (`gemini`, `codex` before
- * their step) is described as a CLI-authenticated agent with no question path.
+ * A launcher this build has no implementation for (`gemini`) is described as a CLI-authenticated agent with no question path.
  * Both of those are true of them as far as anything here has measured, and the
  * driver refuses such a turn in words either way — a capability answer that
  * pretended otherwise would put the composer and the turn into disagreement.
@@ -92,13 +91,8 @@ function acpCapabilities(launcher: string): AgentCapabilities {
     ...folderCapabilities(),
     input: {
       permission: true,
-      // **Claude alone**, because Claude alone is measured: its adapter enables
-      // `AskUserQuestion` when the client declares `elicitation.form`. OpenCode
-      // registers no question tool under ACP at all, and whether Gemini CLI or
-      // Codex bridge one is not something this build has run — claiming a path
-      // that turns out not to exist would have the composer offer an answer
-      // widget for an ask that never arrives.
-      question: launcher === 'claude',
+      // Both adapters bridge user questions over ACP form elicitation.
+      question: launcher === 'claude' || launcher === 'codex',
       auth: false,
       // The desktop renders an elicitation *as* a question — one widget, one
       // answer path — so nothing downstream needs a fourth ask kind to

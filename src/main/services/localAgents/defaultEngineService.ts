@@ -89,8 +89,8 @@ function setting(): string {
 }
 
 /** Whether the detection pass that has finished found a usable `claude`. */
-function claudeIn(tools: { id: string; available: boolean }[] | null): boolean {
-  return (tools ?? []).some((tool) => tool.id === 'claude' && tool.available)
+function installed(tools: { id: string; available: boolean }[] | null, id: string): boolean {
+  return (tools ?? []).some((tool) => tool.id === id && tool.available)
 }
 
 export const defaultEngineService = {
@@ -107,7 +107,8 @@ export const defaultEngineService = {
    * choose here.
    */
   current(): AgentEngine {
-    return resolveDefaultEngine(setting(), claudeIn(toolDetectionService.snapshot()))
+    const tools = toolDetectionService.snapshot()
+    return resolveDefaultEngine(setting(), installed(tools, 'claude'), installed(tools, 'codex'))
   },
 
   /**
@@ -121,7 +122,8 @@ export const defaultEngineService = {
   async resolved(): Promise<DefaultEngineDto> {
     const pinned = setting()
     if (isAgentEngine(pinned)) return { engine: pinned }
-    return { engine: resolveDefaultEngine(pinned, claudeIn(await toolDetectionService.list())) }
+    const tools = await toolDetectionService.list()
+    return { engine: resolveDefaultEngine(pinned, installed(tools, 'claude'), installed(tools, 'codex')) }
   },
 
   /**
@@ -154,7 +156,9 @@ export const defaultEngineService = {
 async function settle(): Promise<AgentEngine | null> {
   try {
     if (setting() !== '') return null
-    const claudeAvailable = claudeIn(await toolDetectionService.list())
+    const tools = await toolDetectionService.list()
+    const claudeAvailable = installed(tools, 'claude')
+    const codexAvailable = installed(tools, 'codex')
     /**
      * Detection is a login-shell probe and the picker is live while it runs.
      * A runtime the user chose in that window is a decision already made, and
@@ -170,13 +174,14 @@ async function settle(): Promise<AgentEngine | null> {
      * line that stops an upgrade from re-homing them.
      */
     const established = agentRepo.countFolderAgents() > 0
-    const engine = established ? DEFAULT_AGENT_ENGINE : resolveDefaultEngine('', claudeAvailable)
+    const engine = established ? DEFAULT_AGENT_ENGINE : resolveDefaultEngine('', claudeAvailable, codexAvailable)
     // Through the service, so the value is validated exactly as the picker's
     // own write is — one gate, not two.
     appSettingsService.set('localAgentsDefaultEngine', engine)
     logger.info('locked the default runtime for this machine', {
       engine,
       claudeAvailable,
+      codexAvailable,
       established
     })
     return engine

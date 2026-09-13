@@ -225,3 +225,22 @@ describe('who answers a Claude agent’s permission asks', () => {
   })
 })
 
+
+describe('Codex approval state', () => {
+  it('keeps Codex and Claude decisions independent in both storage locations', () => {
+    for (const kind of ['kit', 'bare'] as const) {
+      desktopStateService.patch(dir, kind, { codexApproval: 'auto', claudeApproval: 'ask' })
+      const state = desktopStateService.read(dir, kind)
+      expect(state.codexApproval).toBe('auto')
+      expect(state.claudeApproval).toBe('ask')
+      expect(desktopStateService.summarize(state).codexApproval).toBe('auto')
+      desktopStateService.patch(dir, kind, { codexApproval: null })
+      expect(desktopStateService.read(dir, kind).claudeApproval).toBe('ask')
+    }
+  })
+  it('does not interpret an unknown Codex mode as automatic approval', () => {
+    mkdirSync(join(dir, 'app-data'), { recursive: true })
+    writeFileSync(join(dir, 'app-data', 'desktop.json'), JSON.stringify({ codexApproval: 'agent-full-access' }))
+    expect(desktopStateService.read(dir, 'kit').codexApproval).toBeNull()
+  })
+})

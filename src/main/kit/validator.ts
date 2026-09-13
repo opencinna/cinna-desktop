@@ -335,13 +335,13 @@ function checkRuntime(report: Report, manifest: CinnaAgentManifest): void {
         MANIFEST_FILE
       )
     } else if (
-      engine.trim() === 'claude' &&
+      ['claude', 'codex'].includes(engine.trim()) &&
       typeof runtime.credential === 'string' &&
       runtime.credential.trim() !== ''
     ) {
       report.warn(
         'manifest.runtime.engine',
-        '`runtime.engine` is `claude` and `runtime.credential` is set. That engine runs on the login of the `claude` install itself and spends no credential configured here, so the credential is ignored. Remove it.',
+        `Runtime engine ${engine.trim()} uses its own CLI login, so runtime.credential is ignored. Remove it.`,
         MANIFEST_FILE
       )
     }

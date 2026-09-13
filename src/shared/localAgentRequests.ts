@@ -297,16 +297,21 @@ export function isPermissionGranted(
 export function describePermissionAction(action: string): string {
   switch (action) {
     // OpenCode's coarse operations.
+    case 'codex:execute':
     case 'bash':
       return 'run a command'
+    case 'codex:edit':
     case 'edit':
       return 'edit a file'
     case 'write':
       return 'write a file'
     case 'read':
       return 'read a file'
+    case 'codex:fetch':
     case 'webfetch':
       return 'fetch from the web'
+    case 'codex:other':
+      return 'grant additional Codex permissions'
     case 'external_directory':
       return 'use a folder outside its own'
     // **Claude's tool names, which are a different vocabulary and stay one.**

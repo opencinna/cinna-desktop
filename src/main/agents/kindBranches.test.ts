@@ -269,8 +269,8 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   {
     file: 'src/main/services/localAgents/runtimeService.ts',
     category: 'engine',
-    count: 2,
-    why: "the manifest's own `runtime.engine`, read by the service that resolves it (a Claude runtime has no credential ladder) and refused by the one that validates it (an engine and a credential together)"
+    count: 4,
+    why: "Codex support: this service owns CLI credential validation plus engine-specific model defaults and validation labels; execution stays in the ACP launcher. The manifest's own `runtime.engine`, read by the service that resolves it (a Claude runtime has no credential ladder) and refused by the one that validates it (an engine and a credential together)"
   },
   {
     file: 'src/renderer/src/components/agents/local/RuntimePanel.tsx',

@@ -9,7 +9,7 @@ import { unwrapIpcError } from '../../../utils/ipcError'
 import { useDefaultChatMode } from '../../../hooks/useChatModes'
 import { useModels } from '../../../hooks/useModels'
 import { useProviders } from '../../../hooks/useProviders'
-import { useClaudeAuth, useLocalTools } from '../../../hooks/useLocalTools'
+import { useClaudeAuth, useCodexAuth, useLocalTools } from '../../../hooks/useLocalTools'
 import { useDefaultRuntime, useEngineBinary } from '../../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
 import { credentialOptionLabel } from '../../../utils/credentialLabel'
@@ -17,6 +17,7 @@ import { findCredentialByReference, isCredentialUsable } from '../../../../../sh
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import {
   claudeModelForComplexity,
+  codexEffortForComplexity,
   DEFAULT_AGENT_ENGINE,
   effectiveEngine,
   isAgentEngine,
@@ -122,6 +123,7 @@ import {
  * a user to name a credential after an implementation detail of this select.
  */
 const CLAUDE_OPTION = 'engine:claude'
+const CODEX_OPTION = 'engine:codex'
 
 const NOTE = 'text-[10px] text-[var(--color-text-muted)]'
 const WARN = 'text-[10px] text-[var(--color-warning)]'
@@ -294,10 +296,12 @@ function accountSuffix(email: string | null, subscriptionType: string | null): s
  * meaning. The dot is the exception, and `const dot` below says why.
  */
 function ClaudeStatus({
+  label = 'Claude Code',
   tool,
   unknown,
   auth
 }: {
+  label?: string
   tool?: { path: string | null; version: string | null }
   /** Detection is still in flight — say so rather than denying an install. */
   unknown?: boolean
@@ -311,7 +315,7 @@ function ClaudeStatus({
         dot="text-[var(--color-text-muted)]"
         tone="text-[var(--color-text-muted)]"
         text="Checking…"
-        title="Looking for Claude Code on this machine"
+        title={`Looking for ${label} on this machine`}
       />
     )
   }
@@ -322,7 +326,7 @@ function ClaudeStatus({
   // needs 232px and was therefore permanently truncated at every width from
   // 1200px up, which is where a default-sized window sits (ux_rules rule 7).
   // The reserved line below carries the explanation; this cell names the state.
-  const text = tool ? `Claude Code${tool.version ? ` ${tool.version}` : ''}` : 'Not installed'
+  const text = tool ? `${label}${tool.version ? ` ${tool.version}` : ''}` : 'Not installed'
   /**
    * **Warning for a login this app knows is missing, and only for that.**
    *
@@ -356,7 +360,7 @@ function ClaudeStatus({
       dot={dot}
       tone={tool ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-danger)]'}
       text={text}
-      title={tool?.path ?? 'No Claude Code was found on this machine.'}
+      title={tool?.path ?? `No ${label} was found on this machine.`}
     />
   )
 }
@@ -518,6 +522,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
 
   const { data: tools } = useLocalTools()
   const { data: claudeAuth } = useClaudeAuth()
+  const { data: codexAuth } = useCodexAuth()
   const { data: binary } = useEngineBinary()
   const declaredCredential = agent.runtime?.credential ?? null
   const declaredModel = agent.runtime?.model ?? null
@@ -604,6 +609,9 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
    * follows for a keyless credential.
    */
   const claudeTool = (tools ?? []).find((tool) => tool.id === 'claude' && tool.available)
+  const onCodex = effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'codex'
+  const onCli = onClaude || onCodex
+  const codexTool = (tools ?? []).find((tool) => tool.id === 'codex' && tool.available)
   /**
    * Detection has not answered yet.
    *
@@ -763,7 +771,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
    * would quietly trade a deliberately pinned dated snapshot for a floating one.
    */
   const [pinned, setPinned] = useState<{ agentId: string; modelId: string } | null>(null)
-  const advanced = onClaude
+  const advanced = onCli
     ? // **There is no raw model list on the Claude path**, so the view cannot be
       // Advanced whatever the remembered preference says. Forcing it here rather
       // than at the render keeps one answer to "which picker is showing".
@@ -785,7 +793,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
    */
   const pickerUnknown =
     engineUnknown ||
-    (!onClaude && declaredView === null && view?.agentId !== agent.id && !settingsLoaded)
+    (!onCli && declaredView === null && view?.agentId !== agent.id && !settingsLoaded)
 
   /**
    * The Default runtime, flattened the way `runtimeService.resolveDefault`
@@ -911,7 +919,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
     // addressed by alias — so gating on it would leave both pickers disabled
     // for ever on a machine with no AI credential configured at all, which is
     // exactly the machine most likely to be using this engine.
-    (!onClaude && !modelsLoaded && !modelsFailed) ||
+    (!onCli && !modelsLoaded && !modelsFailed) ||
     !settingsLoaded ||
     saving
 
@@ -977,7 +985,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
      * resolved runtime, rather than echoing what one global config generation
      * happened to leave out.
      */
-    if (!onClaude && binary?.state === 'failed') return { text: binary.error, tone: DANGER }
+    if (!onCli && binary?.state === 'failed') return { text: binary.error, tone: DANGER }
     /**
      * **The Claude engine leaves the credential ladder entirely**, above every
      * loading state below it.
@@ -997,6 +1005,12 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
      * stripped an environment variable would be a claim about an environment it
      * does not fully control.
      */
+    if (onCodex) {
+      if (toolsUnknown) return null
+      if (!codexTool) return { text: 'Codex CLI is needed. Install it in Settings → Agents → Runtime.', tone: DANGER }
+      if (codexAuth?.state === 'logged_out') return { text: 'Run `codex login` in a terminal, then check again.', tone: DANGER }
+      return { text: `Codex uses your CLI login and configuration, on ${declaredModel ?? 'its configured default model'}, with ${codexEffortForComplexity(declaredComplexity)} reasoning effort.`, tone: NOTE }
+    }
     if (onClaude) {
       // Silent until detection answers. The healthy sentence would assert an
       // install just as wrongly as the alarm denies one, and this slot is
@@ -1187,7 +1201,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
    * could not see (ux_rules rule 6). Dropping it is what switching *to* this
    * engine already does.
    */
-  const commitCredential = (value: string | null): string | null => (onClaude ? null : value)
+  const commitCredential = (value: string | null): string | null => (onCli ? null : value)
 
   const commit = (
     credential: string | null,
@@ -1298,6 +1312,10 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
    * never serve. The status line says so rather than letting it vanish quietly.
    */
   const changeRuntimeTarget = (value: string): void => {
+    if (value === CODEX_OPTION) {
+      commit(null, null, declaredComplexity, { engine: 'codex', note: declaredModel ? 'Codex will use its configured default model.' : undefined })
+      return
+    }
     if (value === CLAUDE_OPTION) {
       commit(null, null, declaredComplexity, {
         engine: 'claude',
@@ -1307,7 +1325,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
       })
       return
     }
-    if (onClaude) {
+    if (onCli) {
       // Leaving the Claude engine for a credential. The model is already null
       // on that path, so there is nothing to drop.
       commit(value || null, null, declaredComplexity, { engine: null })
@@ -1479,13 +1497,16 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
     const credentialMissing = !!declaredCredential && !selected
     const label = unsupportedEngine ? `Unsupported runtime: ${unsupportedEngine}`
       : engineUnknown ? 'Loading runtime…'
+      : onCodex ? 'Codex'
       : onClaude ? `Claude Agent${subscription ? ' with subscription' : ''}`
       : effectiveProvider && !credentialMissing ? `OpenCode with ${effectiveProvider.name}` : 'OpenCode'
     const model = engineUnknown || unsupportedEngine ? null
+      : onCodex ? `${declaredModel ?? 'CLI default'} · ${codexEffortForComplexity(declaredComplexity)} effort`
       : onClaude ? claudeModelForComplexity(declaredComplexity)
       : !credentialMissing && modelsLoaded ? nameOf(choice.modelId) : null
     const issue = unsupportedEngine ? 'Update required'
       : engineUnknown ? null
+      : onCodex ? (!codexTool && !toolsUnknown ? 'Install required' : codexAuth?.state === 'logged_out' ? 'Sign-in required' : null)
       : onClaude ? (claudeAuth?.state === 'logged_out' ? 'Sign-in required' : null)
       : credentialMissing || (providers !== undefined && !effectiveProvider) ? 'AI credential needed'
       : status?.tone === DANGER || status?.tone === WARN ? 'Setup needed' : null
@@ -1528,7 +1549,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
             id="runtime-credential"
             className={FIELD}
             title={
-              onClaude
+              onCodex ? 'Your Codex CLI login and configuration' : onClaude
                 ? 'Your own Claude Code login — this app holds no credential for it'
                 : selected
                   ? selected.name
@@ -1549,7 +1570,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
             value={
               unsupportedEngine
                 ? 'unsupported-engine'
-                : declaredEngine === 'claude'
+                : declaredEngine === 'codex' ? CODEX_OPTION : declaredEngine === 'claude'
                   ? CLAUDE_OPTION
                   : (selected?.name ?? '')
             }
@@ -1569,13 +1590,11 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
               moment later, on the panel's permanent visible state.
             */}
             <option value="">
-              {engineUnknown
-                ? 'Default runtime'
-                : onClaude
-                  ? 'Default runtime (Claude Agent)'
-                  : fallbackProvider
-                    ? `Default runtime (${fallbackProvider.name})`
-                    : 'Default runtime (none set)'}
+              {defaultRuntime ? {
+                codex: 'Default runtime (Codex)',
+                claude: 'Default runtime (Claude Agent)',
+                opencode: fallbackProvider ? `Default runtime (${fallbackProvider.name})` : 'Default runtime (none set)'
+              }[defaultRuntime.engine] : 'Default runtime'}
             </option>
             {/*
               **Two honest lists behind one separator, not one list pretending.**
@@ -1596,6 +1615,9 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
               a second entry for it on a machine with no `claude` would be an
               option that fails after the click (ux_rules rule 4).
             */}
+            {(codexTool || declaredEngine === 'codex') && (
+              <optgroup label="Codex CLI"><option value={CODEX_OPTION}>Codex</option></optgroup>
+            )}
             {(claudeTool || declaredEngine === 'claude') && (
               <optgroup label="On this machine">
                 <option value={CLAUDE_OPTION}>Claude Agent</option>
@@ -1660,7 +1682,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
               out from under the pointer that just used the select (rule 1). The
               reserved line below says what this agent runs on instead.
             */}
-            {!onClaude && (
+            {!onCli && (
             <label
               className="flex shrink-0 cursor-pointer items-center gap-1 text-[10px] text-[var(--color-text-muted)]
                 transition-colors hover:text-[var(--color-text)]"
@@ -1744,7 +1766,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
               }
             >
               <option value="">
-                {onClaude
+                {onCodex ? 'Default (medium effort)' : onClaude
                   ? // The Medium floor, named: an agent that picks no tier on
                     // this engine runs on `sonnet`, and there is no catalogue
                     // that could make that "none set".
@@ -1770,7 +1792,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
                     catalogue. There is none here, and every tier resolves — so
                     the suffix would be both false and alarming.
                   */}
-                  {!onClaude && modelsLoaded && !tierModels[tier] ? ' (none listed)' : ''}
+                  {!onCli && modelsLoaded && !tierModels[tier] ? ' (none listed)' : ''}
                 </option>
               ))}
             </select>
@@ -1787,7 +1809,9 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
             this agent. The column keeps its place and its label so the grid
             does not reflow; only what it reports changes.
           */}
-          {onClaude ? (
+          {onCodex ? (
+            <ClaudeStatus label="Codex" tool={codexTool} unknown={toolsUnknown} auth={codexAuth?.state} />
+          ) : onClaude ? (
             <ClaudeStatus tool={claudeTool} unknown={toolsUnknown} auth={claudeAuth?.state} />
           ) : (
             <EngineStatus />

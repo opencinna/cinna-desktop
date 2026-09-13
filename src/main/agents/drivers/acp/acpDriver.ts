@@ -1191,7 +1191,7 @@ function stopReasonError(stopReason: string): string | undefined {
  * which is the part a user can act on.
  */
 function startFailureMessage(launcher: AcpLauncherId, detail: string): string {
-  const engine = launcher === 'claude' ? 'Claude Code' : 'the local engine'
+  const engine = launcher === 'claude' ? 'Claude Code' : launcher === 'codex' ? 'Codex' : 'the local engine'
   return `${engine} could not be started for this agent: ${detail}`
 }
 

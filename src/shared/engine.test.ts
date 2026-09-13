@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { effectiveEngine, resolveDefaultEngine } from './engine'
+import { effectiveEngine, resolveDefaultEngine, isAgentEngine } from './engine'
 
 /**
  * The two rules that decide **which engine an agent runs on** when its folder
@@ -80,5 +80,19 @@ describe('effectiveEngine', () => {
     // which of the *two* engines applies — an unrecognised value must not pin
     // anything, or a folder written by a newer tool would be stuck.
     expect(effectiveEngine({ engine: 'gemini' }, 'claude')).toBe('claude')
+  })
+})
+
+describe('Codex engine selection', () => {
+  it('honors explicit and default Codex selections', () => {
+    expect(isAgentEngine('codex')).toBe(true)
+    expect(effectiveEngine({ engine: 'codex' }, 'claude')).toBe('codex')
+    expect(effectiveEngine(null, 'codex')).toBe('codex')
+    expect(resolveDefaultEngine('codex', true, false)).toBe('codex')
+  })
+  it('selects an installed Codex on a fresh machine without Claude, preserving pins', () => {
+    expect(resolveDefaultEngine('', false, true)).toBe('codex')
+    expect(resolveDefaultEngine('', true, true)).toBe('claude')
+    expect(resolveDefaultEngine('opencode', false, true)).toBe('opencode')
   })
 })

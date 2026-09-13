@@ -42,8 +42,8 @@ export const FOLDER_AGENT_DRIVER: AgentDriverId = 'acp'
  *
  * **The launcher id is the engine name**, deliberately: it is what the folder's
  * own `runtime.engine` says, and inventing a second vocabulary for it would put
- * the manifest and the row one translation table apart. `gemini` and `codex`
- * are here because a row and a manifest can name them before this build can
+ * the manifest and the row one translation table apart. `gemini`
+ * is here because a row and a manifest can name them before this build can
  * run them — the driver refuses such an agent in words, which is a far better
  * failure than a value that reads as the default engine.
  */

@@ -3,7 +3,8 @@ import { Loader2, ShieldCheck, X } from 'lucide-react'
 import {
   useForgetAgentGrants,
   useLocalAgentGrants,
-  useSetClaudeApproval
+  useSetClaudeApproval,
+  useSetCodexApproval
 } from '../../../hooks/useLocalAgents'
 import { formatRelativeFromDate } from '../../../utils/cinnaTime'
 import { unwrapIpcError } from '../../../utils/ipcError'
@@ -91,6 +92,7 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
    * disagree about whose permission system is running.
    */
   const { data: defaultRuntime } = useDefaultRuntime()
+  const onCodex = effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'codex'
   const onClaude =
     effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'claude'
   /**
@@ -188,6 +190,8 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
         <div className="min-h-[3.25rem] text-[10px] italic text-[var(--color-text-muted)]">
           Reading which runtime this agent uses…
         </div>
+      ) : onCodex ? (
+        <CodexApprovals agent={agent} />
       ) : onClaude ? (
         <ClaudeApprovals agent={agent} />
       ) : (
@@ -468,4 +472,31 @@ function ClaudeApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element
       </div>
     </>
   )
+}
+
+
+function CodexApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+  const save = useSetCodexApproval()
+  const [error, setError] = useState<string | null>(null)
+  return <>
+    <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+      Codex can edit files in the agent folder. Access outside its sandbox and network access
+      require approval. Ask for approval sends those requests to this chat; Automatic lets
+      Codex’s reviewer decide. Both modes keep the workspace sandbox enabled.
+    </p>
+    <div className="mt-3">
+      <label htmlFor="codex-approval" className={LABEL}>Approvals</label>
+      <select id="codex-approval" className={FIELD} value={agent.desktop.codexApproval ?? 'ask'}
+        disabled={save.isPending} onChange={(event) => {
+          const approval = event.target.value
+          if (!isClaudeApproval(approval)) return
+          setError(null)
+          save.mutate({ agentId: agent.id, approval }, { onError: (err) => setError(unwrapIpcError(err)) })
+        }}>
+        <option value="ask">Ask for approval</option>
+        <option value="auto">Automatic</option>
+      </select>
+      <div role="alert" className="mt-1 h-[15px] truncate text-[11px] text-[var(--color-danger)]" title={error ?? undefined}>{error}</div>
+    </div>
+  </>
 }

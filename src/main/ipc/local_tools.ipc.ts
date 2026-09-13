@@ -1,6 +1,6 @@
 import { userActivation } from '../auth/activation'
 import { toolDetectionService } from '../services/localAgents/toolDetectionService'
-import { claudeAuthProbe } from '../agents/drivers'
+import { claudeAuthProbe, codexAuthProbe } from '../agents/drivers'
 import { openInService } from '../services/localAgents/openInService'
 import { toolInstallService } from '../services/localAgents/toolInstallService'
 import { defaultEngineService } from '../services/localAgents/defaultEngineService'
@@ -92,7 +92,14 @@ export function registerLocalToolsHandlers(): void {
     // its own copy, and that refetch joins this probe rather than starting a
     // second one.
     void claudeAuthProbe.refresh().catch(() => {})
+    void codexAuthProbe.refresh().catch(() => {})
     return tools
+  })
+
+  // Codex exposes a login verdict without returning account or credential data.
+  ipcHandle('local-tools:codex-auth', () => {
+    userActivation.requireActivated()
+    return codexAuthProbe.status()
   })
 
   /**

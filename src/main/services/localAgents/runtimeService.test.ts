@@ -738,7 +738,7 @@ describe('resolve — the engine axis', () => {
     defaultMode.current = { providerId: 'p1', modelId: 'gpt-5' }
     const providers = [provider({ id: 'p1' })]
 
-    expect(runtimeService.resolve({ engine: 'codex' }, providers)).toEqual(
+    expect(runtimeService.resolve({ engine: 'future-engine' }, providers)).toEqual(
       runtimeService.resolve({}, providers)
     )
   })
@@ -797,7 +797,7 @@ describe('the engine axis — writing', () => {
   it('refuses an engine this app cannot run', () => {
     expect(() =>
       runtimeService.toRuntimeRef({
-        engine: 'codex' as never,
+        engine: 'future-engine' as never,
         credential: null,
         modelId: null,
         complexity: null
@@ -896,5 +896,20 @@ describe('the engine survives a save that is not about it', () => {
       complexity: null
     })
     expect(manifest.runtime).toEqual({ model: 'gpt-5' })
+  })
+})
+
+describe('Codex CLI runtime', () => {
+  it('uses its CLI default without consulting credentials or a provider model catalogue', () => {
+    expect(runtimeService.resolve({ engine: 'codex', complexity: 'complex' }, [])).toMatchObject({
+      launcher: 'codex', credentialId: null, modelId: null, reason: null
+    })
+    expect(runtimeService.resolve({ engine: 'codex', model: 'chosen-model' }, []).modelId).toBe('chosen-model')
+  })
+  it('persists Codex as a supported engine and rejects desktop credential billing', () => {
+    const manifest: CinnaAgentManifest = {}
+    runtimeService.applyToManifest(manifest, { engine: 'codex', credential: null, modelId: null, complexity: 'medium' })
+    expect(manifest.runtime).toEqual({ engine: 'codex', complexity: 'medium' })
+    expect(() => runtimeService.validate({ engine: 'codex', credential: 'Personal', modelId: null, complexity: null })).toThrow(/own login/)
   })
 })

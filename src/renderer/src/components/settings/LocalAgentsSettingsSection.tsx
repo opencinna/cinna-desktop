@@ -67,12 +67,8 @@ import { RUNTIME_CHOICES, RuntimeChoiceButtons } from './RuntimeChoiceButtons'
  * lines at the 800px minimum and a third would move every row under it
  * (ux_rules rules 1 and 7).
  *
- * `codex` is listed and installable but is **not** a runtime here, and the row
- * says so in its own words rather than by being absent. This build has no Codex
- * launcher — nothing has run one to measure its command line or its
- * capabilities — so offering it in the Default Runtime picker would be an
- * option that fails after the click (rule 4). Installing it still buys the user
- * something real: Codex is one of the tools an agent folder can be opened in.
+ * Claude and Codex use the user's own CLI login; OpenCode uses the selected
+ * desktop credential. Each runtime can be selected after installation.
  */
 /**
  * Settings → Local Agents.
@@ -363,6 +359,10 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
     // Detection in flight is not "not installed": saying so would put the full
     // warning on screen for half a second on a machine that has Claude Code.
     if (tools === undefined) return { text: '', tone: 'muted' }
+    if (selectedRuntime === 'codex') {
+      const codex = tools.find((tool) => tool.id === 'codex' && tool.available)
+      return { text: codex ? `Codex ${codex.version ?? 'installed'} — uses your CLI login and configuration.` : 'Codex CLI not found — agents on it cannot run.', tone: codex ? 'muted' : 'warning' }
+    }
     if (!claudeTool) {
       return {
         // "Agents on it": the ones that name no runtime of their own, which is

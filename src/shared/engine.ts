@@ -79,22 +79,17 @@ export const PINNED_ENGINE_VERSION = '1.18.27'
  * - `opencode` — the desktop-managed `opencode serve` process. The default, and
  *   the only engine that existed before this axis; every agent that names no
  *   engine is one.
- * - `claude` — the Claude Agent SDK, in-process, spawning the `claude` binary
- *   the user installed under that install's own login. The desktop holds no
- *   credential on this path and no API key is involved.
- *
- * Deliberately two-valued. Nothing here is built to accommodate a third engine
- * and it should not be until there is one — the abstraction that fits two is
- * not reliably the one that fits three.
+ * - `claude` and `codex` — ACP adapters driving the user's installed CLI and
+ *   its own login. Neither uses a credential configured in this desktop.
  */
-export type AgentEngine = 'opencode' | 'claude'
+export type AgentEngine = 'opencode' | 'claude' | 'codex'
 
 /** The engine an agent that names none runs on. */
 export const DEFAULT_AGENT_ENGINE: AgentEngine = 'opencode'
 
 /** Whether a value off a manifest is an engine this build knows. */
 export function isAgentEngine(value: unknown): value is AgentEngine {
-  return value === 'opencode' || value === 'claude'
+  return value === 'opencode' || value === 'claude' || value === 'codex'
 }
 
 /**
@@ -118,10 +113,10 @@ export function isAgentEngine(value: unknown): value is AgentEngine {
  * machine with no developer tooling at all. What it spends is the credential
  * named beside the picker.
  */
-export function resolveDefaultEngine(setting: string, claudeAvailable: boolean): AgentEngine {
+export function resolveDefaultEngine(setting: string, claudeAvailable: boolean, codexAvailable = false): AgentEngine {
   const pinned = setting.trim()
   if (isAgentEngine(pinned)) return pinned
-  return claudeAvailable ? 'claude' : DEFAULT_AGENT_ENGINE
+  return claudeAvailable ? 'claude' : codexAvailable ? 'codex' : DEFAULT_AGENT_ENGINE
 }
 
 export function effectiveEngine(
@@ -218,6 +213,16 @@ const CLAUDE_TIER_ALIAS: Record<WorkComplexity, string> = {
 /** The alias the Claude engine runs a tier on; `sonnet` when none is named. */
 export function claudeModelForComplexity(complexity: WorkComplexity | null): string {
   return complexity ? CLAUDE_TIER_ALIAS[complexity] : CLAUDE_TIER_ALIAS.medium
+}
+
+/** Login readiness from the user's Codex CLI; no credentials cross IPC. */
+export interface CodexAuthStatus {
+  state: 'logged_in' | 'logged_out' | 'unknown'
+}
+
+/** Codex keeps its configured model; complexity controls reasoning effort. */
+export function codexEffortForComplexity(complexity: WorkComplexity | null): string {
+  return complexity === 'simple' ? 'low' : complexity === 'complex' ? 'high' : 'medium'
 }
 
 /**

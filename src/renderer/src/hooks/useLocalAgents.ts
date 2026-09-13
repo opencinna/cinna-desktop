@@ -494,6 +494,18 @@ export function useSetClaudeApproval() {
   })
 }
 
+export function useSetCodexApproval() {
+  const queryClient = useQueryClient()
+  return useMutation<LocalAgentDto, Error, { agentId: string; approval: ClaudeApproval | null }>({
+    mutationFn: async ({ agentId, approval }) =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.setCodexApproval(agentId, approval)),
+    onSuccess: (agent) => {
+      queryClient.setQueryData(localAgentKey(agent.id), agent)
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+    }
+  })
+}
+
 /**
  * Move the agent's folder to the Trash and forget it.
  *

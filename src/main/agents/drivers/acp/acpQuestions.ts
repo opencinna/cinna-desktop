@@ -80,7 +80,11 @@ export function toInputQuestions(request: CreateElicitationRequest): AcpElicitat
   const questions: InputQuestion[] = []
   const fields: { key: string; multiple: boolean }[] = []
   const entries = Object.entries(properties)
-  const askable = entries.filter(([, value]) => !isCustomAnswerField(asRecord(value)))
+  const askable = entries.filter(([, value]) => {
+    const field = asRecord(value)
+    const codex = asRecord(asRecord(field?._meta)?.codex)
+    return !isCustomAnswerField(field) && codex?.isOtherAnswer !== true
+  })
 
   for (const [key, raw] of askable) {
     const field = asRecord(raw)

@@ -102,6 +102,8 @@ vi.mock('../../../hooks/useProviders', () => ({ useProviders: () => ({ data: pro
  */
 let claudeInstalled = true
 /** `undefined` is a third state: detection has not answered yet. */
+let codexInstalled = false
+let codexAuth: { state: 'logged_in' | 'logged_out' | 'unknown' } = { state: 'logged_in' }
 let toolsLoaded = true
 /**
  * What `claude auth status` said, or `undefined` for the query still in flight.
@@ -118,11 +120,14 @@ vi.mock('../../../hooks/useLocalTools', () => ({
   useLocalTools: () => ({
     data: !toolsLoaded
       ? undefined
-      : claudeInstalled
+      : codexInstalled
+        ? [{ id: 'codex', kind: 'cli-assistant', label: 'Codex', available: true, path: '/usr/local/bin/codex', version: '0.153.4', source: 'path' }]
+        : claudeInstalled
         ? [{ id: 'claude', kind: 'cli-assistant', label: 'Claude Code', available: true, path: '/usr/local/bin/claude', version: '2.1.266', source: 'path' }]
         : []
   }),
-  useClaudeAuth: () => ({ data: claudeAuth })
+  useClaudeAuth: () => ({ data: claudeAuth }),
+  useCodexAuth: () => ({ data: codexAuth })
 }))
 vi.mock('../../../hooks/useAppSettings', () => ({
   useAppSettings: () => ({
@@ -186,6 +191,8 @@ function bareAgent(runtime: Record<string, string> | null): LocalAgentDto {
 }
 
 beforeEach(() => {
+  codexInstalled = false
+  codexAuth = { state: 'logged_in' }
   claudeInstalled = true
   toolsLoaded = true
   claudeAuth = undefined
@@ -1186,7 +1193,7 @@ describe('RuntimePanel', () => {
       // tool wrote into one *this* build vouches for. Reading it as none and
       // clearing it is right: the agent falls to the default either way, and
       // echoing an unknown value back would be this desktop asserting it.
-      render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
+      render(<RuntimePanel agent={agent({ engine: 'future-engine' })} />)
       fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
       const [vars] = save.mock.calls[0] as [{ runtime: { engine: string | null } }]
       expect(vars.runtime.engine).toBeNull()
@@ -1263,4 +1270,43 @@ describe('runtime badges on the agent chat page', () => {
     expect(screen.getByTitle('Model: Claude Sonnet 4.5')).toBeTruthy()
     expect(screen.queryByRole('combobox')).toBeNull()
   })
+})
+
+
+describe('Codex runtime', () => {
+  it('selects Codex, clears the credential/model, and preserves complexity', () => {
+    codexInstalled = true
+    render(<RuntimePanel agent={agent({ credential: 'Anthropic', complexity: 'complex' })} />)
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'engine:codex' } })
+    expect((save.mock.calls[0][0] as { runtime: unknown }).runtime).toMatchObject({ engine: 'codex', credential: null, modelId: null, complexity: 'complex' })
+  })
+  it('runs without a provider catalogue and explains reasoning effort', () => {
+    codexInstalled = true
+    models = undefined
+    providers = []
+    render(<RuntimePanel agent={agent({ engine: 'codex', complexity: 'complex' })} />)
+    expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('engine:codex')
+    expect(screen.getByText(/high reasoning effort/)).toBeTruthy()
+    expect(screen.queryByText('Advanced')).toBeNull()
+    expect((screen.getByLabelText('Work complexity') as HTMLSelectElement).disabled).toBe(false)
+  })
+  it('shows the login remedy and keeps an explicitly selected missing install visible', () => {
+    codexInstalled = true
+    codexAuth = { state: 'logged_out' }
+    const view = render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
+    expect(screen.getByText(/Run `codex login`/)).toBeTruthy()
+    codexInstalled = false
+    view.rerender(<RuntimePanel agent={agent({ engine: 'codex' })} />)
+    expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('engine:codex')
+    expect(screen.getByText(/Codex CLI is needed/)).toBeTruthy()
+  })
+})
+
+
+it('names the machine default separately from a pinned Codex runtime', () => {
+  codexInstalled = true
+  render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
+  const picker = screen.getByLabelText('Runs on') as HTMLSelectElement
+  expect(picker.value).toBe('engine:codex')
+  expect(picker.querySelector('option[value=""]')?.textContent).not.toContain('Codex')
 })

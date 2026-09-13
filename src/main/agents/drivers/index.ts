@@ -28,6 +28,11 @@ import { permissionGrantService } from '../../services/localAgents/permissionGra
 import { turnLock } from '../../services/localAgents/turnLock'
 import { runAgentTurn } from '../../services/a2aStreamingService'
 import { createLogger } from '../../logger/logger'
+import { CodexAuthProbe } from './acp/codexAuth'
+import { buildCodexEnv } from './acp/codexEnv'
+import { createCodexLauncher } from './acp/codexLauncher'
+import { codexEffortForComplexity } from '../../../shared/engine'
+import { isWorkComplexity } from '../../../shared/modelFamilies'
 import { ClaudeAuthProbe } from './acp/claudeAuth'
 import { pendingRequests } from './pendingRequests'
 import { toolDetectionService } from '../../services/localAgents/toolDetectionService'
@@ -235,7 +240,42 @@ function folderSystemPrompt(userId: string, agentId: string): string {
     : assembleAgentPrompt(agent.path, agent.manifest, context)
 }
 
+export const codexAuthProbe = new CodexAuthProbe({
+  path: async () => (await toolDetectionService.get('codex'))?.path ?? null,
+  env: async () => buildCodexEnv({ shellEnv: await getShellEnv() })
+})
+
 const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
+  codex: createCodexLauncher({
+    path: async (options) => {
+      let tool = await toolDetectionService.get('codex')
+      if (!tool?.path && options?.fresh) {
+        await toolDetectionService.refresh()
+        tool = await toolDetectionService.get('codex')
+      }
+      return tool?.path ?? null
+    },
+    auth: (options) => options?.fresh ? codexAuthProbe.refresh() : codexAuthProbe.status(),
+    adapterEntry: () => {
+      const entry = '@agentclientprotocol/codex-acp/dist/index.js'
+      const path = app.isPackaged
+        ? join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', entry)
+        : createRequire(import.meta.url).resolve(entry)
+      if (!existsSync(path)) throw new Error('Codex ACP adapter is missing')
+      return path
+    },
+    nodeRuntime: electronNodeRuntime,
+    env: async () => buildCodexEnv({ shellEnv: await getShellEnv() }),
+    systemPrompt: folderSystemPrompt,
+    settings: (userId, agentId) => {
+      const agent = localAgentService.get(userId, agentId)
+      return {
+        model: typeof agent.runtime?.model === 'string' ? agent.runtime.model.trim() || null : null,
+        effort: codexEffortForComplexity(isWorkComplexity(agent.runtime?.complexity) ? agent.runtime.complexity : null),
+        approval: desktopStateService.read(agent.path, agent.kind).codexApproval ?? 'ask'
+      }
+    }
+  }),
   custom: customAgentService.launcher,
   opencode: createOpencodeLauncher({
     // Through the service, which memoises per *configured path* and never

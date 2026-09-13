@@ -325,7 +325,7 @@ export const runtimeService = {
     // A `credential` alongside `engine: "claude"` is ignored here and warned
     // about by the validator; `validate` refuses to *write* one. Reading is
     // tolerant, writing is strict — the same asymmetry `complexity` has.
-    if (engine === 'claude') {
+    if (engine === 'claude' || engine === 'codex') {
       return {
         // **What chose this engine, honestly.** An agent whose manifest says
         // `engine: "claude"` is on its own runtime; one that says nothing and
@@ -341,7 +341,7 @@ export const runtimeService = {
         // A declared model wins over a tier, matching `resolveRuntimeModel`'s
         // own precedence, so the two paths cannot disagree about which of the
         // pair the user meant.
-        modelId: model !== '' ? model : claudeModelForComplexity(complexity),
+        modelId: model !== '' ? model : engine === 'claude' ? claudeModelForComplexity(complexity) : null,
         modelSource: model !== '' ? 'declared' : complexity ? 'tier' : 'floor',
         replacedModelId: null,
         // Readiness — installed, logged in — is not a credential question and is
@@ -511,10 +511,10 @@ export const runtimeService = {
     // only a validator *warning* — reading stays tolerant so a folder written by
     // a newer tool keeps running — but this desktop never authors the ambiguity
     // it tolerates in others.
-    if (engine === 'claude' && credential !== null) {
+    if ((engine === 'claude' || engine === 'codex') && credential !== null) {
       throw new LocalAgentError(
         'invalid_input',
-        'An agent on the Claude engine runs on that install’s own login, so it does not use a credential configured here.'
+        `An agent on the ${engine === 'claude' ? 'Claude' : 'Codex'} engine runs on that install’s own login, so it does not use a credential configured here.`
       )
     }
 

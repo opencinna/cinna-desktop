@@ -4,7 +4,7 @@
 
 Main owns execution, persistence and cancellation. The renderer submits `run:start` and independently attaches with `run:watch`; navigation or renderer reload does not cancel the run. `liveRunHub` retains bounded sequenced replay in process memory for active runs. Transcript persistence and durable Task/Inbox checkpoints are separate; the event cache is not a durable event log. The lower-level `run:send` MessagePort API remains available through the same executor. The retired agent/model-specific preload send methods and IPC forwards are removed.
 
-Six supported external agent forms use three AgentDriver implementations:
+Seven supported external agent forms use three AgentDriver implementations:
 
 | Agent form | Driver | Runtime selection |
 |---|---|---|
@@ -12,6 +12,7 @@ Six supported external agent forms use three AgentDriver implementations:
 | Cinna-synced | a2a | Cinna endpoint and account credential |
 | OpenCode folder | acp | Fresh folder launcher |
 | Claude Code folder | acp | Fresh folder launcher |
+| Codex folder | acp | Fresh folder launcher through the pinned app-server adapter |
 | Custom command, including SSH | acp | Captured owned executable/argv and runtime binding |
 | Claude Managed | managed | Bound API credential, agent and environment |
 
@@ -49,7 +50,7 @@ Managed and custom user-facing slices also received their own built UX reviews: 
 ## Deliberate boundaries
 
 - MCP uses the official v2 client with modern/legacy negotiation and native loopback DCR. The conditional Tasks lifecycle is unavailable in that dependency; no Tasks poller, elicitation advertisement or invented Tasks golden is claimed. CIMD remains unconfigured without an owned hosted metadata URL. See [MCP connections](../../mcp/connections/connections.md).
-- ACP command launchers use stdio. SSH local arguments are passed directly, while SSH remote-command interpretation still follows the remote shell. Test only initializes/disposes; authentication happens in the user's CLI/SSH setup. ACP HTTP, Gemini and Codex launchers remain unsupported.
+- ACP command launchers use stdio. SSH local arguments are passed directly, while SSH remote-command interpretation still follows the remote shell. Test only initializes/disposes; authentication happens in the user's CLI/SSH setup. ACP HTTP and Gemini remain unsupported. [Codex](../../agents/local_agents/codex_engine.md) is implemented through its installed CLI and the pinned ACP adapter; controlled native-peer tests do not establish live model/sandbox behavior.
 - Managed validation uses the official SDK against controlled HTTP/SSE peers. No live Claude Managed account was called. Custom tests use real child processes and controlled ACP peers; they do not claim a real SSH host or remote CLI deployment.
 - Unsupported complete token accounting remains an explicit refusal. Autonomous execution supports the implemented turn/time budgets; unavailable usage is never fabricated.
 
@@ -67,4 +68,4 @@ MCP supports OAuth for SSE and HTTP, serializes calls per provider during token 
 
 `src/main/services/askDelivery.ts` routes answers to their durable delivery owner. `src/main/services/runExecutionState.ts` owns active run maps independently of renderer attachment. `src/main/tasks/jobDefinitionPolicy.ts` centralizes the retained job-type executor policy.
 
-The original phase 2 assertion that every row has a driver after launch was not delivered: unsupported/null drivers remain visible and refuse execution. No ACP session-relaunch E2E was delivered; session loading is covered by unit/peer tests. Engine helpers remain seven files, not just the three helpers named in the early phase 3 plan. Only coordinator-target manifest handback is structural. These are explicit scope limits, not claims of completed coverage.
+The original phase 2 assertion that every row has a driver after launch was not delivered: unsupported/null drivers remain visible and refuse execution. The recorded runtime phase delivered no ACP session-relaunch E2E; that phase covered loading through unit/peer tests. The later Codex feature adds a targeted built-Electron restart/resume test with a real adapter and scripted native peer; see [Codex verification](../../agents/local_agents/codex_engine_tech.md#verification-and-limits). Engine helpers remain seven files, not just the three helpers named in the early phase 3 plan. Only coordinator-target manifest handback is structural. These are explicit scope limits, not claims of completed coverage.

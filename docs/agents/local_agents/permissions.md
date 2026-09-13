@@ -4,21 +4,21 @@
 
 ## Purpose
 
-What a folder agent is allowed to do on the user's machine, who decides, and where the decision is kept. Two mechanisms, and they answer different questions: a **static profile** generated into the engine config says what never needs asking, and a **standing grant** stored beside the agent records what the user has since said may stop being asked. On the [Claude](claude_engine.md) engine there is a third, and it stands in front of both: the agent's **Approvals** setting decides whether Claude Code's own reviewer answers first, and by default it does.
+What a folder agent is allowed to do on the user's machine, who decides, and where the decision is kept. The selected engine supplies its base policy: OpenCode uses a **static profile** generated into its config, while Claude and Codex use their CLI approval mechanisms. A **standing grant** records what the user has since said may stop being asked, and is shared infrastructure for all three engines. On the [Claude](claude_engine.md) engine, the agent's **Approvals** setting decides whether Claude Code's own reviewer answers first, and by default it does.
 
 ## Core Concepts
 
-- **Permission Profile** — the `permission` block written onto every agent entry in the generated engine config (`CONVERSATION_PERMISSIONS`). Identical for every folder agent unless that agent's `cinna-agent.json` overrides it. It is not per-conversation and not editable from the UI
-- **Permission Ask** — the engine parking mid-turn on a `permission.v2.asked` event, rendered as a [Parked Request](agent_turn.md#permissions-and-questions-are-tool-parts-there-is-no-permission-part-kind) in the transcript with **Allow once / Always allow / Deny**
-- **Action** — the name the engine that raised the ask gave the operation. On the OpenCode engine that is a coarse one (`bash`, `edit`, `write`, `read`, `webfetch`, `external_directory`), coarser than the tool: the `write` tool asks under `edit`. On the [Claude](claude_engine.md) engine it is that engine's own tool name (`Bash`, `Edit`, `WebFetch`). **The two vocabularies are stored as they arrive and are never mapped onto each other**, so a rule written on one engine cannot silently authorise the other; what they share is only the sentence the user reads
+- **Permission Profile** — the `permission` block written onto every OpenCode agent entry in the generated config (`CONVERSATION_PERMISSIONS`). Identical for every OpenCode folder agent unless that agent's `cinna-agent.json` overrides it. It is not per-conversation and not editable from the UI
+- **Permission Ask** — the engine parking mid-turn on an ACP `session/request_permission` request, rendered as a [Parked Request](agent_turn.md#permissions-and-questions-are-tool-parts-there-is-no-permission-part-kind) in the transcript with **Allow once / Always allow / Deny**
+- **Action** — the name the engine that raised the ask gave the operation. On the OpenCode engine that is a coarse one (`bash`, `edit`, `write`, `read`, `webfetch`, `external_directory`), coarser than the tool: the `write` tool asks under `edit`. On the [Claude](claude_engine.md) engine it is that engine's own tool name (`Bash`, `Edit`, `WebFetch`). Codex uses namespaced `codex:<kind>` actions. **The engine vocabularies remain separate**, so a rule written on one engine cannot silently authorise the other; what they share is only the sentence the user reads
 - **Standing Grant** — one remembered decision: this agent may take this action on this resource without asking again. `{action, pattern, scope, decidedAt}`, stored in that agent's desktop state — `app-data/desktop.json` for a kit folder, a file under `<userData>/external-agents/` for a [bare](bare_agents.md) one, since the desktop writes nothing into an adopted folder
 - **Grant Scope** — how widely a grant's pattern reaches: `exact` (the resource character for character), `origin` (a URL prefix the desktop synthesised), `action` (the whole action, from an ask that named no resource). **Recorded, never inferred from the pattern's characters**
-- **Approvals** — [Claude](claude_engine.md) engine only: who answers an ask *before* the desktop does. **Automatic** (the default) puts Claude Code's own reviewer in front — the classifier a terminal `claude` runs with auto mode on — and the desktop's block is the backstop for what it declines; **Ask every time** brings every command, edit, write and fetch to the block. A per-agent choice, set on the Permissions tab, stored beside the grants for either kind of folder and never in a manifest; null is *no choice made* and reads as the default. There is no third value: the SDK's `bypassPermissions` and `dontAsk` would take the grants and the block out of the decision and are unreachable
-- **Permissions tab** — a tab under the agent page's **Settings**: what the profile allows, what the manifest has overridden, and the list of standing grants with a per-row revoke. For a Claude agent the profile paragraph gives way to the Approvals setting and its control, since the profile describes rules that are not in force on that engine. Its examples name files the folder actually has — for a bare agent, "editing its own `AGENT.md`" rather than the manifest and `credentials/.env`, because two fictional examples out of three is how a reader comes to discount the third, and the third is the sentence about a command reaching anything they can
+- **Approvals** — separate per-agent settings for [Claude](claude_engine.md) and [Codex](codex_engine.md). Codex defaults to **Ask for approval** for sandbox escalations; **Automatic** delegates those to Codex's reviewer, within the same workspace-write sandbox. On Claude: who answers an ask *before* the desktop does. **Automatic** (the default) puts Claude Code's own reviewer in front — the classifier a terminal `claude` runs with auto mode on — and the desktop's block is the backstop for what it declines; **Ask every time** brings every command, edit, write and fetch to the block. A per-agent choice, set on the Permissions tab, stored beside the grants for either kind of folder and never in a manifest; null is *no choice made* and reads as the default. There is no third value: the SDK's `bypassPermissions` and `dontAsk` would take the grants and the block out of the decision and are unreachable
+- **Permissions tab** — a tab under the agent page's **Settings**: what the profile allows, what the manifest has overridden, and the list of standing grants with a per-row revoke. For a Claude or Codex agent the OpenCode profile paragraph gives way to its own Approvals setting and its control, since the profile describes rules that are not in force on that engine. Its examples name files the folder actually has — for a bare agent, "editing its own `AGENT.md`" rather than the manifest and `credentials/.env`, because two fictional examples out of three is how a reader comes to discount the third, and the third is the sentence about a command reaching anything they can
 
 ## User Stories / Flows
 
-### Ordinary work inside the folder
+### Ordinary work inside the folder, on OpenCode
 1. The agent reads a file in its folder, writes a script, runs it. Nothing is asked and nothing appears in the transcript beyond the tool calls themselves
 2. That is the profile, not a grant. Nobody had to allow it and there is nothing to revoke
 
@@ -55,7 +55,17 @@ What a folder agent is allowed to do on the user's machine, who decides, and whe
 
 ## Business Rules
 
+### Codex approvals retain the sandbox and their complete request scope
+
+Codex defaults to **Ask for approval**, with workspace writes permitted and network access disabled until escalated. **Automatic** uses Codex's reviewer inside that same workspace-write policy. Normal temporary-directory allowances remain, and reads do not all require escalation. The adapter calls the first mode `read-only`; the name must never become a claim that workspace files are read-only. `runtime.permissions` is an OpenCode profile override and is not translated for Codex.
+
+The independent `codexApproval` value is stored with desktop state, never in the manifest. Both new and loaded sessions receive the selected mode before a prompt; a refusal stops startup. Grants answer only asks forwarded to Cinna.
+
+Codex execute grants hold raw input, title, content and locations as **one exact scope**. The initial raw-input-only shape omitted SOCKS host and protocol carried in the adapter's presentation fields, allowing a saved grant for one host to cover another. Splitting command, cwd and extra privileges into separate resources would also let unrelated grants combine into broader rights. Edit asks retain every touched path; all must be covered. Unknown requests with no usable scope get an exact request-ID resource, never a whole-action grant. See [Codex security](codex_engine_tech.md#security).
+
 ### An agent works freely inside its own folder
+
+The generated rules in this section apply to OpenCode; Codex's sandbox policy is described above.
 
 A session's `location.directory` **is** the agent folder, so every resource the engine names is relative to it and a shell command starts there. `read`, `edit`, `write` and `bash` are therefore `allow`.
 
@@ -258,7 +268,8 @@ Claude engine — the reviewer in front of all of the above
 
 - [The Local Engine, Runtimes & Prompt Assembly](engine.md) — generates the profile into the config, and owns the merge with a manifest's `runtime.permissions`
 - [The Agent Turn Runner](agent_turn.md) — where an ask becomes a parked request, how the answer travels out of band, and why there is no `permission` part kind
-- [The Claude Engine](claude_engine.md) — the second engine writing into this same grant store, under its own action vocabulary; the Approvals setting that puts the CLI's reviewer in front of it; and why *Always allow* is never persisted into that tool's own rules either
+- [The Codex Engine](codex_engine.md) — workspace sandbox, separate approval default, and exact command/network grant boundaries
+- [The Claude Engine](claude_engine.md) — a sibling engine writing into this same grant store, under its own action vocabulary; the Approvals setting that puts the CLI's reviewer in front of it; and why *Always allow* is never persisted into that tool's own rules either
 - [The OpenCode Engine Contract](opencode_contract.md) — the matcher, the rule-resolution order, the shell tool's gating, and the proof behind §4
 - [Agents Tab & Agent Page](agents_tab.md) — the page the Permissions tab lives on
 - [Kit Contract & Manifest Layer](kit_contract.md) — `runtime.permissions` in the manifest schema, and `cloud_import_excludes` keeping `app-data/` out of a publication

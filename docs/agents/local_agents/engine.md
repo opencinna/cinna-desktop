@@ -6,7 +6,7 @@
 
 What runs a folder agent: a **child process per agent**, spawned by the turn that needs it and spoken to over the [Agent Client Protocol](../drivers/drivers.md); the generated OpenCode configuration derived from this machine's AI credentials and that one agent; the **runtime** (engine + credential + model) each agent resolves to — from a model the manifest names, a work complexity it names instead, or the defaults below it — and the per-agent system prompt assembled out of the agent's own files.
 
-**Two engines, and the agent's runtime says which.** `opencode` is the default and what every agent naming no engine gets; `claude` is the user's own Claude Code install ([The Claude Engine](claude_engine.md)). Both are run by one driver over one protocol, so the engine is no longer an identity — it is a **launcher**: the thing that knows what command to spawn, what to declare at `initialize`, and what has to be said to the session before the first prompt. Everything about prompt assembly and runtime resolution below is shared by both.
+**Three engines, and the agent's runtime says which.** OpenCode uses desktop AI credentials; [Claude Code](claude_engine.md) and [Codex](codex_engine.md) use their own installed CLIs and saved logins. An agent without an explicit engine follows the machine default unless it declares a credential or model, which preserves OpenCode. All run through one driver over one protocol, so the engine is no longer an identity — it is a **launcher**: the thing that knows what command to spawn, what to declare at `initialize`, and what has to be said to the session before the first prompt. Folder prompt assembly is shared; the credential/model ladder and generated profile below are OpenCode-specific. Codex supplies the assembled prompt as developer instructions and preserves its CLI configuration.
 
 **There is no server.** Until phase 3 of the agent runtime plan one desktop-managed `opencode serve` sat on loopback behind a password and backed every folder agent at once, with a state machine around it — resolve, download, spawn, health-check, reconcile, restart, stop at quit. It is gone, and with it every rule that existed because the process was shared: the global lock predicate that gated a restart, the deferral of a config change while any turn streamed, the two digests compared against a running process, and the *skip* list a screen read to explain an agent. What replaced them is smaller and is described here: one process per agent, one config per agent, and a refusal at the top of the turn that belongs to the agent it refuses.
 
@@ -34,8 +34,8 @@ Both halves are load-bearing.
 
 ## Core Concepts
 
-- **Engine** — what runs a folder agent's turn. Two of them: `opencode`, the default, and `claude` ([The Claude Engine](claude_engine.md)). Both are spawned as a child process and spoken to over ACP
-- **Launcher** — the engine, as the turn path sees it: what command to spawn, what environment it gets, what the client declares at `initialize`, what `session/new` carries, and what must be set on the session before the first prompt. `opencode` and `claude` are built; `gemini` and `codex` are names a folder or a row may carry and this build refuses in words
+- **Engine** — what runs a folder agent's turn: `opencode`, `claude` or `codex`, each spawned through an ACP launcher
+- **Launcher** — the engine, as the turn path sees it: what command to spawn, what environment it gets, what the client declares at `initialize`, what `session/new` carries, and what must be set on the session before the first prompt. `opencode`, `claude` and `codex` are implemented; `gemini` remains a recognized name without a launcher and is refused in words
 - **Launch spec** — one process's command, arguments, whole environment, cwd, and a `key` that moves whenever any of those do. The key is a **digest, never the values** — the environment carries API keys, and the pool logs the key
 - **Process pool** — one process per agent id: started by the first turn that needs it, held for the length of a turn, reaped after two minutes idle, replaced when its spec key moved, killed at app quit. It never restarts a process on its own
 - **Engine config** — the OpenCode configuration this app generates for **one agent**, into `<userData>/acp/opencode/<hash of agent id>/opencode.json`: the provider entry for that agent's credential, that agent's entry with its inlined system prompt, the permission profile, and a top-level `model`
@@ -43,9 +43,9 @@ Both halves are load-bearing.
 - **Agent key** — the OpenCode agent-entry name a folder agent becomes (`<slug>-<hash of agent id>`). Selected on the session as the `mode` config option, which is what makes the turn run *that* agent rather than OpenCode's stock coding assistant
 - **Engine binary state** — whether this machine has a usable `opencode` and where it came from (`unresolved` / `resolving` / `ready` / `failed`). All that is left of "the engine" as state a screen shows: it is about a file, not a process
 - **Binary source** — where the resolved `opencode` came from: `configured` (a path in Settings), `path` (the user's own install, found on the login-shell PATH), or `managed` (the pinned version this app downloaded and verified)
-- **Runtime** — what an agent runs on: `{engine, credential, model}`. On OpenCode the credential and the model are the whole of it, and the manifest reaches that model two ways: by naming it, or by naming a **work complexity** the desktop resolves against the credential's own catalogue. An agent that names `engine: "claude"` has no credential at all and no entry in any generated config
+- **Runtime** — what an agent runs on: `{engine, credential, model}`. On OpenCode the credential and the model are the whole of it, and the manifest reaches that model two ways: by naming it, or by naming a **work complexity** the desktop resolves against the credential's own catalogue. An agent on `claude` or `codex` has no desktop credential or generated OpenCode config
 - **Work complexity** — `simple` | `medium` | `complex`, written into `cinna-agent.json` in place of a model id. It says how hard the agent's work is and lets the host pick; a model id is the least portable thing that file can carry
-- **Default runtime** — the fallback runtime, derived from the user's default chat mode
+- **Default runtime** — the machine engine selection in Settings. On OpenCode, the credential/model fallback comes from the machine credential override or effective default chat mode; CLI engines use their own login/configuration
 - **Medium floor** — the last step of model resolution: an agent that would otherwise have no model at all runs on the Medium tier of the credential it was already given
 - **Refusal** — the sentence a launcher answers with instead of a plan when the agent cannot run: no binary, no credential, no model, no Claude Code, not logged in. It is produced **before the turn lock is taken and before anything is spawned**
 
@@ -94,6 +94,14 @@ Both halves are load-bearing.
 
 ## Business Rules
 
+### The machine default is selected once, and explicit agents keep their choice
+
+`localAgentsDefaultEngine` accepts `opencode`, `claude` and `codex`. When unset, the first settling pass preserves an installation already holding folder agents on OpenCode; a fresh installation prefers an installed Claude, then Codex, then OpenCode. This is an installation check, not a login check. The result is saved, and a user choice made during detection wins. Installing another CLI later cannot silently move an agent onto a different login or permission system.
+
+A recognized `runtime.engine` wins. Without one, a concrete credential or model retains OpenCode; an empty runtime or a complexity-only runtime follows the machine default. Unknown future engine names use that tolerant fallback; a recognized but unimplemented launcher such as Gemini is explicitly refused at dispatch. Kit and bare runtime storage follow the same precedence.
+
+CLI engines leave the desktop credential ladder before its first lookup. Claude maps complexity to a model alias; Codex maps it to reasoning effort and keeps its CLI default model unless one is declared. See [Codex](codex_engine.md) for configuration ownership, approvals and readiness.
+
 ### One process per agent, started by a turn and reaped when idle
 
 The pool starts a process on the first turn that needs it and keeps it while turns keep coming. Both ends of that are measured rather than assumed:
@@ -141,10 +149,10 @@ The generated config is the shared server's config **minus the server, and minus
 |---|---|---|
 | Readiness `invalid` or `contract_too_new` | **Refused before the launcher is asked at all.** A folder that does not validate has no business being handed to a model: its prompt files may be half-written and its manifest may say anything | The turn error, and the readiness strip on the agent page |
 | The agent is switched off | **Refused**, in the same place. `enabled` is the user's own choice and the turn is the one gate on it | The turn error |
-| The runtime names an engine this build cannot run (`gemini`, `codex`) | **Refused in words** — "This agent runs on an engine this version of Cinna does not support." A launcher that does not exist is never guessed at, and the row's value is never read as the default | The turn error |
+| The runtime names an engine this build cannot run (`gemini`) | **Refused in words** — "This agent runs on an engine this version of Cinna does not support." A launcher that does not exist is never guessed at, and the row's value is never read as the default | The turn error |
 | Runtime resolves to no credential the engine can use, or to no model | **Refused by the OpenCode launcher**, using the same code the config generator produces (`credential_unavailable`, `no_model`) | The turn error, and the "Runs with" panel's status line |
-| No `opencode` could be resolved, or no `claude` is installed / logged in | **Refused by the launcher**, in a sentence naming the remedy | The turn error; Settings and the panel say the same thing standing |
-| Everything resolves | A config with one agent entry, its model, its inlined prompt and the permission profile | — |
+| No `opencode` could be resolved, or the selected `claude` / `codex` is missing or definitely logged out | **Refused by the launcher**, in a sentence naming the remedy | The turn error; Settings and the panel say the same thing standing |
+| Everything resolves | OpenCode gets one generated agent config; Claude/Codex get their launcher-specific instruction and approval setup | — |
 
 A credential is offered to the generator when the user has it switched **on** and `isCredentialUsable` says it can make a call at all: it is not flagged `unsupported` (an Anthropic OAuth token is not an API key) and it either has a stored key or is of a **keyless** type, which needs none. That predicate is shared with the "Runs with" panel and every picker on purpose — a hand-written `hasApiKey` here would have made the panel offer a credential the generator then silently refused. Own **and** server-managed credentials both count. A key the keystore refuses to decrypt is skipped with a warning rather than failing the whole plan; the other credentials still work.
 
@@ -195,7 +203,7 @@ The environment variable name is derived from the provider id so it is stable ac
 
 An OpenCode process gets **the same narrowed environment a third-party stdio MCP server gets** — `shellEnvForChild` over the resolved login-shell environment — plus an enumerated set of variables added explicitly (`OPENCODE_CONFIG` **and `OPENCODE_CONFIG_DIR`** — the engine has two config readers and they honour different variables, see [the contract](acp_contract.md) — `OPENCODE_DISABLE_AUTOUPDATE=1`, and the credential map). There is no server password to add any more, and nothing is inherited: `spawn` is handed the whole environment the launcher built, never `process.env` with additions.
 
-A Claude process gets a *narrower* one still — `buildClaudeEnv`, which strips every API key, auth token, base URL and third-party-provider switch by name before it hands anything over, so a turn cannot be billed to an account the user did not choose. See [The Claude Engine](claude_engine.md).
+A Claude process gets a *narrower* one still — `buildClaudeEnv`, which strips every API key, auth token, base URL and third-party-provider switch by name before it hands anything over, so a turn cannot be billed to an account the user did not choose. See [The Claude Engine](claude_engine.md). Codex uses the shared narrowed environment plus `CODEX_HOME`; it excludes shell API keys and adapter overrides while preserving normal CLI user/project configuration. See [The Codex Engine](codex_engine.md).
 
 The instinct is that this should be looser, since the engine is our own binary rather than a third party's. It is the opposite: the thing that *runs inside* the engine is a language model with a bash tool, driven by whatever text arrives in a conversation, and its output goes on screen and into the database. A shell environment handed to it is one prompt injection away from being read aloud, and `ANTHROPIC_API_KEY`, `GITHUB_TOKEN` and `AWS_*` live in exactly the `.zshrc` this app is deliberately sourcing. The narrowing applies with *more* force here than for an MCP server, whose tools at least have fixed schemas.
 
@@ -372,7 +380,7 @@ The asymmetry with the assembler above is the whole design. A kit folder has a k
 - **Three of the context block's rules are dropped rather than reworded** — `uv run`, "write only under `app-data/`", and the `credentials/.env` rule — because each describes a folder convention this folder never agreed to, and stating a rule about a file that does not exist is how a model ends up refusing ordinary work. One line replaces them: follow whatever the instructions above say about running this folder's own tools, because the desktop imposes no convention here
 - **The Builder line survives verbatim**, for exactly the reason below: a bare folder's `AGENT.md` and `README.md` are precisely what a builder opens the folder to rewrite
 - **An empty `AGENT.md` gets the same stand-in** the kit path gives an empty workflow prompt, and for the same reason
-- **`runtime` is `null`**, so `runtimeService.resolve` falls straight through to the Default runtime. There is no manifest to name a credential or a tier, and the rule against a third credential fallback is untouched
+- **The bare runtime comes from Desktop State**, or is null when no choice exists. It follows the same machine-engine and credential/model precedence as a kit runtime; adopting a folder adds no new credential fallback
 
 ### The desktop context block, and the line that matters most
 
@@ -381,6 +389,8 @@ The appended block is the part only the desktop knows: that this is a conversati
 The last line is load-bearing: **do not switch to the Builder role.** The same folder is also opened by a builder — an assistant developing the agent, and later this app's own building mode — whose job is to rewrite these very files. An agent that decides mid-conversation that it is the builder starts editing its own prompt while the user is talking to it.
 
 ### The permission profile
+
+This generated profile and `runtime.permissions` overrides apply to OpenCode. [Claude](claude_engine.md) and [Codex](codex_engine.md) use their own approval mechanisms; the desktop standing-grant store is shared.
 
 **An agent works freely inside its own folder.** A session's `location.directory` *is* the agent folder, so `read`, `edit`, `write` and `bash` are `allow`; what still asks is what the folder boundary does not cover — `external_directory`, `webfetch`, the agent's own manifest and workflow prompt, secret files, and `sudo` / `rm -r`. This replaced a profile that allowed writes only under `app-data/` and only three shapes of command, which asked about nearly every step of ordinary work: **a permission prompt that fires constantly is not a control, it is a thing users learn to click through.**
 
@@ -403,7 +413,7 @@ Carried honestly rather than implied as passing.
 - **The download *sequence* has only ever run against fakes.** Every piece is hand-verified against the real binary — the digests, `tar -xf` on a `.zip`, the archive layout, `--version` — but the staging rename and the lost-race branch have never executed end to end
 - **The `knowledge/` topic sort is unpinned** — pre-existing; `readdirSync` already returns name order on APFS, so removing the sort passes everything
 - **The per-turn cost of generating a config is reasoned, not measured.** Every turn does a keychain decrypt per credential and a full prompt re-assembly (several file reads plus the `knowledge/` walk), and now does it on the turn path unconditionally rather than only when a reconcile ran. Believed to be a few milliseconds; unproven
-- **`gemini` and `codex` are names without launchers.** Both are accepted by the row, the manifest and the capability answer, and both are refused in words at the top of a turn. Neither binary is on the machine this was built on and the Codex adapter is not a dependency, so nothing about how they behave over ACP has been measured here
+- **Gemini has no launcher.** It is a recognized unsupported runtime. Codex is implemented and tested with the actual pinned adapter against a scripted app-server peer; real paid-model turns, automatic-review decisions and native sandbox enforcement remain unverified here. See [Codex verification](codex_engine_tech.md#verification-and-limits)
 
 ## Architecture Overview
 
@@ -451,15 +461,16 @@ A turn (see agent_turn.md)                     │
 ## Integration Points
 
 - [The Agent Turn](agent_turn.md) — the turn that plans a launch, takes the lock, opens the session and translates what comes back
-- [The ACP Engine Contract](acp_contract.md) — what was actually watched against both engines, per launcher, and what is still unverified
-- [Agent Drivers & Readiness](../drivers/drivers.md) — the one driver behind both engines, the launcher recorded in `driver_config`, and the readiness a list shows
-- [The Claude Engine](claude_engine.md) — the second launcher: no credential, no generated config, the user's own login, and the approval mode set on every session
+- [The ACP Engine Contract](acp_contract.md) — what was actually watched per launcher, with separate Codex adapter/native-CLI evidence limits, and what is still unverified
+- [Agent Drivers & Readiness](../drivers/drivers.md) — the one driver behind all folder engines, the launcher recorded in `driver_config`, and the readiness a list shows
+- [The Codex Engine](codex_engine.md) — CLI-owned login/configuration, reasoning effort, sandboxed approvals and adapter packaging
+- [The Claude Engine](claude_engine.md) — the sibling launcher: no credential, no generated config, the user's own login, and the approval mode set on every session
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the folder agents a config is generated from, the readiness that refuses one, the launcher the scanner records, and the per-agent turn lock
 - [Local Agent Permissions](permissions.md) — the profile this generator writes, entry by entry, and the desktop-held grants that answer an ask it produces
 - [Agents Tab & Agent Page](agents_tab.md) — the “Runs with” panel, the Settings → Agents engine row, and the stamped `update-field` path a runtime write reuses
 - [Kit Contract & Manifest Layer](kit_contract.md) — the `runtime` block in `cinna-agent.json`, the validator's secret pattern reused on the credential reference, and the templates whose HTML comments the prompt assembly strips
 - [Account-Provisioned Providers & Chat Modes](../../llm/account_provisioning/account_provisioning.md) — managed credentials are usable runtimes, and the background sync changes what a turn will generate with no hook anywhere
-- [Chat Modes](../../chat/chat_modes/chat_modes.md) — the default chat mode *is* the Default runtime
+- [Chat Modes](../../chat/chat_modes/chat_modes.md) — the effective default chat mode supplies the OpenCode credential/model fallback
 - [Adapters](../../llm/adapters/adapters.md) — `listModels()` is the network call kept off the per-turn path; the registry supplies the model lists custom provider entries need
 - [Local Models & Keyless Credentials](../../llm/local_models/local_models.md) — the credential type with no key, its host, the `/v1` suffix a custom entry gets, and the local-only model refresh
 - [Switching an AI Credential Off](../../llm/adapters/credential_enablement.md) — why a disabled credential is excluded here, the shared reference resolver, and every surface that reports the consequence

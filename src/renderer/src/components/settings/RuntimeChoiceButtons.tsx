@@ -10,12 +10,8 @@ import { SettingsBadge } from './SettingsLayout'
  * three questions — is it here, is it selected, can it run an agent at all —
  * and three hand-written blocks is how one of them quietly stops answering one.
  *
- * `engine` is what selecting it writes. `null` means **this build cannot run an
- * agent on it**, which is a different state from "not installed" and is the
- * whole reason Codex is in the list: it is detectable, installable, and useful
- * (Cinna opens agent folders in it), and an agent cannot run on it yet because
- * there is no launcher — nothing here has ever driven one. Offering it as a
- * runtime would be an option that fails after the click (ux_rules rule 4).
+ * `engine` is what selecting it writes. All listed runtimes have ACP launchers;
+ * CLI runtimes offer installation when their executable is missing.
  */
 export interface RuntimeChoice {
   /** Stable key for React and for the install dialog. */
@@ -29,7 +25,7 @@ export interface RuntimeChoice {
 
 export const RUNTIME_CHOICES: readonly RuntimeChoice[] = [
   { id: 'claude', label: 'Claude Agent', tool: 'claude', engine: 'claude' },
-  { id: 'codex', label: 'Codex', tool: 'codex', engine: null },
+  { id: 'codex', label: 'Codex', tool: 'codex', engine: 'codex' },
   // **Always available, and that is why it is the fallback.** Cinna downloads
   // and verifies its own `opencode` the first time an agent needs one, so this
   // is the only choice that is true on a machine with no developer tooling at

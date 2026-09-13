@@ -103,6 +103,8 @@ Caller (tool detection / launcher / MCP stdio spawn)
 
 ## Integration Points
 
+- [Codex engine](../../agents/local_agents/codex_engine_tech.md#configuration) — `buildCodexEnv` uses this inherit set for both login probes and turns, then explicitly preserves `CODEX_HOME` so the same saved CLI profile is selected. Shell billing keys and adapter overrides remain excluded; launcher-owned overrides are supplied separately. A shell-profile change needs the same app restart as a new PATH directory.
+
 - [MCP Connections](../../mcp/connections/connections.md) — the stdio transport spawn is the first consumer and the one whose behaviour changed; see its **Stdio environment** rules for the user-visible consequence
 - [Open in Tools](../../agents/local_agents/open_in_tools.md) — installed-tool detection and the terminal/editor launchers resolve every binary through `which`
 - [Setup](../setup/setup.md) — general dev environment and gotchas

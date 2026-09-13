@@ -6,7 +6,7 @@
 
 What happens when a user types a message into a chat with a folder agent: the message becomes one streaming turn against a child process running that agent's engine, at parity with a chat against a remote A2A agent. Same composer, same transcript, same cancel button, same orchestrated-tool behaviour.
 
-**One implementation serves both engines.** Until phase 3 of the agent runtime plan there were two: `LocalAgentTurnRunner`, which drove a shared `opencode serve` over HTTP with an SSE event bus, a durable cursor and hole-and-heal recovery; and `ClaudeAgentTurnRunner`, which ran the Claude Agent SDK inside this process. Both are gone. With the transport standardised on the [Agent Client Protocol](../drivers/drivers.md) there is nothing left for them to disagree about — what differs between engines is how a process is started, and that is a [launcher](engine.md).
+**One implementation serves OpenCode, Claude Code and Codex.** Until phase 3 of the agent runtime plan there were two: `LocalAgentTurnRunner`, which drove a shared `opencode serve` over HTTP with an SSE event bus, a durable cursor and hole-and-heal recovery; and `ClaudeAgentTurnRunner`, which ran the Claude Agent SDK inside this process. Both are gone. With the transport standardised on the [Agent Client Protocol](../drivers/drivers.md) there is nothing left for them to disagree about — what differs between engines is how a process is started, and that is a [launcher](engine.md).
 
 ## A note on paths
 
@@ -43,9 +43,9 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 1. The user opens a chat bound to a folder agent and sends a message
 2. The message is persisted exactly as it is for a remote agent — one shared path, no local branch
 3. The **folder is read**: it must still exist on disk, must be switched on, and must not be in a readiness state it cannot run from. The engine comes from what the folder says now, not from the row
-4. That engine's launcher **plans** the turn, or refuses it in a sentence. Planning may resolve (and download) the `opencode` binary, generate this agent's config, or probe whether Claude Code is logged in — all of it before the turn lock is taken, so a user reads the reason instead of queueing behind another chat to be told
+4. That engine's launcher **plans** the turn, or refuses it in a sentence. Planning may resolve (and download) the `opencode` binary, generate this agent's config, or probe whether Claude Code/Codex is logged in — all of it before the turn lock is taken, so a user reads the reason instead of queueing behind another chat to be told
 5. The per-agent turn lock is taken, the agent's process is acquired — started if this is the first turn — and a session is loaded or created
-6. The launcher's setup is applied to the session: the agent definition on OpenCode, the approval mode on Claude
+6. The launcher's setup is applied to the session: the agent definition on OpenCode, the approval mode on Claude and Codex
 7. The prompt is sent. Text, thinking, tool calls and their results stream into the transcript as `session/update` notifications arrive; the turn ends on a stop reason and the assistant message is persisted
 
 ### Continuing a conversation the next day
@@ -62,7 +62,7 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 5. If a standing grant already covers the ask, **none of that happens**: the agent is answered `allow_once` automatically and nothing is written to the transcript at all
 
 ### The agent asks a question
-1. Only on Claude, and only because the client declares `elicitation.form`: the adapter enables its `AskUserQuestion` tool, renders each question as a form field and sends `elicitation/create`
+1. Claude and Codex advertise `elicitation.form`: Claude bridges `AskUserQuestion`, and Codex bridges native `requestUserInput`, into `elicitation/create`. OpenCode has no question bridge. Companion free-text fields are folded into the existing Other answer rather than shown as extra questions
 2. The question block renders, the answer is delivered by request id while the turn streams on, and the turn does **not** end to ask
 3. On OpenCode nothing arrives here — its `question` tool is not registered under ACP — so a model that wants to ask asks in prose
 
@@ -96,7 +96,7 @@ Enforced at both ends. The driver catches — including around `turnLock.acquire
 
 ### Refuse before the lock, stream inside it
 
-Everything that can be answered without spawning anything is answered first: the folder's own state, `enabled`, the engine this build cannot run, and the launcher's plan — no `opencode` binary, no usable credential, no model, no Claude Code, not logged in. Only then is the lock taken.
+Everything that can be answered without spawning anything is answered first: the folder's own state, `enabled`, the engine this build cannot run, and the launcher's plan — no `opencode` binary, no usable credential, no model, no selected Claude/Codex CLI, not logged in. Only then is the lock taken.
 
 The ordering is about what the user reads. A refusal produced *inside* the lock would queue behind another chat's turn on the same agent before saying that this agent cannot run at all.
 
@@ -134,7 +134,7 @@ Four rules come from watching the wire rather than from the protocol document:
 
 - **Only a chunk names a message.** `tool_call` and `tool_call_update` carry no message id in either engine, so a tool call is filed under whatever message was current when it arrived. Under the Claude adapter a turn's tool calls arrive *before* its first chunk, so they land in an anonymous message of their own — which is far better than adopting the id of whatever message comes next
 - **The first title wins as the tool name.** OpenCode titles a call `write` and then retitles the *same* call with the file path; the Claude adapter titles a Bash call `Terminal` and then the command. Neither later title is a tool name. What is authoritative is `_meta.claudeCode.toolName`, then the non-standard `name` field, and only then the first title
-- **A tool call ends a run of text.** A turn is text → tool → more text, and the second run must not be appended to the first part, or the renderer shows the tool block after a paragraph it interrupted. No recording *forces* this rule — both engines happen to start a new message id after a call — which is exactly why it is written down: the protocol never promised it
+- **A tool call ends a run of text.** A turn is text → tool → more text, and the second run must not be appended to the first part, or the renderer shows the tool block after a paragraph it interrupted. No recording *forces* this rule — the recorded OpenCode and Claude turns happen to start a new message id after a call — which is exactly why it is written down: the protocol never promised it
 - **Part identity is assigned once and never moves**, and text never shrinks. A part key gets an index on first sight and keeps it; parts are appended, never spliced
 
 ### Permissions and questions are `tool` parts. There is no `permission` part kind
@@ -178,7 +178,7 @@ Inside that, the order is the point:
 
 ### The setup is a refusal, not a warning
 
-`session/set_mode` and the mandatory `session/set_config_option` calls are what make the desktop's own choices true: OpenCode's `mode` selects the agent definition (without it the turn runs the engine's stock coding agent in the user's folder), and Claude's `session/set_mode` is the only thing that overrides a `defaultMode` from the user's own settings — which can be `bypassPermissions`. A turn that ran anyway would run under a policy nobody chose.
+`session/set_mode` and the mandatory `session/set_config_option` calls are what make the desktop's own choices true: OpenCode's `mode` selects the agent definition (without it the turn runs the engine's stock coding agent in the user's folder), and Claude's `session/set_mode` is the only thing that overrides a `defaultMode` from the user's own settings — which can be `bypassPermissions`. Codex also sets its chosen sandbox/reviewer mode after every new/load, before prompting. A turn that ran anyway would run under a policy nobody chose.
 
 The refusal goes out through the same exit every other path takes, so the session this turn *did* create is still recorded: a bare failure leaves it behind engine-side and mints another on every retry, and the chat never gets a session to continue from.
 
@@ -206,7 +206,7 @@ Three obligations follow, and each is a lie to the user if dropped:
 - **The transcript says which of the two happened** — "Allowed, and remembered for this agent." only where the rule reached disk, "Allowed once." otherwise. A store that refused the write must not cancel the action the user approved: they are asked again next time, and nothing claims a rule that does not exist
 - **An auto-answered ask writes nothing.** The grant is checked *before* any part is created, so no block, no registry entry and no `needs_input` exist for it. A block that appeared and answered itself milliseconds later would be a widget the user cannot act on, mid-stream
 
-The vocabulary is the engine's and stays the engine's: a grant made under OpenCode's `bash` must never silently authorise Claude's `Bash`. The rest of the model is [Local Agent Permissions](permissions.md).
+The vocabulary is the engine's and stays the engine's: a grant made under OpenCode's `bash` must never silently authorise Claude's `Bash`. Codex uses namespaced `codex:<kind>` actions and exact compound command scopes, including the adapter's SOCKS host/protocol fields. The rest of the model is [Local Agent Permissions](permissions.md).
 
 ### The `enabled` gate lives in the driver, and nowhere else
 
@@ -252,7 +252,8 @@ Permission/question → captured pending registration → tool part + needs_inpu
 - [The Local Engine, Runtimes & Prompt Assembly](engine.md) — the launchers this turn plans with, the per-agent config, the process pool and the binary behind it
 - [The ACP Engine Contract](acp_contract.md) — what was actually watched on the wire, per launcher, and what is still unverified
 - [Agent Drivers & Readiness](../drivers/drivers.md) — the dispatch point, the capability answer a composer reads, and the readiness a send is refused on
-- [The Claude Engine](claude_engine.md) — the second launcher: the approval mode set on every session, the question path it gains, and the isolation it is spawned with
+- [The Codex Engine](codex_engine.md) — the CLI-owned profile, developer instructions, mode setup and native question bridge
+- [The Claude Engine](claude_engine.md) — the sibling launcher: the approval mode set on every session, the question path it gains, and the isolation it is spawned with
 - [Local Agent Permissions](permissions.md) — what an ask can be about, and where a standing grant lives. This document owns the parking and the reply; that one owns the decision and the store
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the `enabled` flag this driver gates on, the readiness values it refuses, and the per-agent turn lock
 - [Ask User Question](../../chat/ask_user_question/ask_user_question.md) — the tool-part convention permission and question blocks follow
@@ -267,7 +268,7 @@ This project's honesty convention applies: coverage is named, not implied.
 
 Named gaps:
 
-- **Gemini and Codex have not been run at all.** Neither binary is on the machine this was built on and the Codex adapter is not a dependency. Both are refused in words, and the capability answer claims no question path for either, because nothing has measured one
+- **Gemini remains unimplemented.** Codex runs through the pinned adapter in real-stdio and targeted built-Electron tests with a scripted app-server peer. These prove adapter translation and startup/session arguments, not a paid model turn or native sandbox enforcement; see [Codex verification](codex_engine_tech.md#verification-and-limits)
 - **A `session/load` against a session an engine has forgotten** is covered by the fake, but the *shape* of what each real engine returns when a session id is stale has been seen only on OpenCode
 - **Whether OpenCode will ever bridge a question to `elicitation/create`** is an open question upstream; today it registers no question tool under ACP, and the desktop claims none for it
 - **The golden suites both engines had are gone**, deliberately. All 32 cases were reduced to their final text, part kinds, tool names, asks and notices before deletion: 26 map straight across to assertions in the ACP suite, three are gone by construction (an SSE drop healed by a durable cursor, a shared server that could be cold), and three that were **missing** are now covered — a user's explicit Deny, a permission ask arriving after the agent has already replied, and the notice that says the CLI fell back from automatic approvals

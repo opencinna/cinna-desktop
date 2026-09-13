@@ -27,6 +27,10 @@ Renders a remote agent's `AskUserQuestion` tool call as an interactive prompt in
 
 ## Business Rules
 
+### Local ACP questions use a live reply
+
+Claude and Codex folder agents reuse the question modal through ACP form elicitation, while the turn is parked. Their answer goes through the shared request/Inbox reply path, not a new user turn; the next-message rules below describe the remote transcript-tool variant. Codex's `_meta.codex.isOtherAnswer` companion field is folded into the existing Other choice, and selected/custom text returns under the original question ID. Live reply requests expire on run teardown or restart. OpenCode has no native question bridge over ACP. See [The Agent Turn](../../agents/local_agents/agent_turn.md) and [Codex](../../agents/local_agents/codex_engine.md).
+
 ### Detection
 
 - A `tool`-kind part (or live tool delta) is treated as an interactive question solely by tool name: lower-cased and stripped of non-letters, it must equal `askuserquestion`. This tolerates `AskUserQuestion`, `ask_user_question`, and the normalised `askuserquestion`. No other tool name triggers the rendering.

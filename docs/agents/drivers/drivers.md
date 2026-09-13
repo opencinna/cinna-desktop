@@ -18,7 +18,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 - **Not known** — a readiness of `null`: never checked, or a check that could not tell. **It never refuses anything**
 - **Refusal** — the composer declining to send a message to the agent it goes straight to, because that agent's driver answered something other than `ok`
 - **Check again** — the composer's action on a refusal; the Settings card's **Test Connection** does the same. It is a check the user asked for, so it goes past every cache a probe keeps
-- **Launcher** — the ACP process definition in driver_config. Folder engines use opencode or claude; gemini and codex remain recognized but unimplemented. The custom launcher runs a user-configured executable/argv, including SSH, with separately captured state and no folder. See [Command-line Agents](../custom_agents/custom_agents.md)
+- **Launcher** — the ACP process definition in driver_config. Folder engines use opencode, claude or codex; gemini remains recognized but unimplemented. The custom launcher runs a user-configured executable/argv, including SSH, with separately captured state and no folder. See [Command-line Agents](../custom_agents/custom_agents.md)
 - **Reconcile** — the ACP driver re-reading its folder's engine at the start of every turn and taking the launcher from what it says now. It used to mean handing the turn to a *sibling driver*, and while that hand-off was missing a Claude agent on a stale row answered "try again in a moment" for ever
 
 ## User Stories / Flows
@@ -56,7 +56,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 2. The tags send without going through the composer, so a tag that looked live and did nothing would fail silently
 
 ### A folder agent whose manifest now names the other engine
-1. The user, or an assistant, switches a folder agent's runtime between OpenCode and Claude
+1. The user, or an assistant, switches a folder agent's runtime between OpenCode, Claude Code and Codex
 2. The next turn reads the folder, sees the other engine and runs there, whatever the row still says
 
 ## Business Rules
@@ -122,7 +122,7 @@ Every driver answers `readiness()` without throwing, and **null means "could not
   - A card that does not answer within the bound gives `null`, not `unreachable`. A turn's own card fetch has no automatic deadline but remains stoppable, so refusing a slow agent would make readiness stricter than the turn it predicts
   - The bound includes the token. A token endpoint that accepted the connection and never answered once held a list-time slot for ever, and every check queued behind it waited too
 - **OpenCode** readiness is the folder's alone, and that launcher deliberately has no rungs of its own: whether the binary is resolved is not part of it, because the turn resolves it (downloading it if it must), and a list must never start a download to answer "can this agent run"
-- **Claude** — the launcher's rungs, asked about the engine the **folder** names rather than the one the row stores, so an agent just switched over in the Runtime card is answered about where it is going. The folder first, then whether a `claude` is installed, then whether it is logged in. Only a definite `logged_out` refuses. A login probe that could not answer never blocks, which is the same rule the runner applies before a turn
+- **Claude / Codex** — the selected launcher's rungs, asked about the engine the **folder** names rather than the one the row stores, so an agent just switched over in the Runtime card is answered about where it is going. The folder first, then whether the selected CLI is installed, then whether it is logged in. Only a definite `logged_out` refuses. A login probe that could not answer never blocks, which is the same rule the runner applies before a turn
 
 - **Custom ACP** returns cached binding readiness on ordinary reads; explicit Test/Check again performs initialize only. A failed explicit check remains failed until a fresh success.
 - **Managed** checks local credential/configuration availability; discovery/save and the turn verify remote access.
@@ -176,14 +176,16 @@ Renderer run.start → run:start → runExecutionService → router → AgentDri
 | Cinna-synced agent | a2a | Remote context; account authentication |
 | OpenCode folder | acp / opencode | Resumable child session; folder/runtime credential configuration |
 | Claude folder | acp / claude | Resumable child session; existing CLI login |
+| Codex folder | acp / codex | Resumable child session through the bundled adapter; existing CLI login/configuration |
 | Command-line / SSH | acp / custom | Resumable child session; captured command and external CLI/SSH configuration |
 | Claude Managed | managed | Credential-bound remote session; Anthropic API key |
 
-The LLM coordinator is separate: model adapters and chatStreamingService call MCP, agents and trusted coordinator controls through ToolProvider. Gemini/Codex ACP launchers and ACP HTTP remain unimplemented.
+The LLM coordinator is separate: model adapters and chatStreamingService call MCP, agents and trusted coordinator controls through ToolProvider. Gemini ACP and ACP HTTP remain unimplemented. Codex uses the shared ACP launcher path; [its technical reference](../local_agents/codex_engine_tech.md) separates adapter tests from live CLI/model validation.
 
 ## Integration Points
 
 - [The Agent Turn](../local_agents/agent_turn.md) — what the ACP driver does inside `run`, and the parked-ask registry it answers through
+- [The Codex Engine](../local_agents/codex_engine.md) — CLI login readiness, native question bridge and sandboxed approvals
 - [The Claude Engine](../local_agents/claude_engine.md) — the install and login probes the Claude launcher's readiness asks, and what it declares at `initialize`
 - [The Local Engine](../local_agents/engine.md) — why OpenCode readiness is the folder alone: the turn resolves the binary, and the process is the turn's own
 - [Agents Home, Scanner & Folder Index](../local_agents/folder_index.md) — the folder readiness that is the first rung of the ACP driver's answer, and the scanner that writes the launcher

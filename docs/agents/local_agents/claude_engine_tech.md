@@ -8,7 +8,7 @@ Implementation reference for [The Claude Engine](claude_engine.md). What the SDK
 
 | File | What it carries |
 |---|---|
-| `src/shared/engine.ts` | `AgentEngine = 'opencode' \| 'claude'`, `DEFAULT_AGENT_ENGINE`, `isAgentEngine()`, `claudeModelForComplexity()`, `engine` on `ResolvedRuntime`, `engine` on `LocalAgentRuntimeInput`, and `ClaudeAuthState` / `ClaudeAuthStatus` — the login answer as a caller may see it: a state, the CLI's own `authMethod` word, and a plan tier. **The account's email, organisation id and organisation name are in the CLI's response and are not in this type.** Also `ClaudeApproval = 'auto' \| 'ask'`, `DEFAULT_CLAUDE_APPROVAL` (`'auto'`) and `isClaudeApproval()` — the Approvals setting, deliberately its own two-member type and not the SDK's six-member `PermissionMode` |
+| `src/shared/engine.ts` | `AgentEngine = 'opencode' \| 'claude' \| 'codex'`, `DEFAULT_AGENT_ENGINE`, `isAgentEngine()`, `claudeModelForComplexity()`, `launcher` on `ResolvedRuntime`, `engine` on `LocalAgentRuntimeInput`, and `ClaudeAuthState` / `ClaudeAuthStatus` — the login answer as a caller may see it: a state, the CLI's own `authMethod` word, and a plan tier. **The account's email, organisation id and organisation name are in the CLI's response and are not in this type.** Also `ClaudeApproval = 'auto' \| 'ask'`, `DEFAULT_CLAUDE_APPROVAL` (`'auto'`) and `isClaudeApproval()` — the Approvals setting, deliberately its own two-member type and not the SDK's six-member `PermissionMode` |
 | `src/shared/localAgents.ts` | `LocalAgentDesktopSummary.claudeApproval: ClaudeApproval \| null` — the one field of the setting that crosses to the renderer; null is *no choice made* and survives the round trip |
 | `src/shared/kit/manifest.ts` | `AgentRuntimeRef.engine?: string \| null` — typed as a loose string, not as `AgentEngine`, because an unrecognised value must read rather than fail |
 | `src/shared/runtimeMessages.ts` | `EngineSkipCode` gains `claude_not_installed` and `claude_not_logged_in`; `describeEngineSkip()` writes both sentences. The logged-out one ends with the panel's own instruction verbatim — *Run `claude` in a terminal.* — because the user meets that condition on two surfaces, and the panel is the one that could not be reworded (it is measured to the pixel). It is still not the same string: the opening clause names the engine, which a turn error in a transcript needs and the panel already says two rows up |
@@ -27,7 +27,7 @@ Implementation reference for [The Claude Engine](claude_engine.md). What the SDK
 | `src/main/agents/drivers/acp/claudeEnv.ts` | `buildClaudeEnv()`, `auditClaudeEnv()`, `CLAUDE_STRIPPED_ENV`, `ENGINE_KEY_PREFIX`, `CLIENT_APP_ENV` |
 | `src/main/agents/drivers/acp/claudePermissions.ts` | `toClaudePermissionRequest()`, `claudePermissionResources()`, `mintPermissionRequestId()` |
 | `src/main/agents/drivers/index.ts` | Production wiring: `claudeAuthProbe`, the Claude launcher's deps (including `approval`, which reads the setting off the agent's desktop state and applies the default), `claudeAdapterEntry()` and `electronNodeRuntime()`, and the exported `acpProcessPool` that `will-quit` shuts down |
-| `src/main/agents/drivers/acp/acpDriver.ts` | The one driver behind both engines. It asks the **folder** which launcher to use, so a Claude agent is never dispatched on a stale row |
+| `src/main/agents/drivers/acp/acpDriver.ts` | The one driver behind OpenCode, Claude and Codex. It asks the **folder** which launcher to use, so a Claude agent is never dispatched on a stale row |
 | `src/main/agents/drivers/driverOf.ts` | `launcherOfFolder(runtime)` — the tolerant read of the folder's `runtime.engine`, which never answers null; `launcherOfRow` for the cached value a capability answer has to use |
 | `src/main/services/localAgents/runtimeService.ts` | `declaredEngine()`, the Claude early return in `resolve()`, the engine refusals in `validate()`, `engine` in `toRuntimeRef()` and `applyToManifest()` |
 | `src/main/services/localAgents/desktopStateService.ts` | `coerceRuntime()` — `engine` joins the bare agent's runtime allowlist; `DesktopState.claudeApproval`, coerced through `isClaudeApproval` so anything unknown reads as null, and copied into the summary |
@@ -40,9 +40,9 @@ Implementation reference for [The Claude Engine](claude_engine.md). What the SDK
 
 | File | Role |
 |---|---|
-| `src/renderer/src/components/agents/local/RuntimePanel.tsx` | The "Runs with" panel: the `Runs on` select with two `optgroup`s, `EngineRow`, `ClaudeStatus`, `commitCredential()`, `changeRuntimeTarget()`, the Claude branches of the status line and the disabled/advanced gates |
+| `src/renderer/src/components/agents/local/RuntimePanel.tsx` | The "Runs with" panel: the `Runs on` select grouping AI credentials, Claude, and Codex when installed or explicitly selected, `EngineRow`, `ClaudeStatus`, `commitCredential()`, `changeRuntimeTarget()`, the Claude branches of the status line and the disabled/advanced gates |
 | `src/renderer/src/hooks/useLocalTools.ts` | `useLocalTools()` — the detected-tools query the Claude option and status column read (`staleTime: Infinity`, cached in main for the app's lifetime) — plus `useClaudeAuth()`, `CLAUDE_AUTH_KEY` and `CLAUDE_AUTH_POLL_MS`, the login query the status line reads |
-| `src/renderer/src/components/agents/local/PermissionsCard.tsx` | Branches on `agent.runtime?.engine === 'claude'`: the private `ClaudeApprovals` (the two-setting paragraph, the **Approvals** select, the one-line error slot) in place of the private `OpenCodeProfile` |
+| `src/renderer/src/components/agents/local/PermissionsCard.tsx` | Branches on the effective engine: the private `ClaudeApprovals` (the two-setting paragraph, the **Approvals** select, the one-line error slot) in place of the private `OpenCodeProfile` |
 | `src/renderer/src/hooks/useLocalAgents.ts` | `useSetClaudeApproval()` — writes the returned DTO into the agent's own query with `setQueryData` rather than invalidating it |
 
 ### Resources and packaging
@@ -87,7 +87,7 @@ Session continuity reuses `a2a_sessions.context_id` and the `sessions` map in th
 ### `runtimeService` (`src/main/services/localAgents/runtimeService.ts`)
 
 - `declaredEngine(runtime)` — `runtime.engine` if `isAgentEngine` accepts it, else `null`. The tolerant read
-- `resolve(runtime, providers, models)` — returns early for `engine === 'claude'` with `source: 'manifest'`, no credential of any kind, `modelId` = a declared model or `claudeModelForComplexity(complexity)`, `modelSource` `declared` / `tier` / `floor`, and `reason: null`. **The early return is above `resolveDefault`**, so a throw in the default-chat-mode or credential-override store cannot demote a Claude agent to OpenCode at dispatch
+- `resolve(runtime, providers, models)` — returns early for `engine === 'claude'` with `source` identifying an explicit declaration or machine default, no credential of any kind, `modelId` = a declared model or `claudeModelForComplexity(complexity)`, `modelSource` `declared` / `tier` / `floor`, and `reason: null`. **The early return is above `resolveDefault`**, so a throw in the default-chat-mode or credential-override store cannot demote a Claude agent to OpenCode at dispatch
 - `validate(input)` — now returns `engine` alongside the other three. Throws `LocalAgentError('invalid_input')` for an engine this build does not know, and for `claude` together with a credential. Shared by both write paths, so the refusal is not something the bare-agent writer can skip
 - `toRuntimeRef(input)` / `applyToManifest(manifest, input)` — write `engine` first and treat all-four-null as "remove the block"
 
@@ -116,7 +116,7 @@ What it returns:
 - **`session`** — `mcpServers: []` and `_meta.claudeCode.options`: `systemPrompt` (never the SDK's `claude_code` preset, which is a coding assistant's prompt and would talk over the folder's), `model`, `settingSources: []`, `strictMcpConfig: true`, `mcpServers: {}`, and `agents` **only when the folder has some**. **No `allowedTools`**, because a bare name there shadows the permission request the desktop's grants run through
 - **`setup`** — `modeId: approval === 'auto' ? 'auto' : 'default'`, applied after every `session/new` *and* every `session/load`, and never anything else: every other mode takes the desktop's request, its grants and the transcript's record out of the decision
 
-Everything the old runner owned around this — the lock, the ceiling, the parks, the abort, the session stores, the exits — is the driver's now and is identical for both engines. See [The Agent Turn (technical)](agent_turn_tech.md).
+Everything the old runner owned around this — the lock, the ceiling, the parks, the abort, the session stores, the exits — is the driver's now and is shared by all folder engines. See [The Agent Turn (technical)](agent_turn_tech.md).
 
 **What went with the runner**, because it is the sort of thing a reader will look for: the async-iterable prompt held open past the first `result`, the background-task set and its five-second grace, the `drain(resume)` retry for a forgotten session (now a `catch` around `session/load`), `isNotLoggedIn`'s substring match on a thrown error (readiness answers before the turn instead), and the `CLAUDE_BACKGROUND_GRACE_MS` / `CLAUDE_TURN_FREE_TASK_TYPES` constants.
 
@@ -146,7 +146,7 @@ Starting from the shared helper rather than hand-assembling a dictionary is what
 
 ### The translator, and what is Claude-specific in it
 
-`ClaudeMessageStream` is gone; `AcpMessageStream` (`acpMessages.ts`) folds both engines' `session/update` notifications into the cumulative message every consumer already reads. The rules that used to be written about the SDK's message union hold in their ACP form and are documented with the turn ([The Agent Turn](agent_turn.md#the-translator-maintains-a-cumulative-message-the-accumulator-computes-the-delta)).
+`ClaudeMessageStream` is gone; `AcpMessageStream` (`acpMessages.ts`) folds all folder engines' `session/update` notifications into the cumulative message every consumer already reads. The rules that used to be written about the SDK's message union hold in their ACP form and are documented with the turn ([The Agent Turn](agent_turn.md#the-translator-maintains-a-cumulative-message-the-accumulator-computes-the-delta)).
 
 Two things about this engine's stream still need saying here:
 
@@ -200,15 +200,15 @@ The full runtime form and Permissions tab live in agent **Settings**. Chat mode 
 
 | Component / helper | Renders / manages |
 |---|---|
-| `RuntimePanel` | The first select is labelled **`Runs on`** (was `Credential`) and carries two `optgroup`s: `On this machine` with a single `Claude Agent` option valued `engine:claude`, and `AI credentials` with the existing list. The pending model placeholder was renamed `Model choice`, because two controls on one surface must not announce the same name |
-| `EngineRow` (private) | The third column's row — dot, word, optional button — extracted so both engines render into one fixed `h-[26px]` slot. `dot` and `tone` are passed in, not derived: the two engines mean different things by the same colours |
+| `RuntimePanel` | The first select is labelled **`Runs on`** (was `Credential`) and groups `On this machine` with a `Claude Agent` option valued `engine:claude`, and `AI credentials` with the existing list; the conditional `Codex CLI` group adds Codex when installed or explicitly selected. The pending model placeholder was renamed `Model choice`, because two controls on one surface must not announce the same name |
+| `EngineRow` (private) | The third column's row — dot, word, optional button — shared so folder engines render into one fixed `h-[26px]` slot. `dot` and `tone` are passed in, not derived: the engine status and CLI login checks mean different things by the same colours |
 | `EngineStatus` (private) | Unchanged, and shown only for OpenCode agents |
 | `ClaudeStatus` (private) | `Checking…` while detection is in flight, `Claude Code <version>` when found, `Not installed` when not. **No Start button** — this app starts nothing there. The `title` carries the resolved path. **The login is deliberately not in this cell's text** — not because it is unknowable, but because the column is fixed at 219 px and does not widen with the window, so it holds the shortest true thing and the status line carries the meaning. Takes `auth={claudeAuth?.state}`, which decides the **dot only**: danger with no install, `--color-warning` on a definite `logged_out` (the type scale's *"Awaiting auth"*, and warning not danger because the install is fine and one command fixes it), muted for `unknown`, in-flight and `logged_in`. **Never the success colour** — one option away in the same slot a green dot means *the process is running*, so green here would be one indicator in one position meaning two things |
 | `planSuffix(subscriptionType)` (private) | `"max"` → `" (Max plan)"`, empty string when the CLI named none. Passed through and capitalised, never mapped: this app does not own the set of plan names, and a lookup table would render an unrecognised plan as blank on the one line meant to say who pays |
 | `changeRuntimeTarget(value)` | The one picker's answer, now either an engine or a credential. To Claude: clear the credential and the model, keep the tier, note what was dropped. Away from Claude: clear the engine, keep the tier |
 | `commitCredential(value)` | Returns `null` on the Claude path, always. A manifest may legally carry both an engine and a credential, and forwarding the credential from a control that is not on screen handed `validate` the one pair it refuses |
 | `commit(..., {engine})` | `engine` **absent means "the engine the manifest already names"**. The panel rewrites the whole `runtime` block, so a save about the model that did not carry the engine would delete the user's engine choice |
-| `ClaudeApprovals` (private, `PermissionsCard.tsx`) | Rendered in place of `OpenCodeProfile` when `agent.runtime?.engine === 'claude'`. One paragraph describing **both** settings above the control — a sentence that changed with the select would resize the card on every toggle — then the `Approvals` select (`auto` / `ask`, `value = pending ?? stored ?? DEFAULT_CLAUDE_APPROVAL`), then a `h-[15px]` truncating error slot that is always rendered with the full text in `title`. `pending` holds the pick until `onSettled`: the select is otherwise controlled by the DTO, and main re-scans the folder before answering, so the control snapped back to the old value for the round trip and flipped afterwards. `onError` writes *"Nothing was changed — "* plus the lower-cased reason. The grants footnote's last clause is *on the default setting* here rather than *which is asked again* |
+| `ClaudeApprovals` (private, `PermissionsCard.tsx`) | Rendered in place of `OpenCodeProfile` when the effective engine is Claude, including the machine default. One paragraph describing **both** settings above the control — a sentence that changed with the select would resize the card on every toggle — then the `Approvals` select (`auto` / `ask`, `value = pending ?? stored ?? DEFAULT_CLAUDE_APPROVAL`), then a `h-[15px]` truncating error slot that is always rendered with the full text in `title`. `pending` holds the pick until `onSettled`: the select is otherwise controlled by the DTO, and main re-scans the folder before answering, so the control snapped back to the old value for the round trip and flipped afterwards. `onError` writes *"Nothing was changed — "* plus the lower-cased reason. The grants footnote's last clause is *on the default setting* here rather than *which is asked again* |
 Renderer rules that are decisions, not styling:
 
 - **`declaredEngine` is read through `isAgentEngine`**, so a value a newer tool wrote is carried as "none" rather than written back as itself
@@ -240,7 +240,7 @@ So: `refetchInterval` is `CLAUDE_AUTH_POLL_MS` (10 s) **only** while the answer 
 ## Configuration
 
 - **Contract version** — `1.2.0` in `resources/cinna-kit-contract/{VERSION,kit.json}` and mirrored in `layout.json`. Added `runtime.engine`
-- **No app setting, no environment variable.** The engine is a per-agent choice, and so is the one user-facing setting on this path: **Approvals** (`DesktopState.claudeApproval`, `auto` \| `ask` \| null), with `DEFAULT_CLAUDE_APPROVAL = 'auto'` applied at read time in `claudeDeps.approval` and in the card, never written to disk in place of null
+- **Engine selection may be per-agent or inherited from the machine Default runtime.** The approval choice remains per-agent: **Approvals** (`DesktopState.claudeApproval`, `auto` \| `ask` \| null), with `DEFAULT_CLAUDE_APPROVAL = 'auto'` applied at read time in `claudeDeps.approval` and in the card, never written to disk in place of null
 - **The turn's own constants live with the driver now** (`ACP_TURN_CEILING_MS`, `ACP_CANCEL_GRACE_MS`, `ACP_IDLE_REAP_MS`), none read from the environment. The runner's `CLAUDE_BACKGROUND_GRACE_MS` and `CLAUDE_TURN_FREE_TASK_TYPES` went with it: the adapter decides when a turn with background work is over
 - **`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` is deliberately not set** into the child. It would remove `run_in_background` from the CLI's tool schemas — buying nothing now that the stdin hazard is gone, and taking away a capability the user's own `claude` has
 - **`CLAUDE_AGENT_SDK_CLIENT_APP`** is set *into the child*, never read from the parent
@@ -290,8 +290,8 @@ So: `refetchInterval` is `CLAUDE_AUTH_POLL_MS` (10 s) **only** while the answer 
 ## Related
 
 - [The Claude Engine](claude_engine.md) — the rules and the reasons
-- [The ACP Engine Contract](acp_contract.md) — the live contract for both engines
+- [The ACP Engine Contract](acp_contract.md) — the live contract with separate per-engine evidence
 - [The Claude Engine Contract](claude_contract.md) — what was watched about Claude Code itself, and what is still unverified (§8 is the list of open risks). Sections describing the in-process SDK are marked retired in place
-- [The Agent Turn (tech)](agent_turn_tech.md) — the driver both engines share, the process pool, and the shared input/result
+- [The Agent Turn (tech)](agent_turn_tech.md) — the driver all folder engines share, the process pool, and the shared input/result
 - [The Local Engine (tech)](engine_tech.md) — runtime resolution, config generation and the "Runs with" panel's other half
-- [Local Agent Permissions (tech)](permissions_tech.md) — the grant store both engines write to
+- [Local Agent Permissions (tech)](permissions_tech.md) — the grant store all folder engines write to

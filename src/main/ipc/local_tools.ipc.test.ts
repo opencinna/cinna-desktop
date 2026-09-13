@@ -65,6 +65,7 @@ vi.mock('../services/localAgents/toolDetectionService', () => ({
 /** Records the path each probe resolved, so staleness is visible in the result. */
 const probed = vi.hoisted(() => ({ paths: [] as (string | null)[] }))
 vi.mock('../agents/drivers', () => ({
+  codexAuthProbe: { status: async () => ({ state: 'unknown' }), refresh: async () => ({ state: 'unknown' }) },
   claudeAuthProbe: {
     status: async () => ({ state: 'unknown', authMethod: null, subscriptionType: null }),
     refresh: async () => {

@@ -2,7 +2,7 @@
 
 ## File Locations
 
-- Shared: `src/shared/agentDrivers.ts` holds AgentDriverId (a2a/acp/managed), AcpLauncherId (opencode/claude/custom; gemini/codex recognized but unimplemented), capabilities/readiness DTOs and guards. `src/shared/runEvents.ts` is the run event vocabulary.
+- Shared: `src/shared/agentDrivers.ts` holds AgentDriverId (a2a/acp/managed), AcpLauncherId (opencode/claude/codex/custom; gemini recognized but unimplemented), capabilities/readiness DTOs and guards. `src/shared/runEvents.ts` is the run event vocabulary.
 - Registry: `src/main/agents/drivers/index.ts` wires production dependencies and driverFor; `src/main/agents/drivers/driver.ts` defines AgentDriver/RunInput/RunResult/ParkedAsk; `src/main/agents/drivers/driverOf.ts` and `src/main/agents/drivers/capabilities.ts` are pure row readers. `src/main/agents/drivers/unsupportedDriver.ts` provides total refusal for unknown identities.
 - A2A: `src/main/agents/drivers/a2aDriver.ts`, `src/main/agents/drivers/a2aConnection.ts`, `src/main/agents/drivers/a2aErrors.ts`, `src/main/agents/a2a-client.ts`, `src/main/services/a2aStreamingService.ts`.
 - ACP: `src/main/agents/drivers/acp/acpDriver.ts`, `src/main/agents/drivers/acp/acpRuntime.ts`, `src/main/agents/drivers/acp/acpLaunchers.ts`, `src/main/agents/drivers/acp/acpPool.ts`, `src/main/agents/drivers/acp/acpProcessPool.ts`, `src/main/agents/drivers/acp/acpConnection.ts`; message/permission/question translation lives beside them.
@@ -46,7 +46,7 @@ The old agent/model-specific send forwards are removed. Custom and Managed confi
 
 ### Capabilities per driver
 
-| | `a2a`, Cinna-synced | `a2a`, hand-added | `acp`, launcher `opencode` | `acp`, launcher `claude` | `managed` | `acp`, launcher `custom` |
+| | `a2a`, Cinna-synced | `a2a`, hand-added | `acp`, launcher `opencode` | `acp`, launchers `claude` / `codex` | `managed` | `acp`, launcher `custom` |
 |---|---|---|---|---| --- | --- |
 | `streaming` / `cancel` | yes / yes | yes / yes | yes / yes | yes / yes | yes / yes | yes / yes |
 | `sessions` | `context` | `context` | `resumable` | `resumable` | `resumable` | `resumable` |
@@ -61,7 +61,7 @@ The old agent/model-specific send forwards are removed. Custom and Managed confi
 
 ### ACP execution
 
-readAcpRuntime captures either a fresh folder and its state closures or an owned custom command and binding validation. Folder launchers choose OpenCode/Claude from the current folder runtime; custom uses the saved executable configuration. Both run through one ACP turn implementation, process pool and per-agent lock. queueWhenBusy permits abortable autonomous admission; ordinary interactive overlap refuses.
+readAcpRuntime captures either a fresh folder and its state closures or an owned custom command and binding validation. Folder launchers choose OpenCode/Claude/Codex from the current folder runtime; custom uses the saved executable configuration. Both run through one ACP turn implementation, process pool and per-agent lock. queueWhenBusy permits abortable autonomous admission; ordinary interactive overlap refuses.
 
 The replay gate closes before session bind/load. Replayed history never duplicates transcript output or old asks. Stop and ceiling cover initialize/new/load/setup; late startup cannot publish a canceled connection or send a prompt. During a prompt the cancellation grace retires an unresponsive process; external commands warn when remote stop is unconfirmed. User Stop returns canceled while retaining partial text. See [ACP turn](../local_agents/agent_turn_tech.md) and [custom commands](../custom_agents/custom_agents_tech.md).
 
@@ -77,7 +77,7 @@ The official SDK owns sessions/events HTTP/SSE. The driver reconciles complete h
 
 ### Readiness and renderer behavior
 
-agentReadinessService holds main-memory cached results, schedules enabled rows without blocking list responses, discards superseded checks and broadcasts visible changes. A2A probes card/auth with a deadline; OpenCode uses folder readiness without downloading on a list read; Claude adds installed/login rungs. Managed validates local credential/configuration availability. Custom ordinary reads return its latest binding-keyed check or null; only explicit Test/Check again initializes a command.
+agentReadinessService holds main-memory cached results, schedules enabled rows without blocking list responses, discards superseded checks and broadcasts visible changes. A2A probes card/auth with a deadline; OpenCode uses folder readiness without downloading on a list read; Claude and Codex add installed/login rungs. Managed validates local credential/configuration availability. Custom ordinary reads return its latest binding-keyed check or null; only explicit Test/Check again initializes a command.
 
 The composer refuses the directly addressed agent on an established refusal and retains the draft. Null never refuses. Bare catalog commands remain eligible independently of model readiness. Tool specialists report failure through their tool result. Cinna reauthentication is selected by capabilities.auth, not source. useAgents invalidates with cancelRefetch false so multiple mounted listeners do not restart the same fetch.
 
@@ -88,6 +88,8 @@ The composer refuses the directly addressed agent on an established refusal and 
 Zero means no counted behavioral debt. Explicit allowlisted transport/sync sites and exact per-file ownership/authoring/presentation pins remain, including custom configuration ownership and trusted coordinator controls. Raising a pin is not interchangeable with hiding new behavior; each pin names its reason and the scanner checks both additions and removals. Migration history and physical legacy table names are not live routing fallbacks.
 
 ## Configuration and Security
+
+[Codex](../local_agents/codex_engine_tech.md) shares Claude's advertised capability values but retains its own launcher, CLI profile and approval default. Its form elicitation bridge has actual-adapter coverage; a matching capability vector does not imply identical permission or configuration behavior.
 
 Configuration/auth belongs to the selected launcher/driver, with APIs documented in [folder engines](../local_agents/engine_tech.md), [custom commands](../custom_agents/custom_agents_tech.md) and [Managed sessions](../managed_agents/managed_agents_tech.md). Keys remain in main. Source checks outside transport code govern who may read/edit/sync a row; driver capabilities govern execution affordances. Bound remote replies never select a replacement credential or destination after user/profile/configuration changes.
 

@@ -616,6 +616,26 @@ export function registerLocalAgentHandlers(): void {
     }
   )
 
+  ipcHandle(
+    'local-agent:set-codex-approval',
+    (
+      _event,
+      input: { agentId: string; approval: ClaudeApproval | null }
+    ): LocalAgentOutcome<LocalAgentDto> => {
+      userActivation.requireActivated()
+      // The value goes through as it arrived. Null is a real answer — clear
+      // the choice — so a missing one must not be turned into it here; the
+      // service refuses anything that is not one of the two values or null.
+      return withCode(() =>
+        localAgentService.setCodexApproval(
+          getSettingsScopeUserId(),
+          input?.agentId ?? '',
+          input?.approval
+        )
+      )
+    }
+  )
+
   /**
    * The git state of one registered root.
    *

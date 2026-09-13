@@ -257,7 +257,7 @@ describe('validateAgentFolder — manifest errors', () => {
     // `collectEngineAgents` drop it from the engine entirely, which is exactly
     // what "minor bumps are additive and safe to ignore" promises against.
     patchManifest(agentDir, (m) => {
-      m.runtime = { engine: 'codex' }
+      m.runtime = { engine: 'future-engine' }
     })
     const report = validateAgentFolder(agentDir, OPTIONS)
     expect(report.errors).toEqual([])

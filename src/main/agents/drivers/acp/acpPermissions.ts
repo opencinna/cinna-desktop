@@ -136,6 +136,33 @@ export function toAcpPermissionRequest(
     return { ...request, callId: params.toolCall.toolCallId }
   }
 
+  if (launcher === 'codex') {
+    const kind = params.toolCall.kind ?? 'other'
+    const resources: string[] = []
+    if (kind === 'execute' && rawInput) {
+      // One indivisible scope: separate command/cwd/privilege resources would let
+      // grants from unrelated calls combine into a broader permission than either.
+      // SOCKS network host/protocol live only in title/content in the adapter;
+      // rawInput alone would let a grant for one host authorize another.
+      resources.push(JSON.stringify({
+        rawInput,
+        title: params.toolCall.title,
+        content: params.toolCall.content,
+        locations: params.toolCall.locations
+      }))
+    } else if (kind === 'edit') {
+      resources.push(...(params.toolCall.locations ?? []).map((location) => location.path))
+    } else if (rawInput) {
+      resources.push(JSON.stringify(rawInput))
+    }
+    return {
+      // Keep Codex grants separate when an agent switches engines.
+      action: `codex:${kind}`,
+      resources: resources.length ? resources : [`Request ${params.toolCall.toolCallId}`],
+      savable: [], callId: params.toolCall.toolCallId
+    }
+  }
+
   const action = openCodeAction(params, toolName)
   return {
     action,

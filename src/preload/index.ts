@@ -38,6 +38,7 @@ import { LOCAL_AGENT_CHANGED_CHANNEL } from '../shared/localAgents'
 import type { StoredPermissionGrant } from '../shared/localAgentRequests'
 import type {
   ClaudeApproval,
+  CodexAuthStatus,
   ClaudeAuthStatus,
   DefaultEngineDto,
   EngineBinaryState,
@@ -1258,6 +1259,7 @@ const api = {
      * read on the other side of this call; the email is, because a plan tier
      * alone cannot say *which* login on a machine holding more than one.
      */
+    codexAuth: (): Promise<CodexAuthStatus> => ipcRenderer.invoke('local-tools:codex-auth'),
     claudeAuth: (): Promise<ClaudeAuthStatus> => ipcRenderer.invoke('local-tools:claude-auth'),
     openIn: (request: OpenInRequest): Promise<{ success: true }> =>
       ipcRenderer.invoke('local-tools:open-in', request),
@@ -1447,6 +1449,11 @@ const api = {
       approval: ClaudeApproval | null
     ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
       ipcRenderer.invoke('local-agent:set-claude-approval', { agentId, approval }),
+    setCodexApproval: (
+      agentId: string,
+      approval: ClaudeApproval | null
+    ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
+      ipcRenderer.invoke('local-agent:set-codex-approval', { agentId, approval }),
     /**
      * The agent list of a root that is **already registered**, so its selection
      * can be changed without sending the user back through the OS picker. Only

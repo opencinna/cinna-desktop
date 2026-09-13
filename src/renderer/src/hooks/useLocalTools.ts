@@ -23,6 +23,18 @@ export const LOCAL_TOOLS_KEY = ['local-tools'] as const
  * the first person to add an invalidation for detection would silently start
  * re-spawning `claude` with it.
  */
+export const CODEX_AUTH_KEY = ['codex-auth'] as const
+
+export function useCodexAuth() {
+  return useQuery({
+    queryKey: CODEX_AUTH_KEY,
+    queryFn: () => window.api.localTools.codexAuth(),
+    staleTime: 30_000,
+    refetchOnWindowFocus: 'always',
+    refetchInterval: (query) => query.state.data?.state === 'logged_out' ? 10_000 : false
+  })
+}
+
 export const CLAUDE_AUTH_KEY = ['claude-auth'] as const
 
 /**
@@ -110,6 +122,7 @@ export function useRefreshLocalTools() {
       // The main process re-asks the login on this same call, so the cached
       // answer here is stale the moment detection comes back.
       void queryClient.invalidateQueries({ queryKey: CLAUDE_AUTH_KEY })
+      void queryClient.invalidateQueries({ queryKey: CODEX_AUTH_KEY })
       // Detection is half of what the Default Runtime is derived from: on
       // Automatic, finding a `claude` that was not there a moment ago *is* the
       // change of runtime. Left stale, Settings would report the new install in
@@ -159,6 +172,7 @@ export function useInstallRuntimeTool(options: { onDone?: (result: ToolInstallPr
         // reads of a fresh answer rather than a second detection pass.
         void queryClient.invalidateQueries({ queryKey: LOCAL_TOOLS_KEY })
         void queryClient.invalidateQueries({ queryKey: CLAUDE_AUTH_KEY })
+      void queryClient.invalidateQueries({ queryKey: CODEX_AUTH_KEY })
         void queryClient.invalidateQueries({ queryKey: DEFAULT_RUNTIME_KEY })
       }
       options.onDone?.(result)

@@ -1672,6 +1672,27 @@ export const localAgentService = {
     return this.overlayEnabled(userId, [dto])[0]
   },
 
+  setCodexApproval(userId: string, agentId: string, approval: unknown): LocalAgentDto {
+    const { root, agentDir } = this.locate(userId, agentId)
+    if (approval !== null && !isClaudeApproval(approval)) {
+      throw new LocalAgentError('invalid_input', 'That is not an approval setting this app knows.')
+    }
+    const kind = kindOf(root)
+    const handle = turnLock.acquire(agentId, 'editor')
+    try {
+      desktopStateService.patch(agentDir, kind, { codexApproval: approval })
+    } finally {
+      handle.release()
+    }
+    // The watcher acts on neither file: a bare agent's is under `userData`,
+    // and a kit folder's is under `app-data/`, which the watcher ignores by
+    // segment. So the row is re-read here, or the page would keep rendering
+    // the choice it had before the click.
+    scannerService.markRootDirty(root.id)
+    const dto = this.scanFolder(root, agentDir)
+    return this.overlayEnabled(userId, [dto])[0]
+  },
+
   /**
    * Put back every bare agent that was removed from one external root's list.
    *

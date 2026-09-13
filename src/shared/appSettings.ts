@@ -87,7 +87,7 @@ export interface AppSettingsSchema {
   localAgentsDefaultCredentialId: string
   /**
    * This machine's **Default Runtime** — what a folder agent that names no
-   * engine of its own runs on. `'claude'`, `'opencode'`, or empty for
+   * engine of its own runs on. `'claude'`, `'codex'`, `'opencode'`, or empty for
    * *Automatic*.
    *
    * Empty is the default and is a real answer, not an unset one: it means "the

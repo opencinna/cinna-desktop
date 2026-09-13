@@ -16,7 +16,7 @@ output) or explicitly marked as assumed. If you cannot say which, it is assumed.
 
 ## 1. Conditions — what was run
 
-Reproduce with these exact conditions or the results do not transfer.
+These are the original OpenCode/Claude probe conditions. Their live-model measurements do not transfer to Codex; the separate Codex adapter evidence and native-CLI limits are recorded below.
 
 | | |
 |---|---|
@@ -31,7 +31,7 @@ The spike answered seven questions and went **go** on all of the ones that gated
 back partly negative and both are recorded below in full: OpenCode has no question path over ACP, and
 its agent entry's own `model` is ignored.
 
-## 2. Verified — shared, on both engines
+## 2. Verified — shared behavior measured on OpenCode and Claude
 
 ### Traffic arrives before a turn can bind, and it is not rare
 
@@ -177,8 +177,7 @@ schema the adapter builds is read rather than guessed: `question_<n>` (a `oneOf`
 description?}` for single-select, an `array`/`anyOf` for multi-select, where the `const` **is** the
 option's label because that is what the tool records as the answer), plus a `question_<n>_custom`
 free-text companion marked with `_meta._askUserQuestionCustomAnswer` — dropped rather than rendered,
-since the desktop's widget has no free-text answer and it would otherwise appear as a question of its
-own.
+because the desktop's widget supplies its own Other answer and the companion would otherwise appear as a second question. Codex companions use a different marker, described below.
 
 ### `permissionMode` in `_meta` is overridden by the user's own settings
 
@@ -237,6 +236,20 @@ what each one actually did to the machine, is [§10](claude_contract.md#10-auto-
 `bypassPermissions` and `dontAsk` are deliberately unreachable: both remove the desktop's request
 from the decision, and with it the grants and the transcript's record.
 
+## Codex over `@agentclientprotocol/codex-acp`
+
+The pinned adapter is **1.11.0**, with an upstream Codex dependency range **^0.153.4**. It bridges ACP to the user's installed `codex app-server`, selected explicitly by `CODEX_PATH`; Cinna excludes the dependency's bundled CLI from its packaged app. This range is compatibility evidence from the package, not a version gate enforced by Cinna.
+
+**Watched through the actual adapter, with a scripted app-server peer:** `src/main/agents/drivers/acp/codexAdapter.test.ts` runs an isolated copy over real stdio and observes text streaming, native approval and question round trips, cancellation, thread creation and resume. `CODEX_CONFIG` reaches both thread paths with the assembled developer instructions, optional model and reasoning effort. The test observes turn arguments for `on-request`, reviewer `user`, workspace-write and network disabled. The built-Electron `e2e/specs/codex-engine.spec.ts` also covers this production launcher path, persistent settings and resume after restart. Neither test calls a real model.
+
+**Read from the pinned adapter source:** `read-only` means Ask for approval with a workspace-write sandbox, not read-only files. `agent` selects `auto_review` in the same sandbox. Both retain temporary-directory allowances; `agent-full-access` is never selected by Cinna. The mode is set after every new/load before prompting. Normal Codex user/project settings, skills and MCP configuration remain active; this is not the Claude launcher's settings-isolated contract.
+
+**Permission scope differs again:** actions are namespaced `codex:<kind>`. Execute scope is the complete `rawInput`, `title`, `content` and `locations` as one exact resource. SOCKS host/protocol lives outside raw input in the adapter, so raw-input-only grants could authorize a different network destination; regression tests pin that boundary. Edit scope includes all locations. A scope-less request is unique to its request ID. The shared one-time answer rule still applies to remembered grants.
+
+**Questions:** the declared `elicitation.form` capability bridges native `requestUserInput`. Companion fields marked `_meta.codex.isOtherAnswer` are excluded from the visible questions; the original field ID receives either a chosen label or custom text. URL elicitation and native child-session UI are not advertised. Shared tool-call translation is the fallback for child-agent activity; native child-session presentation is not tested.
+
+The [Codex technical reference](codex_engine_tech.md) owns the exact configuration, diagnostics and test inventory. Native CLI sandbox behavior, real reviewer decisions, login/provider variants and version compatibility remain separate live validation work; the original OpenCode/Claude measurements above are not claims about Codex.
+
 ## 5. Corrections, and what a fake could not have caught
 
 Worth stating plainly, because it generalises past this feature.
@@ -273,16 +286,14 @@ Three corrections from this phase, all found by the real binaries after the fake
 
 ## 6. Still unverified
 
-- **Gemini CLI (`gemini --acp`) and Codex (`@agentclientprotocol/codex-acp`).** Neither binary is on
-  the machine this was built on and the Codex adapter is not a dependency. No launcher exists, the
-  driver refuses such an agent in words, and `capabilities().input.question` claims no question path
-  for either — because nothing has measured one
+- **Gemini CLI (`gemini --acp`).** No launcher exists and no question capability is claimed.
+- **Codex native execution.** The implemented pinned adapter is tested against a scripted native app server. A real paid-model turn, live account login, automatic-review decisions, native sandbox enforcement and a CLI-version/platform matrix are not established by those tests
 - **Whether OpenCode will bridge a question to `elicitation/create`** in a later version. Today it
   does not, and the desktop's capability answer says so
 - **Remote ACP transports** (Streamable HTTP, WebSocket) are an active RFD upstream, not shipped.
   `opencode acp --port` exists but is OpenCode-specific
-- **MCP servers passed in `session/new.mcpServers`.** Both launchers send an empty list today, so
-  nothing here has exercised per-session MCP injection
+- **MCP servers passed in `session/new.mcpServers`.** The folder launchers send an empty list today, so
+  nothing here has exercised Cinna per-session MCP injection. Codex may still load MCP servers from its own configuration
 - **The Claude adapter's own `session/load`** is covered by a fixture rather than by a live run
 - **How each engine behaves on a session id it has forgotten** has been watched on OpenCode only
 

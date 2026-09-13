@@ -300,6 +300,7 @@ export interface LocalAgentDesktopSummary {
    * agents that never chose.
    */
   claudeApproval: ClaudeApproval | null
+  codexApproval?: ClaudeApproval | null
 }
 
 /**

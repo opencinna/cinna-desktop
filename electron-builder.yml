@@ -34,6 +34,9 @@ files:
   # sets `CLAUDE_CODE_EXECUTABLE` to the user's `claude`, so that copy is never
   # executed either.
   - '!node_modules/**/node_modules/@anthropic-ai/claude-agent-sdk-*/**'
+  # Codex is always supplied by CODEX_PATH; exclude the unused bundled CLI.
+  - '!node_modules/@openai/codex*/**'
+  - '!node_modules/**/node_modules/@openai/codex*/**'
 asarUnpack:
   # For the icon PNGs, which are imported with electron-vite's `?asset`.
   # The kit contract is excluded from `files` above, so this never matches it.
@@ -46,6 +49,7 @@ asarUnpack:
   # `claude-agent-sdk-*` platform package — another ~190 MB `claude` — out of
   # the unpacked copy; `CLAUDE_CODE_EXECUTABLE` is what makes that safe.
   - node_modules/@agentclientprotocol/claude-agent-acp/**
+  - node_modules/@agentclientprotocol/codex-acp/**
 extraResources:
   # The kit contract is read as a *tree* at runtime — the manifest schema,
   # layout.json, and the templates the scaffolder copies file by file — so it

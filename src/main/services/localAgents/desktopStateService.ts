@@ -120,6 +120,7 @@ export interface DesktopState {
    * every agent that never chose.
    */
   claudeApproval: ClaudeApproval | null
+  codexApproval?: ClaudeApproval | null
 }
 
 const EMPTY_STATE: DesktopState = {
@@ -131,7 +132,8 @@ const EMPTY_STATE: DesktopState = {
   displayName: null,
   hidden: false,
   runtime: null,
-  claudeApproval: null
+  claudeApproval: null,
+  codexApproval: null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -210,7 +212,8 @@ function coerce(raw: unknown): DesktopState {
     runtime: coerceRuntime(raw.runtime),
     // Anything but the two known values reads as no choice — the default —
     // never as the more permissive of the two by accident.
-    claudeApproval: isClaudeApproval(raw.claudeApproval) ? raw.claudeApproval : null
+    claudeApproval: isClaudeApproval(raw.claudeApproval) ? raw.claudeApproval : null,
+    codexApproval: isClaudeApproval(raw.codexApproval) ? raw.codexApproval : null
   }
 }
 
@@ -443,7 +446,8 @@ export const desktopStateService = {
       hasAgentToken: state.agentToken !== null,
       sessionCount: Object.keys(state.sessions).length,
       lastStatusAt: state.lastStatus?.at ?? null,
-      claudeApproval: state.claudeApproval
+      claudeApproval: state.claudeApproval,
+      codexApproval: state.codexApproval ?? null
     }
   }
 }
