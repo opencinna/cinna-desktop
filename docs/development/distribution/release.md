@@ -7,7 +7,7 @@ App identity:
 - **Product name:** `Cinna Desktop`
 - **Release artifacts per version:**
   - **macOS:** `cinna-desktop-${version}-x64.dmg` + `cinna-desktop-${version}-arm64.dmg` (user downloads), `cinna-desktop-${version}-x64-mac.zip` + `cinna-desktop-${version}-arm64-mac.zip` (auto-update payload, mandatory — see below), `.blockmap` files for each, + `latest-mac.yml`
-  - **Linux:** `cinna-desktop-${version}-x64.AppImage`, `cinna-desktop-${version}-x64.deb`, + `latest-linux.yml`
+  - **Linux:** `cinna-desktop-${version}-x86_64.AppImage`, `cinna-desktop-${version}-amd64.deb`, + `latest-linux.yml`
 - **Channels:**
   - macOS: signed + notarized, auto-updates via `electron-updater`.
   - Linux AppImage: auto-updates via `electron-updater`.
@@ -166,7 +166,7 @@ The `notarize:dmgs` script (in `package.json`) loops over every `dist/cinna-desk
 
 ## Verifying the result
 
-After the build, run the [packaged runtime checks](packaged_runtime.md#commands-and-coverage) against the artifact on a compatible host before publishing. `afterPack` automatically validates the required ACP manifest tree and target Canvas payload before signing, including cross-builds; it does not execute either smoke check. The ACP check uses packaged Electron, while the main check uses project Electron by default, or an explicitly supplied matching target Electron, against copied packaged files. A cross-built artifact needs a runtime matching its architecture and Electron/native ABI. Record the tested platform/architecture and keep untested targets explicit; measured runtime coverage is macOS arm64 and x64 under Rosetta, with explicit Canvas drawing measured on x64 only. See the guide's [evidence table](packaged_runtime.md#evidence-and-limits) before extending that claim to another artifact.
+After the build, run the [packaged runtime checks](packaged_runtime.md#commands-and-coverage) against the artifact on a compatible host before publishing. `afterPack` automatically validates the required ACP manifest tree and target Canvas payload before signing, including cross-builds; it does not execute either smoke check. The ACP check uses packaged Electron, while the main check uses project Electron by default, or an explicitly supplied matching target Electron, against copied packaged files. A cross-built artifact needs a runtime matching its architecture and Electron/native ABI. Record the tested platform/architecture and keep untested targets explicit; measured runtime coverage includes signed macOS arm64 and x64 under Rosetta, with explicit Canvas drawing passing on both. Linux CI passed the packaging tests and build guards; Linux runtime remains unverified. See the guide's [evidence table](packaged_runtime.md#evidence-and-limits) before extending that claim to another artifact.
 
 Cross-build native validation is separate from the manifest guard: `npmRebuild: true` prepares SQLite for each target ABI/CPU, and target-specific optional Canvas payloads need their own preparation. Inspect the shipped native files and run the matching target Electron, because an ARM64 host runtime can successfully load an ARM64 binding mistakenly packaged for Intel. See [Native dependencies across targets](packaged_runtime.md#native-dependencies-across-targets).
 
@@ -336,8 +336,8 @@ gh release view "$VERSION" --repo opencinna/cinna-desktop
 #   latest-mac.yml                          (must list the .zip URLs in `files:`)
 #
 # Expected assets (Linux, added by CI ~5-8 min after tag push):
-#   cinna-desktop-${V}-x64.AppImage
-#   cinna-desktop-${V}-x64.deb
+#   cinna-desktop-${V}-x86_64.AppImage
+#   cinna-desktop-${V}-amd64.deb
 #   latest-linux.yml
 
 # Sanity-check latest-mac.yml lists ZIPs (electron-updater will throw
@@ -402,6 +402,8 @@ When you push the `v*` tag in step 4, the workflow `.github/workflows/release-li
 - Runs `npm run test:packaging` — dependency/build-hook and environment regressions.
 - Runs `npm run release:linux` — builds `.AppImage` and `.deb`, plus `latest-linux.yml` for auto-update; the hooks prepare target Canvas payloads and discover/validate the shipped dependency trees, while native addons rebuild for the target.
 - Uploads them to the **same draft release** the macOS build created.
+
+The Linux `x64` build target uses format-specific architecture names in artifacts: `x86_64` for AppImage and `amd64` for deb. Check actual filenames in `latest-linux.yml` and the release assets rather than assuming the target spelling is preserved.
 
 The workflow does not run `test:packaged:acp`, `test:packaged:main` or the full E2E suite. Runtime smoke checks remain separate manual verification on a compatible host.
 
@@ -506,8 +508,8 @@ For each release, GitHub Releases will hold:
 - `latest-mac.yml` — auto-update manifest for `electron-updater`
 
 **Linux** (uploaded by the `release-linux.yml` GitHub Actions workflow):
-- `cinna-desktop-${version}-x64.AppImage`
-- `cinna-desktop-${version}-x64.deb`
+- `cinna-desktop-${version}-x86_64.AppImage`
+- `cinna-desktop-${version}-amd64.deb`
 - `latest-linux.yml` — auto-update manifest (only AppImage uses it)
 
 The `.blockmap` files (macOS only currently) enable **differential downloads** — a user updating from 0.1.0 to 0.1.1 typically transfers ~5–20 MB instead of the full ~130 MB. Linux AppImage updates download the full new AppImage.

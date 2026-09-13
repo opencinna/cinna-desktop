@@ -43,19 +43,18 @@ needed an explicit production dependency. Both adapters' dependency trees are no
 discovered before packing and the shipped required manifest tree is checked after
 packing, including cross-builds. The user's Claude/Codex executables remain external.
 
-Verified on macOS arm64: both packaged adapters completed ACP v1 `initialize` using
+Verified on the signed macOS arm64 package: both adapters completed ACP v1 `initialize` using
 the packaged Electron executable and isolated copies outside the checkout. Codex's
-app-server was the integration-test fixture; Claude did not start a turn. Both
-initializations also passed with the check runner's Node executable in a path
-containing spaces. These checks use temporary homes and no inherited credentials
+app-server was the integration-test fixture; Claude did not start a turn. Separate
+arm64 checks also passed for both adapters with the check runner's Node executable
+in a path containing spaces. These checks use temporary homes and no inherited credentials
 or Node loader overrides; they establish no live model or login behavior.
 
 The separate packaged main-process check loaded 21 external imports and exercised
-SQLite queries, libsodium initialization/hashing, and RTF/PDF extraction including
-the dynamic PDF.js worker on macOS arm64. Those runs preceded the explicit Canvas
-drawing probe, so arm64 Canvas drawing remains unverified.
+SQLite queries, libsodium initialization/hashing, native Canvas drawing, and RTF/PDF
+extraction including the dynamic PDF.js worker against the signed macOS arm64 package.
 
-The corrected unsigned macOS x64 package also passed both ACP initializations and
+The signed macOS x64 package also passed both ACP initializations and
 all named main-process checks, including native Canvas drawing, under Rosetta on an
 arm64 host with x64 Electron 41.2.1. ACP initialization allows 60 seconds for cold
 Rosetta startup. This establishes x64 runtime behavior under Rosetta, not a separate

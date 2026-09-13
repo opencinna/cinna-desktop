@@ -96,8 +96,9 @@ The probe imports each discovered specifier, then queries an in-memory `better-s
 
 | Measured target/runtime | Result |
 |---|---|
-| macOS arm64 | Both packaged ACP initializations, 21 external main imports, SQLite, libsodium, RTF and PDF worker checks passed. These runs preceded the explicit Canvas drawing probe; arm64 Canvas drawing remains unverified. |
-| macOS x64 under Rosetta on an arm64 host, Electron 41.2.1 | Both packaged ACP initializations passed with the 60-second deadline. The corrected unsigned package passed 21 external main imports, SQLite, libsodium, native Canvas drawing, RTF and PDF worker checks with matching x64 Electron. Target Canvas fetching used the actual locked tarball/SRI path, and its shipped-payload check passed. This is x64 runtime evidence under Rosetta, not a separate Intel-hardware result. |
+| Signed macOS arm64 package | Both packaged ACP initializations, 21 external main imports, SQLite, libsodium, native Canvas drawing, RTF and PDF worker checks passed. |
+| Signed macOS x64 package under Rosetta on an arm64 host, Electron 41.2.1 | Both packaged ACP initializations passed with the 60-second deadline. The signed package passed 21 external main imports, SQLite, libsodium, native Canvas drawing, RTF and PDF worker checks with matching x64 Electron. Target Canvas fetching also exercised the actual locked tarball/SRI path, and its shipped-payload check passed. This is x64 runtime evidence under Rosetta, not a separate Intel-hardware result. |
+| Linux release CI | [Run 34781536386](https://github.com/opencinna/cinna-desktop/actions/runs/34781536386) passed all 13 packaging fixture/environment tests and the release build with shipped-tree guards. No Linux packaged runtime smoke was run. |
 
 All thirteen fixture/environment tests passed, including Canvas target selection, lock/integrity validation, staged payload preparation, shipped-payload rejection and a regression that demonstrates CommonJS can load a developer-only package through inherited `NODE_PATH` before asserting the sanitized environment prevents it. The ACP command also passed for both adapters on macOS arm64 when invoked with a Node executable path containing spaces.
 
