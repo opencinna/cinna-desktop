@@ -52,9 +52,17 @@ or Node loader overrides; they establish no live model or login behavior.
 
 The separate packaged main-process check loaded 21 external imports and exercised
 SQLite queries, libsodium initialization/hashing, and RTF/PDF extraction including
-the dynamic PDF.js worker. It uses the project's Electron against a copied actual
-archive with sanitized environment and temporary userData, rather than starting
-the production app. Windows/Linux runtime and OCR remain unverified.
+the dynamic PDF.js worker on macOS arm64. Those runs preceded the explicit Canvas
+drawing probe, so arm64 Canvas drawing remains unverified.
+
+The corrected unsigned macOS x64 package also passed both ACP initializations and
+all named main-process checks, including native Canvas drawing, under Rosetta on an
+arm64 host with x64 Electron 41.2.1. ACP initialization allows 60 seconds for cold
+Rosetta startup. This establishes x64 runtime behavior under Rosetta, not a separate
+Intel-hardware result. The main check uses project Electron by default, or an
+explicit matching target runtime, against copied packaged files with sanitized
+environment and temporary userData; it does not boot the production app.
+Windows/Linux runtime and OCR remain unverified.
 
 See [Packaged Runtime Dependencies](../../development/distribution/packaged_runtime.md)
 for the commands, dependency/optional rules, isolation and evidence limits. The

@@ -59,7 +59,8 @@ try {
     let timer
     try {
       const response = await new Promise((resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`${adapter}: initialize timed out\n${stderr}`)), 15_000)
+        // A newly built Intel executable may need a cold Rosetta translation.
+        timer = setTimeout(() => reject(new Error(`${adapter}: initialize timed out\n${stderr}`)), 60_000)
         child.once('error', reject)
         child.once('exit', (code, signal) => reject(new Error(`${adapter}: exited (${code ?? signal}) before initialize\n${stderr}`)))
         child.stdin.on('error', reject)

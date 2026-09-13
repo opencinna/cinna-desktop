@@ -143,7 +143,7 @@ npm run build:mac
 
 This script (defined in `package.json`) runs `electron-vite build && electron-builder --mac` and, with the env vars present, will:
 1. Compile main/preload/renderer.
-2. Discover ACP runtime dependencies, package the app for both `x64` and `arm64`, and validate required manifests in each shipped unpacked tree (hooks in `electron-builder.yml`; see [Packaged Runtime Dependencies](packaged_runtime.md)).
+2. Discover ACP dependencies and prepare target-native payloads, package the app for both `x64` and `arm64`, and validate required ACP manifests and Canvas payloads in each shipped unpacked tree (hooks in `electron-builder.yml`; see [Packaged Runtime Dependencies](packaged_runtime.md)).
 3. Sign every binary with your Developer ID cert.
 4. Upload to Apple's notary service and wait (typically 2–10 min per arch).
 5. Staple the notarization ticket onto the DMG.
@@ -166,7 +166,9 @@ The `notarize:dmgs` script (in `package.json`) loops over every `dist/cinna-desk
 
 ## Verifying the result
 
-After the build, run the [packaged runtime checks](packaged_runtime.md#commands-and-coverage) against the artifact on a compatible host before publishing. `afterPack` automatically validates the required ACP manifest tree before signing, including cross-builds; it does not execute either smoke check. The ACP check uses packaged Electron, while the main check uses project Electron against copied packaged files. Record the tested platform/architecture and keep untested targets explicit; measured runtime coverage is macOS arm64 only.
+After the build, run the [packaged runtime checks](packaged_runtime.md#commands-and-coverage) against the artifact on a compatible host before publishing. `afterPack` automatically validates the required ACP manifest tree and target Canvas payload before signing, including cross-builds; it does not execute either smoke check. The ACP check uses packaged Electron, while the main check uses project Electron by default, or an explicitly supplied matching target Electron, against copied packaged files. A cross-built artifact needs a runtime matching its architecture and Electron/native ABI. Record the tested platform/architecture and keep untested targets explicit; measured runtime coverage is macOS arm64 and x64 under Rosetta, with explicit Canvas drawing measured on x64 only. See the guide's [evidence table](packaged_runtime.md#evidence-and-limits) before extending that claim to another artifact.
+
+Cross-build native validation is separate from the manifest guard: `npmRebuild: true` prepares SQLite for each target ABI/CPU, and target-specific optional Canvas payloads need their own preparation. Inspect the shipped native files and run the matching target Electron, because an ARM64 host runtime can successfully load an ARM64 binding mistakenly packaged for Intel. See [Native dependencies across targets](packaged_runtime.md#native-dependencies-across-targets).
 
 Then sanity-check signing and notarization:
 
@@ -290,7 +292,7 @@ npm run release:mac
 
 This single command:
 - Compiles main/preload/renderer.
-- Discovers/unpacks the ACP runtime dependency trees and validates the required shipped manifests while packaging `.app` bundles for `x64` and `arm64`.
+- Prepares target Canvas payloads, discovers/unpacks the ACP runtime dependency trees, rebuilds native addons per target, and validates shipped manifests/payloads while packaging `.app` bundles for `x64` and `arm64`.
 - Signs everything with the Developer ID cert.
 - Submits each `.app` to Apple notary and **waits** for `Accepted` (2–10 min per arch).
 - Staples the notarization ticket onto the `.app`.
@@ -398,7 +400,7 @@ When you push the `v*` tag in step 4, the workflow `.github/workflows/release-li
 
 - Runs `npm ci` (which installs `linux-x64` native binaries for `better-sqlite3` and friends).
 - Runs `npm run test:packaging` — dependency/build-hook and environment regressions.
-- Runs `npm run release:linux` — builds `.AppImage` and `.deb`, plus `latest-linux.yml` for auto-update; `beforePack` and `afterPack` discover and validate the ACP manifest tree.
+- Runs `npm run release:linux` — builds `.AppImage` and `.deb`, plus `latest-linux.yml` for auto-update; the hooks prepare target Canvas payloads and discover/validate the shipped dependency trees, while native addons rebuild for the target.
 - Uploads them to the **same draft release** the macOS build created.
 
 The workflow does not run `test:packaged:acp`, `test:packaged:main` or the full E2E suite. Runtime smoke checks remain separate manual verification on a compatible host.

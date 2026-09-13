@@ -113,7 +113,9 @@ appImage:
   artifactName: ${name}-${version}-${arch}.${ext}
 deb:
   artifactName: ${name}-${version}-${arch}.${ext}
-npmRebuild: false
+# Rebuild native modules for each target's Electron ABI and architecture.
+# Reusing the host's SQLite binary makes an x64 package built on arm64 fail at startup.
+npmRebuild: true
 publish:
   provider: github
   owner: opencinna

@@ -63,6 +63,14 @@ app.whenReady().then(async () => {
     assert.equal(sodium.crypto_generichash(32, 'packaged crypto check').length, 32)
     console.log('Packaged libsodium initialization and hashing passed')
 
+    const { createCanvas } = await import('@napi-rs/canvas')
+    const canvas = createCanvas(2, 2)
+    const context = canvas.getContext('2d')
+    context.fillStyle = '#ff0000'
+    context.fillRect(0, 0, 2, 2)
+    assert.deepEqual([...context.getImageData(0, 0, 1, 1).data], [255, 0, 0, 255])
+    console.log('Packaged Canvas native drawing passed')
+
     const { parseOffice } = await import('officeparser')
     const text = 'Packaged attachment check'
     assert.ok((await parseOffice(Buffer.from(`{\\rtf1\\ansi ${text}}`))).toText().includes(text))

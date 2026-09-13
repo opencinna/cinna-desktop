@@ -21,10 +21,11 @@ function checkEnvironment(scratch, host = process.env) {
 
 async function main() {
   const resources = process.argv[2]
-  if (!resources) throw new Error('Usage: npm run test:packaged:main -- <resources directory>')
+  if (!resources) throw new Error('Usage: npm run test:packaged:main -- <resources directory> [matching Electron executable]')
+  const electron = process.argv[3] ? resolve(process.argv[3]) : require('electron')
   const scratch = await mkdtemp(join(tmpdir(), 'cinna-main-check-'))
   try {
-    const child = spawn(require('electron'), [join(__dirname, 'packaged-main-probe.cjs'), resolve(resources)], {
+    const child = spawn(electron, [join(__dirname, 'packaged-main-probe.cjs'), resolve(resources)], {
       cwd: scratch, env: checkEnvironment(scratch), stdio: 'inherit'
     })
     let timedOut = false

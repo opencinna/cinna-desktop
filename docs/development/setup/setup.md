@@ -19,7 +19,7 @@ Packaging checks are separate from the Vite build and Vitest suite:
 |---|---|
 | `npm run test:packaging` | Dependency discovery/build-hook and isolated-environment regression tests; no packaged artifact required. |
 | `npm run test:packaged:acp -- <app-executable> <resources-directory>` | Initialize both adapters in an existing package using packaged Electron. |
-| `npm run test:packaged:main -- <resources-directory>` | Check shipped main imports, native/WASM initialization and parser paths using project Electron. |
+| `npm run test:packaged:main -- <resources-directory> [matching-electron-executable]` | Check shipped main imports, native/WASM initialization and parser paths using supplied Electron or project Electron by default. |
 
 Run the runtime commands from a checkout with dependencies installed and on a compatible host. They do not build the package or run live model turns. See [Packaged Runtime Dependencies](../distribution/packaged_runtime.md) for quoted examples, isolation, CI coverage and platform limits; [Release & Distribution](../distribution/release.md) owns package creation.
 
@@ -104,7 +104,7 @@ MainArea routes chats, Settings, Inbox, tasks, jobs, notes and agent pages. Chat
 - Default provider/model, dark/light theme, markdown rendering
 - Compact UI with animated sidebar, controls row, metadata popups
 - Animated tool call blocks: provider-first badges, shimmer progress bar, smooth expand/collapse
-- Packaged ACP dependency discovery and shipped-tree guard; isolated ACP/main smoke checks verified on macOS arm64
+- Packaged ACP dependency discovery and shipped-tree guard; isolated ACP/main smoke checks verified on macOS arm64 and x64 under Rosetta (Canvas drawing measured on x64 only)
 
 ### Known Gaps
 - Chat title auto-generation (currently truncated first message)
@@ -112,4 +112,4 @@ MainArea routes chats, Settings, Inbox, tasks, jobs, notes and agent pages. Chat
 - Inline chat rename, message editing/deletion
 - Conversation export, system prompt UI, image/file attachments
 - Streaming cancellation cleanup, search across chats
-- Packaged runtime checks on Windows/Linux and macOS x64 remain unverified; build-time dependency validation also runs on cross-builds (see [Packaged Runtime Dependencies](../distribution/packaged_runtime.md))
+- Packaged runtime checks on Windows/Linux and the explicit Canvas drawing probe on macOS arm64 remain unverified; build-time dependency validation also runs on cross-builds (see [Packaged Runtime Dependencies](../distribution/packaged_runtime.md))
