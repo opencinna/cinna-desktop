@@ -23,6 +23,7 @@ vi.mock('../../hooks/useAppSettings', () => ({
 }))
 
 const { FeaturesSettingsSection } = await import('./FeaturesSettingsSection')
+const { useUIStore } = await import('../../stores/ui.store')
 
 /**
  * Two titled sections, each one `SettingsRows` list of one-line toggles. The
@@ -35,7 +36,7 @@ describe('FeaturesSettingsSection', () => {
 
     expect(screen.getByRole('heading', { name: 'AI Functions' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Interface' })).toBeTruthy()
-    expect(screen.getAllByRole('switch')).toHaveLength(5)
+    expect(screen.getAllByRole('switch')).toHaveLength(6)
     // The label names the switch (rule 10), not the branching title.
     expect(screen.getByRole('switch', { name: 'Auto-generate chat titles' })).toBeTruthy()
     expect(screen.queryByText(/Couldn’t load settings/)).toBeNull()
@@ -61,6 +62,23 @@ describe('FeaturesSettingsSection', () => {
     expect(tray.getAttribute('title')).toBe('Menu-bar tray icon is hidden')
     fireEvent.click(tray)
     expect(setSetting).toHaveBeenCalledWith({ key: 'enableTrayIcon', value: true })
+  })
+
+  it('saves appearance changes immediately, including while service settings are unavailable', () => {
+    settings = undefined
+    useUIStore.setState({ extraUIAnimation: true, themePreference: 'dark', theme: 'dark' })
+    render(<FeaturesSettingsSection />)
+    const animation = screen.getByRole('switch', { name: 'Extra UI animation' })
+    expect(animation.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(animation)
+    expect(animation.getAttribute('aria-checked')).toBe('false')
+    expect(localStorage.getItem('cinna-extra-ui-animation')).toBe('0')
+    fireEvent.click(screen.getByRole('button', { name: 'System' }))
+    expect(useUIStore.getState().themePreference).toBe('system')
+    expect(screen.getByRole('button', { name: 'System' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Light' }))
+    expect(document.documentElement.dataset.theme).toBe('light')
+    expect(localStorage.getItem('cinna-theme')).toBe('light')
   })
 
   it('explains a rejected setting instead of silently resetting the switch', () => {

@@ -11,8 +11,9 @@ import { DevelopmentRuntimeBadges } from './DevelopmentRuntimeBadges'
 import { BuildGuideModal } from './BuildGuideModal'
 import { DevelopmentSettings } from './DevelopmentSettings'
 import { ComposerWarning } from '../chat/ComposerWarning'
+import { AmbientGrid } from '../ui/AmbientGrid'
 
-const actionClass = 'inline-flex items-center justify-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 transition-colors'
+const actionClass = 'ambient-button inline-flex items-center justify-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 transition-colors'
 const EXAMPLES = [
   { title: 'Build a new agent', text: 'Help me build an agent that ' },
   { title: 'Improve an existing agent', text: 'Show me the agents I can build on this Cinna instance, then help me improve one.' },
@@ -121,15 +122,15 @@ function DevelopmentComposer({ profileId, active, busy, blocked, onSend }: {
   return (
     <>
       <form className="mt-6" onSubmit={(event) => { event.preventDefault(); if (!blocked) void onSend(draft) }}>
-        <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-input)] overflow-hidden focus-within:border-[var(--color-accent)] transition-colors">
+        <div className="ambient-grid-surface rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-input)] overflow-hidden focus-within:border-[var(--color-accent)] transition-colors [--ambient-input-tint:var(--color-border)] focus-within:[--ambient-input-tint:var(--color-accent)]">
+          <AmbientGrid active={active} inputRef={textarea} />
           <label htmlFor="development-message" className="sr-only">Describe the agent you want to build</label>
           <textarea id="development-message" ref={textarea} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={busy || blocked} rows={4}
             placeholder="Build an agent that…"
             className="block w-full resize-none bg-transparent px-4 py-3 text-sm leading-relaxed text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] outline-none disabled:opacity-60"
             onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!blocked) void onSend(draft) } }} />
         </div>
-        <div className="flex items-center justify-between gap-3 px-1 pt-2">
-          <span className="text-xs text-[var(--color-text-muted)]">Enter to send · Shift + Enter for a new line</span>
+        <div className="flex items-center justify-end px-1 pt-2">
           <button type="submit" disabled={busy || blocked || !draft.trim()} className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-[var(--color-success)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-80 disabled:opacity-20 disabled:cursor-not-allowed transition-opacity">
             {busy ? <Loader2 size={16} className="animate-spin" /> : <SendHorizontal size={16} />} {busy ? 'Starting…' : 'Start building'}
           </button>

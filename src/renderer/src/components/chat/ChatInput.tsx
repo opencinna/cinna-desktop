@@ -1,4 +1,5 @@
 import { PendingHandoffControl } from '../tasks/PendingHandoffControl'
+import { AmbientGrid } from '../ui/AmbientGrid'
 import { AutonomousTaskDialog } from '../tasks/AutonomousTaskDialog'
 import { useState, useRef, useEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef } from 'react'
 import { SendHorizontal, Square, Bot } from 'lucide-react'
@@ -1225,6 +1226,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     setTriggerIndex(0)
   }
 
+  const inputBorderColor = isDraggingOver
+    ? 'var(--color-accent)'
+    : modeColor ? modeColor.border : 'var(--color-border)'
+
   return (
     <div className="w-full max-w-3xl mx-auto px-4 relative">
       <div className="absolute bottom-full right-4 mb-2"><PendingHandoffControl chatId={chatId} /></div>
@@ -1304,20 +1309,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       <ComposerReadinessWarning readiness={readiness} reasonId={readinessReasonId} />
 
       <div
-        className="relative rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
+        className="ambient-grid-surface relative rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         style={{
-          borderColor: isDraggingOver
-            ? 'var(--color-accent)'
-            : modeColor
-              ? modeColor.border
-              : 'var(--color-border)',
+          borderColor: inputBorderColor,
           backgroundColor: modeColor ? modeColor.bg : undefined
         }}
       >
+        <AmbientGrid inputRef={textareaRef} borderColor={inputBorderColor} />
         <textarea
           ref={textareaRef}
           value={input}

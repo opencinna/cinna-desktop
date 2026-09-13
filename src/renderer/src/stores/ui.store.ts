@@ -1,4 +1,7 @@
+/// <reference types="vite/client" />
 import { create } from 'zustand'
+import { readThemePreference, resolveTheme, type Theme, type ThemePreference } from '../utils/theme'
+export type { Theme, ThemePreference } from '../utils/theme'
 
 export type ActiveView =
   | 'chat'
@@ -49,9 +52,13 @@ export const PROFILE_SCOPE_TABS: readonly SettingsMenu[] = [
   'profile-catalog',
   'profile-sync'
 ]
-export type Theme = 'dark' | 'light'
-
 const VERBOSE_KEY = 'cinna-verbose-mode'
+const ANIMATION_KEY = 'cinna-extra-ui-animation'
+
+function applyTheme(theme: Theme): void {
+  document.documentElement.setAttribute('data-theme', theme)
+  void window.api?.app?.setTheme(theme)?.catch(() => {})
+}
 
 interface UIStore {
   activeView: ActiveView
@@ -77,6 +84,8 @@ interface UIStore {
   pendingDraftAgentId: string | null
   sidebarOpen: boolean
   theme: Theme
+  themePreference: ThemePreference
+  extraUIAnimation: boolean
   logsOpen: boolean
   agentStatusOpen: boolean
   /** Agent whose status detail the overlay should show (null = grid view). */
@@ -96,6 +105,8 @@ interface UIStore {
   setPendingDraftAgentId: (id: string | null) => void
   toggleSidebar: () => void
   toggleTheme: () => void
+  setThemePreference: (preference: ThemePreference) => void
+  setExtraUIAnimation: (enabled: boolean) => void
   setLogsOpen: (open: boolean) => void
   setAgentStatusOpen: (open: boolean) => void
   setAgentStatusDetailId: (id: string | null) => void
@@ -103,7 +114,7 @@ interface UIStore {
   toggleVerboseMode: () => void
 }
 
-export const useUIStore = create<UIStore>((set) => ({
+export const useUIStore = create<UIStore>((set, get) => ({
   activeView: 'chat',
   agentPageMode: 'chat',
   settingsTab: 'chats',
@@ -116,7 +127,9 @@ export const useUIStore = create<UIStore>((set) => ({
   activeLocalAgentId: null,
   pendingDraftAgentId: null,
   sidebarOpen: true,
-  theme: (localStorage.getItem('cinna-theme') as Theme) || 'dark',
+  theme: resolveTheme(readThemePreference()),
+  themePreference: readThemePreference(),
+  extraUIAnimation: localStorage.getItem(ANIMATION_KEY) !== '0',
   logsOpen: false,
   agentStatusOpen: false,
   agentStatusDetailId: null,
@@ -134,14 +147,18 @@ export const useUIStore = create<UIStore>((set) => ({
   setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id, activeExternalAgentId: null }),
   setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
-  toggleTheme: () =>
-    set((state) => {
-      const next = state.theme === 'dark' ? 'light' : 'dark'
-      localStorage.setItem('cinna-theme', next)
-      document.documentElement.setAttribute('data-theme', next)
-      window.api.app.setTheme(next).catch(() => {})
-      return { theme: next }
-    }),
+  // The footer always chooses a fixed theme, including when following System.
+  toggleTheme: () => get().setThemePreference(get().theme === 'dark' ? 'light' : 'dark'),
+  setThemePreference: (themePreference) => {
+    localStorage.setItem('cinna-theme', themePreference)
+    const theme = resolveTheme(themePreference)
+    applyTheme(theme)
+    set({ themePreference, theme })
+  },
+  setExtraUIAnimation: (extraUIAnimation) => {
+    localStorage.setItem(ANIMATION_KEY, extraUIAnimation ? '1' : '0')
+    set({ extraUIAnimation })
+  },
   setLogsOpen: (open) => set({ logsOpen: open }),
   setAgentStatusOpen: (open) => set({ agentStatusOpen: open }),
   setAgentStatusDetailId: (id) => set({ agentStatusDetailId: id }),
@@ -154,7 +171,30 @@ export const useUIStore = create<UIStore>((set) => ({
     })
 }))
 
-// Apply theme on load
-const savedTheme = (localStorage.getItem('cinna-theme') as Theme) || 'dark'
-document.documentElement.setAttribute('data-theme', savedTheme)
-window.api.app.setTheme(savedTheme).catch(() => {})
+applyTheme(useUIStore.getState().theme)
+const systemTheme = window.matchMedia?.('(prefers-color-scheme: dark)')
+const followSystemTheme = (): void => {
+  if (useUIStore.getState().themePreference !== 'system') return
+  const theme = resolveTheme('system')
+  applyTheme(theme)
+  useUIStore.setState({ theme })
+}
+systemTheme?.addEventListener('change', followSystemTheme)
+const syncAppearance = (event: StorageEvent): void => {
+  if (event.key === 'cinna-theme' || event.key === null) {
+    const themePreference = readThemePreference()
+    const theme = resolveTheme(themePreference)
+    applyTheme(theme)
+    useUIStore.setState({ themePreference, theme })
+  }
+  if (event.key === ANIMATION_KEY || event.key === null) {
+    useUIStore.setState({ extraUIAnimation: localStorage.getItem(ANIMATION_KEY) !== '0' })
+  }
+}
+window.addEventListener('storage', syncAppearance)
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    systemTheme?.removeEventListener('change', followSystemTheme)
+    window.removeEventListener('storage', syncAppearance)
+  })
+}

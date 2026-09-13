@@ -26,6 +26,7 @@ import { UserMenu } from '../auth/UserMenu'
 import { UpdateStatusButton } from '../updater/UpdateStatusButton'
 import { LocalDevStatusButton } from '../localdev/LocalDevStatusButton'
 import { InterfaceMenu } from './InterfaceMenu'
+import { AmbientGrid } from '../ui/AmbientGrid'
 import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 
 const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles }[] = [
@@ -97,7 +98,8 @@ export function Sidebar(): React.JSX.Element {
   return (
     <div className={`app-sidebar-wrap h-full ${sidebarOpen ? '' : 'is-collapsed'}`}>
       {!isSettings && <SidebarTabs />}
-      <div className="app-sidebar overflow-hidden flex flex-col">
+      <div className="app-sidebar ambient-grid-surface overflow-hidden flex flex-col">
+        <AmbientGrid active={sidebarOpen} borderGlow />
         {isSettings ? (
           <>
             <div className="px-2 pt-2 pb-1">

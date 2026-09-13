@@ -314,7 +314,7 @@ export function SettingsButton({
       disabled={disabled}
       title={title}
       aria-label={ariaLabel}
-      className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-border)]
+      className="ambient-button inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-border)]
         bg-[var(--color-bg-secondary)] px-2.5 py-1 text-[13px] font-medium text-[var(--color-text)]
         transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
     >

@@ -245,7 +245,7 @@ export function LocalAgentPage(): React.JSX.Element {
               className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
                 mode === 'settings'
                   ? 'border-transparent bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)]'
-                  : 'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+                  : 'ambient-button border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
               }`}
             >
               {mode === 'settings' ? <MessageSquare size={12} /> : <Settings size={12} />}

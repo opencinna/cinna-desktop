@@ -41,6 +41,12 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 2. **Profile → Agents** manages only agents supplied by the active Cinna server. It groups them under that server's host, includes hidden agents, offers Enable/Disable and Sync, and exposes Settings for enabled rows. Sync/reauthentication failures and visibility-write errors stay visible beside the relevant controls.
 3. **Agents sidebar → Add an agent → A2A Agent** opens a modal for a direct connection. Enter a card URL and optional access token, optionally Test Connection, then Save Agent. Creation stays open on failure and closes only after successful save. Direct A2A, ACP and Managed connections are configured from their own agent page's **Settings** action; there is no separate Default Remote agents tab.
 
+### Appearance preferences
+
+1. Open Features → Interface to choose **System**, **Dark** or **Light**, or change **Extra UI animation**. Dark is the theme fallback; extra animation is on by default.
+2. Changes apply and save immediately across local profiles and app windows. These renderer preferences remain usable while the service-backed settings query is unavailable.
+3. System follows live OS appearance; the sidebar footer Theme shortcut selects a fixed opposite theme. Extra animation governs the shared decorative grid, border and header effects and respects reduced motion. See [Appearance](../appearance/appearance.md).
+
 ### Agent sidebar sections
 
 1. Open Features → Interface → **Show sections in Agents sidebar** (on by default).
@@ -112,6 +118,7 @@ Every section is rendered with a `key` equal to its tab id (the Profile Local De
 
 - **UI Store** — `activeView`, `settingsTab`, and the `PROFILE_SCOPE_TABS` constant drive sidebar mode, group rendering, and the stale-tab guard
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — defines which menu items belong to the Default vs Profile group
+- [Appearance](../appearance/appearance.md) — Renderer-stored theme and extra animation, independent of app-settings service writes.
 - [App Shell](../app_shell/app_shell.md) — Hosts the profile dropdown (settings entry) and the sidebar's settings-menu mode
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — Chat modes section manages named presets
 - [Switching an AI Credential Off](../../llm/adapters/credential_enablement.md) — the AI Credentials tab's off switch: the confirm that names what stops, and the line the card keeps while it is off

@@ -36,7 +36,7 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 
 1. User clicks the sliders icon in the sidebar footer.
 2. Interface popover appears above the button with three small icon toggles: Console, Verbose, Theme.
-3. User clicks any toggle to flip the matching preference. Popover stays open until the user clicks outside.
+3. User clicks any toggle to flip the matching preference. Theme chooses the opposite of the currently displayed theme as a fixed Dark/Light preference, including when System was selected. Choose System in Settings → Features → Interface to follow the OS again. Popover stays open until the user clicks outside.
 
 ### Checking Agent Status
 
@@ -60,6 +60,7 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 - **Chat rows retain background activity.** A running row shows a spinner and offers **Interrupt session** on hover/focus without selecting it. A stopped row can show its latest unread outcome and offers **Delete session**; foreground transcript loading acknowledges the result. See [Sidebar Session Status](../../chat/session_status/session_status.md).
 - **Agent rows show stable identity.** Name plus type icon replaces description/credential sublines and readiness dots. Folder agents use a terminal, A2A/Cinna/WebSocket ACP a network icon, and other ACP/Managed agents a bot. Readiness remains in agent details and the separate status surface.
 - **Agent grouping is optional.** Settings → Features → Interface → **Show sections in Agents sidebar** is installation-wide and on by default. Turning it off removes headings and section spacing without changing order: default Local folder root, active Cinna server, other folder roots, direct A2A, ACP connections, Managed agents. Hidden Cinna agents remain in Settings → Profile → Agents.
+- **Appearance decoration follows one preference.** Default-on Extra UI animation adds sidebar grid/border bursts, a left-to-right header background wave and occasional secondary-button glows. Composer interaction quiets its own artwork, reduced motion suppresses all extra effects, and collapsing the sidebar disables its decoration. See [Appearance](../appearance/appearance.md) for scope and lifecycle.
 - **Top bar is always present.** Buttons do not shift when the sidebar toggles — they share a row with the macOS traffic lights via a fixed left gutter.
 - **Sidebar reserves its slot.** Collapse animates the inner panel away (translate + fade) and shrinks the wrapper width, but it does not unmount; the main area reflows in step.
 - **Sidebar always renders.** Even when collapsed the wrapper exists in the flex layout (width 0); the inner panel uses `pointer-events: none` when invisible.
@@ -93,6 +94,7 @@ App
 
 - **UI Store** — Owns `sidebarOpen`, `activeView`, `settingsTab`, `theme`, `verboseMode`, `logsOpen`, `agentStatusOpen`. See `src/renderer/src/stores/ui.store.ts`.
 - [Inbox](../../jobs/tasks/inbox.md) — Global waiting asks, opened from the top bar.
+- [Appearance](../appearance/appearance.md) — Theme preference/resolution, shared storage and decorative motion across shell and composers.
 - [Settings](../settings/settings.md) — The settings page rendered in the main area; entered via the profile dropdown.
 - [Verbose Mode](../verbose_mode/verbose_mode.md) — Toggled from the Interface popover.
 - [Keyboard Shortcuts](../keyboard_shortcuts/keyboard_shortcuts.md) — ⌘\` opens the logs overlay regardless of the Console toggle.

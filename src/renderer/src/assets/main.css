@@ -1,6 +1,12 @@
 @import 'tailwindcss';
 @source "../**/*.{ts,tsx}";
 
+@property --ambient-border-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
 @layer base {
   /* Dark theme (default) */
   :root, [data-theme="dark"] {
@@ -15,6 +21,8 @@
     --color-text-muted: #666;
     --color-accent: #d97a4a;
     --color-accent-hover: #e8a87c;
+    --color-ambient-glow: #edf4ff;
+    --color-header-wave: rgba(255, 255, 255, 0.1);
     /* Foreground laid over the accent (e.g. selected items on accent-tinted surfaces). */
     --color-on-accent: #ffffff;
     --color-user-bubble: #3d2818;
@@ -52,6 +60,8 @@
     --color-text-muted: #999;
     --color-accent: #2e88b8;
     --color-accent-hover: #226a92;
+    --color-ambient-glow: #218cda;
+    --color-header-wave: rgba(0, 0, 0, 0.07);
     /* Light-theme accents are desaturated; black reads better than white on top. */
     --color-on-accent: #1a1a1a;
     --color-user-bubble: #d4e6f1;
@@ -135,6 +145,132 @@
     -webkit-backdrop-filter: blur(10px);
     border-color: rgba(255, 255, 255, 0.06);
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  /* Local, quiet bursts of grid motion, painted below content and controls.
+     Only the decoration is clipped; popovers keep their existing stacking. */
+  .ambient-grid-surface {
+    position: relative;
+    isolation: isolate;
+  }
+  .ambient-grid {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    overflow: hidden;
+    border-radius: inherit;
+    pointer-events: none;
+    user-select: none;
+    color: var(--color-ambient-glow);
+    opacity: 0.8;
+    transition: opacity 350ms ease-out;
+  }
+  .ambient-grid[data-fading] {
+    opacity: 0;
+  }
+  .ambient-grid-burst {
+    display: block;
+    opacity: 0;
+    mask-image: radial-gradient(ellipse 300px 240px at var(--grid-origin-x) var(--grid-origin-y), #000 10%, transparent 100%);
+    animation: ambient-grid-breathe var(--grid-duration) ease-in-out both;
+  }
+  .ambient-grid-lines {
+    opacity: 0.045;
+  }
+  .ambient-grid-edge {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1;
+    stroke-linejoin: round;
+    stroke-linecap: square;
+    opacity: 0;
+    --edge-opacity: 0.24;
+    animation: ambient-grid-edge-glow 1600ms ease-in-out var(--edge-delay) both;
+  }
+  .ambient-grid-edge-halo {
+    stroke-width: 4;
+    filter: blur(2px);
+    --edge-opacity: 0.13;
+  }
+  [data-theme="light"] .ambient-grid-lines {
+    opacity: 0.08;
+  }
+  [data-theme="light"] .ambient-grid-edge {
+    --edge-opacity: 0.3;
+  }
+  [data-theme="light"] .ambient-grid-edge-halo {
+    --edge-opacity: 0.15;
+  }
+  @keyframes ambient-grid-breathe {
+    0%, 100% { opacity: 0; }
+    24%, 65% { opacity: 1; }
+  }
+  @keyframes ambient-grid-edge-glow {
+    0%, 100% { opacity: 0; }
+    25%, 40% { opacity: var(--edge-opacity); }
+  }
+  .ambient-button {
+    position: relative;
+  }
+  .ambient-button[data-ambient-glow]:not(:disabled)::after,
+  .ambient-surface-border {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    padding: 1px;
+    border-radius: inherit;
+    pointer-events: none;
+    background: conic-gradient(from var(--ambient-border-angle), transparent 0deg, var(--color-ambient-glow) 35deg, transparent 95deg);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    filter: drop-shadow(0 0 3px var(--color-ambient-glow));
+    animation: ambient-button-travel var(--button-glow-duration) linear both,
+      ambient-button-breathe var(--button-glow-duration) ease-in-out both;
+  }
+  .ambient-surface-border {
+    /* An inner highlight preserves the actual surface, focus and drop border. */
+    inset: 0;
+    --input-highlight: color-mix(in srgb, var(--color-ambient-glow) 70%, var(--ambient-input-tint, var(--color-border)));
+    background: conic-gradient(from var(--ambient-border-angle), transparent 0deg, var(--input-highlight) 35deg, transparent 95deg);
+  }
+  @keyframes ambient-button-travel {
+    from { --ambient-border-angle: var(--button-start-angle); }
+    to { --ambient-border-angle: calc(var(--button-start-angle) + 270deg); }
+  }
+  @keyframes ambient-button-breathe {
+    0%, 100% { opacity: 0; }
+    20%, 75% { opacity: 0.48; }
+  }
+  .ambient-header-button {
+    position: relative;
+    isolation: isolate;
+  }
+  [data-header-wave] > .ambient-header-button::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--color-header-wave);
+    animation: ambient-header-wave 1200ms ease-in-out both;
+  }
+  [data-header-wave] > .ambient-header-button:nth-child(2)::before { animation-delay: 220ms; }
+  [data-header-wave] > .ambient-header-button:nth-child(3)::before { animation-delay: 440ms; }
+  [data-header-wave] > .ambient-header-button:nth-child(4)::before { animation-delay: 660ms; }
+  [data-header-wave] > .ambient-header-button:is(:hover, :focus-visible)::before {
+    animation: none;
+    opacity: 0;
+  }
+  @keyframes ambient-header-wave {
+    0%, 100% { opacity: 0; }
+    40% { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ambient-grid { display: none; }
+    .ambient-grid-burst, .ambient-grid-edge { animation: none; }
+    .ambient-button[data-ambient-glow]::after { display: none; }
+    [data-header-wave] > .ambient-header-button::before { display: none; }
   }
 
   /* Frosted-glass surface for modals/popovers (profile dropdown, register

@@ -14,13 +14,13 @@ Implementation companion to [Account Build Sessions](build_sessions.md). Tool in
 - `src/main/engine/engineConfigSource.ts` — process-local model catalogue, `getCachedEngineModels`, `collectEngineConfigInput`.
 - `src/main/agents/drivers/index.ts` — builder runtime projection, selected launchers, development prompt/config, PATH/pool-key composition and `developmentRuntimeBlocker`.
 - `src/main/agents/drivers/acp/acpDriver.ts` — async runtime reads and cancel-safe preflight; `src/main/agents/drivers/acp/claudeAuth.ts` — auth-probe timeout cleanup.
-- `src/main/services/agentService.ts` — active-profile builder filtering and public `development` discriminator.
+- `src/main/services/agentService.ts` — active-profile builder filtering, public `development` discriminator and validated saved `developmentEngine`.
 - `src/main/services/customAgentService.ts`, `src/main/services/localAgents/desktopStateService.ts`, `src/main/db/agents.ts`, `src/main/db/schema.ts` — owned builder row and reused external session/grant state.
 - `src/main/ipc/localdev.ipc.ts` — activation gate and input boundary.
 
 ### Preload
 
-- `src/preload/index.ts` — `window.api.localDev.sessionContext`, `prepareSession`, and optional `AgentData.development`.
+- `src/preload/index.ts` — `window.api.localDev.sessionContext`, `prepareSession`, and optional `AgentData.development` / `AgentData.developmentEngine`.
 
 ### Renderer
 
@@ -48,7 +48,7 @@ No new table or migration. Existing definitions in `src/main/db/schema.ts` and r
 
 `customAgentService.runtime` reuses `desktopStateService.readExternal/patchExternal` for binding-scoped sessions and permission grants. The binding digest covers active profile, owner, row ID and configuration identity. The private file is written before the SQLite session mirror; an old mirror without the matching private session refuses reuse. No `AGENT.md`, manifest or desktop-state file is written into the CLI account workspace by builder preparation. See [external storage](../custom_agents/custom_agents_tech.md#database-schema).
 
-`isDevelopmentAgent` requires a local ACP row with a string `developmentProfileId`. `agentService.toDto` exposes only `development: true` as the presentation discriminator, while `listMerged` excludes builder rows for other profiles. The internal driver configuration is not a renderer-editable command.
+`isDevelopmentAgent` requires a local ACP row with a string `developmentProfileId`. `agentService.toDto` exposes `development: true` as the presentation discriminator and an optional saved `developmentEngine` only when `isAgentEngine` validates it, while `listMerged` excludes builder rows for other profiles. The internal driver configuration is not a renderer-editable command.
 
 ## IPC Channels
 
@@ -87,7 +87,8 @@ No new table or migration. Existing definitions in `src/main/db/schema.ts` and r
 ## Renderer Components
 
 - `LocalDevelopmentPage` keys its workspace by account ID. `useDevelopmentWorkspace` queries only when `LocalDevState.phase = ready`, with a 30-second stale time and retries disabled. The query key includes profile, state, inherited engine/credential and all three build settings. `useSetAppSetting` invalidates development context after settlement.
-- `DevelopmentComposer` alone subscribes to the profile draft. Its textarea auto-sizes to at most 180 px and uses `resize-none`. Settings hides rather than discards the composer; readiness and visibility control autofocus. The guide mounts only on demand and memoizes the selected document, keeping Markdown parsing and runtime probes off the keystroke path.
+- `src/renderer/src/components/chat/AgentConnectionDetails.tsx` branches on `development` before generic ACP configuration. It displays the saved engine through `DEVELOPMENT_RUNTIME_NAMES` (Claude Code/Codex/OpenCode, otherwise Not recorded), protocol/location and Local Development ownership directly from public metadata. No custom configuration request, private driver configuration or current-default lookup is needed; see [connection detail lookup](../../chat/chat_routing/chat_routing_tech.md#connection-detail-lookup).
+- `DevelopmentComposer` alone subscribes to the profile draft. Its textarea auto-sizes to at most 180 px and uses `resize-none`. Settings hides rather than discards the composer; readiness and visibility control autofocus. `AmbientGrid` receives that active/ready state and textarea ref; CSS propagates normal/focused border tint, and secondary actions opt into the Shell scheduler. The submit row contains only Start building; Enter/Shift+Enter/composition behavior remains in the textarea handler. See [Appearance](../../ui/appearance/appearance_tech.md). The guide mounts only on demand and memoizes the selected document, keeping Markdown parsing and runtime probes off the keystroke path.
 - `BuildGuideModal` uses `useDialogChrome` for focus trapping, Escape and focus restoration, portals to the document body, and resets document scroll when the contents selection changes. `react-markdown` uses GFM, `remarkStripHtml` and `documentMarkdownComponents`. Session instructions show the briefing prefix; document bodies appear as separate contents entries.
 - `DevelopmentSettings` uses the shared cards with an optional Default Runtime choice and smaller 8rem minimum widths. It saves build keys only; work complexity uses `SettingsLabel` and `settingsDropdownRowClass`. `InstallRuntimeDialog.selectionDescription` names the build-specific effect rather than promising to change all folder agents. `RuntimeInstallAction` rechecks after installation.
 - `DevelopmentRuntimeBadges` reads the shared cached `useClaudeAuth` only for Claude. Subscription wording requires a logged-in result with `authMethod = claude.ai` or a subscription type; OpenCode names the credential where available and Codex shows CLI default plus effort.
@@ -123,7 +124,7 @@ All three use installation-global app settings. They do not write local-agent ma
 
 - `src/main/localdev/developmentSessionService.test.ts` — fixed docs and secret/symlink exclusion, inherited/explicit runtime, complexity, stale checks, reuse, startup wait, settled failure and OpenCode warmup.
 - `src/main/agents/drivers/index.test.ts`, `src/main/agents/drivers/acp/acpDriver.test.ts`, `src/main/agents/drivers/acp/claudeAuth.test.ts` — production launcher selection/effort, cancellation before runtime/plan settlement and real-vs-false timeout behavior.
-- `src/main/services/agentService.readiness.test.ts`, `src/main/services/customAgentService.test.ts`, `src/main/services/appSettingsService.test.ts` — discriminator/profile visibility, command-editor protection and setting validation.
+- `src/main/services/agentService.readiness.test.ts`, `src/main/services/customAgentService.test.ts`, `src/main/services/appSettingsService.test.ts` — discriminator/profile visibility, all three saved runtime DTO values, omission of unknown/missing values without exposing driverConfig, command-editor protection and setting validation. `src/renderer/src/components/chat/RouterBadge.test.tsx` covers builder hover/focus without configuration requests and saved-runtime labels.
 - `src/renderer/src/components/localdev/LocalDevelopmentPage.test.tsx`, `src/renderer/src/components/localdev/DevelopmentSettings.test.tsx`, `src/renderer/src/components/agents/ExternalAgentPage.development.test.tsx` — entry/focus/draft/guide/setup, save rollback and builder settings routing.
 - `src/renderer/src/hooks/useNewChatFlow.test.tsx`, `src/renderer/src/components/chat/ChatInput.readiness.test.tsx`, `src/renderer/src/components/chat/ChatInput.routing.test.tsx` — delayed selection, navigation/account cancellation, real query-cache cleanup and universal warning behavior.
 - `e2e/specs/local-dev.spec.ts` covers the local-only profile surface; `e2e/specs/cinna-integration.spec.ts` includes optional real-server build entry, guide and settings assertions after setup. These changes were checked with focused tests, typechecks and a production build, without running the full E2E suite or claiming a live remote build.

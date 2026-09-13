@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useAuthStore } from './stores/auth.store'
 import { TrayPanel } from './components/tray/TrayPanel'
+import { readThemePreference, resolveTheme } from './utils/theme'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -19,7 +20,7 @@ const queryClient = new QueryClient({
 // match the app's theme — read it from the shared localStorage key (same origin
 // as the main window) and stay in sync via the cross-window `storage` event.
 function applyTheme(): void {
-  const theme = localStorage.getItem('cinna-theme') === 'light' ? 'light' : 'dark'
+  const theme = resolveTheme(readThemePreference())
   document.documentElement.setAttribute('data-theme', theme)
 }
 
@@ -60,6 +61,7 @@ function TrayRoot(): React.JSX.Element {
 }
 
 applyTheme()
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme)
 window.addEventListener('storage', (e) => {
   if (e.key === 'cinna-theme') applyTheme()
 })

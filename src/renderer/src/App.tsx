@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { useAmbientButtons } from './hooks/useAmbientButtons'
 import { QueryClient, QueryCache, MutationCache, QueryClientProvider } from '@tanstack/react-query'
 import { Sidebar } from './components/layout/Sidebar'
 import { DesktopToast } from './components/ui/DesktopToast'
@@ -90,6 +91,7 @@ function StartupError({
 }
 
 function Shell(): React.JSX.Element {
+  useAmbientButtons()
   // Drives the menu-bar tray icon (severity dot) and the popup's Start-Chat flow.
   useTrayIcon()
   // App-level sync wiring (Cinna profiles only). `useSyncEvents` keeps the

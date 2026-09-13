@@ -54,7 +54,9 @@
 | `agentPageMode` | `chat` or `settings`, initially `chat`; row selection sets chat mode explicitly |
 | `pendingAgentId` | One-shot dashboard preselection consumed only by the non-embedded workspace |
 | `settingsTab` | Active settings sub-section (consumed by `Sidebar` + `SettingsPage`) |
-| `theme` | `'dark' \| 'light'` — toggled from `InterfaceMenu`; written to `localStorage('cinna-theme')`, applied via `data-theme` on `<html>`, and propagated to main process via `window.api.app.setTheme(theme)` so `appIconService.apply()` swaps the macOS dock + window icon to the matching `cinna-desktop-icon-{dark,light}.png` asset |
+| `theme` | Resolved `'dark' \| 'light'`, applied via document `data-theme` and `window.api.app.setTheme(theme)` for dock/window icons |
+| `themePreference` | `'system' \| 'dark' \| 'light'`, persisted as `cinna-theme`; Features chooses any value, InterfaceMenu selects a fixed opposite resolved theme |
+| `extraUIAnimation` | Default-on renderer preference, persisted as `cinna-extra-ui-animation`; gates grid, surface/button borders and header wave |
 | `verboseMode` | Toggled from `InterfaceMenu`; persisted via `localStorage` |
 | `logsOpen` | Toggled from `InterfaceMenu` and via ⌘\` |
 | `agentStatusOpen` | Toggled from `AgentStatusButton` |
@@ -65,7 +67,7 @@ Most shell components select individual store keys to limit unrelated renders; `
 
 | Channel | Type | Params | Returns | Purpose |
 |---------|------|--------|---------|---------|
-| `app:set-theme` | handle | `'dark' \| 'light'` | `{ success: boolean }` | Updates main-process icon state via `appIconService.apply()`; called on bootstrap and on every theme toggle. Handler in `src/main/ipc/app.ipc.ts` via the shared `ipcHandle` wrap. |
+| `app:set-theme` | handle | `'dark' \| 'light'` | `{ success: boolean }` | Updates main-process icon state via `appIconService.apply()`; called on bootstrap and when explicit selection, System appearance or another window changes the resolved theme. Handler in `src/main/ipc/app.ipc.ts` via the shared `ipcHandle` wrap. |
 
 Other shell features (status indicator, profile menu, etc.) consume existing IPC via hooks (`useAgentStatus`, `useUsers`, etc.) — no new channels.
 
@@ -96,7 +98,7 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 
 - Uses `usePopover<HTMLButtonElement>('above-right')`
 - Popover (portaled to `document.body`) holds three icon toggles: Terminal/Eye-EyeOff/Sun-Moon
-- Each toggle writes through the UI store; the popover stays open until outside click
+- Each toggle writes through the UI store; the popover stays open until outside click. Theme calls `toggleTheme`, which chooses a fixed Dark/Light value from the opposite resolved theme; System is selected in Features.
 
 ### UserMenu (`UserMenu.tsx`)
 
@@ -136,6 +138,13 @@ Layout is unmeasurable in jsdom, so the behaviour is covered by an E2E assertion
 - `RuntimePanel compact` is the folder landing/connection-tooltip summary; the full runtime form mounts only in folder Settings. Shared resolution supplies engine, credential/model and setup state. Claude subscription wording requires logged-in authentication with `authMethod === 'claude.ai'` or a subscription type; unknown auth is not a confirmed subscription.
 - `ExternalAgentPage` uses Overview for description/readiness/skills and Connection for `AgentCard connectionOnly` (A2A/Cinna) or Configure buttons opening ACP/Managed dialogs. The Cinna header host opens through `window.api.system.openExternal`; failures stay on the page.
 
+### Appearance integration
+
+- `Shell` mounts `src/renderer/src/hooks/useAmbientButtons.ts` once. `TopBar` owns its independent header-wave timer and passes the shared decorative class to all four controls.
+- `Sidebar` marks its card as `ambient-grid-surface` and mounts `src/renderer/src/components/ui/AmbientGrid.tsx` with explicit border glow and `active={sidebarOpen}`; collapse cancels decoration without unmounting the sidebar.
+- Every `ChatWorkspace` path reaches the shared decorated `ChatInput`; Local Development has its own active/ready-gated host. The neutral Settings button on folder/external agent pages opts into secondary glows; its accent Start chat state does not.
+- Preference storage, System/cross-window propagation, scheduler timing and reduced-motion/interaction cleanup belong to [Appearance technical details](../appearance/appearance_tech.md). These decorators do not change workspace routing or draft lifetime.
+
 ### Desktop visibility notification
 
 - `src/renderer/src/hooks/useAgentDesktopVisibility.ts` handles Cinna hide/restore, snapshots sidebar order before the optimistic update, invalidates status data, and navigates after successful hide only if profile and selected external page still match. It picks the nearest preceding remaining agent, then another available agent, then the empty dashboard. Non-remote agents can be re-enabled from legacy disabled state but cannot be disabled here.
@@ -160,4 +169,5 @@ No new surface. Console/Verbose/Theme toggles only mutate UI state (`localStorag
 
 - [App Shell business doc](./app_shell.md) — user-facing behaviour and business rules
 - [Settings](../settings/settings.md) — settings page integration
+- [Appearance](../appearance/appearance.md) — theme and extra-animation contracts
 - [UI Guidelines](../../development/ui_guidelines/ui_guidelines_llm.md) — color system, expandable card pattern

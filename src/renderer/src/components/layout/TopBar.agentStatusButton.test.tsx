@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -83,5 +83,41 @@ describe('TopBar — agent status', () => {
     expect(status.querySelector('span')).toBeNull()
     fireEvent.click(status)
     expect(useUIStore.getState().agentStatusOpen).toBe(true)
+  })
+
+  it('stops the header wave and future waves with the shared animation setting or reduced motion', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const media = new EventTarget()
+    let reduced = false
+    vi.stubGlobal('matchMedia', () => ({
+      get matches() { return reduced },
+      addEventListener: media.addEventListener.bind(media),
+      removeEventListener: media.removeEventListener.bind(media)
+    }))
+    useUIStore.setState({ extraUIAnimation: true })
+    const { container, unmount } = render(createElement(TopBar), { wrapper })
+    try {
+      await act(async () => vi.advanceTimersByTime(13000))
+      expect(container.querySelector('[data-header-wave]')).not.toBeNull()
+      expect(container.querySelectorAll('.ambient-header-button')).toHaveLength(4)
+      act(() => useUIStore.getState().setExtraUIAnimation(false))
+      expect(container.querySelector('[data-header-wave]')).toBeNull()
+      await act(async () => vi.advanceTimersByTime(60000))
+      expect(container.querySelector('[data-header-wave]')).toBeNull()
+
+      act(() => useUIStore.getState().setExtraUIAnimation(true))
+      await act(async () => vi.advanceTimersByTime(13000))
+      expect(container.querySelector('[data-header-wave]')).not.toBeNull()
+      act(() => { reduced = true; media.dispatchEvent(new Event('change')) })
+      expect(container.querySelector('[data-header-wave]')).toBeNull()
+      await act(async () => vi.advanceTimersByTime(60000))
+      expect(container.querySelector('[data-header-wave]')).toBeNull()
+    } finally {
+      unmount()
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+    }
   })
 })

@@ -97,10 +97,16 @@ beforeEach(() => {
 })
 
 describe('agentService readiness', () => {
-  it('marks builders for development settings and keeps them in their owning profile', () => {
-    db.rows.set('default', [row('builder', 'local', { driver: 'acp', driverConfig: { launcher: 'custom', developmentProfileId: 'alice', developmentEngine: 'claude' } })])
-    expect(agentService.listMerged('default', 'alice')[0]).toMatchObject({ id: 'builder', development: true })
+  it.each(['claude', 'codex', 'opencode'])('exposes the saved %s builder runtime in its owning profile', (developmentEngine) => {
+    db.rows.set('default', [row('builder', 'local', { driver: 'acp', driverConfig: { launcher: 'custom', developmentProfileId: 'alice', developmentEngine } })])
+    const dto = agentService.listMerged('default', 'alice')[0]
+    expect(dto).toMatchObject({ id: 'builder', development: true, developmentEngine })
+    expect(dto).not.toHaveProperty('driverConfig')
     expect(agentService.listMerged('default', 'bob')).toEqual([])
+  })
+  it.each([undefined, 'unrecognized'])('does not guess a builder runtime when the saved value is %s', (developmentEngine) => {
+    db.rows.set('default', [row('builder', 'local', { driver: 'acp', driverConfig: { developmentProfileId: 'alice', developmentEngine } })])
+    expect(agentService.listMerged('default', 'alice')[0]).not.toHaveProperty('developmentEngine')
   })
   it('carries each agent’s last known readiness on its DTO, null when unknown', () => {
     db.rows.set('default', [row('local-1', 'local'), row('folder:a', 'folder')])

@@ -93,6 +93,28 @@ describe('agent connection badge', () => {
     expect(screen.getByText('Managed by the ACP agent')).toBeTruthy()
   })
 
+  it.each(['mouseEnter', 'focus'] as const)('describes the development builder on %s without requesting custom-agent configuration', (event) => {
+    mount(agent({ name: 'Builder', development: true, driver: 'acp', protocol: 'acp', acpTransport: 'stdio' }))
+    fireEvent[event](screen.getByRole('status', { name: 'Local agent connection' }))
+    const tooltip = screen.getByRole('tooltip')
+    expect(tooltip.textContent).toContain('Builder')
+    expect(tooltip.textContent).toContain('ACP · stdio')
+    expect(tooltip.textContent).toContain('This computer')
+    expect(tooltip.textContent).toContain('Local Development')
+    expect(configuration).not.toHaveBeenCalled()
+    expect(screen.queryByText('Loading configuration…')).toBeNull()
+  })
+
+  it.each([
+    ['claude', 'Claude Code'], ['codex', 'Codex'], ['opencode', 'OpenCode']
+  ] as const)('shows the saved %s driver for a builder without fetching its private configuration', (developmentEngine, label) => {
+    mount(agent({ development: true, developmentEngine, driver: 'acp', protocol: 'acp', acpTransport: 'stdio' }))
+    fireEvent.mouseEnter(screen.getByRole('status', { name: 'Local agent connection' }))
+    expect(screen.getByText('Driver')).toBeTruthy()
+    expect(screen.getByText(label)).toBeTruthy()
+    expect(configuration).not.toHaveBeenCalled()
+  })
+
   it('treats Claude Managed Agents as remote and names the configured credential', async () => {
     configuration.mockResolvedValue({ config: { credentialId: 'credential', environmentId: 'environment' } })
     mount(agent({ driver: 'managed', protocol: 'managed' }))

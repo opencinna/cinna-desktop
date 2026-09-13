@@ -1,4 +1,5 @@
 import type { DevelopmentContext } from '../shared/developmentSession'
+import type { AgentEngine } from '../shared/engine'
 import type { JobExecuteResult } from '../shared/jobs'
 import { isRunWatchMessage, type RunWatchMessage } from '../shared/runWatch'
 import type { AutonomousTaskStart } from '../shared/taskRuntime'
@@ -219,6 +220,8 @@ export interface ChatModeData {
 export interface AgentData {
   /** Internal account-bound builder, configured through Local Development. */
   development?: boolean
+  /** Saved runtime for an account-bound builder. */
+  developmentEngine?: AgentEngine
   id: string
   name: string
   description: string | null

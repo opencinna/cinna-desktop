@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import type { AgentData } from '../../../../preload'
+import { DEVELOPMENT_RUNTIME_NAMES } from '../../../../shared/developmentSession'
 import { useLocalAgent } from '../../hooks/useLocalAgents'
 import { useProviders } from '../../hooks/useProviders'
 import { useAuthStore } from '../../stores/auth.store'
@@ -87,7 +88,15 @@ export function AgentConnectionDetails({ agent }: { agent: AgentData }): React.J
   const serverUrl = useAuthStore((s) => s.currentUser?.cinnaServerUrl)
   return <>
     <p className="mb-2 break-words font-semibold text-[var(--color-text)]">{agent.name}</p>
-    {agent.source === 'folder' ? <FolderDetails agent={agent} />
+    {/* Builders use ACP internally, but their configuration belongs to Local
+        Development. The custom-agent management endpoint intentionally rejects them. */}
+    {agent.development ? <Details rows={[
+        ['Driver', agent.developmentEngine ? DEVELOPMENT_RUNTIME_NAMES[agent.developmentEngine] : 'Not recorded'],
+        ['Protocol', 'ACP · stdio'],
+        ['Runs on', 'This computer'],
+        ['Settings', 'Local Development']
+      ]} />
+      : agent.source === 'folder' ? <FolderDetails agent={agent} />
       : agent.driver === 'acp' ? <AcpDetails agent={agent} />
       : agent.driver === 'managed' ? <ManagedDetails agent={agent} />
       : <Details rows={[

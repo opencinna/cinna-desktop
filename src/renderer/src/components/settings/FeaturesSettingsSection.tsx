@@ -1,5 +1,6 @@
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
+import { useUIStore, type ThemePreference } from '../../stores/ui.store'
 import { unwrapIpcError } from '../../utils/ipcError'
 import {
   SettingsButton,
@@ -15,8 +16,8 @@ import {
  *     chat flow (chat-title autogen, future chat-summary, etc.)
  *   • Interface — chrome toggles (tray icon, future window/menu prefs)
  *
- * All settings live in the installation-global `app_settings` KV store and
- * are read by the corresponding main-process feature service.
+ * Service settings live in `app_settings`; appearance preferences live in
+ * the renderer's persistent UI store alongside the sidebar theme shortcut.
  *
  * **One `SettingsRows` list per section, one line per toggle.** Each toggle
  * was its own bordered card with a paragraph under its label; a row that is
@@ -25,6 +26,10 @@ import {
  * the surface (ux_rules rule 12).
  */
 export function FeaturesSettingsSection(): React.JSX.Element {
+  const themePreference = useUIStore((s) => s.themePreference)
+  const setThemePreference = useUIStore((s) => s.setThemePreference)
+  const extraUIAnimation = useUIStore((s) => s.extraUIAnimation)
+  const setExtraUIAnimation = useUIStore((s) => s.setExtraUIAnimation)
   const { data: settings, isLoading, isError } = useAppSettings()
   const setSetting = useSetAppSetting()
 
@@ -101,6 +106,26 @@ export function FeaturesSettingsSection(): React.JSX.Element {
 
       <SettingsSection title="Interface">
         <SettingsRows insetDividers>
+          <SettingsRow className="flex items-center justify-between gap-3">
+            <label id="feature-theme-label" className="text-[14px] font-medium text-[var(--color-text)]">Theme</label>
+            <div role="group" aria-labelledby="feature-theme-label" className="flex shrink-0 rounded-md border border-[var(--color-border)] p-0.5">
+              {(['system', 'dark', 'light'] as const).map((value: ThemePreference) => (
+                <button key={value} type="button" aria-pressed={themePreference === value}
+                  onClick={() => setThemePreference(value)}
+                  className={`rounded px-2.5 py-1 text-[13px] transition-colors ${themePreference === value ? 'app-nav-active text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
+                  {value[0].toUpperCase() + value.slice(1)}
+                </button>
+              ))}
+            </div>
+          </SettingsRow>
+          <SettingsToggleRow
+            id="feature-extra-ui-animation"
+            label="Extra UI animation"
+            description="Add occasional grid pulses, border glows on inputs, the sidebar and secondary buttons, and a gentle background wave across header buttons. Turn off to stop all these effects. Respects your system’s reduced-motion setting."
+            checked={extraUIAnimation}
+            onToggle={() => setExtraUIAnimation(!extraUIAnimation)}
+            title={extraUIAnimation ? 'Extra UI animation is enabled' : 'Extra UI animation is disabled'}
+          />
           <SettingsToggleRow
             id="feature-enable-tray-icon"
             label="Enable Tray Icon"

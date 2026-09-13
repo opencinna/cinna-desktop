@@ -1,5 +1,6 @@
 import { net } from 'electron'
 import { isDevelopmentAgent } from '../../shared/developmentSession'
+import { isAgentEngine, type AgentEngine } from '../../shared/engine'
 import { agentRepo, agentOverrideRepo, AgentRow, RemoteTarget } from '../db/agents'
 import { userRepo } from '../db/users'
 import { encryptApiKey } from '../security/keystore'
@@ -76,6 +77,8 @@ export interface AgentDto {
   acpTransport?: 'stdio' | 'websocket'
   /** Account-bound builder: configured through Local Development, never as a custom command. */
   development?: boolean
+  /** Runtime captured by this builder, rather than today's development default. */
+  developmentEngine?: AgentEngine
   driver: string | null
   /**
    * What the agent can do, from its driver. A surface that needs to decide
@@ -118,6 +121,7 @@ export interface SyncRemoteResult {
 }
 
 function toDto(row: AgentRow): AgentDto {
+  const developmentEngine = row.driverConfig?.developmentEngine
   return {
     id: row.id,
     name: row.name,
@@ -138,7 +142,10 @@ function toDto(row: AgentRow): AgentDto {
     localPath: row.localPath,
     localRootId: row.localRootId,
     driver: row.driver,
-    ...(isDevelopmentAgent(row) ? { development: true } : {}),
+    ...(isDevelopmentAgent(row) ? {
+      development: true,
+      ...(isAgentEngine(developmentEngine) ? { developmentEngine } : {})
+    } : {}),
     ...(row.driver === 'acp' && row.driverConfig?.launcher === 'custom' ? { acpTransport: row.driverConfig.transport === 'websocket' ? 'websocket' as const : 'stdio' as const } : {}),
     capabilities: capabilitiesFor(row),
     readiness: driverOfRow(row) ? agentReadinessService.peek(row.id) : unsupportedReadiness(),
