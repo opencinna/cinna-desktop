@@ -73,6 +73,6 @@ macOS menu "Check for Updates…"
 ## Integration Points
 
 - **Release & Distribution** — Ships the artifacts the updater consumes. The `electron-builder.yml` `mac.target` must include **both** `dmg` and `zip` — `electron-updater` requires the ZIP payload; without it `MacUpdater` throws `ZIP file not provided` on every check. See [Release & Distribution](../distribution/release.md)
-- **App Shell** — `UpdateStatusButton` mounts in the sidebar footer (right of `AgentStatusButton`, left of `InterfaceMenu`). See [App Shell](../../ui/app_shell/app_shell.md)
+- **App Shell** — `UpdateStatusButton` mounts in the sidebar footer (right of `LocalDevStatusButton`, left of `InterfaceMenu`). See [App Shell](../../ui/app_shell/app_shell.md)
 - **Logger** — All updater events are logged under the `updater` scope: check lifecycle, download progress (debug), errors, manual-check requests. Surfaced via the in-app logs overlay. See [Logger](../logger/logger.md)
 - **Menu accelerator** — The "Check for Updates…" item lives in the explicit `appMenu` template in `src/main/index.ts`, replacing the default `role: 'appMenu'` so the item can be inserted right after "About"

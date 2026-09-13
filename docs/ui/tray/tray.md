@@ -6,7 +6,7 @@ A macOS menu-bar (status-bar) icon with a small popover window that surfaces age
 
 ## Core Concepts
 
-- **Tray Icon** — The menu-bar icon (Electron `Tray`). A monochrome glyph plus a severity dot reflecting the **worst** status across the user's agents. Mirrors the sidebar-footer `AgentStatusButton`.
+- **Tray Icon** — The menu-bar icon (Electron `Tray`). A monochrome glyph plus a severity dot reflecting the **worst** status across the user's agents. Mirrors the top-bar `AgentStatusButton`.
 - **Tray Popup** — A frameless, always-on-top popover window anchored under the icon. On macOS it uses native vibrancy (frosted-glass material) with rounded corners and a native shadow; it fades in and out.
 - **Severity Dot** — Colored badge on the icon: error→red, warning→amber, info→sky, ok→emerald, unknown→muted. Absent when no agent has published a status.
 - **Renderer-push icon** — The main window computes the worst severity and pushes a rendered icon image to the main process. There is **no** main-process polling.
@@ -67,6 +67,6 @@ Menu-bar Tray click → trayService.toggle() → Tray Popup window (trayPanel.ht
 ## Integration Points
 
 - [Agent Status](../../agents/agent_status/agent_status.md) — Data source and the in-app overlay the popup redirects into; the card/detail views are shared components.
-- [App Shell](../app_shell/app_shell.md) — The sidebar-footer status button is the in-app sibling surface; the main-window lifecycle owns tray creation/destruction.
+- [App Shell](../app_shell/app_shell.md) — The top-bar status button is the in-app sibling surface; the main-window lifecycle owns tray creation/destruction.
 - [Settings](../settings/settings.md) — The Features tab's "Interface" group hosts the `enableTrayIcon` toggle; the settings IPC handler calls `syncTrayFromSettings` to create or destroy the tray live on write.
 - [Logger](../../development/logger/logger.md) — The `tray` scoped logger traces tray create/destroy and icon-set failures.

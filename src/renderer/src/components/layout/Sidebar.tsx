@@ -23,7 +23,6 @@ import { NotesList } from '../notes/NotesList'
 import { LocalAgentsList } from '../agents/local/LocalAgentsList'
 import { SidebarTabs } from './SidebarTabs'
 import { UserMenu } from '../auth/UserMenu'
-import { AgentStatusButton } from '../agents/AgentStatusButton'
 import { UpdateStatusButton } from '../updater/UpdateStatusButton'
 import { LocalDevStatusButton } from '../localdev/LocalDevStatusButton'
 import { InterfaceMenu } from './InterfaceMenu'
@@ -167,17 +166,10 @@ export function Sidebar(): React.JSX.Element {
           </>
         )}
 
-        {/* Footer: profile (left) — agent status + interface (right) */}
+        {/* Footer: profile (left) — development, updates + interface (right) */}
         <div className="px-2 py-2 flex items-center gap-1">
           <UserMenu compact />
           <div className="flex-1" />
-          {/* Not account-gated: a folder agent reports a status with no Cinna
-              account at all, and this button is the only way into the status
-              overlay — and so into "Refresh all". Gating it on live data
-              instead would make the footer's controls move as statuses arrive
-              and go. With nothing to report it renders a plain glyph with no
-              severity dot. */}
-          <AgentStatusButton />
           <LocalDevStatusButton />
           <UpdateStatusButton />
           <InterfaceMenu />

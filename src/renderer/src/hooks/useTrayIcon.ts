@@ -6,7 +6,7 @@ import { SEVERITY_HEX, worstSeverity, type Severity } from '../constants/agentSe
 // Logical icon is 16pt; the menu bar is retina, so render the buffer at 2x and
 // tell the main process the scale factor when building the NativeImage.
 const SIZE = 32
-// lucide-react "Activity" path in its 24-unit viewBox — matches the sidebar footer icon.
+// lucide-react "Activity" path in its 24-unit viewBox — matches the top-bar status icon.
 const ACTIVITY_PATH = 'M22 12h-4l-3 9L9 3l-3 9H2'
 
 function renderTrayIcon(worst: Severity | null, systemDark: boolean): string {

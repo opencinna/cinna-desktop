@@ -17,7 +17,7 @@
 ### Renderer
 - `src/renderer/src/stores/updater.store.ts` — Zustand `useUpdaterStore`. State: `{ state, subscribed, unsubscribe }`. Actions: `subscribe()` (hydrate via `getState()` then attach `onState` listener), `promptInstall()` (wrapped in try/catch; failures logged via renderer `createLogger('updater')`)
 - `src/renderer/src/components/updater/UpdateStatusButton.tsx` — Footer indicator. Returns `null` when `phase === 'idle'`. Three render modes corresponding to the three phases
-- `src/renderer/src/components/layout/Sidebar.tsx` — Mounts `<UpdateStatusButton />` in the sidebar footer between `AgentStatusButton` and `InterfaceMenu`
+- `src/renderer/src/components/layout/Sidebar.tsx` — Mounts `<UpdateStatusButton />` in the sidebar footer between `LocalDevStatusButton` and `InterfaceMenu`
 
 ### Build Config
 - `electron-builder.yml` — `mac.target` lists **both** `dmg` (user download) and `zip` (auto-update payload). Removing the zip target breaks `electron-updater` (`ZIP file not provided` error)

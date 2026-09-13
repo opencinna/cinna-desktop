@@ -14,22 +14,22 @@ Phase 7b of Local Agents added the folder leg. Before it, this feature was Cinna
 - **Severity** — Normalized level for a snapshot: `ok` · `info` · `warning` · `error` · `unknown` · `null`. Drives card tint, corner indicator, icon, sort order and the menu-bar dot.
 - **Severity derivation (folder agents only)** — A remote snapshot arrives with a severity already assigned. A folder agent writes a **free-form word** in its frontmatter (`state:` / `status:` / `health:`), so the desktop derives one. See the rules below — the mapping is anchored on the kit contract's own vocabulary, and an unreadable word never becomes green.
 - **`status_refresh_command`** — An optional manifest field on a folder agent naming the command that recomputes its status. Only the `/run:<name>` form — a reference into the agent's own `docs/CLI_COMMANDS.yaml` catalog — is executed. It runs as a subprocess in the agent folder under that agent's turn lock. <!-- nocheck -->
-- **Worst severity** — The highest-ranked severity across all snapshots, shown as a coloured dot on the sidebar-footer icon and painted into the menu-bar tray icon. A `null` severity is skipped.
-- **Desktop visibility** — Cinna agents disabled in Desktop are omitted from the status list, overlay and tray as well as the Agents sidebar. They remain in Settings → Profile → Agents for recovery. This filters the Desktop view; it does not stop or delete the server agent. Sidebar rows and agent page headers use type icons without readiness dots; the status overlay and footer/tray severity indicators remain.
+- **Worst severity** — The highest-ranked severity across all snapshots, shown as a coloured dot on the top-bar icon and painted into the menu-bar tray icon. A `null` severity is skipped.
+- **Desktop visibility** — Cinna agents disabled in Desktop are omitted from the status list, overlay and tray as well as the Agents sidebar. They remain in Settings → Profile → Agents for recovery. This filters the Desktop view; it does not stop or delete the server agent. Sidebar rows and agent page headers use type icons without readiness dots; the status overlay and top-bar/tray severity indicators remain.
 - **Batch list** — The cache-only, poll-safe list every surface consumes. It is the **union** of the folder leg (local disk) and the remote leg (one HTTP call). It runs **no** commands — see the polling rule below.
 - **Manual refresh** — An explicit refresh of one agent. The status data owner decides its meaning: a Cinna environment is refreshed; a folder agent runs its declared status command before the file is read.
 - **Re-read** — A folder agent's status without forcing anything: read `STATUS.md` off disk. Takes no lock, spawns nothing. This is what the post-turn pull and "Refresh all" use for a folder agent.
 - **Partial failure / degradation strip** — The Cinna leg failing no longer costs the user the rows it did not invalidate. The list returns folder rows plus a `remoteError`, and the overlay renders a bounded error footer below the grid or detail while the tray keeps its strip above the rows. Both preserve surviving snapshots.
 - **Sentinel snapshot** — A remote row with both `severity == null` *and* `raw == null` — the agent has never published. Hidden. A folder agent with no `STATUS.md` is omitted for the same reason.
 - **`environmentId: 'local'` is a sentinel, not data.** The renderer reads `null` as a stopped remote environment. Folder snapshots use the non-null sentinel so a local file does not falsely claim that its environment is down; the value itself is not displayed.
-- **Status overlay** — Full-window frosted-glass modal opened from the sidebar-footer activity icon: a responsive grid of agent cards, each expandable into a detail view with the full markdown body.
+- **Status overlay** — Full-window frosted-glass modal opened from the top-bar activity icon: a responsive grid of agent cards, each expandable into a detail view with the full markdown body.
 - **Tray popup** — The macOS menu-bar popover showing the same list. See [Menu-Bar Tray](../../ui/tray/tray.md).
 
 ## User Stories / Flows
 
 ### Seeing at-a-glance agent health
 
-1. The activity icon sits in the sidebar footer whichever profile is active. Folder agents are **default-scope shared resources**, so their statuses are visible from every profile; remote statuses additionally require the active profile to be a Cinna account. Neither surface is gated on the account's *type*
+1. The activity icon sits in the top bar between Collapse/Expand Sidebar and Inbox, whichever profile is active and even when the sidebar is collapsed. Folder agents are **default-scope shared resources**, so their statuses are visible from every profile; remote statuses additionally require the active profile to be a Cinna account. Neither surface is gated on the account's *type*
 2. If any agent has published a status, the icon gains a coloured dot — red for `error`, amber for `warning`, sky for `info`, emerald for `ok`, muted for `unknown` — reflecting the **worst** severity across every agent, local and remote alike
 3. Hovering shows *"Agent status — 3 agents · worst: warning"*; with nothing to report it is a plain glyph reading *"Agent status"*, with no dot
 4. The background poll (every 45 s) keeps it fresh; window focus also refetches
@@ -88,7 +88,7 @@ Phase 7b of Local Agents added the folder leg. Before it, this feature was Cinna
 ### Who sees it
 
 - **Not a Cinna-only feature — and the reason is scope, not account type.** *(This rule replaced the opposite claim, which stood until 7b: the batch hook ran with `enabled: false` for every non-Cinna account and the sidebar button was account-gated.)* Folder agents live in the **default scope**, shared and available regardless of which profile is currently active, so a status list has something to report whether or not the active profile is linked to Cinna — which is what makes the no-Cinna-account case work at all. The renderer's account-type condition was therefore **dropped rather than widened** to "cinna user OR has a folder agent": whether a user has anything to report is the main process's question, and it answers it from *two scopes* rather than from the account's type. A second copy of that rule in the renderer is a second thing to be wrong; being wrong the cheap way costs one IPC round trip returning `[]`, with no network call behind it for a profile with no Cinna link.
-- **The button is not gated on live data either.** It is the only door into the overlay, and so into "Refresh all"; gating it on whether statuses exist would make the footer's controls move as statuses arrive and go.
+- **The button is not gated on live data either.** It remains available in every view, including Settings and with the sidebar collapsed, so users can open the overlay and reach "Refresh all". Gating it on whether statuses exist would make the top-bar controls move as statuses arrive and go.
 
 - **Two scopes, and the list needs both.** Folder agents are shared machine resources stored in the **default/settings** scope, visible from every profile; remote agents, the Cinna account and its tokens are **profile**-scoped. The status service therefore takes *both* user ids rather than one. Handing it the profile id alone is not an error anyone sees — it is a valid query returning an empty list, which reads as "this user has no folder agents"; that is exactly how the folder leg was, for a time, silently dead for every user except the default guest profile.
 
@@ -166,7 +166,7 @@ Renderer
   useAfterTurnAgentStatus          ── live ending only; folder read, Cinna refresh
   useForceRefreshAllAgentStatuses  ── "Refresh all": force remote, re-read folder
 
-  Sidebar footer → AgentStatusButton (dot = worst severity, no account gate)
+  Top bar → AgentStatusButton (dot = worst severity, no account gate)
         │ click
         ▼
   AgentStatusOverlay      grid + detail; failure is a FOOTER when rows survive,

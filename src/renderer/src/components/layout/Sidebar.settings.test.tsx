@@ -1,21 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
-/**
- * The sidebar footer's agent-status button — the **only** way into the status
- * overlay, and so into "Refresh all".
- *
- * It was rendered behind `{isCinnaUser && …}`, which is the same "gate above the
- * branch that would otherwise show something" shape as `agentStatusService`'s
- * remote-only filter and `useAgentStatus`'s account gate. A folder agent reports
- * a status with no Cinna account at all, so a local-only user could have agents
- * to see and no door to see them through.
- *
- * Everything in the sidebar except the button under test is stubbed: the point
- * is which children render for which account, not what any of them contain.
- */
+/** Sidebar settings retain their account scope; status lives in the header. */
 
 vi.mock('../chat/ChatList', () => ({ ChatList: () => null }))
 vi.mock('../jobs/JobsList', () => ({ JobsList: () => null }))
@@ -56,61 +44,18 @@ function signInAs(type: 'local_user' | 'cinna_user'): void {
 }
 
 beforeEach(() => {
-  useUIStore.setState({ activeView: 'chat', settingsMenu: 'chats' } as never)
-  ;(window as unknown as { api: Record<string, unknown> }).api = {
-    app: { setTheme: async () => undefined },
-    agentStatus: {
-      list: vi.fn().mockResolvedValue({
-        success: true,
-        remoteError: null,
-        items: [
-          {
-            agentId: 'folder:alpha',
-            remoteAgentId: 'folder:alpha',
-            name: 'Alpha',
-            environmentId: 'local',
-            severity: 'error',
-            summary: 'disk full',
-            reportedAt: null,
-            reportedAtSource: null,
-            fetchedAt: null,
-            raw: null,
-            body: '',
-            hasStructuredMetadata: true,
-            prevSeverity: null,
-            severityChangedAt: null
-          }
-        ]
-      }),
-      get: vi.fn()
-    }
-  }
+  useUIStore.setState({ activeView: 'chat', settingsMenu: 'chats', sidebarOpen: true } as never)
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('Sidebar — the agent status button', () => {
-  it('is there for a purely local account, which can still have folder agents', async () => {
-    signInAs('local_user')
-    render(createElement(Sidebar), { wrapper })
-
-    const button = await screen.findByTitle(/Agent status/)
-    // Consequence: the door into the overlay exists, and it reports what the
-    // user's one folder agent said.
-    await waitFor(() =>
-      expect(button.getAttribute('title')).toContain('worst: error')
-    )
-  })
-
-  it('is still there for a cinna account', () => {
-    signInAs('cinna_user')
-    render(createElement(Sidebar), { wrapper })
-    expect(screen.getByTitle(/Agent status/)).toBeTruthy()
-  })
+it('does not duplicate the header agent-status control in the sidebar', () => {
+  signInAs('local_user')
+  render(createElement(Sidebar), { wrapper })
+  expect(screen.queryByTitle(/Agent status/)).toBeNull()
 })
-
 
 describe('agent settings scope', () => {
   it('keeps the second Agents menu under Profile for a Cinna account', () => {

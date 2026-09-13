@@ -9,15 +9,15 @@
 
 ### Renderer — Layout
 
-- `src/renderer/src/components/layout/TopBar.tsx` — Persistent top strip; sidebar toggle + Inbox + new chat icons; `app-drag-strip` makes the area draggable, traffic-light gutter via `pl-[76px]`. Absolutely positioned (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) so it overlays the sidebar/main row rather than stealing height from it
-- `src/renderer/src/components/layout/Sidebar.tsx` — Floating sidebar; renders Chats/Jobs/Notes/Agents tab content or the settings menu; footer composes `UserMenu`, `AgentStatusButton`, local-development/update status and `InterfaceMenu`
+- `src/renderer/src/components/layout/TopBar.tsx` — Persistent top strip; sidebar toggle + Agent Status + Inbox + new chat icons; `app-drag-strip` makes the area draggable, traffic-light gutter via `pl-[76px]`. Absolutely positioned (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) so it overlays the sidebar/main row rather than stealing height from it
+- `src/renderer/src/components/layout/Sidebar.tsx` — Floating sidebar; renders Chats/Jobs/Notes/Agents tab content or the settings menu; footer composes `UserMenu`, local-development/update status and `InterfaceMenu`
 - `src/renderer/src/components/layout/InterfaceMenu.tsx` — Sliders icon + portaled popover with Console / Verbose / Theme toggles
 - `src/renderer/src/components/layout/MainArea.tsx` — View router for chat, settings, Inbox, task/job/note and local/external agent pages; mounts `useLiveRunWatch` once above the individual workspaces
 
-### Renderer — Sidebar Footer Sub-components
+### Renderer — Header and Footer Sub-components
 
 - `src/renderer/src/components/auth/UserMenu.tsx` — Profile trigger + portaled dropdown; `compact` prop renders the avatar-only sidebar-footer variant
-- `src/renderer/src/components/agents/AgentStatusButton.tsx` — Activity icon with severity dot; opens agent-status overlay
+- `src/renderer/src/components/agents/AgentStatusButton.tsx` — Top-bar activity icon with severity dot; opens agent-status overlay
 
 ### Renderer — Shared UI / Hooks
 
@@ -75,7 +75,8 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 
 - Absolutely positioned overlay (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) — sits on top of the sidebar card and MainArea so the chat scroll viewport keeps full window height. Inset by 8 px on top/left/right to match the Shell's `p-2` window border
 - Reads `sidebarOpen` to pick icon (`PanelLeftClose` vs `PanelLeft`)
-- Renders `InboxButton` between sidebar toggle and `+`. Its 29×29 px control overlays an aria-hidden count (blank at zero, `99+` above 99, `!` on read error), exposes the full count/error in its title and accessible name, and sets `aria-pressed` for the Inbox view.
+- Renders `AgentStatusButton` between sidebar toggle and Inbox, independently of sidebar state, active view, profile type and available statuses. This keeps the overlay reachable with the sidebar collapsed.
+- Renders `InboxButton` between Agent Status and `+`. Its 29×29 px control overlays an aria-hidden count (blank at zero, `99+` above 99, `!` on read error), exposes the full count/error in its title and accessible name, and sets `aria-pressed` for the Inbox view.
 - Calls `useStartNewChat()` for the `+` button
 - Buttons share the `TOPBAR_BTN` class string: slight-tint background at rest, solid background + subtle border on hover
 - Background is transparent — content scrolling at the very top of MainArea is visible behind the bar's drag region; child views (`MessageStream`, `SettingsPage`, new-chat default) add their own `pt-[…var(--topbar-h)…]` so visible content starts below the buttons
@@ -87,7 +88,7 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 - Two body modes:
   - `activeView === 'settings'` — Back button, "Settings" header, vertical menu items + Trash with a divider
   - otherwise — the tab rail and the list selected by `sidebarTab`: `ChatList`, `JobsList`, `NotesList` or `LocalAgentsList`
-- Footer is `UserMenu compact` / spacer / `AgentStatusButton` / `LocalDevStatusButton` / `UpdateStatusButton` / `InterfaceMenu`. Agent status is not account-gated; a local-only profile can refresh folder statuses.
+- Footer is `UserMenu compact` / spacer / `LocalDevStatusButton` / `UpdateStatusButton` / `InterfaceMenu`.
 - Returning to the already selected Agents tab from Inbox restores `external-agent` when `activeExternalAgentId` exists; otherwise it uses the tab's folder-agent view.
 - `LocalAgentsList` reads `showAgentSidebarSections` from `useAppSettings`, defaulting on unless explicitly false. The same group ordering renders with or without headers; flattening adds no empty-group placeholder.
 
@@ -106,8 +107,10 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 
 ### AgentStatusButton (`AgentStatusButton.tsx`)
 
-- Always rendered by `Sidebar`, including empty/default/local profiles. With no reporting agents its glyph has no severity dot.
-- Reads `useAgentStatus()` for severity dot; calls `refetch()` when opening the overlay so the indicator matches what the user is about to see
+- Always rendered by `TopBar` between sidebar toggle and Inbox, including empty/default/local profiles. With no reporting agents its glyph has no severity dot.
+- Uses a fixed 29×29 px button with a 15 px Activity glyph, an overlaid severity dot and the `TOPBAR_BTN` classes passed through `className`, matching Inbox without moving adjacent controls when statuses change.
+- `aria-label` mirrors the count/severity title; `aria-pressed` tracks `agentStatusOpen` and gives the open overlay an accent treatment. Glyph and dot are aria-hidden.
+- Reads `useAgentStatus()` for severity dot; toggles the overlay and calls `refetch()` only when opening it so the indicator matches what the user is about to see
 
 ### usePopover (`usePopover.ts`)
 

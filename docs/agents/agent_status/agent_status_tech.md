@@ -55,8 +55,8 @@ Status sources own reported data and refresh policy independently of agent trans
 | Cache shape + patch | `src/renderer/src/hooks/useAgentStatus.ts` — `AgentStatusCache`, `patchAgentStatusCache()` |
 | Typed client-side error | `src/renderer/src/hooks/useAgentStatus.ts` — `AgentStatusRequestError` |
 | Severity palette, rank, `worstSeverity()` | `src/renderer/src/constants/agentSeverity.ts:6`, `:63` |
-| Sidebar-footer activity icon (no account gate) | `src/renderer/src/components/agents/AgentStatusButton.tsx:12` |
-| Footer mount point | `src/renderer/src/components/layout/Sidebar.tsx:175` |
+| Top-bar activity icon (no account or sidebar-state gate) | `src/renderer/src/components/agents/AgentStatusButton.tsx:12` |
+| Top-bar mount point, between sidebar toggle and Inbox | `src/renderer/src/components/layout/TopBar.tsx` |
 | Overlay (grid + detail + "Refresh all" + shared error footer) | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` |
 | Grid/detail card views, `sortByUrgency` | `src/renderer/src/components/agents/statusViews.tsx:64` |
 | Tray popup | `src/renderer/src/components/tray/TrayPanel.tsx` — see [Menu-Bar Tray](../../ui/tray/tray.md) |
@@ -192,7 +192,7 @@ Anchored on `update_status.py:40` (`STATUSES = ("ok", "attention", "error", "unk
 | `useAfterTurnAgentStatus()` | `useAgentStatus.ts`, `useLiveRunWatch.ts` | Sends `after_turn` only for live done/error events; snapshot replay does not refresh. |
 | `useForceRefreshAllAgentStatuses()` | `useAgentStatus.ts` | Sends `batch` for every cached ID via `Promise.allSettled`; main owns source policy. An empty cache triggers a list refetch. |
 | `patchAgentStatusCache()` | `useAgentStatus.ts` | Upserts by agent ID and retains the standing partial-error marker; callers check their captured profile before patching. |
-| `AgentStatusButton` | `AgentStatusButton.tsx:12` | Activity icon + worst-severity dot. Mounted unconditionally at `Sidebar.tsx:175`. |
+| `AgentStatusButton` | `AgentStatusButton.tsx:12` | Activity icon + worst-severity dot. Mounted unconditionally by `TopBar.tsx` between sidebar toggle and Inbox. Fixed 29×29 px control with a 15 px glyph and shared `TOPBAR_BTN` styling; `aria-label` mirrors the title and `aria-pressed` tracks the overlay. The glyph and dot are aria-hidden. |
 | `AgentStatusOverlay` | `AgentStatusOverlay.tsx` | Fade state machine, both mutations, `reauthNeeded`, and the failure-shape decision `const degraded = sorted.length > 0`. |
 | `ReauthErrorStrip` / `FailureStrip` | `AgentStatusOverlay.tsx` | Compact forms of the two error panels, rendered in the shared footer below the active grid or detail. The reauth strip carries the same Re-authenticate button as the panel. |
 | `FailureStrips` | `AgentStatusOverlay.tsx` | One call outside the grid/detail branches renders reauth, batch and per-agent failures in a `role="status"` footer. It is `shrink-0`, scrollable and capped at 40% of the overlay height, and appears only when surviving rows and an error exist. Keeping it below both views prevents asynchronous failures from moving Refresh, Start Chat or navigation controls; healthy views reserve no blank footer. The tray retains its existing strip placement above rows. |
@@ -217,7 +217,8 @@ The rows below are not decoration. Three claims **this document makes** — that
 | `src/renderer/src/hooks/useAgentStatus.test.tsx` | The query is issued for a purely local account, for one not signed in yet, and still for a Cinna account — the three the dropped gate would have silenced; partial failure re-raised while `data` stays populated; the two per-agent fetches proven to be different requests; semantic batch fan-out; delayed success/error and batch results cannot patch a replacement profile. |
 | `src/renderer/src/components/agents/AgentStatusOverlay.test.tsx` | Strip vs panel by row count; reauth strip; the per-agent failure message — as a **differential pair** whose two halves differ by one line (`agentStatusDetailId`), because the grid test passed while the detail view said nothing. Also the concurrency tests for per-card refresh state. One test here was **thrown away rather than kept**: it clicked a refreshing card twice and asserted one call, and deleting the guard it was written for failed nothing, because the button's own `disabled` already swallowed the second click. It now asserts the mechanism that actually stops the second run — the button going disabled — and dies under two mutations. |
 | `src/renderer/src/components/tray/TrayPanel.test.tsx` | Same degradation rule in the popup. |
-| `src/renderer/src/components/layout/Sidebar.agentStatusButton.test.tsx` | The footer button renders without a Cinna account. |
+| `src/renderer/src/components/layout/TopBar.agentStatusButton.test.tsx` | Header order for local/Cinna profiles, availability with the sidebar collapsed or no reporting agents, severity dot, pressed state and refresh only on opening. |
+| `src/renderer/src/components/layout/Sidebar.settings.test.tsx` | No duplicate status button in the sidebar; local/Cinna agent settings scope remains intact. |
 | `src/renderer/src/hooks/useChatStream.statusRefresh.test.tsx` | Live endings use `after_turn`; replaying a finished snapshot does not refresh. |
 | `src/main/services/localAgents/scannerService.test.ts` | `timestamp` accepted, using the byte shape `render_status()` produces rather than a synonym. |
 | `src/renderer/src/components/agents/sortByUrgency.test.ts` | The ordering claim this document makes: a `null` severity sorts below every real one, **below `unknown` specifically** — the pair the rule exists for — and two silent agents break their tie by recency rather than by chance. |

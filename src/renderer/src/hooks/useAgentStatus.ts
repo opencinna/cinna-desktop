@@ -43,7 +43,7 @@ export class AgentStatusRequestError extends Error {
  * and a purely local user — no Cinna account at all — is the case Local Agents
  * exists for. With that gate in place no amount of correctness in the main
  * process could reach the screen: the IPC call was never issued, so the overlay,
- * the sidebar-footer dot and the menu-bar tray (which reads this same hook
+ * the top-bar dot and the menu-bar tray (which reads this same hook
  * through `useTrayIcon` and `TrayPanel`) all stayed empty.
  *
  * The account-type condition is dropped rather than widened to "cinna user OR

@@ -2,13 +2,13 @@
 
 ## Purpose
 
-The window-level chrome that frames every view: a permanent top bar next to the macOS traffic lights, a floating left sidebar that slides in/out, and a main working area. Hosts global actions (sidebar toggle, Inbox, new chat), the profile/account menu, the agent-status indicator, and an interface-preferences popover.
+The window-level chrome that frames every view: a permanent top bar next to the macOS traffic lights, a floating left sidebar that slides in/out, and a main working area. Hosts global actions (sidebar toggle, Agent Status, Inbox, new chat), the profile/account menu, and an interface-preferences popover.
 
 ## Core Concepts
 
-- **Top Bar** — A persistent ~36 px strip across the window top. Holds the macOS traffic-light gutter plus the **Collapse/Expand Sidebar**, **Inbox** and **New Chat** icon buttons, in that order. Its position and contents never change with sidebar state.
+- **Top Bar** — A persistent ~36 px strip across the window top. Holds the macOS traffic-light gutter plus the **Collapse/Expand Sidebar**, **Agent Status**, **Inbox** and **New Chat** icon buttons, in that order. Its position and contents never change with sidebar state.
 - **Floating Sidebar** — A rounded, slightly inset panel on the left. Always slot-reserves its position; expanding/collapsing only animates its visibility (slide + fade), not the surrounding layout.
-- **Sidebar Footer** — Bottom row of the sidebar with the profile menu on the left and agent status, local-development status, update status and Interface controls on the right. Agent status is available to every profile; folder agents can report without a Cinna account.
+- **Sidebar Footer** — Bottom row of the sidebar with the profile menu on the left and local-development status, update status and Interface controls on the right.
 - **Profile Menu** — Avatar-only trigger that opens an upward dropdown listing local profiles, the Settings entry, "Add Account", and "Sign Out".
 - **Interface Menu** — Popover above the gear-toggle button containing three preference toggles: **Console** (app logs overlay), **Verbose**, and **Theme**.
 - **Main Area** — Everything to the right of the sidebar; routes chats, app settings, Inbox, tasks, jobs, notes and folder/external agent pages.
@@ -40,8 +40,9 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 
 ### Checking Agent Status
 
-1. Status icon shows a colored dot when there is a non-OK agent status.
-2. User clicks the icon; the agent-status overlay opens. See [Agent Status](../../agents/agent_status/agent_status.md).
+1. User finds the activity icon between Collapse/Expand Sidebar and Inbox, including with the sidebar collapsed or Settings open. It is available to every profile because folder agents can report without a Cinna account.
+2. The icon shows the worst reported severity as a colored dot, including OK; no non-null severity means no dot.
+3. User clicks the icon; the agent-status overlay opens and refreshes the status list. See [Agent Status](../../agents/agent_status/agent_status.md).
 
 ### Opening an agent
 
@@ -74,6 +75,7 @@ App
 └── Shell
     ├── TopBar (always visible, draggable, contains traffic-light gutter + icons)
     │     ├── Collapse/Expand button → ui.store.toggleSidebar()
+    │     ├── Agent Status button   → ui.store.setAgentStatusOpen()
     │     ├── Inbox button          → ui.store.setActiveView('inbox')
     │     └── New Chat button       → useStartNewChat()
     └── flex row
@@ -81,7 +83,7 @@ App
         │     ├── Settings menu OR Chats / Jobs / Notes / Agents tab content
         │     └── Footer
         │           ├── UserMenu compact (portaled dropdown)
-        │           ├── AgentStatusButton + local-dev/update controls
+        │           ├── Local-dev/update controls
         │           └── InterfaceMenu (portaled popover)
         └── MainArea (view router + live-run watch; ChatWorkspace or selected feature page)
 ```
@@ -94,6 +96,6 @@ App
 - [Verbose Mode](../verbose_mode/verbose_mode.md) — Toggled from the Interface popover.
 - [Keyboard Shortcuts](../keyboard_shortcuts/keyboard_shortcuts.md) — ⌘\` opens the logs overlay regardless of the Console toggle.
 - [User Accounts](../../auth/user_accounts/user_accounts.md) — Profile dropdown lists local accounts and triggers account switching / sign-out.
-- [Agent Status](../../agents/agent_status/agent_status.md) — Sidebar-footer status indicator and overlay.
+- [Agent Status](../../agents/agent_status/agent_status.md) — Top-bar status indicator and overlay.
 - [Menu-Bar Tray](../tray/tray.md) — macOS menu-bar icon + popover; created when the main window opens and destroyed when it closes.
 - [Logger](../../development/logger/logger.md) — Console toggle and overlay.

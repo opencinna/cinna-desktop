@@ -4,12 +4,12 @@ import { useAgentStatus } from '../../hooks/useAgentStatus'
 import { SEVERITY_DOT, worstSeverity } from '../../constants/agentSeverity'
 
 /**
- * Sidebar footer button that opens the agent-status overlay and shows a
+ * Fixed-size top-bar button that opens the agent-status overlay and shows a
  * severity dot for the worst current status. Shown for every account: a folder
  * agent reports a status without a Cinna account, and with nothing to report the
  * button is a plain glyph with no dot.
  */
-export function AgentStatusButton(): React.JSX.Element {
+export function AgentStatusButton({ className = '' }: { className?: string }): React.JSX.Element {
   const agentStatusOpen = useUIStore((s) => s.agentStatusOpen)
   const setAgentStatusOpen = useUIStore((s) => s.setAgentStatusOpen)
   const { data: statuses, refetch } = useAgentStatus()
@@ -21,6 +21,7 @@ export function AgentStatusButton(): React.JSX.Element {
 
   return (
     <button
+      type="button"
       onClick={() => {
         const next = !agentStatusOpen
         setAgentStatusOpen(next)
@@ -29,15 +30,14 @@ export function AgentStatusButton(): React.JSX.Element {
         if (next) refetch()
       }}
       title={title}
-      className={`relative p-1.5 rounded-md transition-colors ${
-        agentStatusOpen
-          ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text)]'
-          : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'
-      }`}
+      aria-label={title}
+      aria-pressed={agentStatusOpen}
+      className={`relative flex h-[29px] w-[29px] shrink-0 items-center justify-center aria-pressed:bg-[var(--color-accent)]/15 aria-pressed:text-[var(--color-accent)] ${className}`}
     >
-      <Activity size={14} />
+      <Activity size={15} aria-hidden="true" />
       {worst && (
         <span
+          aria-hidden="true"
           className={`absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full ${SEVERITY_DOT[worst]}`}
         />
       )}

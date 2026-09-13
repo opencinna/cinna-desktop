@@ -16,7 +16,7 @@ import { useAuthStore } from '../stores/auth.store'
  *
  * `useAgentStatus` was `enabled: currentUser?.type === 'cinna_user'`, with
  * `refetchInterval` off entirely when disabled. Every surface in this feature —
- * the status overlay, the sidebar-footer button, the menu-bar tray icon
+ * the status overlay, the top-bar button, the menu-bar tray icon
  * (`useTrayIcon`) and the tray popup (`TrayPanel`) — reads this one hook, so no
  * amount of correctness in `agentStatusService`'s folder branch could be seen by
  * a user with no Cinna account: the IPC call was never issued.
