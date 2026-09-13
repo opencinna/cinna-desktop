@@ -52,7 +52,7 @@ Implementation reference for [The Claude Engine](claude_engine.md). What the SDK
 | `resources/cinna-kit-contract/VERSION`, `kit.json`, `layout.json` | contract `1.1.0` → `1.2.0` (all three move together) |
 | `resources/cinna-kit-contract/schema/cinna-agent.schema.json` | `runtime.engine`, `["string","null"]`, **no enum** |
 | `resources/cinna-kit-contract/CHANGELOG.md` | the 1.2.0 entry, and the rule that an unrecognised value is not a broken folder |
-| `electron-builder.yml` | `!node_modules/@anthropic-ai/claude-agent-sdk-*/**` |
+| `electron-builder.yml`, `scripts/packaged-dependencies.cjs` | Root/nested CLI exclusions, automatic adapter runtime dependency unpacking and shipped-tree validation |
 | `package.json` | `@anthropic-ai/claude-agent-sdk` added; `@anthropic-ai/sdk` `^0.89.0` → `^0.93.0` |
 
 ## Database Schema
@@ -245,7 +245,7 @@ So: `refetchInterval` is `CLAUDE_AUTH_POLL_MS` (10 s) **only** while the answer 
 - **The turn's own constants live with the driver now** (`ACP_TURN_CEILING_MS`, `ACP_CANCEL_GRACE_MS`, `ACP_IDLE_REAP_MS`), none read from the environment. The runner's `CLAUDE_BACKGROUND_GRACE_MS` and `CLAUDE_TURN_FREE_TASK_TYPES` went with it: the adapter decides when a turn with background work is over
 - **`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` is deliberately not set** into the child. It would remove `run_in_background` from the CLI's tool schemas — buying nothing now that the stdin hazard is gone, and taking away a capability the user's own `claude` has
 - **`CLAUDE_AGENT_SDK_CLIENT_APP`** is set *into the child*, never read from the parent
-- **Packaging** — two exclusions and one unpack in `electron-builder.yml`: `!node_modules/@anthropic-ai/claude-agent-sdk-*/**` and `!node_modules/**/node_modules/@anthropic-ai/claude-agent-sdk-*/**` keep both copies of the SDK's ~190 MB bundled `claude` out of the installer, and `asarUnpack: node_modules/@agentclientprotocol/claude-agent-acp/**` puts the adapter on disk as a real file, because the child process reads it with its own `fs`. `CLAUDE_CODE_EXECUTABLE` is what makes the exclusions safe
+- **Packaging** — root/nested `@anthropic-ai/claude-agent-sdk-*` exclusions keep the bundled CLI binaries out; `CLAUDE_CODE_EXECUTABLE` makes that safe. The hooks in `scripts/packaged-dependencies.cjs` unpack the adapter and its installed runtime dependency tree, then reject missing required shipped dependencies. Unpacking only the adapter left its SDK imports unreachable in the Node child. See [Packaged Runtime Dependencies](../../development/distribution/packaged_runtime.md) for peer/optional handling, re-hoisting, manual smoke checks and the macOS arm64 evidence boundary.
 
 ## Security
 

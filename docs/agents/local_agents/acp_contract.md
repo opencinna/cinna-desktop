@@ -33,6 +33,34 @@ its agent entry's own `model` is ignored.
 
 ## 2. Verified — shared behavior measured on OpenCode and Claude
 
+### Packaged dependency resolution — Claude and Codex
+
+The adapters run as Node children from `app.asar.unpacked`; their dependencies must
+also resolve there. Claude failed before `initialize` while `@agentclientprotocol/sdk`
+remained inside the adjacent archive. The installed peer tree also differed from
+what electron-builder shipped: the Claude SDK's `@modelcontextprotocol/sdk` peer
+needed an explicit production dependency. Both adapters' dependency trees are now
+discovered before packing and the shipped required manifest tree is checked after
+packing, including cross-builds. The user's Claude/Codex executables remain external.
+
+Verified on macOS arm64: both packaged adapters completed ACP v1 `initialize` using
+the packaged Electron executable and isolated copies outside the checkout. Codex's
+app-server was the integration-test fixture; Claude did not start a turn. Both
+initializations also passed with the check runner's Node executable in a path
+containing spaces. These checks use temporary homes and no inherited credentials
+or Node loader overrides; they establish no live model or login behavior.
+
+The separate packaged main-process check loaded 21 external imports and exercised
+SQLite queries, libsodium initialization/hashing, and RTF/PDF extraction including
+the dynamic PDF.js worker. It uses the project's Electron against a copied actual
+archive with sanitized environment and temporary userData, rather than starting
+the production app. Windows/Linux runtime and OCR remain unverified.
+
+See [Packaged Runtime Dependencies](../../development/distribution/packaged_runtime.md)
+for the commands, dependency/optional rules, isolation and evidence limits. The
+automatic build guard and `npm run test:packaging` are distinct from the manually
+invoked `test:packaged:acp` and `test:packaged:main` runtime checks.
+
 ### Traffic arrives before a turn can bind, and it is not rare
 
 Messages are *read* in order and *processed* concurrently: the SDK's connection dispatches each

@@ -37,19 +37,17 @@ files:
   # Codex is always supplied by CODEX_PATH; exclude the unused bundled CLI.
   - '!node_modules/@openai/codex*/**'
   - '!node_modules/**/node_modules/@openai/codex*/**'
+beforePack: ./scripts/packaged-dependencies.cjs
+afterPack: ./scripts/packaged-dependencies.cjs
 asarUnpack:
   # For the icon PNGs, which are imported with electron-vite's `?asset`.
   # The kit contract is excluded from `files` above, so this never matches it.
   - resources/**
-  # **The Claude ACP adapter, which is executed as a child process.** The
-  # launcher spawns `<this app> --as-node <adapter>/dist/index.js`, and the
-  # child reads that file with its own `fs`: a path inside `app.asar` is a file
-  # to Electron's patched reader and to nothing else. Unpacked, it is a real
-  # path on disk. The `files` exclusion above keeps its nested
-  # `claude-agent-sdk-*` platform package — another ~190 MB `claude` — out of
-  # the unpacked copy; `CLAUDE_CODE_EXECUTABLE` is what makes that safe.
-  - node_modules/@agentclientprotocol/claude-agent-acp/**
-  - node_modules/@agentclientprotocol/codex-acp/**
+  # The beforePack hook adds both ACP adapters and their complete installed
+  # runtime dependency trees. Node child processes cannot resolve dependencies
+  # left inside app.asar. Discovering the tree handles hoisted/nested versions
+  # and dependency updates without maintaining a list of individual packages.
+  # afterPack checks the shipped tree before signing or publishing.
 extraResources:
   # The kit contract is read as a *tree* at runtime — the manifest schema,
   # layout.json, and the templates the scaffolder copies file by file — so it

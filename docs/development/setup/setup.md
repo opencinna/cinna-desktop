@@ -13,6 +13,16 @@ npm run build    # Production build (outputs to out/)
 npm run start    # Preview the production build
 ```
 
+Packaging checks are separate from the Vite build and Vitest suite:
+
+| Command | Purpose |
+|---|---|
+| `npm run test:packaging` | Dependency discovery/build-hook and isolated-environment regression tests; no packaged artifact required. |
+| `npm run test:packaged:acp -- <app-executable> <resources-directory>` | Initialize both adapters in an existing package using packaged Electron. |
+| `npm run test:packaged:main -- <resources-directory>` | Check shipped main imports, native/WASM initialization and parser paths using project Electron. |
+
+Run the runtime commands from a checkout with dependencies installed and on a compatible host. They do not build the package or run live model turns. See [Packaged Runtime Dependencies](../distribution/packaged_runtime.md) for quoted examples, isolation, CI coverage and platform limits; [Release & Distribution](../distribution/release.md) owns package creation.
+
 ## Tech Stack
 
 | Layer | Tech |
@@ -94,6 +104,7 @@ MainArea routes chats, Settings, Inbox, tasks, jobs, notes and agent pages. Chat
 - Default provider/model, dark/light theme, markdown rendering
 - Compact UI with animated sidebar, controls row, metadata popups
 - Animated tool call blocks: provider-first badges, shimmer progress bar, smooth expand/collapse
+- Packaged ACP dependency discovery and shipped-tree guard; isolated ACP/main smoke checks verified on macOS arm64
 
 ### Known Gaps
 - Chat title auto-generation (currently truncated first message)
@@ -101,4 +112,4 @@ MainArea routes chats, Settings, Inbox, tasks, jobs, notes and agent pages. Chat
 - Inline chat rename, message editing/deletion
 - Conversation export, system prompt UI, image/file attachments
 - Streaming cancellation cleanup, search across chats
-- App packaging (electron-builder configured but untested)
+- Packaged runtime checks on Windows/Linux and macOS x64 remain unverified; build-time dependency validation also runs on cross-builds (see [Packaged Runtime Dependencies](../distribution/packaged_runtime.md))

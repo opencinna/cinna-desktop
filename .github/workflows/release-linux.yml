@@ -29,6 +29,8 @@ jobs:
 
       - run: npm ci
 
+      - run: npm run test:packaging
+
       - name: Build & publish Linux artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

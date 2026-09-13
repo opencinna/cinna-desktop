@@ -186,6 +186,10 @@ export const claudeAuthProbe = new ClaudeAuthProbe({
  * is `asarUnpack`ed, so the path below is a real file on disk. It has to be: a
  * child process reads the adapter with its own `fs`, and a path inside
  * `app.asar` is not a file to anything but Electron's patched reader. The
+ * adapter's hoisted runtime dependencies must also be unpacked: Node's ESM
+ * resolver cannot find packages left inside the adjacent `app.asar`.
+ * `npm run test:packaged:acp -- <executable> <resources>` checks the handshake
+ * against a built app without starting a model turn. The
  * `files` entry that excludes the adapter's *nested* `claude-agent-sdk-*`
  * platform packages is what keeps the unpacked copy from carrying a second
  * ~190 MB `claude` the user never chose; `CLAUDE_CODE_EXECUTABLE` is what makes

@@ -143,7 +143,7 @@ npm run build:mac
 
 This script (defined in `package.json`) runs `electron-vite build && electron-builder --mac` and, with the env vars present, will:
 1. Compile main/preload/renderer.
-2. Package the app for both `x64` and `arm64` (config in `electron-builder.yml`).
+2. Discover ACP runtime dependencies, package the app for both `x64` and `arm64`, and validate required manifests in each shipped unpacked tree (hooks in `electron-builder.yml`; see [Packaged Runtime Dependencies](packaged_runtime.md)).
 3. Sign every binary with your Developer ID cert.
 4. Upload to Apple's notary service and wait (typically 2–10 min per arch).
 5. Staple the notarization ticket onto the DMG.
@@ -166,7 +166,9 @@ The `notarize:dmgs` script (in `package.json`) loops over every `dist/cinna-desk
 
 ## Verifying the result
 
-After the build, sanity-check before publishing:
+After the build, run the [packaged runtime checks](packaged_runtime.md#commands-and-coverage) against the artifact on a compatible host before publishing. `afterPack` automatically validates the required ACP manifest tree before signing, including cross-builds; it does not execute either smoke check. The ACP check uses packaged Electron, while the main check uses project Electron against copied packaged files. Record the tested platform/architecture and keep untested targets explicit; measured runtime coverage is macOS arm64 only.
+
+Then sanity-check signing and notarization:
 
 ```bash
 # Signature is valid and chains to Apple root
@@ -219,7 +221,7 @@ At a glance:
 3. **Build, sign, notarize, upload** — `npm run release:mac` produces a GitHub **draft** release with both DMGs + manifest.
 4. **Push** the version-bump commit **and the tag** — `git push --follow-tags`. This is what triggers...
 5. **Linux build (automated)** — GitHub Actions runs on `ubuntu-latest`, appends `.AppImage` + `.deb` to the same release.
-6. **Verify the draft** — `gh release view`, optional download-and-launch smoke test.
+6. **Verify the draft** — `gh release view`, isolated packaged runtime checks on compatible hosts, optional download-and-launch smoke test.
 7. **(Optional) Test auto-update** before users see it.
 8. **Write notes & publish** — `gh release edit ... --draft=false`.
 
@@ -258,6 +260,8 @@ npx electron-vite build
 npm run dev              # Ctrl+C once the window opens cleanly
 ```
 
+Run `npm run test:packaging` as a separate pre-flight check. It runs the dependency/hook and environment fixtures without a package; neither `npm test` nor the Vite build includes it.
+
 If anything fails, fix it on `main` before continuing — every release tag is a permanent reference point.
 
 > **The `npm run dev` check is normally already done.** In practice the maintainer has been running the app in dev while finishing the work that's being released, so by the time a release is requested this step is redundant and gets skipped. It needs an interactive window + Ctrl+C, so it's also the one step an agent driving this runbook can't meaningfully perform — skipping it is fine as long as `typecheck` and `electron-vite build` pass. Run it explicitly only when the release contains changes you haven't exercised in a live app.
@@ -286,7 +290,7 @@ npm run release:mac
 
 This single command:
 - Compiles main/preload/renderer.
-- Packages `.app` bundles for `x64` and `arm64`.
+- Discovers/unpacks the ACP runtime dependency trees and validates the required shipped manifests while packaging `.app` bundles for `x64` and `arm64`.
 - Signs everything with the Developer ID cert.
 - Submits each `.app` to Apple notary and **waits** for `Accepted` (2–10 min per arch).
 - Staples the notarization ticket onto the `.app`.
@@ -313,6 +317,8 @@ git ls-remote --tags origin "v$(node -p "require('./package.json').version")"   
 The moment the `v*` tag lands, `.github/workflows/release-linux.yml` triggers on `ubuntu-latest` and builds Linux artifacts in parallel. Check it at https://github.com/opencinna/cinna-desktop/actions and wait for it to finish (5–8 min) before publishing the draft, so the released version includes Linux too. Full details — what the workflow runs, manual dispatch, auto-update caveats — are in "Linux build details" below.
 
 #### 6. Verify the draft on GitHub
+
+Complete the packaged runtime checks under [Verifying the result](#verifying-the-result) for compatible artifacts, and record coverage before publishing. A successful CI build provides static dependency validation, not target runtime evidence.
 
 ```bash
 VERSION="v$(node -p "require('./package.json').version")"
@@ -391,8 +397,11 @@ Done. Installed clients on a previous version will pick up the new release on ne
 When you push the `v*` tag in step 4, the workflow `.github/workflows/release-linux.yml` triggers automatically on `ubuntu-latest` and:
 
 - Runs `npm ci` (which installs `linux-x64` native binaries for `better-sqlite3` and friends).
-- Runs `npm run release:linux` — builds `.AppImage` and `.deb`, plus `latest-linux.yml` for auto-update.
+- Runs `npm run test:packaging` — dependency/build-hook and environment regressions.
+- Runs `npm run release:linux` — builds `.AppImage` and `.deb`, plus `latest-linux.yml` for auto-update; `beforePack` and `afterPack` discover and validate the ACP manifest tree.
 - Uploads them to the **same draft release** the macOS build created.
+
+The workflow does not run `test:packaged:acp`, `test:packaged:main` or the full E2E suite. Runtime smoke checks remain separate manual verification on a compatible host.
 
 Watch progress at https://github.com/opencinna/cinna-desktop/actions. Typical runtime: 5–8 min.
 
@@ -556,6 +565,8 @@ After publishing release `0.1.1` while running `0.1.0`:
 
 ### electron-builder packaging problems
 
+For missing ACP dependencies, pre-`initialize` module failures and native/parser smoke failures, see [Packaged runtime diagnosis](packaged_runtime.md#diagnosing-a-failure). Check the requiring package and shipped tree before clearing caches: a required peer omitted by production collection cannot be fixed with an unpack pattern alone.
+
 | Symptom | Likely cause |
 |---|---|
 | `ENOENT: no such file or directory, rename '...Electron.app/Contents/MacOS/Electron' -> '...Cinna Desktop'` | Stale/corrupt Electron download in the electron-builder cache. Fix: see "Recovering from a failed build" below. |
@@ -603,5 +614,5 @@ A clean re-run will redownload Electron (~120 MB per arch from GitHub Releases) 
   - Added runtime dep `electron-updater`.
 - `src/main/updater/updater.ts`: auto-update wire-up. Checks on launch + every 6h, prompts user on `update-downloaded`, installs on quit. Dev-mode guard via `is.dev`.
 - `src/main/index.ts`: calls `initAutoUpdater()` after `createWindow()`. Loads dock icon from `resources/cinna-desktop-icon.png`.
-- `.github/workflows/release-linux.yml`: triggers on `v*` tag push or manual dispatch. Runs on `ubuntu-latest`, calls `npm run release:linux` with the auto-provided `GITHUB_TOKEN`. Appends Linux assets to the same draft release the macOS build created.
+- `.github/workflows/release-linux.yml`: triggers on `v*` tag push or manual dispatch. Runs on `ubuntu-latest`, tests the packaging guard/environment fixtures, then calls `npm run release:linux` with the auto-provided `GITHUB_TOKEN`. Appends Linux assets to the same draft release the macOS build created; runtime smoke commands are manual.
 - `build/entitlements.mac.plist`: unchanged — current entitlements (JIT, unsigned exec memory, dyld env vars) are correct for Electron + hardened runtime.

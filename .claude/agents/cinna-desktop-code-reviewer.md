@@ -32,6 +32,15 @@ Not a checklist to recite — the places worth looking first, because each has p
 - **React.** Effects re-running and overwriting what the user just did; query-cache resets unmounting a screen mid-flow; refs versus state; StrictMode's double invocation; anything that must survive a remount.
 - **Conventions.** Colours only through `var(--color-*)`; custom CSS inside `@layer base`; no renderer access to keys or tokens; no direct DB access outside `src/main/db`.
 
+## Packaged runtime dependencies
+
+For dependency, launcher, worker, native-module or packaging changes, review the distributed layout separately from development. A successful Vite build or test against the checkout does not prove the installed app can resolve its packages.
+
+- **The asar boundary.** An adapter launched with `ELECTRON_RUN_AS_NODE=1` from `app.asar.unpacked` cannot resolve dependencies left inside the adjacent `app.asar`. Follow the complete runtime dependency tree, including peers, optional dependencies used by the target, and nested versions. The real failure here was Claude's adapter failing before `initialize` because `@agentclientprotocol/sdk` remained packed.
+- **Dependency collection and hoisting.** npm installing a peer does not prove electron-builder ships it: the Claude SDK's required `@modelcontextprotocol/sdk` peer was omitted until declared as a production dependency. electron-builder can also hoist packages again, so source-directory-only unpack patterns can miss the destination. Check `scripts/packaged-dependencies.cjs`, its build hooks, `electron-builder.yml`, and the actual packaged tree. Preserve the deliberate bundled Claude/Codex CLI exclusions; both launchers use the user's executable.
+- **Exercise the consumer.** Import checks alone miss lazy paths. For affected features, test adapter initialization, document parsing and its dynamic worker, native bindings or WASM initialization as appropriate. Main-process imports use Electron's asar support; ordinary Node children need real disk paths. Do not infer one from the other.
+- **Isolate the evidence.** Run packaged checks outside the checkout with temporary HOME/userData and no live credentials or model calls, so ancestor `node_modules` cannot mask missing files. Clear `NODE_PATH` and `NODE_OPTIONS` before launching Electron: copying the archive and redirecting ESM resolution alone still lets CommonJS dependencies fall back to developer packages. `npm run test:packaging` tests the dependency guard; `test:packaged:acp` and `test:packaged:main` exercise a built package. See `docs/agents/local_agents/acp_contract.md` for commands and limits. State the tested platform/architecture and distinguish build-time validation from runtime verification on cross-builds.
+
 ## Report
 
 Findings first, ranked most severe first. Each one: `file:line`, one sentence saying what is wrong, a **concrete failure scenario** (the inputs or state, and the wrong outcome the user sees), and a suggested fix. Give each a severity, and say when a finding is pre-existing rather than introduced by this diff.

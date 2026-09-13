@@ -160,7 +160,7 @@ Desktop conversations and tasks across remote agents, folder agents running on O
 | [LLM](llm/adapters/adapters.md) | Provider management, adapter abstraction, model selection |
 | [MCP](mcp/connections/connections.md) | MCP server connections, tool aggregation, OAuth DCR |
 | [UI](ui/app_shell/app_shell.md) | App shell with global agent status and Inbox, shared chat workspace, Default/Profile settings, sidebar presentation and [appearance preferences](ui/appearance/appearance.md) |
-| [Development](development/setup/setup.md) | Dev environment, commands, gotchas |
+| [Development](development/setup/setup.md) | Dev environment, commands, gotchas, [release and packaged runtime verification](development/distribution/release.md) |
 
 ## Feature Registry
 
@@ -298,7 +298,7 @@ Desktop conversations and tasks across remote agents, folder agents running on O
 - [Database Migrations](development/migrations/migrations_llm.md) — Inline, version-less, idempotent SQLite migrations run every boot from `runMigrations()`; ordering rules, the FK-off-during-migration pattern, `hasTable`/`hasColumn` guards, and fresh-install validation (LLM reference)
 - [Stream Event Typing](development/stream_event_typing/stream_event_typing_llm.md) — The one event vocabulary for agent and LLM chats: raw `RunEvent` on the lower-level send port, sequenced `RunWatchMessage` envelopes on live subscriptions, one `isRunEvent` guard at the contextBridge boundary, one `useRunEventHandler` receiver, `postRunError` for IPC pre-flight failures. Includes the `needs_input` / `input_resolved` contract for a run waiting on a human (who posts, after the ask's part, `reply` vs `next_message`, teardown posts nothing), the mapping from the retired `AgentStreamEvent` / `LlmStreamEvent` / `tool_subevent`, and why "never unify" was overturned: two unions had grown a third and two renderer handlers that drift (LLM reference)
 - [Shell Environment Resolution](development/shell_environment/shell_environment.md) — Shared main-process resolver that recovers the user's login-shell environment (chiefly `PATH`), which a GUI-launched macOS app does not inherit: one probe per app lifetime behind a sentinel + `env -0` parse, never throws, falls back to `process.env`, plus a cached bare-name `which()`. **Every child spawn must source its environment here.** Also owns the child inherit rule — the MCP SDK's allowlist valued from the login shell, plus session variables and (win32) `PATHEXT`, plus proxy/CA variables taken from `process.env` only, minus `()`-valued entries — which deliberately *narrows* what a stdio MCP server can read, with a names-only debug log of what was dropped. Sub-doc: [Technical Details](development/shell_environment/shell_environment_tech.md)
-- [Release & Distribution](development/distribution/release.md) — Full release cycle: macOS signing/notarization, Linux build via GitHub Actions, GitHub Releases, in-app auto-update
+- [Release & Distribution](development/distribution/release.md) — Full release cycle: macOS signing/notarization, Linux build via GitHub Actions, GitHub Releases, in-app auto-update. Aspect: [Packaged Runtime Dependencies](development/distribution/packaged_runtime.md) — ACP dependency discovery and shipped-tree build guard, isolated ACP/main smoke commands, CI coverage and platform evidence limits.
 - [Auto-Update](development/auto_update/auto_update.md) — Runtime auto-update behavior: state machine, sidebar footer progress indicator, "Check for Updates…" menu, restart prompt
 
 ## Architecture
