@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, renderHook, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RunWatchMessage } from '../../../shared/runWatch'
@@ -8,6 +8,9 @@ import type { RunEvent } from '../../../shared/runEvents'
 const { useLiveRunWatch } = await import('./useLiveRunWatch')
 const { useChatStore } = await import('../stores/chat.store')
 const { useAuthStore } = await import('../stores/auth.store')
+const { useUIStore } = await import('../stores/ui.store')
+const { useChatList } = await import('./useChat')
+const { ChatItem } = await import('../components/chat/ChatItem')
 const delta = (text: string): RunEvent => ({ type: 'delta', kind: 'text', text })
 const snapshot = (runId = 'r', events: RunEvent[] = [], sequence = 0): RunWatchMessage => ({
   type: 'snapshot', runId, sequence, active: true, agentId: null, replayAvailable: true,
@@ -39,6 +42,63 @@ beforeEach(() => {
   useAuthStore.setState({ currentUser: { id: 'u', type: 'local_user' } as never })
 })
 describe('selected chat live subscription', () => {
+  it('leaves an unseen result unread when replay is unavailable and the user leaves before settlement', async () => {
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    const markRead = vi.fn().mockResolvedValue(undefined)
+    window.api.chat.markResultRead = markRead
+    get.mockReturnValue(new Promise(() => {}))
+    useUIStore.setState({ activeView: 'chat' })
+    const view = mount()
+    try {
+      emit({ ...snapshot('run-seen'), replayAvailable: false } as RunWatchMessage)
+      emit({ type: 'closed', runId: 'run-seen', sequence: 1, agentId: null })
+      act(() => useChatStore.getState().setActiveChatId('b'))
+      expect(markRead).not.toHaveBeenCalled()
+    } finally { view.unmount(); focus.mockRestore() }
+  })
+
+  it('keeps the sidebar spinner across chat switches before a list refresh, even when an older idle read arrives late', async () => {
+    vi.useFakeTimers()
+    const chats = [
+      { id: 'a', title: 'Running chat', updatedAt: new Date(), activeRunId: null },
+      { id: 'b', title: 'Other chat', updatedAt: new Date(), activeRunId: null }
+    ]
+    let finishOldRead!: (value: typeof chats) => void
+    const list = vi.fn().mockReturnValueOnce(new Promise((resolve) => { finishOldRead = resolve }))
+      .mockResolvedValue(chats)
+    window.api.chat.list = list
+    window.api.chat.onTitleUpdated = () => () => {}
+    client.setQueryData(['chats'], chats)
+    function Sidebar() {
+      useLiveRunWatch()
+      const { data } = useChatList()
+      return <>{data?.map((chat) => <ChatItem key={chat.id} chat={chat} />)}</>
+    }
+    const view = render(<QueryClientProvider client={client}><Sidebar /></QueryClientProvider>)
+    try {
+      emit(snapshot('run-a', [{ type: 'request-id', requestId: 'request-a' }]))
+      // Switch immediately, while the list still has its pre-run read in flight.
+      fireEvent.click(screen.getByText('Other chat'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+      const runningRow = within(screen.getByText('Running chat').parentElement!)
+      expect(runningRow.getByRole('button', { name: 'Interrupt session' })).toBeTruthy()
+      expect(runningRow.queryByRole('button', { name: 'Delete session' })).toBeNull()
+      expect(within(screen.getByText('Other chat').parentElement!).getByRole('button', { name: 'Delete session' })).toBeTruthy()
+      expect(useChatStore.getState().isStreaming).toBe(false)
+
+      await act(async () => { finishOldRead(chats); await vi.advanceTimersByTimeAsync(10) })
+      expect(runningRow.getByRole('button', { name: 'Interrupt session' })).toBeTruthy()
+
+      // The background run ends; polling still retires its indicator.
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_100) })
+      expect(runningRow.getByRole('button', { name: 'Delete session' })).toBeTruthy()
+    } finally {
+      view.unmount()
+      client.clear()
+      vi.useRealTimers()
+    }
+  })
+
   it('replays once, ignores overlapping sequence delivery, detaches without cancel and isolates another chat', () => {
     const view = mount()
     emit(snapshot('r', [{ type: 'request-id', requestId: 'req' }, delta('one')], 2))

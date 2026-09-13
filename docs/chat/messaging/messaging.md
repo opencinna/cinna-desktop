@@ -51,6 +51,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 
 ## Business Rules
 
+- Sidebar rows show main-owned running activity across chat switches. Hover/focus offers **Interrupt session** while running; **Delete session** returns after execution stops. Background results persist until the matching conversation loads in the foreground; user cancellation has no unread icon. See [Sidebar Session Status](../session_status/session_status.md).
 - Each chat is bound to exactly one LLM provider + model (set at creation, can be changed)
 - A chat can have zero or more MCP servers enabled (junction table)
 - Messages are ordered by `sort_order` within a chat

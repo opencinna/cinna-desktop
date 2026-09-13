@@ -11,6 +11,7 @@ Opening a running conversation shows the output already produced and continues r
 3. Switching conversation or profile discards that view's projection and closes its subscription. Queued old callbacks cannot populate the new view.
 4. Stop targets the owned active conversation, even before a protocol request ID arrives. Detaching does not mean Stop.
 5. On closure, the view reads the saved transcript before retiring live output. A failed read keeps the output available; a later successful query retries settlement. A delayed prior-turn read cannot clear a newer turn or optimistic send.
+6. Sidebar activity is independent of this selected-chat watch. Main list activity keeps another conversation's spinner visible, and persisted results remain unread until the matching saved conversation loads in the foreground. A closed watch alone does not acknowledge a result. See [Sidebar Session Status](../session_status/session_status.md).
 
 **One representation per output row.** Model turns save assistant and tool rows between tool rounds while the live projection still contains that output. Showing both would duplicate the conversation. Each run captures the IDs present before it starts. While its complete replay is displayed, the transcript shows those historical rows and all user/system rows, withholding new assistant/tool/transition/error rows until final settlement. The filter is applied before grouping and question selection. The optimistic user bubble still uses persisted user count, not text equality, so repeated identical sends remain distinct.
 
@@ -45,7 +46,7 @@ run:send and preload run.send remain the lower-level caller-owned-port path thro
 - `src/renderer/src/stores/chat.store.ts` — selected run ID, baseline IDs and projection version alongside blocks/requests; navigation and reset advance the version.
 - `src/renderer/src/components/chat/MessageStream.tsx` — filters persisted duplicates and renders replay/live blocks. `ChatInput` uses owned chat cancellation before a transport request ID is available. `useChatDetail` retains polling as the fallback when no complete live projection is attached.
 
-No new database table, migration or durable event log is introduced. The scope is visibility of an existing main-owned turn. The executor also supplies [typed turn outcomes and explicit completion ownership](turn_completion.md). [Autonomous coordination](../../jobs/tasks/autonomous_tasks.md) and [script execution](../../jobs/tasks/script_execution.md) supply their own controls, budgets and queues; schedules remain separate work.
+Replay itself has no durable event log. The separate [sidebar result record](../session_status/session_status_tech.md#database-schema) persists only the latest outcome and read state, not live events. The executor also supplies [typed turn outcomes and explicit completion ownership](turn_completion.md). [Autonomous coordination](../../jobs/tasks/autonomous_tasks.md) and [script execution](../../jobs/tasks/script_execution.md) supply their own controls, budgets, queues and session-outcome projections; schedules remain separate work.
 
 ## Verification and Related Features
 
@@ -55,4 +56,4 @@ See [Messaging](messaging.md), [main turn lifetime](../chat_routing/chat_routing
 
 ## Autonomous owner turns
 
-[Autonomous tasks](../../jobs/tasks/autonomous_tasks.md) reuse the same selected-chat watch across consecutive owner turns. Their working reservation supplies chat:get activeRunId between individual handles, and cancellation targets the whole runner. Waiting/interrupted reservations still block unrelated sends in main but are not live replay entries; saved runtime controls and the Inbox provide recovery. Restart restores checkpoints/transcripts, never this process-local replay cache.
+[Autonomous tasks](../../jobs/tasks/autonomous_tasks.md) reuse the same selected-chat watch across consecutive owner turns. Their working reservation supplies chat:list and chat:get activeRunId between individual handles, and cancellation targets the whole runner. Waiting/interrupted reservations still block unrelated sends in main but are not live replay entries; saved runtime controls and the Inbox provide recovery. Controllers publish their own latest result identities so intermediate completed or canceled leaf turns cannot mislabel whole-session outcomes. Restart restores checkpoints/transcripts and unread result state, never this process-local replay cache.

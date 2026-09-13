@@ -16,6 +16,11 @@ export function registerChatHandlers(): void {
     return chatService.get(getProfileScopeUserId(), chatId)
   })
 
+  ipcHandle('chat:mark-result-read', async (_event, chatId: string, runId: string) => {
+    userActivation.requireActivated()
+    chatService.markResultRead(getProfileScopeUserId(), chatId, runId)
+  })
+
   ipcHandle('chat:create', async () => {
     userActivation.requireActivated()
     return chatService.create(getProfileScopeUserId())

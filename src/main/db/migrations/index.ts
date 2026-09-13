@@ -3,6 +3,7 @@ import { migrateProviders } from './providers'
 import { migrateMcp } from './mcp'
 import { migrateChats } from './chats'
 import { migrateChatRouter } from './chat-router'
+import { migrateChatRunResults } from './chat-run-results'
 import { migrateRetireChatMirror } from './retire-chat-mirror'
 import { migrateMessages } from './messages'
 import { migrateChatModes } from './chat-modes'
@@ -63,6 +64,7 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // beside the table it extends, not about necessity.
   migrateAgentRoots(sqlite)
   migrateChats(sqlite)
+  migrateChatRunResults(sqlite)
   migrateMessages(sqlite)
   migrateChatModes(sqlite)
   // Account-provisioned (Cinna-managed) provider/mode columns + overrides table.

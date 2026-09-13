@@ -57,6 +57,7 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 
 ## Business Rules
 
+- **Chat rows retain background activity.** A running row shows a spinner and offers **Interrupt session** on hover/focus without selecting it. A stopped row can show its latest unread outcome and offers **Delete session**; foreground transcript loading acknowledges the result. See [Sidebar Session Status](../../chat/session_status/session_status.md).
 - **Agent rows show stable identity.** Name plus type icon replaces description/credential sublines and readiness dots. Folder agents use a terminal, A2A/Cinna/WebSocket ACP a network icon, and other ACP/Managed agents a bot. Readiness remains in agent details and the separate status surface.
 - **Agent grouping is optional.** Settings → Features → Interface → **Show sections in Agents sidebar** is installation-wide and on by default. Turning it off removes headings and section spacing without changing order: default Local folder root, active Cinna server, other folder roots, direct A2A, ACP connections, Managed agents. Hidden Cinna agents remain in Settings → Profile → Agents.
 - **Top bar is always present.** Buttons do not shift when the sidebar toggles — they share a row with the macOS traffic lights via a fixed left gutter.

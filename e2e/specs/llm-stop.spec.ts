@@ -22,13 +22,9 @@ import { test, expect, type CinnaApp } from '../fixtures/app'
  * socket closed by the client is the witness that Stop aborted the request
  * rather than the stream happening to end. Nothing leaves the machine.
  *
- * ## Why the composer buttons are found by their icon
- *
- * Send and Stop are icon-only `<button>`s with no `aria-label` or `title`
- * (`ChatInput.tsx`), so neither has an accessible name to query. They are
- * located by the lucide icon each renders (`lucide-square` for Stop,
- * `lucide-send-horizontal` for Send) — the one thing that tells them apart —
- * until the product names them.
+ * Composer buttons use their accessible names. The sidebar's interrupt
+ * action also contains a square icon, including when its spinner is showing,
+ * so an icon-only locator would select both unrelated controls.
  *
  * ## What it does not cover
  *
@@ -157,8 +153,8 @@ test('Stop mid-reply ends streaming, and the part that streamed stays in the tra
   await arrange(cinna)
   const page = cinna.page
   const input = page.getByPlaceholder('Type a message...')
-  const stop = page.locator('button:has(svg.lucide-square)')
-  const send = page.locator('button:has(svg.lucide-send-horizontal)')
+  const stop = page.getByRole('button', { name: 'Stop', exact: true })
+  const send = page.getByRole('button', { name: 'Send', exact: true })
   const reply = page.getByRole('paragraph').filter({ hasText: PARTIAL })
 
   await test.step('the reply streams and the composer offers only Stop', async () => {
@@ -201,6 +197,6 @@ test('Stop mid-reply ends streaming, and the part that streamed stays in the tra
     const reopened = cinna.page
     await reopened.getByText(PROMPT, { exact: true }).first().click()
     await expect(reopened.getByRole('paragraph').filter({ hasText: PARTIAL })).toHaveText(PARTIAL)
-    await expect(reopened.locator('button:has(svg.lucide-square)')).toHaveCount(0)
+    await expect(reopened.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
   })
 })

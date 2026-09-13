@@ -39,13 +39,14 @@
 - `src/renderer/src/components/chat/MessageBubble.tsx` — User/assistant message with markdown, avatar, metadata popup
 - `src/renderer/src/components/chat/ToolCallBlock.tsx` — Animated collapsible tool call display: provider-first badge layout, spinner during pending, CSS grid expand/collapse animation, structured JSON input/result rendering with MCP content block unwrapping
 - `src/renderer/src/components/chat/ChatList.tsx` — Sidebar chat list
-- `src/renderer/src/components/chat/ChatItem.tsx` — Single chat row (click to select, hover to delete)
+- `src/renderer/src/components/chat/ChatItem.tsx` — Selectable chat row with running spinner/interrupt action or stopped unread-result/delete action; mutations stay in useChat hooks. [Sidebar status details](../session_status/session_status_tech.md)
 
 ## Database Schema
 
 | Table | Purpose | Key columns |
 |-------|---------|-------------|
 | `chats` | Conversations | id, title, model_id, provider_id, created_at, updated_at |
+| `chat_run_results` | Latest local sidebar outcome | chat_id (PK, cascade from chats), run_id (result identity), status, unread; [ownership and acknowledgement](../session_status/session_status_tech.md#database-schema) |
 | `messages` | Chat messages | id, chat_id, role (user\|assistant\|tool_call\|error\|agent_transition), content, tool_call_id, tool_name, tool_input (json), tool_calls (json), tool_error (boolean), tool_provider, parts (json — `MessagePart[]`, optional, set by A2A agents with `cinna.content_kind`-tagged parts), source_agent_id, sort_order. `agent_transition` rows hold agent-side system notices (e.g. startup pings) emitted as `cinna.content_kind: 'notice'` parts — never sent back to the LLM and excluded from history rebuilds |
 | `chat_mcp_providers` | Junction: MCP servers active per chat | chat_id, mcp_provider_id (composite PK) |
 
@@ -55,10 +56,11 @@ DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-d
 
 | Channel | Type | Purpose |
 |---------|------|---------|
-| `chat:list` | invoke | List all chats (sorted by updatedAt desc) |
-| `chat:get` | invoke | Get chat + its messages |
+| `chat:list` | invoke | List visible chats (sorted by updatedAt desc), including activeRunId and lastRunResult |
+| `chat:get` | invoke | Get owned chat + saved messages, activeRunId and lastRunResult; does not acknowledge reading |
+| `chat:mark-result-read` | invoke | Mark the owned chat's matching result ID read; stale IDs cannot clear a newer result |
 | `chat:create` | invoke | Create new empty chat |
-| `chat:delete` | invoke | Delete chat (cascades to messages) |
+| `chat:delete` | invoke | Soft-delete stopped chat; active work refuses with run_active until interrupted. Permanent deletion performs cascade cleanup |
 | `chat:update` | invoke | Update title, modelId, providerId |
 | `chat:add-message` | invoke | Add a message to a chat |
 | `chat:set-mcp-providers` | invoke | Set active MCP providers for a chat |

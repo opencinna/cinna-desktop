@@ -229,7 +229,8 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
 
   // Real detection, over the same IPC the panel's query uses. The option below
   // exists because of what this answers, not because the spec arranged it.
-  const claude = (await cinna.page.evaluate(() => window.api.localTools.list())).find(
+  const tools = await cinna.page.evaluate(() => window.api.localTools.list())
+  const claude = tools.find(
     (tool: DetectedTool) => tool.id === 'claude' && tool.available
   )
   test.skip(
@@ -335,7 +336,11 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
       runsOn.locator('optgroup').evaluateAll((groups) =>
         groups.map((entry) => (entry as HTMLOptGroupElement).label)
       )
-    ).resolves.toEqual([MACHINE_GROUP, CREDENTIAL_GROUP])
+    ).resolves.toEqual([
+      ...(tools.some((tool) => tool.id === 'codex' && tool.available) ? ['Codex CLI'] : []),
+      MACHINE_GROUP,
+      CREDENTIAL_GROUP
+    ])
     await expect(runsOn).toHaveValue(CREDENTIAL)
     await expect(complexity).toHaveValue('medium')
     await expect(status(ON_CREDENTIAL)).toHaveText(ON_CREDENTIAL)

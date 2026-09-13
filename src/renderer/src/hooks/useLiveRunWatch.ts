@@ -54,6 +54,14 @@ export function useLiveRunWatch(): void {
         sequence = message.sequence
         replayAvailable = message.replayAvailable
         needsSettlement = !message.active
+        if (message.active) {
+          // Persist activity outside the selected transcript before switching
+          // chats can clear isStreaming. Cancel older list reads so an idle
+          // response cannot overwrite this newer run-start notification.
+          void queryClient.cancelQueries({ queryKey: ['chats'], exact: true })
+          queryClient.setQueryData<Awaited<ReturnType<typeof window.api.chat.list>>>(['chats'], (chats) =>
+            chats?.map((chat) => chat.id === chatId ? { ...chat, activeRunId: message.runId } : chat))
+        }
         useChatStore.setState({ liveRunId: runId,
           liveProjectionVersion: useChatStore.getState().liveProjectionVersion + 1,
           liveBaselineMessageIds: message.active && replayAvailable ? message.baselineMessageIds : null,

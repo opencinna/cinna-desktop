@@ -89,6 +89,7 @@ MessageStream
 
 ## Integration Points
 
+- [Sidebar Session Status](../session_status/session_status.md) — Running/interrupt and unread-result indicators live in chat rows, independently of inline loading dots. A result is acknowledged only when the matching saved transcript is available in the foreground chat view.
 - [Apply-Patch Diff](../apply_patch_diff/apply_patch_diff.md) — The `apply_patch` tool's git-style diff block; one of the disclosure blocks rendered here
 - [Transcript Scrolling](scroll_following.md) — When the conversation follows the bottom, when it stops, and the "Jump to latest" pill
 - [Account Build Sessions](../../agents/local_dev/build_sessions.md) — uses the shared warning and CLI-output presentation while building through local tools

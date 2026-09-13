@@ -65,6 +65,7 @@ Task writes → device sync and handoff export; activated profile / focus / wake
 
 ## Integration Points
 
+- [Sidebar Session Status](../../chat/session_status/session_status.md) — Listed local conversations retain running/interrupt controls and unread outcomes. These are latest local session results, not task status or an Inbox count; opening the task page alone does not mark its conversation read.
 - [Script definitions](script_definitions.md) — portable agent aliases and validated graph/template data; [execution](script_execution.md) covers checkpoints and isolated children.
 - [Autonomous tasks](autonomous_tasks.md) — coordinator controls, local checkpoints, limits, queues and interruption recovery.
 - [Remote handoff and recovery](remote_handoff.md) — selected remote destination, durable uncertainty, shared jobs path and recovery controls.

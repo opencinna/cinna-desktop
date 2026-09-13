@@ -18,7 +18,10 @@ export function useChatList() {
 
   return useQuery({
     queryKey: ['chats'],
-    queryFn: () => window.api.chat.list()
+    queryFn: () => window.api.chat.list(),
+    // Main owns runs even when their chat is not selected (or they start in
+    // the background). Keep every sidebar row's interrupt action current.
+    refetchInterval: 1_000
   })
 }
 
@@ -62,6 +65,17 @@ export function useDeleteChat() {
       if (activeChatId === chatId) {
         setActiveChatId(null)
       }
+    }
+  })
+}
+
+export function useInterruptChat(chatId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => window.api.run.cancelChat(chatId),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['chats'] })
+      void queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
     }
   })
 }

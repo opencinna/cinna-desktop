@@ -4,6 +4,7 @@ import { taskRepo } from '../db/tasks'
 import { taskRuntimeRepo } from '../db/taskRuntimes'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { chatRepo } from '../db/chats'
+import { chatRunResultRepo } from '../db/chatRunResults'
 import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { messageRepo } from '../db/messages'
 import { agentOverrideRepo } from '../db/agents'
@@ -74,6 +75,9 @@ function finish(userId: string, taskId: string, state: 'completed' | 'error' | '
     taskService.setStatus(userId, taskId, state, { errorMessage: reason })
     // A failed/canceled task must not strand any gate from a prior invocation.
     taskInputRequestRepo.expireNextMessageForTask(task.id)
+    if (chatRepo.getOwned(userId, saved.chatId)) {
+      chatRunResultRepo.record(saved.chatId, nanoid(), state === 'error' ? 'failed' : state === 'cancelled' ? 'canceled' : 'completed')
+    }
   })
   taskRunnersByChat.delete(saved.chatId)
 }
@@ -82,12 +86,19 @@ function wait(userId: string, taskId: string, value: TaskRuntimeCheckpoint, reas
     .filter((request) => request.chatId === value.chatId &&
       (request.rootRunId === value.lastRunId || value.pendingRequestIds?.includes(request.id)))
     .map((request) => request.id)
-  store(userId, taskId, { ...value, pendingRequestIds, state: 'waiting', reason, activeStartedAt: null })
-  taskService.applyRunState(userId, taskId, 'needs_input')
+  getDb().transaction(() => {
+    store(userId, taskId, { ...value, pendingRequestIds, state: 'waiting', reason, activeStartedAt: null })
+    taskService.applyRunState(userId, taskId, 'needs_input')
+    chatRunResultRepo.record(value.chatId, nanoid(), 'needs_input')
+  })
 }
 function interrupted(userId: string, taskId: string, value: TaskRuntimeCheckpoint, reason: string): void {
-  store(userId, taskId, { ...value, state: 'interrupted', reason, activeStartedAt: null })
-  taskService.applyRunState(userId, taskId, 'needs_input')
+  getDb().transaction(() => {
+    store(userId, taskId, { ...value, state: 'interrupted', reason, activeStartedAt: null })
+    taskService.applyRunState(userId, taskId, 'needs_input')
+    // Quit checkpoints synchronously, then the canceled leaf settles later.
+    if (value.state !== 'interrupted') chatRunResultRepo.record(value.chatId, nanoid(), 'needs_input')
+  })
 }
 
 async function drive(userId: string, taskId: string, execution: Execution): Promise<void> {
@@ -422,7 +433,20 @@ installTaskRunnerHooks({
       const active = executing.get(keyOf(userId, taskId))
       active?.controller.abort(); active?.handle?.cancel()
       taskRunnersByChat.delete(saved.chatId)
-      try { taskRuntimeRepo.save(userId, taskId, { ...saved, state: 'interrupted', activeStartedAt: null, reason: 'Execution stopped because this device no longer owns a runnable task.' }) } catch { /* deleted task */ }
+      try {
+        getDb().transaction(() => {
+          taskRuntimeRepo.save(userId, taskId, { ...saved, state: 'interrupted', activeStartedAt: null, reason: 'Execution stopped because this device no longer owns a runnable task.' })
+          const task = taskRepo.getById(userId, taskId)
+          if (task?.chatId === saved.chatId && chatRepo.getOwned(userId, saved.chatId)) {
+            const status = task.deletedAt || ['cancelled', 'archived'].includes(task.status)
+              ? 'canceled' : task.status === 'completed' ? 'completed' : task.status === 'error' ? 'failed' : 'needs_input'
+            // Metadata edits after an external stop do not produce a new result.
+            if (saved.state !== 'interrupted' || chatRunResultRepo.get(userId, saved.chatId)?.status !== status) {
+              chatRunResultRepo.record(saved.chatId, nanoid(), status)
+            }
+          }
+        })
+      } catch { /* deleted task */ }
     }
   }
 })

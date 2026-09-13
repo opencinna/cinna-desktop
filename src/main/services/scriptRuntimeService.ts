@@ -2,6 +2,7 @@ import { nanoid } from 'nanoid'
 import { getDb, getRawSqlite } from '../db/client'
 import { taskRepo } from '../db/tasks'
 import { chatRepo } from '../db/chats'
+import { chatRunResultRepo } from '../db/chatRunResults'
 import { jobsRepo, jobRunsRepo, type JobRow } from '../db/jobs'
 import { messageRepo } from '../db/messages'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
@@ -140,9 +141,15 @@ function finish(userId: string, taskId: string, state: 'completed' | 'error' | '
         if (!terminalSteps.has(step.state)) {
           step.state = state === 'error' ? 'failed' : 'canceled'
           const child = taskRepo.getById(userId, step.taskId)
-          if (child && !child.deletedAt && ['new', 'open', 'in_progress', 'blocked'].includes(child.status)) {
+          if (child && !child.deletedAt) {
             const current = taskService.getById(userId, child.id)
-            if (current.executor === 'desktop' && current.runsHere && current.parentTaskId === taskId && current.chatId === step.chatId) taskService.applyRunState(userId, child.id, state === 'error' ? 'failed' : 'canceled')
+            if (current.executor === 'desktop' && current.runsHere && current.parentTaskId === taskId && current.chatId === step.chatId) {
+              const unfinished = ['new', 'open', 'in_progress', 'blocked'].includes(child.status)
+              if (unfinished) taskService.applyRunState(userId, child.id, state === 'error' ? 'failed' : 'canceled')
+              const status = unfinished ? (state === 'error' ? 'failed' : 'canceled')
+                : child.status === 'completed' ? 'completed' : child.status === 'error' ? 'failed' : 'canceled'
+              chatRunResultRepo.record(step.chatId, nanoid(), status)
+            }
           }
         }
         for (const request of taskInputRequestRepo.listOpenForTask(step.taskId)) {
@@ -163,7 +170,15 @@ function finish(userId: string, taskId: string, state: 'completed' | 'error' | '
             messageRepo.saveError({ chatId: saved.chatId, short: reason, code: 'script_runtime' })
           }
           taskService.setStatus(userId, taskId, state, { errorMessage: reason })
+          if (chatRepo.getOwned(userId, saved.chatId)) {
+            chatRunResultRepo.record(saved.chatId, nanoid(), state === 'error' ? 'failed' : state === 'cancelled' ? 'canceled' : 'completed')
+          }
+        } else if (row.chatId === saved.chatId && chatRepo.getOwned(userId, saved.chatId)) {
+          // Ordinary task controls have already written the authoritative root status.
+          chatRunResultRepo.record(saved.chatId, nanoid(), row.status === 'completed' ? 'completed' : row.status === 'error' ? 'failed' : 'canceled')
         }
+      } else if (chatRepo.getOwned(userId, saved.chatId)) {
+        chatRunResultRepo.record(saved.chatId, nanoid(), 'canceled')
       }
       const run = jobRunsRepo.getById(userId, saved.jobRunId)
       if (run?.taskId === taskId && run.localChatId === saved.chatId && ['pending', 'running'].includes(run.status)) {
@@ -177,6 +192,7 @@ function finish(userId: string, taskId: string, state: 'completed' | 'error' | '
 }
 function interrupt(userId: string, taskId: string, reason: string): void {
   write(userId, taskId, (saved) => {
+    const wasInterrupted = saved.state === 'interrupted'
     saved.elapsedMs += saved.activeStartedAt === null ? 0 : Math.max(0, Date.now() - saved.activeStartedAt)
     saved.activeStartedAt = null; saved.state = 'interrupted'; saved.reason = reason
     const root = taskService.getById(userId, taskId)
@@ -189,12 +205,16 @@ function interrupt(userId: string, taskId: string, reason: string): void {
           const child = taskService.getById(userId, step.taskId)
           if (child.executor === 'desktop' && child.runsHere && child.parentTaskId === taskId && child.chatId === step.chatId) {
             taskService.applyRunState(userId, step.taskId, 'needs_input')
+            if (!wasInterrupted) chatRunResultRepo.record(step.chatId, nanoid(), 'needs_input')
           }
         }
       }
     }
     scriptRuntimeRepo.save(userId, taskId, saved)
-    if (localOwner && ['in_progress', 'blocked'].includes(root.status)) taskService.applyRunState(userId, taskId, 'needs_input')
+    if (localOwner && ['in_progress', 'blocked'].includes(root.status)) {
+      taskService.applyRunState(userId, taskId, 'needs_input')
+      if (!wasInterrupted) chatRunResultRepo.record(saved.chatId, nanoid(), 'needs_input')
+    }
   })
 }
 
@@ -219,6 +239,7 @@ async function runStep(userId: string, taskId: string, definition: ScriptStep, e
         messageRepo.saveTransition({ chatId: child.chatId, content: prompt })
         scriptRuntimeRepo.save(userId, taskId, saved)
         taskService.applyRunState(userId, child.taskId, 'needs_input')
+        chatRunResultRepo.record(child.chatId, nanoid(), 'needs_input')
         reflectStatus(userId, taskId, saved)
       })
       return
@@ -270,9 +291,11 @@ async function runStep(userId: string, taskId: string, definition: ScriptStep, e
             (request.rootRunId === handle.id || child.pendingRequestIds.includes(request.id))).map((request) => request.id)
           if (child.pendingRequestIds.length !== open.length) throw new Error(`Step ${stepId} has a question outside its execution.`)
           taskService.applyRunState(userId, child.taskId, 'needs_input')
+          chatRunResultRepo.record(child.chatId, nanoid(), 'needs_input')
         } else {
           child.state = 'completed'; child.pendingRequestIds = []
           taskService.applyRunState(userId, child.taskId, 'completed')
+          chatRunResultRepo.record(child.chatId, nanoid(), 'completed')
           messageRepo.saveTransition({ chatId: saved.chatId, content: `Step ${stepId} completed.\n${child.text}` })
         }
         scriptRuntimeRepo.save(userId, taskId, saved)
@@ -333,6 +356,7 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
           value.activeStartedAt = null; value.state = 'waiting'; value.reason = 'Waiting for script answers in the Inbox.'
           scriptRuntimeRepo.save(userId, taskId, value)
           taskService.applyRunState(userId, taskId, 'needs_input')
+          chatRunResultRepo.record(value.chatId, nanoid(), 'needs_input')
         })
         return
       }
@@ -487,6 +511,7 @@ export const scriptRuntimeService = {
       saved.reason = saved.state === 'waiting' ? 'Waiting for script answers in the Inbox.' : null
       scriptRuntimeRepo.save(userId, taskId, saved)
       reflectStatus(userId, taskId, saved)
+      if (saved.state === 'waiting') chatRunResultRepo.record(saved.chatId, nanoid(), 'needs_input')
     })
     if (checkpoint(userId, taskId).state === 'queued') enqueue(userId, taskId)
   },
@@ -532,6 +557,7 @@ export const scriptRuntimeService = {
             child.state = 'completed'; child.text = compactScriptOutput(answer)
             messageRepo.saveUser({ chatId: child.chatId, content: answer })
             taskService.applyRunState(userId, child.taskId, 'completed')
+            chatRunResultRepo.record(child.chatId, nanoid(), 'completed')
             messageRepo.saveTransition({ chatId: current.chatId, content: `Human answer for step ${stepId}:\n${child.text}` })
           } else {
             child.state = 'queued'; child.prompt = answer; child.promptOrigin = 'user'

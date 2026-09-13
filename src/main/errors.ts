@@ -34,6 +34,7 @@ export type McpErrorCode =
 
 export type ChatErrorCode =
   | 'not_found'
+  | 'run_active'
   | 'not_configured'
   | 'adapter_unavailable'
   | 'not_activated'

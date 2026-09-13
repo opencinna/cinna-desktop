@@ -8,6 +8,7 @@ import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 import type { MessageAttachment } from '../../shared/attachments'
 import type { JobDepDescriptor, JobSyncManifest } from '../../shared/sync'
 import type { ChatRouter } from '../../shared/chatRouting'
+import type { ChatRunResultStatus } from '../../shared/chatRunResult'
 import type { InputRequest, InputResumeMode } from '../../shared/runEvents'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { TaskStatus } from '../../shared/taskStatus'
@@ -163,6 +164,13 @@ export const chats = sqliteTable('chats', {
   updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())
+})
+
+export const chatRunResults = sqliteTable('chat_run_results', {
+  chatId: text('chat_id').primaryKey().references(() => chats.id, { onDelete: 'cascade' }),
+  runId: text('run_id').notNull(),
+  status: text('status').$type<ChatRunResultStatus>().notNull(),
+  unread: integer('unread', { mode: 'boolean' }).notNull().default(true)
 })
 
 export const chatMcpProviders = sqliteTable(

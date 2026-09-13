@@ -7,6 +7,7 @@ import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { syncRepo } from '../db/sync'
 import { messageRepo } from '../db/messages'
 import { chatRepo } from '../db/chats'
+import { chatRunResultRepo } from '../db/chatRunResults'
 import { chatAgentCursorRepo } from '../db/chatAgentCursors'
 import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { agentService } from './agentService'
@@ -163,7 +164,6 @@ export const runExecutionService = {
         if (!accepted) refuse(new Error(failure ?? 'The turn could not be started.'))
         if (activeChats.get(payload.chatId) === handle) activeChats.delete(payload.chatId)
         try { options.port?.close() } catch { /* subscriber already disconnected */ }
-        live.close()
         let inputRequestIds: string[] = []
         let inputRequestReadError: string | undefined
         try {
@@ -180,6 +180,17 @@ export const runExecutionService = {
         const result = outcome!
         const final: RunOutcome = { ...result, state: result.state === 'completed' && inputRequestIds.length ? 'needs_input' : result.state,
           runId: handle.id, accepted, inputRequestIds, ...(inputRequestReadError ? { inputRequestReadError } : {}) }
+        try {
+          // A runner owns the session outcome: a successful leaf may continue,
+          // and its cancellation can be the controller enforcing a time limit.
+          if (!options.runnerTaskId && (accepted || !options.preserveOnRefusal)) {
+            chatRunResultRepo.record(payload.chatId, handle.id,
+              cancelRequested ? 'canceled' : final.state === 'budget' || final.inputRequestReadError ? 'failed' : final.state)
+          }
+        } catch (error) {
+          logger.warn('could not save sidebar run result', { chatId: payload.chatId, error: String(error) })
+        }
+        live.close()
         if (!options.runnerTaskId && (accepted || !options.preserveOnRefusal)) {
           try { reportStandaloneTurn(payload.chatId, final) }
           catch (error) { logger.warn('turn status projection failed', { chatId: payload.chatId, error: String(error) }) }

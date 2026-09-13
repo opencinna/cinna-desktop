@@ -52,6 +52,8 @@ vi.mock('../auth/scope', () => ({
 let chatRow: Record<string, unknown> = {}
 let history: MessageRow[] = []
 const listMessages = vi.fn(() => history)
+const recordChatResult = vi.fn()
+vi.mock('../db/chatRunResults', () => ({ chatRunResultRepo: { record: (...args: unknown[]) => recordChatResult(...args) } }))
 vi.mock('../db/chats', () => ({
   chatRepo: { listMessageIds: vi.fn(() => []), getOwned: vi.fn(() => chatRow), listMessages }
 }))
@@ -632,6 +634,7 @@ describe('main-owned turn lifetime', () => {
     })
     expect(runExecutionService.isRunning('chat-1')).toBe(false)
     expect(reportRunCompletion).toHaveBeenCalledWith('chat-1', 'failed', 'setup failed')
+    expect(recordChatResult).toHaveBeenCalledWith('chat-1', handle.id, 'failed')
   })
 
   it('leaves a pending Inbox ask and job alone when answer preparation refuses', async () => {
@@ -718,6 +721,7 @@ describe('typed main turn completion', () => {
     input.onFinished({ state: 'failed', text: '' })
     expect(reportRunCompletion).toHaveBeenCalledTimes(1)
     expect(reportRunCompletion).toHaveBeenCalledWith('chat-1', 'succeeded', undefined)
+    expect(recordChatResult).toHaveBeenCalledWith('chat-1', handle.id, 'completed')
   })
   it('runner-owned completion leaves task/job finalization to its owner and returns remaining asks', async () => {
     runnerTask.mockReturnValue({ id: 'task', chatId: 'chat-1', executor: 'desktop', executorDevice: null, status: 'in_progress' })
@@ -730,6 +734,7 @@ describe('typed main turn completion', () => {
     openRunRequests.mockReturnValue([{ id: 'durable-question', resume: 'next_message' }])
     input.port.close()
     await expect(handle.completed).resolves.toMatchObject({ state: 'needs_input', text: 'waiting', inputRequestIds: ['durable-question'] })
+    expect(recordChatResult).not.toHaveBeenCalled()
     expect(reportRunCompletion).not.toHaveBeenCalled()
     expect(observer).toHaveBeenCalledWith(expect.objectContaining({ completionOwner: 'runner', rootRunId: handle.id, turnId: handle.id }), { type: 'done' })
   })
@@ -737,6 +742,16 @@ describe('typed main turn completion', () => {
     runnerTask.mockReturnValue({ id: 'task', chatId: 'chat-1', executor: 'desktop', executorDevice: null, status })
     expect(() => runExecutionService.start(scope, payload, { observe: vi.fn(), runnerTaskId: 'task' })).toThrow('does not own')
     expect(runExecutionService.isRunning('chat-1')).toBe(false)
+  })
+  it('records user interruption even if a driver reports completion after cancellation', async () => {
+    const handle = runExecutionService.start(scope, payload, { observe: vi.fn() })
+    await handle.accepted
+    runExecutionService.cancelChat(scope.profileUserId, payload.chatId)
+    const input = serviceInput()
+    input.onFinished({ state: 'completed', text: 'partial result' })
+    input.port.close()
+    await handle.completed
+    expect(recordChatResult).toHaveBeenCalledWith('chat-1', handle.id, 'canceled')
   })
   it.each([{ deletedAt: new Date() }, { executorDevice: 'another-device' }, { chatId: 'another-chat' }, { executor: 'remote' }])('refuses a deleted or foreign task claim %j', (override) => {
     runnerTask.mockReturnValue({ id: 'task', chatId: 'chat-1', executor: 'desktop', executorDevice: null, status: 'in_progress', ...override })

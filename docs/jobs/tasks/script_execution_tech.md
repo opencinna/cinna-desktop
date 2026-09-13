@@ -43,6 +43,12 @@ useExecuteJob invalidates saved Job/task/chat queries and optionally navigates f
 
 TaskRuntimeControl uses controllerTaskId for whole-script Stop/Resume and states that scope on child pages. It retains fixed action columns and the existing error handling. Live child turns use selected-chat attachment; root transition/summary messages are read through saved-chat polling while the working reservation is active. No durable token replay cache or graph editor is introduced.
 
+## Sidebar Result Projection
+
+`src/main/services/scriptRuntimeService.ts` writes through `src/main/db/chatRunResults.ts` in its controller transactions: root finish/wait/interruption, agent-step completion/wait, human-gate creation/answer and relevant child termination. Leaf turns pass runnerTaskId and do not publish sidebar results. A root outcome therefore exists even when its graph has only human gates. Each new transition uses a fresh identity; duplicate interruption cleanup retains the old one.
+
+Termination reflects already-terminal child statuses changed through task controls while preserving already completed checkpoint siblings. Actual chat/parent/device bindings gate child writes; missing chats are skipped, so permanent deletion cannot strand task/gate cleanup through a result-table foreign-key failure. See [result schema, read acknowledgement and tests](../../chat/session_status/session_status_tech.md).
+
 ## Configuration
 
 Defaults are twenty agent turns and sixty minutes; structural ranges and template bounds remain in [the definition contract](script_definitions_tech.md). Script ownerTurns counts each agent dispatch atomically across parallel siblings; human gates consume no turn. Time counts task/agent queues and live approvals, pausing only when remaining work is held by settled saved questions. Explicit maxTokens refuses before dispatch because complete usage reporting is unavailable.

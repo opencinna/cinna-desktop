@@ -14,6 +14,8 @@ import { routerOf, type ChatRouter } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
 import { taskRunnersByChat } from './taskRunnerState'
 import { activeRunsByChat } from './runExecutionState'
+import { chatRunResultRepo } from '../db/chatRunResults'
+import type { ChatRunResult } from '../../shared/chatRunResult'
 
 const logger = createLogger('chat')
 
@@ -31,16 +33,27 @@ function requireOwnedChat(userId: string, chatId: string): ChatRow {
   return chat
 }
 
+function activeRunId(chatId: string): string | null {
+  const runner = taskRunnersByChat.get(chatId)
+  return activeRunsByChat.get(chatId)?.id ?? (runner?.working ? runner.id : null)
+}
+
 export const chatService = {
-  list(userId: string): ChatRow[] {
-    return chatRepo.list(userId)
+  list(userId: string): (ChatRow & { activeRunId: string | null; lastRunResult: ChatRunResult | null })[] {
+    const results = chatRunResultRepo.list(userId)
+    return chatRepo.list(userId).map((chat) => ({ ...chat, activeRunId: activeRunId(chat.id), lastRunResult: results.get(chat.id) ?? null }))
   },
 
-  get(userId: string, chatId: string): (ChatRow & { messages: MessageRow[]; activeRunId: string | null }) | null {
+  markResultRead(userId: string, chatId: string, runId: string): void {
+    requireOwnedChat(userId, chatId)
+    chatRunResultRepo.markRead(chatId, runId)
+  },
+
+  get(userId: string, chatId: string): (ChatRow & { messages: MessageRow[]; activeRunId: string | null; lastRunResult: ChatRunResult | null }) | null {
     const chat = chatRepo.getOwned(userId, chatId)
     if (!chat) return null
     const messages = chatRepo.listMessages(chatId)
-    return { ...chat, messages, activeRunId: activeRunsByChat.get(chatId)?.id ?? (taskRunnersByChat.get(chatId)?.working ? taskRunnersByChat.get(chatId)!.id : null) }
+    return { ...chat, messages, activeRunId: activeRunId(chatId), lastRunResult: chatRunResultRepo.get(userId, chatId) }
   },
 
   create(userId: string): ChatRow {
@@ -50,6 +63,8 @@ export const chatService = {
   },
 
   delete(userId: string, chatId: string): void {
+    requireOwnedChat(userId, chatId)
+    if (activeRunId(chatId)) throw new ChatError('run_active', 'Interrupt the session before deleting it.')
     const ok = chatRepo.softDelete(userId, chatId)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
     taskRunnerBridge.chatRemoved(userId, chatId)

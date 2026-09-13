@@ -43,6 +43,7 @@ const { jobService } = await import('./jobService')
 const { jobRunsRepo } = await import('../db/jobs')
 const { turnLock } = await import('./localAgents/turnLock')
 const { chatRepo } = await import('../db/chats')
+const { chatRunResultRepo } = await import('../db/chatRunResults')
 const { taskRunnersByChat } = await import('./taskRunnerState')
 const { activeRunsByChat } = await import('./runExecutionState')
 const { appSettingsRepo } = await import('../db/appSettings')
@@ -82,6 +83,48 @@ function completed(text: string) { return { text, parts: [], notices: [], taskSt
 const decision = (answer: string) => ({ kind: 'question' as const, answers: [[answer]] })
 
 describe('script runtime', () => {
+  it('records root and child results through a gate, preserving completed siblings on user cancellation', async () => {
+    const { taskId, chatId } = start([{ id: 'write', agent: 'writer', prompt: '{{goal}}' },
+      { id: 'gate', after: ['write'], ask_user: 'Publish?' }])
+    await vi.waitFor(() => expect(scriptRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
+    const writerId = child(taskId, 'write').chatId
+    const gateId = child(taskId, 'gate').chatId
+    const writerResult = chatRunResultRepo.list(USER).get(writerId)
+    expect(writerResult).toMatchObject({ status: 'completed', unread: true })
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'needs_input', unread: true })
+    expect(chatRunResultRepo.list(USER).get(gateId)).toMatchObject({ status: 'needs_input', unread: true })
+    scriptRuntimeService.cancel(USER, taskId)
+    await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('cancelled'))
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'canceled', unread: false })
+    expect(chatRunResultRepo.list(USER).get(gateId)).toMatchObject({ status: 'canceled', unread: false })
+    expect(chatRunResultRepo.list(USER).get(writerId)).toEqual(writerResult)
+  })
+
+  it('gives a completed script a new result identity after its human gate', async () => {
+    const { taskId, chatId } = start([{ id: 'gate', ask_user: 'Proceed?' }])
+    await vi.waitFor(() => expect(scriptRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
+    const gate = child(taskId, 'gate')
+    const oldRoot = chatRunResultRepo.list(USER).get(chatId)!
+    const oldChild = chatRunResultRepo.list(USER).get(gate.chatId)!
+    expect(await inboxService.answer(USER, gate.pendingRequestIds[0], decision('Yes'))).toEqual({ ok: true })
+    await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('completed'))
+    chatRunResultRepo.markRead(chatId, oldRoot.runId)
+    chatRunResultRepo.markRead(gate.chatId, oldChild.runId)
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'completed', unread: true })
+    expect(chatRunResultRepo.list(USER).get(gate.chatId)).toMatchObject({ status: 'completed', unread: true })
+  })
+
+  it('records a timeout as failure for the script and its canceled leaf', async () => {
+    driverRun.mockImplementation((_owner, _row, input) => new Promise((_resolve, reject) => {
+      input.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+    }))
+    const { taskId, chatId } = start([{ id: 'write', agent: 'writer', prompt: '{{goal}}' }], { maxMinutes: 0.001 })
+    await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('error'))
+    expect(taskService.getById(USER, taskId).errorMessage).toContain('time limit')
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'failed', unread: true })
+    expect(chatRunResultRepo.list(USER).get(child(taskId, 'write').chatId)).toMatchObject({ status: 'failed', unread: true })
+  })
+
   it('prepares inside an outer transaction without escaping its rollback', async () => {
     const job = makeJob([{ id: 'write', agent: 'writer', prompt: '{{goal}}' }])
     expect(() => state.database!.db.transaction(() => {
@@ -218,16 +261,31 @@ describe('script runtime', () => {
     expect(driverRun).toHaveBeenCalledTimes(1)
   })
 
-  it('settles all child gates when the parent is canceled through ordinary task controls', async () => {
-    const { taskId, runId } = start([{ id: 'one', ask_user: 'One?' }, { id: 'two', ask_user: 'Two?' }])
+  it.each(['parent', 'child'])('settles all child gates when the %s is canceled through ordinary task controls', async (target) => {
+    const { taskId, runId, chatId } = start([{ id: 'one', ask_user: 'One?' }, { id: 'two', ask_user: 'Two?' }])
     await vi.waitFor(() => expect(scriptRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
     expect(taskInputRequestRepo.listOpen(USER)).toHaveLength(2)
-    taskService.setStatus(USER, taskId, 'cancelled')
+    const firstChildChat = child(taskId, 'one').chatId
+    taskService.setStatus(USER, target === 'parent' ? taskId : child(taskId, 'one').taskId, 'cancelled')
     expect(scriptRuntimeRepo.get(USER, taskId)?.state).toBe('completed')
     expect(taskInputRequestRepo.listOpen(USER)).toEqual([])
     expect(taskRepo.list(USER, { parentTaskId: taskId }).map((task) => task.status)).toEqual(['cancelled', 'cancelled'])
     expect(jobRunsRepo.getById(USER, runId)?.status).toBe('cancelled')
     expect(taskRunnersByChat.size).toBe(0)
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'canceled', unread: false })
+    expect(chatRunResultRepo.list(USER).get(firstChildChat)).toMatchObject({ status: 'canceled', unread: false })
+  })
+
+  it.each(['root', 'child'])('finishes script cleanup after the %s chat is permanently deleted', async (target) => {
+    const { taskId, chatId } = start([{ id: 'gate', ask_user: 'Proceed?' }])
+    await vi.waitFor(() => expect(scriptRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
+    const gate = child(taskId, 'gate')
+    const deletedId = target === 'root' ? chatId : gate.chatId
+    chatService.permanentDelete(USER, deletedId)
+    expect(taskService.getById(USER, taskId).status).toBe('cancelled')
+    expect(scriptRuntimeRepo.get(USER, taskId)?.state).toBe('completed')
+    expect(taskInputRequestRepo.listOpen(USER)).toEqual([])
+    expect(chatRunResultRepo.list(USER).has(deletedId)).toBe(false)
   })
 
   it('deleting a waiting parent cancels its children and linked attempt', async () => {
@@ -368,11 +426,12 @@ describe('script runtime', () => {
   })
 
   it('charges a global agent-turn budget atomically across parallel steps', async () => {
-    const { taskId } = start([{ id: 'a', agent: 'analyst', prompt: 'A' }, { id: 'b', agent: 'writer', prompt: 'B' }], { maxRounds: 1 })
+    const { taskId, chatId } = start([{ id: 'a', agent: 'analyst', prompt: 'A' }, { id: 'b', agent: 'writer', prompt: 'B' }], { maxRounds: 1 })
     await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('error'))
     expect(driverRun).toHaveBeenCalledTimes(1)
     expect(scriptRuntimeRepo.get(USER, taskId)?.ownerTurns).toBe(1)
     expect(taskService.getById(USER, taskId).errorMessage).toContain('agent-turn limit')
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'failed', unread: true })
   })
 
   it('stops a silent agent at the time limit and cancels a queued sibling before dispatch', async () => {
@@ -388,13 +447,19 @@ describe('script runtime', () => {
   it('reconciles only the interrupted step after explicit Resume and never replays a completed sibling', async () => {
     driverRun.mockImplementation((_owner, row, input) => row.id === 'analyst' ? Promise.resolve(completed('Analysis saved')) :
       new Promise((resolve) => input.signal?.addEventListener('abort', () => resolve({ ...completed('partial'), taskState: 'canceled' }), { once: true })))
-    const { taskId } = start([{ id: 'a', agent: 'analyst', prompt: 'ANALYSE' }, { id: 'b', agent: 'writer', prompt: 'WRITE' }])
+    const { taskId, chatId } = start([{ id: 'a', agent: 'analyst', prompt: 'ANALYSE' }, { id: 'b', agent: 'writer', prompt: 'WRITE' }])
     await vi.waitFor(() => expect(child(taskId, 'a').state).toBe('completed'))
     await vi.waitFor(() => expect(child(taskId, 'b').state).toBe('running'))
     scriptRuntimeService.interruptAll('App closed')
+    const interruption = chatRunResultRepo.list(USER).get(chatId)!
+    expect(interruption).toMatchObject({ status: 'needs_input', unread: true })
+    expect(chatRunResultRepo.list(USER).get(child(taskId, 'b').chatId)).toMatchObject({ status: 'needs_input', unread: true })
+    expect(chatRunResultRepo.list(USER).get(child(taskId, 'a').chatId)).toMatchObject({ status: 'completed', unread: true })
+    chatRunResultRepo.markRead(chatId, interruption.runId)
     await vi.waitFor(() => expect(activeRunsByChat.size).toBe(0))
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(scriptRuntimeRepo.get(USER, taskId)?.state).toBe('interrupted')
+    expect(chatRunResultRepo.list(USER).get(chatId)).toEqual({ ...interruption, unread: false })
     scriptRuntimeService.recover()
     expect(taskService.getById(USER, child(taskId, 'b').taskId).status).toBe('blocked')
     expect(taskService.getById(USER, child(taskId, 'a').taskId).status).toBe('completed')

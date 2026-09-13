@@ -64,16 +64,58 @@ const USER = 'profile-1'
 
 const { chatService } = await import('./chatService')
 const { activeRunsByChat } = await import('./runExecutionState')
+const { taskRunnersByChat } = await import('./taskRunnerState')
+const { chatRunResultRepo } = await import('../db/chatRunResults')
+const { runAllMigrations } = await import('../db/migrations')
+
+it('retains unread results across migration replay, scopes reads by owner and acknowledges only the opened run', () => {
+  const chat = chatService.create(USER)
+  chatRunResultRepo.record(chat.id, 'run-1', 'needs_input')
+  expect(chatService.list(USER)[0].lastRunResult).toEqual({ runId: 'run-1', status: 'needs_input', unread: true })
+  runAllMigrations(holder.current!.sqlite)
+  expect(chatService.list(USER)[0].lastRunResult?.unread).toBe(true)
+  expect(chatService.list('another-profile')).toEqual([])
+  expect(() => chatService.markResultRead('another-profile', chat.id, 'run-1')).toThrow('Chat not found')
+  chatService.markResultRead(USER, chat.id, 'run-1')
+  expect(chatService.list(USER)[0].lastRunResult?.unread).toBe(false)
+
+  chatRunResultRepo.record(chat.id, 'run-2', 'completed')
+  chatService.markResultRead(USER, chat.id, 'run-1')
+  expect(chatService.list(USER)[0].lastRunResult).toEqual({ runId: 'run-2', status: 'completed', unread: true })
+  chatRunResultRepo.record(chat.id, 'run-3', 'canceled')
+  expect(chatService.list(USER)[0].lastRunResult).toEqual({ runId: 'run-3', status: 'canceled', unread: false })
+  chatService.permanentDelete(USER, chat.id)
+  expect(chatRunResultRepo.list(USER).size).toBe(0)
+})
 
 it('exposes main-run activity only on an owned chat and clears it when the turn closes', () => {
   const chat = chatService.create(USER)
   activeRunsByChat.set(chat.id, { id: 'headless-turn' } as never)
   try {
     expect(chatService.get(USER, chat.id)?.activeRunId).toBe('headless-turn')
+    expect(chatService.list(USER).find((item) => item.id === chat.id)?.activeRunId).toBe('headless-turn')
+    expect(chatService.list('another-profile')).toEqual([])
+    expect(() => chatService.delete(USER, chat.id)).toThrow('Interrupt the session before deleting it.')
     expect(chatService.get('another-profile', chat.id)).toBeNull()
     activeRunsByChat.delete(chat.id)
     expect(chatService.get(USER, chat.id)?.activeRunId).toBeNull()
+    expect(chatService.list(USER).find((item) => item.id === chat.id)?.activeRunId).toBeNull()
+    expect(() => chatService.delete(USER, chat.id)).not.toThrow()
+    expect(chatService.list(USER)).toEqual([])
   } finally { activeRunsByChat.delete(chat.id) }
+})
+
+it('keeps a working autonomous session interruptible between turns', () => {
+  const chat = chatService.create(USER)
+  const runner = { userId: USER, taskId: 'task-1', id: 'attempt-1', working: true, cancel: vi.fn() }
+  taskRunnersByChat.set(chat.id, runner)
+  try {
+    expect(chatService.list(USER)[0].activeRunId).toBe('attempt-1')
+    expect(() => chatService.delete(USER, chat.id)).toThrow('Interrupt the session before deleting it.')
+    runner.working = false
+    expect(chatService.list(USER)[0].activeRunId).toBeNull()
+    expect(() => chatService.delete(USER, chat.id)).not.toThrow()
+  } finally { taskRunnersByChat.delete(chat.id) }
 })
 const { chatRepo } = await import('../db/chats')
 const { chatOnDemandAgentRepo } = await import('../db/chatOnDemandAgent')

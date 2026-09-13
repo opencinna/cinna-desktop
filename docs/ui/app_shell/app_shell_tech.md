@@ -12,7 +12,7 @@
 - `src/renderer/src/components/layout/TopBar.tsx` — Persistent top strip; sidebar toggle + Agent Status + Inbox + new chat icons; `app-drag-strip` makes the area draggable, traffic-light gutter via `pl-[76px]`. Absolutely positioned (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) so it overlays the sidebar/main row rather than stealing height from it
 - `src/renderer/src/components/layout/Sidebar.tsx` — Floating sidebar; renders Chats/Jobs/Notes/Agents tab content or the settings menu; footer composes `UserMenu`, local-development/update status and `InterfaceMenu`
 - `src/renderer/src/components/layout/InterfaceMenu.tsx` — Sliders icon + portaled popover with Console / Verbose / Theme toggles
-- `src/renderer/src/components/layout/MainArea.tsx` — View router for chat, settings, Inbox, task/job/note and local/external agent pages; mounts `useLiveRunWatch` once above the individual workspaces
+- `src/renderer/src/components/layout/MainArea.tsx` — View router for chat, settings, Inbox, task/job/note and local/external agent pages; mounts `useLiveRunWatch` and `useReadChatResult` once above the individual workspaces. Only activeView=chat supplies a visible chat ID for foreground result acknowledgement; [status details](../../chat/session_status/session_status_tech.md#renderer-components).
 
 ### Renderer — Header and Footer Sub-components
 

@@ -27,7 +27,7 @@ All three handlers require activation, resolve the profile in main and mark devi
 | task:resume-runtime / tasks.resumeRuntime | taskId → void after explicit recovery is accepted |
 | task:stop-runtime / tasks.stopRuntime | taskId → void after cancellation is requested; active turn cleanup may still be settling |
 
-Existing task:get carries the local runtime projection. Existing chat:get reports an active turn id or working runner reservation id; existing run cancellation routes to the runner before an individual active turn. Existing inbox:answer and transcript agent:answer-request both reach taskRunnerBridge before live-driver delivery; the latter is in `src/main/ipc/agent_a2a.ipc.ts`.
+Existing task:get carries the local runtime projection. Existing chat:list and chat:get report an active turn id or working runner reservation id plus the latest local result; existing run cancellation routes to the runner before an individual active turn. Existing inbox:answer and transcript agent:answer-request both reach taskRunnerBridge before live-driver delivery; the latter is in `src/main/ipc/agent_a2a.ipc.ts`.
 
 ## Services and Key Methods
 
@@ -43,6 +43,10 @@ Existing task:get carries the local runtime projection. Existing chat:get report
 - `taskRunnerState` reserves the chat across waits and owner transitions. `chatService` refuses model/routing edits while reserved; `runExecutionService` refuses unrelated sends. `taskRunnerBridge` receives task writes/device apply, chat removal and profile removal, aborting work after lost authority. Chat deletion durably cancels runtime/task and expires gates, even after its chat can no longer pass ordinary live-chat validation. `src/main/index.ts` runs recovery after session/database initialization and checkpoints interruptions synchronously on suspend/quit before cancellation.
 
 The optional manifest handback note is authorized in the ACP driver only for an eligible handed-off kit turn, carried only by completed TurnOutcome and consumed after all request checks. It augments the existing saved/wire notice, retaining unmarked automatic return. See [manifest handback details](manifest_handback_tech.md).
+
+## Sidebar Result Projection
+
+Session results are persisted by finish, wait and interrupted through `src/main/db/chatRunResults.ts`, inside the corresponding task/checkpoint transaction. Each actual outcome gets a fresh acknowledgement identity; duplicate interruption cleanup and metadata edits after an externally projected stop keep the same identity/read state. Limits publish failed even when their leaf was canceled. Missing-chat cleanup omits the result insert so permanent deletion cannot roll back task/gate finalization. See [result ownership and lifecycle](../../chat/session_status/session_status_tech.md#services--key-methods).
 
 ## Renderer Components
 

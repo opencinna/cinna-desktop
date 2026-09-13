@@ -121,8 +121,9 @@ export type { MessageAttachment }
 
 export interface ChatData {
   id: string
-  /** Ephemeral main-owned turn; present on detail reads only. */
+  /** Ephemeral main-owned turn; present on list and detail reads. */
   activeRunId?: string | null
+  lastRunResult?: import('../shared/chatRunResult').ChatRunResult | null
   title: string
   modelId: string | null
   providerId: string | null
@@ -356,6 +357,8 @@ const api = {
 
   chat: {
     list: (): Promise<ChatData[]> => ipcRenderer.invoke('chat:list'),
+    markResultRead: (chatId: string, runId: string): Promise<void> =>
+      ipcRenderer.invoke('chat:mark-result-read', chatId, runId),
     get: (chatId: string): Promise<(ChatData & { messages: MessageData[] }) | null> =>
       ipcRenderer.invoke('chat:get', chatId),
     create: (): Promise<ChatData> => ipcRenderer.invoke('chat:create'),

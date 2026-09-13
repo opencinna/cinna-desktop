@@ -214,6 +214,8 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
     why: 'server deletion requires a cached agent owned by this Cinna profile; deleting a local connection cannot select this authority' },
   { file: 'src/shared/agentDevelopment.ts', category: 'source', count: 1,
     why: 'development eligibility belongs to a Cinna-owned agent workspace, with publisher versus consumer ownership checked separately' },
+  { file: 'src/shared/developmentSession.ts', category: 'source', count: 1,
+    why: 'internal builder identity belongs to a locally owned row; the guard protects its Local Development configuration from generic custom-agent edits' },
   { file: 'src/shared/agentPresentation.ts', category: 'source', count: 1,
     why: 'consumer bundle ownership selects uninstall instead of deleting a connection or publisher working copy' },
   { file: 'src/renderer/src/components/agents/AgentTypeIcon.tsx', category: 'source', count: 2,

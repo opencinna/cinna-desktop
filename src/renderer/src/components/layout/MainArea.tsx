@@ -1,5 +1,7 @@
 import { LocalDevelopmentPage } from '../localdev/LocalDevelopmentPage'
 import { useLiveRunWatch } from '../../hooks/useLiveRunWatch'
+import { useReadChatResult } from '../../hooks/useReadChatResult'
+import { useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
 import { ChatWorkspace } from './ChatWorkspace'
 import { SettingsPage } from '../settings/SettingsPage'
@@ -14,7 +16,9 @@ import { LocalAgentPage } from '../agents/local/LocalAgentPage'
 
 export function MainArea(): React.JSX.Element {
   const activeView = useUIStore((s) => s.activeView)
+  const activeChatId = useChatStore((s) => s.activeChatId)
   useLiveRunWatch()
+  useReadChatResult(activeView === 'chat' ? activeChatId : null)
   switch (activeView) {
     case 'settings': return <SettingsPage />
     case 'inbox': return <InboxView />

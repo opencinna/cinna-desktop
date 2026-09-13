@@ -32,6 +32,7 @@ const { taskRuntimeRepo } = await import('../db/taskRuntimes')
 const { taskInputRequestRepo } = await import('../db/taskInputRequests')
 const { turnLock } = await import('./localAgents/turnLock')
 const { chatRepo } = await import('../db/chats')
+const { chatRunResultRepo } = await import('../db/chatRunResults')
 const { chatOnDemandAgentRepo } = await import('../db/chatOnDemandAgent')
 const { taskRunnersByChat } = await import('./taskRunnerState')
 const { activeRunsByChat } = await import('./runExecutionState')
@@ -70,6 +71,8 @@ describe('autonomous coordinator runner', () => {
     const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Ship the feature' })
     await vi.waitFor(() => expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
     expect(taskService.getById(USER, taskId).status).toBe('blocked')
+    const waitingResult = chatRunResultRepo.list(USER).get(chatId)!
+    expect(waitingResult).toMatchObject({ status: 'needs_input', unread: true })
     expect(stream).toHaveBeenCalledTimes(2)
     expect(stream.mock.calls[0][0].tools?.map((definition) => definition.name)).toEqual(['delegate', 'handoff', 'ask_user', 'update_task', 'finish'])
     const [gate] = taskInputRequestRepo.listOpenForTask(taskId)
@@ -77,6 +80,9 @@ describe('autonomous coordinator runner', () => {
     expect(taskInputRequestRepo.expireOpen()).toBe(0)
     expect(await inboxService.answer(USER, gate.id, { kind: 'question', answers: [['main']] })).toEqual({ ok: true })
     await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('completed'))
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'completed', unread: true })
+    chatRunResultRepo.markRead(chatId, waitingResult.runId)
+    expect(chatRunResultRepo.list(USER).get(chatId)?.unread).toBe(true)
     expect(driverRun).toHaveBeenCalledTimes(2)
     expect(driverRun.mock.calls.find((call) => call[1].id === 'analyst')![2].handbackEligible).toBeUndefined()
     const writer = driverRun.mock.calls.find((call) => call[1].id === 'writer')![2].wireContent
@@ -119,11 +125,15 @@ describe('autonomous coordinator runner', () => {
   })
 
   it('bounds natural model continuations by owner turns instead of falsely completing', async () => {
-    stream.mockResolvedValue({ content: 'More work remains', toolCalls: [] })
+    stream.mockImplementation(async () => {
+      expect(chatRunResultRepo.list(USER).get(chatId)).toBeUndefined()
+      return { content: 'More work remains', toolCalls: [] }
+    })
     const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Keep working', budget: { maxRounds: 2 } })
     await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('error'))
     expect(stream).toHaveBeenCalledTimes(2)
     expect(taskService.getById(USER, taskId).errorMessage).toContain('owner-turn limit')
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'failed', unread: true })
     expect(chatRepo.listMessages(chatId).filter((row) => row.role === 'user')).toHaveLength(1)
   })
 
@@ -134,6 +144,7 @@ describe('autonomous coordinator runner', () => {
     const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Work', budget: { maxMinutes: 0.001 } })
     await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('error'))
     expect(taskService.getById(USER, taskId).errorMessage).toContain('time limit')
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'failed', unread: true })
     expect(activeRunsByChat.size).toBe(0)
   })
 
@@ -143,6 +154,31 @@ describe('autonomous coordinator runner', () => {
     expect(driverRun).not.toHaveBeenCalled()
     expect(taskRunnersByChat.has(chatId)).toBe(false)
     expect(chatRepo.listMessages(chatId)).toEqual([])
+  })
+
+  it('clears a waiting result when ordinary task controls cancel the session', async () => {
+    stream.mockResolvedValueOnce(tool('ask_user', { question: 'Continue?' }))
+    const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Work' })
+    await vi.waitFor(() => expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'needs_input', unread: true })
+    taskService.setStatus(USER, taskId, 'cancelled')
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'canceled', unread: false })
+  })
+
+  it('keeps an externally completed result read through metadata edits, but records a changed outcome', async () => {
+    stream.mockResolvedValueOnce(tool('ask_user', { question: 'Continue?' }))
+    const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Work' })
+    await vi.waitFor(() => expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
+    taskService.setStatus(USER, taskId, 'in_progress')
+    taskService.setStatus(USER, taskId, 'completed')
+    const result = chatRunResultRepo.list(USER).get(chatId)!
+    expect(result).toMatchObject({ status: 'completed', unread: true })
+    chatRunResultRepo.markRead(chatId, result.runId)
+    taskService.update(USER, taskId, { title: 'Renamed completed task' })
+    expect(chatRunResultRepo.list(USER).get(chatId)).toEqual({ ...result, unread: false })
+    taskService.setStatus(USER, taskId, 'archived')
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'canceled', unread: false })
+    expect(chatRunResultRepo.list(USER).get(chatId)?.runId).not.toBe(result.runId)
   })
 
   it('preserves a durable gate and repairs an interrupted tool batch without replaying its side effects', async () => {
@@ -174,15 +210,18 @@ describe('autonomous coordinator runner', () => {
     await vi.waitFor(() => expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
     await new Promise((resolve) => setTimeout(resolve, 0))
     const failure = vi.spyOn(taskService, 'setStatus').mockImplementationOnce(() => { throw new Error('disk unavailable') })
+    const waitingResult = chatRunResultRepo.list(USER).get(chatId)
     try {
       expect(() => taskRunnerService.cancel(USER, taskId)).toThrow('disk unavailable')
       expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('waiting')
       expect(taskService.getById(USER, taskId).status).toBe('blocked')
       expect(taskInputRequestRepo.listOpenForTask(taskId)).toHaveLength(1)
       expect(taskRunnersByChat.has(chatId)).toBe(true)
+      expect(chatRunResultRepo.list(USER).get(chatId)).toEqual(waitingResult)
     } finally { failure.mockRestore() }
     taskRunnerService.cancel(USER, taskId)
     expect(taskService.getById(USER, taskId).status).toBe('cancelled')
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'canceled', unread: false })
     expect(taskInputRequestRepo.listOpenForTask(taskId)).toEqual([])
   })
 
@@ -193,9 +232,13 @@ describe('autonomous coordinator runner', () => {
     const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Initial goal' })
     await vi.waitFor(() => expect(stream).toHaveBeenCalledTimes(1))
     taskRunnerService.interruptAll('App is closing')
+    const interruptedResult = chatRunResultRepo.list(USER).get(chatId)!
+    expect(interruptedResult).toMatchObject({ status: 'needs_input', unread: true })
+    chatRunResultRepo.markRead(chatId, interruptedResult.runId)
     await vi.waitFor(() => expect(activeRunsByChat.size).toBe(0))
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('interrupted')
+    expect(chatRunResultRepo.list(USER).get(chatId)).toEqual({ ...interruptedResult, unread: false })
     expect(taskService.getById(USER, taskId).status).toBe('blocked')
     taskRunnerService.resume(USER, taskId)
     await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('completed'))
@@ -228,11 +271,15 @@ describe('autonomous coordinator runner', () => {
     await vi.waitFor(() => expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
     await new Promise((resolve) => setTimeout(resolve, 0))
     const [first, second] = taskInputRequestRepo.listOpenForTask(taskId)
+    const priorResult = chatRunResultRepo.list(USER).get(chatId)!
     expect(second).toBeDefined()
     expect(await inboxService.answer(USER, first.id, { kind: 'question', answers: [['one']] })).toEqual({ ok: true })
     await vi.waitFor(() => expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(taskRuntimeRepo.get(USER, taskId)?.lastRunId).not.toBe(second.rootRunId)
+    chatRunResultRepo.markRead(chatId, priorResult.runId)
+    expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'needs_input', unread: true })
+    expect(chatRunResultRepo.list(USER).get(chatId)?.runId).not.toBe(priorResult.runId)
     expect(taskRuntimeRepo.get(USER, taskId)?.pendingRequestIds).toEqual([second.id])
     expect(taskService.getById(USER, taskId).status).toBe('blocked')
     expect(await inboxService.answer(USER, second.id, { kind: 'question', answers: [['two']] })).toEqual({ ok: true })
@@ -264,18 +311,33 @@ describe('autonomous coordinator runner', () => {
     expect(taskRunnersByChat.has(chatId)).toBe(false)
   })
 
-  it('durably cancels an active task before its deleted conversation can strand cleanup', async () => {
+  it('finishes waiting task cleanup after its chat is permanently deleted', async () => {
+    stream.mockResolvedValueOnce(tool('ask_user', { question: 'Continue?' }))
+    const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Work' })
+    await vi.waitFor(() => expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
+    const { chatService } = await import('./chatService')
+    chatService.permanentDelete(USER, chatId)
+    expect(taskService.getById(USER, taskId).status).toBe('cancelled')
+    expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('completed')
+    expect(taskInputRequestRepo.listOpenForTask(taskId)).toEqual([])
+    expect(chatRunResultRepo.list(USER).has(chatId)).toBe(false)
+  })
+
+  it('requires interruption before deleting an active task conversation and completes cleanup', async () => {
     stream.mockImplementation((input) => new Promise((_resolve, reject) => {
       input.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
     }))
     const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Work' })
     await vi.waitFor(() => expect(stream).toHaveBeenCalledTimes(1))
     const { chatService } = await import('./chatService')
-    chatService.delete(USER, chatId)
+    const { runExecutionService } = await import('./runExecutionService')
+    expect(() => chatService.delete(USER, chatId)).toThrow('Interrupt the session before deleting it.')
+    runExecutionService.cancelChat(USER, chatId)
     await vi.waitFor(() => expect(activeRunsByChat.size).toBe(0))
     expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('completed')
     expect(taskService.getById(USER, taskId).status).toBe('cancelled')
     expect(taskRunnersByChat.has(chatId)).toBe(false)
+    expect(() => chatService.delete(USER, chatId)).not.toThrow()
   })
 
   it('requires explicit recovery when a driver needs input but its durable question could not be written', async () => {
