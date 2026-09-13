@@ -23,7 +23,9 @@ import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSql
 const holder = vi.hoisted(() => ({
   current: null as TestDatabase | null,
   /** What the browser flow comes back with. Each test sets the email/server. */
-  profileEmail: 'a@b.test'
+  profileEmail: 'a@b.test',
+  currentUserId: null as string | null,
+  activated: false
 }))
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/cinna-auth-test' } }))
@@ -55,19 +57,20 @@ vi.mock('../auth/activation', () => ({
   userActivation: {
     activate: vi.fn(async () => {}),
     deactivate: vi.fn(async () => {}),
-    forgetUnlock: vi.fn()
+    forgetUnlock: vi.fn(),
+    isActivated: () => holder.activated
   }
 }))
 vi.mock('../auth/session', async () => {
   const actual = await vi.importActual<typeof import('../auth/session')>('../auth/session')
-  return { ...actual, getCurrentUserId: () => null }
+  return { ...actual, getCurrentUserId: () => holder.currentUserId }
 })
 vi.mock('./syncService', () => ({
   syncService: { signOutCleanup: vi.fn(async () => {}) }
 }))
 vi.mock('./connectIntentService', () => ({ connectIntentService: { flush: vi.fn() } }))
 vi.mock('../window/focus', () => ({ focusMainWindow: vi.fn() }))
-vi.mock('../localdev/localDevService', () => ({ localDevService: { stop: vi.fn(async () => {}) } }))
+vi.mock('../localdev/localDevService', () => ({ localDevService: { stop: vi.fn(async () => {}), reconcile: vi.fn(async () => {}) } }))
 
 const sync = vi.hoisted(() => ({
   resetCursors: vi.fn(),
@@ -77,6 +80,8 @@ vi.mock('./taskSyncService', () => ({ taskSyncService: sync }))
 
 const { authService } = await import('./authService')
 const { userRepo } = await import('../db/users')
+const { localDevService } = await import('../localdev/localDevService')
+const { storeCinnaTokens } = await import('../auth/cinna-tokens')
 
 /** The browser flow, answering for `email` with whatever server it was aimed at. */
 function oauthAnswers(email: string): void {
@@ -91,6 +96,10 @@ function oauthAnswers(email: string): void {
 
 beforeEach(() => {
   holder.current = createTestDatabase()
+  holder.currentUserId = null
+  holder.activated = false
+  vi.mocked(localDevService.reconcile).mockClear()
+  vi.mocked(storeCinnaTokens).mockClear()
   oauth.flow.mockReset()
   sync.resetCursors.mockReset()
   sync.forgetBindings.mockReset()
@@ -151,4 +160,37 @@ describe('a profile whose local data is deleted', () => {
 
     expect(sync.resetCursors).toHaveBeenCalledWith(id)
   })
+})
+
+
+describe('reauthentication that outlives its activated profile', () => {
+  it.each(['switched', 'switching', 'unchanged'] as const)(
+    'refreshes tokens and reconciles only the still-active account: %s', async (transition) => {
+      const id = await signInSelfHosted('https://one.cinna.test')
+      holder.currentUserId = id
+      holder.activated = true
+      const tokens = {
+        clientId: 'client-1', accessToken: 'fresh-access', refreshToken: 'fresh-refresh', expiresIn: 3600,
+        profile: { email: holder.profileEmail, displayName: 'A Person', fullName: 'A Person' }
+      }
+      let finish!: (value: typeof tokens) => void
+      oauth.flow.mockImplementationOnce(() => new Promise<typeof tokens>((resolve) => { finish = resolve }))
+      vi.mocked(storeCinnaTokens).mockClear()
+      const reauth = authService.reauthCinna(id)
+      if (transition === 'switched') holder.currentUserId = 'profile-b'
+      // During a queued activation the session can still name A, but the gate
+      // is already closed. Checking just the user ID would revive A here.
+      if (transition === 'switching') holder.activated = false
+      finish(tokens)
+      const result = await reauth
+
+      expect(result.user.id).toBe(id)
+      expect(storeCinnaTokens).toHaveBeenCalledExactlyOnceWith(id, tokens)
+      if (transition === 'unchanged') {
+        expect(localDevService.reconcile).toHaveBeenCalledExactlyOnceWith(id)
+      } else {
+        expect(localDevService.reconcile).not.toHaveBeenCalled()
+      }
+    }
+  )
 })

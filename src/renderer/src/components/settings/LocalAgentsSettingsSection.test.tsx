@@ -110,43 +110,11 @@ describe('LocalAgentsSettingsSection', () => {
     ).toBeTruthy()
   })
 
-  it('notes a saved path the status line does not describe yet, last in its card', () => {
-    appSettings = { ...appSettings, localAgentsEnginePath: '/opt/opencode' }
+  it('keeps the Open agents with explanation behind its tip', () => {
     render(<LocalAgentsSettingsSection />)
 
-    expect(
-      screen.getByText('Used from the next agent run. The status above is still the old path.')
-    ).toBeTruthy()
-  })
-
-  it('discards a half-typed OpenCode path on Escape instead of saving it', () => {
-    // Escape resets the field and blurs it; the blur commits synchronously with
-    // the closure's value, so without the discard flag this *saved* the typed
-    // path — the opposite of what Escape means.
-    appSettings = { ...appSettings, localAgentsEnginePath: '/opt/opencode' }
-    render(<LocalAgentsSettingsSection />)
-    const input = screen.getByLabelText('OpenCode path', { exact: true }) as HTMLInputElement
-
-    input.focus()
-    fireEvent.change(input, { target: { value: '/tmp/half-typ' } })
-    fireEvent.keyDown(input, { key: 'Escape' })
-
-    expect(document.activeElement).not.toBe(input)
-    expect(input.value).toBe('/opt/opencode')
-    expect(setAppSetting).not.toHaveBeenCalledWith(
-      expect.objectContaining({ key: 'localAgentsEnginePath' }),
-      expect.anything()
-    )
-  })
-
-  it('keeps the Developer Tools explanations behind their tips', () => {
-    render(<LocalAgentsSettingsSection />)
-
-    expect(screen.queryByText(/What else Cinna found installed/)).toBeNull()
     expect(screen.queryByText(/Open-in button uses this tool/)).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: 'About Detected on this machine' }))
-    expect(screen.getByText(/What else Cinna found installed globally/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'About Open agents with' }))
     expect(screen.getByText(/Open-in button uses this tool/)).toBeTruthy()
     expect(screen.getByLabelText('Open agents with').tagName).toBe('SELECT')

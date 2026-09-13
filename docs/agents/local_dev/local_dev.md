@@ -19,7 +19,7 @@ Naming the non-goals first, because the feature is easy to over-read from its na
 
 | Term | Definition |
 |------|-----------|
-| **Reconciler** | `localDevService.reconcile(userId, force?)` — the **one** entry point. Idempotent, single-flight, and the only way any of this happens |
+| **Reconciler** | `localDevService.reconcile(userId, force?)` — the **one** entry point. Idempotent and serialized; same-profile callers share a run, while another profile waits for the former run to drain |
 | **Managed toolchain** | uv, Mutagen and cinna-cli installed into `<userData>/localdev/`, version-stamped so an upgrade installs beside the old copy rather than swapping a running binary's file |
 | **Pins** | The versions in play. uv is pinned by *this app*; cinna-cli and Mutagen versions arrive from the server's `local_dev` discovery block. The desktop pins the **bytes** of uv and Mutagen against digest tables in source |
 | **Account workspace** | `<AgentsHome>/Cloud/<host>/` — a cinna-cli-owned directory holding the account token and the context package. `.cinna/account.json` is the one file the desktop looks for, and only to answer "has cinna-cli set this up" |
@@ -30,7 +30,7 @@ Naming the non-goals first, because the feature is easy to over-read from its na
 
 ## The state union
 
-`LocalDevState` (`src/shared/localDevState.ts`) is one process-global value, pushed on every transition and pulled by whoever mounts late — the same shape as `UpdaterState`. It is per profile only in the sense that switching accounts re-reconciles; one profile is active at a time, so there is only ever one state.
+`LocalDevState` (`src/shared/localDevState.ts`) is one process-global value, pushed on every transition and pulled by whoever mounts late — the same shape as `UpdaterState`. It belongs to the active profile: every activation first clears it to `idle`, including a move to a local/default profile or logout. The previous profile loses permission to publish progress or readiness immediately, before the next profile reload awaits. Shared installed-tool information is a separate read and survives that reset.
 
 | Phase | What it means to a user |
 |---|---|
@@ -45,7 +45,7 @@ Naming the non-goals first, because the feature is easy to over-read from its na
 
 Every phase also carries `tasks` — the per-step checklist the status modal renders — once a reconcile has run. It is empty before that, because there is nothing truthful to say about uv before anybody has looked.
 
-**Six phases, not four.** The original design named `unsupported`, `installing`, `ready` and `attention`. `idle` and `declined` were added because each is a distinction the UI cannot make without them:
+**Idle, consent and declined are separate states.** The UI must distinguish a check that has not run from a question waiting for an answer and a remembered refusal:
 
 - `idle` vs `unsupported` — "we have not looked" and "this server does not offer it" produce the same empty screen but opposite answers to *why is there no Repair button*. A local profile is `idle`, and calling it `unsupported` would imply it could never be otherwise.
 - `declined` vs `consent` — asked-and-declined vs never-asked. Settings has to offer "Set up local development" in one and the consent question in the other, and a screen that has to guess which it is looking at will eventually guess wrong. `declined` is also what keeps the onboarding step and the consent modal from re-asking every launch.
@@ -66,7 +66,7 @@ Every phase also carries `tasks` — the per-step checklist the status modal ren
 2. Connecting a server that offers local development is already most of that decision, so it rides along with the button that acts on it instead of becoming a screen of its own after sign-in
 3. **It is ticked only for a host nobody has answered for.** An answer this machine already holds wins over the default, because the same panel is what an already-onboarded install shows and **Switch to it** can name a profile whose owner declined on purpose — re-ticking it for them would spend a few hundred megabytes reversing a deliberate decision. On a genuine first run the read simply finds nothing and the tick stands. What a stored answer never beats is the **user's own click**: once they have touched the box it is theirs, and a stored answer that resolves a moment later leaves it alone
 4. Ticked or not, the answer is recorded for that host the moment the account exists, so the `localdev` step that follows has nothing left to ask: it shows the install running, or falls through
-5. **Unticking is a real decline**, remembered for that host like any other — not a "remind me later". Settings → Local Development turns it back on
+5. **Unticking is a real decline**, remembered for that host like any other — not a "remind me later". Settings → Profile → Local Development turns it back on
 
 ### First run where there is nothing to ask
 1. `unsupported` (either reason) and `declined` both mean *nothing to ask*, and the onboarding step falls straight through to the app
@@ -81,7 +81,7 @@ Every phase also carries `tasks` — the per-step checklist the status modal ren
 
 ### Declining, and changing your mind
 1. **Skip** records `false` for that host. The prompt does not come back
-2. Settings → Local Development shows the `declined` line and a **Set up** button
+2. Settings → Profile → Local Development shows the `declined` line and a **Set up** button
 3. Pressing it calls `reconcile(force)`, which records `true` for that host and proceeds — pressing a button that says what it will do *is* the consent, and without recording it the press would loop straight back to the prompt
 4. **Reset consent** forgets the answer entirely, so the next reconcile asks the question again
 
@@ -92,15 +92,15 @@ Every phase also carries `tasks` — the per-step checklist the status modal ren
 4. A pinned version the server bumped, or a workspace folder the user deleted, is discovered here too
 
 ### Something went wrong
-1. The sidebar footer shows a warning dot; clicking it runs Repair
-2. Settings → Local Development shows the `detail` plus a per-reason hint saying what Repair will and will not do
+1. The sidebar footer shows a warning dot; clicking it opens the checklist, where Repair is available
+2. Settings → Profile → Local Development shows the `detail` plus a per-reason hint saying what Repair will and will not do
 3. The reason that earns real copy is `toolchain`: its commonest cause — a desktop older than the versions the server pinned — is the one thing Repair cannot fix, and a user left pressing the button would never find that out
 
 ### Running `cinna` yourself
-1. Settings → Local Development → **Add to PATH** symlinks the managed `cinna` into `~/.local/bin`
+1. Settings → Default → Local Development → **Add to PATH** symlinks the managed `cinna` into `~/.local/bin`
 2. **Opt-in, never automatic.** The app's copy exists so the desktop can drive it; a developer's terminal is theirs, and silently shadowing (or being shadowed by) a `cinna` they installed is the kind of surprise that costs an afternoon
-3. An existing link that already points into the managed toolchain is refreshed — that is a version bump. **Any other file at that path is left strictly alone and reported**: it is someone's real install
-4. Everything the desktop spawns is unaffected either way; it always goes through the toolchain environment
+3. A link is refreshed only when its normalized destination is exactly the managed `bin/cinna` launcher. **Other files and links are left alone and reported**, including similarly named directories and paths that escape the managed root
+4. Linking requires an installed managed CLI, not a ready account workspace; unsupported or local profiles do not hide a shared installation. The IPC still requires an activated session. Everything the desktop spawns uses the toolchain environment independently of the link
 
 ### Develop a Remote Agent
 
@@ -113,24 +113,33 @@ Eligibility requires a remote `agent` target and target ID, excludes explicit `c
 
 The header visibility check accepts any `ready` phase, but preparation additionally requires the CLI's **JSON workspace protocol**. A legacy-ready installation can show Develop and then receive an update/setup error; the service cannot safely infer paths from a CLI that does not report them. Reusing a connection is based on its generated name and exact canonical workspace directory, not a persisted remote-to-local mapping.
 
+### Inspecting shared desktop tools
+
+1. **Default → Local Development** shows the managed cinna-cli executable path and the version that executable reports. An editable checkout can differ from a server pin or an older installation stamp; the readout must describe the executable, not the stamp. Missing installation and an installed executable with an unknown version are distinct states.
+2. **Developer Tools** on that page reports detected global tools and the bundled kit contract. Its Cinna row can name a PATH installation different from the desktop-managed CLI above it. OpenCode instead reports the engine resolver's actual binary, including a configured or downloaded copy.
+3. **OpenCode Path** below the table changes the installation-wide executable override. Runtime selection and Open agents with remain under Default → Agents → Runtime. See [engine configuration](../local_agents/engine_tech.md#configuration).
+4. **Profile → Local Development** renders workspace status, setup/repair, Open folder and the server's consent. It remounts on account changes so pending page controls do not carry over. The profile page never uses shared CLI presence as proof that this account's workspace is ready.
+
 ## Business Rules
 
 ### One entry point
 
 `reconcile` is the only door. There is deliberately no `install()`, no `createWorkspace()` and no `repair()` that does something different — a second door into a state machine is a second place for it to be entered halfway. Repair *is* `reconcile(force)`.
 
-It is **idempotent**: every step checks whether it is already satisfied and skips itself. And it is **single-flight**: a second caller joins the run in flight, because activation, an OS resume and a Repair click can easily land together and two simultaneous `uv tool install`s into the same directory is not a race worth having. **A `force` call that lands during an ordinary run joins it rather than restarting** — the case is a user pressing Repair during a long download, where finishing the download is what they want and a restart would throw away the bytes already on disk while looking identical from the outside.
+It is **idempotent**: every step checks whether it is already satisfied. Concurrent calls for the **same profile** share one run, including Repair during an ordinary install. A different profile immediately retires the former state and waits for the previous run to drain before starting its own account work. Requests queued for a profile that has since been replaced are skipped. Running downloads and subprocesses are not cancelled; they may finish, but cannot publish old results or start a later account step.
+
+Both toolchain branches finish before an install failure returns. uv/cinna-cli and Mutagen write into shared installation state; returning while a sibling still writes would allow the next account's different pins to overlap it. Engine prefetch has its own shared resolver and may outlive a failed reconcile, but its old progress and completion cannot change the new profile's state.
 
 Reconcile is triggered from exactly four places:
 
 | Trigger | Where |
 |---|---|
 | A Cinna user activates | `src/main/auth/activation.ts` — on **every** activation, not only the first |
-| A re-auth succeeds | `src/main/services/authService.ts:reauthCinna()` — non-blocking; a toolchain check must not make a successful re-auth report failure |
+| A re-auth succeeds | `src/main/services/authService.ts:reauthCinna()` — non-blocking, only when the reauthenticated account is still current and activated; an OAuth flow may finish after a switch |
 | The machine wakes | `powerMonitor.on('resume')` in `src/main/index.ts` |
 | The user presses Repair / Set up | `localdev:repair`, and `localdev:consent` after recording an answer |
 
-Sign-out and profile switch call `clear()`, which resets to `idle` — the state names a host and a folder belonging to the profile that is going away.
+Every activation begins with `clear()` synchronously, and deactivation also clears. Login and logout can call activation directly, so clearing only during deactivation would leave a former Cinna workspace visible while a local/default profile loads. A cleared state has no checklist or openable workspace.
 
 ### The order of steps
 
@@ -146,14 +155,14 @@ A workspace someone created from a terminal at the same path is simply **adopted
 
 ### Consent
 
-- **Per host.** One desktop can hold accounts on several instances, and agreeing to install a toolchain and create a folder for one says nothing about another
+- **Per host, installation-wide.** Accounts on the same server share the answer, including a decline. Moving the controls to Profile settings does not migrate consent to per-user storage. Agreeing for one instance says nothing about another
 - **`false` is a real answer**, stored, and is what keeps the prompt from reappearing on every launch. Absent means never asked
 - Stored in the **default-scoped** `localDevConsent` app setting as a JSON `{ "<host>": boolean }` object. A string rather than a nested object because that store is one flat key-value table validated by `typeof` — so the shape is checked once in `appSettingsService` rather than defended at every read, since the value is also reachable through the generic `settings:set` channel
 - A corrupt value reads as "nobody has been asked". The worst case is asking once more; never acting without an answer
 - **`force` is the one thing that skips the question**, because the only ways to pass it are Repair and Settings' **Set up** — a button whose copy says what it will do. Any other reconcile stops at `consent` or `declined`
 - **Where it is asked depends on how the account arrived.** A `cinna://connect` link asks it as a checkbox on the confirm screen, ticked unless this machine already holds an answer for that host; the ordinary Cinna Server path asks it as the `localdev` onboarding step; an install that gains the feature later is asked by the consent modal. All three render one explainer component, so no two of them can describe the same install differently
-- **Recording an answer waits for the reconcile already in flight.** The connect screen answers within moments of activation, and the run that activation started read the consent *before* this one wrote it — joining that run, which is what a single-flight `reconcile` does, would answer "still waiting on the user" and quietly drop the answer just given. One discovery round trip is what an accept that always takes effect costs
-- **The renderer remembers which hosts *this window* has answered.** Until main's reconcile has moved off `consent` the broadcast state still says "waiting on the user", which is how a screen that has just taken the answer asks it again for half a second. Only the surfaces that ask consult that list — it is a fact about the window, not about the machine — and Settings' **Reset consent** is the one thing that clears it, since otherwise the prompt it just re-armed would never appear
+- **Recording an answer waits for the reconcile already in flight.** The connect screen answers within moments of activation, and the run that activation started read the consent *before* this one wrote it — joining that run, which is what a single-flight `reconcile` does, would answer "still waiting on the user" and quietly drop the answer just given. The waiting answer captures its profile before the wait; if that profile is replaced, it does not restart its setup afterward
+- **The renderer remembers which hosts *this window* has answered.** Until main's reconcile has moved off `consent` the broadcast state still says "waiting on the user", which is how a screen that has just taken the answer asks it again for half a second. Only the surfaces that ask consult that list — it is a fact about the window, not about the machine — and **Reset consent** clears that host. An `idle` profile reset clears every temporary marker, so an earlier profile cannot suppress the next question; a late rejection from the earlier profile cannot erase a newer same-host answer
 
 ### The toolchain
 
@@ -239,7 +248,7 @@ Two surfaces result, and `ready` says which one it settled on:
 | Account token state | read from `cinna account status` | not visible; the desktop learns only that cinna-cli could read the workspace |
 | An expired token | refreshed in place with a fresh mint | needs **Repair**, which sets the workspace up again |
 
-A `legacy` install really does create a workspace; the explicit Develop action additionally requires JSON workspace reporting. This is reported rather than hidden: Settings shows the one sentence about what the older cinna-cli cannot do, next to the version. A working badge that quietly could not refresh a token would be the worse failure.
+A `legacy` install really does create a workspace; the explicit Develop action additionally requires JSON workspace reporting. This is reported rather than hidden: Profile → Local Development shows what the older cinna-cli cannot do beside workspace readiness; Default → Local Development shows the actual managed executable version. A working badge that quietly could not refresh a token would be the worse failure.
 
 ### Progress is measured, not implied
 
@@ -286,9 +295,9 @@ The sidebar button opens the same checklist over a running app. It answers the t
 
 **A failure names its component**, and the error is what names it. Asking which row happens to be active stopped being an answer once several are — a cinna-cli failure was landing on Mutagen's row, accusing a download that was proceeding perfectly well — so the component travels on the error itself rather than being inferred, or read out of a `detail` that carries a stderr tail or a path exactly when it matters most. The rows still in flight drop back to `pending` rather than keeping their spinners: their work may well still be running, but a spinner beside a failure reads as "and this part is fine", which is not something the run can claim.
 
-Only the **current** reconcile is allowed to narrate, and that claim is released when a run *ends* rather than when the next one starts — the window that matters is after a failure, while a sibling download is still going. The survivor keeps reporting for as long as it takes to finish, and without this its next cheerful line would replace the `attention` the user is looking at with a bar nothing will ever complete, leaving the failure true and invisible.
+Only the **current** reconcile may publish progress or completion. Ownership ends both when the run finishes and when its profile is invalidated. An old engine prefetch or subprocess callback previously could restore an old progress bar after a failure or switch; generation checks now leave the current state intact.
 
-The button is now shown when everything is `ready` too, quietly and without a dot. That is a change from hiding it on success: clicking it is the only way to see which cinna-cli is installed and where the workspace went, and a control that vanishes when things work is a control nobody learns exists. The dot, not the icon, distinguishes "fine" from "wants you". It stays hidden for `idle`, `unsupported`, `consent` and `declined` — the consent question has its own surface, and the rest have nothing to report.
+The button is now shown when everything is `ready` too, quietly and without a dot. That is a change from hiding it on success: clicking it shows the checklist without navigating away; the settings pages also expose the managed CLI and workspace, and a control that vanishes when things work is a control nobody learns exists. The dot, not the icon, distinguishes "fine" from "wants you". It stays hidden for `idle`, `unsupported`, `consent` and `declined` — the consent question has its own surface, and the rest have nothing to report.
 
 ### Toolchain failures are not all "try again"
 
@@ -310,7 +319,7 @@ When the heavy path *is* taken, it deliberately **destroys the proof of a good i
 activation / reauth / resume / Repair
         │
         ▼
-localDevService.reconcile(userId, force)      ← single-flight, idempotent
+localDevService.reconcile(userId, force)      ← serialized, same-profile dedupe
         │
         ├─ discoverCinnaEndpoints ─────────► /.well-known/cinna-desktop → local_dev
         ├─ consent (localDevConsent setting, per host)
@@ -326,8 +335,8 @@ localDevService.reconcile(userId, force)      ← single-flight, idempotent
   LocalDevState ──localdev:state──► renderer store
                                       ├─ LocalDevOnboardingStep  (first run)
                                       ├─ LocalDevConsentModal    (consent, after first run)
-                                      ├─ LocalDevStatusButton    (installing / attention)
-                                      └─ LocalDevSettingsSection (every phase)
+                                      ├─ LocalDevStatusButton    (installing / attention / ready)
+                                      └─ ProfileLocalDevSettingsSection (every phase)
 
   ConnectIntentPanel ──consent(host, accepted)──► localdev:consent
     (the opt-in checkbox on the cinna://connect confirm screen,
@@ -337,7 +346,7 @@ localDevService.reconcile(userId, force)      ← single-flight, idempotent
 ## Integration Points
 
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — the OAuth session whose bearer mints setup tokens; local development exists only for a `cinna_user` profile
-- [Cinna Re-authentication](../../auth/cinna_accounts/reauthentication.md) — a successful re-auth fires a reconcile, because a dead session is the usual reason the workspace's account token went stale too
+- [Cinna Re-authentication](../../auth/cinna_accounts/reauthentication.md) — a successful re-auth fires a reconcile only while that account is current and activated, because a dead session is the usual reason the workspace's account token went stale too
 - [Onboarding](../../auth/onboarding/onboarding.md) — the `localdev` step is the last step of the Cinna path
 - [The `cinna://connect` Link](../../auth/onboarding/connect_link.md) — the other route in, and the one that answers the consent question on its confirm screen rather than in a step of its own
 - [Agents Home, Scanner & Folder Index](../local_agents/folder_index.md) — the account workspace is created under the Agents Home, and `Cloud/` is the [kit contract](../local_agents/kit_contract.md)'s `workshop.cloud_dir` rather than a literal in this feature's code
@@ -351,9 +360,9 @@ localDevService.reconcile(userId, force)      ← single-flight, idempotent
 
 Carried honestly rather than implied as passing.
 
-- **The reconciler's *sequence* is not unit-tested.** `localDevService.test.ts` covers the part that is a contract — how a toolchain code and a cinna-cli exit code become what the user is told — but the ordering itself, the 403 role branch, the token-refresh branch and the single-flight collapse are exercised only through `cinna-integration.spec.ts` and through their parts. A reconciler test needs a database, a window and a server, which is why it was left to the live run
-- **Three branches have never executed anywhere.** The `unsupported/role` 403 (the account used for the live run is an admin), the expired-token refresh (no expired token to hand), and `addToPath` (no test at all)
+- **Lifecycle coverage uses mocked boundaries.** `localDevReconcile.test.ts` covers profile serialization, stale progress/mint/setup completion, consent waits and same-profile deduplication; `activation.test.ts` covers switching to local/default profiles without deactivation. These do not replace a live account/server lifecycle run.
+- **PATH ownership is covered with real temporary symlinks**, including lookalike and escaping destinations; component tests cover returned refusals and rejected IPC calls. They do not prove a user's login shell includes `~/.local/bin`.
 - **Windows is absent from both pin tables**, because the desktop does not build for it. A musl-only Linux distribution is the same known gap the engine has
 - **The context-package refresh is fire-and-forget.** A repeated failure is logged and never surfaced anywhere the user can see
 - **The OS `open-url` hook and the packaged scheme registration are untested.** Playwright cannot raise a Launch Services event, so the E2E specs enter the funnel through the test-only argv flag and everything below the hook is real — but that a *packaged* build actually claims `cinna://` has only been asserted by the `protocols:` block in `electron-builder.yml`, never by installing a DMG and clicking a link
-- **`localDevConsent` is installation-global, not per profile.** Two Cinna profiles on the same host share one consent answer. The host is the key because the toolchain and the workspace are per host too, but a second profile on the same instance inherits the first's decision without being asked
+- **Two profiles on the same host share a workspace location and consent.** A workspace belonging to another account is still refused by CLI identity checks; separating per-account workspace folders is outside this change.

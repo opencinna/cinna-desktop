@@ -30,7 +30,7 @@
 - `src/renderer/src/components/agents/local/OpenInMenu.tsx` — the split button and its menu; `OpenInMenu.test.tsx`
 - `src/renderer/src/components/agents/local/AgentActionsMenu.tsx` — Reveal and Terminal again, from the ⋯ menu
 - `src/renderer/src/components/agents/local/NewLocalAgentModal.tsx` — the "Build it with…" step
-- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — the **Open agents with** select and the auto-open checkbox, on their own card in the **Developer Tools** section; the detected-tools table and **Refresh** are the card above, with Refresh beside the section title rather than inside the card, since it re-detects everything the section reports
+- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — Runtime owns the Open agents with select and auto-open checkbox. Detected non-runtime tools and their Refresh action are rendered by `src/renderer/src/components/settings/DeveloperToolsSettingsSection.tsx` under Default → Local Development; runtime availability remains beside its picker under Agents.
 
 ### Packaging
 - `build/entitlements.mac.plist` — `com.apple.security.automation.apple-events`

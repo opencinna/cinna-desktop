@@ -2,11 +2,12 @@ import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { developAgent } from '../localdev/developAgentService'
 import { localDevService } from '../localdev/localDevService'
+import { toolchain } from '../localdev/toolchain'
 import type { LocalDevState } from '../../shared/localDevState'
 import { ipcHandle } from './_wrap'
 
 /**
- * Local development: one read, and six verbs that all end in a state.
+ * Active-profile local development and shared desktop tool inspection.
  *
  * Every verb resolves the **active** profile itself rather than taking a
  * `userId` from the renderer. The reconciler mints account setup tokens with
@@ -27,7 +28,7 @@ export function registerLocalDevHandlers(): void {
   })
 
   /**
-   * The one channel here not behind `requireActivated()`, deliberately.
+   * Readiness is available before `requireActivated()`, deliberately.
    *
    * It is read from a mount effect that runs during onboarding — before any
    * account exists — and what it returns then is `{ phase: 'idle' }`, a
@@ -36,6 +37,8 @@ export function registerLocalDevHandlers(): void {
    * Every channel that *acts* is gated.
    */
   ipcHandle('localdev:get-state', async (): Promise<LocalDevState> => localDevService.getState())
+  // Installed desktop tools belong to the machine, even without an active account.
+  ipcHandle('localdev:get-managed-cli', async () => toolchain.installedCli())
 
   ipcHandle('localdev:consent', async (_event, host: string, accepted: boolean) => {
     userActivation.requireActivated()

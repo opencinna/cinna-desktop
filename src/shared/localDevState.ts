@@ -15,6 +15,12 @@
  * time so there is only ever one state.
  */
 
+/** Installed desktop CLI, independent of the active account's workspace state. */
+export interface ManagedLocalDevCli {
+  path: string
+  version: string | null
+}
+
 export type LocalDevAttentionReason =
   /** The account token in the workspace is dead. Repair re-mints it. */
   | 'token_expired'

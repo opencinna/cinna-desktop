@@ -1,3 +1,5 @@
+import { useAuthStore } from '../../stores/auth.store'
+import { ProfileLocalDevSettingsSection } from './ProfileLocalDevSettingsSection'
 import { useUIStore } from '../../stores/ui.store'
 import { LLMSettingsSection } from './LLMSettingsSection'
 import { MCPSettingsSection } from './MCPSettingsSection'
@@ -24,6 +26,7 @@ const sectionTitles = {
   features: 'Features',
   development: 'Development',
   'profile-agents': 'Agents',
+  'profile-local-dev': 'Local Development',
   'profile-chats': 'Chat Modes',
   'profile-llm': 'AI Credentials',
   'profile-catalog': 'Catalog',
@@ -33,6 +36,7 @@ const sectionTitles = {
 
 export function SettingsPage(): React.JSX.Element {
   const { settingsTab } = useUIStore()
+  const profileId = useAuthStore((s) => s.currentUser?.id)
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -42,6 +46,7 @@ export function SettingsPage(): React.JSX.Element {
         {settingsTab === 'llm' && <LLMSettingsSection key="llm" />}
         {settingsTab === 'local-agents' && <LocalAgentsSettingsSection key="local-agents" />}
         {settingsTab === 'local-dev' && <LocalDevSettingsSection key="local-dev" />}
+        {settingsTab === 'profile-local-dev' && <ProfileLocalDevSettingsSection key={profileId} />}
         {settingsTab === 'profile-agents' && (
           <AgentsSettingsSection key="profile-agents" />
         )}

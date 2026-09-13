@@ -81,6 +81,10 @@ class UserActivation {
   private async _activate(userId: string): Promise<void> {
     const epoch = ++this._epoch
     this._activated = false
+    // Login, profile switching and logout all enter through activate(), without
+    // necessarily calling deactivate(). Retire the former profile before any
+    // awaited reload, including when the destination has no Cinna account.
+    localDevService.clear()
     taskSyncScheduler.stop()
     localScheduleScheduler.stop()
     const current = () => epoch === this._epoch

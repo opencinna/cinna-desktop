@@ -46,7 +46,7 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 ### Opening an agent
 
 1. User selects an agent in the Agents sidebar. Its page opens a new-chat composer with that agent selected; no empty chat is created.
-2. **Settings** switches the page body to configuration. **Start chat** returns to the same composer with its draft intact. Folder agents show a compact runtime summary while chatting and full runtime controls in Settings; non-folder agents expose Overview and Connection tabs in Settings.
+2. The neutral bordered **Settings** action switches the page body to configuration. The accent **Start chat** action returns to the same composer with its draft intact. Folder agents show a compact runtime summary while chatting and full runtime controls in Settings; non-folder agents expose Overview and Connection tabs in Settings.
 3. Sending uses the shared chat flow and opens the resulting conversation under Chats. The row's hover Start chat shortcut opens the dashboard composer directly and does not also select the row's page.
 
 ### Opening Inbox

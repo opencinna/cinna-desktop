@@ -1,24 +1,36 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render as renderUI, screen, waitFor, fireEvent } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { LocalDevState } from '../../../../shared/localDevState'
 
-/**
- * Settings → Local Development, phase by phase.
- *
- * The phases this pins are the ones where being wrong is expensive: a role gate
- * that must not offer a button which cannot work, a toolchain failure that must
- * say updating the app is the fix, and the PATH opt-in whose refusal reason is
- * written for the user and must therefore reach them rather than a log line.
- */
+/** Device-wide tools remain available independently of account workspace readiness. */
+
+vi.mock('../../hooks/useLocalAgents', () => ({
+  useLocalAgents: () => ({ data: { roots: [] } })
+}))
+vi.mock('../../hooks/useLocalTools', () => ({
+  useLocalTools: () => ({ data: [] }),
+  useRefreshLocalTools: () => ({ mutate: vi.fn(), isPending: false })
+}))
+
+vi.mock('../../hooks/useAppSettings', () => ({
+  useAppSettings: () => ({ data: { localAgentsEnginePath: '' } }),
+  useSetAppSetting: () => ({ mutate: vi.fn() })
+}))
+vi.mock('../../hooks/useEngine', () => ({
+  useEngineBinary: () => ({ data: { state: 'unresolved' } })
+}))
 
 const addToPath = vi.fn()
+const getManagedCli = vi.fn()
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
   localDev: {
     getState: async () => ({ phase: 'idle' }) as LocalDevState,
     onState: () => () => undefined,
-    addToPath
+    addToPath,
+    getManagedCli
   }
 }
 
@@ -32,52 +44,18 @@ function withState(state: LocalDevState): void {
 
 beforeEach(() => {
   addToPath.mockReset()
+  getManagedCli.mockResolvedValue({
+    path: '/Users/x/Library/Application Support/cinna/bin/cinna',
+    version: '0.4.2'
+  })
 })
 
+function render(element: React.ReactElement): ReturnType<typeof renderUI> {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return renderUI(<QueryClientProvider client={client}>{element}</QueryClientProvider>)
+}
+
 describe('LocalDevSettingsSection', () => {
-  it('explains the role gate and offers nothing to press', () => {
-    withState({ phase: 'unsupported', reason: 'role' })
-    render(<LocalDevSettingsSection />)
-
-    expect(screen.getByText(/agent-developer or admin role/i)).toBeTruthy()
-    expect(screen.getByText(/Ask an admin/i)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /set up/i })).toBeNull()
-    expect(screen.queryByRole('button', { name: /repair/i })).toBeNull()
-  })
-
-  it('says a toolchain failure may need an app update, and still offers Repair', () => {
-    withState({
-      phase: 'attention',
-      reason: 'toolchain',
-      detail: 'Mutagen 0.18.1 could not be verified.'
-    })
-    render(<LocalDevSettingsSection />)
-
-    expect(screen.getByText('Mutagen 0.18.1 could not be verified.')).toBeTruthy()
-    expect(screen.getByText(/updating Cinna Desktop will/i)).toBeTruthy()
-    expect(screen.getByRole('button', { name: /repair/i })).toBeTruthy()
-  })
-
-  it('says what an older pinned cinna-cli cannot do, without calling it broken', () => {
-    // The server picks the cinna-cli version, so a desktop can be handed one
-    // that predates the machine-readable protocol. Everything works; one thing
-    // (silent token refresh) does not, and meeting that as a surprise later is
-    // worse than a sentence here.
-    withState({
-      phase: 'ready',
-      workspacePath: '/Users/x/Agents/Cloud/cinna.example.com',
-      cliVersion: '0.3.0',
-      cinnaBinPath: '/Users/x/Library/Application Support/cinna/bin/cinna',
-      protocol: 'legacy' as const
-    })
-    render(<LocalDevSettingsSection />)
-
-    expect(screen.getByText(/older than the machine-readable protocol/i)).toBeTruthy()
-    expect(screen.getByText(/expired account token cannot be refreshed on its own/i)).toBeTruthy()
-    // Still ready: no warning icon, no attention copy.
-    expect(screen.queryByText(/needs attention/i)).toBeNull()
-  })
-
   it('shows where things are when ready, and surfaces a PATH refusal inline', async () => {
     addToPath.mockResolvedValue({ ok: false, reason: '~/.local/bin is not writable.' })
     withState({
@@ -89,18 +67,39 @@ describe('LocalDevSettingsSection', () => {
     })
     render(<LocalDevSettingsSection />)
 
-    expect(screen.getByText('/Users/x/Agents/Cloud/cinna.example.com')).toBeTruthy()
-    expect(screen.getByText('0.4.2')).toBeTruthy()
+    expect(await screen.findByText('0.4.2')).toBeTruthy()
+    expect(screen.queryByText('Account workspace')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Consent' })).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: /add to path/i }))
     await waitFor(() => expect(screen.getByText('~/.local/bin is not writable.')).toBeTruthy())
   })
 
-  it('reports progress while installing', () => {
-    withState({ phase: 'installing', step: 'Downloading cinna-cli', percent: 40 })
+
+  it('keeps installed desktop tools available when the active profile is unsupported', async () => {
+    withState({ phase: 'unsupported', reason: 'server' })
     render(<LocalDevSettingsSection />)
 
-    expect(screen.getByText('Downloading cinna-cli')).toBeTruthy()
-    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('40')
+    expect(await screen.findByText('0.4.2')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /add to path/i })).toBeTruthy()
+    expect(screen.queryByText(/This Cinna server/)).toBeNull()
   })
+
+  it('directs setup to the profile when no desktop CLI is installed', async () => {
+    getManagedCli.mockResolvedValue(null)
+    withState({ phase: 'idle' })
+    render(<LocalDevSettingsSection />)
+
+    expect(await screen.findByText(/Set it up under Profile/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /add to path/i })).toBeNull()
+  })
+
+  it('surfaces a rejected PATH IPC call inline', async () => {
+    addToPath.mockRejectedValue(new Error('Session not activated'))
+    withState({ phase: 'idle' })
+    render(<LocalDevSettingsSection />)
+    fireEvent.click(await screen.findByRole('button', { name: /add to path/i }))
+    expect(await screen.findByText('Session not activated')).toBeTruthy()
+  })
+
 })

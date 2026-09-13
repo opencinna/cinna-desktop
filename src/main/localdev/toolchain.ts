@@ -57,6 +57,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { app } from 'electron'
+import type { ManagedLocalDevCli } from '../../shared/localDevState'
 import { ToolchainError } from '../errors'
 import { createLogger } from '../logger/logger'
 import {
@@ -70,7 +71,7 @@ import {
   type DownloadProgress,
   type PinnedAsset
 } from '../managed/managedAsset'
-import { getShellEnv } from '../shell/env'
+import { getShellEnv, shellEnvForChild } from '../shell/env'
 
 const logger = createLogger('localdev-toolchain')
 
@@ -313,6 +314,7 @@ export interface ToolchainDeps {
 
 export interface Toolchain {
   root(): string
+  installedCli(): Promise<ManagedLocalDevCli | null>
   paths(pins: ToolchainPins): ToolchainPaths
   ensure(pins: ToolchainPins, onProgress?: ToolchainProgress): Promise<ToolchainResult>
   repair(pins: ToolchainPins, onProgress?: ToolchainProgress): Promise<ToolchainResult>
@@ -815,14 +817,11 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
    *
    * They write to different directories and publish through
    * {@link installPinnedAsset}'s own atomic rename, so concurrency costs no
-   * safety here. What it does cost is a failure that lands while a sibling is
-   * still running: `Promise.all` rejects at once and the sibling keeps going in
-   * the background. That is deliberate — killing an in-flight download to
-   * report a failure faster would throw away bytes the user has already paid
-   * for, and the next reconcile joins the same promise through {@link once}
-   * rather than starting a second one. Callers must simply not treat a late
-   * progress report from a run they have already failed as news; the reconciler
-   * ignores anything from a superseded run.
+   * safety here. If one branch fails, the other finishes before the failure is
+   * returned. A queued profile may require different pins, so returning early
+   * would let its install overlap writes from the failed run. Draining also
+   * preserves downloads already in progress. The reconciler ignores progress
+   * from a profile that was superseded while its work drains.
    */
   async function run(
     pins: ToolchainPins,
@@ -859,7 +858,12 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
     const mutagen = once(`mutagen:${pins.mutagenVersion}:${reinstall}`, () =>
       ensureMutagen(pins, assets.mutagen)
     )
-    const [cliVersion] = await Promise.all([uvThenCli, mutagen])
+    // A rejected sibling may still be installing into this shared directory.
+    // Drain both branches before another account's queued reconcile can start.
+    const [cliResult, mutagenResult] = await Promise.allSettled([uvThenCli, mutagen])
+    if (cliResult.status === 'rejected') throw cliResult.reason
+    if (mutagenResult.status === 'rejected') throw mutagenResult.reason
+    const cliVersion = cliResult.value
     // The one place the bar is allowed to reach the end: everything above caps
     // itself short, so 100% means the toolchain is genuinely installed rather
     // than "the last thing we could measure finished".
@@ -874,6 +878,23 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
 
   return {
     root: deps.root,
+    installedCli: async () => {
+      const root = deps.root()
+      const path = join(root, 'bin', 'cinna')
+      if (!(await isFile(path))) return null
+      // state.json only decides whether a pinned install may be skipped. It
+      // does not track editable checkouts, so ask the installed binary itself.
+      const result = await deps.run(
+        path,
+        ['--version'],
+        shellEnvForChild(await deps.shellEnv()),
+        PROBE_TIMEOUT_MS
+      ).catch(() => null)
+      return {
+        path,
+        version: result?.code === 0 ? parseVersion(`${result.stdout}\n${result.stderr}`) : null
+      }
+    },
     paths,
     ensure: (pins, onProgress) => run(pins, false, onProgress),
     repair: (pins, onProgress) => run(pins, true, onProgress),

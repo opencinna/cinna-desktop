@@ -35,21 +35,41 @@ interface LocalDevStore {
   openWorkspace: () => Promise<void>
 }
 
+// A pushed state or a newer action supersedes older IPC replies. In
+// particular, a ready reply from A must never replace B's idle/consent state.
+let revision = 0
+let profileGeneration = 0
+
+function receive(state: LocalDevState): void {
+  revision += 1
+  if (state.phase === 'idle') {
+    profileGeneration += 1
+    useLocalDevStore.setState({ state, answeredHosts: [] })
+  } else {
+    useLocalDevStore.setState({ state })
+  }
+}
+
+function receiveReply(state: LocalDevState, request: number): void {
+  if (revision === request) receive(state)
+}
+
 export const useLocalDevStore = create<LocalDevStore>((set, get) => ({
   state: { phase: 'idle' },
   subscribed: false,
   answeredHosts: [],
 
-  set: (state) => set({ state }),
+  set: receive,
 
   subscribe: async () => {
     if (get().subscribed) return
     // Set before the await: this runs from a mount effect that StrictMode
     // double-invokes in development, and two runs would attach two listeners.
     set({ subscribed: true })
+    const request = ++revision
     try {
-      window.api.localDev.onState((state) => set({ state }))
-      set({ state: await window.api.localDev.getState() })
+      window.api.localDev.onState(receive)
+      receiveReply(await window.api.localDev.getState(), request)
     } catch (err) {
       set({ subscribed: false })
       log.error('could not subscribe to local dev state', { message: (err as Error).message })
@@ -57,6 +77,8 @@ export const useLocalDevStore = create<LocalDevStore>((set, get) => ({
   },
 
   consent: async (host, accepted) => {
+    const request = ++revision
+    const profile = profileGeneration
     // Marked answered before the call, not after: the whole point is to cover
     // the window while main is still working the answer through a reconcile.
     set((s) => ({
@@ -66,14 +88,16 @@ export const useLocalDevStore = create<LocalDevStore>((set, get) => ({
       // The answer comes back as the next state — main reconciles immediately
       // on an accept — so there is nothing to invalidate and no window in which
       // the UI shows a decision that has not been recorded.
-      set({ state: await window.api.localDev.consent(host, accepted) })
+      receiveReply(await window.api.localDev.consent(host, accepted), request)
     } catch (err) {
       // Rolled back, or the marker outlives the answer it was covering for:
       // the channel is gated on an activated profile, and a rejection there
       // would otherwise suppress the question in both surfaces that ask it for
       // the life of this window — and nothing would ever set local development
       // up until the app was restarted.
-      set((s) => ({ answeredHosts: s.answeredHosts.filter((h) => h !== host) }))
+      if (profileGeneration === profile) {
+        set((s) => ({ answeredHosts: s.answeredHosts.filter((h) => h !== host) }))
+      }
       log.error('could not record the local dev consent answer', {
         host,
         message: (err as Error).message
@@ -82,14 +106,16 @@ export const useLocalDevStore = create<LocalDevStore>((set, get) => ({
   },
 
   resetConsent: async (host) => {
+    const request = ++revision
     // Settings asking for the question back is the one thing that clears the
     // marker; otherwise the prompt it just re-armed would never be shown.
     set((s) => ({ answeredHosts: s.answeredHosts.filter((h) => h !== host) }))
-    set({ state: await window.api.localDev.resetConsent(host) })
+    receiveReply(await window.api.localDev.resetConsent(host), request)
   },
 
   repair: async () => {
-    set({ state: await window.api.localDev.repair() })
+    const request = ++revision
+    receiveReply(await window.api.localDev.repair(), request)
   },
 
   openWorkspace: async () => {

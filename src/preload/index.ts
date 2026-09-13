@@ -47,7 +47,7 @@ import type {
 import { ENGINE_BINARY_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
-import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState } from '../shared/localDevState'
+import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } from '../shared/localDevState'
 import type { RemoteAgentMetadata, BundleVersionInfo } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import {
@@ -1211,6 +1211,7 @@ const api = {
   localDev: {
     developAgent: (agentId: string): Promise<{ agentId: string }> => ipcRenderer.invoke('localdev:develop-agent', agentId),
     getState: (): Promise<LocalDevState> => ipcRenderer.invoke('localdev:get-state'),
+    getManagedCli: (): Promise<ManagedLocalDevCli | null> => ipcRenderer.invoke('localdev:get-managed-cli'),
     /** Answer the per-host consent prompt. `false` is remembered too. */
     consent: (host: string, accepted: boolean): Promise<LocalDevState> =>
       ipcRenderer.invoke('localdev:consent', host, accepted),

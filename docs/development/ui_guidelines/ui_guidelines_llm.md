@@ -68,18 +68,21 @@ Build a new tab from `src/renderer/src/components/settings/SettingsLayout.tsx`, 
 |--------|-----------|
 | `SettingsSection` | `<section>` + uppercase muted title + optional section-wide `action`, wrapping `space-y-3` |
 | `SettingsCard` | One setting: `rounded-lg border bg-[var(--color-bg)] p-4` |
-| `SettingsRows` / `SettingsRow` | A card holding a list of like things, `divide-y` rather than gapped |
+| `SettingsRows` / `SettingsRow` | A card holding like rows, `divide-y`; `insetDividers` adds 16 px group insets and removes child horizontal padding. Features and Agents Runtime/Tasks use it; root lists retain full-width dividers |
 | `SettingsLabel` / `SettingsInfoTip` | A control's label, with its explanation behind the (?) beside it (`info` prop; tip named `About <label>`, and a non-string label must pass `infoLabel`) |
 | `SettingsToggleRow` | One line in a `SettingsRows` list: label, (?) tip and switch. `id` is required so the label names the switch |
 | `SettingsHint` | One line of live value under a label (a path, what a choice resolves to) — never standing prose |
 | `SettingsStatusRow` | A prerequisite as a dot + line + the one button that fixes it |
 | `SettingsButton` / `SettingsAddButton` / `SettingsIconButton` / `SettingsBadge` | Bordered secondary action, dashed Add, icon-only row action, tag |
 | `settingsInputClass` | The shared input/select shell |
+| `settingsDropdownRowClass` | Label left, compact select in the rightmost 33%; runtime credential, Open agents with and task concurrency |
+| `settingsControlRowClass` | Equal-width label/input columns; OpenCode Path |
 
 Rules the primitives exist to enforce:
 
-- **Name the sections after what the user came to change**, not after the data model: Agent Folders, Runtime, Developer Tools. Two or three per tab is normal; a tab needing seven is really two tabs.
-- **A fact lives in the section that holds the control which changes it.** The engine's status sits above the engine path, not in a separate Readiness card three rows up — the user reading "not running" is one keystroke from the field that decides *which* binary starts.
+- **Name the sections after what the user came to change**, not after the data model: Agent Folders, Runtime and Tasks under Agents; Developer Tools under Local Development. Two or three per tab is normal; a tab needing seven is really two tabs.
+- **A fact lives in the section that holds the control which changes it.** Developer Tools shows the resolved OpenCode version beside its path override; Agents Runtime keeps the selected-runtime status and retry beside its choice buttons.
+- **The default-runtime choice buttons keep their arrangement.** Compact selects use the right-hand column; they do not replace the runtime buttons. Agent Folders uses a compact secondary Add an agents folder beside Rescan.
 - **A section-wide verb (Rescan, Refresh) goes beside the section title**, as a labelled bordered button. It acts on everything in the section, so it belongs to the section, not to the first card; and a bare muted icon there is invisible until hovered (ux_rules rule 11).
 - **Explanation behind the (?), status below the control, nothing reserved for nothing.** What a setting is for goes in the `SettingsInfoTip` beside its label, not in a paragraph under it. Under the control there is either a one-line status that is filled in every state (`min-h-[1lh]` on the element that carries the text size and leading, so slot and line cannot drift; copy that fits one line at 800px) or a message rendered only when it exists, last in the card. An empty `min-h` slot in the healthy state is wrong bottom padding, not a reservation (ux_rules rules 1 and 12). Rows that are only a label, a (?) and a switch go in one `SettingsRows` list, one line each.
 - **`SettingsSection` and the Expandable Card Pattern compose.** A section whose content is a list of configurable items (AI Credentials, MCP Providers) puts expandable cards inside the section; the two are not alternatives.

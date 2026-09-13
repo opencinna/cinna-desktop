@@ -66,7 +66,11 @@ export function ExternalAgentPage(): React.JSX.Element {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {localDev.phase === 'ready' && canDevelopAgent(agent) && <button type="button" disabled={!!developing} onClick={() => void develop()} className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50"><Code2 size={13} />{developing === agent.id ? 'Preparing…' : 'Develop'}</button>}
-              <button type="button" onClick={() => setMode(mode === 'settings' ? 'chat' : 'settings')} className="flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--color-accent-hover)]">
+              <button type="button" onClick={() => setMode(mode === 'settings' ? 'chat' : 'settings')} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                mode === 'settings'
+                  ? 'border-transparent bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)]'
+                  : 'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+              }`}>
                 {mode === 'settings' ? <MessageSquare size={13} /> : <Settings size={13} />}{mode === 'settings' ? 'Start chat' : 'Settings'}
               </button>
               <ExternalAgentActionsMenu key={`${profile?.id}:${agent.id}`} agent={agent} onError={(message) => setDevelopmentError(message ? { id: agent.id, message } : null)} />

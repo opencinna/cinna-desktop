@@ -72,14 +72,14 @@ Renderer: AuthGate → auth:get-startup
 ### User Switch
 
 When switching users (via UserMenu or login), the activation cycle repeats:
-1. Previous user's adapters cleared, MCP connections disconnected
+1. Local-development state is cleared synchronously before any awaited reload; former setup work may drain but cannot publish readiness or start later account steps. Previous user's adapters are then cleared and MCP connections disconnected
 2. Default-scope providers reloaded (same set across profiles — see [Settings Scope](../settings_scope/settings_scope.md))
 3. Remote-agent sync starts for the new profile if it's a Cinna account
 4. All profile-scoped data queries (chats, remote agents) refetch for the new user's context
 
 ### Logout
 
-Logout activates the `__default__` (guest) user — the guest account is always considered authorized, so the gate stays open and guest providers load.
+Logout activates the `__default__` (guest) user — the guest account is always considered authorized, so the activation gate reopens after guest providers load. Local-development state is retired at activation start even though logout does not first call deactivation.
 
 ### Deactivation
 
@@ -104,6 +104,10 @@ Activation is not a cheap read: it clears every LLM adapter and disconnects ever
 - **The renderer asks for startup exactly once per session.** The startup request is made once and its result reused, so a component remount (including React StrictMode's dev-only double mount) cannot re-trigger activation. It is also deliberately excluded from cache-invalidation and refetch machinery — a login or user deletion resets query caches, and re-issuing the startup request from there would re-activate the session mid-flow
 - **Concurrent activation requests for the same user collapse onto one run.** Overlapping callers share a single activation rather than each performing a teardown-and-reload. Sequential activations still each run in full — that is what a user switch or a re-login needs
 - A consequence worth knowing when debugging: MCP connects are started but not awaited by activation, so activation completes while connections are still being established. The connection layer serializes per provider so a later activation cannot corrupt an in-flight connect — see [Connections](../../mcp/connections/connections.md)
+
+### Local-development ownership
+
+Every activation start, including local/default login and logout, clears the displayed workspace state and temporary checklist before provider loading awaits. Same-profile pending activation is deduplicated, so it does not clear twice. Only the winning Cinna activation starts reconciliation. Reconciliation serializes shared installs and guards queued requests, callbacks and account operations by generation; switching profile does not cancel an already running subprocess. See [Local Development](../../agents/local_dev/local_dev.md).
 
 ## Integration Points
 

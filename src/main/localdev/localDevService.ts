@@ -52,7 +52,7 @@
 
 import { homedir, hostname } from 'node:os'
 import { lstat, mkdir, readlink, stat, symlink, unlink } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { BrowserWindow, shell } from 'electron'
 import { userRepo } from '../db/users'
 import { appSettingsRepo } from '../db/appSettings'
@@ -433,17 +433,37 @@ let state: LocalDevState = { phase: 'idle' }
  * The reconcile whose progress reports are worth listening to, or `null`
  * between runs.
  *
- * Cleared when a run ends rather than only when the next one starts, because
- * the window that matters is *after* a failure: the toolchain installs
- * concurrently, so a run can return `attention` while a sibling download is
- * still going, and that survivor keeps reporting for as long as it takes to
- * finish. Left un-cleared, its next line would replace the failure the user is
- * looking at with a progress bar that nothing will ever complete.
+ * Cleared when a run ends or its profile is invalidated. Engine prefetch can
+ * outlive a failed reconcile, and an old profile's work drains before the next
+ * run starts. Neither may replace the current state with late progress.
  */
 let activeRun: number | null = null
 let runGeneration = 0
-/** One reconcile at a time; a second caller joins the run in flight. */
+let profileUserId: string | null = null
+let profileGeneration = 0
+/** The tail of the serialized queue, including a request waiting for an old profile. */
 let inFlight: Promise<LocalDevState> | null = null
+let inFlightProfileGeneration: number | null = null
+
+class SupersededReconcile extends Error {}
+
+function assertCurrentRun(generation: number): void {
+  if (activeRun !== generation) throw new SupersededReconcile()
+}
+
+function invalidateProfile(): void {
+  profileGeneration += 1
+  profileUserId = null
+  activeRun = null
+  tasks = []
+  setState({ phase: 'idle' })
+}
+
+function selectProfile(userId: string): void {
+  if (profileUserId === userId) return
+  if (profileUserId !== null) invalidateProfile()
+  profileUserId = userId
+}
 
 /** Last logged phase and percent decade, so progress ticks do not flood the log. */
 let lastLogged = { phase: '', decade: -1 }
@@ -687,9 +707,11 @@ async function createWorkspace(
   workspacePath: string,
   env: NodeJS.ProcessEnv,
   cinnaBin: string,
-  caps: CliCapabilities
+  caps: CliCapabilities,
+  generation: number
 ): Promise<LocalDevState | null> {
   const minted = await mintSetupCommand(userId, localDev)
+  assertCurrentRun(generation)
   if (!minted.ok) return minted.state
 
   setState({
@@ -717,7 +739,7 @@ async function createWorkspace(
     // loose end worth not having.
     cwd: dirname(workspacePath),
     onProgress: (line) => {
-      if (line.status !== 'start') return
+      if (generation !== activeRun || line.status !== 'start') return
       // cinna-cli's own `step n of m` — the only progress the desktop has for
       // this half, and it is real: each line is a step actually beginning.
       const within =
@@ -730,6 +752,7 @@ async function createWorkspace(
       })
     }
   })
+  assertCurrentRun(generation)
   if (outcome.exitCode !== EXIT_OK) return fromCliOutcome(outcome, 'Creating the workspace')
   return null
 }
@@ -740,7 +763,8 @@ async function refreshAccountToken(
   workspacePath: string,
   env: NodeJS.ProcessEnv,
   cinnaBin: string,
-  caps: CliCapabilities
+  caps: CliCapabilities,
+  generation: number
 ): Promise<LocalDevState | null> {
   if (!caps.accountSetToken) {
     // Nothing to fall back on: the top-level `cinna set-token` refreshes an
@@ -754,6 +778,7 @@ async function refreshAccountToken(
     }
   }
   const minted = await mintSetupCommand(userId, localDev)
+  assertCurrentRun(generation)
   if (!minted.ok) return minted.state
 
   setState({
@@ -768,6 +793,7 @@ async function refreshAccountToken(
     env,
     cwd: workspacePath
   })
+  assertCurrentRun(generation)
   if (outcome.exitCode !== EXIT_OK) return fromCliOutcome(outcome, 'Refreshing the account token')
   return null
 }
@@ -793,6 +819,16 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
   activeRun = generation
   try {
     return await reconcileOnce(userId, force, generation)
+  } catch (err) {
+    // A former profile may finish or fail, but can no longer publish a result.
+    if (activeRun !== generation || err instanceof SupersededReconcile) return state
+    logger.error('local dev reconcile threw', err)
+    setState({
+      phase: 'attention',
+      reason: 'workspace',
+      detail: err instanceof Error ? err.message : String(err)
+    })
+    return state
   } finally {
     // Only if nothing newer has claimed it: `reconcile` serializes runs, but a
     // future caller that does not must not have its generation retired here.
@@ -838,7 +874,9 @@ async function reconcileOnce(
   let localDev: CinnaLocalDev | undefined
   try {
     localDev = (await discoverCinnaEndpoints(user.cinnaServerUrl)).local_dev
+    assertCurrentRun(generation)
   } catch (err) {
+    assertCurrentRun(generation)
     setState({
       phase: 'attention',
       reason: 'network',
@@ -897,6 +935,7 @@ async function reconcileOnce(
     const result = reinstallToolchain
       ? await toolchain.repair(pins, onToolchainProgress)
       : await toolchain.ensure(pins, onToolchainProgress)
+    assertCurrentRun(generation)
     cliVersion = result.cliVersion
     // Whatever the individual reports said, the three tools are installed once
     // this returns — belt and braces for a toolchain path that skipped work
@@ -907,7 +946,9 @@ async function reconcileOnce(
     // when the behaviour surprises them.
     tasks = tasks.map((task) => (task.id === 'cinna-cli' ? { ...task, detail: cliVersion } : task))
     env = await toolchain.toolchainEnv(pins)
+    assertCurrentRun(generation)
   } catch (err) {
+    assertCurrentRun(generation)
     const failure =
       err instanceof ToolchainError
         ? fromToolchainError(err)
@@ -929,6 +970,7 @@ async function reconcileOnce(
   // server may pin a cinna-cli older than the protocol this app prefers, and
   // handing that one `--json` fails it before it does anything.
   const caps = await probeCliCapabilities(cinnaBin, cliVersion, env)
+  assertCurrentRun(generation)
 
   // The agents home has to exist before its `Cloud/` can, and on macOS creating
   // it for the first time raises the Documents-folder prompt. `prepare` takes
@@ -937,6 +979,7 @@ async function reconcileOnce(
   // `workspacePathFor` would reach `ensureHome` and be refused for want of an
   // explanation the user has already read.
   const home = await agentsHomeService.prepare(userId)
+  assertCurrentRun(generation)
   if (home.access !== 'ready') {
     // `guarded` rather than the platform, and rather than assuming a refusal is
     // always TCC: a read-only or root-owned folder fails the same way on Linux,
@@ -958,7 +1001,9 @@ async function reconcileOnce(
   // first time a server needs one.
   try {
     await mkdir(dirname(workspacePath), { recursive: true })
+    assertCurrentRun(generation)
   } catch (err) {
+    assertCurrentRun(generation)
     const detail = `Could not create the agents folder: ${err instanceof Error ? err.message : String(err)}`
     // Through `markFailed` rather than straight to `setState`, like every other
     // stopping failure: it puts the reason on the workspace row and takes the
@@ -969,9 +1014,12 @@ async function reconcileOnce(
     return state
   }
 
-  if (!(await isFile(accountConfigPath(workspacePath)))) {
+  const hasAccount = await isFile(accountConfigPath(workspacePath))
+  assertCurrentRun(generation)
+  if (!hasAccount) {
     markActive('workspace', 'Creating…', 0)
-    const failure = await createWorkspace(userId, localDev, workspacePath, env, cinnaBin, caps)
+    const failure = await createWorkspace(userId, localDev, workspacePath, env, cinnaBin, caps, generation)
+    assertCurrentRun(generation)
     if (failure) {
       markFailed(failure.phase === 'attention' ? failure.detail : 'Failed.')
       setState(failure)
@@ -987,6 +1035,7 @@ async function reconcileOnce(
     percent: overall(WORKSPACE_TO)
   })
   let status = await readAccountStatus(workspacePath, env, cinnaBin, caps)
+  assertCurrentRun(generation)
   if (status.exitCode !== EXIT_OK) {
     const failure = fromCliOutcome(status, 'Reading the workspace')
     markFailed(failure.phase === 'attention' ? failure.detail : 'Failed.')
@@ -1002,14 +1051,17 @@ async function reconcileOnce(
       workspacePath,
       env,
       cinnaBin,
-      caps
+      caps,
+      generation
     )
+    assertCurrentRun(generation)
     if (failure) {
       markFailed(failure.phase === 'attention' ? failure.detail : 'Failed.')
       setState(failure)
       return state
     }
     status = await readAccountStatus(workspacePath, env, cinnaBin, caps)
+    assertCurrentRun(generation)
     if (status.exitCode !== EXIT_OK) {
       const readFailure = fromCliOutcome(status, 'Reading the workspace')
       markFailed(readFailure.phase === 'attention' ? readFailure.detail : 'Failed.')
@@ -1041,6 +1093,7 @@ async function reconcileOnce(
       cwd: workspacePath,
       timeoutMs: 5 * 60_000
     })
+    assertCurrentRun(generation)
     if (refreshed.exitCode !== EXIT_OK) {
       logger.warn('context package refresh failed', { exitCode: refreshed.exitCode })
     }
@@ -1050,6 +1103,7 @@ async function reconcileOnce(
   // for it. It has usually finished long before this line; when it has not, the
   // engine row is the only one still moving and the bar says so.
   await engine
+  assertCurrentRun(generation)
 
   markAllDone('Valid')
   setState({
@@ -1085,36 +1139,39 @@ export const localDevService = {
   /**
    * Bring local development to its target state for `userId`.
    *
-   * Concurrent calls collapse onto the run already in flight — activation,
-   * an OS resume and a Repair click can easily land together, and two
+   * Concurrent calls for the same profile join the run already in flight —
+   * activation, an OS resume and a Repair click can easily land together. A
+   * different profile invalidates the old run and waits for it to drain: two
    * simultaneous `uv tool install`s into the same directory is not a race worth
    * having. `force` re-runs the installs and overrides a remembered decline;
    * it is what Repair and "Set up" pass.
    *
-   * A `force` call that lands while an ordinary run is already going joins that
+   * A `force` call while an ordinary run for the same profile is going joins that
    * run rather than starting a second one. That is deliberate: the case is a
    * user pressing Repair during a long download, and finishing the download is
    * what they want — restarting it would throw away the bytes already on disk
    * and look identical from the outside.
    */
   async reconcile(userId: string, force = false): Promise<LocalDevState> {
-    if (inFlight) return inFlight
-    const run = runReconcile(userId, force)
-      .catch((err) => {
-        // A throw here is a bug, not a condition — but the user still needs a
-        // state they can act on rather than a spinner that never resolves.
-        logger.error('local dev reconcile threw', err)
-        setState({
-          phase: 'attention',
-          reason: 'workspace',
-          detail: err instanceof Error ? err.message : String(err)
-        })
-        return state
+    selectProfile(userId)
+    const profile = profileGeneration
+    if (inFlight && inFlightProfileGeneration === profile) return inFlight
+    const previous = inFlight
+    const run = Promise.resolve(previous)
+      .then(() => {
+        // Capture before waiting: B queued behind A must not revive after C
+        // or sign-out has superseded it. Downloads already running drain first.
+        if (profileGeneration !== profile || profileUserId !== userId) return state
+        return runReconcile(userId, force)
       })
       .finally(() => {
-        if (inFlight === run) inFlight = null
+        if (inFlight === run) {
+          inFlight = null
+          inFlightProfileGeneration = null
+        }
       })
     inFlight = run
+    inFlightProfileGeneration = profile
     return run
   },
 
@@ -1132,7 +1189,10 @@ export const localDevService = {
   async setConsent(userId: string, host: string, accepted: boolean): Promise<LocalDevState> {
     writeConsent({ ...readConsent(), [host]: accepted })
     logger.info('local dev consent recorded', { host, accepted })
+    selectProfile(userId)
+    const profile = profileGeneration
     if (inFlight) await inFlight.catch(() => undefined)
+    if (profileGeneration !== profile || profileUserId !== userId) return state
     return this.reconcile(userId)
   },
 
@@ -1167,14 +1227,15 @@ export const localDevService = {
    * kind of surprise that costs an afternoon. Everything the desktop spawns
    * uses `toolchainEnv()` and is unaffected by this either way.
    *
-   * An existing link that already points into the managed toolchain is
+   * An existing link that already points to the managed launcher is
    * refreshed — that is a version bump, and repointing it is the whole job. Any
    * other file at that path is left strictly alone and reported: it is
    * someone's real install.
    */
   async addToPath(): Promise<{ ok: boolean; path?: string; reason?: string }> {
-    if (state.phase !== 'ready') return { ok: false, reason: 'Local development is not ready yet.' }
-    const source = state.cinnaBinPath
+    const installed = await toolchain.installedCli()
+    if (!installed) return { ok: false, reason: 'The managed cinna-cli is not installed yet.' }
+    const source = installed.path
     const targetDir = join(homedir(), '.local', 'bin')
     const target = join(targetDir, 'cinna')
     try {
@@ -1183,7 +1244,7 @@ export const localDevService = {
       if (existing) {
         const managed =
           existing.isSymbolicLink() &&
-          (await readlink(target).catch(() => '')).startsWith(toolchain.root())
+          resolve(targetDir, await readlink(target)) === resolve(toolchain.root(), 'bin', 'cinna')
         if (!managed) {
           return {
             ok: false,
@@ -1202,6 +1263,6 @@ export const localDevService = {
 
   /** Reset to `idle` on sign-out / profile switch, so no stale host is shown. */
   clear(): void {
-    setState({ phase: 'idle' })
+    invalidateProfile()
   }
 }

@@ -49,6 +49,8 @@ Within one rendering opportunity the browser runs: scroll steps → `requestAnim
 
 ## CSS
 
+`src/renderer/src/components/chat/MessageStream.tsx` applies both `maskImage` and `WebkitMaskImage` directly to the scrolling transcript: a vertical alpha gradient from transparent at 0 to opaque at 10 px. There is no top blur overlay. Masking removes text at the clipped edge without adding layout height or changing `useStickToBottom`; the existing composer measurement, bottom padding and bottom composer blur remain separate.
+
 Both rules live in `@layer base` in `src/renderer/src/assets/main.css`:
 
 - `::-webkit-scrollbar` now declares `height: 6px` alongside `width: 6px`. `height` is the horizontal bar's thickness; styling this pseudo-element at all opts Chrome out of overlay scrollbars, so an *unstyled* horizontal bar claimed Chrome's default 15px of layout. This rule is global — every scroller in the app, not only the transcript.

@@ -91,9 +91,18 @@ export function SettingsCard({
  * than spaced: the divider is what says "these are the same kind of thing",
  * where a gap says "these are unrelated".
  */
-export function SettingsRows({ children }: { children: ReactNode }): React.JSX.Element {
+export function SettingsRows({
+  children,
+  insetDividers = false
+}: {
+  children: ReactNode
+  /** Align dividers with the row content inside a group of related settings. */
+  insetDividers?: boolean
+}): React.JSX.Element {
   return (
-    <div className="divide-y divide-[var(--color-border)] overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
+    <div className={`divide-y divide-[var(--color-border)] overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] ${
+      insetDividers ? 'px-4 [&>*]:px-0' : ''
+    }`}>
       {children}
     </div>
   )
@@ -398,6 +407,14 @@ export function SettingsBadge({
     </span>
   )
 }
+
+/** Keep labels on the left and controls aligned in a right-hand column. */
+export const settingsControlRowClass =
+  'grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-4 [&>*]:min-w-0'
+
+/** Compact selectors occupy the rightmost third of a settings row. */
+export const settingsDropdownRowClass =
+  'grid grid-cols-[minmax(0,1fr)_33%] items-center gap-4 [&>*]:min-w-0'
 
 /** The shared text-input shell — same metrics as every other settings input. */
 export const settingsInputClass =

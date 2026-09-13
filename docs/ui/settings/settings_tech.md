@@ -21,9 +21,13 @@
 - `src/renderer/src/components/settings/UserAccountsSection.tsx` — User accounts list with expandable cards per user
 - `src/renderer/src/components/settings/FeaturesSettingsSection.tsx` — Feature toggles in two titled sections (AI Functions, Interface), each one `SettingsRows` list of `SettingsToggleRow`s. Reset hints is a row of its own under Show hints, present only while hints are on. A failed settings read is said once, as the last row of the last list: every switch reads the same query, and a copy under each label moved every switch down when it arrived. Save errors use `unwrapIpcError` and a final `role="alert"` row; `Unknown app setting:` gets restart guidance, other failures retain their reason. The Interface list includes `showAgentSidebarSections` (default on). See [Auto Chat Titles](../../chat/auto_titles/auto_titles.md)
 - `src/renderer/src/components/settings/DevelopmentSettingsSection.tsx` — Two sections: **About** (repository and website links) and **Testing**, one `SettingsToggleRow` that arms force-onboarding (`isForceOnboardingArmed` / `setForceOnboarding` in `constants/onboarding`, localStorage-backed — not an `app_settings` key)
-- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — Agent Folders, Runtime and Developer Tools; see [Agents Tab](../../agents/local_agents/agents_tab.md)
+- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — Agent Folders, Runtime and Tasks; see [Agents Tab](../../agents/local_agents/agents_tab.md)
 - `src/renderer/src/components/settings/RootRepositoryDialog.tsx` — The Repository dialog opened from an Agent Folders row: remote, branches, head commit, Check and Update; see [Agents Folder Updates](../../agents/local_agents/folder_updates.md)
-- `src/renderer/src/components/settings/LocalDevSettingsSection.tsx` — Every phase of `LocalDevState`, with Set up / Repair / Add to PATH / Reset consent; see [Local Development](../../agents/local_dev/local_dev.md)
+- `src/renderer/src/components/settings/LocalDevSettingsSection.tsx` — Shared managed CLI readout and Add to PATH; see [Local Development](../../agents/local_dev/local_dev.md)
+- `src/renderer/src/components/settings/ProfileLocalDevSettingsSection.tsx` — Every account phase, workspace setup/repair/opening and shared server consent; keyed by account ID
+- `src/renderer/src/components/settings/DeveloperToolsSettingsSection.tsx` — Global tools table, resolved engine OpenCode row, contract version and `OpenCodeSettingsFields`
+- `src/renderer/src/components/settings/OpenCodeSettingsFields.tsx` — Installation-wide executable override; independent dirty/empty draft, inline failure, Escape discard
+- `src/renderer/src/components/settings/TaskConcurrencySetting.tsx` — Default → Agents → Tasks row; device-wide admission limit
 - `src/renderer/src/components/settings/ProfileChatModesSection.tsx` — Account-provisioned chat modes (Profile scope), off the same `useChatModes` hook as the Default tab
 - `src/renderer/src/components/settings/ProfileLLMSection.tsx` — Account-provisioned (managed) providers (Profile scope)
 - `src/renderer/src/components/settings/CatalogSettingsSection.tsx` — Bundle catalog install/uninstall; see [Bundles Catalog](../../agents/bundles_catalog/bundles_catalog.md)
@@ -50,8 +54,8 @@
 - `src/renderer/src/hooks/useAppSettings.ts` — React Query hooks for the `app_settings` KV store (`useAppSettings` read, `useSetAppSetting` write with optimistic update + rollback)
 - `src/renderer/src/hooks/useLocalAgents.ts` — Roots and folder agents: list, rescan, add/remove root, restore hidden, and the git status/check/update hooks
 - `src/renderer/src/hooks/useLocalTools.ts` — Detected assistants and editors, the default-tool value and `openIn`
-- `src/renderer/src/hooks/useEngine.ts` — Engine state, start and stop
-- `src/renderer/src/hooks/useLocalDev.ts` — `LocalDevState` for the Local Development tab (main owns the reconciler; the tab renders state and never derives it)
+- `src/renderer/src/hooks/useEngine.ts` — Read-only engine binary state and explicit resolution/retry
+- `src/renderer/src/hooks/useLocalDev.ts` — Main-owned `LocalDevState`, the independent `managed-local-dev-cli` query refetched on phase changes, and PATH mutation with rejected IPC errors converted to inline refusals
 - `src/renderer/src/hooks/useCatalog.ts` — Bundle catalog listing and install/uninstall
 - `src/renderer/src/hooks/useSync.ts` — Cloud Sync state and device pairing
 
@@ -62,13 +66,13 @@
 | State | Type | Default | Purpose |
 |-------|------|---------|---------|
 | `activeView` | `ActiveView` (see UI store) | `'chat'` | Controls sidebar mode and main content |
-| `settingsTab` | `SettingsMenu` (14 members — see `ui.store.ts`) | `'chats'` | Active settings section |
+| `settingsTab` | `SettingsMenu` (15 members — see `ui.store.ts`) | `'chats'` | Active settings section |
 
-`SettingsMenu` is the single source of truth for the tab ids; `sectionTitles` in `SettingsPage.tsx` must give every member a title, or the `sectionTitles[settingsTab]` lookup fails to compile. `PROFILE_SCOPE_TABS` lists the five profile-scope members and drives the sidebar's stale-tab guard.
+`SettingsMenu` is the single source of truth for the tab ids; `sectionTitles` in `SettingsPage.tsx` must give every member a title, or the `sectionTitles[settingsTab]` lookup fails to compile. `PROFILE_SCOPE_TABS` lists the six profile-scope members and drives the sidebar's stale-tab guard.
 
 ### Section Reset on Tab Switch
 
-Each section is rendered with a `key` prop matching the tab ID. Switching tabs unmounts the previous section, destroying all local `useState` (open forms, expanded cards, partial input).
+Each section is keyed by tab ID, except Profile Local Development, which uses the active account ID and therefore also resets on account changes. Switching tabs unmounts the previous section, destroying all local `useState` (open forms, expanded cards, partial input).
 
 ## Renderer Components
 
@@ -89,6 +93,7 @@ Two static arrays, rendered under their group headers by the shared `renderMenuB
 `profileMenuItems` (rendered only when `showProfileGroup = isCinnaUser && !!profileLabel`):
 - `{ id: 'profile-chats', label: 'Chats', icon: MessageSquare }`
 - `{ id: 'profile-agents', label: 'Agents', icon: Waypoints }`
+- `{ id: 'profile-local-dev', label: 'Local Development', icon: TerminalSquare }`
 - `{ id: 'profile-llm', label: 'AI Credentials', icon: Sparkles }`
 - `{ id: 'profile-catalog', label: 'Catalog', icon: Package }`
 - `{ id: 'profile-sync', label: 'Cloud Sync', icon: Cloud }`
@@ -99,7 +104,7 @@ Active item highlighted with `app-nav-active`. Back button calls `setActiveView(
 
 ### SettingsPage (`SettingsPage.tsx`)
 
-Thin shell — looks the title up in `sectionTitles`, then conditionally renders one of the fourteen section components (`LocalAgentsSettingsSection` renders Default Agents; `AgentsSettingsSection` renders Profile Agents only). Each is given a `key` equal to its tab id, which is what makes a tab switch a remount.
+Thin shell — looks the title up in `sectionTitles`, then conditionally renders one of the fifteen section components (`LocalAgentsSettingsSection` renders Default Agents; `AgentsSettingsSection` renders Profile Agents only). Tab switches remount their sections; Profile Local Development also remounts when the account ID changes.
 
 ### LLMSettingsSection (`LLMSettingsSection.tsx`)
 
@@ -116,6 +121,12 @@ Thin shell — looks the title up in `sectionTitles`, then conditionally renders
 
 `src/renderer/src/components/agents/ExternalAgentPage.tsx` owns the page's Overview/Connection tab and shared chat/settings mode. A2A/Cinna uses `AgentCard connectionOnly` for visible structured fields, authentication and connection testing. ACP and Managed agents use Configure to open their existing dialogs. Agent-wide disable/delete/uninstall actions belong to `ExternalAgentActionsMenu` in the page header. This page mode is independent of `settingsTab`; hiding its composer preserves the draft while app-settings tab changes unmount their previous section. See [Shared chat workspace](../app_shell/app_shell_tech.md#shared-chat-workspace).
 
+### Grouped rows and control placement
+
+`SettingsRows insetDividers` adds 16 px horizontal group padding and removes child horizontal padding, aligning row dividers with their content. Features AI Functions/Interface and Agents Runtime/Tasks use it; root lists retain their existing full-width dividers. `settingsDropdownRowClass` puts compact selectors in the rightmost 33% column; `settingsControlRowClass` divides label and text input evenly. These are layout primitives, not new persistence behavior.
+
+Default → Agents keeps default-runtime choice buttons and the selected-runtime status arrangement. Credential and Open agents with selectors occupy the right column in subsequent Runtime rows, with the auto-open checkbox below its selector. Task concurrency has its own Tasks section. Add an agents folder is a compact secondary button beside Rescan in the Agent Folders heading. Shared `SettingsButton` styling also governs Repair, Reset consent and Add to PATH.
+
 ## Database Schema
 
 The section preference adds an installation-wide `app_settings` key, not a profile column or new table. `src/shared/appSettings.ts` types `showAgentSidebarSections`; `src/main/db/appSettings.ts` supplies `true` for missing values. Existing agent repositories/configuration own saved connections and visibility overrides; see [Agents](../../agents/agents/agents_tech.md).
@@ -126,7 +137,7 @@ The section preference adds an installation-wide `app_settings` key, not a profi
 
 ## Security
 
-Connection fields reuse existing typed preload APIs. The A2A modal accepts a token for main-process storage; saved secret values are not loaded into its fields. Cinna rows retain profile-scoped ownership and expose visibility controls only for server-provided agents. Agent-page connection tooltips display only host, auth method/presence and credential names; see [Routing details](../../chat/chat_routing/chat_routing_tech.md#connection-detail-lookup).
+Local Development placement does not change consent storage: `localDevConsent` remains installation-wide JSON keyed by server host. `localdev:get-managed-cli` is an ungated read-only path/version probe; account actions and Add to PATH still require activation. Account state/action reply ownership is enforced by the [local-development lifecycle](../../agents/local_dev/local_dev_tech.md#services--key-methods). Connection fields reuse existing typed preload APIs. The A2A modal accepts a token for main-process storage; saved secret values are not loaded into its fields. Cinna rows retain profile-scoped ownership and expose visibility controls only for server-provided agents. Agent-page connection tooltips display only host, auth method/presence and credential names; see [Routing details](../../chat/chat_routing/chat_routing_tech.md#connection-detail-lookup).
 
 ## IPC Channels
 

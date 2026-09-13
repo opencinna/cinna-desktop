@@ -235,7 +235,7 @@ That precision is written down because losing it broke agents in a way nothing r
 
 ### Binary resolution, and what "verified" means
 
-Three sources, in order: a configured path, the login-shell PATH, the pinned download.
+Three sources, in order: a configured path, the login-shell PATH, the pinned download. Set or clear the override in **Default → Local Development → Developer Tools → OpenCode Path**. The table above it reports the engine resolver's actual version and path; opening the page only reads that state. Runtime choice and a failed-runtime retry remain under Default → Agents → Runtime.
 
 > The staging, verifying and atomic publishing described below lives in `src/main/managed/managedAsset.ts` and is shared with the [local-development toolchain](../local_dev/local_dev.md), which installs uv and Mutagen the same way. `binaryResolver.ts` keeps what is genuinely about the engine: the pin table, the three sources and their precedence, and the `--version` probe. `EngineBinaryError` widens the shared `ManagedAssetError` codes with its two "your configured path is wrong" cases.
 
@@ -419,7 +419,7 @@ Carried honestly rather than implied as passing.
 
 ```
 Agent page → Settings → “Runs with” panel        Settings → Agents
-  credential + model pickers,           Runtime status line + OpenCode path
+  credential + model pickers,           Runtime status line; OpenCode path under Local Development
   engine row (binary, not process)      Try again on `failed`
         │                                       │
         ▼                                       ▼

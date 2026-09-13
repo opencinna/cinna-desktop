@@ -242,9 +242,11 @@ export function LocalAgentPage(): React.JSX.Element {
                 setMode(mode === 'settings' ? 'chat' : 'settings')
               }}
               title={mode === 'settings' ? `Start a new chat with ${agent.name}` : 'Agent settings'}
-              className="flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5
-                text-xs font-medium text-white
-                hover:bg-[var(--color-accent-hover)] transition-colors"
+              className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                mode === 'settings'
+                  ? 'border-transparent bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)]'
+                  : 'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+              }`}
             >
               {mode === 'settings' ? <MessageSquare size={12} /> : <Settings size={12} />}
               {mode === 'settings' ? 'Start chat' : 'Settings'}

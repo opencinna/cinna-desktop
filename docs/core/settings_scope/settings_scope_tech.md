@@ -68,6 +68,12 @@ All other tables (`llm_providers`, `mcp_providers`, `chat_modes`, `agents`, `cha
 - `AgentsSettingsSection` (`src/renderer/src/components/settings/AgentsSettingsSection.tsx`) — lists only profile-owned Cinna agents, with visibility controls, sync and reauthentication. Direct connections use the Agents sidebar and `ExternalAgentPage`.
 - `AgentCard` (`src/renderer/src/components/settings/AgentCard.tsx`) — structured connection fields, authentication and testing for A2A pages; header actions live in `ExternalAgentActionsMenu`.
 
+### Local Development ownership
+
+`SettingsMenu` and `PROFILE_SCOPE_TABS` include `profile-local-dev`; `Sidebar` exposes it only for the Cinna profile group. `SettingsPage` routes that tab to `ProfileLocalDevSettingsSection`, keyed by active account ID. Default `local-dev` routes to `LocalDevSettingsSection` for shared managed tools, Developer Tools and the OpenCode override.
+
+`src/shared/localDevState.ts` keeps `ManagedLocalDevCli` separate from active-profile `LocalDevState`. `localdev:get-managed-cli` is read-only and ungated; `localdev:add-to-path` requires activation but not workspace readiness. The existing `localDevConsent` app-setting JSON remains installation-wide and keyed by host, including declines; no table or migration makes it per-user. Every activation clears local-dev state synchronously; queued reconciles and renderer replies retain profile/generation ownership. See [Local Development technical details](../../agents/local_dev/local_dev_tech.md).
+
 ## Configuration
 
 `showAgentSidebarSections` is installation-wide (`src/shared/appSettings.ts`, `src/main/db/appSettings.ts`), defaults to true, and is independent of profile resource ownership. No new environment variables.

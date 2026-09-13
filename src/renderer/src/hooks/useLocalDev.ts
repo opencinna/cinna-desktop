@@ -1,4 +1,6 @@
 import { useEffect } from 'react'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { unwrapIpcError } from '../utils/ipcError'
 import { useLocalDevStore } from '../stores/localDev.store'
 import type { LocalDevState } from '../../../shared/localDevState'
 
@@ -19,4 +21,31 @@ export function useLocalDev(): LocalDevState {
     void subscribe()
   }, [subscribe])
   return state
+}
+
+/** Shared desktop installation; profile transitions can finish or replace its setup. */
+export function useManagedLocalDevCli() {
+  const { phase } = useLocalDev()
+  const query = useQuery({
+    queryKey: ['managed-local-dev-cli'],
+    queryFn: () => window.api.localDev.getManagedCli()
+  })
+  const { refetch } = query
+  useEffect(() => {
+    void refetch()
+  }, [phase, refetch])
+  return query
+}
+
+/** Turn IPC failures into the same inline refusal as a conflicting PATH entry. */
+export function useAddManagedCliToPath() {
+  return useMutation({
+    mutationFn: async (): Promise<{ ok: boolean; path?: string; reason?: string }> => {
+      try {
+        return await window.api.localDev.addToPath()
+      } catch (error) {
+        return { ok: false, reason: unwrapIpcError(error, 'The link could not be created.') }
+      }
+    }
+  })
 }

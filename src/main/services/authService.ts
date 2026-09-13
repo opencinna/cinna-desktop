@@ -334,8 +334,11 @@ export const authService = {
     // A dead session is the usual reason the account token in the cinna-cli
     // workspace went stale too — the reconciler mints its setup tokens with
     // this bearer. Non-blocking: re-auth has already succeeded and must not
-    // report a failure because a toolchain check did.
-    void localDevService.reconcile(userId)
+    // report a failure because a toolchain check did. OAuth may have outlived
+    // a profile switch: save its tokens above, but do not reactivate its setup.
+    if (userActivation.isActivated() && getCurrentUserId() === userId) {
+      void localDevService.reconcile(userId)
+    }
 
     const refreshed = userRepo.get(userId)
     if (!refreshed) throw new Error('User disappeared after reauth')

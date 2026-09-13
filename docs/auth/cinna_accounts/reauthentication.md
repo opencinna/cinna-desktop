@@ -55,6 +55,8 @@ When a Cinna account's stored OAuth tokens become unusable — token replay dete
 
 ## Business Rules
 
+- A browser authorization can finish after switching profiles. Valid matching tokens are still saved to the reauthenticated account, but local-development reconciliation starts only if that account is still current and activated. Re-authentication never reactivates an earlier account's workspace or turns a successful token refresh into a toolchain failure. See [Local Development](../../agents/local_dev/local_dev.md).
+
 - Re-auth always operates on the **active profile** (`getProfileScopeUserId()`) resolved main-side. The renderer never supplies a userId — closes the confused-deputy gap where a renderer bug could target a non-active account
 - The flow is only available for users where `type === 'cinna_user'` and `cinnaServerUrl` is non-null. Non-Cinna users see no entry
 - The OAuth round-trip uses the user's **stored** `cinnaServerUrl` — the server URL is not user-editable at re-auth time; switching servers requires creating a new account

@@ -69,7 +69,7 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   return (
     <div className="space-y-6">
       <SettingsSection title="AI Functions">
-        <SettingsRows>
+        <SettingsRows insetDividers>
           <SettingsToggleRow
             id="feature-auto-chat-titles"
             label="Auto-generate chat titles"
@@ -100,7 +100,7 @@ export function FeaturesSettingsSection(): React.JSX.Element {
       </SettingsSection>
 
       <SettingsSection title="Interface">
-        <SettingsRows>
+        <SettingsRows insetDividers>
           <SettingsToggleRow
             id="feature-enable-tray-icon"
             label="Enable Tray Icon"

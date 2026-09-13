@@ -54,6 +54,7 @@ The optional manifest handback note is authorized in the ACP driver only for an 
 
 - runtimeBudget defaults maxRounds=20, maxMinutes=60; rounds must be safe integers 1–1000, minutes finite and greater than zero up to 1440. Explicit maxTokens is validated structurally but rejected by start/drive before participant dispatch: no supported path currently reports complete task usage. Do not expose it as an enforced limit.
 - Time starts before task-slot acquisition, so queue contention counts. Timer cancellation reaches the active handle. Settled human waits stop the timer and preserve elapsed usage; live agent reply parks remain within the running turn’s time limit; a resumed segment starts from that usage. Unclean recovery of a running interval conservatively includes downtime. A queued checkpoint without activeStartedAt has no recoverable start instant for that interval.
+- `TaskConcurrencySetting` is a `SettingsRow` inside Default → Agents → Tasks, with the selector in the rightmost third and read/save errors below it. Its separate section does not change admission scope.
 - app_settings.taskRunnerConcurrency defaults to 2, validates integer 1–8 and is device-wide. Separate FIFO task and runner-agent queues read the limit when admitting waiters. Each agent also has a one-slot queue; ACP withQueuedLock atomically waits for its existing editor/turn lock. Waiting is abortable. Ordinary sends retain their existing lock/refusal behavior; this is not a global cap on every chat.
 
 ## Security

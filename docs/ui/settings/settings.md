@@ -7,9 +7,9 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 ## Core Concepts
 
 - **Settings View** — A dedicated app view (`activeView: 'settings'`) that replaces the chat interface
-- **Settings Tab** — A sub-section within settings, selected from the sidebar menu. The union is `SettingsMenu` in `ui.store.ts`, and `sectionTitles` in `SettingsPage.tsx` gives every member a title; the two are kept in step by hand, so a tab added to one and not the other is a compile error on the title lookup. Fourteen members: `'chats' | 'llm' | 'mcp' | 'local-agents' | 'local-dev' | 'accounts' | 'features' | 'development' | 'profile-agents' | 'profile-chats' | 'profile-llm' | 'profile-catalog' | 'profile-sync' | 'trash'`
+- **Settings Tab** — A sub-section within settings, selected from the sidebar menu. The union is `SettingsMenu` in `ui.store.ts`, and `sectionTitles` in `SettingsPage.tsx` gives every member a title; the two are kept in step by hand, so a tab added to one and not the other is a compile error on the title lookup. Fifteen members: `'chats' | 'llm' | 'mcp' | 'local-agents' | 'local-dev' | 'accounts' | 'features' | 'development' | 'profile-agents' | 'profile-local-dev' | 'profile-chats' | 'profile-llm' | 'profile-catalog' | 'profile-sync' | 'trash'`
 - **Default Group** — Sidebar section labeled "Default" containing the machine-local settings, in menu order: Chats, Agents, Local Development, AI Credentials, MCP Providers, User Accounts, Features, Development. Always visible. "Machine-local" is the rule that puts the agent folders/runtime tab here rather than in the Profile group — the agents home follows the machine, not whoever is signed in.
-- **Profile Group** — Sidebar section labeled "Profile {displayName}" containing profile-bound settings, in menu order: Chats, Agents, AI Credentials, Catalog, Cloud Sync. Only rendered when the active profile has profile-scope content (`showProfileGroup = isCinnaUser && !!profileLabel` in `Sidebar.tsx`), so today: Cinna users only. Cinna re-authentication is not a standalone menu item — it lives on the account's card in Settings → User Accounts.
+- **Profile Group** — Sidebar section labeled "Profile {displayName}" containing profile-bound settings, in menu order: Chats, Agents, Local Development, AI Credentials, Catalog, Cloud Sync. Only rendered when the active profile has profile-scope content (`showProfileGroup = isCinnaUser && !!profileLabel` in `Sidebar.tsx`), so today: Cinna users only. Cinna re-authentication is not a standalone menu item — it lives on the account's card in Settings → User Accounts.
 - **Sidebar Menu Mode** — When settings are active, the sidebar replaces the chat list with the two-group vertical settings menu plus a footer "Trash" entry.
 
 > **UI naming note:** The settings section for LLM providers (the `'llm'` / `'profile-llm'` tab) is labeled **"AI Credentials"** in the UI — in the sidebar menu item, the page title, and the "Add AI Credentials" button. "LLM Provider" is the canonical/technical name used in code (`useProviders`, `LLMProviderCard`, the `providers` store) and throughout these docs; "AI Credentials" is just the friendlier user-facing label (matching CinnaCore). They are the same thing. The sidebar menu item itself reads **AI Credentials** in both groups; "LLM Providers" survives only in code and in the technical docs.
@@ -20,7 +20,7 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 
 1. User clicks the avatar in the sidebar footer to open the profile dropdown
 2. User clicks the "Settings" entry in the dropdown
-3. Sidebar transforms: chat list replaced by settings menu with "Back" button, a "Default" header followed by the machine-local menu items (Chats, Agents, Local Development, AI Credentials, MCP Providers, User Accounts, Features, Development), and — for Cinna users — a "Profile {name}" header followed by the profile-bound items (Chats, Agents, AI Credentials, Catalog, Cloud Sync). A separator + "Trash" entry sits at the bottom.
+3. Sidebar transforms: chat list replaced by settings menu with "Back" button, a "Default" header followed by the machine-local menu items (Chats, Agents, Local Development, AI Credentials, MCP Providers, User Accounts, Features, Development), and — for Cinna users — a "Profile {name}" header followed by the profile-bound items (Chats, Agents, Local Development, AI Credentials, Catalog, Cloud Sync). A separator + "Trash" entry sits at the bottom.
 4. Main content area shows the active settings section (Chat Modes by default)
 
 ### Navigating Between Sections
@@ -37,7 +37,7 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 
 ### Choosing the correct Agents settings
 
-1. **Default → Agents** manages the machine's registered folders, runtime defaults and developer tools; its internal tab id remains `local-agents`.
+1. **Default → Agents** manages the machine's registered folders, runtime defaults and task concurrency; its internal tab id remains `local-agents`.
 2. **Profile → Agents** manages only agents supplied by the active Cinna server. It groups them under that server's host, includes hidden agents, offers Enable/Disable and Sync, and exposes Settings for enabled rows. Sync/reauthentication failures and visibility-write errors stay visible beside the relevant controls.
 3. **Agents sidebar → Add an agent → A2A Agent** opens a modal for a direct connection. Enter a card URL and optional access token, optionally Test Connection, then Save Agent. Creation stays open on failure and closes only after successful save. Direct A2A, ACP and Managed connections are configured from their own agent page's **Settings** action; there is no separate Default Remote agents tab.
 
@@ -49,7 +49,15 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 
 ## Autonomous task concurrency
 
-Default → Agents → Runtime exposes **Autonomous task concurrency**, a device-wide integer from one to eight, default two. It limits separate autonomous-task and runner-agent admission queues; it does not cap all ordinary chat turns. Busy local agents wait cancelably for their lock. The control uses the existing app-settings read/write path and disables while loading or saving. Its explanation is behind the (?) beside its label. A read or save failure is rendered under the select only while one exists. See [autonomous configuration](../../jobs/tasks/autonomous_tasks_tech.md#configuration).
+Default → Agents → Tasks exposes **Autonomous task concurrency**, a device-wide integer from one to eight, default two. It limits separate autonomous-task and runner-agent admission queues; it does not cap all ordinary chat turns. Busy local agents wait cancelably for their lock. The control uses the existing app-settings read/write path and disables while loading or saving. Its explanation is behind the (?) beside its label. A read or save failure is rendered under the select only while one exists. See [autonomous configuration](../../jobs/tasks/autonomous_tasks_tech.md#configuration).
+
+## Local Development scopes
+
+- **Default → Local Development** shows the desktop-managed CLI version and binary, terminal PATH integration, and Developer Tools. The installed CLI is read from the desktop toolchain independently of the active account's workspace readiness.
+- **Profile → Local Development** shows the active Cinna account's workspace, setup status, setup/repair actions, and consent. Switching accounts remounts the profile page; activation clears and reconciles local-development state for the new account.
+- Developer Tools includes the resolved OpenCode version and editable OpenCode Path. The Cinna detected from PATH can differ from the desktop-managed CLI; both readouts describe their own executable. OpenCode edits survive refresh and failed saves, including an empty draft; Escape discards.
+- Runtime keeps its default choice buttons, with credential/Open agents with selectors in the rightmost third. Tasks is separate; Add an agents folder sits beside Rescan. Grouped Features and Runtime rows use 16 px inset dividers.
+- Consent remains stored per server host. The Profile page explicitly says that accounts on the same server share the answer.
 
 ## Business Rules
 
@@ -60,7 +68,7 @@ Default → Agents → Runtime exposes **Autonomous task concurrency**, a device
 - The Interface popover (Console / Verbose / Theme toggles) remains accessible from the sidebar footer regardless of view — see [App Shell](../app_shell/app_shell.md)
 - Default settings tab is "Chat Modes" (`settingsTab: 'chats'`)
 - Settings view state (`settingsTab`) persists across view switches — returning to settings reopens the last active section
-- When the active profile loses access to a Profile-scope tab (e.g. user signs out of a Cinna account while `settingsTab === 'profile-agents'`), the sidebar auto-resets the selection to `'chats'` so no orphaned menu item is highlighted. `PROFILE_SCOPE_TABS` in `ui.store.ts` is the guard's list — all five profile tabs (`profile-agents`, `profile-chats`, `profile-llm`, `profile-catalog`, `profile-sync`). A profile tab added to the union but not to that array leaves the sidebar highlighting a menu item the group no longer renders
+- When the active profile loses access to a Profile-scope tab (e.g. user signs out of a Cinna account while `settingsTab === 'profile-agents'`), the sidebar auto-resets the selection to `'chats'` so no orphaned menu item is highlighted. `PROFILE_SCOPE_TABS` in `ui.store.ts` is the guard's list — all six profile tabs (`profile-agents`, `profile-local-dev`, `profile-chats`, `profile-llm`, `profile-catalog`, `profile-sync`). A profile tab added to the union but not to that array leaves the sidebar highlighting a menu item the group no longer renders
 
 ## Architecture Overview
 
@@ -73,7 +81,7 @@ Sidebar (settings menu mode)
   ├── "Default" header (defaultMenuItems in Sidebar.tsx)
   │     └── 'chats' | 'local-agents' | 'local-dev' | 'llm' | 'mcp' | 'accounts' | 'features' | 'development'
   ├── "Profile {name}" header (profileMenuItems; Cinna users only)
-  │     └── 'profile-chats' | 'profile-agents' | 'profile-llm' | 'profile-catalog' | 'profile-sync'
+  │     └── 'profile-chats' | 'profile-agents' | 'profile-local-dev' | 'profile-llm' | 'profile-catalog' | 'profile-sync'
   └── (separator) → 'trash'
 
 MainArea
@@ -87,6 +95,7 @@ MainArea
         ├── UserAccountsSection (when tab = 'accounts')   # hosts the per-account password modal + Cinna re-auth button
         ├── FeaturesSettingsSection (when tab = 'features')
         ├── DevelopmentSettingsSection (when tab = 'development')
+        ├── ProfileLocalDevSettingsSection (when tab = 'profile-local-dev')
         ├── AgentsSettingsSection (when tab = 'profile-agents')
         ├── ProfileChatModesSection (when tab = 'profile-chats')
         ├── ProfileLLMSection (when tab = 'profile-llm')
@@ -95,7 +104,7 @@ MainArea
         └── TrashSection (when tab = 'trash')
 ```
 
-Every section is rendered with a `key` equal to its tab id, which is what makes tab switching a remount rather than a re-render — see the reset rule under Business Rules.
+Every section is rendered with a `key` equal to its tab id (the Profile Local Development page uses the active account id), which is what makes tab switching a remount rather than a re-render — see the reset rule under Business Rules.
 
 ## Integration Points
 

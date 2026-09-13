@@ -67,6 +67,7 @@ The handler returns the standard `{success, error}` discriminated union so rende
 ### `src/main/services/authService.ts`
 
 - `authService.reauthCinna(userId: string)` — Positional userId (the IPC layer passes the resolved active profile). Validates `cinna_user` + non-null `cinnaServerUrl`, runs `startCinnaOAuthFlow(serverUrl)`, verifies `profile.email === row.username`, then `storeCinnaTokens(userId, …)`. Raises `AuthError` codes: `not_found`, `invalid_user_type`, `oauth_failed`, `identity_mismatch`. Logs every branch via the `auth` scoped logger
+- After storing matching OAuth tokens, `reauthCinna` starts non-blocking `localDevService.reconcile(userId)` only when `userActivation.isActivated()` and `getCurrentUserId() === userId`. Both conditions matter: during activation the session can still name the previous profile while its gate is already closed. `src/main/services/authService.test.ts` covers switched, switching and unchanged accounts, including token persistence in all three cases.
 - `authService.registerCinna` — Unchanged. Continues to own the *new-account* creation path; `reauthCinna` is the in-place sibling
 
 ### `src/main/agents/drivers/a2aConnection.ts`

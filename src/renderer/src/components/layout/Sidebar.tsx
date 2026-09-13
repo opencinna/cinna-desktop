@@ -43,6 +43,7 @@ const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles
 const profileMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles }[] = [
   { id: 'profile-chats', label: 'Chats', icon: MessageSquare },
   { id: 'profile-agents', label: 'Agents', icon: Waypoints },
+  { id: 'profile-local-dev', label: 'Local Development', icon: TerminalSquare },
   { id: 'profile-llm', label: 'AI Credentials', icon: Sparkles },
   { id: 'profile-catalog', label: 'Catalog', icon: Package },
   { id: 'profile-sync', label: 'Cloud Sync', icon: Cloud }
@@ -61,7 +62,7 @@ export function Sidebar(): React.JSX.Element {
     currentUser && currentUser.id !== DEFAULT_USER_ID
       ? currentUser.displayName || currentUser.username
       : null
-  // Profile scope currently only carries remote agents — Cinna users only.
+  // Account settings are available for the active Cinna profile.
   const showProfileGroup = isCinnaUser && !!profileLabel
 
   // When the active profile loses the Profile group, snap the selected tab

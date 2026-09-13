@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { mkdir, readlink, symlink, unlink } from 'node:fs/promises'
 import type { LocalDevState } from '../../shared/localDevState'
 import type { ToolchainProgress, ToolchainResult, ToolchainPins } from './toolchain'
 
@@ -39,7 +40,7 @@ vi.mock('electron', () => ({
       }
     ]
   },
-  shell: { openPath: async () => '' },
+  shell: { openPath: vi.fn(async () => '') },
   app: { getPath: () => '/nonexistent' }
 }))
 
@@ -49,11 +50,11 @@ vi.mock('../logger/logger', () => ({
 
 vi.mock('../db/users', () => ({
   userRepo: {
-    get: () => ({
-      id: 'u1',
+    get: (id: string) => ({
+      id,
       type: 'cinna_user',
       username: 'someone@example.com',
-      cinnaServerUrl: 'https://cinna.example.com'
+      cinnaServerUrl: id === 'u1' ? 'https://cinna.example.com' : `https://${id}.example.com`
     })
   }
 }))
@@ -66,7 +67,7 @@ vi.mock('../db/appSettings', () => ({
 }))
 
 vi.mock('../services/cinna-http', () => ({
-  cinnaFetch: async () => ({ setup_command: 'cinna account setup <token>' })
+  cinnaFetch: vi.fn(async () => ({ setup_command: 'cinna account setup <token>' }))
 }))
 
 vi.mock('../auth/cinna-oauth', () => ({
@@ -81,12 +82,16 @@ vi.mock('../auth/cinna-oauth', () => ({
 }))
 
 const agentsHome = mkdtempSync(join(tmpdir(), 'cinna-localdev-'))
+vi.mock('node:os', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:os')>(),
+  homedir: () => agentsHome
+}))
 vi.mock('../services/localAgents/agentsHomeService', () => ({
   agentsHomeService: {
     ensureHome: () => ({ path: agentsHome }),
     // The reconcile calls this before it can name the workspace: on macOS it is
     // what takes the Documents-folder prompt, off it a plain `mkdir`.
-    prepare: async () => ({ path: agentsHome, guarded: false, access: 'ready' })
+    prepare: vi.fn(async () => ({ path: agentsHome, guarded: false, access: 'ready' }))
   }
 }))
 vi.mock('../kit/contractStore', () => ({
@@ -101,7 +106,7 @@ vi.mock('../kit/contractStore', () => ({
 let nextStatusToken: 'valid' | 'expired' = 'valid'
 
 vi.mock('./cliRunner', () => ({
-  runCinnaCli: async ({ args }: { args: readonly string[] }) => {
+  runCinnaCli: vi.fn(async ({ args }: { args: readonly string[] }) => {
     const isStatus = args.includes('status')
     const token = isStatus ? nextStatusToken : 'valid'
     if (isStatus) nextStatusToken = 'valid'
@@ -112,7 +117,7 @@ vi.mock('./cliRunner', () => ({
       stdout: '',
       timedOut: false
     }
-  }
+  })
 }))
 
 /**
@@ -166,12 +171,26 @@ vi.mock('./toolchain', () => ({
     repair: (pins: ToolchainPins, onProgress?: ToolchainProgress) => ensure(pins, onProgress),
     toolchainEnv: async () => ({}),
     paths: () => ({ cinnaBin: '/managed/bin/cinna' }),
-    root: () => '/managed'
+    root: () => '/managed',
+    installedCli: async () => ({ path: '/managed/bin/cinna', version: '0.4.0' })
   }
 }))
 
 const { localDevService } = await import('./localDevService')
 const { ToolchainError } = await import('../errors')
+const { cinnaFetch } = await import('../services/cinna-http')
+const { runCinnaCli } = await import('./cliRunner')
+const { agentsHomeService } = await import('../services/localAgents/agentsHomeService')
+const { shell } = await import('electron')
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
+const installed = { cliVersion: '0.4.0', paths: {} as never }
+
 
 /** Wait for the reconcile to reach the point where it is asking the toolchain. */
 async function untilInstalling(): Promise<void> {
@@ -179,6 +198,11 @@ async function untilInstalling(): Promise<void> {
 }
 
 beforeEach(() => {
+  localDevService.clear()
+  vi.mocked(cinnaFetch).mockClear()
+  vi.mocked(runCinnaCli).mockClear()
+  vi.mocked(agentsHomeService.prepare).mockClear()
+  vi.mocked(shell.openPath).mockClear()
   sent.length = 0
   consentStore.clear()
   // Consent already given: this file is about what happens after it.
@@ -397,5 +421,149 @@ describe('what the renderer is told', () => {
     const tasks = sent.at(-1)?.tasks ?? []
     expect(tasks.find((t) => t.id === 'cinna-cli')?.status).toBe('failed')
     expect(tasks.find((t) => t.id === 'mutagen')?.status).not.toBe('failed')
+  })
+})
+
+
+describe('profile ownership of reconciliation', () => {
+  it('drains A installation before starting B and never prepares A after the switch', async () => {
+    consentStore.set('localDevConsent', JSON.stringify({ 'cinna.example.com': true, 'u2.example.com': true }))
+    const a = localDevService.reconcile('u1')
+    await untilInstalling()
+    const oldInstall = install
+    const b = localDevService.reconcile('u2')
+    const stateAtSwitch = localDevService.getState()
+    const openedAtSwitch = await localDevService.openWorkspace()
+    const installsAtSwitch = ensure.mock.calls.length
+    oldInstall.finish(installed)
+    await a
+    expect(stateAtSwitch.phase).toBe('idle')
+    expect(openedAtSwitch).toEqual({ ok: false })
+    expect(installsAtSwitch).toBe(1)
+    await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(2))
+    const after = sent.length
+    oldInstall.report({ step: 'A finished late', tool: 'cinna-cli', toolPercent: 100 })
+    expect(sent).toHaveLength(after)
+    expect(agentsHomeService.prepare).not.toHaveBeenCalled()
+    install.finish(installed)
+    expect(await b).toMatchObject({ phase: 'ready', workspacePath: join(agentsHome, 'Cloud', 'u2.example.com') })
+    expect(agentsHomeService.prepare).toHaveBeenCalledExactlyOnceWith('u2')
+    expect(cinnaFetch).toHaveBeenCalledExactlyOnceWith('u2', expect.any(String), expect.any(Object))
+    await localDevService.openWorkspace()
+    expect(shell.openPath).toHaveBeenCalledExactlyOnceWith(join(agentsHome, 'Cloud', 'u2.example.com'))
+  })
+
+  it.each(['signout', 'switch'] as const)('does not revive a queued B after %s', async (next) => {
+    const a = localDevService.reconcile('u1')
+    await untilInstalling()
+    const b = localDevService.reconcile('u2')
+    localDevService.clear()
+    const c = next === 'switch' ? localDevService.reconcile('u3') : undefined
+    install.finish(installed)
+    await Promise.all([a, b, c])
+    expect(ensure).toHaveBeenCalledTimes(1)
+    expect(agentsHomeService.prepare).not.toHaveBeenCalled()
+    expect(cinnaFetch).not.toHaveBeenCalled()
+    expect(localDevService.getState()).toMatchObject(next === 'switch'
+      ? { phase: 'consent', host: 'u3.example.com' }
+      : { phase: 'idle', tasks: undefined })
+  })
+
+  it('ignores progress and failure after clear, including the parallel engine', async () => {
+    const engine = deferred<PrefetchResult>()
+    let engineProgress: ((received: number, total: number | null) => void) | undefined
+    prefetchEngineBinary.mockImplementationOnce((report) => { engineProgress = report; return engine.promise })
+    const run = localDevService.reconcile('u1')
+    await untilInstalling()
+    localDevService.clear()
+    const after = sent.length
+    install.report({ step: 'Old progress', tool: 'uv', toolPercent: 90 })
+    engineProgress?.(30, 100)
+    engine.resolve({ ok: true, source: 'managed' })
+    install.fail(new Error('Old failure'))
+    await run
+    expect(sent).toHaveLength(after)
+    expect(localDevService.getState()).toEqual({ phase: 'idle', tasks: undefined })
+    expect(engineEnsure).not.toHaveBeenCalled()
+  })
+
+  it('does not start account setup when a mint completes after clear', async () => {
+    const mint = deferred<{ setup_command: string }>()
+    vi.mocked(cinnaFetch).mockImplementationOnce(() => mint.promise)
+    const run = localDevService.reconcile('u1')
+    await untilInstalling()
+    install.finish(installed)
+    await vi.waitFor(() => expect(cinnaFetch).toHaveBeenCalled())
+    localDevService.clear()
+    const after = sent.length
+    mint.resolve({ setup_command: 'old-profile-token' })
+    await run
+    expect(runCinnaCli).not.toHaveBeenCalled()
+    expect(sent).toHaveLength(after)
+  })
+
+  it('ignores workspace progress and skips token checks when setup finishes after clear', async () => {
+    const setup = deferred<Awaited<ReturnType<typeof runCinnaCli>>>()
+    vi.mocked(runCinnaCli).mockImplementationOnce(() => setup.promise)
+    const run = localDevService.reconcile('u1')
+    await untilInstalling()
+    install.finish(installed)
+    await vi.waitFor(() => expect(runCinnaCli).toHaveBeenCalled())
+    const report = vi.mocked(runCinnaCli).mock.calls[0][0].onProgress
+    localDevService.clear()
+    const after = sent.length
+    report?.({ status: 'start', message: 'Old workspace', step: 2, total: 3 })
+    setup.resolve({ exitCode: 0, result: { result: 'ok' }, stderr: '', stdout: '', timedOut: false })
+    await run
+    expect(runCinnaCli).toHaveBeenCalledTimes(1)
+    expect(sent).toHaveLength(after)
+  })
+
+  it('does not revive a consent request waiting on a former profile', async () => {
+    const a = localDevService.reconcile('u1')
+    await untilInstalling()
+    const consent = localDevService.setConsent('u1', 'cinna.example.com', true)
+    localDevService.clear()
+    install.finish(installed)
+    await a
+    // Drain a wrongly revived run too, so the regression fails on its extra
+    // install rather than leaving a pending promise behind for the next test.
+    for (let i = 0; i < 200; i += 1) await Promise.resolve()
+    if (ensure.mock.calls.length > 1) install.finish(installed)
+    await consent
+    expect(ensure).toHaveBeenCalledTimes(1)
+    expect(localDevService.getState().phase).toBe('idle')
+  })
+
+  it('deduplicates same-profile calls during an install', async () => {
+    const first = localDevService.reconcile('u1')
+    await untilInstalling()
+    const repair = localDevService.reconcile('u1', true)
+    install.finish(installed)
+    const results = await Promise.all([first, repair])
+    expect(ensure).toHaveBeenCalledTimes(1)
+    expect(results[0]).toBe(results[1])
+  })
+})
+
+describe('managed PATH link ownership', () => {
+  it.each(['/managed-backup/bin/cinna', '/managed/../other/cinna'])(
+    'preserves the unrelated symlink to %s', async (destination) => {
+      const target = join(agentsHome, '.local', 'bin', 'cinna')
+      await mkdir(join(agentsHome, '.local', 'bin'), { recursive: true })
+      await unlink(target).catch(() => {})
+      await symlink(destination, target)
+      expect(await localDevService.addToPath()).toMatchObject({ ok: false })
+      expect(await readlink(target)).toBe(destination)
+    }
+  )
+
+  it('refreshes the link pointing exactly to the managed launcher', async () => {
+    const target = join(agentsHome, '.local', 'bin', 'cinna')
+    await mkdir(join(agentsHome, '.local', 'bin'), { recursive: true })
+    await unlink(target).catch(() => {})
+    await symlink('/managed/bin/../bin/cinna', target)
+    expect(await localDevService.addToPath()).toMatchObject({ ok: true, path: target })
+    expect(await readlink(target)).toBe('/managed/bin/cinna')
   })
 })

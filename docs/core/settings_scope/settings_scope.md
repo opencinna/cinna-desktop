@@ -27,7 +27,7 @@ Cross-cutting model that splits app data into two scopes: **Default** (shared ac
 ### Profile-Specific Extension (Cinna)
 
 1. Cinna user activates → background sync upserts remote agents into Profile scope.
-2. Settings sidebar gains a "Profile {displayName}" group. Its Agents entry shows only Cinna-synced agents, including hidden ones; the group also offers account Chats, AI Credentials, Catalog and Cloud Sync. Default → Agents configures this installation's folders, runtimes and Open in tools. Direct A2A connections are added through Agents → Add an agent and configured on their own agent pages.
+2. Settings sidebar gains a "Profile {displayName}" group. Its Agents entry shows only Cinna-synced agents, including hidden ones; the group also offers account Chats, Local Development, AI Credentials, Catalog and Cloud Sync. Default → Agents configures this installation's folders, runtimes and Open in tools. Direct A2A connections are added through Agents → Add an agent and configured on their own agent pages.
 3. User signs out → the Profile group disappears; Default settings (providers, MCP, modes, local agents) stay untouched.
 
 ### Toggle a Remote Agent
@@ -104,3 +104,9 @@ Sidebar (Settings view)
 - [Chat Modes](../../chat/chat_modes/chat_modes.md), [Adapters](../../llm/adapters/adapters.md), [MCP Connections](../../mcp/connections/connections.md) — all live in Default scope and are mutated only via Default scope.
 - [Agents](../../agents/agents/agents.md), [Remote Agents](../../agents/remote_agents/remote_agents.md) — local agents live in Default scope; remote agents live in Profile scope with overrides for enable/disable.
 - [Messaging](../../chat/messaging/messaging.md) — chats remain Profile-scoped; switching profiles changes the chat history.
+
+## Local Development settings
+
+Default → Local Development owns the shared desktop toolchain readout, terminal PATH integration and detected developer tools. The managed CLI can be inspected and linked to PATH even when the active account has no local-development workspace; the read is ungated, while linking still requires an activated session. OpenCode Path is an installation-wide override on this page.
+
+Profile → Local Development owns workspace status, setup/repair, opening the account workspace and resetting its server's consent. Consent is still keyed by server host: accounts on the same server share the answer. The profile page remounts on account changes. Every activation synchronously retires the old workspace state before loading the new profile, including local/default activation and logout; only a winning Cinna activation reconciles. Running work drains without publishing old results or starting later account steps. There is no per-user consent migration. See [Local Development](../../agents/local_dev/local_dev.md).

@@ -25,6 +25,8 @@ The chat transcript follows the bottom of the conversation while a reply streams
 
 ## Rules
 
+The transcript fades out across its top 10 px, fully invisible at the clipped edge and fully visible 10 px below it. It fades the content itself so text does not survive at the boundary. This is a visual mask, not a scroll animation; the composer's bottom blur and following behavior are unchanged.
+
 Each rule below exists because of a specific way the transcript misbehaved.
 
 - **Following never animates.** The previous implementation smooth-scrolled to a bottom marker from an effect keyed on the streaming state. Every delta produced a new streaming-blocks array identity, so a fast stream started a fresh several-hundred-millisecond animation many times a second, each interrupting the last. At the chunk rate of a local engine printing a table, that reads as the window shaking. Sticking is instantaneous and happens before paint, so the bottom of the content is simply where it always was — there is no intermediate frame to see.

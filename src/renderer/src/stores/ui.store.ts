@@ -27,6 +27,7 @@ export type SettingsMenu =
   | 'accounts'
   | 'features'
   | 'development'
+  | 'profile-local-dev'
   | 'profile-agents'
   | 'profile-chats'
   | 'profile-llm'
@@ -40,6 +41,7 @@ export type SettingsMenu =
  * without them should snap the sidebar back to a default-scope tab.
  */
 export const PROFILE_SCOPE_TABS: readonly SettingsMenu[] = [
+  'profile-local-dev',
   'profile-agents',
   'profile-chats',
   'profile-llm',

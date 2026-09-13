@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import {
   createToolchain,
   MUTAGEN_ASSETS,
@@ -501,16 +501,39 @@ describe('ensure — failures leave the root untouched', () => {
       })
     )
     await expect(tc.ensure(PINS)).rejects.toMatchObject({ code: 'checksum_mismatch' })
-    // Not merely that it threw: nothing on disk that a later run — which trusts
-    // a present directory absolutely — could take for a finished install.
-    //
-    // `.staging-*` is excluded rather than asserted absent, and that is not a
-    // loosened invariant. The installs run concurrently, so the sibling of the
-    // one that failed is still working when the rejection surfaces and its
-    // staging directory legitimately exists for a moment longer. Nothing reads
-    // a staging directory as an install: it is swept at the start of the next
-    // pass and removed by its own `finally` regardless.
-    expect(everything().filter((e) => !e.startsWith('.staging-'))).toEqual([])
+    // Both branches have settled and cleaned up before the failure escapes.
+    expect(everything()).toEqual([])
+  })
+
+  it('drains a surviving install before reporting a sibling failure', async () => {
+    let releaseUv!: () => void
+    const uvGate = new Promise<void>((resolve) => { releaseUv = resolve })
+    let failedStaging = ''
+    const tc = createToolchain(deps({
+      download: async (url, dest) => {
+        if (url.includes('mutagen')) {
+          failedStaging = dirname(dest)
+          throw new Error('Mutagen download failed')
+        }
+        await uvGate
+        writeFileSync(dest, BYTES)
+      }
+    }))
+    const run = tc.ensure(PINS)
+    let settled = false
+    void run.then(() => { settled = true }, () => { settled = true })
+    try {
+      await vi.waitFor(() => {
+        expect(failedStaging).not.toBe('')
+        expect(existsSync(failedStaging)).toBe(false)
+      })
+      expect(settled).toBe(false)
+    } finally {
+      releaseUv()
+      await run.catch(() => undefined)
+    }
+    await expect(run).rejects.toThrow()
+    expect(existsSync(join(root, 'bin', 'cinna'))).toBe(true)
   })
 
   it('reports a failing uv tool install with the tail of its output', async () => {
@@ -614,4 +637,50 @@ describe('a local cinna-cli checkout', () => {
     // must not, or a run would silently be testing yesterday's checkout.
     expect(second).toBeGreaterThan(first)
   })
+})
+
+
+describe('installed desktop CLI', () => {
+  it('reads the shared installation without server pins or running setup', async () => {
+    mkdirSync(join(root, 'bin'), { recursive: true })
+    writeFileSync(join(root, 'bin', 'cinna'), '#!/bin/sh\n')
+    writeFileSync(join(root, 'state.json'), JSON.stringify({ cinnaCliVersion: '0.4.0' }))
+    installedCli = '0.4.0'
+    const toolchain = createToolchain(deps())
+
+    expect(await toolchain.installedCli()).toEqual({ path: join(root, 'bin', 'cinna'), version: '0.4.0' })
+    expect(runs.map(({ args }) => args)).toEqual([['--version']])
+    expect(downloads).toEqual([])
+  })
+
+  it('does not report an installation from a stale version stamp alone', async () => {
+    writeFileSync(join(root, 'state.json'), JSON.stringify({ cinnaCliVersion: '0.4.0' }))
+    expect(await createToolchain(deps()).installedCli()).toBeNull()
+  })
+  it('reports the executable version after an editable install leaves an older stamp', async () => {
+    const toolchain = createToolchain(deps())
+    await toolchain.ensure(PINS)
+    const editable = createToolchain(deps({ cliSourceOverride: () => '/src/cinna-cli' }))
+    await editable.ensure(PINS)
+
+    expect(await editable.installedCli()).toEqual({
+      path: join(root, 'bin', 'cinna'), version: editableCliVersion
+    })
+  })
+
+  it('reports the version of a fresh editable install without a stamp', async () => {
+    const editable = createToolchain(deps({ cliSourceOverride: () => '/src/cinna-cli' }))
+    await editable.ensure(PINS)
+    expect(existsSync(join(root, 'state.json'))).toBe(false)
+    expect((await editable.installedCli())?.version).toBe(editableCliVersion)
+  })
+
+  it('keeps an installed path but reports an unknown version when its probe fails', async () => {
+    mkdirSync(join(root, 'bin'), { recursive: true })
+    writeFileSync(join(root, 'bin', 'cinna'), 'broken')
+    expect(await createToolchain(deps()).installedCli()).toEqual({
+      path: join(root, 'bin', 'cinna'), version: null
+    })
+  })
+
 })
