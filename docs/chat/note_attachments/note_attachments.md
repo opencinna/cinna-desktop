@@ -42,12 +42,12 @@ Attach existing profile notes to a chat message via the composer's `?` mention p
 1. With one or more note badges present, the user types text and hits Enter / Send.
 2. **Active chat:** each pending note's current body is fetched on the main side, written as `<safe-title>.md` into a fresh tempdir, and routed through `fileService.ingest` under the chat's destination scope. The resulting `MessageAttachment[]` is merged with any file attachments and dispatched.
 3. **New chat:** the note ids are deferred alongside file attachments. After the chat row is created and the destination scope is decided, the same materialization runs.
-4. After the send dispatches, both note badges and file attachment badges clear from the composer.
+4. After confirmed dispatch, unchanged submitted note and file badges clear from the originating composer. Preparation failures retain them; selections edited while preparation runs remain available.
 
 ### Removing a note
 
 - Trailing X on the badge drops it from the pending list. No backend call — pending notes are purely composer-local until send time.
-- Switching chats wipes the composer's pending notes (mirrors file-attachment behavior).
+- Switching chats preserves pending notes in the originating draft (mirrors file-attachment behavior).
 
 ## Business Rules
 
@@ -59,9 +59,9 @@ Attach existing profile notes to a chat message via the composer's `?` mention p
 - **Empty notes are valid.** A note with an empty body still attaches as an empty `.md`. The user is in control.
 - **Filename safety.** Note titles are sanitized to `<allowlist>.md` (alphanumerics, space, dash, underscore, dot) and capped at 80 characters; empty results fall back to `note.md`. `basename()` is re-applied inside `fileService.ingestSyntheticContent` as defense in depth.
 - **Scope routing.** Scope mirrors the chat's destination: Cinna-uploaded for a chat bound to a remote agent (direct A2A), local-store for orchestrated / raw LLM chats. The new-chat composer defers the decision until the chat row exists.
-- **Clearing on send.** Pending notes are cleared alongside pending file attachments once the send dispatches.
+- **Clearing on send.** Confirmed dispatch consumes only unchanged submitted notes/files/text from the source draft. Missing chat data, failed note materialization or failed new-chat preparation do not consume it; the draft-owned preparation lock prevents duplicate submission across remounts.
 - **No retroactive editing.** The attached `.md` is a frozen snapshot of the note's body at send time. Later edits to the original note do not propagate to messages that already carry the attachment.
-- **No persistence of pending notes.** Refreshing or switching chats discards the pending list — they aren't stored on the message row until materialization at send.
+- **Session draft storage.** Pending notes survive navigation within the current renderer session, isolated by profile and composer. Refreshing or restarting discards them; they are not stored on a message row until materialization at send.
 - **Double-Enter expansion target.** A note picked via `?` is "armed" as the expansion target. The next Enter on an empty composer replaces the badge with the note's live body inline instead of sending. The arming is cleared by typing anything, removing the targeted badge, picking a different note (which becomes the new target), switching chats, or by the expansion itself. Only one note at a time can be the target — earlier badges remain attached when expansion fires.
 
 ## Architecture Overview
@@ -104,6 +104,8 @@ Send pressed
 ```
 
 ## Integration Points
+
+- [Conversation UI](../conversation_ui/conversation_ui.md) — owns draft lifetime and caret restoration. Its Save to Notes action creates a note from transcript text; this feature instead attaches an existing note to a message.
 
 - [Mention Popups](../mention_popups/mention_popups.md) — Adds `?` as a fourth trigger character. Reuses the shared `MentionPopup<T>` primitive and the boundary-rule trigger token detector.
 - [Notes](../../notes/notes/notes.md) — Source domain. `notesService` owns ownership checks, the `safeNoteFilename` helper, and the `materializeAsAttachments` entry point.

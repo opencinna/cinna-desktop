@@ -3,6 +3,7 @@
 ## File Locations
 
 ### Main process
+
 - `src/main/ipc/note.ipc.ts` — `note:attach-as-files` IPC handler (thin controller)
 - `src/main/services/notesService.ts` — `materializeAsAttachments`, `safeNoteFilename` helper
 - `src/main/services/fileService.ts` — `ingestSyntheticContent` (temp-file orchestration + ingest delegation)
@@ -11,19 +12,24 @@
 - `src/main/db/notes.ts` — `notesRepo.getById` (ownership-filtered fetch consumed by `requireNote`)
 
 ### Shared
+
 - `src/shared/notes.ts` — `NoteAttachAsFilesInputDto`, `NoteAttachAsFilesResultDto`
 - `src/shared/attachments.ts` — `MessageAttachment` (the shape produced by the ingest)
 
 ### Preload
+
 - `src/preload/index.ts` — `window.api.notes.attachAsFiles(data)` bridge
 
 ### Renderer
+
+- `src/renderer/src/stores/composerDraft.store.ts`, `src/renderer/src/hooks/useComposerDraft.ts` — profile/surface ownership, bound field setters and preparation lock; see [Draft ownership](../conversation_ui/conversation_ui_tech.md#draft-ownership).
+
 - `src/renderer/src/components/chat/NoteMentionPopup.tsx` — `?` trigger popup (wraps shared `MentionPopup<NoteData>`)
 - `src/renderer/src/components/chat/NoteBadge.tsx` — `NoteBadge`, `NoteBadgeList`
 - `src/renderer/src/components/notes/NotePreviewModal.tsx` — portal-rendered read-only modal (`react-markdown` + `remarkGfm` + `rehypeHighlight`)
 - `src/renderer/src/components/chat/ChatInput.tsx` — trigger plumbing, badge rendering, send-time materialization, badge clearing on send
 - `src/renderer/src/hooks/useNotes.ts` — `useAttachNotesAsFiles` (`useMutation` wrapping the attach IPC), `useFetchNote` (imperative single-note fetcher used by the double-Enter expansion)
-- `src/renderer/src/hooks/useChatNotes.ts` — composer-local note buffer keyed by chatId (mirrors `useChatAttachments`)
+- `src/renderer/src/hooks/useChatNotes.ts` — note draft buffer keyed by profile and composer (mirrors `useChatAttachments`)
 - `src/renderer/src/hooks/useNewChatFlow.ts` — `ingestPendingNotes` (deferred materialize on chat creation)
 
 ## Database Schema
@@ -51,14 +57,14 @@ No new tables. The feature reads from the existing `notes` table (see [Notes —
 - `src/renderer/src/components/notes/NotePreviewModal.tsx` — Portal-rendered modal (`max-w-2xl`, `max-h-80vh`); loads the note via `useNote(noteId)` so previewing reflects the latest body. Renders with the same `Markdown` + `remarkGfm` + `rehypeHighlight` + `markdownComponents` stack used by chat bubbles. Closes on Esc, outside click, or X.
 - `src/renderer/src/components/chat/ChatInput.tsx`:
   - `findTriggerToken` extended to recognize `?` alongside `@`, `#`, `/`.
-  - `useChatNotes(chatId)` provides the composer-local buffer; `useAttachNotesAsFiles()` provides the mutation.
+  - `useChatNotes(chatId, draftKey)` provides the session draft buffer; `useAttachNotesAsFiles()` provides the mutation.
   - `selectNote` drops the `?token` from the textarea, calls `addPendingNote`, and arms `pendingExpansionNoteId` for the double-Enter shortcut.
   - `pendingExpansionNoteId` is a single-id local state cleared by typing (`handleInput`), removing the targeted badge (`handleRemovePendingNote`), chat switch (the same `useEffect` that resets `previewNoteId`), or the expansion itself.
   - `handleSend`: first branch is the double-Enter check — when `pendingExpansionNoteId` is armed and `trimmed.length === 0`, **disarms the id and removes the note from the pending buffer synchronously** (so a re-entrant Enter during the fetch can't fall through to the attachment-only send path), then awaits `fetchNote(id)`, calls `setInput(note.body)`, refocuses + resizes the textarea, and returns early. On fetch failure the error surfaces via `setAttachError('Note: …')` and the user can re-attach via `?`. Otherwise on active chat it awaits `attachNotesAsync` then concats results into `mergedAttachments` before `composer.submit`; on new chat, threads `noteIds` through `onNewChat`.
-  - After `composer.submit` dispatches, `clearPendingNotes()` is called alongside `clearPendingAttachments()`.
+  - After `composer.submit` or the new-chat callback confirms dispatch, `clearComposer()` consumes unchanged submitted notes, files and text from the originating draft. The draft preparation lock survives component remount and is released in `finally`; failed materialization retains the badges.
 - `src/renderer/src/hooks/useNotes.ts:useAttachNotesAsFiles()` — `useMutation` wrapping `window.api.notes.attachAsFiles`. Rejects with `Error(result.error)` on `success: false` so callers can `try/await`.
 - `src/renderer/src/hooks/useNotes.ts:useFetchNote()` — Imperative single-note fetcher for event handlers. Returns a `(noteId) => Promise<NoteData>` callback that delegates to `queryClient.fetchQuery` against the same `['notes', id]` cache key as `useNote`, so a recently previewed note hits cache. Used by the composer's double-Enter expansion.
-- `src/renderer/src/hooks/useChatNotes.ts:useChatNotes(chatId)` — Mirrors `useChatAttachments` structurally: `{ notes, add, remove, clear }`. `useEffect([chatId])` wipes the buffer on chat switch. `add` dedups by id.
+- `src/renderer/src/hooks/useChatNotes.ts:useChatNotes(chatId, draftKey?)` — Mirrors `useChatAttachments` structurally: `{ notes, add, remove, clear }`. `useComposerDraftField` restores notes across navigation and remount; `add` dedups by id. The expansion fetch writes through the source-bound text setter, while its arming and preview are transient. Clear and async send callbacks retain the originating draft key.
 - `src/renderer/src/hooks/useNewChatFlow.ts:ingestPendingNotes()` — Calls the same `attachNotesAsync` mutation, concatenated with resolved file attachments before `startRun`.
 
 ## Configuration

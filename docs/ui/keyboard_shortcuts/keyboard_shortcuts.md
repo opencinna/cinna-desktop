@@ -51,6 +51,19 @@ Typing `~` into an empty input opens the chat-modes picker above the textarea (s
 | Any other character | Closes the popup and is appended to the input — the user is interpreted as having meant to type `~`. |
 | Click a mode | Same as Enter — applies AND wipes the `~`. |
 
+### Transcript context menu (`MessageContextMenu`)
+
+After right-clicking a message body or selected transcript text, Copy text receives focus. Pointer movement and keys share the same focused highlight.
+
+| Key | Action |
+|-----|--------|
+| `↓` / `↑` | Move between enabled Copy text and Save to Notes actions, wrapping at either end. |
+| `Home` / `End` | Focus the first / last action. |
+| `Enter` / `Space` | Activate the focused button. |
+| `Esc` / `Tab` / `PageUp` / `PageDown` | Close the menu; restore the previous connected control when focus was still in the menu. These keys are consumed. |
+
+Outside pointer input, wheel/touch scrolling, window resize/blur and chat/profile navigation also close it. Programmatic transcript following leaves it open. See [Conversation UI](../../chat/conversation_ui/conversation_ui.md#reusing-message-text).
+
 ### Logs overlay (`LogsOverlay`)
 
 | Combo | Action |

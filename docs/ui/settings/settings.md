@@ -45,7 +45,7 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 
 1. Open Features → Interface to choose **System**, **Dark** or **Light**, or change **Extra UI animation**. Dark is the theme fallback; extra animation is on by default.
 2. Changes apply and save immediately across local profiles and app windows. These renderer preferences remain usable while the service-backed settings query is unavailable.
-3. System follows live OS appearance; the sidebar footer Theme shortcut selects a fixed opposite theme. Extra animation governs the shared decorative grid, border and header effects and respects reduced motion. See [Appearance](../appearance/appearance.md).
+3. System follows live OS appearance; the sidebar footer Theme shortcut selects a fixed opposite theme. Extra animation governs quick stationary-text chat curtains and the shared decorative grid, border and header effects, and respects reduced motion. Switching it off does not disable composer draft restoration or message actions. See [Appearance](../appearance/appearance.md).
 
 ### Agent sidebar sections
 

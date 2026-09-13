@@ -17,6 +17,7 @@ Implementation companion to [Appearance](appearance.md).
 - `src/renderer/src/components/ui/AmbientGrid.tsx` — `makeTrails`, grid/border state, interaction and visibility lifecycle.
 - `src/renderer/src/hooks/useAmbientButtons.ts` — one secondary-button scheduler per mounted Shell.
 - `src/renderer/src/components/layout/TopBar.tsx` — header-wave scheduler.
+- `src/renderer/src/components/layout/ChatTransition.tsx` — chat-switch DOM snapshot and diagonal fading curtain; hosted by `MainArea`.
 - `src/renderer/src/assets/main.css` — theme tokens, grid/edge animations, masked traveling borders and staggered header backgrounds.
 - `src/renderer/src/trayPanel.tsx` — independent popup theme application and listeners.
 
@@ -76,6 +77,13 @@ Grid/border state is per host; the secondary-button singleton and header schedul
 - `TopBar` sets `data-header-wave` for a two-second window. The four direct children share `ambient-header-button`; CSS gives their background layers a 1.2 s animation with 0/220/440/660 ms left-to-right delays. Hover/focus-visible suppresses the local layer. The effect resets when the preference changes and removes timers/listeners on cleanup.
 - All three schedulers check `document.hidden` and `prefers-reduced-motion: reduce`; they do not subscribe to window blur. CSS reduced-motion rules also hide decorative layers and disable grid animations.
 
+### Chat-switch transitions
+
+- `MainArea` wraps its chat workspace in `ChatTransition`, passing the active chat ID and shared animation preference. Only ID changes animate, including transitions to/from null (new chat); first mount and same-chat updates do not. Other `MainArea` feature branches and embedded agent start pages are outside this host.
+- `getSnapshotBeforeUpdate` clones the outgoing workspace before React mutates it. The clone is inert, aria-hidden and pointer-transparent, with duplicate IDs/autofocus removed. Descendant scroll offsets are captured and restored after insertion. Clone descendants have CSS animations/transitions disabled and cannot receive pointer input. No second React chat tree or subscriptions mount; navigation, streaming and composer state keep their existing lifecycle.
+- Web Animations sweeps oversized diagonal gradient masks across each layout to create a soft curtain edge. The outgoing copy wipes/fades over 110 ms; only then does live content reveal over 150 ms (260 ms total). Text and layout stay stationary: only mask position and opacity animate, with no transforms. Backwards fill hides the incoming layout during the exit. The host clips the curtain to the workspace; masks disappear when the animation ends. The shell classes use the CSS base layer so Tailwind utilities can override their layout defaults, following the repository convention.
+- Rapid switches cancel prior animations and remove the old snapshot before capturing another. Completion only cleans its own snapshot. Disabling the preference, OS motion changes, document visibility changes and unmount cancel running effects; hidden documents, reduced motion and unavailable Web Animations skip them.
+
 ## Renderer Components
 
 - `.ambient-grid-surface` establishes relative positioning and an isolated stacking context. The absolute, negative-z-index `.ambient-grid` clips only decoration, inherits corner radius, ignores pointer events and selection, and is `aria-hidden`; SVG is nonfocusable. Hosts retain their existing input, clipping and popover rules.
@@ -101,6 +109,7 @@ Appearance storage contains presentation preferences only. Decoration performs n
 
 ## Validation
 
+- `src/renderer/src/components/layout/ChatTransition.test.tsx` — immediate next-chat rendering, inert outgoing snapshots, scroll/focus preservation, rapid switches, preference/motion cancellation and stable child lifecycle.
 - `src/renderer/src/stores/ui.appearance.test.ts` — default-on animation persistence, live System resolution, fixed shortcut and cross-window storage propagation.
 - `src/renderer/src/components/settings/FeaturesSettingsSection.test.tsx` — accessible controls, immediate persistence and operation while service settings are unavailable.
 - `src/renderer/src/components/ui/AmbientGrid.test.tsx` — autofocus versus actual interaction, fade/blur quiet intervals, unmount timer cleanup, live tint and independent sidebar border behavior.

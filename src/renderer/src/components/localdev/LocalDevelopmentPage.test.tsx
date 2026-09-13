@@ -51,6 +51,15 @@ beforeEach(() => {
 })
 
 describe('Local Development entry', () => {
+  it('restores the draft after navigating away and remounting the page', async () => {
+    const first = renderPage()
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'Build my helper later' } })
+    first.unmount()
+    renderPage()
+    expect(await screen.findByRole('textbox')).toHaveProperty('value', 'Build my helper later')
+    expect(screen.getByRole('textbox')).toHaveProperty('selectionStart', 'Build my helper later'.length)
+    expect(screen.getByRole('textbox')).toHaveProperty('selectionEnd', 'Build my helper later'.length)
+  })
   it('keeps the draft when opening Settings and returning to Start chat', async () => {
     renderPage()
     fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'Build my helper' } })

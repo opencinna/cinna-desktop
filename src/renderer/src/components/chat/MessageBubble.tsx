@@ -101,6 +101,7 @@ export function MessageBubble({
       <div className="flex flex-col items-end gap-1">
         <div className="relative group max-w-[80%]">
           <div
+            data-message-markdown={content}
             className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
           >
             <div className={animate ? 'anim-user-bubble-content' : ''}>
@@ -158,6 +159,7 @@ export function MessageBubble({
         </div>
       )}
       <div
+        data-message-markdown={stripCinnaAttachTags(content, { streaming: isStreaming })}
         className={`text-sm leading-relaxed markdown-body text-[var(--color-text)] ${animate ? 'anim-assistant-bubble' : ''}`}
         style={animate && animateDelay ? { animationDelay: `${animateDelay}ms` } : undefined}
       >

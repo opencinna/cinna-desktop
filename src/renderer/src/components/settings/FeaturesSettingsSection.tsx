@@ -121,7 +121,7 @@ export function FeaturesSettingsSection(): React.JSX.Element {
           <SettingsToggleRow
             id="feature-extra-ui-animation"
             label="Extra UI animation"
-            description="Add occasional grid pulses, border glows on inputs, the sidebar and secondary buttons, and a gentle background wave across header buttons. Turn off to stop all these effects. Respects your system’s reduced-motion setting."
+            description="Add quick fading curtain transitions between chats, occasional grid pulses, border glows on inputs, the sidebar and secondary buttons, and a gentle background wave across header buttons. Turn off to stop all these effects. Respects your system’s reduced-motion setting."
             checked={extraUIAnimation}
             onToggle={() => setExtraUIAnimation(!extraUIAnimation)}
             title={extraUIAnimation ? 'Extra UI animation is enabled' : 'Extra UI animation is disabled'}

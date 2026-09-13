@@ -3,6 +3,7 @@
 ## File Locations
 
 ### Main process
+
 - `src/main/db/schema.ts` — `notes` (id, userId, title, body, `folderId`, `position`, `deletedAt`, timestamps) and `noteFolders` (id, userId, name, position, collapsed, timestamps) tables.
 - `src/main/db/migrations/notes.ts` — `migrateNotes()` — inline-SQL `CREATE TABLE IF NOT EXISTS` for `notes` + `note_folders` with `idx_notes_user_id` + `idx_note_folders_user_id`. Idempotent `ALTER TABLE notes ADD COLUMN folder_id` guarded via `hasColumn`. Boot-time `DELETE FROM notes WHERE deleted_at IS NOT NULL AND deleted_at < <30d threshold>` mirrors the chats cleanup; the threshold is computed in Unix seconds because Drizzle's `mode: 'timestamp'` stores epoch-seconds (using `Date.now()` directly would wipe every trashed row).
 - `src/main/db/client.ts` — `migrateNotes(sqlite)` invoked from `runMigrations()` after `migrateJobs` (notes is independent — no FKs to other tables).
@@ -13,17 +14,23 @@
 - `src/main/errors.ts` — `NoteError` + `NoteErrorCode` (`not_found | not_activated | invalid_input`).
 
 ### Shared
+
 - `src/shared/notes.ts` — `NoteData` (carries `folderId: string | null` + `position: number`), `NoteCreateInputDto`, `NotePatchDto`, `NoteFolderData`, `NoteFolderCreateInputDto`, `NoteFolderPatchDto` — imported by both preload and renderer.
 
 ### Preload
+
 - `src/preload/index.ts`:
   - `window.api.notes` — `list`, `get`, `create`, `update`, `delete`, `trashList`, `restore`, `permanentDelete`, `emptyTrash`, `reorder(targetFolderId, orderedNoteIds)`.
   - `window.api.noteFolders` — `list`, `create({ name })`, `update(folderId, { name?, collapsed? })`, `delete(folderId)`, `reorder(orderedIds)`.
 
 ### Renderer
+
+- `src/renderer/src/components/chat/MessageContextMenu.tsx` — caller of `useSaveMessageNote`; captures transcript text and opens the returned note only while its menu remains mounted.
+
 - `src/renderer/src/stores/ui.store.ts` — adds `'notes'` to `SidebarTab`, `'note-detail'` to `ActiveView`, `activeNoteId: string | null` + `setActiveNoteId`. Not persisted to localStorage at MVP.
 - `src/renderer/src/hooks/useNotes.ts`:
   - Query/mutation hooks: `useNoteList`, `useNote(noteId)`, `useCreateNote` (defaults `title: 'Untitled note'`, `body: ''`; **navigates to `'note-detail'` on success** so the new row opens inline-editable immediately), `useUpdateNote`, `useDeleteNote` (soft-delete; clears `activeNoteId` when it matched), `useNotesTrash`, `useRestoreNote`, `usePermanentDeleteNote`, `useEmptyNotesTrash`.
+  - `useSaveMessageNote` — captures the current profile synchronously at the user action, passes `{ text, profileId }` to its mutation, checks profile identity before create IPC and after completion, derives the excerpt title/body and invalidates the notes list. A changed profile returns no note; the caller owns whether to navigate. Uses existing `note:create`, without a new schema or channel.
   - Folder hooks: `useNoteFolders` (`['note-folders']` query), `useCreateNoteFolder`, `useUpdateNoteFolder` (also used for the collapse/expand toggle), `useDeleteNoteFolder` (invalidates both `['note-folders']` AND `['notes']` since contained notes detach to root), `useReorderNotes` ({ targetFolderId, orderedNoteIds }), `useReorderNoteFolders` (orderedIds[]).
   - **`useAutosaveNote(note)`** — encapsulates inline-edit state. Returns `{ title, body, setTitle, setBody, flushNow }`. Owns local state, the per-note `snapshotRef` (last-persisted title/body), and a `lastNoteIdRef` tracking which note id local state currently reflects. Two effects: a cross-note switch effect that flushes pending edits on the *previous* note (using the in-memory state) before reseeding from the new note's persisted content, and a debounced autosave effect (`AUTOSAVE_DEBOUNCE_MS = 500`) gated on `lastNoteIdRef.current === note.id` so an in-flight switch never fires a save against the wrong id. `flushNow` skips the debounce — used by input `onBlur` so the rendered view never lags behind. Whitespace-only titles are normalized to `FALLBACK_TITLE = 'Untitled note'` before persisting.
 - `src/renderer/src/components/notes/dragContext.ts` — `NotesDragContext` + `useNotesDrag`, carrying `{ kind: 'note' | 'folder', id } | null`. Set on `dragstart`, cleared on `dragend` / `drop`. Distinct from `JobsDragContext` so the two sidebars can't cross-pollinate.
@@ -40,6 +47,7 @@
 ## Database Schema
 
 ### `notes` table
+
 - `id` TEXT PK
 - `user_id` TEXT NOT NULL — profile scope key (per-account)
 - `title` TEXT NOT NULL DEFAULT `'Untitled note'`
@@ -51,6 +59,7 @@
 - Index: `idx_notes_user_id`
 
 ### `note_folders` table
+
 - `id` TEXT PK
 - `user_id` TEXT NOT NULL — profile scope key (per-account)
 - `name` TEXT NOT NULL — trimmed, non-empty (validated in the service)
@@ -80,6 +89,8 @@
 
 ## Services & Key Methods
 
+- `src/renderer/src/hooks/useNotes.ts:useSaveMessageNote()` — first nonempty trimmed line, leading Markdown heading removal, 80-character title cap and Chat excerpt fallback. Stored body is captured text verbatim. [Context actions](../../chat/conversation_ui/conversation_ui_tech.md#message-context-actions) define selection and menu lifecycle.
+
 - `src/main/db/notes.ts`:
   - `notesRepo.list/getById/create/update/softDelete` — CRUD with `userId` in WHERE.
   - `notesRepo.minPositionInFolder(userId, folderId | null)` — `SELECT min(position)` filtered by group; used by `create` to land new notes at the top of the root group with `position = min - 1`.
@@ -101,6 +112,8 @@
 - Empty-title fallback: `FALLBACK_TITLE = 'Untitled note'` exported from `useNotes.ts` (applied by `useAutosaveNote` before persisting; also imported by `NoteDetail.tsx` for the first-focus clear check so the visual blank and the autosave normalization can never drift).
 
 ## Security
+
+- **Excerpt action lifetime.** The profile is captured before React Query schedules the mutation; checks before and after IPC prevent a queued old-profile action from creating under a new profile or changing its cache. Main still resolves and authorizes the active profile. Dismissing a menu does not cancel an already requested note write.
 
 - **Profile scope.** Every `notesRepo` / `noteFoldersRepo` query filters by `userId` (the active profile). Notes and note folders never cross profiles.
 - **Reorder authorization.** Both `reorderNotes` and `reorderFolders` use single-query `countOwned` ownership checks before any write — a malicious renderer can't trip the transaction into touching another user's row even by guessing an id.

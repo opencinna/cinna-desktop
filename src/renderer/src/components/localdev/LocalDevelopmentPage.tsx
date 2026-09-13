@@ -112,7 +112,13 @@ function DevelopmentComposer({ profileId, active, busy, blocked, onSend }: {
   const draft = useLocalDevStore((s) => s.drafts[profileId] ?? '')
   const setDraft = (text: string): void => useLocalDevStore.getState().setDraft(profileId, text)
   const textarea = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => { if (active && !document.querySelector('[role="dialog"]')) textarea.current?.focus() }, [active])
+  useEffect(() => {
+    const input = textarea.current
+    if (!active || !input || document.querySelector('[role="dialog"]')) return
+    input.focus()
+    input.setSelectionRange(input.value.length, input.value.length)
+    input.scrollTop = input.scrollHeight
+  }, [active])
   useLayoutEffect(() => {
     const input = textarea.current
     if (!input) return

@@ -3,9 +3,11 @@
 ## File Locations
 
 ### Shared (cross-process types)
+
 - `src/shared/messageParts.ts` — `ContentKind` and `MessagePart` types used by main (DB schema, repo, A2A accumulator) and renderer (store, hook, MessageStream, ThinkingBlock, ToolNarrationBlock). Type-only module; included by both `tsconfig.node.json` and `tsconfig.web.json`
 
 ### Main Process
+
 - `src/main/db/schema.ts` — `chats`, `messages`, `chatMcpProviders` table definitions (`messages.parts` typed as `MessagePart[]`)
 - `src/main/db/client.ts` — SQLite init, Drizzle instance, inline migrations for chat/message tables
 - `src/main/db/chats.ts` — `chatRepo` — chat CRUD, soft-delete/trash, message history loading, all scoped by `userId`
@@ -21,9 +23,11 @@
 - `src/main/errors.ts` — `ChatError` + `ChatErrorCode` (`not_found`, `not_configured`, `adapter_unavailable`, `not_activated`)
 
 ### Preload
+
 - `src/preload/index.ts` — Exposes `window.api.chat.*` methods via contextBridge
 
 ### Renderer
+
 - `src/renderer/src/stores/chat.store.ts` — selected chat, run ID, projection version, baseline message IDs, streaming blocks, input requests and optimistic user message. A matching successful terminal read replaces the projection with persisted messages; see [live-run state](live_runs.md#implementation-and-ownership).
 - `src/renderer/src/hooks/useChat.ts` — useChatList, useChatDetail, useCreateChat, useDeleteChat, useUpdateChat, trash hooks, `useSetChatRouter` (moves a chat between routers; replaced `usePromoteToOrchestrated`). The old `useSendMessage`, which looked up an A2A session to decide where a message went, is gone — main resolves that now
 - `src/renderer/src/hooks/useChatStream.ts` — `startRun` issues `run.start`; `useRunEventHandler` projects events only. `src/renderer/src/hooks/useLiveRunWatch.ts` owns the selected-chat subscription, replay and guarded terminal settlement, mounted once by `MainArea`. See [Live Run Attachment and Replay](live_runs.md).
@@ -104,7 +108,8 @@ The user's bubble is shown the instant they send — before the persisted row ar
 - **Set on send** — `startRun` snapshots the cached chat’s persisted user count and stores the optimistic message only for the selected chat. Attachments are the resolved `MessageAttachment[]` passed to `window.api.run.start`; the new-chat flow resolves them before sending.
 - **Rendered** — `src/renderer/src/components/chat/MessageStream.tsx` shows the optimistic bubble while `persistedUserCount <= baselineUserCount`, passing `attachments={pendingUserMessage.attachments ?? null}`. Without this the file badges only appeared once the persisted row refetched, lagging the bubble itself until the stream ended. **Count-keyed, not content-keyed** — repeating the previous turn's exact text still shows a bubble (content-keyed dedup hid the second of two identical consecutive messages until its own row refetched). The optimistic bubble's user-turn prop set is kept in lockstep with the persisted bubble (`addressedAgent*` passed `null` — no persisted addressed-agent yet).
 - **Cleared** — `useLiveRunWatch` retires the matching optimistic message and live blocks only after a successful fresh terminal transcript read. Failure keeps them until recovery; profile/chat/projection-version and pending-object checks prevent a stale read from clearing a newer send. Idle attachment after fast completion and replay-unavailable closure use the same settlement. Chat switch/reset also clears pending state. See [live-run settlement](live_runs.md#user-flow-and-rules).
-- **Send re-entrancy** — `src/renderer/src/components/chat/ChatInput.tsx` guards the active-chat send with an `activeSendInFlight` ref (set/reset in try/finally). The watch starts streaming state once main begins the turn; it cannot block a second Enter during the earlier `attachNotesAsync` await; the ref prevents double-sending the same turn.
+- **Send re-entrancy** — `src/renderer/src/components/chat/ChatInput.tsx` acquires `composerDraft.store.beginSend(key)` before new-chat preparation or active-chat note materialization and releases it in `finally`. The watch starts streaming only once main begins the turn, so it cannot guard these earlier awaits. The lock survives navigation/remount of that draft and does not block other drafts.
+- **Draft consumption** — `useChatComposer.submit` and `useNewChatFlow.startNewChat` report a boolean dispatch outcome. Missing chat cache or failed preparation returns false; active attachment-only sends are valid. Confirmed dispatch consumes only unchanged submitted fields in the source draft, not newer edits or another visible composer. Run completion remains separate. See [Draft ownership](../conversation_ui/conversation_ui_tech.md#draft-ownership).
 
 The persisted user content equals the optimistic `content` verbatim (both `prepareLlmSend` / `prepareAgentSend` pass the payload `content` straight to `messageRepo.saveUser`), so the handoff is exact.
 

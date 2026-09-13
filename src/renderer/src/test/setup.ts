@@ -1,5 +1,6 @@
 import { afterEach } from 'vitest'
 import { cleanup } from '@testing-library/react'
+import { useComposerDraftStore } from '../stores/composerDraft.store'
 
 /**
  * Setup for the `renderer` vitest project (see `vitest.config.ts`).
@@ -11,4 +12,6 @@ import { cleanup } from '@testing-library/react'
  */
 afterEach(() => {
   cleanup()
+  // Each test starts a fresh renderer session; navigation within a test keeps drafts.
+  useComposerDraftStore.setState({ drafts: {} })
 })

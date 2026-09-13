@@ -37,20 +37,23 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 ## User Stories / Flows
 
 ### Browsing agents
+
 1. Click **Agents** in the sidebar tab strip. Switching to the tab clears the selection and shows its empty pane; it does not choose an arbitrary agent
 2. Groups appear in this order: default local folders (**Local**), enabled agents from the active Cinna server (its host name), other registered folder roots in registration order, **A2A agents**, **ACP agents**, **Managed**. Existing ordering within each group is retained
 3. Rows show the name and type icon only. Folder agents use `SquareTerminal`; Cinna/A2A and WebSocket ACP use `Waypoints`; other ACP and managed agents use `Bot`. Readiness dots, descriptions and credential sublines are absent; runtime and readiness belong on the page
 4. **Settings → Features → Interface → Show sections in Agents sidebar** defaults on. Turning it off removes headings, section spacing and empty-group placeholders without changing row order or profile membership. With sections enabled, the default root is labelled **Local**; a lone present non-default root retains the existing rule that omits its heading. See [Features Settings](../../ui/settings/settings.md)
-5. Clicking a row explicitly enters chat mode with that agent selected. **Settings** opens the runtime controls and detail tabs; **Start chat** returns to that page's composer. Neither mode switch creates a chat or sends a message. The composer stays mounted while hidden, preserving its draft and pending selections across this switch; choosing a different agent remounts it
+5. Clicking a row explicitly enters chat mode with that agent selected. **Settings** opens the runtime controls and detail tabs; **Start chat** returns to that page's composer. Neither mode switch creates a chat or sends a message. The composer stays mounted while hidden; choosing a different agent remounts it. Draft text and pending selections are also stored by profile and agent surface, so navigating away and returning restores them after remount, independently of the dashboard draft. See [Composer drafts](../../chat/conversation_ui/conversation_ui.md#leaving-and-returning-to-a-draft)
 6. The trailing chat shortcut instead opens the main new-chat screen, selects the agent, focuses its composer and moves the sidebar to **Chats**. It stops propagation, so it does not also navigate to the agent page. Folder shortcuts exclude `invalid` folders; external shortcuts require `enabled`. A successful send from the page's embedded composer moves to the resulting conversation and the Chats sidebar
 
 ### Before there is anywhere to put a folder agent
+
 1. Opening Agents reports **Your agents need a folder** with **Set one up** or **Pick another folder** when needed; opening the tab alone does not raise the consent modal
 2. **+** still opens **Add an agent**. External connections and adopting an existing folder do not require the default agents home. Only choosing **New agent** asks to prepare the home when it is unavailable
 3. Any registered root makes the folder list usable; the unresolved default home remains manageable in application Settings
 4. See [The Agents Folder Question](home_access.md) for the consent and recovery flow
 
 ### Creating an agent
+
 1. **+** — "Add an agent" — offers folder choices alongside **A2A agent**, **Remote ACP agent**, **Command-line agent** and **Managed (Claude)**: **New agent** (scaffold a folder) and **Add a folder** (adopt one that already is an agent). The fork is at the front because the two have nothing in common: one *writes* a kit folder into the agents home and hands it to an assistant to build, the other *reads* a folder the user already owns and changes nothing in it. An "or point at an existing folder" link under a name field would have made the second look like an option on the first
 2. **New agent** is the form that already existed. It asks for one thing: a **name**. Enter creates
 3. The folder name (slug) is derived from the name and shown as a real path preview (`<root>/Local/<slug>`) under the field. It is a directory an assistant will `cd` into and a Cinna instance will import by, so it is shown before anything is written
@@ -60,6 +63,7 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 7. Only when a description was given does the page — not the form — ask for the AI draft, so closing the form neither cancels nor hides it. The readiness strip shows "Drafting…", then the outcome. With no AI credential configured the folder is still created; the draft comes back `skipped` and the strip says what to add
 
 ### Adding a folder that is already an agent
+
 1. **Add a folder** opens the OS directory picker in main and previews what is in it. Nothing is registered and nothing is written; a refusal keeps the dialog on the choice step and says why
 2. One `AGENT.md` folder found means the picked folder *is* the agent: one **Name** field, prefilled from its heading, and Enter is a complete answer
 3. Several means a repository of them: a scrolling checkbox list with **Select all** / **Clear all**, rows already added under another root ticked and disabled, and names as the app shows them — the user's own where they have renamed the agent, else the folder's `AGENT.md` heading
@@ -67,6 +71,7 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 5. Picking a folder that is **already registered** is not a refusal but a **re-selection**: the same list, opened on the state the app is in, where unticking an agent takes it out of the list and ticking one puts it back. It is the only surface that lists a repository's agents one by one, so it is the only place a sixteenth can be added after fifteen were. Anything leaving the list is confirmed first, by name, in a step inside the dialog
 
 ### Opening the folder in a tool
+
 1. The header's **Open in <tool>** launches the default tool at the folder in one click. Its chevron opens a menu of every installed assistant and editor, then Terminal, Reveal folder and **Copy prompt for another tool**
 2. Picking a different tool from the menu launches it **and makes it the new default** — the last pick wins. Terminal, Reveal and the copy never become the default
 3. With no usable default — never picked, or the tool has since been uninstalled — the button is the menu itself, labelled "Open in…". A machine with no assistant or editor at all still gets Terminal, Reveal and the copy, and a sentence pointing at Settings → Agents → Refresh
@@ -74,40 +79,47 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 5. Main re-validates the folder against the registered roots on every launch request; a refusal is shown under the button, not swallowed. See [Open in… (Local Agent Tools)](open_in_tools.md)
 
 ### Deleting an agent
+
 1. **⋯ → Delete agent…** opens a confirm dialog. It leads with what is recoverable and what is not: the folder goes to the OS **Trash** and can be put back; existing chats stay but can no longer reach the agent, and any job that uses it will refuse to run. The copy deliberately does not say "until it is back": `job_agents` cascades away with the row, so restoring the folder from the Trash does not re-attach the job — only the stored dependency descriptor survives, and it keeps the run refused
 2. **Move to Trash** takes the agent's turn lock, trashes the folder, releases the lock, and rescans the root. The row disappears because the folder is no longer on disk — the same prune every other removal goes through, never a direct row delete
 3. The selection is cleared, so the page does not sit asking for a row that no longer exists. While "Deleting…" is showing the dialog cannot be dismissed — not by Escape, an outside click or Cancel — because dismissing it would cancel nothing; it would only leave the user looking at a page whose folder is being trashed with no sign that it is
 4. If the agent is mid-turn the dialog stays open and says so — "This agent is in the middle of a turn. Wait for it to finish, then try again — nothing was removed." — because that is a *busy* answer, not a failure
 
 ### Removing a bare agent
+
 1. **⋯ → Remove agent…** — different wording from "Delete agent…" because the outcome is different
 2. The dialog offers two options as radios: **Remove from the list only** (the default, selected) and **Remove and move the folder to the Trash**. The recoverable one is first, because this is the user's own folder — very often a repository they share with other people — so deleting it is the deliberate second choice ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 5)
 3. The confirm button's label follows the choice: **Remove** or **Move to Trash**
 4. A kit agent is offered no such choice, and main refuses `trashFolder: false` for one: its row is a derived index over its folder, so the next scan would put it straight back
 
 ### Editing a prompt in place
+
 1. The user opens **Settings → Prompts** on the agent page and clicks the Workflow prompt card's text. No edit mode, no Save button — the Notes inline-editor pattern
 2. Typing autosaves 700 ms after the last keystroke; blurring saves immediately
 3. The save carries the stamp **the rendered text was read with**. Main re-stamps the file, compares, and writes atomically only if they match
 4. The card shows "Saving…", then the text the folder now holds — read back from the returned agent, not echoed from the request
 
 ### An assistant edits the same file
+
 1. Claude Code rewrites `Local/<slug>/docs/WORKFLOW_PROMPT.md` while the card is open
 2. The watcher pushes `local-agent:changed`; the query invalidates and a new snapshot arrives
 3. **Clean editor**: the new text is adopted silently — an assistant's edit appears without a click
 4. **Dirty editor**: the user's text is kept, a conflict banner appears, autosave stops. The banner offers the disk contents in a disclosure and a **Reload** button. Nothing is discarded without the user saying so
 
 ### A save that arrives too late
+
 1. The user types while an assistant has already changed the file; the save is sent with a now-stale stamp
 2. Main refuses it (`manifest_modified` for the manifest, `file_modified` for a prompt document)
 3. The same conflict banner appears, worded "your save was refused". The save is **never retried** — retrying with a fresh stamp is exactly the overwrite the refusal prevented
 
 ### A save during a run
+
 1. A turn holds the agent's lock; the desktop must not write into the folder mid-stream
 2. Main refuses with `turn_in_progress`. This is **not** a conflict: nothing was written, nothing changed underneath, the stamp is still good
 3. The card says quietly "This agent is running. Your changes are saved as soon as it finishes.", keeps the text, and the autosave timer re-arms at a longer interval (3 s rather than 700 ms — a turn runs for minutes)
 
 ### Giving a legacy folder a durable identity
+
 1. A folder whose `cinna-agent.json` states no `id` opens and edits normally, but its identity is *positional* — root plus folder name — so renaming or moving it starts a different agent
 2. The readiness strip says so, as information rather than a fault, and offers **Stamp identity**
 3. Clicking it writes a fresh UUID `id` (and `contract_version` when absent) through the ordinary stamped write — the same guard as any other edit, because an assistant may have that file open
@@ -115,6 +127,7 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 5. The page follows the selection to the returned agent, because the old row id no longer exists
 
 ### Two folders claiming the same id
+
 1. Copying an agent folder to start a new one duplicates its manifest `id` — ordinary, not exotic
 2. The first folder alphabetically owns `folder:<id>`. The loser is still listed, marked invalid, with a finding naming the other folder
 3. The loser is **selectable but never indexed**. Clicking it lands on the page's "This agent is not indexed" state, whose copy explains the collision and offers a rescan

@@ -71,7 +71,7 @@ Codex keeps its CLI default model. Claude/Codex retain their CLI authentication 
 - A builder's Local connection tooltip identifies its saved engine as Claude Code, Codex or OpenCode, with ACP · stdio, This computer and Local Development. Missing/invalid engine metadata reads Not recorded instead of guessing today's default. The tooltip needs no private configuration lookup.
 - Internal builders open Local Development settings rather than the generic command configuration editor. Generic configuration, Test and Save refuse a builder ID, so the placeholder command cannot replace its managed launch behavior.
 - Leaving the entry page or changing accounts during first-chat preparation cannot select or send the late chat. An empty chat is soft-deleted on best effort only while the originating account remains active; successful same-account cleanup refreshes both Chats and Trash. Cleanup after an account switch is deliberately skipped because deletion is scoped to the currently active account.
-- Drafts are isolated by profile and survive page/settings navigation for the renderer's lifetime. They are not saved across app restart. Typing neither rereads readiness nor reparses the guide.
+- Drafts are isolated by profile and survive page/settings navigation for the renderer's lifetime. Returning to the active, ready composer restores the caret to the end and shows its last line, so continued typing appends to the draft. They are not saved across app restart. Typing neither rereads readiness nor reparses the guide.
 
 ### A local conversation is not proof of a remote build
 

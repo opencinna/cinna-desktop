@@ -24,23 +24,24 @@ type OnDemandAgents = Awaited<ReturnType<typeof window.api.chat.listOnDemandAgen
  * answer is the one that runs.
  */
 export function useChatComposer(chatId: string | null): {
-  submit: (input: string, attachments?: MessageAttachment[]) => Promise<void>
+  submit: (input: string, attachments?: MessageAttachment[]) => Promise<boolean>
 } {
   const queryClient = useQueryClient()
   const { startRun } = useChatStream()
   const addressedAgentByChat = useChatStore((s) => s.addressedAgentByChat)
 
   const submit = useCallback(
-    async (input: string, attachments?: MessageAttachment[]): Promise<void> => {
+    async (input: string, attachments?: MessageAttachment[]): Promise<boolean> => {
       const trimmed = input.trim()
-      if (!trimmed || !chatId) return
+      if ((!trimmed && !attachments?.length) || !chatId) return false
       const chat = queryClient.getQueryData<CachedChat>(['chat', chatId])
-      if (!chat) return
+      if (!chat) return false
 
       startRun(chatId, trimmed, {
         attachments,
         target: answererFor(queryClient, chat, chatId, addressedAgentByChat[chatId])
       })
+      return true
     },
     [chatId, queryClient, startRun, addressedAgentByChat]
   )

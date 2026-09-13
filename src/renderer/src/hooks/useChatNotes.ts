@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback } from 'react'
+import { useComposerDraftField, useComposerDraftKey } from './useComposerDraft'
 
 export interface NoteRef {
   id: string
@@ -13,30 +14,26 @@ export interface ChatNotesAPI {
 }
 
 /**
- * Composer-local buffer of notes the user attached via the `?` mention
- * popup. Mirrors {@link useChatAttachments} in shape — keyed by `chatId`
- * so switching chats wipes the buffer — but intentionally minimal: notes
+ * Draft buffer of notes the user attached via the `?` mention popup.
+ * Notes survive navigation, scoped to the originating composer; notes
  * aren't materialized into files until send time, so there's no upload
  * state machine to manage here.
  */
-export function useChatNotes(chatId: string | null): ChatNotesAPI {
-  const [notes, setNotes] = useState<NoteRef[]>([])
-
-  useEffect(() => {
-    setNotes([])
-  }, [chatId])
+export function useChatNotes(chatId: string | null, draftKey?: string): ChatNotesAPI {
+  const defaultKey = useComposerDraftKey(chatId)
+  const [notes, setNotes] = useComposerDraftField(draftKey ?? defaultKey, 'notes')
 
   const add = useCallback((note: NoteRef) => {
     setNotes((curr) =>
       curr.some((n) => n.id === note.id) ? curr : [...curr, note]
     )
-  }, [])
+  }, [setNotes])
 
   const remove = useCallback((id: string) => {
     setNotes((curr) => curr.filter((n) => n.id !== id))
-  }, [])
+  }, [setNotes])
 
-  const clear = useCallback(() => setNotes([]), [])
+  const clear = useCallback(() => setNotes([]), [setNotes])
 
   return { notes, add, remove, clear }
 }

@@ -10,6 +10,7 @@ import type {
 } from '../../../shared/notes'
 import type { MessageAttachment } from '../../../shared/attachments'
 import { useUIStore } from '../stores/ui.store'
+import { useAuthStore } from '../stores/auth.store'
 
 export function useNoteList() {
   return useQuery({
@@ -57,6 +58,28 @@ export function useCreateNote() {
       setActiveView('note-detail')
     }
   })
+}
+
+/** Save a transcript excerpt; the caller owns whether its menu is still open. */
+export function useSaveMessageNote() {
+  const queryClient = useQueryClient()
+  const { mutateAsync } = useMutation({
+    mutationFn: async ({ text, profileId }: { text: string; profileId: string | undefined }) => {
+      // React Query may start the mutation in a later microtask. Capture its
+      // account at the gesture, and never dispatch into a different profile.
+      if (useAuthStore.getState().currentUser?.id !== profileId) return null
+      const firstLine = text.trim().split('\n').find((line) => line.trim()) ?? ''
+      const title = firstLine.replace(/^\s{0,3}#{1,6}\s+/, '').slice(0, 80) || 'Chat excerpt'
+      const note = await window.api.notes.create({ title, body: text })
+      // Query keys are shared across profiles and cleared during a switch.
+      if (useAuthStore.getState().currentUser?.id !== profileId) return null
+      void queryClient.invalidateQueries({ queryKey: ['notes'] })
+      return note
+    }
+  })
+  return useCallback((text: string) => mutateAsync({
+    text, profileId: useAuthStore.getState().currentUser?.id
+  }), [mutateAsync])
 }
 
 export function useUpdateNote() {

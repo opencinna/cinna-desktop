@@ -14,30 +14,42 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 
 ## User Stories / Flows
 
+### Saving a chat excerpt
+
+1. Select text in a chat transcript and right-click within it, or right-click a message body to use its original Markdown. Choose **Save to Notes**.
+2. A normal note is created at the top of the root group with the captured text as its body. The title uses the first nonempty line, removes a leading Markdown heading marker and is capped at 80 characters; Chat excerpt is the fallback.
+3. The new note opens for the usual inline editing. If the menu was dismissed or navigation moved away before creation completed, the saved note stays in the list without taking the user back to its detail view.
+4. Copy/Save errors remain in the context menu for retry. Selecting part of rendered text preserves the visible excerpt; whole message bodies preserve Markdown. Capture and menu lifetime belong to [Conversation UI](../../chat/conversation_ui/conversation_ui.md#reusing-message-text).
+
 ### Switching to Notes
+
 1. User clicks the **NotebookPen** icon on the sidebar's left edge tab rail.
 2. The sidebar body swaps from Chats / Jobs to the notes list. `activeNoteId` is reset to `null`, and the main area lands on the **"Select a note to view."** empty state — auto-selecting the first note would be misleading when notes can live inside a collapsed folder.
 3. Switching back to Chats or Jobs follows the same realignment contract as the Jobs tab.
 
 ### Creating a note
+
 1. User clicks the `+` button in the Notes sidebar header.
 2. A note is created with placeholder title `Untitled note` and empty body; the main area opens the **Note Detail** view for the new note.
 3. The title input is focusable immediately; typing starts the autosave loop.
 4. **First-focus clear.** When the user focuses the title input while it still holds the default `Untitled note`, the input is visually blanked so the user can type without deleting the placeholder first. The underlying title state is untouched until the user actually types — focusing-then-blurring with no input restores `Untitled note` and triggers no autosave. The blank-on-focus flag resets per note (switching notes re-arms it) and is cleared as soon as the user types or blurs.
 
 ### Editing a note (inline)
+
 1. From the sidebar, user clicks a note row. Main area renders the read-rendered detail view: title input on top, rendered markdown body below.
 2. **Title.** The input is always editable. Each keystroke updates local state; after 500ms of inactivity, autosave persists. Blurring the input also flushes immediately. Whitespace-only titles are normalized to `Untitled note` before persisting (the user is never blocked, but the row stays addressable).
 3. **Body.** Click anywhere on the rendered body → it swaps to a focused textarea showing raw markdown. Type. Click outside (or focus another input) → the textarea blurs, the latest body is flushed immediately, and the rendered view reappears with the new content.
 4. **Switching notes mid-edit.** Selecting another note in the sidebar before the debounce fires flushes the pending change on the *previous* note before reseeding local state from the new one — unsaved edits cannot get stranded on the wrong row.
 
 ### Deleting / restoring a note
+
 1. Hovering a note row in the sidebar reveals a small trash icon on the right. Clicking it soft-deletes the note (sets `deleted_at`) and removes it from the list. There is no confirm modal — the action is reversible from Trash, same as chats.
 2. If the deleted note was the active one, `activeNoteId` is cleared; the main area falls back to the "Select a note to view." pane.
 3. **Trash** (Settings → Trash) lists trashed chats and notes interleaved in a single chronological view, each row tagged with its kind icon (MessageSquare / NotebookPen). Restore returns the note to the sidebar in its prior folder/position (the row's `deletedAt` is cleared); Permanent Delete hard-removes it. **Empty Trash** drops both chats and notes for the profile.
 4. On boot, the notes migration permanently drops any note whose `deleted_at` is older than 30 days.
 
 ### Organising notes into folders
+
 1. The Notes sidebar header has two icon buttons: **FolderPlus** (new folder) and **Plus** (new note).
 2. Clicking FolderPlus creates a folder named `New folder` at the bottom of the folder list and immediately opens the rename modal so the user can type a real name and confirm.
 3. Each folder row is a thin header with a chevron (▶ collapsed / ▼ expanded), the folder name, and a trailing slot showing the count of notes inside when idle. On hover (or while the gear menu is open) the count is replaced by a **gear** icon; the gear menu has **Edit** (rename modal) and **Delete** (confirm modal).
@@ -45,6 +57,7 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 5. **Deleting a folder** is always confirmed. On confirm, the folder row disappears and any notes that lived inside are detached back to the root group (their `folderId` is set to null). Notes are never lost.
 
 ### Reordering and moving by drag-and-drop
+
 1. Note rows and folder headers are both drag sources, mirroring the Jobs behavior.
 2. **Dragging a note** can drop:
    - **Onto another note row** → reorders within the target's group (inserts before the drop target). Cross-group drops carry the note into the target's folder.
@@ -54,6 +67,8 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 4. The renderer constructs the new ordering of the affected group and posts it to the server in one IPC call (`note:reorder` or `noteFolder:reorder`); the server rewrites positions in a single transaction. The list refetches afterwards.
 
 ## Business Rules
+
+- **A saved excerpt is independent.** Save to Notes snapshots the captured body into an ordinary profile note. Later message streaming, edits or chat deletion do not rewrite the note; it has no live link back to the message.
 
 - **Profile scope.** Notes and note folders live in the active profile's `userId` scope — they don't follow the user across profile switches and are invisible from other profiles.
 - **Validation.** `title` must be non-empty on PATCH. The renderer normalizes whitespace-only titles to `Untitled note` before sending, so the user is never blocked while typing. Updates that would null out the title are rejected with `NoteError('invalid_input', ...)`.
@@ -65,6 +80,8 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 - **Reorder ownership.** Both `notesService.reorderNotes` and `notesService.reorderFolders` use `notesRepo.countOwned` / `noteFoldersRepo.countOwned` to verify in a single COUNT query that every submitted id belongs to the active profile. A mismatch raises `NoteError('not_found')` before any write.
 
 ## Architecture Overview
+
+Transcript context menu → captured text → Notes create → profile note in root group → note detail while the originating menu remains current.
 
 ```
 Sidebar
@@ -109,6 +126,8 @@ Trash (Settings → Trash)
 See [Notes — Technical Details](notes_tech.md) for file paths, IPC channel signatures, schema fields, and configuration constants.
 
 ## Integration Points
+
+- [Conversation UI](../../chat/conversation_ui/conversation_ui.md) — captures transcript text and owns right-click menu navigation; Notes owns the resulting document and its existing Trash lifecycle.
 
 - [App Shell](../../ui/app_shell/app_shell.md) — Sidebar tab rail gains the Notes (NotebookPen) tab alongside Chats and Jobs.
 - [Messaging](../../chat/messaging/messaging.md) — Notes reuse the chat trash retention contract (30-day permanent delete) and share the Settings → Trash view.

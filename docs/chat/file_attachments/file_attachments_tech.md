@@ -3,10 +3,12 @@
 ## File Locations
 
 ### Shared (cross-process types)
+
 - `src/shared/attachments.ts` — `MessageAttachment` (id, filename, size, mimeType, `source?: 'cinna' | 'local'`), `PendingAttachment` (id = absolute path, `source: 'pending'`), `ComposerAttachment` union, `isPendingAttachment` narrow
 - `src/shared/ipcPayloads.ts` — `RunSendPayload.attachments?: MessageAttachment[]`
 
 ### Main process — DB
+
 - `src/main/db/schema.ts` — `messages.attachments` JSON column (`MessageAttachment[] | null`); `chatFiles` table (local-store metadata)
 - `src/main/db/migrations/messages.ts` — adds `attachments` column (idempotent via `hasColumn`)
 - `src/main/db/migrations/chat-files.ts` — creates `chat_files` table + index, registered in `client.ts:runMigrations()`
@@ -14,6 +16,7 @@
 - `src/main/db/messages.ts` — `messageRepo.saveUser({ attachments })` writes the JSON array; treats empty arrays as `null`
 
 ### Main process — services
+
 - `src/main/services/fileService.ts` — single chokepoint:
   - `resolvePaths(paths)` — `stat()` + MIME guess; returns `PendingAttachment[]`. No upload, no chat-id needed
   - `ingest({ userId, scope, chatId, filePaths })` — verifies chat ownership for local scope; dispatches to `localFileStore.ingest` or `cinnaFileService.uploadMany`; stamps `source` on Cinna results
@@ -30,6 +33,7 @@
 - `src/main/services/providerService.ts` — `getModelCapability(providerId, modelId)` wraps `getAdapter(...).modelCapability(...)`; returns `NO_FILE_SUPPORT` if the provider isn't registered
 
 ### Main process — LLM adapters
+
 - `src/main/llm/types.ts` — `MediaPart` discriminated union (`image | document | text`); `ModelCapability` (`acceptedMimeTypes`, `nativeMimeTypes`, `maxFileSizeBytes`, `maxFilesPerMessage`); `NO_FILE_SUPPORT` constant; `renderTextPartsPrefix(media)` shared `<file>` block renderer
 - `src/main/llm/capabilityMimes.ts` — `TEXT_EXTRACTABLE_MIMES` — universal list reused by all three adapters
 - `src/main/llm/anthropic.ts` — Claude 3+: images (PNG/JPEG/GIF/WebP) + PDF native; legacy Claude 2 / Instant: text-only. `buildMediaBlocks` emits `image` and `document` content blocks
@@ -37,6 +41,7 @@
 - `src/main/llm/gemini.ts` — Gemini 1.5+ / 2.x: images + PDF native via `inlineData`. Legacy Gemini Pro: text-only. `buildInlineDataParts` handles both image and document variants
 
 ### Main process — IPC
+
 - `src/main/ipc/files.ipc.ts` — thin controllers, all delegating to `fileService`:
   - `files:track-path` (`ipcMain.on`) — preload-side path tracking, records into `pathGuard`
   - `files:pick-and-upload` — opens dialog, records paths, delegates to `fileService.ingest`
@@ -50,6 +55,7 @@
 - runExecutionService prepares agent attachments, resolves file IDs and invokes the driver through streamToAgent; capability checks decide the permitted scope.
 
 ### Preload
+
 - `src/preload/index.ts`:
   - `MessageData.attachments?: MessageAttachment[] | null`
   - `window.api.files.pickAndUpload({ scope?, chatId? })`
@@ -63,8 +69,11 @@
   - `window.api.run.start({ ..., attachments })`; the lower-level `run.send` accepts the same payload
 
 ### Renderer
+
+- `src/renderer/src/stores/composerDraft.store.ts`, `src/renderer/src/hooks/useComposerDraft.ts` — per-profile/surface session buffer, upload/error/token state and send preparation lock. Lifecycle and dispatch outcomes are specified in [Draft ownership](../conversation_ui/conversation_ui_tech.md#draft-ownership).
+
 - `src/renderer/src/stores/fileDownload.store.ts` — `useFileDownloadStore`: `downloadingIds: Set<string>`, `error`, `errorFileId`, `download(attachment)`. Passes `attachment.source ?? 'cinna'` to the download IPC
-- `src/renderer/src/hooks/useChatAttachments.ts` — composer buffer keyed by chatId. Returns `ComposerAttachment[]`. Deferred mode (`chatId === null`) routes to `files:pick-paths` / `files:resolve-paths` instead of immediate ingest. `remove(attachment)` skips the IPC for `source === 'pending'`. Generation counter for staleness
+- `src/renderer/src/hooks/useChatAttachments.ts` — session draft buffer keyed by profile and composer. Returns `ComposerAttachment[]`. Deferred mode (`chatId === null`) routes to `files:pick-paths` / `files:resolve-paths` instead of immediate ingest. `remove(attachment)` skips the IPC for `source === 'pending'`. Draft-owned upload token prevents cleared results from returning; navigation keeps the token so completion updates the originating draft
 - `src/renderer/src/hooks/useModelCapability.ts` — React Query hook over `llm:get-model-capability`. 5-min stale time. Returns `NO_FILE_SUPPORT` shape while loading or when ids are absent
 - `src/renderer/src/hooks/useChatComposer.ts` — `submit(input, attachments?: MessageAttachment[])` forwards attachments to `startRun` on the one send channel; the upload **scope** comes from `routingOf(chat).attachmentTarget` (see [Chat Routing](../chat_routing/chat_routing_tech.md)) — `cinna` when an agent answers, `local` when the local model does
 - `src/renderer/src/hooks/useChatStream.ts` — `StartLlmOptions.attachments?: MessageAttachment[]`, `StartAgentOptions.attachments?: MessageAttachment[]`; types unified on shared `MessageAttachment`
@@ -116,6 +125,9 @@ Index: `idx_chat_files_chat_id ON chat_files(chat_id)`. Migration is additive �
 
 ## Services & Key Methods
 
+- `src/renderer/src/hooks/useNewChatFlow.ts:resolvePendingAttachments()` — deferred ingest must return one file for every pending path. A shorter successful result throws the unavailable-files error rather than dispatching with omissions. `startNewChat` returns false after failure and best-effort orphan cleanup, true after run dispatch; the caller consumes the source draft only on true.
+- `src/renderer/src/hooks/useChatComposer.ts:submit()` — returns whether an active-chat dispatch occurred; attachment-only content is valid, missing chat cache is false. `ChatInput` retains selected files when no dispatch occurred.
+
 - `src/main/services/fileService.ts:ingest()` — ownership-checked dispatch + uniform `MessageAttachment[]` return; logs per-scope ingest counts
 - `src/main/services/fileService.ts:resolvePaths()` — `stat()` + `guessLocalMime`; returns `PendingAttachment[]`; logs `{ in, out }` per call
 - `src/main/services/fileService.ts:downloadToPath()` — disk-to-disk for local, HTTP-streamed for Cinna
@@ -129,7 +141,7 @@ Index: `idx_chat_files_chat_id ON chat_files(chat_id)`. Migration is additive �
 ## Renderer State
 
 - `useFileDownloadStore` (Zustand) — concurrent download spinners + bubble-scoped error
-- `useChatAttachments(chatId, scope)` (local hook) — composer buffer; deferred mode when `chatId === null`
+- `useChatAttachments(chatId, scope, draftKey?)` — session draft buffer; deferred mode when `chatId === null`. A synchronous per-draft upload guard prevents concurrent picker ingestion. Completion targets the captured key/token after navigation; clearing replaces file state and invalidates that token. Removal is source-scoped and pending paths need no backend delete
 - `useModelCapability(providerId, modelId)` (React Query) — drives `[+]` gating and picker filters
 
 ## Configuration

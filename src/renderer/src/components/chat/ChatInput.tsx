@@ -1,7 +1,7 @@
 import { PendingHandoffControl } from '../tasks/PendingHandoffControl'
 import { AmbientGrid } from '../ui/AmbientGrid'
 import { AutonomousTaskDialog } from '../tasks/AutonomousTaskDialog'
-import { useState, useRef, useEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef } from 'react'
 import { SendHorizontal, Square, Bot } from 'lucide-react'
 import { useChatDetail, useSetChatRouter } from '../../hooks/useChat'
 import { useModels } from '../../hooks/useModels'
@@ -42,17 +42,21 @@ import { NotePreviewModal } from '../notes/NotePreviewModal'
 import { ComposerReadinessWarning, useComposerReadiness } from './ComposerReadiness'
 import type { ComposerAttachment, MessageAttachment } from '../../../../shared/attachments'
 import type { NoteData } from '../../../../shared/notes'
+import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
+import { useComposerDraftStore } from '../../stores/composerDraft.store'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type TriggerChar = '@' | '#' | '/' | '?'
 
 interface ChatInputProps {
   chatId: string | null
+  /** Stable, profile-scoped identity for an entry-page composer. */
+  draftKey?: string
   onNewChat?: (
     message: string,
     attachments?: ComposerAttachment[],
     noteIds?: string[]
-  ) => void
+  ) => void | boolean | Promise<void | boolean>
   /**
    * Chat-mode sub-menu for the `[+]` button. Omitted when mode selection
    * doesn't apply (e.g. an active chat that wasn't created with a mode).
@@ -143,6 +147,7 @@ export interface ChatInputHandle {
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
   {
     chatId,
+    draftKey: suppliedDraftKey,
     onNewChat,
     chatModeMenu,
     modeColor,
@@ -160,7 +165,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   },
   ref
 ) {
-  const [input, setInput] = useState('')
+  const defaultDraftKey = useComposerDraftKey(chatId)
+  const draftKey = suppliedDraftKey ?? defaultDraftKey
+  const [input, setInput] = useComposerDraftField(draftKey, 'text')
+  const [sending] = useComposerDraftField(draftKey, 'sending')
   const [autonomousGoal, setAutonomousGoal] = useState<string | null>(null)
   const [capabilityPickerOpen, setCapabilityPickerOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -168,7 +176,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // Synchronous re-entrancy guard for the active-chat send. `isStreaming` only
   // flips true once the stream's `request-id` arrives, so it can't block a
   // second Enter fired during the `attachNotesAsync` await — this ref does.
-  const activeSendInFlight = useRef(false)
   const { data: chatData } = useChatDetail(chatId)
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   // Hint bar telemetry. Every call is "the user just did X" — the store decides
@@ -228,10 +235,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   )
   const modelSupportsMedia = modelCapability.acceptedMimeTypes.length > 0
 
-  // Composer-local attachment buffer + IPC wiring. Hook owns staleness so
-  // switching chats mid-upload (or after a clear) won't repopulate state
-  // when the upload eventually resolves. See `useChatAttachments` for the
-  // generation-ref trick.
+  // Files belong to this draft. Uploads completing after navigation still
+  // populate their originating composer, never the newly visible one.
   //
   // The scope: a message an agent answers uploads to the Cinna backend, one the
   // local model answers uses the local store. Asked of the chat's router rather
@@ -246,20 +251,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     pick: pickAttachments,
     pickFromPaths: pickAttachmentsFromPaths,
     remove: handleRemoveAttachment,
-    clear: clearPendingAttachments,
     setError: setAttachError
-  } = useChatAttachments(chatId, attachScope)
+  } = useChatAttachments(chatId, attachScope, draftKey)
   // The send. Who answers is main's decision, from `chats.router`; the composer
   // only says which agent the user addressed.
   const composer = useChatComposer(chatId)
-
-  const clearComposer = useCallback(() => {
-    setInput('')
-    clearPendingAttachments()
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
-  }, [clearPendingAttachments])
 
   // Local kbd-nav index for the `~` chat-mode popup. Reset to the active mode
   // (or the first row) whenever the popup is freshly opened so navigation
@@ -293,8 +289,18 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   }))
 
   useEffect(() => {
-    textareaRef.current?.focus()
-  }, [chatId])
+    const el = textareaRef.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+    el.scrollTop = el.scrollHeight
+  }, [draftKey])
+  useLayoutEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 180) + 'px'
+  }, [input, draftKey])
   const { cancel: cancelStream } = useChatStream()
   const { isStreaming: hasPortStream, activeRequestId } = useChatStore()
   const isStreaming = hasPortStream || !!chatData?.activeRunId
@@ -306,15 +312,24 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const [triggerStart, setTriggerStart] = useState(0)
   const [triggerIndex, setTriggerIndex] = useState(0)
 
-  // Notes attached via the `?` mention popup. Composer-local buffer keyed
-  // by chatId — switching chats wipes it. Body is fetched on the main side
+  // Notes attached via the `?` mention popup stay with the draft. Body is fetched on the main side
   // at send time, so late edits to a note are reflected in the attached `.md`.
   const {
     notes: pendingNotes,
     add: addPendingNote,
-    remove: removePendingNote,
-    clear: clearPendingNotes
-  } = useChatNotes(chatId)
+    remove: removePendingNote
+  } = useChatNotes(chatId, draftKey)
+  const clearComposer = useCallback(() => {
+    // The send may finish after switching away or editing another draft.
+    // Consume only the submitted values that are still unchanged.
+    useComposerDraftStore.getState().update(draftKey, (draft) => ({
+      text: draft.text === input ? '' : draft.text,
+      notes: draft.notes === pendingNotes ? [] : draft.notes,
+      files: draft.files.attachments === pendingAttachments
+        ? { ...draft.files, attachments: [], error: null }
+        : draft.files
+    }))
+  }, [draftKey, input, pendingNotes, pendingAttachments])
   const { mutateAsync: attachNotesAsync } = useAttachNotesAsFiles()
   const fetchNote = useFetchNote()
   const [previewNoteId, setPreviewNoteId] = useState<string | null>(null)
@@ -331,12 +346,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   )
   // Preview is UI-only; reset whenever the chat row swaps so a modal
   // doesn't bleed into a different chat's composer. The expansion target
-  // is also chat-local — `useChatNotes` already wipes the badges on switch,
-  // so a stale id would point at a no-longer-pending note.
+  // is also chat-local; navigation restores the draft without reopening popups.
   useEffect(() => {
     setPreviewNoteId(null)
     setPendingExpansionNoteId(null)
-  }, [chatId])
+    setTriggerChar(null)
+    setTriggerFilter('')
+    setCapabilityPickerOpen(false)
+    setAutonomousGoal(null)
+  }, [draftKey])
 
   // Hold the hint rotation while the composer has something open — changing the
   // tip under a user who's mid-selection competes for the attention they're
@@ -585,23 +603,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     wasRefusedRef.current = refused
   }, [refused, focusComposer])
 
-  useEffect(() => {
-    if (!targetSupportsAttachments && pendingAttachments.length > 0) {
-      clearPendingAttachments()
-    }
-  }, [targetSupportsAttachments, pendingAttachments.length, clearPendingAttachments])
-
-  // Pivoting between scopes (e.g. switching active agent from remote to LLM
-  // root) makes already-queued attachments wrong-scope. Drop them so the
-  // user re-picks under the new destination's rules.
-  const lastScopeRef = useRef(attachScope)
-  useEffect(() => {
-    if (lastScopeRef.current !== attachScope) {
-      lastScopeRef.current = attachScope
-      if (pendingAttachments.length > 0) clearPendingAttachments()
-    }
-  }, [attachScope, pendingAttachments.length, clearPendingAttachments])
-
   // Drag-drop wiring. `dragOverDepth` is a counter (not a boolean) because
   // dragenter/dragleave fire on every child during a drag — we'd flicker
   // off the moment the pointer crosses an inner element. Counting nested
@@ -759,7 +760,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         el.style.height = Math.min(el.scrollHeight, 180) + 'px'
       }, 0)
     },
-    [input, triggerStart, triggerFilter, closeTrigger]
+    [input, triggerStart, triggerFilter, closeTrigger, setInput]
   )
 
   const selectAgent = useCallback(
@@ -965,6 +966,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       trimmed.length > 0 ||
       (chatId !== null && (pendingAttachments.length > 0 || pendingNotes.length > 0))
     if (!hasContent) return
+    // A restored draft can render before destination queries finish. Keep its
+    // files, and validate on send instead of deleting them during loading.
+    if (pendingAttachments.length > 0 && !targetSupportsAttachments) {
+      setAttachError('Choose a destination that supports these files, or remove them before sending.')
+      return
+    }
+    if (chatId && pendingAttachments.some((file) => (file.source ?? 'cinna') !== attachScope)) {
+      setAttachError('These files were attached for a different destination. Remove and reattach them before sending.')
+      return
+    }
     const attachmentsToSend =
       targetSupportsAttachments && pendingAttachments.length > 0
         ? [...pendingAttachments]
@@ -977,18 +988,23 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // refuse here. Notes ride the same deferral — startNewChat will
     // materialize each into a `.md` attachment once the scope is known.
     if (!chatId) {
+      if (!onNewChat || !useComposerDraftStore.getState().beginSend(draftKey)) return
       const noteIds = pendingNotes.map((n) => n.id)
-      clearComposer()
-      clearPendingNotes()
-      onNewChat?.(trimmed, attachmentsToSend, noteIds.length > 0 ? noteIds : undefined)
+      try {
+        const sent = await onNewChat(trimmed, attachmentsToSend, noteIds.length > 0 ? noteIds : undefined)
+        if (sent !== false) clearComposer()
+      } catch (error) {
+        setSendError(unwrapIpcError(error, 'Could not start new chat'))
+      } finally {
+        useComposerDraftStore.getState().endSend(draftKey)
+      }
       return
     }
 
     // Guard against a second Enter landing during the note-ingest await below
     // (which would double-send the same turn) — `isStreaming` can't yet, since
     // it only flips once the stream's `request-id` arrives.
-    if (activeSendInFlight.current) return
-    activeSendInFlight.current = true
+    if (!useComposerDraftStore.getState().beginSend(draftKey)) return
     try {
       // Convert any pending notes into real .md attachments via the IPC
       // ingest path so they ride the same code-path as user-attached files
@@ -1021,18 +1037,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         noteAttachments.length > 0
           ? [...(persistedAttachments ?? []), ...noteAttachments]
           : persistedAttachments
-      await composer.submit(trimmed, mergedAttachments)
-      // Reset the composer after an active-chat send: text, pending attachments,
-      // and textarea height. `clearComposer` mirrors the new-chat branch above —
-      // the input clear lived in `handleSend` pre-refactor and was lost when it
-      // moved into `clearComposer`, which only the new-chat branch then called.
-      clearComposer()
-      clearPendingNotes()
+      const dispatched = await composer.submit(trimmed, mergedAttachments)
+      // Consume submitted values from the source draft, even after navigation.
+      if (dispatched) clearComposer()
     } finally {
-      activeSendInFlight.current = false
+      useComposerDraftStore.getState().endSend(draftKey)
     }
   }, [
     input,
+    draftKey,
     isStreaming,
     chatId,
     onNewChat,
@@ -1044,8 +1057,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     clearComposer,
     targetSupportsAttachments,
     pendingAttachments,
-    clearPendingAttachments,
-    clearPendingNotes,
+    setInput,
+    setSendError,
     pendingExpansionNoteId,
     removePendingNote,
     fetchNote,
@@ -1489,6 +1502,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               aria-describedby={readiness.text ? readinessReasonId : undefined}
               title={readiness.title ?? undefined}
               disabled={
+                sending ||
                 readiness.blocksSend ||
                 (!input.trim() &&
                   !(

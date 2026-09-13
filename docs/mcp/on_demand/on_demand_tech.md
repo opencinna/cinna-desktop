@@ -3,6 +3,7 @@
 ## File Locations
 
 ### Main process
+
 - `src/main/db/schema.ts` — `chatOnDemandMcps` table definition (Drizzle)
 - `src/main/db/migrations/chats.ts` — `CREATE TABLE IF NOT EXISTS chat_on_demand_mcps` alongside `chat_mcp_providers`
 - `src/main/db/chatOnDemandMcp.ts` — `chatOnDemandMcpRepo` data-access (CRUD + peek/clear)
@@ -14,12 +15,14 @@
 - `src/main/mcp/manager.ts` — `mcpManager.getToolsForProviders()` consumes the unioned id list
 
 ### Preload
+
 - `src/preload/index.ts` — adds `chat.listOnDemandMcps`, `chat.addOnDemandMcp`, `chat.removeOnDemandMcp` to the typed `window.api.chat` namespace
 
 ### Renderer
+
 - `src/renderer/src/hooks/useMcp.ts` — `useChatOnDemandMcps`, `useAddOnDemandMcp`, `useRemoveOnDemandMcp` (React Query hooks with scoped `on-demand-mcp` logger on error)
 - `src/renderer/src/hooks/useNewChatFlow.ts` — `startNewChat` flushes the new-chat MCP buffer onto the freshly-created chat (via the `useAddOnDemandMcp` mutation, so the chips' query key is invalidated and failures are logged) before the first send dispatches
-- `src/renderer/src/components/layout/ChatWorkspace.tsx` — owns the `pendingMcpIds` state for the new-chat screen and the toggle/remove callbacks passed into ChatInput
+- `src/renderer/src/components/layout/ChatWorkspace.tsx` — reads `pendingMcpIds` from the profile/surface draft and owns the toggle/remove callbacks passed into ChatInput; the source buffer survives navigation and only unchanged submitted selections clear after confirmed dispatch
 - `src/renderer/src/components/chat/ChatInput.tsx` — owns trigger detection, filtered agent + MCP lists, combined keyboard nav; routes MCP selections to either the DB mutation (active chat) or the parent's pending buffer (new chat)
 - `src/renderer/src/components/chat/AgentMcpMentionPopup.tsx` — listbox with `role="group"` sections per "Agents" and "MCP"
 - `src/renderer/src/components/chat/ActiveMcpChips.tsx` — the strip rendered alongside `OnDemandAgentChips` below the composer. Draws the chat's **whole** active MCP set: mode-owned `baselineIds` first (locked, no `×`), then the on-demand engagements (removable), de-duplicated by id with the baseline winning. The on-demand half has two modes — DB-backed (`chatId` prop) and buffer-backed (`pendingIds` + `onRemovePending` props). Fixed accent color + connector (`Plug`) icon; connection health is shown only on problems via a red `McpStatusDot` (hover-card detail) after the name when `status !== 'connected'`

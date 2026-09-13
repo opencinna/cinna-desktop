@@ -4,6 +4,7 @@ import { useReadChatResult } from '../../hooks/useReadChatResult'
 import { useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
 import { ChatWorkspace } from './ChatWorkspace'
+import { ChatTransition } from './ChatTransition'
 import { SettingsPage } from '../settings/SettingsPage'
 import { JobDetail } from '../jobs/JobDetail'
 import { JobEditPage } from '../jobs/JobEditPage'
@@ -17,6 +18,7 @@ import { LocalAgentPage } from '../agents/local/LocalAgentPage'
 export function MainArea(): React.JSX.Element {
   const activeView = useUIStore((s) => s.activeView)
   const activeChatId = useChatStore((s) => s.activeChatId)
+  const extraUIAnimation = useUIStore((s) => s.extraUIAnimation)
   useLiveRunWatch()
   useReadChatResult(activeView === 'chat' ? activeChatId : null)
   switch (activeView) {
@@ -30,6 +32,10 @@ export function MainArea(): React.JSX.Element {
     case 'external-agent': return <ExternalAgentPage />
     case 'local-development': return <LocalDevelopmentPage />
     case 'local-agent': return <LocalAgentPage />
-    default: return <ChatWorkspace />
+    default: return (
+      <ChatTransition chatId={activeChatId} enabled={extraUIAnimation}>
+        <ChatWorkspace />
+      </ChatTransition>
+    )
   }
 }

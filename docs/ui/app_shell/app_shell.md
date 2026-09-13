@@ -24,7 +24,7 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 ### Starting a New Chat
 
 1. User clicks the **+** icon in the top bar (visible in any state, any view).
-2. Active chat is cleared and the chat view is shown — same as the old in-sidebar "New Chat" button.
+2. Active chat is cleared and the dashboard composer is shown with its saved session draft and the caret at the end. New Chat is navigation; it does not discard unsent work. Agent start screens keep separate drafts. See [Composer drafts](../../chat/conversation_ui/conversation_ui.md#leaving-and-returning-to-a-draft).
 
 ### Opening Settings
 
@@ -60,7 +60,7 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 - **Chat rows retain background activity.** A running row shows a spinner and offers **Interrupt session** on hover/focus without selecting it. A stopped row can show its latest unread outcome and offers **Delete session**; foreground transcript loading acknowledges the result. See [Sidebar Session Status](../../chat/session_status/session_status.md).
 - **Agent rows show stable identity.** Name plus type icon replaces description/credential sublines and readiness dots. Folder agents use a terminal, A2A/Cinna/WebSocket ACP a network icon, and other ACP/Managed agents a bot. Readiness remains in agent details and the separate status surface.
 - **Agent grouping is optional.** Settings → Features → Interface → **Show sections in Agents sidebar** is installation-wide and on by default. Turning it off removes headings and section spacing without changing order: default Local folder root, active Cinna server, other folder roots, direct A2A, ACP connections, Managed agents. Hidden Cinna agents remain in Settings → Profile → Agents.
-- **Appearance decoration follows one preference.** Default-on Extra UI animation adds sidebar grid/border bursts, a left-to-right header background wave and occasional secondary-button glows. Composer interaction quiets its own artwork, reduced motion suppresses all extra effects, and collapsing the sidebar disables its decoration. See [Appearance](../appearance/appearance.md) for scope and lifecycle.
+- **Appearance decoration follows one preference.** Default-on Extra UI animation adds a quick stationary-text curtain between main chat layouts, sidebar grid/border bursts, a left-to-right header background wave and occasional secondary-button glows. Composer interaction quiets its own artwork, reduced motion suppresses all extra effects, and collapsing the sidebar disables its decoration. See [Appearance](../appearance/appearance.md) for scope and lifecycle.
 - **Top bar is always present.** Buttons do not shift when the sidebar toggles — they share a row with the macOS traffic lights via a fixed left gutter.
 - **Sidebar reserves its slot.** Collapse animates the inner panel away (translate + fade) and shrinks the wrapper width, but it does not unmount; the main area reflows in step.
 - **Sidebar always renders.** Even when collapsed the wrapper exists in the flex layout (width 0); the inner panel uses `pointer-events: none` when invisible.

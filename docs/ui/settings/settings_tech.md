@@ -119,7 +119,7 @@ Thin shell — looks the title up in `sectionTitles`, then conditionally renders
 
 ### Agent page settings
 
-`src/renderer/src/components/agents/ExternalAgentPage.tsx` owns the page's Overview/Connection tab and shared chat/settings mode. A2A/Cinna uses `AgentCard connectionOnly` for visible structured fields, authentication and connection testing. ACP and Managed agents use Configure to open their existing dialogs. Agent-wide disable/delete/uninstall actions belong to `ExternalAgentActionsMenu` in the page header. This page mode is independent of `settingsTab`; hiding its composer preserves the draft while app-settings tab changes unmount their previous section. See [Shared chat workspace](../app_shell/app_shell_tech.md#shared-chat-workspace).
+`src/renderer/src/components/agents/ExternalAgentPage.tsx` owns the page's Overview/Connection tab and shared chat/settings mode. A2A/Cinna uses `AgentCard connectionOnly` for visible structured fields, authentication and connection testing. ACP and Managed agents use Configure to open their existing dialogs. Agent-wide disable/delete/uninstall actions belong to `ExternalAgentActionsMenu` in the page header. This page mode is independent of `settingsTab`; hiding its composer preserves mounted state, and the session draft store also restores content after navigating away and remounting. App-settings tab changes still unmount their previous section. See [Shared chat workspace](../app_shell/app_shell_tech.md#shared-chat-workspace).
 
 ### Grouped rows and control placement
 
@@ -133,7 +133,7 @@ The section preference adds an installation-wide `app_settings` key, not a profi
 
 ## Configuration
 
-`showAgentSidebarSections` is a boolean and defaults to true. `useAppSettings` reads it for Features and the Agents list; `useSetAppSetting` optimistically updates the cache and restores the previous snapshot on failure. Service-backed settings controls disable while loading or writing. Theme and Extra UI animation use independent renderer localStorage keys through `useUIStore`, with no `app_settings` keys or query dependency; their defaults and cross-window propagation are defined in [Appearance](../appearance/appearance_tech.md#configuration). The restart message is triggered by the actual unknown-key error; it does not diagnose every failed switch as an old backend.
+`showAgentSidebarSections` is a boolean and defaults to true. `useAppSettings` reads it for Features and the Agents list; `useSetAppSetting` optimistically updates the cache and restores the previous snapshot on failure. Service-backed settings controls disable while loading or writing. Theme and Extra UI animation use independent renderer localStorage keys through `useUIStore`, with no `app_settings` keys or query dependency; the animation preference also gates `ChatTransition`, while drafts/context actions have no settings. Defaults and cross-window propagation are defined in [Appearance](../appearance/appearance_tech.md#configuration). The restart message is triggered by the actual unknown-key error; it does not diagnose every failed switch as an old backend.
 
 ## Security
 

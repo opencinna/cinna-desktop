@@ -23,7 +23,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 3. User selects the entry. The `@gith` token disappears and a "GitHub" chip (connector/`Plug` icon, fixed accent color) appears next to whichever other selectors (agent picker, chat-mode chip) are visible.
 4. User types their first message and presses Enter.
 5. `useNewChatFlow.startNewChat` creates the chat row, flushes the buffered MCP onto it via `chat:on-demand-mcp-add` (which sets `pendingAnnounce = true`), then kicks off the stream as usual. The LLM sees the silent announce prefix on this very first send.
-6. The buffer is cleared so a return trip to the new-chat screen starts fresh.
+6. A confirmed first-send dispatch consumes the submitted buffer only if its selection is unchanged. Navigating away before sending keeps the dashboard or agent-page draft; preparation failure retains it for retry. New picks made during preparation remain in that source draft.
 
 ### Engaging an MCP mid-chat
 
@@ -59,7 +59,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 
 - On-demand MCPs apply to LLM-channel (orchestrator) sends only. A2A agent turns have their own tool set and bypass `chatStreamingService` — the on-demand list does not affect them. (Picks made on the new-chat screen still persist onto the chat row, so an orchestrated chat picks them up on its first send.)
 - The on-demand set is persisted per chat (`chat_on_demand_mcps`) and survives reload, app restart, and chat reopen. It is intentionally *not* per-message.
-- New-chat screen picks live in a renderer-only buffer until the chat is created. `useNewChatFlow.startNewChat` flushes the buffer via `chat:on-demand-mcp-add` *before* the first send dispatches, so the announce prefix fires on the very first turn.
+- New-chat screen picks live in a renderer-session draft, isolated by profile and dashboard/agent surface, until the chat is created. Navigation and component remount do not clear them; restart does. See [Draft ownership](../../chat/conversation_ui/conversation_ui_tech.md#draft-ownership). `useNewChatFlow.startNewChat` flushes the buffer via `chat:on-demand-mcp-add` *before* the first send dispatches, so the announce prefix fires on the very first turn.
 - Detaching an on-demand MCP removes the row outright; there is no "soft disable" intermediate state.
 - The silent announcement is built once per engagement: the moment the user picks the MCP, `pendingAnnounce = true`; the next stream consumes it and flips it false; only re-adding the MCP (via the popup) re-arms it.
 - **The flag is consumed by the local model's stream loop, and by nothing else.** In a chat an agent answers — `direct` to an agent, or `human`, where no model runs at all — an on-demand MCP row can sit with `pendingAnnounce` still set indefinitely, because there is nobody to read the prefix. That is correct rather than a leak: MCP servers are the *model's* tools and an agent cannot call them, so an unread announce describes a tool nothing could have used. The flag stays armed and fires on the first turn after the chat moves to `coordinator`, which is the first turn where it means anything. See [Chat Routing](../../chat/chat_routing/chat_routing.md).

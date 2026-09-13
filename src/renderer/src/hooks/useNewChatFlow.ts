@@ -86,7 +86,7 @@ export function resolveModel(
 }
 
 export function useNewChatFlow(): {
-  startNewChat: (opts: NewChatOptions) => Promise<void>
+  startNewChat: (opts: NewChatOptions) => Promise<boolean>
 } {
   const queryClient = useQueryClient()
   const createChat = useCreateChat()
@@ -131,6 +131,9 @@ export function useNewChatFlow(): {
       if (!result.success) {
         throw new Error(result.error || 'File ingest failed')
       }
+      if (result.files.length !== pending.length) {
+        throw new Error('Some files are no longer available. Remove and reattach them before sending.')
+      }
       const ingestedByPath = new Map<string, MessageAttachment>()
       pending.forEach((p, i) => {
         const ingested = result.files[i]
@@ -171,7 +174,7 @@ export function useNewChatFlow(): {
   )
 
   const startNewChat = useCallback(
-    async (opts: NewChatOptions): Promise<void> => {
+    async (opts: NewChatOptions): Promise<boolean> => {
       const {
         message,
         agentIds,
@@ -289,6 +292,7 @@ export function useNewChatFlow(): {
           attachments: [...resolved, ...noteAttachments],
           target
         })
+        return true
       } catch (err) {
         // Surface the error so the user knows the send didn't go through
         // — without this, a failed ingest leaves an empty chat row and a
@@ -316,6 +320,7 @@ export function useNewChatFlow(): {
             // an empty list entry the user can manually delete.
           }
         }
+        return false
       }
     },
     [

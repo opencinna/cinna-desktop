@@ -22,12 +22,15 @@ import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
 import { Sparkles } from 'lucide-react'
 import type { ComposerAttachment } from '../../../../shared/attachments'
+import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
+import { useComposerDraftStore } from '../../stores/composerDraft.store'
 
 export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string; embedded?: boolean }): React.JSX.Element {
   const { activeView, pendingAgentId, setPendingAgentId } = useUIStore()
   const agentStatusOpen = useUIStore((s) => s.agentStatusOpen)
   const storedChatId = useChatStore((s) => s.activeChatId)
   const activeChatId = embedded ? null : storedChatId
+  const newChatDraftKey = useComposerDraftKey(null, embedded ? agentId : undefined)
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
   const sendError = useChatStore((s) => s.sendError)
   const setSendError = useChatStore((s) => s.setSendError)
@@ -47,7 +50,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   //   'none'      → the user explicitly cleared the mode,
   //   { id }      → the user picked a specific mode (re-derived from the live
   //                 list so edits to that mode propagate too).
-  const [modeSelection, setModeSelection] = useState<'auto' | 'none' | { id: string }>('auto')
+  const [modeSelection, setModeSelection] = useComposerDraftField(newChatDraftKey, 'modeSelection')
   const activeMode = useMemo<ChatModeData | null>(() => {
     if (modeSelection === 'none') return null
     if (modeSelection === 'auto') return defaultMode ?? null
@@ -56,31 +59,34 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   // On-demand MCP buffer for the new-chat screen — the chat row doesn't
   // exist yet, so picks are held here until `useNewChatFlow.startNewChat`
   // flushes them onto the created chat.
-  const [pendingMcpIds, setPendingMcpIds] = useState<string[]>([])
+  const [pendingMcpIds, setPendingMcpIds] = useComposerDraftField(newChatDraftKey, 'pendingMcpIds')
   // The new-chat agent set — a single ordered list. Both the `[+]` capability
   // picker and the `@` popup toggle into it; the "primary" agent (first picked)
   // is derived below for example-prompt sourcing and the comm badge.
-  const [pendingAgentIds, setPendingAgentIds] = useState<string[]>(agentId ? [agentId] : [])
+  const [storedPendingAgentIds, setPendingAgentIds] = useComposerDraftField(newChatDraftKey, 'pendingAgentIds')
+  const initialAgentIds = useMemo(() => agentId ? [agentId] : [], [agentId])
+  const pendingAgentIds = storedPendingAgentIds ?? initialAgentIds
 
   const togglePendingMcp = useCallback((mcpId: string) => {
     setPendingMcpIds((curr) =>
       curr.includes(mcpId) ? curr.filter((id) => id !== mcpId) : [...curr, mcpId]
     )
-  }, [])
+  }, [setPendingMcpIds])
 
   const removePendingMcp = useCallback((mcpId: string) => {
     setPendingMcpIds((curr) => curr.filter((id) => id !== mcpId))
-  }, [])
+  }, [setPendingMcpIds])
 
   const togglePendingAgent = useCallback((agentId: string) => {
-    setPendingAgentIds((curr) =>
-      curr.includes(agentId) ? curr.filter((id) => id !== agentId) : [...curr, agentId]
-    )
-  }, [])
+    setPendingAgentIds((stored) => {
+      const curr = stored ?? initialAgentIds
+      return curr.includes(agentId) ? curr.filter((id) => id !== agentId) : [...curr, agentId]
+    })
+  }, [initialAgentIds, setPendingAgentIds])
 
   const removePendingAgent = useCallback((agentId: string) => {
-    setPendingAgentIds((curr) => curr.filter((id) => id !== agentId))
-  }, [])
+    setPendingAgentIds((curr) => (curr ?? initialAgentIds).filter((id) => id !== agentId))
+  }, [initialAgentIds, setPendingAgentIds])
   // Primary new-chat agent — the first one picked. Sources example prompts and
   // the comm-pattern badge; replaces the old standalone AgentSelector pick.
   const selectedAgent = useMemo(
@@ -154,24 +160,13 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   const handleSelectMode = useCallback((mode: ChatModeData | null) => {
     setModeSelection(mode ? { id: mode.id } : 'none')
     setSendError(null)
-  }, [])
-
-  // Returning to the new-chat screen resets the selection to 'auto' so the
-  // current default re-applies — a settings change to the default chat mode (or
-  // the account/local precedence) then takes effect immediately when the user
-  // hasn't picked anything. (A pick/deselect on the screen sticks until they
-  // leave and come back, matching the documented chat-mode behavior.)
-  const prevChatIdRef = useRef<string | null | undefined>(undefined)
-  useEffect(() => {
-    const prev = prevChatIdRef.current
-    prevChatIdRef.current = activeChatId
-    if (activeChatId === null && prev !== null) setModeSelection('auto')
-  }, [activeChatId])
+  }, [setModeSelection, setSendError])
 
   // The `~` sole-character shortcut opens a chat-modes popup above the textarea
   // (rendered by ChatInput). The `[+]` button's own chat-mode sub-menu manages
   // its open state internally, so only the tilde popup needs coordinating here.
   const [tildeModePopupOpen, setTildeModePopupOpen] = useState(false)
+  useEffect(() => setTildeModePopupOpen(false), [activeChatId, newChatDraftKey])
 
   const handleTildeOpenRequest = useCallback(() => {
     setTildeModePopupOpen(true)
@@ -195,7 +190,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
     setPendingAgentId(null)
     // Focus after the new-chat screen mounts the input.
     requestAnimationFrame(() => chatInputRef.current?.focus())
-  }, [embedded, pendingAgentId, agentList, setActiveChatId, setPendingAgentId])
+  }, [embedded, pendingAgentId, agentList, setActiveChatId, setPendingAgentId, setPendingAgentIds])
 
   // When the agent-status overlay closes and we're on the chat view (new-chat
   // form or active chat), return focus to the chat input so the user can keep
@@ -230,10 +225,10 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
             ? 'Letting the model coordinate needs a local model — pick a chat mode or set a default in Settings. Removing the MCP servers lets the agents answer you directly instead.'
             : "Can't send message — no agent, chat mode, or AI credentials are configured. Pick an agent or set a default chat mode in Settings."
         )
-        return
+        return false
       }
       setSendError(null)
-      await startNewChat({
+      const started = await startNewChat({
         message,
         agentIds: combinedAgentIds,
         mode: activeMode,
@@ -245,14 +240,19 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
         attachments,
         noteIds
       })
-      if (useChatStore.getState().sendError) return
+      if (!started) return false
       if (embedded) {
         useUIStore.getState().setActiveView('chat')
         useUIStore.getState().setSidebarTab('chats')
       }
-      setModeSelection('auto')
-      setPendingMcpIds([])
-      setPendingAgentIds([])
+      // Navigation never consumes a draft. Successful sends reset only the
+      // selections that have not been edited while preparation was in flight.
+      useComposerDraftStore.getState().update(newChatDraftKey, (draft) => ({
+        ...(draft.modeSelection === modeSelection ? { modeSelection: 'auto' as const } : {}),
+        ...(draft.pendingMcpIds === pendingMcpIds ? { pendingMcpIds: [] } : {}),
+        ...(draft.pendingAgentIds === storedPendingAgentIds ? { pendingAgentIds: null } : {})
+      }))
+      return true
     },
     [
       startNewChat,
@@ -263,7 +263,10 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       providers,
       allModels,
       effectiveMcpIds,
-      pendingMcpIds
+      pendingMcpIds,
+      newChatDraftKey,
+      modeSelection,
+      storedPendingAgentIds
     ]
   )
 
@@ -368,6 +371,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
         <ChatInput
           ref={chatInputRef}
           chatId={null}
+          draftKey={newChatDraftKey}
           onNewChat={handleNewChat}
           modeColor={modeColorPreset}
           selectedAgent={selectedAgent}

@@ -1,6 +1,36 @@
 @import 'tailwindcss';
 @source "../**/*.{ts,tsx}";
 
+@layer base {
+  .chat-transition,
+  .chat-transition-content {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .chat-transition {
+    overflow: clip;
+    isolation: isolate;
+  }
+
+  .chat-transition-snapshot {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .chat-transition-snapshot * {
+    animation: none !important;
+    transition: none !important;
+    pointer-events: none !important;
+  }
+}
+
 @property --ambient-border-angle {
   syntax: '<angle>';
   inherits: false;

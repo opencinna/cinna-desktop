@@ -8,6 +8,7 @@ import { useAuthStore } from '../../stores/auth.store'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { CINNA_REAUTH_REQUIRED_CODE } from '../../../../shared/cinnaErrors'
 import { MessageBubble } from './MessageBubble'
+import { useMessageContextMenu } from './MessageContextMenu'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolNarrationBlock } from './ToolNarrationBlock'
@@ -282,6 +283,7 @@ function ReauthErrorBubble({ detail }: { detail?: string }): React.JSX.Element {
 }
 
 export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): React.JSX.Element {
+  const messageContextMenu = useMessageContextMenu(chatId)
   const { data: chatData } = useChatDetail(chatId)
   const { data: agents } = useAgents()
   const { streamingBlocks, isStreaming, liveBaselineMessageIds, pendingUserMessage, streamedIncrementallyChatId, inputRequests, settledInputRequestIds } = useChatStore()
@@ -452,6 +454,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
     <>
     <div
       ref={containerRef}
+      onContextMenu={messageContextMenu.onContextMenu}
       className="flex-1 overflow-y-auto px-4 pb-4 pt-[calc(var(--topbar-h)+12px)]"
       style={{
         paddingBottom: bottomPadding ? bottomPadding + 41 : undefined,
@@ -1190,6 +1193,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
           Jump to latest
         </button>
       )}
+      {messageContextMenu.menu}
     </>
   )
 }

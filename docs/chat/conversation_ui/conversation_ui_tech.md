@@ -2,7 +2,21 @@
 
 ## File Locations
 
+### Main process and preload
+
+No new backend module. Save to Notes reuses `src/main/ipc/note.ipc.ts`, `src/main/services/notesService.ts`, `src/main/db/notes.ts` and `src/preload/index.ts`; schema and ownership belong to [Notes tech](../../notes/notes/notes_tech.md). Draft file/note preparation reuses [File Attachments tech](../file_attachments/file_attachments_tech.md) and [Note Attachments tech](../note_attachments/note_attachments_tech.md).
+
 ### Renderer
+
+- `src/renderer/src/components/chat/MessageContextMenu.tsx` — payload capture, portal, focus, pointer/keyboard navigation and action lifetime.
+- `src/renderer/src/hooks/useNotes.ts` — `useSaveMessageNote` title derivation, existing create IPC and profile-guarded query invalidation.
+- `src/renderer/src/components/chat/ChatInput.tsx` — restored textarea, draft content, preparation lock and conditional send cleanup.
+- `src/renderer/src/components/layout/ChatWorkspace.tsx` — dashboard/agent entry identity, stored mode and capability intent, explicit new-chat outcome.
+- `src/renderer/src/hooks/useComposerDraft.ts`, `src/renderer/src/stores/composerDraft.store.ts` — field subscriptions and profile/surface buffers.
+- `src/renderer/src/hooks/useChatAttachments.ts`, `src/renderer/src/hooks/useChatNotes.ts` — draft-owned files and note references.
+- `src/renderer/src/hooks/useChatComposer.ts`, `src/renderer/src/hooks/useNewChatFlow.ts` — boolean dispatch outcomes; missing chat data or preparation failure must not consume content.
+- `src/renderer/src/components/layout/MainArea.tsx`, `src/renderer/src/components/layout/ChatTransition.tsx` — workspace transition; see [Appearance tech](../../ui/appearance/appearance_tech.md#chat-switch-transitions).
+- `src/renderer/src/components/localdev/LocalDevelopmentPage.tsx`, `src/renderer/src/stores/localDev.store.ts` — separate text-only build draft; see [Build Sessions tech](../../agents/local_dev/build_sessions_tech.md).
 
 | File | Role |
 |------|------|
@@ -31,7 +45,43 @@
 | `src/renderer/src/hooks/useChatStream.ts` | `handleRun` — the one receiver for agent and LLM chats — forwards every field of a `delta` (`kind`, `toolName`, `toolInput`, `toolId`, `toolStream`, `commandInvocation`, `file`) to `appendDelta`; an LLM chat's delta is `kind: 'text'` with the rest unset. Note: the `tool_result` **event**, which pairs an LLM tool-use id with its result, is unrelated to the `tool_result` **content kind**, which streams stdout/stderr text as a `delta`. See [Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md) |
 | `src/shared/messageParts.ts` | Shared `ContentKind` (`text`, `thinking`, `tool`, `tool_result`), `ToolStream` (`stdout`/`stderr`), and `MessagePart` types — single source of truth for both store and rendering |
 
+## Database Schema
+
+No draft table or migration. `composerDraft.store` and the build draft map live only in renderer memory. Save to Notes creates an ordinary row in the existing profile-scoped `notes` table; it stores the captured body, without a chat foreign key or synchronization with later transcript changes.
+
+## IPC Channels
+
+- `note:create` through `window.api.notes.create({ title, body })` returns the existing `NoteData`; main resolves the active profile. See [Notes channels](../../notes/notes/notes_tech.md#ipc-channels).
+- Copy uses `navigator.clipboard.writeText`; draft edits and the curtain have no IPC. Attachment preparation and run dispatch keep their existing channels.
+
+## Services & Key Methods
+
+### Draft ownership
+
+- `composerDraftKey` serializes a tuple of profile ID (or null) and `dashboard`, `agent:<id>` or `chat:<id>`. `useComposerDraftKey` derives it from the active profile and entry identity. Agent-page drafts do not reuse the dashboard's null-chat buffer.
+- `useComposerDraftStore.update` merges a field patch and skips unchanged identities. `useComposerDraftField` subscribes to one field and binds its setter to the originating key, so typing does not rerender the workspace and an awaited operation cannot write into a newly visible composer.
+- Each draft contains text, note ID/title references, files with upload/error/token state, new-chat `modeSelection`, ordered `pendingAgentIds` and `pendingMcpIds`, plus `sending`. Mode intent is `auto`, `none` or a live mode ID. Null agent intent uses the entry page's seed; an empty list preserves explicit removal.
+- `beginSend(key)` synchronously acquires the draft's preparation lock; `endSend(key)` releases it in `finally`. A component-local ref used to reset on remount, allowing a return to the entry page to dispatch the same preparation twice. The lock belongs to the draft, not all composers.
+- `ChatInput.clearComposer` compares the submitted text by value and note/file lists by identity before clearing them in the source key. `ChatWorkspace.handleNewChat` similarly resets only unchanged mode/agent/MCP intent after `startNewChat` returns true. Changed fields and in-flight file state remain available.
+- `useNewChatFlow.startNewChat` returns true after calling `startRun`, false after preparation failure/guard cancellation and best-effort orphan cleanup. Missing deferred files are a failure rather than a successful send with silently omitted paths. `useChatComposer.submit` returns false for missing chat cache or empty content; attachment-only active sends are valid. These outcomes mean dispatch, not successful run completion.
+- `useChatAttachments` keeps a monotonically assigned upload token in the draft. Completion/failure/finally update the source only while that token matches. Navigation/unmount preserves it; explicit clear invalidates it. Destination capability/scope is validated on send so loading queries cannot discard a restored attachment.
+
+### Message context actions
+
+- `MessageBubble` marks each rendered body with `data-message-markdown`; assistant source uses the same attachment-tag stripping as the visible body. Labels, metadata and cursors are outside the source payload. Structured turns expose each rendered text body independently.
+- `MessageStream` attaches `useMessageContextMenu` to the transcript container. `messageContextText` accepts a selection only when both range endpoints are inside it and the range intersects the right-click target. Otherwise it reads the closest marked body. A selected string matching the full body's text can retain the original source; other excerpts remain plain text.
+- `MessageContextMenu` captures text before focus changes and renders a fixed portal clamped eight pixels inside the viewport. Each opening has an identity; completion from an older action cannot close a newer menu.
+- `useSaveMessageNote` uses the first nonempty line, removes a leading one-to-six-hash heading marker, caps the title at 80 characters and falls back to Chat excerpt. Its returned callback captures profile identity synchronously at the gesture, before React Query schedules the mutation. The mutation checks identity before existing Notes create IPC and after completion, returning no note for a changed profile and invalidating `['notes']` only for the unchanged profile. The caller navigates to the returned note only while its menu is mounted.
+- A synchronous action ref prevents duplicate Copy/Save calls; both controls disable while pending. Failures remain in a retryable alert. Dismissal does not cancel an already requested note write.
+
 ## Renderer Components
+
+### Draft restoration and context-menu focus
+
+- On a draft key change, `ChatInput` focuses the textarea, places both selection endpoints at its current value length and scrolls to the bottom. Its layout effect sizes to the restored text, capped at 180 px. Keystrokes do not rerun the caret effect. Transient mention/capability menus, note previews and expansion targets reset independently of saved fields.
+- `DevelopmentComposer` retains `localDev.store.drafts[profileId]`. Its active/focus effect restores the end caret when the build composer returns; readiness and open dialogs still gate focus. Runtime choices remain installation settings, not draft fields.
+- Copy receives initial menu focus. Pointer enter/move focuses the enabled item under the pointer; arrows wrap, Home/End select first/last. One focus background drives the highlight, with a 100 ms color transition disabled under reduced motion.
+- Escape, Tab and PageUp/PageDown dismiss; outside pointerdown, wheel/touchmove, resize, blur and chat/profile change dismiss too. Programmatic scroll events are deliberately ignored so streaming bottom-follow does not close an action menu. Cleanup restores previous connected focus only if focus was still inside the dismissed menu.
 
 ### MessageBubble
 
@@ -99,3 +149,21 @@ Tests: `src/renderer/src/utils/cinnaCli.test.ts`, `src/renderer/src/components/c
 ### Loading indicator
 
 - Inline in `MessageStream` — three `span` dots with staggered `animationDelay` and `animate-bounce`. No wrapper bubble or icon.
+
+## Configuration
+
+Draft retention and text actions have no setting or environment variable. Draft memory is per renderer lifetime, isolated by profile and surface; it is not localStorage or cloud state. Extra UI animation affects the curtain only through [Appearance configuration](../../ui/appearance/appearance_tech.md#configuration); it does not control draft retention or menu availability.
+
+## Security
+
+The context menu acts only on text captured inside its transcript and leaves editable controls to their native menu. Copy requires an explicit action; Save uses the existing main-owned profile boundary. The renderer profile guard prevents an old result from changing another profile's cache/view; it does not replace main authorization. Draft paths and IDs remain subject to the existing file path guards, note ownership and send-time destination validation. No transcript text is sent to an LLM merely to copy or name a note.
+
+## Validation
+
+- `src/renderer/src/components/chat/MessageContextMenu.test.tsx` — original Markdown, selected excerpts, tool text, Notes creation, profile/dismissal lifetime, retry/reentrancy, pointer/keyboard focus and user versus programmatic scrolling.
+- `src/renderer/src/hooks/useComposerDraft.test.tsx` — profile/surface isolation, complete field restoration, source-owned late uploads and clear invalidation.
+- `src/renderer/src/components/chat/ChatInput.drafts.test.tsx`, `src/renderer/src/components/layout/ChatWorkspace.drafts.test.tsx` — navigation/remount, end caret, mode/capability intent, source-only cleanup, newer edits and preparation reentrancy.
+- `src/renderer/src/hooks/useChatComposer.test.tsx`, `src/renderer/src/hooks/useNewChatFlow.test.tsx` — dispatch outcome, missing data, attachment-only sends and deferred preparation failures.
+- `src/renderer/src/components/localdev/LocalDevelopmentPage.test.tsx` — existing build-draft restoration and end-caret contract. [Appearance validation](../../ui/appearance/appearance_tech.md#validation) covers curtain lifecycle.
+
+These focused renderer tests verify state and lifecycle contracts; they do not prove a real clipboard, Electron dialog or remote agent workflow completed.

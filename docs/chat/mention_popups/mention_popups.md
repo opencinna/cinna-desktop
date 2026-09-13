@@ -51,6 +51,8 @@ The trigger fires only when input transitions from empty to exactly `~` — `~` 
 
 ## Business Rules
 
+- **Restore selected content, not open menus.** Navigation retains draft text and picked agents/MCP/notes/mode, but closes mention/capability/mode menus and clears the transient note-expansion target. Returning places the caret at the end without replaying a trigger. See [Composer drafts](../conversation_ui/conversation_ui.md#leaving-and-returning-to-a-draft).
+
 - **Gating** — `@` only opens before a chat exists (`!chatId`). `#` and `/` open whenever the source agent declares prompts or commands; gating is the parent's responsibility, not the popup's. `?` opens whenever the profile has at least one note. `~` opens only when the input transitions from empty to exactly `~` (sole-character rule) and the chat-modes feature has at least one mode available.
 - **Filter scope** — each picker chooses what fields match its filter token. Agents match name/protocol; example prompts match label/body; CLI commands match only the **signature** (`slug`, `command`) so typing `/status` does not pull in commands whose description happens to contain the word; notes match only the **title** so body content doesn't balloon the result list.
 - **Empty state** — popups render nothing when the filtered list is empty. The trigger state stays open so continued typing can re-populate it.

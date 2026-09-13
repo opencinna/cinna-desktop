@@ -116,6 +116,34 @@ beforeEach(() => {
   useAuthStore.getState().setCurrentUser({ id: 'account-1', type: 'local', username: 'one', displayName: 'One', hasPassword: false })
 })
 
+it('returns failure even if navigation clears the error during orphan cleanup', async () => {
+  let finishDelete!: (value: { success: boolean }) => void
+  spies.ingestPaths.mockRejectedValueOnce(new Error('File unavailable'))
+  spies.deleteChat.mockImplementationOnce(() => new Promise((resolve) => { finishDelete = resolve }))
+  const { result } = renderFlow()
+  let pending!: Promise<boolean>
+  act(() => { pending = result.current.startNewChat(chatOptions({ attachments: PENDING })) })
+  await waitFor(() => expect(spies.deleteChat).toHaveBeenCalled())
+  act(() => useChatStore.getState().setActiveChatId('other-chat'))
+  expect(useChatStore.getState().sendError).toBeNull()
+  await act(async () => {
+    finishDelete({ success: true })
+    expect(await pending).toBe(false)
+  })
+  expect(spies.runSend).not.toHaveBeenCalled()
+})
+
+it('rejects a deferred file batch when path permission expiry omits an attachment', async () => {
+  spies.ingestPaths.mockResolvedValueOnce({ success: true, files: [] })
+  const { result } = renderFlow()
+  await act(async () => {
+    expect(await result.current.startNewChat(chatOptions({ attachments: PENDING }))).toBe(false)
+  })
+  expect(spies.runSend).not.toHaveBeenCalled()
+  expect(useChatStore.getState().sendError).toContain('Remove and reattach')
+  expect(spies.deleteChat).toHaveBeenCalledWith('chat-1')
+})
+
 describe('startNewChat — the router it creates the chat on', () => {
   it('is direct for a plain chat with the local model', async () => {
     await start({ agentIds: [] })
@@ -212,7 +240,7 @@ describe('startNewChat — guarded creation lifecycle', () => {
       expect(result.current.chats.data).toEqual([])
       expect(result.current.trash.data).toEqual([])
     })
-    let pending!: Promise<void>
+    let pending!: Promise<boolean>
     act(() => {
       pending = result.current.startNewChat(chatOptions({ isCurrent: () => current }))
     })
@@ -250,7 +278,7 @@ describe('startNewChat — guarded creation lifecycle', () => {
     spies.createChat.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve }))
     const { result, unmount } = renderFlow()
     let current = true
-    let pending!: Promise<void>
+    let pending!: Promise<boolean>
     act(() => {
       pending = result.current.startNewChat(chatOptions({ agentIds: ['builder'], isCurrent: () => current }))
     })
@@ -273,7 +301,7 @@ describe('startNewChat — guarded creation lifecycle', () => {
     let resolveCreate!: (chat: { id: string }) => void
     spies.createChat.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve }))
     const { result } = renderFlow()
-    let pending!: Promise<void>
+    let pending!: Promise<boolean>
     act(() => {
       pending = result.current.startNewChat(chatOptions({
         agentIds: ['builder'],
@@ -299,7 +327,7 @@ describe('startNewChat — guarded creation lifecycle', () => {
     let resolveUpdate!: (result: { success: boolean }) => void
     spies.updateChat.mockImplementationOnce(() => new Promise((resolve) => { resolveUpdate = resolve }))
     const { result } = renderFlow()
-    let pending!: Promise<void>
+    let pending!: Promise<boolean>
     act(() => {
       useChatStore.getState().setActiveChatId('previous-chat')
       pending = result.current.startNewChat(chatOptions({ isCurrent: guarded ? () => true : undefined }))

@@ -14,6 +14,7 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 ## User Stories / Flows
 
 ### Creating a chat mode
+
 1. User navigates to Settings > Chats (first tab)
 2. User clicks "Add Chat Mode"
 3. Inline form appears: user enters a name, picks a color, selects an LLM provider + model, and toggles MCP providers
@@ -21,11 +22,13 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 5. Mode appears as a card in the list; all further edits auto-save
 
 ### Editing a chat mode
+
 1. User expands a mode card in Settings > Chats
 2. Any change (color, provider, model, MCP toggles) saves automatically
 3. Name saves on blur or Enter key press
 
 ### Starting a chat with a mode
+
 1. User is on the new-chat screen ("What can I help with?")
 2. User clicks the `[+]` button below the chat input and chooses **Chat mode**
 3. The sub-menu shows all defined modes as colored rows with name, model, and MCP summary
@@ -35,10 +38,12 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 7. Mode resets after the chat is created
 
 ### Deselecting a mode (new-chat screen)
+
 1. User reopens the `[+]` → **Chat mode** sub-menu and clicks the already-selected mode
 2. Mode deselects — input returns to default styling. Without a mode (and without a selected agent) the next send raises an inline "can't determine destination" error banner above the input; the user has to pick a mode or an agent to send
 
 ### Switching mode on an active chat
+
 1. User is in a chat that was created with a mode — the input border/background and the `[+]` button show the mode's color
 2. User opens the `[+]` → **Chat mode** sub-menu and selects a different mode
 3. The chat's provider, model, and MCP configuration update to match the new mode
@@ -46,6 +51,7 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 5. Subsequent messages use the new mode's configuration
 
 ### Deselecting a mode on an active chat
+
 1. User opens the `[+]` → **Chat mode** sub-menu and clicks the currently active mode
 2. Mode clears — `modeId` is removed from the chat, input returns to default styling
 3. The chat falls back to standard ChatControls (model picker + MCP toggles) for manual configuration
@@ -60,7 +66,7 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 - Switching modes on an active chat replaces the baseline with the new mode's list verbatim — switching to a mode with no MCPs clears it. On-demand engagements live in their own table and survive the switch
 - A moded chat hides `ChatControls`, so the mode's MCP servers are surfaced as **locked chips** below the composer (and as locked selections in the `[+]` picker) — visible, but managed on the mode itself. See [On-Demand MCP](../../mcp/on_demand/on_demand.md)
 - At most one mode per user is `isDefault`. Marking a mode as default in Settings clears the flag on any previously default mode (single-default invariant, enforced in the same transaction)
-- The default chat mode auto-applies whenever the user lands on the new-chat screen with nothing chosen. Deselecting it via the popup keeps it cleared for the rest of that new-chat session; it reapplies the next time the user returns to the new-chat screen
+- The default chat mode applies until the user explicitly chooses or deselects a mode. That choice stays with the dashboard or agent-page draft across navigation. Confirmed send dispatch resets unchanged mode intent to the current default; a different selection made during preparation remains in the source draft
 - Mode selection is available on the new-chat screen and on active chats that were created with a mode
 - Active chats with a `mode_id` show the mode selector instead of separate model/MCP controls
 - Switching modes on an active chat updates its provider, model, and MCP configuration immediately
