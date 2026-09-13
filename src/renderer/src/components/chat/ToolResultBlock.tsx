@@ -1,6 +1,7 @@
 import { Terminal, AlertTriangle } from 'lucide-react'
 import type { ToolStream } from '../../../../shared/messageParts'
 import { DisclosureBlock } from './DisclosureBlock'
+import { unwrapConsoleOutput } from '../../utils/consoleOutput'
 
 interface ToolResultBlockProps {
   content: string
@@ -39,11 +40,11 @@ export function ToolResultBlock({
     >
       {content && (
         <pre
-          className={`px-3 pb-2.5 pt-0 text-[12px] leading-relaxed font-mono whitespace-pre-wrap break-words max-h-96 overflow-y-auto ${
+          className={`px-3 pb-2.5 pt-0 text-[12px] leading-[1.25] font-mono whitespace-pre max-h-96 overflow-auto ${
             isErr ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-secondary)]'
           }`}
         >
-          {content}
+          {unwrapConsoleOutput(content, isStreaming)}
         </pre>
       )}
     </DisclosureBlock>

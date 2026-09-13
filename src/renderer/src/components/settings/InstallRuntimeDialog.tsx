@@ -18,6 +18,8 @@ interface InstallRuntimeDialogProps {
    * confirm exists to answer (ux_rules rule 5).
    */
   willSelect: boolean
+  /** Destination-specific wording when installation serves a building session. */
+  selectionDescription?: string
   /**
    * Owned by the settings section, which outlives this dialog — a
    * `mutate`-level success handler would be dropped by the unmount that closing
@@ -52,6 +54,7 @@ interface InstallRuntimeDialogProps {
 export function InstallRuntimeDialog({
   plan,
   willSelect,
+  selectionDescription,
   install,
   failure,
   onCancel
@@ -129,9 +132,9 @@ export function InstallRuntimeDialog({
         </code>
 
         <p className="text-[13px] leading-relaxed text-[var(--color-text-secondary)]">
-          {willSelect
+          {selectionDescription ?? (willSelect
             ? `When it finishes, Cinna runs your folder agents on ${plan.label}.`
-            : `Cinna cannot run agents on ${plan.label} yet — installing it makes it available for opening agent folders in.`}
+            : `Cinna cannot run agents on ${plan.label} yet — installing it makes it available for opening agent folders in.`)}
         </p>
 
         <p className="text-[13px] leading-relaxed text-[var(--color-text-muted)]">

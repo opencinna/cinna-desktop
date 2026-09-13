@@ -249,37 +249,21 @@ describe('composer readiness refusal', () => {
     }
   })
 
-  it('gives the reason a line of its own under the controls row, so it never takes the chips’ width', () => {
+  it('shows the full warning and recovery action above the input', () => {
     mountNew(agent(DOWN), 'direct', vi.fn())
     const reason = screen.getByText('Could not reach the agent.')
-    const line = reason.closest('[data-readiness-line]') as HTMLElement
-    expect(line).toBeTruthy()
-    // The controls row holds the + menu, the chips, the badge and Send.
-    const controlsRow = send().parentElement!.parentElement!
-    expect(controlsRow.contains(screen.getByRole('status', { name: 'Remote agent connection' }))).toBe(true)
-    expect(controlsRow.contains(reason)).toBe(false)
-    expect(controlsRow.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const warning = reason.closest('[role="status"]') as HTMLElement
+    expect(warning).toBeTruthy()
+    expect(warning.contains(screen.getByRole('button', { name: 'Check again' }))).toBe(true)
+    expect(warning.compareDocumentPosition(screen.getByRole('combobox')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(reason.className).not.toContain('truncate')
   })
 
-  it('keeps the line’s space for a direct agent that is ready, so a refusal arriving moves nothing', () => {
+  it('shows no warning panel when a direct agent is ready', () => {
     mountNew(agent({ state: 'ok', reason: null }), 'direct', vi.fn())
-    const line = document.querySelector('[data-readiness-line]') as HTMLElement
-    expect(line).toBeTruthy()
-    expect(line.className).toContain('h-4')
-    expect(line.textContent).toBe('')
-  })
-
-  it('reserves no line where nothing can be refused', () => {
-    mountNew(agent(DOWN), 'coordinator', vi.fn())
+    expect(screen.queryByText('Could not reach the agent.')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull()
     expect(document.querySelector('[data-readiness-line]')).toBeNull()
-  })
-
-  it('separates the reason from its action with a mark screen readers skip', () => {
-    mountActive(agent(DOWN))
-    const action = screen.getByRole('button', { name: 'Check again' })
-    const separator = action.previousElementSibling as HTMLElement
-    expect(separator.textContent).toBe('·')
-    expect(separator.getAttribute('aria-hidden')).toBe('true')
   })
 
   it('shows the raw error as the tooltip when the driver kept one', () => {

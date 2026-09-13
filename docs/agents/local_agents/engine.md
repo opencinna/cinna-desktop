@@ -102,6 +102,8 @@ A recognized `runtime.engine` wins. Without one, a concrete credential or model 
 
 CLI engines leave the desktop credential ladder before its first lookup. Claude maps complexity to a model alias; Codex maps it to reasoning effort and keeps its CLI default model unless one is declared. See [Codex](codex_engine.md) for configuration ownership, approvals and readiness.
 
+[Account build sessions](../local_dev/build_sessions.md) use these same launchers and credential/model resolver, with separate installation-wide settings. Default Runtime inherits this machine engine, while build complexity is independently Complex by default (Claude Opus, Codex high effort, OpenCode Complex tier). Builder settings do not rewrite folder manifests or the local-agent default.
+
 ### One process per agent, started by a turn and reaped when idle
 
 The pool starts a process on the first turn that needs it and keeps it while turns keep coming. Both ends of that are measured rather than assumed:

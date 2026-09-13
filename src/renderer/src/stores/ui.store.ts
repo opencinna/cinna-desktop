@@ -16,6 +16,7 @@ export type ActiveView =
   | 'cinna-task-run'
   | 'note-detail'
   | 'local-agent'
+  | 'local-development'
   | 'external-agent'
 export type SidebarTab = 'chats' | 'jobs' | 'notes' | 'agents'
 export type SettingsMenu =

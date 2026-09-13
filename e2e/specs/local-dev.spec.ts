@@ -17,8 +17,8 @@ import { test, expect, type CinnaApp } from '../fixtures/app'
 
 const HOST = 'cinna.example.com'
 
-const IDLE_LINE =
-  'Nothing has been checked yet. Local development applies to Cinna accounts — sign in to one and Cinna checks what that server offers.'
+const MISSING_CLI_LINE =
+  'The managed cinna-cli is not installed. Set it up under Profile → Local Development.'
 
 /** Open Settings → Local Development through the UI. */
 async function openLocalDevSettings(cinna: CinnaApp): Promise<void> {
@@ -32,7 +32,7 @@ async function openLocalDevSettings(cinna: CinnaApp): Promise<void> {
   await cinna.page.getByRole('button', { name: 'Local Development', exact: true }).click()
 }
 
-test('a profile with no Cinna account is idle, and nothing in the UI mentions local dev', async ({
+test('a profile with no Cinna account has no build entry and can inspect desktop tools', async ({
   cinna
 }) => {
   await cinna.skipOnboarding()
@@ -48,11 +48,11 @@ test('a profile with no Cinna account is idle, and nothing in the UI mentions lo
   await expect(page.getByLabel('Setting up local development')).toHaveCount(0)
   await expect(page.getByLabel('Local development needs attention')).toHaveCount(0)
 
-  // Settings is the one screen that renders every phase, so `idle` has to say
-  // why there is nothing to do rather than showing an empty card.
+  // Default settings inspect installed desktop tools; account setup belongs
+  // to the Profile group and is absent for a local-only profile.
   await openLocalDevSettings(cinna)
   await expect(page.getByRole('heading', { name: 'Local Development', exact: true })).toBeVisible()
-  await expect(page.getByText(IDLE_LINE, { exact: true })).toBeVisible()
+  await expect(page.getByText(MISSING_CLI_LINE, { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Set up local development' })).toHaveCount(0)
 })
 

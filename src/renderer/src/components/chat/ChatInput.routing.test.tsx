@@ -296,32 +296,11 @@ describe('refusing a send in a human chat', () => {
   })
 })
 
-describe("the composer height across a router change", () => {
-  const readinessSlot = (): Element | null => document.querySelector('[data-readiness-line]')
-
-  it('keeps the readiness slot in a chat that has an agent, whoever is answering', async () => {
-    // The slot is a fixed-height line under the controls row. Gating it on the
-    // agent that would answer made it vanish the moment the user handed the
-    // chat to the model — lifting the whole composer 21px under their cursor.
-    await mount({ router: 'human', attached: ['a-1', 'a-2'] })
-    expect(readinessSlot()).toBeTruthy()
-  })
-
-  it('keeps it in a coordinated chat too, where no agent answers', async () => {
-    await mount({ router: 'coordinator', attached: ['a-1', 'a-2'] })
-    expect(readinessSlot()).toBeTruthy()
-  })
-
-  it('keeps it in a direct chat with a bound agent', async () => {
-    await mount({ router: 'direct', agentId: 'a-1' })
-    expect(readinessSlot()).toBeTruthy()
-  })
-
-  it('does not reserve it in a plain chat with the local model', async () => {
-    // Nothing about an agent can ever be said here, and the transition into
-    // this state needs an agent added, which moves the chip strip anyway.
-    await mount({ router: 'direct', agentId: null })
-    expect(readinessSlot()).toBeNull()
+describe('healthy composer routing', () => {
+  it.each(['human', 'coordinator', 'direct'] as const)('shows no readiness warning for a healthy %s chat', async (router) => {
+    await mount({ router, agentId: router === 'direct' ? 'a-1' : null, attached: ['a-1', 'a-2'] })
+    expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull()
+    expect(document.querySelector('[data-readiness-line]')).toBeNull()
   })
 })
 

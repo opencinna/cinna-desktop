@@ -30,6 +30,9 @@ export const DEFAULTS: AppSettingsSchema = {
   localAgentsDefaultCredentialId: '',
   // Empty = Automatic: the first runtime detected on this machine.
   localAgentsDefaultEngine: '',
+  localDevelopmentEngine: '',
+  localDevelopmentCredentialId: '',
+  localDevelopmentComplexity: 'complex',
   // Only meaningful with a default tool set: skip the "build it with…" step.
   localAgentsAutoOpen: false,
   // Work Complexity is the default view; the raw model list is opt-in.

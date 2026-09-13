@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { renderHook, act } from '@testing-library/react'
+import { renderHook, act, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
@@ -20,6 +20,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 
 const spies = vi.hoisted(() => ({
   createChat: vi.fn(async () => ({ id: 'chat-1' })),
+  listChats: vi.fn(async (): Promise<{ id: string }[]> => []),
+  listTrash: vi.fn(async (): Promise<{ id: string }[]> => []),
   updateChat: vi.fn(async () => ({ success: true })),
   ingestPaths: vi.fn(async () => ({ success: true, files: [{ id: 'f1', filename: 'a.pdf' }] })),
   addOnDemandAgent: vi.fn(async () => ({ success: true })),
@@ -47,6 +49,8 @@ function namespace(methods: Record<string, unknown>): unknown {
       if (ns === 'chat') {
         return namespace({
           create: spies.createChat,
+          list: spies.listChats,
+          trashList: spies.listTrash,
           update: spies.updateChat,
           delete: spies.deleteChat,
           addOnDemandAgent: spies.addOnDemandAgent,
@@ -62,26 +66,37 @@ function namespace(methods: Record<string, unknown>): unknown {
 )
 
 const { useNewChatFlow } = await import('./useNewChatFlow')
+const { useChatList, useTrashList } = await import('./useChat')
 const { useChatStore } = await import('../stores/chat.store')
+const { useAuthStore } = await import('../stores/auth.store')
 
 const PENDING = [{ id: '/tmp/a.pdf', source: 'pending' as const, filename: 'a.pdf' }]
 
-async function start(over: Record<string, unknown>): Promise<void> {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
-  const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element =>
+function queryWrapper(client: QueryClient) {
+  return ({ children }: { children: ReactNode }): React.JSX.Element =>
     createElement(QueryClientProvider, { client }, children)
-  const { result } = renderHook(() => useNewChatFlow(), { wrapper })
+}
+
+function renderFlow() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  return renderHook(() => useNewChatFlow(), { wrapper: queryWrapper(client) })
+}
+
+const chatOptions = (over: Record<string, unknown> = {}) => ({
+  message: 'hello',
+  agentIds: [],
+  mode: null,
+  providerId: 'p-1',
+  providers: [{ id: 'p-1', defaultModelId: 'm-1' }] as never,
+  allModels: [{ id: 'm-1', providerId: 'p-1' }] as never,
+  mcpIds: [],
+  ...over
+} as Parameters<ReturnType<typeof useNewChatFlow>['startNewChat']>[0])
+
+async function start(over: Record<string, unknown>): Promise<void> {
+  const { result } = renderFlow()
   await act(async () => {
-    await result.current.startNewChat({
-      message: 'hello',
-      agentIds: [],
-      mode: null,
-      providerId: 'p-1',
-      providers: [{ id: 'p-1', defaultModelId: 'm-1' }] as never,
-      allModels: [{ id: 'm-1', providerId: 'p-1' }] as never,
-      mcpIds: [],
-      ...over
-    } as never)
+    await result.current.startNewChat(chatOptions(over))
   })
 }
 
@@ -95,7 +110,10 @@ const ingestScope = (): string =>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  spies.listChats.mockResolvedValue([])
+  spies.listTrash.mockResolvedValue([])
   useChatStore.getState().reset()
+  useAuthStore.getState().setCurrentUser({ id: 'account-1', type: 'local', username: 'one', displayName: 'One', hasPassword: false })
 })
 
 describe('startNewChat — the router it creates the chat on', () => {
@@ -161,5 +179,140 @@ describe('startNewChat — the first message', () => {
     await start({ agentIds: ['a-1'], onDemandMcpIds: ['mcp-1'] })
     const extras = spies.runSend.mock.calls[0][0] as { addressedAgentId?: string | null }
     expect(extras.addressedAgentId ?? null).toBeNull()
+  })
+})
+
+
+describe('startNewChat — guarded creation lifecycle', () => {
+  it.each([
+    { switchAccount: false, deletedSuccess: true },
+    { switchAccount: true, deletedSuccess: true },
+    { switchAccount: false, deletedSuccess: false }
+  ])('refreshes orphan cleanup queries only after successful same-account deletion (switch: $switchAccount, success: $deletedSuccess)', async ({ switchAccount, deletedSuccess }) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    let rows: { id: string }[] = []
+    let trash: { id: string }[] = []
+    spies.listChats.mockImplementation(async () => rows)
+    spies.listTrash.mockImplementation(async () => trash)
+    let current = true
+    spies.createChat.mockImplementationOnce(async () => {
+      rows = [{ id: 'chat-1' }]
+      current = false
+      return rows[0]
+    })
+    let resolveDelete!: (result: { success: boolean }) => void
+    spies.deleteChat.mockImplementationOnce(() => new Promise((resolve) => { resolveDelete = resolve }))
+    // Observe the same production queries the sidebar/trash use, including
+    // the creation refetch that can finish before orphan cleanup completes.
+    const { result } = renderHook(() => ({
+      ...useNewChatFlow(), chats: useChatList(), trash: useTrashList()
+    }), { wrapper: queryWrapper(client) })
+    await waitFor(() => {
+      expect(result.current.chats.data).toEqual([])
+      expect(result.current.trash.data).toEqual([])
+    })
+    let pending!: Promise<void>
+    act(() => {
+      pending = result.current.startNewChat(chatOptions({ isCurrent: () => current }))
+    })
+    await waitFor(() => {
+      expect(spies.deleteChat).toHaveBeenCalledWith('chat-1')
+      expect(result.current.chats.data).toEqual([{ id: 'chat-1' }])
+    })
+    invalidate.mockClear()
+    await act(async () => {
+      if (switchAccount) {
+        useAuthStore.getState().setCurrentUser({ id: 'account-2', type: 'local', username: 'two', displayName: 'Two', hasPassword: false })
+        client.setQueryData(['chats'], [{ id: 'account-2-chat' }])
+      }
+      if (deletedSuccess) {
+        rows = []
+        trash = [{ id: 'chat-1' }]
+      }
+      resolveDelete({ success: deletedSuccess })
+      await pending
+    })
+    if (switchAccount || !deletedSuccess) {
+      expect(invalidate).not.toHaveBeenCalled()
+      expect(client.getQueryData(['chats'])).toEqual([{ id: switchAccount ? 'account-2-chat' : 'chat-1' }])
+      expect(client.getQueryData(['trash'])).toEqual([])
+    } else {
+      await waitFor(() => {
+        expect(result.current.chats.data).toEqual([])
+        expect(result.current.trash.data).toEqual([{ id: 'chat-1' }])
+      })
+    }
+  })
+
+  it.each(['navigation', 'unmount'])('cleans up a same-account orphan after %s during creation without changing the selected chat', async (reason) => {
+    let resolveCreate!: (chat: { id: string }) => void
+    spies.createChat.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve }))
+    const { result, unmount } = renderFlow()
+    let current = true
+    let pending!: Promise<void>
+    act(() => {
+      pending = result.current.startNewChat(chatOptions({ agentIds: ['builder'], isCurrent: () => current }))
+    })
+    await waitFor(() => expect(spies.createChat).toHaveBeenCalled())
+    await act(async () => {
+      current = false
+      if (reason === 'unmount') unmount()
+      useChatStore.getState().setActiveChatId('other-chat')
+      resolveCreate({ id: 'chat-1' })
+      await pending
+    })
+    expect(spies.updateChat).not.toHaveBeenCalled()
+    expect(spies.runSend).not.toHaveBeenCalled()
+    expect(spies.deleteChat).toHaveBeenCalledWith('chat-1')
+    expect(useChatStore.getState().activeChatId).toBe('other-chat')
+    expect(useChatStore.getState().sendError).toBeNull()
+  })
+
+  it('does not select, delete, update, or send to a created chat after switching accounts', async () => {
+    let resolveCreate!: (chat: { id: string }) => void
+    spies.createChat.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve }))
+    const { result } = renderFlow()
+    let pending!: Promise<void>
+    act(() => {
+      pending = result.current.startNewChat(chatOptions({
+        agentIds: ['builder'],
+        // Account identity is protected independently of the page guard.
+        isCurrent: () => true
+      }))
+    })
+    await waitFor(() => expect(spies.createChat).toHaveBeenCalled())
+    await act(async () => {
+      useAuthStore.getState().setCurrentUser({ id: 'account-2', type: 'local', username: 'two', displayName: 'Two', hasPassword: false })
+      useChatStore.getState().setActiveChatId('account-2-chat')
+      resolveCreate({ id: 'chat-1' })
+      await pending
+    })
+    expect(spies.updateChat).not.toHaveBeenCalled()
+    expect(spies.runSend).not.toHaveBeenCalled()
+    expect(spies.deleteChat).not.toHaveBeenCalled()
+    expect(useChatStore.getState().activeChatId).toBe('account-2-chat')
+    expect(useChatStore.getState().sendError).toBeNull()
+  })
+
+  it.each([false, true])('defers selection through preparation only for a guarded flow (%s)', async (guarded) => {
+    let resolveUpdate!: (result: { success: boolean }) => void
+    spies.updateChat.mockImplementationOnce(() => new Promise((resolve) => { resolveUpdate = resolve }))
+    const { result } = renderFlow()
+    let pending!: Promise<void>
+    act(() => {
+      useChatStore.getState().setActiveChatId('previous-chat')
+      pending = result.current.startNewChat(chatOptions({ isCurrent: guarded ? () => true : undefined }))
+    })
+    await waitFor(() => expect(spies.updateChat).toHaveBeenCalled())
+    expect(useChatStore.getState().activeChatId).toBe(guarded ? 'previous-chat' : 'chat-1')
+    expect(spies.runSend).not.toHaveBeenCalled()
+    await act(async () => {
+      resolveUpdate({ success: true })
+      await pending
+    })
+    expect(useChatStore.getState().activeChatId).toBe('chat-1')
+    expect(spies.runSend).toHaveBeenCalledTimes(1)
+    expect(spies.deleteChat).not.toHaveBeenCalled()
   })
 })

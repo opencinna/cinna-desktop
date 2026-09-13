@@ -17,11 +17,13 @@ import type { AcpRuntimeView } from '../agents/drivers/acp/acpRuntime'
 import type { AcpConnection } from '../agents/drivers/acp/types'
 import type { AgentReadiness } from '../../shared/agentDrivers'
 import { agentReadinessService } from './agentReadinessService'
+import { isDevelopmentAgent } from '../../shared/developmentSession'
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const identity = (row: AgentRow): string => digest([row.source, row.driver, row.driverConfig, row.enabled,
   ...(row.driverConfig?.transport === 'websocket' ? [row.accessTokenEncrypted] : [])])
-const assertCustom = (row: AgentRow | undefined): AgentRow => {
+const assertCustom = (row: AgentRow | undefined, allowDevelopment = false): AgentRow => {
+  if (!allowDevelopment && isDevelopmentAgent(row)) throw new Error('Configure this builder in Local Development settings.')
   if (!row || row.source !== 'local' || row.driver !== 'acp' || row.driverConfig?.launcher !== 'custom') throw new Error('External ACP agent not found.')
   return row
 }
@@ -56,7 +58,7 @@ export const customAgentService = {
     return { ownerId, agentId: row.id, binding: digest([getProfileScopeUserId(), ownerId, row.id, identity(row)]) }
   },
   runtime(ownerId: string, supplied: AgentRow): AcpRuntimeView {
-    const row = assertCustom(agentRepo.getOwned(ownerId, supplied.id))
+    const row = assertCustom(agentRepo.getOwned(ownerId, supplied.id), true)
     if (identity(row) !== identity(supplied)) throw new Error('This ACP configuration changed. Start again with its current configuration.')
     const profileId = getProfileScopeUserId()
     const config = parseCustomAgentConfig(row.driverConfig)
@@ -167,6 +169,7 @@ export const customAgentService = {
     }
   },
   save(input: { id?: string; name?: string; config: CustomAgentConfig; accessToken?: string; testToken: string }): { id: string } {
+    if (input.id) assertCustom(agentRepo.getOwned(getSettingsScopeUserId(), input.id))
     const config = parseCustomAgentConfig(input.config)
     const receipt = receipts.get(input.testToken)
     const ownerId = getSettingsScopeUserId(), profileId = getProfileScopeUserId()

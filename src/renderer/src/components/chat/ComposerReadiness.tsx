@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
+import { ComposerWarning } from './ComposerWarning'
 import { useCheckAgentReadiness } from '../../hooks/useAgents'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -163,74 +164,23 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
   }
 }
 
-interface ComposerReadinessLineProps {
+/** A complete, actionable warning above the input, hidden when ready. */
+export function ComposerReadinessWarning({ readiness, reasonId }: {
   readiness: ComposerReadiness
-  /** Id Send points `aria-describedby` at. */
   reasonId: string
-}
-
-/**
- * Why the composer will not send to this agent, and the one action that might
- * change it.
- *
- * **A line of its own under the controls row, at a fixed height, rendered
- * whenever the composer sends straight to one agent — refused or not.** So a
- * refusal arriving (a check that lands while the user types) or clearing
- * (*Check again*) moves nothing, and the reason never competes with the chips
- * for the row's width. Inline in the row, the action and its separator cost
- * ~100px: that wrapped two chips at the narrowest window and four at every
- * width, moved the textarea when the refusal cleared, and squeezed the reason
- * itself to nothing, leaving "· Check again" with no sentence before it.
- */
-export function ComposerReadinessLine({
-  readiness,
-  reasonId
-}: ComposerReadinessLineProps): React.JSX.Element {
+}): React.JSX.Element | null {
   const { refusal, text, title, action } = readiness
-
-  return (
-    <div data-readiness-line="" className="flex h-4 mt-1 px-1 min-w-0 items-center justify-end gap-1.5">
-      {refusal && text && action && (
-        <>
-          <span
-            id={reasonId}
-            role="status"
-            aria-live="polite"
-            title={title ?? undefined}
-            className={`min-w-0 truncate text-right text-[11px] leading-4 ${readinessTone(refusal)}`}
-          >
-            {text}
-          </span>
-          {/* Keeps an amber sentence and an accent action from reading as one run. */}
-          <span aria-hidden="true" className="shrink-0 text-[11px] leading-4 text-[var(--color-text-muted)]">
-            ·
-          </span>
-          <button
-            type="button"
-            // `aria-disabled`, not `disabled`: a button that disables itself while
-            // it has focus drops focus to the page body mid-check.
-            aria-disabled={action.pending || undefined}
-            onClick={() => {
-              if (!action.pending) action.run()
-            }}
-            // Wide enough for either of its labels, so the pending swap moves nothing.
-            className={`shrink-0 inline-flex items-center justify-center gap-1 text-[11px] leading-4 font-medium
-              text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors
-              aria-disabled:cursor-default ${action.label.length > 11 ? 'min-w-[6.5rem]' : 'min-w-[5rem]'}`}
-          >
-            {action.pending ? (
-              <>
-                <Loader2 size={10} className="animate-spin" />
-                {action.pendingLabel}
-              </>
-            ) : (
-              action.label
-            )}
-          </button>
-        </>
-      )}
-    </div>
-  )
+  if (!refusal || !text || !action) return null
+  return <ComposerWarning className="mb-3" tone={readinessSeverity(refusal)} action={
+    <button type="button" aria-disabled={action.pending || undefined}
+      onClick={() => { if (!action.pending) action.run() }}
+      className="inline-flex items-center justify-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] aria-disabled:cursor-default">
+      {action.pending && <Loader2 size={12} className="animate-spin" />}
+      {action.pending ? action.pendingLabel : action.label}
+    </button>
+  }>
+    <p id={reasonId} title={title ?? undefined}>{text}</p>
+  </ComposerWarning>
 }
 
 interface RefusableExamplePromptsProps {

@@ -120,7 +120,7 @@ export interface AcpDriverDeps {
   /** The launcher for an engine, or undefined when this build has none. */
   launcher(id: AcpLauncherId): AcpLauncher | undefined
   /** Resolve and capture the actual folder or external command and its state. */
-  readRuntime(userId: string, agent: AgentRow): AcpRuntimeView | null
+  readRuntime(userId: string, agent: AgentRow): AcpRuntimeView | null | Promise<AcpRuntimeView | null>
   /** Park an ask in the pending-request registry. */
   registerRequest(input: {
     requestId: string
@@ -154,6 +154,34 @@ function fail(message: string, raw?: string): RunAgentTurnResult {
   return { text: '', parts: [], notices: [], error: { message, raw: raw ?? message } }
 }
 
+function canceled(): RunAgentTurnResult {
+  return { text: '', parts: [], notices: [], taskState: 'canceled', stopReason: 'canceled' }
+}
+
+/** Stop waiting without canceling restoration that other turns may share. */
+async function beforeStart<T>(signal: AbortSignal, operation: () => T | Promise<T>): Promise<T> {
+  const stopped = new Error('The agent was stopped before its prompt started.')
+  if (signal.aborted) throw stopped
+  let onAbort!: () => void
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(stopped)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    // Both outcomes stay observed after cancellation, including a late failure
+    // from shared setup. No continuation of the canceled turn can launch it.
+    return await Promise.race([
+      Promise.resolve().then(() => {
+        if (signal.aborted) throw stopped
+        return operation()
+      }),
+      aborted
+    ])
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+  }
+}
+
 export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
   const parkedRuntimes = new Map<string, AcpRuntimeView>()
   const driver: AgentDriver = {
@@ -165,7 +193,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
 
     async readiness(userId, agent, options): Promise<AgentReadiness | null> {
       try {
-        const runtime = deps.readRuntime(userId, agent)
+        const runtime = await deps.readRuntime(userId, agent)
         if (runtime?.type === 'external') { runtime.validate(); return await runtime.readiness(options) }
         const folder = runtime?.folder ?? null
         const state = folderReadiness(folder)
@@ -191,10 +219,16 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
     },
 
     async run(userId, agent, input): Promise<RunAgentTurnResult> {
-      if (input.signal.aborted) return { text: '', parts: [], notices: [], taskState: 'canceled', stopReason: 'canceled' }
+      if (input.signal.aborted) return canceled()
       let runtime: AcpRuntimeView | null
-      try { runtime = deps.readRuntime(userId, agent); runtime?.validate(input.chatId) }
-      catch (error) { return fail(error instanceof Error ? error.message : 'This agent configuration is unavailable.') }
+      try {
+        runtime = await beforeStart(input.signal, () => deps.readRuntime(userId, agent))
+        if (input.signal.aborted) return canceled()
+        runtime?.validate(input.chatId)
+      } catch (error) {
+        return input.signal.aborted ? canceled() : fail(error instanceof Error ? error.message : 'This agent configuration is unavailable.')
+      }
+      if (input.signal.aborted) return canceled()
       if (!runtime) return fail(ACP_FOLDER_NOT_FOUND)
       const folder = runtime.type === 'folder' ? runtime.folder : null
       const name = folder?.name ?? (runtime.type === 'external' ? runtime.name : agent.name)
@@ -221,9 +255,10 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
       // without spawning anything, and answering them here means a user reads a
       // sentence naming the remedy instead of queueing behind another chat's
       // turn to be told.
-      const plan = await launcher
-        .plan({ userId, agentId: agent.id, ...(runtime.type === 'folder' ? { folder: runtime.folder } : { custom: runtime.config, binding: runtime.binding, accessToken: runtime.accessToken }) })
+      const plan = await beforeStart(input.signal, () => launcher
+        .plan({ userId, agentId: agent.id, ...(runtime.type === 'folder' ? { folder: runtime.folder } : { custom: runtime.config, binding: runtime.binding, accessToken: runtime.accessToken }) }))
         .catch((err: unknown) => {
+          if (input.signal.aborted) return { error: 'The agent was stopped before its prompt started.' }
           logger.warn('a launcher failed to plan a turn', {
             agentId: agent.id,
             launcher: launcherId,
@@ -231,7 +266,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
           })
           return { error: 'This agent could not be started.' }
         })
-      if (input.signal.aborted) return { text: '', parts: [], notices: [], taskState: 'canceled', stopReason: 'canceled' }
+      if (input.signal.aborted) return canceled()
       if (isRefusal(plan)) return fail(plan.error)
 
       try {

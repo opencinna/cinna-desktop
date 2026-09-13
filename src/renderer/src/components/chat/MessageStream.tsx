@@ -16,6 +16,8 @@ import { CommandResultBlock } from './CommandResultBlock'
 import { AgentAttachment } from './AgentAttachment'
 import { AgentToolSubThread } from './AgentToolSubThread'
 import { CommandToolFrame } from './CommandToolFrame'
+import { CinnaCliBlock } from './CinnaCliBlock'
+import { pairCinnaCliTools } from '../../utils/cinnaCli'
 import { NoticeBlock } from './NoticeBlock'
 import { AskUserQuestionBlock } from './AskUserQuestionBlock'
 import { isAskUserQuestionTool, parseAskQuestions } from '../../utils/askUserQuestion'
@@ -604,6 +606,8 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 : null
             if (msg.role === 'assistant' && Array.isArray(parts) && parts.length > 0) {
               const { pairResultIdx, consumed } = pairCommandTools(parts)
+              const cli = pairCinnaCliTools(parts)
+              cli.consumed.forEach((index) => consumed.add(index))
               if (verboseMode) {
                 renderNodes.push({
                   slot: 'plain',
@@ -615,6 +619,8 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                         // tool_result already absorbed into a CommandToolFrame
                         // alongside its paired tool — skip the standalone render.
                         if (consumed.has(idx)) return null
+                        const cliCall = cli.calls.get(idx)
+                        if (cliCall) return <CinnaCliBlock key={k} command={cliCall.command} narration={p.text} results={cliCall.resultIndices.map((index) => parts[index])} animate={shouldAnimate} animateDelay={idx * 80} />
                         if (p.kind === 'tool' && p.commandInvocation) {
                           const ri = pairResultIdx.get(idx)
                           const result = ri !== undefined ? parts[ri] : undefined
@@ -690,6 +696,19 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 parts.forEach((p, idx) => {
                   const k = `${msg.id}-${idx}`
                   if (consumed.has(idx)) return
+                  const cliCall = cli.calls.get(idx)
+                  if (cliCall) {
+                    const results = cliCall.resultIndices.map((index) => parts[index])
+                    renderNodes.push({
+                      slot: 'collapsible',
+                      item: {
+                        key: k, kind: 'tool_narration', groupWhenAlone: true,
+                        status: results.some((result) => result.toolStream === 'stderr') ? 'error' : 'done',
+                        node: <CinnaCliBlock command={cliCall.command} narration={p.text} results={results} animate={shouldAnimate} animateDelay={idx * 80} />
+                      }
+                    })
+                    return
+                  }
                   if (p.kind === 'tool' && p.commandInvocation) {
                     const ri = pairResultIdx.get(idx)
                     const result = ri !== undefined ? parts[ri] : undefined
@@ -871,14 +890,35 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
           // even before the stream finishes.
           const streamingTextBlocks = streamingBlocks.map((b) =>
             b.type === 'text'
-              ? { kind: b.kind, toolId: b.toolId, commandInvocation: b.commandInvocation }
+              ? { kind: b.kind, toolId: b.toolId, commandInvocation: b.commandInvocation, toolName: b.toolName, toolInput: b.toolInput }
               : { kind: 'tool_call' }
           )
           const { pairResultIdx: streamPairResultIdx, consumed: streamConsumed } =
             pairCommandTools(streamingTextBlocks)
+          const streamingCli = pairCinnaCliTools(streamingTextBlocks)
+          streamingCli.consumed.forEach((index) => streamConsumed.add(index))
           streamingBlocks.forEach((block, i) => {
             const isLastBlock = i === streamingBlocks.length - 1
             if (streamConsumed.has(i)) return
+            const cliCall = streamingCli.calls.get(i)
+            if (cliCall && block.type === 'text') {
+              const results = cliCall.resultIndices.flatMap((index) => {
+                const result = streamingBlocks[index]
+                return result.type === 'text' ? [{ text: result.content, toolStream: result.toolStream }] : []
+              })
+              const live = isStreaming && (!results.length || isLastBlock || cliCall.resultIndices.includes(streamingBlocks.length - 1))
+              const key = `stream-cli-${i}`
+              const node = <CinnaCliBlock command={cliCall.command} narration={block.content} results={results} isStreaming={live} />
+              renderNodes.push(verboseMode ? { slot: 'plain', key, node } : {
+                slot: 'collapsible',
+                item: {
+                  key, kind: 'tool_narration', groupWhenAlone: true, isLive: live,
+                  status: results.some((result) => result.toolStream === 'stderr') ? 'error' : isStreaming && !results.length ? 'pending' : 'done',
+                  node
+                }
+              })
+              return
+            }
             if (block.type === 'text' && block.kind === 'tool' && block.commandInvocation) {
               const ri = streamPairResultIdx.get(i)
               const resultBlock =

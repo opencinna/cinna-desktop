@@ -27,14 +27,14 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 1. The user opens a direct chat with one agent, or a human-routed chat addressed to that agent
 2. The agent list answers at once with whatever readiness is already known: `null` for an agent not checked yet. It also starts a background check for every enabled agent whose answer is missing or old
 3. The check comes back, say, `unreachable`. The answer changed, so main pushes it and the renderer re-reads the list
-4. The reason appears in the state's colour, followed by a separator and **Check again**. It sits on a line under the controls row that is kept for every composer sending straight to one agent, so it was already there and nothing moves. Send is disabled and described by the reason. Its tooltip is the raw error where the driver kept one
+4. A warning panel above the input shows the full reason in the state's tone, with **Check again** below it. Healthy composers show no panel or empty reserved slot. Send is disabled and described by the reason; its tooltip retains the raw detail where the driver kept one
 5. Enter does nothing more. Nothing is cleared, so the message is still in the box when the agent comes back
 6. The user fixes the agent and presses **Check again**. The check runs fresh and the list is re-read when it finishes. The reason goes away, Send is enabled, and focus lands in the message box
 
 ### An expired Cinna session
 1. A synced agent's readiness comes back `not_logged_in`
 2. The action is **Re-authenticate**, not Check again: asking again does not fix a session, signing in does. It runs the same flow as the chat's error chip ([Cinna Re-authentication](../../auth/cinna_accounts/reauthentication.md))
-3. If either action fails, the line adds that (*Couldn't re-authenticate — …*) and the reason stays
+3. If either action fails, the warning adds that (*Couldn't re-authenticate — …*) and the reason stays
 
 ### A catalog command to a refused folder agent
 1. A folder agent is refused — its credentials are missing, say
@@ -92,6 +92,10 @@ A folder row always dispatches to ACP. Its stored launcher is a scanner cache: e
 
 Custom commands instead capture their locally owned configuration and state authority. Managed sessions capture profile, agent and credential identity. Neither invents a folder or silently substitutes a new binding into existing work.
 
+### Account builders restore before deciding readiness
+
+[Account build sessions](../local_dev/build_sessions.md) reuse ACP with a saved profile/workspace/engine binding. Their runtime read waits for idle/installing workspace restoration and warms OpenCode's model catalogue before readiness or a turn. A transient startup phase must not be cached as failed setup; settled failures still report their actual remedy. Stop cancels waiting for runtime restoration or launch planning promptly, without canceling shared restoration or allowing a late result to launch the stopped turn.
+
 ### The A2A pre-flight lives in one place
 
 These all run inside the A2A driver's `run`:
@@ -127,7 +131,7 @@ Every driver answers `readiness()` without throwing, and **null means "could not
 - **Custom ACP** returns cached binding readiness on ordinary reads; explicit Test/Check again performs initialize only. A failed explicit check remains failed until a fresh success.
 - **Managed** checks local credential/configuration availability; discovery/save and the turn verify remote access.
 
-A failure reason is a short sentence that leads with what helps: the status, and where to fix it. It sits beside a disabled Send, cut to whatever width is left. The URL, the status and the network code go in `detail`, which only the tooltip shows. The raw error strings were shown on screen at first: "fetch failed", or a card URL cut off before the status that explained it.
+A failure reason is a sentence that leads with what helps: the status, and where to fix it. It wraps in the warning panel above the input instead of being cut to the space left beside Send. The URL, the status and the network code go in `detail`, which only the tooltip shows. The raw error strings were shown on screen at first: "fetch failed", or a card URL cut off before the status that explained it.
 
 **For a synced agent, checking has side effects.** Its token comes from the Cinna session, and a check refreshes that session when it is near expiry — and clears it if the refresh is refused — exactly as a turn does. Skipping the refresh would be worse: an access token that had merely expired would read as `not_logged_in`, and the composer would refuse an agent that works.
 
@@ -150,8 +154,8 @@ Each agent in the list carries whatever readiness is already known. Listing star
 - **It refuses rather than just warning.** Sending to an agent the driver says cannot take a turn produces a failed turn the user then has to read, and the reason was already known
 - **A bare `/run:<name>` to an agent whose commands come from a folder catalog always runs,** refused or not. It is a script run in the folder on this machine, not a turn on the agent's engine, so the agent's readiness says nothing about whether it can run. The composer matches the same grammar main uses; a looser one would enable Send for text that main then passes to the engine
 - **`null` never refuses.** A check that has not run yet, or could not tell, never stops a working agent
-- **The line never depends on what is typed**, so nothing appears or moves while the user types ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 1). What is typed only decides whether Send is blocked
-- **The reason has its own fixed-height line under the controls row, kept for every direct agent whether it is refused or not.** A refusal that lands while the user types, or clears after *Check again*, therefore moves nothing. When the reason sat inline in the row, the action and its separator cost about 100px: that wrapped two chips at the narrowest window and four at every width, moved the textarea when the refusal cleared, and squeezed the reason to nothing, leaving "· Check again" with no sentence before it. A composer the local model conducts, where nothing can be refused, keeps no line. The action button is wide enough for either of its labels, so switching to the pending label moves nothing
+- **Warning visibility never depends on what is typed**, so nothing appears or moves while the user types ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 1). What is typed only decides whether Send is blocked
+- **The reason and remedy share a warning panel above the input.** Full text remains readable at narrow widths, and Check again/Re-authenticate does not compete with the agent chips. Healthy state renders no warning. The same panel is used by [account build sessions](../local_dev/build_sessions.md), so setup failures have one representation across new and existing conversations.
 - **When *Check again* clears the refusal, focus goes to the message box.** The button removes itself, and its focus would otherwise fall to the page body. It happens only from the page body: a refusal that clears in the background never takes focus from wherever the user is
 - **While the action runs it is `aria-disabled`, never `disabled`.** A button that disables itself while it has focus sends focus to the page body in the middle of the check
 - **The refusal is not checked again when the new chat is created.** An example prompt is refused where it is clicked, and the composer has already decided for a typed message. A guard at chat creation once silently dropped a `/run:` the composer had already allowed

@@ -1,3 +1,4 @@
+import { LocalDevelopmentPage } from '../localdev/LocalDevelopmentPage'
 import { useLiveRunWatch } from '../../hooks/useLiveRunWatch'
 import { useUIStore } from '../../stores/ui.store'
 import { ChatWorkspace } from './ChatWorkspace'
@@ -23,6 +24,7 @@ export function MainArea(): React.JSX.Element {
     case 'cinna-task-run': return <CinnaTaskRunView />
     case 'note-detail': return <NoteDetail />
     case 'external-agent': return <ExternalAgentPage />
+    case 'local-development': return <LocalDevelopmentPage />
     case 'local-agent': return <LocalAgentPage />
     default: return <ChatWorkspace />
   }

@@ -1,6 +1,8 @@
 import { useCallback } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useCreateChat, useUpdateChat } from './useChat'
 import { useChatStore } from '../stores/chat.store'
+import { useAuthStore } from '../stores/auth.store'
 import { useChatStream } from './useChatStream'
 import { useAttachNotesAsFiles } from './useNotes'
 import { useAddOnDemandMcp, useSetChatMcpProviders } from './useMcp'
@@ -20,6 +22,8 @@ type ProviderData = Awaited<ReturnType<typeof window.api.providers.list>>[number
 type ModelData = Awaited<ReturnType<typeof window.api.providers.listModels>>[number]
 
 export interface NewChatOptions {
+  /** Optional entry-page lifetime/account guard, checked across asynchronous preparation. */
+  isCurrent?: () => boolean
   message: string
   /**
    * The new-chat agent pick list (`pendingAgentIds`) — populated by the `[+]`
@@ -84,6 +88,7 @@ export function resolveModel(
 export function useNewChatFlow(): {
   startNewChat: (opts: NewChatOptions) => Promise<void>
 } {
+  const queryClient = useQueryClient()
   const createChat = useCreateChat()
   const updateChat = useUpdateChat()
   const { startRun } = useChatStream()
@@ -198,10 +203,19 @@ export function useNewChatFlow(): {
       // by deleting the chat row on the way out.
       const scope = routingOf({ router, agentId: rootAgentId }).attachmentTarget
 
+      const originatingUserId = useAuthStore.getState().currentUser?.id
+      const isSameAccount = (): boolean => useAuthStore.getState().currentUser?.id === originatingUserId
+      const assertCurrent = (): void => {
+        if (opts.isCurrent && (!isSameAccount() || !opts.isCurrent())) {
+          throw new Error('The build session or account changed before sending.')
+        }
+      }
       let chatId: string | null = null
       try {
-        const chat = await createChat.mutateAsync()
+        assertCurrent()
+        const chat = await createChat.mutateAsync(opts.isCurrent ? { select: false } : undefined)
         chatId = chat.id
+        assertCurrent()
 
         // Flush the on-demand buffers before the first send so the stream loop
         // reads both at setup time (and emits the one-shot announce prefix).
@@ -210,10 +224,12 @@ export function useNewChatFlow(): {
         // later hands the chat to the model.
         for (const mcpId of onDemandMcpSnapshot) {
           await addOnDemandMcpAsync({ chatId: chat.id, mcpProviderId: mcpId })
+          assertCurrent()
         }
         for (const agentId of agentSnapshot) {
           if (agentId !== rootAgentId) {
             await addOnDemandAgentAsync({ chatId: chat.id, agentId })
+            assertCurrent()
           }
         }
 
@@ -239,6 +255,7 @@ export function useNewChatFlow(): {
         if (mode) updates.modeId = mode.id
 
         await updateChat.mutateAsync({ chatId: chat.id, updates })
+        assertCurrent()
 
         // Baseline MCPs = the chat mode's list, verbatim. Empty means the
         // chat starts with no baseline servers (the row has none yet, so
@@ -246,6 +263,7 @@ export function useNewChatFlow(): {
         const mcpSnapshot = Array.from(mcpIds)
         if (mcpSnapshot.length > 0) {
           await setChatMcpAsync({ chatId: chat.id, mcpProviderIds: mcpSnapshot })
+          assertCurrent()
         }
 
         // Remote and local agents both ingest as Cinna-scoped: the cinna upload
@@ -253,7 +271,9 @@ export function useNewChatFlow(): {
         // folder has no file path of its own. Only the model's own chat reads
         // from the local store.
         const resolved = await resolvePendingAttachments(chat.id, scope, attachments)
+        assertCurrent()
         const noteAttachments = await ingestPendingNotes(chat.id, scope, noteIds)
+        assertCurrent()
 
         useChatStore.getState().setActiveChatId(chat.id)
         // A `human` chat's first message goes to the first agent the user
@@ -273,12 +293,24 @@ export function useNewChatFlow(): {
         // Surface the error so the user knows the send didn't go through
         // — without this, a failed ingest leaves an empty chat row and a
         // cleared composer with no feedback.
-        setSendError(unwrapIpcError(err, 'Could not start new chat'))
+        if (isSameAccount() && (!opts.isCurrent || opts.isCurrent())) {
+          setSendError(unwrapIpcError(err, 'Could not start new chat'))
+        }
         // Best-effort cleanup of the orphan chat. The user can retry
         // without dragging accumulated empty rows along.
-        if (chatId) {
+        // Leaving the entry page cancels the send, but its new, empty chat
+        // still needs cleanup. The delete IPC is scoped to the active account,
+        // so account identity must be checked separately from page lifetime.
+        if (chatId && isSameAccount()) {
           try {
-            await window.api.chat.delete(chatId)
+            const deleted = await window.api.chat.delete(chatId)
+            // Creation may already have refreshed the sidebar with this empty
+            // row. Delete is a soft delete, so both lists need a fresh read.
+            // A late completion must not invalidate the next account's cache.
+            if (deleted.success && isSameAccount()) {
+              void queryClient.invalidateQueries({ queryKey: ['chats'] })
+              void queryClient.invalidateQueries({ queryKey: ['trash'] })
+            }
           } catch {
             // Swallow — the chat row exists in the DB but at worst it's
             // an empty list entry the user can manually delete.
@@ -287,6 +319,7 @@ export function useNewChatFlow(): {
       }
     },
     [
+      queryClient,
       createChat,
       updateChat,
       startRun,

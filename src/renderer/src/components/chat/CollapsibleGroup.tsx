@@ -6,6 +6,8 @@ export type CollapsibleKind = 'thinking' | 'tool_narration' | 'tool_call' | 'too
 
 export interface CollapsibleGroupItem {
   key: string
+  /** A combined call/result still represents a compact step when alone. */
+  groupWhenAlone?: boolean
   kind: CollapsibleKind
   status?: CollapsibleStatus
   isLive?: boolean
@@ -33,7 +35,7 @@ export function CollapsibleGroup({ items }: CollapsibleGroupProps): React.JSX.El
         type="button"
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
-        aria-label={`${expanded ? 'Collapse' : 'Expand'} ${items.length} steps`}
+        aria-label={`${expanded ? 'Collapse' : 'Expand'} ${items.length} ${items.length === 1 ? 'step' : 'steps'}`}
         className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md
           text-[var(--color-text-muted)]
           hover:text-[var(--color-text-secondary)]
@@ -92,7 +94,7 @@ export type RenderNode =
   | { slot: 'plain'; key: string; node: React.ReactNode }
   | { slot: 'collapsible'; item: CollapsibleGroupItem }
 
-/** Wrap runs of consecutive collapsible nodes (length >= 2) into a CollapsibleGroup. */
+/** Group consecutive auxiliary nodes, plus combined steps that request grouping alone. */
 export function groupConsecutiveCollapsibles(nodes: RenderNode[]): React.ReactNode[] {
   const out: React.ReactNode[] = []
   let i = 0
@@ -106,7 +108,7 @@ export function groupConsecutiveCollapsibles(nodes: RenderNode[]): React.ReactNo
     let j = i
     while (j < nodes.length && nodes[j].slot === 'collapsible') j++
     const run = nodes.slice(i, j) as Extract<RenderNode, { slot: 'collapsible' }>[]
-    if (run.length >= 2) {
+    if (run.length >= 2 || run[0].item.groupWhenAlone) {
       out.push(
         <CollapsibleGroup key={`group-${run[0].item.key}`} items={run.map((r) => r.item)} />
       )

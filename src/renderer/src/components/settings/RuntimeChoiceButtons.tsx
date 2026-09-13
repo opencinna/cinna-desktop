@@ -54,7 +54,9 @@ export function RuntimeChoiceButtons({
   tools,
   installing,
   onSelect,
-  onInstall
+  onInstall,
+  disabled = false,
+  defaultChoice
 }: {
   /** The stored pin. Nothing is selected while it is still being decided. */
   selected: AgentEngine | null
@@ -64,6 +66,8 @@ export function RuntimeChoiceButtons({
   installing: RuntimeToolId | null
   onSelect: (engine: AgentEngine) => void
   onInstall: (tool: RuntimeToolId) => void
+  disabled?: boolean
+  defaultChoice?: { description: string; onSelect: () => void }
 }): React.JSX.Element {
   return (
     /*
@@ -72,6 +76,14 @@ export function RuntimeChoiceButtons({
       third choice behind a gesture nobody makes on a settings screen.
     */
     <div className="flex flex-wrap gap-2">
+      {defaultChoice && <button
+        type="button" aria-pressed={selected === null} disabled={disabled}
+        onClick={defaultChoice.onSelect}
+        className={`min-w-[8rem] flex-1 rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-50 ${selected === null ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10' : 'border-[var(--color-border)] bg-[var(--color-bg-secondary)] hover:enabled:bg-[var(--color-bg-hover)]'}`}
+      >
+        <span className="flex items-center gap-1.5 text-[13px] font-medium text-[var(--color-text)]"><span className="h-[14px] w-[14px] shrink-0">{selected === null && <Check size={14} className="text-[var(--color-accent)]" />}</span>Default Runtime</span>
+        <span className="mt-0.5 block truncate pl-[1.375rem] text-[12px] text-[var(--color-text-muted)]" title={defaultChoice.description}>{defaultChoice.description}</span>
+      </button>}
       {RUNTIME_CHOICES.map((choice) => {
         /**
          * Three states, and `undefined` is one of them: detection in flight is
@@ -107,7 +119,7 @@ export function RuntimeChoiceButtons({
             key={choice.id}
             type="button"
             aria-pressed={isSelected}
-            disabled={busy || inert || detected === undefined}
+            disabled={disabled || busy || inert || detected === undefined}
             onClick={() => {
               if (isSelected) return
               if (detected === false && choice.tool) {
@@ -123,7 +135,7 @@ export function RuntimeChoiceButtons({
                   ? `Install ${choice.label} and run agents on it`
                   : `Run agents on ${choice.label}`
             }
-            className={`min-w-[9.5rem] flex-1 rounded-lg border px-3 py-2 text-left transition-colors
+            className={`${defaultChoice ? 'min-w-[8rem]' : 'min-w-[9.5rem]'} flex-1 rounded-lg border px-3 py-2 text-left transition-colors
               disabled:cursor-not-allowed ${
                 isSelected
                   ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10'
@@ -145,7 +157,7 @@ export function RuntimeChoiceButtons({
                   <Download size={13} className="text-[var(--color-text-muted)]" />
                 ) : null}
               </span>
-              <span className="truncate text-[14px] font-medium text-[var(--color-text)]">
+              <span className={`${defaultChoice ? 'min-w-0 text-[13px]' : 'truncate text-[14px]'} font-medium text-[var(--color-text)]`}>
                 {choice.label}
               </span>
               {/* The one thing the sub-line cannot carry: *why* a detected

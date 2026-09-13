@@ -9,6 +9,7 @@ import { createLogger } from '../logger/logger'
 import { assertUsableRoot } from './localAgents/pathRules'
 import { isLocalToolId } from '../../shared/localTools'
 import { isAgentEngine } from '../../shared/engine'
+import { isWorkComplexity } from '../../shared/modelFamilies'
 
 const logger = createLogger('app-settings')
 
@@ -195,6 +196,16 @@ const VALUE_CHECKS: {
     if (value === '') return
     if (!isAgentEngine(value)) {
       throw new AppSettingsError('invalid_value', 'That is not a runtime Cinna can run agents on.')
+    }
+  },
+  localDevelopmentEngine: (value) => {
+    if (value !== '' && !isAgentEngine(value)) {
+      throw new AppSettingsError('invalid_value', 'That is not a runtime Cinna can build agents on.')
+    }
+  },
+  localDevelopmentComplexity: (value) => {
+    if (!isWorkComplexity(value)) {
+      throw new AppSettingsError('invalid_value', 'Choose Simple, Medium, or Complex work complexity.')
     }
   }
 }

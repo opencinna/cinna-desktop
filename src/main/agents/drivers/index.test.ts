@@ -27,6 +27,11 @@ import type { AgentRow } from '../../db/agents'
  */
 
 const state = vi.hoisted(() => ({
+  development: false,
+  developmentEngine: 'claude',
+  developmentComplexity: 'complex',
+  codexSettings: null as null | ((userId: string, agentId: string) => { effort: string }),
+  developmentPaths: [] as string[],
   handovers: [] as unknown[],
   kind: 'kit',
   handbackPlans: [] as boolean[],
@@ -37,6 +42,29 @@ const state = vi.hoisted(() => ({
   ran: [] as string[]
 }))
 
+vi.mock('../../localdev/developmentSessionService', () => {
+  const context = () => ({ profileId: 'profile-1', workspacePath: '/accounts/alice', complexity: state.developmentComplexity, runtime: { launcher: state.developmentEngine } })
+  return {
+    isDevelopmentAgent: (row: AgentRow) => !!row?.driverConfig?.developmentProfileId,
+    contextForDevelopmentAgent: context,
+    restoreDevelopmentContext: async () => context(),
+    developmentAgentContext: () => state.development ? context() : null,
+    developmentPlanKey: (key: string) => key
+  }
+})
+vi.mock('../../localdev/localDevService', () => ({ localDevService: {
+  executionContext: async () => ({ env: { PATH: '/managed/tools:/usr/bin' } })
+} }))
+vi.mock('../../services/customAgentService', () => ({ customAgentService: {
+  launcher: { id: 'custom', plan: async () => { state.ran.push('custom'); return { error: 'custom' } } },
+  runtime: () => ({ type: 'external', validate() {}, readSession: () => null, saveSession() {}, isGranted: () => false, rememberGrant: () => false })
+} }))
+vi.mock('./acp/codexLauncher', () => ({ createCodexLauncher: (options: { settings: (userId: string, agentId: string) => { effort: string } }) => { state.codexSettings = options.settings; return { id: 'codex',
+  plan: async (context: { folder: { path: string } }) => {
+    state.ran.push('codex'); state.developmentPaths.push(context.folder.path)
+    return { error: 'refused by the codex launcher' }
+  }
+} } }))
 vi.mock('electron', () => ({ app: { getVersion: () => '0.0.0', getPath: () => '/tmp' } }))
 vi.mock('../../engine/binaryResolver', () => ({
   configuredEnginePath: () => null,
@@ -46,7 +74,7 @@ vi.mock('../../engine/binaryResolver', () => ({
 vi.mock('../../engine/engineConfigSource', () => ({
   collectEngineConfigInput: async () => ({ providers: [], agents: [] })
 }))
-vi.mock('../../db/agents', () => ({ agentSessionRepo: { getByChatAndAgent: vi.fn(), upsert: vi.fn() } }))
+vi.mock('../../db/agents', () => ({ agentRepo: { getOwned: () => undefined, list: () => [] }, agentSessionRepo: { getByChatAndAgent: vi.fn(), upsert: vi.fn() } }))
 vi.mock('../../auth/scope', () => ({ getSettingsScopeUserId: () => 'user-1' }))
 vi.mock('../../auth/cinna-oauth', () => ({ CinnaReauthRequired: class CinnaReauthRequired extends Error {} }))
 vi.mock('../../services/localAgents/localAgentService', () => ({
@@ -112,7 +140,8 @@ vi.mock('./acp/acpLaunchers', async (importOriginal) => {
   const original = await importOriginal<typeof import('./acp/acpLaunchers')>()
   const marker = (id: string) => () => ({
     id,
-    plan: async (context: { folder: { coordinatorHandback?: boolean } }) => {
+    plan: async (context: { folder: { coordinatorHandback?: boolean; path: string } }) => {
+      state.developmentPaths.push(context.folder.path)
       state.handbackPlans.push(context.folder.coordinatorHandback === true)
       state.ran.push(id)
       return { error: `refused by the ${id} launcher` }
@@ -167,6 +196,7 @@ async function ranFor(agent: AgentRow): Promise<string[]> {
 }
 
 beforeEach(() => {
+  state.development = false; state.developmentComplexity = 'complex'; state.developmentPaths = []
   state.runtime = { engine: 'opencode' }
   state.readiness = 'ok'
   state.getThrows = false
@@ -176,6 +206,22 @@ beforeEach(() => {
 })
 
 describe('driverFor', () => {
+  it.each([['simple', 'low'], ['medium', 'medium'], ['complex', 'high']])('passes %s build complexity to Codex as %s effort', (complexity, effort) => {
+    state.development = true
+    state.developmentComplexity = complexity
+    expect(state.codexSettings?.('user-1', 'builder').effort).toBe(effort)
+    expect(state.gets).toBe(0)
+  })
+  it.each(['claude', 'codex', 'opencode'])('runs an account builder through its selected %s runtime in the CLI workspace', async (engine) => {
+    state.development = true
+    state.developmentEngine = engine
+    const row = { ...folderRow('custom'), source: 'local', enabled: true,
+      driverConfig: { launcher: 'custom', command: ['cinna-development-session'], developmentProfileId: 'profile-1' } } as AgentRow
+    expect(await ranFor(row)).toEqual([engine])
+    expect(state.developmentPaths).toEqual(['/accounts/alice'])
+    expect(state.gets).toBe(0)
+  })
+
   it('sends an A2A row to the A2A driver without reading any folder', async () => {
     // A remote agent has no folder to read, and reading one for it would be a
     // filesystem hit on every turn of an agent this axis has nothing to do with.

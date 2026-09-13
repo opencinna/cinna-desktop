@@ -14,6 +14,10 @@ const log = createLogger('local-dev')
  * state locally.
  */
 interface LocalDevStore {
+  pageMode: 'chat' | 'settings'
+  setPageMode: (mode: 'chat' | 'settings') => void
+  drafts: Record<string, string>
+  setDraft: (profileId: string, text: string) => void
   state: LocalDevState
   subscribed: boolean
   /**
@@ -55,6 +59,10 @@ function receiveReply(state: LocalDevState, request: number): void {
 }
 
 export const useLocalDevStore = create<LocalDevStore>((set, get) => ({
+  pageMode: 'chat',
+  setPageMode: (pageMode) => set({ pageMode }),
+  drafts: {},
+  setDraft: (profileId, text) => set((s) => ({ drafts: { ...s.drafts, [profileId]: text } })),
   state: { phase: 'idle' },
   subscribed: false,
   answeredHosts: [],

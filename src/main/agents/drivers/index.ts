@@ -20,7 +20,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { engineBinaryService } from '../../engine/engineBinaryService'
 import { collectEngineConfigInput } from '../../engine/engineConfigSource'
-import { agentSessionRepo, type AgentRow } from '../../db/agents'
+import { agentRepo, agentSessionRepo, type AgentRow } from '../../db/agents'
 import { CinnaReauthRequired } from '../../auth/cinna-oauth'
 import { localAgentService } from '../../services/localAgents/localAgentService'
 import { desktopStateService } from '../../services/localAgents/desktopStateService'
@@ -57,6 +57,8 @@ import { createA2aDriver } from './a2aDriver'
 import { createAcpDriver, respondToAcpAsk, type AcpFolderView } from './acp/acpDriver'
 import { acpProcessPool } from './acp/acpPool'
 export { acpProcessPool } from './acp/acpPool'
+import { developmentAgentContext, contextForDevelopmentAgent, restoreDevelopmentContext, isDevelopmentAgent, developmentPlanKey } from '../../localdev/developmentSessionService'
+import { localDevService } from '../../localdev/localDevService'
 import { customAgentService } from '../../services/customAgentService'
 import type { AcpRuntimeView } from './acp/acpRuntime'
 import {
@@ -233,6 +235,8 @@ async function claudePath(options?: { fresh?: boolean }): Promise<string | null>
  * applies to it — the same split `collectEngineAgents` makes.
  */
 function folderSystemPrompt(userId: string, agentId: string): string {
+  const development = developmentAgentContext(userId, agentId)
+  if (development) return development.instructions
   const agent = localAgentService.get(userId, agentId)
   const context = resolveDesktopPromptContext()
   return agent.kind === 'bare'
@@ -268,6 +272,8 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     env: async () => buildCodexEnv({ shellEnv: await getShellEnv() }),
     systemPrompt: folderSystemPrompt,
     settings: (userId, agentId) => {
+      const development = developmentAgentContext(userId, agentId)
+      if (development) return { model: null, effort: codexEffortForComplexity(development.complexity), approval: 'ask' }
       const agent = localAgentService.get(userId, agentId)
       return {
         model: typeof agent.runtime?.model === 'string' ? agent.runtime.model.trim() || null : null,
@@ -288,7 +294,17 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     // would put network latency in front of every message the user sends. The
     // local credentials are still re-asked, because `ollama pull` happens
     // between one turn and the next.
-    configInput: (userId) => collectEngineConfigInput(userId, { refreshModels: false }),
+    configInput: async (userId) => {
+      const input = await collectEngineConfigInput(userId, { refreshModels: false })
+      for (const row of agentRepo.list(userId).filter(isDevelopmentAgent)) {
+        try {
+          const context = contextForDevelopmentAgent(row)
+          input.agents.push({ agentId: row.id, slug: `cinna-build-${row.id}`, description: row.description ?? '',
+            prompt: context.instructions, providerId: context.runtime.credentialId ?? '', modelId: context.runtime.modelId ?? '' })
+        } catch { /* Other profiles and previous runtimes are deliberately excluded. */ }
+      }
+      return input
+    },
     configRoot: () => join(app.getPath('userData'), 'acp'),
     childEnv: async () => shellEnvForChild(await getShellEnv())
   }),
@@ -306,6 +322,8 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     // plan serves what the plan serves, and `runtimeService.resolve` returns the
     // alias for this engine. Null hands the choice to the CLI's own default.
     model: (userId, agentId) => {
+      const development = developmentAgentContext(userId, agentId)
+      if (development) return development.runtime.modelId
       try {
         const agent = localAgentService.get(userId, agentId)
         return runtimeService.resolve(agent.runtime, providerService.listMerged()).modelId
@@ -366,7 +384,18 @@ function readAcpFolder(userId: string, agentId: string): AcpFolderView | null {
   }
 }
 
-function readAcpRuntime(userId: string, agent: AgentRow): AcpRuntimeView | null {
+async function readAcpRuntime(userId: string, agent: AgentRow): Promise<AcpRuntimeView | null> {
+  if (isDevelopmentAgent(agent)) {
+    const context = await restoreDevelopmentContext(agent)
+    const state = customAgentService.runtime(userId, agent)
+    return {
+      ...state, type: 'folder',
+      folder: { name: agent.name, slug: `cinna-build-${agent.id}`, description: agent.description ?? '',
+        path: context.workspacePath, kind: 'bare', enabled: agent.enabled, readiness: 'ok', readinessReason: null,
+        runtime: { engine: context.runtime.launcher } },
+      validate(chatId) { state.validate(chatId); contextForDevelopmentAgent(agent) }
+    }
+  }
   if (agent.source === 'local' && agent.driverConfig?.launcher === 'custom') return customAgentService.runtime(userId, agent)
   const folder = readAcpFolder(userId, agent.id)
   if (!folder) return null
@@ -381,7 +410,22 @@ function readAcpRuntime(userId: string, agent: AgentRow): AcpRuntimeView | null 
 
 export const acpDriver = createAcpDriver({
   pool: acpProcessPool,
-  launcher: (id) => acpLaunchers[id],
+  launcher: (id) => {
+    const launcher = acpLaunchers[id]
+    if (!launcher) return undefined
+    return { ...launcher, async plan(ctx) {
+      const development = developmentAgentContext(ctx.userId, ctx.agentId)
+      if (!development) return launcher.plan(ctx)
+      const execution = await localDevService.executionContext(development.profileId)
+      const plan = await launcher.plan(ctx)
+      developmentAgentContext(ctx.userId, ctx.agentId)
+      if ('error' in plan) return plan
+      // Keep runtime credential/environment policy; add only the managed CLI tools.
+      const path = execution.env.PATH ?? plan.spec.env.PATH ?? ''
+      return { ...plan, spec: { ...plan.spec, env: { ...plan.spec.env, PATH: path },
+        key: developmentPlanKey(plan.spec.key, path) } }
+    } }
+  },
   readRuntime: readAcpRuntime,
   defaultEngine: () => defaultEngineService.current(),
   registerRequest: (input) => pendingRequests.register(input),
@@ -438,4 +482,17 @@ export function respondToOrphanedAsk(
   resolution: Parameters<AgentDriver['respond']>[1]
 ): RespondOutcome {
   return respondToAcpAsk({ rememberGrant: () => false, resolveRequest }, ask, resolution)
+}
+
+/** The same runtime gates used by the turn, before presenting the build composer. */
+export async function developmentRuntimeBlocker(engine: import('../../../shared/engine').AgentEngine): Promise<{ blocker: string | null; installTool?: 'claude' | 'codex' | null }> {
+  const ready = await acpLaunchers[engine]?.readiness?.({ fresh: true })
+  if (ready && ready.state !== 'ok') return { blocker: ready.reason ?? 'Check your default runtime in Settings.',
+    installTool: ready.state === 'not_installed' && engine !== 'opencode' ? engine : null }
+  if (engine === 'opencode') {
+    try { await engineBinaryService.ensure() } catch (error) {
+      return { blocker: error instanceof Error ? error.message : 'OpenCode could not be installed. Check Runtime settings.' }
+    }
+  }
+  return { blocker: null }
 }

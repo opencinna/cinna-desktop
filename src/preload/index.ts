@@ -1,3 +1,4 @@
+import type { DevelopmentContext } from '../shared/developmentSession'
 import type { JobExecuteResult } from '../shared/jobs'
 import { isRunWatchMessage, type RunWatchMessage } from '../shared/runWatch'
 import type { AutonomousTaskStart } from '../shared/taskRuntime'
@@ -215,6 +216,8 @@ export interface ChatModeData {
 }
 
 export interface AgentData {
+  /** Internal account-bound builder, configured through Local Development. */
+  development?: boolean
   id: string
   name: string
   description: string | null
@@ -1209,6 +1212,8 @@ const api = {
    * rejection would lose the reason on the way over.
    */
   localDev: {
+    sessionContext: (): Promise<DevelopmentContext> => ipcRenderer.invoke('localdev:session-context'),
+    prepareSession: (context: Pick<DevelopmentContext, 'profileId' | 'workspacePath' | 'serverUrl' | 'runtime' | 'complexity'>): Promise<{ agentId: string }> => ipcRenderer.invoke('localdev:prepare-session', context),
     developAgent: (agentId: string): Promise<{ agentId: string }> => ipcRenderer.invoke('localdev:develop-agent', agentId),
     getState: (): Promise<LocalDevState> => ipcRenderer.invoke('localdev:get-state'),
     getManagedCli: (): Promise<ManagedLocalDevCli | null> => ipcRenderer.invoke('localdev:get-managed-cli'),

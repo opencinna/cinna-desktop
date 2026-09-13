@@ -15,7 +15,7 @@
  * it replaces.
  */
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentKind } from '../../../../shared/localAgents'
 import type { LocalPermissionRequest } from '../../../../shared/localAgentRequests'
 import type { RunEvent } from '../../../../shared/runEvents'
@@ -26,7 +26,7 @@ import {
   type DriverContractSubject
 } from '../__golden__/driverContract'
 import { goldenRow } from '../__golden__/driverWorld'
-import { createAcpDriver, type AcpDriverDeps, type AcpFolderView } from './acpDriver'
+import { createAcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
 import { createAcpProcessPool } from './acpProcessPool'
 import { startAcpConnection } from './acpConnection'
 import type { AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
@@ -43,6 +43,13 @@ function askedFor(w: World): Promise<Extract<RunEvent, { type: 'needs_input' }>>
       ),
     'the needs_input event'
   )
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(error: Error): void } {
+  let resolve!: (value: T) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
 }
 
 const AGENT_ID = 'folder:pineapple'
@@ -875,6 +882,61 @@ describe('which login paid for the turn', () => {
 })
 
 describe('a stop', () => {
+  it.each([
+    ['runtime restoration', 'resolve'],
+    ['runtime restoration', 'reject'],
+    ['launch planning', 'resolve'],
+    ['launch planning', 'reject']
+  ] as const)('settles during pending %s and ignores its late %s', async (stage, outcome) => {
+    const restoring = deferred<AcpRuntimeView>()
+    const planning = deferred<AcpLaunchPlan>()
+    const validate = vi.fn()
+    const runtime: AcpRuntimeView = {
+      type: 'folder', folder: FOLDER, validate,
+      readSession: () => null, saveSession() {}, isGranted: () => false, rememberGrant: () => false
+    }
+    const plan = vi.fn(() => planning.promise)
+    const readRuntime = vi.fn(() => stage === 'runtime restoration' ? restoring.promise : runtime)
+    const w = world({ deps: {
+      readRuntime,
+      launcher: () => ({ id: 'opencode', plan })
+    } })
+    const acquire = vi.spyOn(w.pool, 'acquire')
+    const controller = new AbortController()
+    const running = w.run({ signal: controller.signal })
+    await waitFor(() => stage === 'runtime restoration' ? readRuntime.mock.calls.length > 0 : plan.mock.calls.length > 0, 'preparation to start')
+    controller.abort()
+
+    // The underlying operation is still pending when Stop returns. In
+    // particular, shared workspace restoration must continue independently.
+    expect(await running).toEqual({ text: '', parts: [], notices: [], taskState: 'canceled', stopReason: 'canceled' })
+    if (outcome === 'reject') {
+      const pending = stage === 'runtime restoration' ? restoring : planning
+      pending.reject(new Error('late preparation failure'))
+    } else if (stage === 'runtime restoration') restoring.resolve(runtime)
+    else planning.resolve({
+      spec: w.fake.spec, init: { protocolVersion: ACP_PROTOCOL_VERSION },
+      session: { mcpServers: [] }, setup: {}
+    })
+    await settle(0)
+
+    if (stage === 'runtime restoration') {
+      expect(validate).not.toHaveBeenCalled()
+      expect(plan).not.toHaveBeenCalled()
+    }
+    expect(acquire).not.toHaveBeenCalled()
+    expect(w.events).toEqual([])
+  }, 1_000)
+
+  it('preserves genuine runtime and planning failures before cancellation', async () => {
+    const runtimeFailure = world({ deps: { readRuntime: async () => { throw new Error('workspace unavailable') } } })
+    expect((await runtimeFailure.run()).error?.message).toBe('workspace unavailable')
+    const planningFailure = world({ deps: { launcher: () => ({
+      id: 'opencode', plan: async () => { throw new Error('planning unavailable') }
+    }) } })
+    expect((await planningFailure.run()).error?.message).toBe('This agent could not be started.')
+  })
+
   it('cancels the session and reports no error', async () => {
     const w = world({ script: { prompt: { emit: [{ kind: 'awaitCancel' }] } } })
     const controller = new AbortController()

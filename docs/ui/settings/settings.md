@@ -53,6 +53,8 @@ Default → Agents → Tasks exposes **Autonomous task concurrency**, a device-w
 
 ## Local Development scopes
 
+- **Build page → Settings → Local Development Runtime** is a separate details view, reached from the footer build entry or an internal builder's Settings action. Its Default Runtime/Claude Agent/Codex/Custom OpenCode cards, optional OpenCode credential and Work complexity configure building only. Settings are installation-wide; complexity defaults to Complex even when the engine is inherited. **Start chat** returns to the preserved build draft. This is not another application settings tab; see [Account Build Sessions](../../agents/local_dev/build_sessions.md).
+
 - **Default → Local Development** shows the desktop-managed CLI version and binary, terminal PATH integration, and Developer Tools. The installed CLI is read from the desktop toolchain independently of the active account's workspace readiness.
 - **Profile → Local Development** shows the active Cinna account's workspace, setup status, setup/repair actions, and consent. Switching accounts remounts the profile page; activation clears and reconciles local-development state for the new account.
 - Developer Tools includes the resolved OpenCode version and editable OpenCode Path. The Cinna detected from PATH can differ from the desktop-managed CLI; both readouts describe their own executable. OpenCode edits survive refresh and failed saves, including an empty draft; Escape discards.

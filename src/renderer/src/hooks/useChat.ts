@@ -40,10 +40,12 @@ export function useCreateChat() {
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
 
   return useMutation({
-    mutationFn: () => window.api.chat.create(),
-    onSuccess: (chat) => {
+    mutationFn: (_options?: { select?: boolean }) => window.api.chat.create(),
+    onSuccess: (chat, options) => {
       queryClient.invalidateQueries({ queryKey: ['chats'] })
-      setActiveChatId(chat.id)
+      // Guarded entry flows select only after their asynchronous preparation
+      // has finished and the originating page/account is still current.
+      if (options?.select !== false) setActiveChatId(chat.id)
     }
   })
 }

@@ -141,6 +141,9 @@ function modelsByProvider(): Map<string, { id: string; name: string }[]> {
  */
 let cachedModels: CachedModel[] = []
 
+/** Shared snapshot for build-session readiness and the eventual ACP config. */
+export function getCachedEngineModels(): readonly CachedModel[] { return cachedModels }
+
 /** Adapters belonging to a keyless credential, which is to say a local server. */
 function localProviderIds(): string[] {
   return providerService

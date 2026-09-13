@@ -67,6 +67,7 @@ export function useSetAppSetting() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: APP_SETTINGS_KEY })
+      queryClient.invalidateQueries({ queryKey: ['local-development-context'] })
       // `localAgentsDefaultCredentialId` lives here and outranks the default
       // chat mode in an agent's runtime chain, so pinning or clearing it moves
       // which credential the sidebar is judging. Invalidated unconditionally

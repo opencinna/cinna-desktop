@@ -1,6 +1,6 @@
 # Local Development — Technical Reference
 
-Implementation companion to [local_dev.md](local_dev.md).
+Implementation companion to [local_dev.md](local_dev.md). Account builder context, storage, runtime settings, composer/guide and cancellation live in [Build Sessions tech](build_sessions_tech.md); this document owns toolchain and account setup.
 
 ## A note on paths
 
@@ -16,7 +16,7 @@ Three trees are discussed and they look alike, so they are written differently t
 
 ### Shared
 - `src/shared/localDevState.ts` — the whole wire contract: `LocalDevState`, `ManagedLocalDevCli` (`path`, nullable `version`), `LocalDevTaskId` (six ids, `'engine'` among them), `LocalDevAttentionReason`, `LOCAL_DEV_STATE_CHANNEL`, `CinnaLocalDev`. Type-only plus one channel constant; nothing key-shaped. `LocalDevTaskStatus` no longer claims at most one task is `active` — that stopped being true when the installs became concurrent
-- `src/shared/appSettings.ts` — `localDevConsent: string` on `AppSettingsSchema`
+- `src/shared/appSettings.ts` — `localDevConsent` and the three `localDevelopment*` build keys on `AppSettingsSchema`
 - `src/shared/localTools.ts` — `LocalToolId` gains `'cinna'`; `LocalToolSource` gains `'managed'`
 
 ### Main process — `src/main/localdev/`
@@ -48,7 +48,7 @@ Progress plumbing, end to end: `downloadToFile(url, dest, onProgress?)` in `mana
 - `src/main/services/localAgents/toolDetectionService.ts` — the `cinna` spec, its `managed` thunk, and the `managed` fallback after PATH and `.app` bundles
 
 ### Preload
-- `src/preload/index.ts` — the `localDev` block. No `userId` parameter on any verb, deliberately
+- `src/preload/index.ts` — the `localDev` block. Account actions resolve active scope in main; `prepareSession` accepts only expected snapshot identity for freshness checks
 
 ### Renderer
 - `src/renderer/src/stores/localDev.store.ts` — `useLocalDevStore`: `state`, `subscribed`, `answeredHosts`, `subscribe()`, `set()`, `consent()`, `resetConsent()`, `repair()`, `openWorkspace()`
@@ -57,9 +57,9 @@ Progress plumbing, end to end: `downloadToFile(url, dest, onProgress?)` in `mana
 - `src/renderer/src/components/localdev/LocalDevConsentPanel.tsx` — the shared question/progress/failure/ready panel
 - `src/renderer/src/components/localdev/LocalDevOnboardingStep.tsx` — the `localdev` onboarding step
 - `src/renderer/src/components/localdev/LocalDevConsentModal.tsx` — the same panel over an app that is past first run
-- `src/renderer/src/components/localdev/LocalDevStatusButton.tsx` — the sidebar-footer indicator, and the only way into the detail modal
-- `src/renderer/src/components/localdev/LocalDevDetailModal.tsx` — the checklist over a running app, opened from that button. Rendered through a **portal to `document.body`**: the sidebar establishes a containing block for `position: fixed` (`.app-sidebar-wrap` has `will-change: transform`, and in dark theme `.app-sidebar` has a `backdrop-filter`), so a plain `fixed inset-0` fills the sidebar card instead of the window
-- `src/renderer/src/components/localdev/LocalDevTaskList.tsx` — the one component that renders `state.tasks`, shared by the modal and the progress panel
+- `src/renderer/src/components/localdev/LocalDevStatusButton.tsx` — the sidebar-footer indicator; opens `LocalDevelopmentPage` in chat mode
+- `src/renderer/src/components/localdev/LocalDevDetailModal.tsx` — retained diagnostic component, no longer opened by the footer. Its **portal to `document.body`** avoids a sidebar containing block: the sidebar establishes a containing block for `position: fixed` (`.app-sidebar-wrap` has `will-change: transform`, and in dark theme `.app-sidebar` has a `backdrop-filter`), so a plain `fixed inset-0` fills the sidebar card instead of the window
+- `src/renderer/src/components/localdev/LocalDevTaskList.tsx` — the one component that renders `state.tasks`, shared by the build setup page and onboarding/progress panel
 - `src/renderer/src/components/localdev/LocalDevExplainer.tsx` — the one copy of the "what gets installed" list, rendered by the consent panel, the consent modal and the (?) popover
 - `src/renderer/src/components/localdev/LocalDevOptInRow.tsx` — the **Enable local development** checkbox plus its (?) popover (portalled to `document.body`, since the connect panel's cards establish their own containing block)
 - `src/renderer/src/components/auth/ConnectIntentPanel.tsx` (+ `.test.tsx`) — hosts that checkbox, seeds it from `localDev.getConsent()[host]`, and calls `useLocalDevStore.consent(host, accepted)` once the account exists. A local-dev surface owned by [the connect link](../../auth/onboarding/connect_link_tech.md)
@@ -81,13 +81,15 @@ Progress plumbing, end to end: `downloadToFile(url, dest, onProgress?)` in `mana
 
 ## Database Schema
 
-No new tables and no migration. One new key in the existing installation-global `app_settings` store:
+No new tables and no migration. Setup uses the existing installation-global `app_settings` store; builder rows, sessions and three additional build-setting keys are documented in [Build Sessions storage](build_sessions_tech.md#database-schema):
 
 | Key | Scope | Value |
 |---|---|---|
 | `localDevConsent` | default (install-wide) | JSON `{"<host>": boolean}`, or `''` for "nobody has been asked". Validated in `appSettingsService` because the generic `settings:set` channel can reach it |
 
 ## IPC Channels
+
+The activated `localdev:session-context` and `localdev:prepare-session` commands are documented in [Build Sessions IPC](build_sessions_tech.md#ipc-channels).
 
 | Channel | Signature | Notes |
 |---|---|---|
@@ -104,8 +106,8 @@ No new tables and no migration. One new key in the existing installation-global 
 
 Two rules hold across all of them:
 
-- **Account actions resolve the active profile in main** (`getProfileScopeUserId()`), and no local-dev IPC accepts a `userId`. All requests except `get-state` and `get-managed-cli` require activation; managed CLI inspection exposes only an executable path and nullable version. The reconciler mints setup tokens with that profile's OAuth bearer and writes into that profile's agents home, so a renderer-supplied id would be a confused deputy — the same rule `authService.reauthCinna` follows
-- **Reconcile/state verbs do not throw for an ordinary failure.** A refused install, a rejected token and a missing role all come back as `LocalDevState`, because a thrown `DomainError`'s code does not survive the IPC boundary and those states are something the UI renders rather than catches. `localdev:develop-agent` is a separate command: failures reject, and `ExternalAgentPage` unwraps them beside the action
+- **Account actions resolve the active profile in main** (`getProfileScopeUserId()`), and no caller can select a different execution account. Build preparation accepts an expected `profileId` only to compare with that active account. All requests except `get-state` and `get-managed-cli` require activation; managed CLI inspection exposes only an executable path and nullable version. The reconciler mints setup tokens with that profile's OAuth bearer and writes into that profile's agents home, so a renderer-supplied id would be a confused deputy — the same rule `authService.reauthCinna` follows
+- **Reconcile/state verbs do not throw for an ordinary failure.** A refused install, a rejected token and a missing role all come back as `LocalDevState`, because a thrown `DomainError`'s code does not survive the IPC boundary and those states are something the UI renders rather than catches. `localdev:develop-agent`, `localdev:session-context` and `localdev:prepare-session` are separate commands: failures reject, and their entry pages unwrap them beside the relevant action/input
 
 ### Develop Preparation Contract
 
@@ -118,6 +120,8 @@ Two rules hold across all of them:
 - Renderer success invalidates the agents query and opens the returned external agent in chat mode only if profile and source-agent selection still match. Preparation is not a chat send. These tests mock CLI/server behavior; they do not establish a live account deletion/development round trip.
 
 ## Services & Key Methods
+
+`developmentSessionService.ts` composes workspace readiness with build runtime resolution and saved-session restoration; see [Build Sessions services](build_sessions_tech.md#services--key-methods).
 
 ### `src/main/localdev/localDevService.ts`
 
@@ -218,6 +222,8 @@ It reads `cinna account setup --help` for `--json` and `cinna account --help` fo
 
 ## Renderer Components
 
+`LocalDevelopmentPage`, its composer, guide and build settings are mapped in [Build Sessions renderer](build_sessions_tech.md#renderer-components).
+
 | Component / hook | Renders / manages |
 |---|---|
 | `useLocalDev()` | Subscribes once and returns `LocalDevState`. Mounted where the app is, not where a card is — the transitions that matter happen while nobody is looking at a particular screen |
@@ -225,8 +231,8 @@ It reads `cinna account setup --help` for `--json` and `cinna account --help` fo
 | `LocalDevOnboardingStep` | Waits for the first answer, falls through on `unsupported` / `declined` (and on a `consent` for a host already in `answeredHosts`, which is what the deep-link route leaves behind), and gives up after `IDLE_GRACE_MS` (8 s) — `onDone` is held in a ref, because callers pass an inline arrow whose identity changes every render, and as an effect dependency that would restart the grace timer each time and could keep it from ever firing. Takes the Agents Home hint from `useAgentsHomeHint()` |
 | `LocalDevConsentPanel` | Question → progress → (`ready` \| `attention`), in **one** component: two would mean the user clicking Set up and watching the screen change under them for no reason. "Continue in the background" is always available during `installing` — the reconciler runs in main and keeps going |
 | `LocalDevConsentModal` | Renders **only** for `consent`, and only past first run, and not for a host in `answeredHosts`. No Escape/backdrop dismissal: dismissing has to record an answer. Closes itself once answered so `installing` does not keep it up |
-| `LocalDevStatusButton` | Renders for `installing`, `attention` and `ready`; nothing for `idle`, `unsupported`, `consent` and `declined`. Clicking opens `LocalDevDetailModal` — it never starts work itself, so a mis-click on a footer glyph cannot trigger a reinstall. The **dot**, not the icon, marks `attention` |
-| `LocalDevDetailModal` | The checklist (`state.tasks`), the current step and percentage, and Repair — hidden while `installing`, so a click cannot restart a running job. Renders what main reports and derives nothing locally. Portalled to `document.body` |
+| `LocalDevStatusButton` | Renders for `installing`, `attention` and `ready`; nothing for `idle`, `unsupported`, `consent` and `declined`. Clicking navigates to `LocalDevelopmentPage` — it never starts work itself, so a mis-click on a footer glyph cannot trigger a reinstall. The **dot**, not the icon, marks `attention` |
+| `LocalDevDetailModal` (legacy diagnostic component) | The checklist (`state.tasks`), the current step and percentage, and Repair — hidden while `installing`, so a click cannot restart a running job. Renders what main reports and derives nothing locally. Portalled to `document.body` |
 | `LocalDevTaskList` | One row per component, all six always present, and more than one may be `active`. A track on **every** row carrying a `percent`, whatever its status — filling in the accent while active, drawn full on `done` regardless of the last fraction reported, left where it stopped in `--color-danger` on `failed`, and in `--color-text-muted` while `pending`, since a pending row is not always empty: one that was downloading when a *different* component failed keeps the bytes it really fetched, and accent there would read as "still working" beside a row saying the run stopped. The `percent` **number** is still only on the `active` row. A row with no `percent` (the account token) shows no track at all |
 | `LocalDevExplainer` | The single "what gets installed" list. The workspace bullet is omitted when the caller has not resolved the agents home, rather than saying "creates a folder somewhere" |
 | `LocalDevOptInRow` | The **Enable local development** checkbox and its (?) popover, on the connect-confirm screen. Ticked is the default only for a host with no stored answer; unticked records a decline for that host |
@@ -237,6 +243,8 @@ It reads `cinna account setup --help` for `--json` and `cinna account --help` fo
 Both StrictMode-sensitive subscriptions (`localDev.store`, `connectIntent.store`) set `subscribed: true` **before** their first `await`, because a mount effect is double-invoked in development and two runs would attach two IPC listeners.
 
 ## Configuration
+
+Build-only runtime, credential and complexity keys are listed in [Build Sessions configuration](build_sessions_tech.md#configuration).
 
 | Setting / constant | Where | Meaning |
 |---|---|---|

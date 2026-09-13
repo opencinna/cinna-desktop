@@ -38,7 +38,7 @@ import { NoteBadgeList } from './NoteBadge'
 import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
 import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
-import { ComposerReadinessLine, useComposerReadiness } from './ComposerReadiness'
+import { ComposerReadinessWarning, useComposerReadiness } from './ComposerReadiness'
 import type { ComposerAttachment, MessageAttachment } from '../../../../shared/attachments'
 import type { NoteData } from '../../../../shared/notes'
 
@@ -566,17 +566,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       ? selectedAgent ?? null
       : null
   const readiness = useComposerReadiness(directTarget, input)
-  /**
-   * Whether the fixed-height readiness slot is on screen.
-   *
-   * An active chat: whenever it holds an agent at all, so handing it to the
-   * model and taking it back changes nothing about the composer's height. A new
-   * chat: whenever a message would go straight to an agent, which is the only
-   * time there is a readiness to report.
-   */
-  const showsReadinessLine = chatId
-    ? !!chatRouting.rootAgentId || attachedAgentIds.length > 0
-    : !!directTarget
   // Read by `handleSend` at call time, so Enter cannot slip past a refusal that
   // arrived after the callback was built.
   const blocksSendRef = useRef(readiness.blocksSend)
@@ -1312,6 +1301,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         />
       )}
 
+      <ComposerReadinessWarning readiness={readiness} reasonId={readinessReasonId} />
+
       <div
         className="relative rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
         onDragEnter={handleDragEnter}
@@ -1512,15 +1503,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           )}
         </div>
       </div>
-      {/* Rendered whenever an agent is in this chat at all — refused or not,
-          and whoever is answering right now — so neither a refusal arriving nor
-          a **router change** moves anything. Gating it on the agent that would
-          answer lifted the whole composer 21px when the user handed the chat to
-          the model, because the model is not an agent whose readiness there is
-          anything to say about. */}
-      {showsReadinessLine && (
-        <ComposerReadinessLine readiness={readiness} reasonId={readinessReasonId} />
-      )}
+
     </div>
   )
 })

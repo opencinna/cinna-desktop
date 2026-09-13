@@ -5,6 +5,8 @@ import { MessageBubble } from './MessageBubble'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolNarrationBlock } from './ToolNarrationBlock'
 import { ToolResultBlock } from './ToolResultBlock'
+import { CinnaCliBlock } from './CinnaCliBlock'
+import { pairCinnaCliTools } from '../../utils/cinnaCli'
 import { CommandResultBlock } from './CommandResultBlock'
 import { AgentAttachment } from './AgentAttachment'
 import { type RenderNode, groupConsecutiveCollapsibles } from './CollapsibleGroup'
@@ -52,9 +54,33 @@ export function AgentContribution({
   const lastIdx = parts.length - 1
 
   const renderNodes: RenderNode[] = []
+  const cli = pairCinnaCliTools(parts)
   parts.forEach((p, idx) => {
     const k = `part-${idx}`
     const live = isStreaming && idx === lastIdx
+    if (cli.consumed.has(idx)) return
+    const cliCall = cli.calls.get(idx)
+    if (cliCall) {
+      const results = cliCall.resultIndices.map((index) => parts[index])
+      const cliLive = isStreaming && (!results.length || idx === lastIdx || cliCall.resultIndices.includes(lastIdx))
+      const node = (
+          <CinnaCliBlock
+            command={cliCall.command}
+            narration={p.text}
+            results={results}
+            isStreaming={cliLive}
+          />
+      )
+      renderNodes.push(verbose ? { slot: 'plain', key: k, node } : {
+        slot: 'collapsible',
+        item: {
+          key: k, kind: 'tool_narration', groupWhenAlone: true, isLive: cliLive,
+          status: results.some((result) => result.toolStream === 'stderr') ? 'error' : isStreaming && !results.length ? 'pending' : 'done',
+          node
+        }
+      })
+      return
+    }
     if (p.kind === 'thinking') {
       const node = <ThinkingBlock content={p.text} isStreaming={live} defaultExpanded={false} />
       renderNodes.push(

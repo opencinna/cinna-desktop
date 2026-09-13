@@ -267,6 +267,37 @@ test.describe('desktop + cinna-core + cinna-cli', () => {
       })
     })
 
+    await test.step('the ready footer opens a build composer or the exact remaining runtime step', async () => {
+      const context = await cinna.page.evaluate(() => window.api.localDev.sessionContext())
+      await cinna.page.getByRole('button', { name: 'Local development is ready — start building', exact: true }).click()
+      await expect(cinna.page.getByRole('heading', { name: 'What would you like to build?' })).toBeVisible()
+      const instanceLink = cinna.page.getByRole('link', { name: context.serverUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, ''), exact: true })
+      await expect(instanceLink).toBeVisible()
+      await expect(instanceLink).toHaveAttribute('href', context.serverUrl)
+      if (context.blocker) {
+        await expect(cinna.page.getByRole('alert', { name: 'Development setup' })).toContainText(context.blocker)
+        await expect(cinna.page.getByRole('button', { name: context.setupTarget === 'local-dev' ? 'Local Development settings' : 'Open Runtime settings', exact: true })).toBeVisible()
+      } else {
+        const composer = cinna.page.getByRole('textbox', { name: 'Describe the agent you want to build' })
+        await expect(composer).toBeFocused()
+        await composer.fill('Help me build a research assistant')
+        await expect(cinna.page.getByRole('button', { name: 'Start building', exact: true })).toBeEnabled()
+      }
+      await expect(cinna.page.getByRole('dialog', { name: 'Build guide' })).toHaveCount(0)
+      await cinna.page.getByRole('button', { name: 'Build guide', exact: true }).click()
+      await expect(cinna.page.getByRole('dialog', { name: 'Build guide' })).toBeVisible()
+      await expect(cinna.page.getByRole('navigation', { name: 'Table of contents' })).toBeVisible()
+      await cinna.page.getByRole('button', { name: 'Close build guide' }).click()
+      await cinna.page.getByRole('button', { name: 'Settings', exact: true }).click()
+      await expect(cinna.page.getByRole('heading', { name: 'Local Development Runtime' })).toBeVisible()
+      await expect(cinna.page.getByRole('button', { name: /Default Runtime/ })).toBeVisible()
+      await cinna.page.getByRole('button', { name: 'Start chat', exact: true }).click()
+      if (!context.blocker) {
+        await expect(cinna.page.getByRole('textbox', { name: 'Describe the agent you want to build' })).toHaveValue('Help me build a research assistant')
+      }
+      await cinna.page.screenshot({ path: test.info().outputPath('local-development-entry.png') })
+    })
+
     await test.step('a restart finds it ready without doing the work again', async () => {
       await cinna.relaunch()
       await expect

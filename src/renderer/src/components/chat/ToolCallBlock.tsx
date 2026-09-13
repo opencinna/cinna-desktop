@@ -4,6 +4,8 @@ import { ToolCallSummary } from './ToolCallSummary'
 import { ApplyPatchBlock } from './ApplyPatchBlock'
 import { parsePatch } from '../../utils/applyPatch'
 import { useUIStore } from '../../stores/ui.store'
+import { cinnaCliCommand } from '../../utils/cinnaCli'
+import { CinnaCliBlock } from './CinnaCliBlock'
 
 interface ToolCallBlockProps {
   name: string
@@ -131,6 +133,16 @@ export function ToolCallBlock({
 
   const parsedResult = result != null ? parseResult(result) : null
   const contentRef = useRef<HTMLDivElement>(null)
+
+  const cliCommand = cinnaCliCommand(name, input)
+  if (cliCommand) {
+    return <CinnaCliBlock command={cliCommand} isStreaming={isPending} results={
+      error ? [{ text: error, toolStream: 'stderr' }] : parsedResult ? [{
+        text: parsedResult.type === 'text' ? parsedResult.value : JSON.stringify(parsedResult.value, null, 2),
+        toolStream: status === 'error' ? 'stderr' : 'stdout'
+      }] : []
+    } />
+  }
 
   return (
     <div className="text-xs">

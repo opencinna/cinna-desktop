@@ -11,6 +11,8 @@ Defines the visual treatment of messages in the chat conversation area. The desi
 - **Thinking block** — A lightweight collapsible block with a brain icon and the label "Thinking", used for the agent's internal reasoning (A2A `thinking`-kind parts). Collapsed: flat, no background or border — just the header. Expanded: a rounded card with faded border and background fades in, showing italic markdown body at lower opacity. Auto-expanded while streaming, collapsed once persisted.
 - **Tool narration block** — A lightweight collapsible block with a wrench icon and the label `Tool: <name>`, used for the agent's narration about a tool it is using (A2A `tool`-kind parts). Same collapsed/expanded visual behaviour as ThinkingBlock. Markdown body, lower opacity. Auto-expanded while streaming, collapsed once persisted.
 - **Tool result block** — A lightweight collapsible block with a terminal icon, used for raw stdout/stderr emitted by a tool execution (A2A `tool_result`-kind parts, paired to the originating tool via `cinna.tool_id`). Monospace body, scrollable, max-height capped. Header reads `Output` for stdout; for stderr the icon switches to a warning triangle, the header reads `stderr`, and the card uses danger colouring. Auto-expanded while streaming (the output is the payload the user is waiting on), collapsed once persisted (keeps long outputs from crowding scrollback).
+- **Cinna CLI block** — One initially collapsed command/output disclosure for a structured shell command beginning with `cinna`. Matching results are paired by tool ID; compact mode retains a dot per command even when it is the only step. A dot is presentation status, not proof that a remote agent was created.
+- **Composer warning** — An actionable full-width warning above the input for a known readiness refusal. Healthy composers reserve no empty warning slot.
 - **Command result block** — A bordered card with a terminal icon and `Command output` header, used for the synchronous result of a platform slash-command (A2A `command_result`-kind parts — `/files`, `/agent-status`, `/run:<name>`, …). Markdown-rendered body so structured command output (file lists, status reports) reads naturally; default-expanded inline because it IS the assistant turn (the agent stream did not run), not auxiliary narration. Visually distinct from a normal assistant bubble so the user can tell they're looking at platform output, not an LLM voice.
 - **Notice block** — Left-aligned view of an agent-side system notice (`cinna.content_kind: 'notice'` parts, e.g. "Starting up the agent environment…"). While streaming live it shows as a `Info`+text row so the user can read the in-flight ping. Once persisted, compact mode collapses it to a small info-toned blue dot (`--color-severity-info`) the user can click to read; verbose mode keeps it expanded inline. Sits visually alongside the green collapsible-group dots from `thinking` / `tool` / `tool_result` parts, not centred.
 - **Disclosure block (shared shell)** — The common collapsible primitive behind the lightweight auxiliary blocks (thinking, tool narration, tool result, command frame, apply-patch). Owns the one-place definition of: transparent-when-collapsed / tinted-when-expanded card chrome, the chevron + icon + truncating-header button, expand state, the streaming pulse dot, and the reveal animation. Variants: `tone` (`default` / `error`) and `frameless` (logical wrapper with no chrome, used by the command frame). `NoticeBlock` is intentionally NOT built on it (it's a dot/inline affordance, not a card).
@@ -50,6 +52,22 @@ Defines the visual treatment of messages in the chat conversation area. The desi
 - Nothing in the transcript scrolls smoothly. Following the bottom is an instant, pre-paint position assignment; a smooth scroll restarted per chunk is what made a streaming table read as the window shaking
 - Markdown tables are their own scroll box (sized to their content, never wider than the bubble). A table is the one markdown block sized by its content rather than its container, and one wide enough made the whole transcript scroll sideways — the horizontal scrollbar then took layout height off the viewport as the streaming table resettled
 
+## User Stories / Flows
+
+1. Read an assistant's answer with its auxiliary steps collapsed in compact mode. Expand the dots to inspect the command headers, then expand a Cinna CLI header to see its associated output.
+2. A recognized command appears once rather than repeating in a Bash argument card and narration. Real explanatory narration and stderr stay visible inside the expanded command block. The same rendering applies to saved, streaming and nested-agent replies.
+3. Unrecognized shell commands keep ordinary tool/output blocks. Whole-output console/text wrappers are still removed there; a command such as `cd workspace && cinna …` does not need CLI recognition to display its console output cleanly.
+4. When the answering agent has a known readiness problem, read the warning above the input and use Check again or Re-authenticate. The message draft stays intact; when recovery clears the warning, input focus returns.
+
+## Business Rules
+
+- **Pair by identity, never proximity.** Only a recognized structured shell call and later results with its tool ID share a Cinna CLI block. Concurrent stdout/stderr belongs to its originating call; unrelated results stay standalone. Slash-command invocations keep their existing command-specific representation.
+- **Keep details opt-in.** Both compact groups and Cinna CLI disclosures start collapsed, including during streaming. Verbose mode shows the collapsed command headers directly. Ordinary generic output retains its existing streaming expansion behavior.
+- **Dots do not verify remote outcomes.** Cinna CLI compact steps are pending while the turn streams without a result, red when any associated result is stderr, and otherwise done/green. A persisted command without captured output may therefore be green; expanding it reports No output recorded. Remote creation/readiness must be established by the assistant's actual checks.
+- **Only strip a whole-payload terminal wrapper.** Console/text-style outer fences are formatting, so they are removed independently of command recognition. Literal embedded fences, multiple fenced sections and other language-tagged code remain text. An unfinished terminal wrapper is removed only while streaming.
+- **Preserve terminal geometry.** Generic output and Cinna CLI output use monospace text, preserved columns, horizontal scrolling and 1.25 line height. Relaxed body-copy spacing left gaps in box-drawing borders; unit line height made rows too condensed. This renderer does not convert terminal tables to HTML tables or interpret their content as Markdown.
+- **Warnings carry a reason and remedy, not healthy-state decoration.** Composer readiness problems use the shared warning panel above the message input, matching the build start page. The full reason wraps and the recovery action appears below it. Healthy composers show no warning panel or reserved empty status line. Checking again keeps the draft and returns focus to the input when the warning clears.
+
 ## Architecture Overview
 
 ```
@@ -58,6 +76,7 @@ MessageStream
   ├── MessageBubble (role=assistant) -> full-width plain text
   ├── ThinkingBlock                -> collapsible dimmed card (brain icon, italic body)
   ├── ToolNarrationBlock           -> collapsible dimmed card (wrench icon; header is "Tool: <name>" in compact mode, "<name>(<args>)" in verbose mode when cinna.tool_input is present)
+  ├── CinnaCliBlock                -> one recognized command and ID-paired outputs, initially collapsed
   ├── ToolResultBlock              -> collapsible card (terminal/alert icon; monospace body; danger colouring when cinna.tool_stream is "stderr")
   ├── CommandResultBlock           -> bordered "Command output" card (terminal icon; markdown body; default-expanded)
   ├── ApplyPatchBlock              -> git-style diff for the apply_patch tool (FileDiffCard per file; see Apply-Patch Diff)
@@ -68,12 +87,12 @@ MessageStream
   └── Loading dots                 -> three bouncing dots, no wrapper
 ```
 
-For an A2A assistant message with structured `parts[]`, MessageStream renders each part in order using the kind-appropriate block (text→MessageBubble, thinking→ThinkingBlock, tool→ToolNarrationBlock, tool_result→ToolResultBlock). `tool` and its paired `tool_result` parts arrive adjacent in the parts list (backend emission order), so they render visually adjacent without explicit lookup.
-
 ## Integration Points
 
 - [Apply-Patch Diff](../apply_patch_diff/apply_patch_diff.md) — The `apply_patch` tool's git-style diff block; one of the disclosure blocks rendered here
 - [Transcript Scrolling](scroll_following.md) — When the conversation follows the bottom, when it stops, and the "Jump to latest" pill
+- [Account Build Sessions](../../agents/local_dev/build_sessions.md) — uses the shared warning and CLI-output presentation while building through local tools
+- [Agent Drivers & Readiness](../../agents/drivers/drivers.md) — owns refusal state, severity and recovery
 - [Messaging](../messaging/messaging.md) — Data flow and streaming protocol that feeds this UI
 - [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) — How `thinking`, `tool`, and `tool_result` parts arrive from A2A agents and end up in the rendering layer
 - Theming — All colours reference CSS variables from `src/renderer/src/assets/main.css`

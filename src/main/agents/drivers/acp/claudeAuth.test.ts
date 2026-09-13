@@ -1,10 +1,17 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import {
   ClaudeAuthProbe,
   parseClaudeAuthStatus,
   probeClaudeAuth,
   type ClaudeAuthStatus
 } from './claudeAuth'
+
+const log = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn() }))
+vi.mock('../../../logger/logger', () => ({ createLogger: () => log }))
+afterEach(() => {
+  vi.useRealTimers()
+  vi.clearAllMocks()
+})
 
 /**
  * The readiness probe, driven with no binary.
@@ -122,6 +129,27 @@ describe('probeClaudeAuth', () => {
       return undefined as never
     }) as unknown as Parameters<typeof probeClaudeAuth>[0]['exec']
   }
+
+  it.each([true, false])('cancels the fallback timeout after a valid loggedIn=%s answer', async (loggedIn) => {
+    vi.useFakeTimers()
+    const pending = probeClaudeAuth({ claudePath: '/opt/claude', env: {},
+      exec: stubExec({ code: loggedIn ? 0 : 1, stdout: JSON.stringify({ loggedIn }) }) })
+    await vi.advanceTimersByTimeAsync(1)
+    expect((await pending).state).toBe(loggedIn ? 'logged_in' : 'logged_out')
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(log.warn).not.toHaveBeenCalled()
+  })
+
+  it('still reports a genuine timeout when the process never completes its callback', async () => {
+    vi.useFakeTimers()
+    const pending = probeClaudeAuth({ claudePath: '/opt/claude', env: {}, timeoutMs: 5,
+      exec: (() => undefined) as unknown as Parameters<typeof probeClaudeAuth>[0]['exec'] })
+    await vi.advanceTimersByTimeAsync(505)
+    expect((await pending).state).toBe('unknown')
+    expect(log.warn).toHaveBeenCalledWith('claude auth status did not answer in time', { timeoutMs: 5 })
+    expect(vi.getTimerCount()).toBe(0)
+  })
 
   it('reads a logged-out answer that exited 1 — the exit code is not the signal', async () => {
     // Measured against claude 2.1.266: exit 0 logged in, exit **1** logged out,

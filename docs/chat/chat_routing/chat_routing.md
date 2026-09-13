@@ -48,13 +48,15 @@ The routing question used to be a boolean, `chats.orchestrated`: on meant "the l
 1. In any chat that holds at least one agent, the `[+]` menu offers **Let the model coordinate**.
 2. Ticking it moves the chat to `coordinator` — the one transition that can be refused, because it is the only one that needs a model. The refusal names the missing piece ("Add an LLM provider or pick a chat mode…").
 3. Unticking it lands on `human` when agents remain, and back on `direct` when none do.
-4. Nothing about the composer's height changes across any of it.
+4. Healthy routing changes reserve no empty readiness line. If the answering agent changes to or from a refused one, its warning panel appears or clears above the input.
 
 ### Starting a new chat
 
 1. The badge on the new-chat screen previews the router the current selection would create — the same call the send makes, so it cannot promise a shape the send does not build.
 2. No agent → `direct`, to the local model. One agent, no MCP → `direct`, bound as the root. Several agents, no MCP → `human`. Any agent mixed with an MCP server → `coordinator`.
 3. A `human` chat's first message goes to the **first agent the user picked**; the order they picked them in is the only signal there is.
+
+The [Local Development entry](../../agents/local_dev/build_sessions.md) creates a direct chat with one prepared account builder and no inherited chat mode/MCP selection. Creation is guarded across asynchronous preparation: a page/account change cannot select or send the late chat. Subsequent messages use the ordinary direct route.
 
 ### Running a job
 
@@ -74,7 +76,7 @@ A local job run makes the same decision from the job's attached agents and MCP s
 - **Arriving at `direct` binds a single attached agent as the root**, which is what `direct` means. Arriving with more than one is refused rather than silently dropping the rest.
 - **The attachment scope follows the router**, not the agent: a message an agent answers uploads to the Cinna backend, one the local model answers uses the local store. Whether an attach button is offered at all is a separate question, asked of the target agent's `capabilities.attachments`.
 - **MCP servers are the model's tools; an agent cannot call them.** They are attached whenever the *model* is the one answering — which is not the same as `coordinator`: a chat with connectors and no agent at all is `direct`, to the model, and dropping its servers there would run it toolless.
-- **The composer never moves while the user types or switches router.** The badge's label reserves the width of the longest of its three labels; the readiness line is rendered whenever the chat holds an agent at all, refused or not and whoever is answering; the addressed chip is marked with a ring rather than a border or weight change. Chip rings use the theme's foreground colour, not the agent's, because two agents can hash to the same preset.
+- **Typing does not change readiness presentation.** The badge's label reserves the width of the longest of its three labels; readiness warnings appear above the input only when the answering agent needs attention, with the full reason and recovery action; the addressed chip is marked with a ring rather than a border or weight change. Chip rings use the theme's foreground colour, not the agent's, because two agents can hash to the same preset.
 - **Only chats.router persists routing.** The old orchestrated flag is backfilled into router on legacy databases before a guarded migration drops it. Current writers and DTOs carry no mirror. An existing router wins over a contradictory legacy flag, so a later startup cannot undo a route the user chose.
 
 ## What this deliberately does not do
@@ -109,7 +111,7 @@ Active chat (ChatInput)
       -> RouterBadge          (who answers next)
       -> OnDemandAgentChips   (ring on the addressed chip; click = address)
       -> ComposerPlusMenu     ("Let the model coordinate")
-      -> ComposerReadinessLine(refusal named for the answering agent)
+      -> ComposerReadinessWarning(refusal named for the answering agent)
 
   @-agent pick / [+] picker -> useAttachAgentToChat
        direct + agent -> chat:set-router 'human'      (no model)

@@ -140,3 +140,23 @@ describe('app settings', () => {
     expect(appSettingsService.getAll().localAgentsEnginePath).toBe(missing)
   })
 })
+
+it('persists a separate build runtime, validates it, and defaults to inheritance', () => {
+  expect(appSettingsService.getAll().localDevelopmentEngine).toBe('')
+  const defaultEngine = appSettingsService.getAll().localAgentsDefaultEngine
+  appSettingsService.set('localDevelopmentEngine', 'codex')
+  appSettingsService.set('localDevelopmentCredentialId', 'build-key')
+  expect(appSettingsService.getAll().localDevelopmentEngine).toBe('codex')
+  expect(appSettingsService.getAll().localAgentsDefaultEngine).toBe(defaultEngine)
+  expect(() => appSettingsService.set('localDevelopmentEngine', 'unknown')).toThrow()
+  appSettingsService.set('localDevelopmentEngine', '')
+  expect(appSettingsService.getAll().localDevelopmentEngine).toBe('')
+})
+
+it('defaults build complexity to Complex and persists only supported tiers', () => {
+  expect(appSettingsService.getAll().localDevelopmentComplexity).toBe('complex')
+  appSettingsService.set('localDevelopmentComplexity', 'medium')
+  expect(appSettingsService.getAll().localDevelopmentComplexity).toBe('medium')
+  expect(() => appSettingsService.set('localDevelopmentComplexity', 'unknown')).toThrow()
+  expect(() => appSettingsService.set('localDevelopmentComplexity', '')).toThrow()
+})

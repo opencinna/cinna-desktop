@@ -97,6 +97,11 @@ beforeEach(() => {
 })
 
 describe('agentService readiness', () => {
+  it('marks builders for development settings and keeps them in their owning profile', () => {
+    db.rows.set('default', [row('builder', 'local', { driver: 'acp', driverConfig: { launcher: 'custom', developmentProfileId: 'alice', developmentEngine: 'claude' } })])
+    expect(agentService.listMerged('default', 'alice')[0]).toMatchObject({ id: 'builder', development: true })
+    expect(agentService.listMerged('default', 'bob')).toEqual([])
+  })
   it('carries each agent’s last known readiness on its DTO, null when unknown', () => {
     db.rows.set('default', [row('local-1', 'local'), row('folder:a', 'folder')])
     const down = { state: 'unreachable', reason: 'Could not reach the agent.' }

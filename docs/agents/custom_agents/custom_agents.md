@@ -26,6 +26,8 @@ Connect an ACP command to a conversation, including an agent reached through SSH
 
 ## Business Rules
 
+- Internal [account builders](../local_dev/build_sessions.md) reuse private ACP session/grant storage but are not editable command-line connections. Their Settings action opens Local Development; generic configuration, Test and Save refuse their IDs to protect the managed runtime and account binding.
+
 - Test runs an executable as the user. There is no command sandbox or implicit local shell. Each JSON array element becomes one local argument, so spaces, dollar signs and semicolons stay literal unless the user explicitly chooses a shell.
 - SSH introduces its own remote command interpretation. Cinna preserves argv into the local SSH client; SSH's remote command may be interpreted by the remote login shell. Local array boundaries are not a promise of remote argv boundaries. Quote remote command text for that shell or use a controlled remote wrapper.
 - SSH uses existing keys, SSH agent and host configuration. Configure CLI authentication separately. No password form, stored SSH password or ACP authenticate flow is supplied; advertised authentication methods are information, not a successful login. The command must run without interactive terminal input.

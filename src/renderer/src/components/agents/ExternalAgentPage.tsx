@@ -24,6 +24,7 @@ export function ExternalAgentPage(): React.JSX.Element {
   const queryClient = useQueryClient()
   const { data: agents, isLoading, error } = useAgents()
   const agent = agents?.find((item) => item.id === activeId && item.source !== 'folder')
+  const settingsMode = mode === 'settings' && !agent?.development
   const [editing, setEditing] = useState<string | null>(null)
   const [developing, setDeveloping] = useState<string | null>(null)
   const [developmentError, setDevelopmentError] = useState<{ id: string; message: string } | null>(null)
@@ -66,19 +67,22 @@ export function ExternalAgentPage(): React.JSX.Element {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {localDev.phase === 'ready' && canDevelopAgent(agent) && <button type="button" disabled={!!developing} onClick={() => void develop()} className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50"><Code2 size={13} />{developing === agent.id ? 'Preparing…' : 'Develop'}</button>}
-              <button type="button" onClick={() => setMode(mode === 'settings' ? 'chat' : 'settings')} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
-                mode === 'settings'
+              <button type="button" onClick={() => {
+                if (agent.development) { useLocalDevStore.getState().setPageMode('settings'); useUIStore.getState().setActiveView('local-development'); return }
+                setMode(settingsMode ? 'chat' : 'settings')
+              }} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                settingsMode
                   ? 'border-transparent bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)]'
                   : 'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
               }`}>
-                {mode === 'settings' ? <MessageSquare size={13} /> : <Settings size={13} />}{mode === 'settings' ? 'Start chat' : 'Settings'}
+                {settingsMode ? <MessageSquare size={13} /> : <Settings size={13} />}{settingsMode ? 'Start chat' : 'Settings'}
               </button>
               <ExternalAgentActionsMenu key={`${profile?.id}:${agent.id}`} agent={agent} onError={(message) => setDevelopmentError(message ? { id: agent.id, message } : null)} />
             </div>
           </header>
           {developmentError?.id === agent.id && <p role="alert" className="text-xs text-[var(--color-danger)]">{developmentError.message}</p>}
-          <div hidden={mode === 'settings'}><ChatWorkspace key={`${profile?.id}:${agent.id}`} agentId={agent.id} embedded /></div>
-          {mode === 'settings' && <>
+          <div hidden={settingsMode}><ChatWorkspace key={`${profile?.id}:${agent.id}`} agentId={agent.id} embedded /></div>
+          {settingsMode && <>
             <nav role="tablist" aria-label="Agent settings" className="flex gap-1 border-b border-[var(--color-border)]">
               {['overview', 'connection'].map((id) => <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`border-b-2 px-3 py-2 text-xs font-medium ${tab === id ? 'border-[var(--color-accent)] text-[var(--color-text)]' : 'border-transparent text-[var(--color-text-muted)]'}`}>{id === 'overview' ? 'Overview' : 'Connection'}</button>)}
             </nav>
@@ -95,7 +99,7 @@ export function ExternalAgentPage(): React.JSX.Element {
               ) : <AgentCard key={agent.id} agent={agent} connectionOnly />}
             </div>
           </>}
-          {editing === agent.id && (agent.driver === 'managed' ? <ManagedAgentModal key={agent.id} agentId={agent.id} onClose={() => setEditing(null)} /> : <CustomAgentModal key={agent.id} remote={agent.acpTransport === 'websocket'} agentId={agent.id} onClose={() => setEditing(null)} />)}
+          {!agent.development && editing === agent.id && (agent.driver === 'managed' ? <ManagedAgentModal key={agent.id} agentId={agent.id} onClose={() => setEditing(null)} /> : <CustomAgentModal key={agent.id} remote={agent.acpTransport === 'websocket'} agentId={agent.id} onClose={() => setEditing(null)} />)}
         </> : <p className="text-sm text-[var(--color-text-muted)]">{isLoading ? 'Loading…' : error ? 'Could not load this agent.' : 'Select an agent from the sidebar.'}</p>}
       </div>
     </div>

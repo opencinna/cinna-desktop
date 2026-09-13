@@ -173,15 +173,23 @@ export async function probeClaudeAuth(input: ClaudeAuthProbeInput): Promise<Clau
   // documents: `execFile`'s `timeout` fires on **close**, which waits for the
   // stdio pipes to reach EOF, so a shim whose grandchild inherits stdout keeps
   // the callback pending after the direct child is dead.
-  return Promise.race([
-    probe,
-    new Promise<ClaudeAuthStatus>((resolve) =>
-      setTimeout(() => {
-        logger.warn('claude auth status did not answer in time', { timeoutMs })
-        resolve(UNKNOWN)
-      }, timeoutMs + 500).unref?.()
-    )
-  ])
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      probe,
+      new Promise<ClaudeAuthStatus>((resolve) => {
+        timer = setTimeout(() => {
+          logger.warn('claude auth status did not answer in time', { timeoutMs })
+          resolve(UNKNOWN)
+        }, timeoutMs + 500)
+        timer.unref?.()
+      })
+    ])
+  } finally {
+    // Promise.race does not cancel its loser. A successful probe must not leave
+    // a timer that reports a timeout five seconds after the answer arrived.
+    clearTimeout(timer)
+  }
 }
 
 export interface ClaudeAuthProbeDeps {

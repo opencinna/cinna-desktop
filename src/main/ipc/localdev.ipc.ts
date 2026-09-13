@@ -1,3 +1,6 @@
+import { getDevelopmentSessionContext, prepareDevelopmentSession } from '../localdev/developmentSessionService'
+import { developmentRuntimeBlocker } from '../agents/drivers'
+import type { DevelopmentContext } from '../../shared/developmentSession'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { developAgent } from '../localdev/developAgentService'
@@ -21,6 +24,16 @@ import { ipcHandle } from './_wrap'
  * of these is something the UI renders rather than something it catches.
  */
 export function registerLocalDevHandlers(): void {
+  ipcHandle('localdev:session-context', async (): Promise<DevelopmentContext> => {
+    userActivation.requireActivated()
+    return getDevelopmentSessionContext(developmentRuntimeBlocker)
+  })
+  ipcHandle('localdev:prepare-session', async (_event, expected: Pick<DevelopmentContext, 'profileId' | 'workspacePath' | 'serverUrl' | 'runtime' | 'complexity'>) => {
+    userActivation.requireActivated()
+    if (!expected || typeof expected.profileId !== 'string' || typeof expected.workspacePath !== 'string' || typeof expected.serverUrl !== 'string' || typeof expected.runtime?.launcher !== 'string') throw new Error('Reopen Local Development before sending.')
+    return prepareDevelopmentSession(expected)
+  })
+
   ipcHandle('localdev:develop-agent', async (_event, agentId: string) => {
     userActivation.requireActivated()
     if (typeof agentId !== 'string' || !agentId) throw new Error('Choose an agent to develop.')

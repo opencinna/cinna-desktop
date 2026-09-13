@@ -41,6 +41,15 @@ afterEach(async () => {
 function row(config: CustomAgentConfig) { return agentRepo.createRuntime(OWNER, { name: 'Command', driver: 'acp', config: { ...config } }) }
 
 describe('custom command state with real SQLite and external files', () => {
+  it('rejects builder configuration, tests and saves while preserving internal session storage', async () => {
+    const config: CustomAgentConfig = { launcher: 'custom', command: ['cinna-development-session'], cwd: state.root }
+    const agent = agentRepo.createRuntime(OWNER, { name: 'Builder', driver: 'acp', config: { ...config, developmentProfileId: OWNER, developmentEngine: 'claude' } })
+    expect(() => customAgentService.configuration(agent.id)).toThrow('Local Development settings')
+    await expect(customAgentService.test({ id: agent.id, config })).rejects.toThrow('Local Development settings')
+    expect(() => customAgentService.save({ id: agent.id, config, testToken: 'any' })).toThrow('Local Development settings')
+    expect(agentRepo.getOwned(OWNER, agent.id)?.driverConfig?.developmentProfileId).toBe(OWNER)
+    expect(customAgentService.runtime(OWNER, agent).type).toBe('external')
+  })
   it.each(['folder', 'remote'] as const)('rejects %s rows with cached custom configuration before execution or management', async (source) => {
     const { fake, config } = fixture(), agent = row(config)
     const captured = customAgentService.runtime(OWNER, agent)

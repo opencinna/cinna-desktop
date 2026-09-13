@@ -105,6 +105,12 @@ export interface AppSettingsSchema {
    * strand this one's agents.
    */
   localAgentsDefaultEngine: string
+  /** Building-only runtime override; empty inherits the local-agent default. */
+  localDevelopmentEngine: string
+  /** Optional OpenCode credential for building; empty inherits the default credential. */
+  localDevelopmentCredentialId: string
+  /** Building work complexity; complex means Opus / high effort by default. */
+  localDevelopmentComplexity: string
   /**
    * When true, creating a local agent opens the new folder in the default tool
    * straight away instead of asking which tool to build it with. Meaningless

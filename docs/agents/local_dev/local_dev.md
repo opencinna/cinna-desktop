@@ -2,30 +2,33 @@
 
 ## Purpose
 
-Get one Cinna profile from "signed in" to "this machine can do agent work", without the user opening a terminal: a desktop-owned toolchain (uv, cinna-cli, Mutagen) under `<userData>/localdev`, a cinna-cli **account workspace** at `<AgentsHome>/Cloud/<host>/` bootstrapped from a setup token the desktop mints with its own OAuth bearer — which is what removes the second browser login — and the opencode engine pre-fetched, so the first turn does not begin with a download.
+Prepare a signed-in Cinna account for local agent development, then offer a one-click entry to a chat that builds through cinna-cli. Desktop owns tool installation and account-workspace orchestration; the selected local assistant performs the requested development with the actual workspace context and Cinna Core status checks.
 
-## What this is not
+[Account Build Sessions](build_sessions.md) covers the composer, guide, runtime settings and saved-session lifecycle; [Technical Reference](local_dev_tech.md) covers setup and reconciliation.
 
-Naming the non-goals first, because the feature is easy to over-read from its name:
+## Scope and non-goals
+
+Setup prepares the machine; an explicit build prompt or Develop action performs later agent work. The following guarantees concern setup orchestration, not the commands an assistant may subsequently run:
 
 - **No agent is cloned.** First run prepares the machine; fetching an agent is a later, explicit action.
 - **No Mutagen session is started.** Mutagen is installed and put on the spawn `PATH` so cinna-cli finds *this app's* copy rather than prompting to `brew install` one. Nothing syncs.
-- **`cinna dev` is never run.** The desktop drives `cinna account setup`, `cinna account set-token`, `cinna account status` and `cinna account refresh-context`, and nothing else.
-- **Nothing is reimplemented that cinna-cli owns.** The desktop is *installer and orchestrator*: it puts the right binaries somewhere it controls, mints a token, spawns cinna-cli in the right directory, and reads the exit code. Workspace layout, the token exchange, the context package and sync are cinna-cli's, and there is deliberately no desktop code that knows what a workspace contains.
+- **Setup never runs `cinna dev`.** The reconciler drives `cinna account setup`, `cinna account set-token`, `cinna account status` and `cinna account refresh-context` for workspace setup and maintenance. Build-session tools and the separate Develop action have their own command flows.
+- **Nothing is reimplemented that cinna-cli owns.** The desktop is *installer and orchestrator*: it puts the right binaries somewhere it controls, mints a token, spawns cinna-cli in the right directory, and reads the exit code. Workspace layout, the token exchange, the context package and sync are cinna-cli's, and the desktop reads only the defined CLI result contracts and a fixed set of public guide documents for the build briefing.
 - **The opencode engine is pre-fetched, not owned.** It is not part of the cinna-cli toolchain and this feature does not install it: it asks the engine's own resolver to make sure a usable binary exists. What is decided here is *when*, not *how* or *where*.
-- **Nothing is written outside two places, ever.** `<userData>/localdev` for the toolchain, `<AgentsHome>/Cloud/<host>/` for the workspace (the engine's own binary directory is the engine's, and unchanged by this). Not Homebrew, not the system Python, not `~/.local/bin` — with one exception the user has to press a button for (see *Your terminal*).
+- **The managed setup toolchain and workspace stay in two places.** `<userData>/localdev` for the toolchain, `<AgentsHome>/Cloud/<host>/` for the workspace (the engine's own binary directory is the engine's, and unchanged by this). Not Homebrew, not the system Python, not `~/.local/bin` — with one exception the user has to press a button for (see *Your terminal*).
 
 ## Core Concepts
 
 | Term | Definition |
 |------|-----------|
-| **Reconciler** | `localDevService.reconcile(userId, force?)` — the **one** entry point. Idempotent and serialized; same-profile callers share a run, while another profile waits for the former run to drain |
+| **Reconciler** | `localDevService.reconcile(userId, force?)` — the **one setup** entry point. Idempotent and serialized; same-profile callers share a run, while another profile waits for the former run to drain |
 | **Managed toolchain** | uv, Mutagen and cinna-cli installed into `<userData>/localdev/`, version-stamped so an upgrade installs beside the old copy rather than swapping a running binary's file |
 | **Pins** | The versions in play. uv is pinned by *this app*; cinna-cli and Mutagen versions arrive from the server's `local_dev` discovery block. The desktop pins the **bytes** of uv and Mutagen against digest tables in source |
-| **Account workspace** | `<AgentsHome>/Cloud/<host>/` — a cinna-cli-owned directory holding the account token and the context package. `.cinna/account.json` is the one file the desktop looks for, and only to answer "has cinna-cli set this up" |
+| **Account workspace** | `<AgentsHome>/Cloud/<host>/` — a cinna-cli-owned directory holding the account token and the context package. The reconciler checks `.cinna/account.json` for setup presence; the build guide separately reads a fixed allowlist of public Markdown documents |
 | **Setup command** | The single-use, fifteen-minute string the server returns from the setup-token mint. Passed to cinna-cli as one argv element and never logged |
 | **Consent** | A per-host yes/no, remembered — including the no. Stored as JSON in the `localDevConsent` app setting |
 | **Engine pre-fetch** | Making sure a usable `opencode` binary is on this machine before anyone needs one. Runs alongside the rest, resolves through the [engine](../local_agents/engine.md)'s own three sources, and is **best effort** — a failure is shown and `ready` is still reached |
+| **Build session** | A direct chat with an internal local builder bound to the active profile, account workspace and selected engine; see [Account Build Sessions](build_sessions.md) |
 | **Attention reason** | Which of four things is wrong (`token_expired`, `toolchain`, `workspace`, `network`), derived from a cinna-cli exit code or a typed toolchain error and never from a message string |
 
 ## The state union
@@ -43,7 +46,7 @@ Naming the non-goals first, because the feature is easy to over-read from its na
 | `ready` | Carries `workspacePath`, `cliVersion`, `cinnaBinPath`, and the `protocol` the installed cinna-cli turned out to support |
 | `attention` | Broken in a way the reconciler can be asked to fix, with a `reason` and a shown `detail` |
 
-Every phase also carries `tasks` — the per-step checklist the status modal renders — once a reconcile has run. It is empty before that, because there is nothing truthful to say about uv before anybody has looked.
+Every phase also carries `tasks` — the per-step checklist the build setup page renders — once a reconcile has run. It is empty before that, because there is nothing truthful to say about uv before anybody has looked.
 
 **Idle, consent and declined are separate states.** The UI must distinguish a check that has not run from a question waiting for an answer and a remembered refusal:
 
@@ -51,6 +54,15 @@ Every phase also carries `tasks` — the per-step checklist the status modal ren
 - `declined` vs `consent` — asked-and-declined vs never-asked. Settings has to offer "Set up local development" in one and the consent question in the other, and a screen that has to guess which it is looking at will eventually guess wrong. `declined` is also what keeps the onboarding step and the consent modal from re-asking every launch.
 
 ## User Stories / Flows
+
+### Start or resume a build conversation
+
+1. Click the Local Development footer icon to open the build page. A healthy workspace proceeds to a focused input; unfinished setup or runtime prerequisites are explained on the same page.
+2. Check the compact instance/account/runtime header, describe the agent, and press **Start building** below the input. Opening the page or choosing a suggestion sends nothing; the first message prepares an account-bound builder and starts an ordinary direct chat.
+3. **Build guide** opens the actual session briefing and available workspace Markdown in a modal. **Settings** selects an inherited or separate build runtime and work complexity, defaulting to Complex (Claude Opus / Codex high effort).
+4. A previous conversation waits for startup restoration before readiness is decided. Real problems use the shared warning above the input; a changed account/workspace/engine requires a new compatible build session.
+
+See [Account Build Sessions](build_sessions.md) for complete flows, runtime rules, draft lifetime and cancellation limits.
 
 ### First run on a server that offers it
 1. The user connects a Cinna account through the ordinary Cinna Server path; activation fires `reconcile`
@@ -92,7 +104,7 @@ Every phase also carries `tasks` — the per-step checklist the status modal ren
 4. A pinned version the server bumped, or a workspace folder the user deleted, is discovered here too
 
 ### Something went wrong
-1. The sidebar footer shows a warning dot; clicking it opens the checklist, where Repair is available
+1. The sidebar footer shows a warning dot; clicking it opens the build setup page, where Retry setup is available
 2. Settings → Profile → Local Development shows the `detail` plus a per-reason hint saying what Repair will and will not do
 3. The reason that earns real copy is `toolchain`: its commonest cause — a desktop older than the versions the server pinned — is the one thing Repair cannot fix, and a user left pressing the button would never find that out
 
@@ -122,15 +134,15 @@ The header visibility check accepts any `ready` phase, but preparation additiona
 
 ## Business Rules
 
-### One entry point
+### One setup entry point
 
-`reconcile` is the only door. There is deliberately no `install()`, no `createWorkspace()` and no `repair()` that does something different — a second door into a state machine is a second place for it to be entered halfway. Repair *is* `reconcile(force)`.
+`reconcile` is the only door into workspace setup. There is deliberately no `install()`, no `createWorkspace()` and no `repair()` that does something different — a second door into a state machine is a second place for it to be entered halfway. Repair *is* `reconcile(force)`.
 
 It is **idempotent**: every step checks whether it is already satisfied. Concurrent calls for the **same profile** share one run, including Repair during an ordinary install. A different profile immediately retires the former state and waits for the previous run to drain before starting its own account work. Requests queued for a profile that has since been replaced are skipped. Running downloads and subprocesses are not cancelled; they may finish, but cannot publish old results or start a later account step.
 
 Both toolchain branches finish before an install failure returns. uv/cinna-cli and Mutagen write into shared installation state; returning while a sibling still writes would allow the next account's different pins to overlap it. Engine prefetch has its own shared resolver and may outlive a failed reconcile, but its old progress and completion cannot change the new profile's state.
 
-Reconcile is triggered from exactly four places:
+Reconcile is triggered by account lifecycle and explicit recovery; a saved builder also joins it when startup is idle/installing:
 
 | Trigger | Where |
 |---|---|
@@ -138,6 +150,7 @@ Reconcile is triggered from exactly four places:
 | A re-auth succeeds | `src/main/services/authService.ts:reauthCinna()` — non-blocking, only when the reauthenticated account is still current and activated; an OAuth flow may finish after a switch |
 | The machine wakes | `powerMonitor.on('resume')` in `src/main/index.ts` |
 | The user presses Repair / Set up | `localdev:repair`, and `localdev:consent` after recording an answer |
+| A saved builder resumes during startup | `restoreDevelopmentContext` joins reconciliation before readiness/turn preparation; settled failures are not automatically retried |
 
 Every activation begins with `clear()` synchronously, and deactivation also clears. Login and logout can call activation directly, so clearing only during deactivation would leave a former Cinna workspace visible while a local/default profile loads. A cleared state has no checklist or openable workspace.
 
@@ -148,7 +161,7 @@ Every activation begins with `clear()` synchronously, and deactivation also clea
 3. **Toolchain.** uv, Mutagen and cinna-cli into `<userData>/localdev`, with the parts that do not need each other running at once
 4. **Workspace.** `cinna account setup` with a minted setup command, into `<AgentsHome>/Cloud/<host>/`, unless `.cinna/account.json` is already there
 5. **Token.** `cinna account status`; an `expired` token gets a fresh mint through `cinna account set-token`, and the status is re-read
-6. **Engine pre-fetch**, started at step 3 and awaited here: `ready` is the point at which everything between the user and a first turn is in place, so it is the one thing worth waiting for at the end. It has usually finished long before
+6. **Engine pre-fetch**, started at step 3 and awaited here: `ready` completes workspace setup; the build page separately checks the selected runtime before enabling its composer. It has usually finished long before
 7. **Context package**, best effort: a `behind` package is refreshed, and a failure is logged and ignored. A stale context package is a worse copy of the platform docs, not a broken workspace, and failing readiness over it would make an offline moment look like a setup failure
 
 A workspace someone created from a terminal at the same path is simply **adopted** at step 5 — it is the same thing cinna-cli would have made.
@@ -248,7 +261,7 @@ Two surfaces result, and `ready` says which one it settled on:
 | Account token state | read from `cinna account status` | not visible; the desktop learns only that cinna-cli could read the workspace |
 | An expired token | refreshed in place with a fresh mint | needs **Repair**, which sets the workspace up again |
 
-A `legacy` install really does create a workspace; the explicit Develop action additionally requires JSON workspace reporting. This is reported rather than hidden: Profile → Local Development shows what the older cinna-cli cannot do beside workspace readiness; Default → Local Development shows the actual managed executable version. A working badge that quietly could not refresh a token would be the worse failure.
+A `legacy` install really does create a workspace; both account build sessions and the explicit Develop action additionally require JSON workspace reporting. This is reported rather than hidden: Profile → Local Development shows what the older cinna-cli cannot do beside workspace readiness; Default → Local Development shows the actual managed executable version. A working badge that quietly could not refresh a token would be the worse failure.
 
 ### Progress is measured, not implied
 
@@ -285,11 +298,11 @@ Three rules keep it readable:
 - **A component with nothing honest to measure gets no bar.** The account-token check is a single round trip; a bar for it would be decoration, and a bar that never moves is precisely what this list exists to remove.
 - **Reaching `ready` does not tick off a row that did not happen** — a failed one, or the engine row when its pre-fetch was skipped. The run can succeed while one row did not, and painting it green on the way past would erase the only notice the user gets that the first turn will still fetch the engine.
 
-The same list renders in the onboarding/progress panel and in the status modal, from one component, so the two cannot describe the same install differently. Above it sits one overall bar for the whole reconcile.
+The same list renders in the onboarding/progress panel and in the build setup page, from one component, so the two cannot describe the same install differently. Setup progress surfaces can also show the overall reconcile percentage; the build page renders the current step and per-component checklist.
 
 ### The status checklist
 
-The sidebar button opens the same checklist over a running app. It answers the two questions a single progress line cannot: how much is left, and *which part* broke.
+While setup is incomplete, the sidebar button opens a build page with this checklist. It answers the two questions a single progress line cannot: how much is left, and *which part* broke.
 
 **Completion is reported, not inferred.** Naming the current step used to be enough to tick off everything above it, because the reconciler could not reach the workspace without having installed the toolchain. Concurrency ends that: "a later component started" is no longer evidence that an earlier one finished, and ticking Mutagen off because cinna-cli began is exactly the lie a per-component checklist exists to make impossible. So each component says when it is done and the reconciler ticks that row and no other. The component id travels with the report rather than being parsed out of the step text, so renaming a user-facing label cannot silently stop the list advancing.
 
@@ -297,7 +310,7 @@ The sidebar button opens the same checklist over a running app. It answers the t
 
 Only the **current** reconcile may publish progress or completion. Ownership ends both when the run finishes and when its profile is invalidated. An old engine prefetch or subprocess callback previously could restore an old progress bar after a failure or switch; generation checks now leave the current state intact.
 
-The button is now shown when everything is `ready` too, quietly and without a dot. That is a change from hiding it on success: clicking it shows the checklist without navigating away; the settings pages also expose the managed CLI and workspace, and a control that vanishes when things work is a control nobody learns exists. The dot, not the icon, distinguishes "fine" from "wants you". It stays hidden for `idle`, `unsupported`, `consent` and `declined` — the consent question has its own surface, and the rest have nothing to report.
+The button is now shown when everything is `ready` too, quietly and without a dot. That is a change from hiding it on success: clicking it opens the build composer; the settings pages also expose the managed CLI and workspace, and a control that vanishes when things work is a control nobody learns exists. The dot, not the icon, distinguishes "fine" from "wants you". It stays hidden for `idle`, `unsupported`, `consent` and `declined` — the consent question has its own surface, and the rest have nothing to report.
 
 ### Toolchain failures are not all "try again"
 
@@ -336,6 +349,7 @@ localDevService.reconcile(userId, force)      ← serialized, same-profile dedup
                                       ├─ LocalDevOnboardingStep  (first run)
                                       ├─ LocalDevConsentModal    (consent, after first run)
                                       ├─ LocalDevStatusButton    (installing / attention / ready)
+                                      ├─ LocalDevelopmentPage (setup → composer / guide / build settings)
                                       └─ ProfileLocalDevSettingsSection (every phase)
 
   ConnectIntentPanel ──consent(host, accepted)──► localdev:consent
@@ -344,6 +358,8 @@ localDevService.reconcile(userId, force)      ← serialized, same-profile dedup
 ```
 
 ## Integration Points
+
+- [Account Build Sessions](build_sessions.md) — one-click composer, inspectable guide, separate runtime settings and account-bound saved chats; [build-session technical details](build_sessions_tech.md)
 
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — the OAuth session whose bearer mints setup tokens; local development exists only for a `cinna_user` profile
 - [Cinna Re-authentication](../../auth/cinna_accounts/reauthentication.md) — a successful re-auth fires a reconcile only while that account is current and activated, because a dead session is the usual reason the workspace's account token went stale too
@@ -358,7 +374,7 @@ localDevService.reconcile(userId, force)      ← serialized, same-profile dedup
 
 ## Known gaps
 
-Carried honestly rather than implied as passing.
+Carried honestly rather than implied as passing. Build-session validation and live-build limits are recorded [separately](build_sessions.md#validation-and-limits).
 
 - **Lifecycle coverage uses mocked boundaries.** `localDevReconcile.test.ts` covers profile serialization, stale progress/mint/setup completion, consent waits and same-profile deduplication; `activation.test.ts` covers switching to local/default profiles without deactivation. These do not replace a live account/server lifecycle run.
 - **PATH ownership is covered with real temporary symlinks**, including lookalike and escaping destinations; component tests cover returned refusals and rejected IPC calls. They do not prove a user's login shell includes `~/.local/bin`.

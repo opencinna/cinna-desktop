@@ -1,4 +1,5 @@
 import { net } from 'electron'
+import { isDevelopmentAgent } from '../../shared/developmentSession'
 import { agentRepo, agentOverrideRepo, AgentRow, RemoteTarget } from '../db/agents'
 import { userRepo } from '../db/users'
 import { encryptApiKey } from '../security/keystore'
@@ -73,6 +74,8 @@ export interface AgentDto {
    * says how it runs.
    */
   acpTransport?: 'stdio' | 'websocket'
+  /** Account-bound builder: configured through Local Development, never as a custom command. */
+  development?: boolean
   driver: string | null
   /**
    * What the agent can do, from its driver. A surface that needs to decide
@@ -135,6 +138,7 @@ function toDto(row: AgentRow): AgentDto {
     localPath: row.localPath,
     localRootId: row.localRootId,
     driver: row.driver,
+    ...(isDevelopmentAgent(row) ? { development: true } : {}),
     ...(row.driver === 'acp' && row.driverConfig?.launcher === 'custom' ? { acpTransport: row.driverConfig.transport === 'websocket' ? 'websocket' as const : 'stdio' as const } : {}),
     capabilities: capabilitiesFor(row),
     readiness: driverOfRow(row) ? agentReadinessService.peek(row.id) : unsupportedReadiness(),
@@ -197,7 +201,8 @@ export const agentService = {
     // are properties of this machine, not of the signed-in account.
     const local = agentRepo
       .list(defaultUserId)
-      .filter((a) => a.source === 'local' || a.source === 'folder')
+      .filter((a) => (a.source === 'local' || a.source === 'folder') &&
+        (!a.driverConfig?.developmentProfileId || a.driverConfig.developmentProfileId === profileUserId))
     const remoteRows =
       profileUserId === defaultUserId
         ? agentRepo.list(defaultUserId).filter((a) => a.source === 'remote')
