@@ -34,7 +34,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 
 ### Sending while a turn runs
 1. User sends a message while the chat's turn is still running
-2. Main hands it to the running turn when that turn's engine takes mid-turn messages and the message is for its agent; otherwise main queues it until the turn ends
+2. Main hands it to the running turn when that turn's engine takes mid-turn messages, the agent has started streaming the turn, no tool call is running, and the message is for its agent; otherwise main queues it. A queued message for that agent goes into the turn as soon as it can take one, and anything else waits for the turn to end
 3. A completed turn drains the queue as a new turn; a stopped, failed or out-of-budget turn gives the queued text back to the composer. See [Pending Messages](../pending_messages/pending_messages.md)
 
 ### Tool-call flow

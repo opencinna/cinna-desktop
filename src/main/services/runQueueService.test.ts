@@ -7,11 +7,12 @@ const start = vi.hoisted(() => vi.fn())
 const answererOf = vi.hoisted(() => vi.fn((_chat?: unknown, _sent?: Pick<RunSendPayload, 'addressedAgentId'>): RunTarget => ({ kind: 'agent', agentId: 'agent-a' })))
 const unresolvedHandoff = vi.hoisted(() => vi.fn(() => false))
 const ownedChat = vi.hoisted(() => vi.fn((): unknown => ({ id: 'chat-1' })))
+const warn = vi.hoisted(() => vi.fn())
 vi.mock('./runExecutionService', () => ({ runExecutionService: { start, answererOf } }))
 vi.mock('../db/taskHandoffs', () => ({ taskHandoffRepo: { unresolvedForChat: unresolvedHandoff } }))
 vi.mock('../db/chats', () => ({ chatRepo: { getOwned: ownedChat } }))
 vi.mock('../logger/logger', () => ({
-  createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
+  createLogger: () => ({ debug: () => {}, info: () => {}, warn, error: () => {} })
 }))
 
 const { createRunQueueService, RUN_QUEUE_ATTACHMENTS_REFUSAL } = await import('./runQueueService')
@@ -25,6 +26,8 @@ interface FakeRun {
   handle: RunHandle
   steer: ReturnType<typeof vi.fn>
   end(state: RunOutcome['state']): void
+  /** The driver offers mid-turn delivery again, as an ACP turn does when its tool call ends. */
+  offer(): void
 }
 
 let runs: FakeRun[] = []
@@ -36,18 +39,31 @@ function fakeRun(
 ): FakeRun {
   let complete!: (outcome: RunOutcome) => void
   const steerFn = vi.fn(steer)
+  let steerable = false
+  const listeners = new Set<() => void>()
   const handle: RunHandle = {
     id,
     agentId,
     accepted: Promise.resolve(),
     completed: new Promise<RunOutcome>((resolve) => { complete = resolve }),
     cancel: vi.fn(),
-    steer: steerFn
+    steer: steerFn,
+    get steerable() { return steerable },
+    onSteerable(listener) {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    }
   }
   const run = {
     handle,
     steer: steerFn,
+    offer() {
+      steerable = true
+      for (const listener of [...listeners]) listener()
+    },
     end(state: RunOutcome['state']) {
+      steerable = false
+      listeners.clear()
       if (activeRunsByChat.get(CHAT) === handle) activeRunsByChat.delete(CHAT)
       complete({ state, text: '', runId: id, accepted: true, inputRequestIds: [] })
     }
@@ -268,6 +284,197 @@ describe('runQueueService.submit', () => {
     running()
     ownedChat.mockReturnValueOnce(undefined)
     await expect(service.submit(SCOPE, payload('hi'), options)).rejects.toThrow('Chat not found')
+  })
+})
+
+describe('runQueueService, handing queued messages to a turn that can take them again', () => {
+  type SteerAnswer = Awaited<ReturnType<RunHandle['steer']>>
+  /** The turn's answer to the next steer, given by hand. */
+  function answeredByHand(run: FakeRun): (outcome: SteerAnswer) => void {
+    let answer!: (outcome: SteerAnswer) => void
+    run.steer.mockImplementation(() => new Promise<SteerAnswer>((resolve) => { answer = resolve }))
+    return (outcome) => answer(outcome)
+  }
+
+  it('sends what was queued while the turn could not take it, as one message, once it can — and tells the view first', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    await service.submit(SCOPE, payload('first'), options)
+    await service.submit(SCOPE, payload('second'), options)
+    const order: string[] = []
+    service.onChange((_chatId, view) => order.push(`view: ${view.items.map((item) => item.content).join(', ')}`))
+    active.steer.mockImplementation(async (content: string) => { order.push(`steer: ${content}`); return 'injected' })
+    active.offer()
+    await flush()
+    expect(order).toEqual(['view: ', 'steer: first\n\nsecond'])
+    expect(service.list(SCOPE, CHAT)).toEqual({ items: [], held: false })
+    active.end('completed')
+    await flush()
+    expect(start).not.toHaveBeenCalled()
+  })
+
+  it('sends a message refused while a tool call ran as soon as it is queued, when the call ended during that steer', async () => {
+    // The re-offer came while the steer was asked and found nothing queued yet.
+    const active = running(async () => { active.offer(); return 'unavailable' })
+    const service = createRunQueueService()
+    expect(await service.submit(SCOPE, payload('2+2?'), options)).toEqual({ kind: 'queued', queuedId: expect.any(String) })
+    await flush()
+    expect(active.steer).toHaveBeenCalledTimes(2)
+    expect(active.steer).toHaveBeenLastCalledWith('2+2?')
+  })
+
+  it('puts the messages back at the head, in order and ahead of one queued meanwhile, when the turn will not take them', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    await service.submit(SCOPE, payload('one'), options)
+    await service.submit(SCOPE, payload('two'), options)
+    const before = service.list(SCOPE, CHAT).items
+    const answer = answeredByHand(active)
+    active.offer()
+    expect(service.list(SCOPE, CHAT).items).toEqual([])
+    await service.submit(SCOPE, payload('three'), options)
+    const listener = vi.fn()
+    service.onChange(listener)
+    answer('unavailable')
+    await flush()
+    const after = service.list(SCOPE, CHAT)
+    expect(after.items.slice(0, 2)).toEqual(before)
+    expect(after.items.map((item) => item.content)).toEqual(['one', 'two', 'three'])
+    expect(after.held).toBe(false)
+    expect(listener).toHaveBeenCalledWith(CHAT, after)
+    // The direct steer of "one" and the flush; not asked again until the turn offers anew.
+    expect(active.steer).toHaveBeenCalledTimes(2)
+  })
+
+  it('queues a message sent while a flush waits for its answer behind it, and sends it next', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    await service.submit(SCOPE, payload('one'), options)
+    const answer = answeredByHand(active)
+    active.offer()
+    expect(await service.submit(SCOPE, payload('two'), options)).toEqual({ kind: 'queued', queuedId: expect.any(String) })
+    expect(active.steer.mock.calls.map((call) => call[0])).toEqual(['one', 'one'])
+    active.steer.mockImplementation(async () => 'injected')
+    answer('injected')
+    await flush()
+    expect(active.steer.mock.calls.map((call) => call[0])).toEqual(['one', 'one', 'two'])
+    expect(service.list(SCOPE, CHAT).items).toEqual([])
+  })
+
+  it('queues a message sent during a flush even once the turn has ended, and drains it after the flushed ones', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    await service.submit(SCOPE, payload('one'), options)
+    const answer = answeredByHand(active)
+    active.offer()
+    active.end('completed')
+    await flush()
+    expect(await service.submit(SCOPE, payload('two'), options)).toEqual({ kind: 'queued', queuedId: expect.any(String) })
+    expect(start).not.toHaveBeenCalled()
+    answer('unavailable')
+    await flush()
+    expect(start.mock.calls.map((call) => call[1].content)).toEqual(['one\n\ntwo'])
+  })
+
+  it.each([['canceled', true], ['failed', true], ['completed', false]] as const)(
+    'applies a turn that ended %s while the flush waited, once the flushed messages are back', async (state, holds) => {
+      const service = createRunQueueService()
+      const active = running()
+      await service.submit(SCOPE, payload('wait'), options)
+      const answer = answeredByHand(active)
+      active.offer()
+      active.end(state)
+      await flush()
+      expect(service.list(SCOPE, CHAT)).toEqual({ items: [], held: false })
+      answer('unavailable')
+      await flush()
+      if (holds) {
+        expect(start).not.toHaveBeenCalled()
+        expect(service.list(SCOPE, CHAT)).toMatchObject({ items: [{ content: 'wait' }], held: true })
+      } else {
+        expect(start).toHaveBeenCalledWith(SCOPE, { chatId: CHAT, content: 'wait', addressedAgentId: 'agent-a' }, expect.anything())
+        expect(service.list(SCOPE, CHAT)).toEqual({ items: [], held: false })
+      }
+    })
+
+  it('never hands the running turn a message queued for another agent', async () => {
+    const service = createRunQueueService()
+    answererOf.mockImplementation((_chat, sent) => ({ kind: 'agent', agentId: sent?.addressedAgentId ?? 'agent-a' }))
+    const active = running()
+    await service.submit(SCOPE, payload('for b', { addressedAgentId: 'agent-b' }), options)
+    await service.submit(SCOPE, payload('for a', { addressedAgentId: 'agent-a' }), options)
+    active.steer.mockImplementation(async () => 'injected')
+    active.offer()
+    await flush()
+    expect(active.steer).not.toHaveBeenCalled()
+    expect(service.list(SCOPE, CHAT).items.map((item) => item.content)).toEqual(['for b', 'for a'])
+  })
+
+  it('hands over the leading messages for the turn’s agent and stops at one for another agent', async () => {
+    const service = createRunQueueService()
+    answererOf.mockImplementation((_chat, sent) => ({ kind: 'agent', agentId: sent?.addressedAgentId ?? 'agent-a' }))
+    const active = running()
+    for (const [content, address] of [['a1', 'agent-a'], ['a2', 'agent-a'], ['b1', 'agent-b'], ['a3', 'agent-a']]) {
+      await service.submit(SCOPE, payload(content, { addressedAgentId: address }), options)
+    }
+    active.steer.mockClear().mockImplementation(async () => 'injected')
+    active.offer()
+    await flush()
+    expect(active.steer.mock.calls.map((call) => call[0])).toEqual(['a1\n\na2'])
+    expect(service.list(SCOPE, CHAT).items.map((item) => item.content)).toEqual(['b1', 'a3'])
+  })
+
+  const elapse = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+  const TWICE = expect.stringContaining('may reach the agent twice')
+
+  it('stops waiting for a hand-over the ended turn never answers, and drains the messages in order after the grace', async () => {
+    const service = createRunQueueService({ flushGraceMs: 50 })
+    const active = running()
+    await service.submit(SCOPE, payload('one'), options)
+    await service.submit(SCOPE, payload('two'), options)
+    const answer = answeredByHand(active)
+    active.offer()
+    active.end('completed')
+    await flush()
+    expect(await service.submit(SCOPE, payload('three'), options)).toEqual({ kind: 'queued', queuedId: expect.any(String) })
+    expect(start).not.toHaveBeenCalled()
+    await elapse(100)
+    expect(start.mock.calls.map((call) => call[1].content)).toEqual(['one\n\ntwo\n\nthree'])
+    expect(service.list(SCOPE, CHAT)).toEqual({ items: [], held: false })
+    // The abandoned steer answers after all: said, and nothing else.
+    answer('injected')
+    await flush()
+    expect(warn).toHaveBeenCalledWith(TWICE, expect.anything())
+    expect(start).toHaveBeenCalledTimes(1)
+  })
+
+  it('holds the messages of a hand-over never answered when the turn ended stopped', async () => {
+    const service = createRunQueueService({ flushGraceMs: 50 })
+    const active = running()
+    await service.submit(SCOPE, payload('wait'), options)
+    answeredByHand(active)
+    active.offer()
+    active.end('canceled')
+    await elapse(100)
+    expect(start).not.toHaveBeenCalled()
+    expect(service.list(SCOPE, CHAT)).toMatchObject({ items: [{ content: 'wait' }], held: true })
+  })
+
+  it('takes a hand-over the ended turn answers inside the grace as delivered, and sends nothing more', async () => {
+    const service = createRunQueueService({ flushGraceMs: 100 })
+    const active = running()
+    await service.submit(SCOPE, payload('one'), options)
+    const answer = answeredByHand(active)
+    active.offer()
+    active.end('completed')
+    await flush()
+    answer('injected')
+    await flush()
+    expect(service.list(SCOPE, CHAT)).toEqual({ items: [], held: false })
+    await elapse(150)
+    expect(start).not.toHaveBeenCalled()
+    expect(service.list(SCOPE, CHAT)).toEqual({ items: [], held: false })
+    expect(warn).not.toHaveBeenCalledWith(TWICE, expect.anything())
   })
 })
 

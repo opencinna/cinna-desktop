@@ -361,8 +361,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const { data: runQueue } = useRunQueue(chatId)
   const heldQueueCount = runQueue?.held ? runQueue.items?.length ?? 0 : 0
   const restoringQueueRef = useRef(false)
-  // The queued message being edited when it left the queue and ended edit mode.
-  const vanishedEditRef = useRef<{ chatId: string; id: string } | null>(null)
+  // The queued message being edited when it left the queue and ended edit mode,
+  // kept while the composer still holds that edit: sending it or emptying the
+  // input forgets it. `gone` once the composer's queue has shown it missing.
+  const vanishedEditRef = useRef<{ chatId: string; id: string; gone: boolean } | null>(null)
   const draftKeyRef = useRef(draftKey)
   draftKeyRef.current = draftKey
   useEffect(() => {
@@ -438,7 +440,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // sentence when main sent it first (ux_rules §6). A queue held by a stop is
   // the held-take effect's, above, which folds the edit into the held texts —
   // also when the edited message comes back held after leaving, a drained start
-  // main refused: that effect takes the sentence back.
+  // main refused: that effect takes the sentence back. Back in a queue that is
+  // not held, a hand-over the running turn refused, it is the effect after
+  // this one's.
   const editingId = chatId ? activeRecall?.queuedId : undefined
   const setEditingQueued = useChatStore((state) => state.setEditingQueued)
   useEffect(() => {
@@ -449,9 +453,29 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     if (!editingId || !runQueue) return
     if ((runQueue.items ?? []).some((item) => item.id === editingId)) return
     setRecall(null)
-    if (chatId) vanishedEditRef.current = { chatId, id: editingId }
+    if (chatId) vanishedEditRef.current = { chatId, id: editingId, gone: true }
     if (!useChatStore.getState().cancelledQueuedIds.includes(editingId)) setSendError(QUEUED_EDIT_TOO_LATE)
   }, [chatId, editingId, runQueue, setSendError])
+  // Main hands queued messages to the running turn, and puts them back, under
+  // the same ids, when the turn would not take them. An edited message that
+  // comes back so was never sent: while the composer still holds the edit,
+  // edit mode returns on it and the sentence goes. Left an ordinary draft, the
+  // edit would be sent as a message of its own, and the original with it.
+  // Not while a send of that text is under way: it is no longer the edit.
+  useEffect(() => {
+    const vanished = vanishedEditRef.current
+    if (!chatId || !vanished || vanished.chatId !== chatId || !runQueue || runQueue.held || activeRecall || sending) return
+    const index = historyEntries.findIndex((entry) => entry.queuedId === vanished.id)
+    if (index < 0) {
+      vanished.gone = true
+      return
+    }
+    // Still listed: the queue has not shown it leaving yet, so it has not come back.
+    if (!vanished.gone || !input.trim()) return
+    vanishedEditRef.current = null
+    setRecall({ chatId, index, text: historyEntries[index].text, queuedId: vanished.id })
+    clearEditTooLate()
+  }, [chatId, runQueue, historyEntries, activeRecall, sending, input, clearEditTooLate])
 
   const saveQueuedEdit = useCallback(async (targetChatId: string, id: string): Promise<void> => {
     const text = input
@@ -460,16 +484,31 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (await window.api.run.queueEdit(targetChatId, id, text)) {
         useComposerDraftStore.getState().update(draftKey, (draft) => ({ text: draft.text === text ? '' : draft.text }))
         clearEditTooLate()
+        setRecall(null)
       } else {
-        setSendError(QUEUED_EDIT_TOO_LATE)
+        // Gone from main's queue, perhaps only handed to the running turn,
+        // which can refuse it and put it back. Main's queue changes reach the
+        // cache before this answer, and the composer's render a tick after, so
+        // the cache says where it is.
+        const view = queryClient.getQueryData<RunQueueView>(['run-queue', targetChatId])
+        const listed = (view?.items ?? []).some((item) => item.id === id)
+        if (view && !view.held && listed) {
+          // Put back already, never sent: the edit stands. Edit mode stays on
+          // it, or — when a render in between showed it leaving and ended edit
+          // mode — returns on it as the save ends.
+          if (activeRecallRef.current?.queuedId !== id) vanishedEditRef.current = { chatId: targetChatId, id, gone: true }
+        } else {
+          setSendError(QUEUED_EDIT_TOO_LATE)
+          vanishedEditRef.current = { chatId: targetChatId, id, gone: !!view && !listed }
+          setRecall(null)
+        }
       }
-      setRecall(null)
     } catch (error) {
       setSendError(unwrapIpcError(error, 'The queued message could not be saved.'))
     } finally {
       useComposerDraftStore.getState().endSend(draftKey)
     }
-  }, [input, draftKey, setSendError, clearEditTooLate])
+  }, [input, draftKey, setSendError, clearEditTooLate, queryClient])
 
   /**
    * Step through the history (-1 older, +1 newer). Active only while the input
@@ -1181,6 +1220,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             text: draft.text === input ? '' : draft.text
           }))
           clearEditTooLate()
+          vanishedEditRef.current = null
         }
       } finally {
         useComposerDraftStore.getState().endSend(draftKey)
@@ -1271,6 +1311,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (dispatched) {
         clearComposer()
         clearEditTooLate()
+        vanishedEditRef.current = null
       }
     } finally {
       useComposerDraftStore.getState().endSend(draftKey)
@@ -1461,7 +1502,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const value = e.target.value
     const prevValue = input
     setInput(value)
-    if (!value) clearEditTooLate()
+    if (!value) {
+      clearEditTooLate()
+      vanishedEditRef.current = null
+    }
 
     const el = e.target
     el.style.height = 'auto'

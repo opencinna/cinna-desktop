@@ -282,6 +282,167 @@ describe('a queued message in the transcript', () => {
   })
 })
 
+describe('a queued message main hands to the running turn', () => {
+  const queuedRow = (): HTMLElement | null => document.querySelector<HTMLElement>('[data-queued-message]')
+  const popsIn = (text: string): boolean => !!screen.getByText(text).closest('.anim-user-bubble-pop')
+
+  it('gives way to its live message in the render that shows it, and that message does not pop in a second time', async () => {
+    run.queueList.mockResolvedValue({ items: [{ id: 'q-1', content: 'Check the build too', createdAt: 1 }], held: false })
+    const blocks: StreamBlock[] = [{ type: 'text', kind: 'text', content: 'Running the check' }]
+    useChatStore.setState({ isStreaming: true, streamingBlocks: blocks })
+    renderStream()
+    await screen.findByText('Check the build too')
+    await queueBecomes({ items: [], held: false })
+    expect(queuedRow()?.dataset.phase).toBe('sent')
+
+    act(() => useChatStore.setState({ streamingBlocks: [...blocks, { type: 'user', content: 'Check the build too' }] }))
+    expect(queuedRow()).toBeNull()
+    expect(screen.getAllByText('Check the build too')).toHaveLength(1)
+    // Mounted in the hand-over render, and still quiet once the bubble's entry is gone.
+    expect(popsIn('Check the build too')).toBe(false)
+  })
+
+  it('is not retired by a live message with the same words the turn took in before it was sent', async () => {
+    run.queueList.mockResolvedValue({ items: [{ id: 'q-1', content: 'yes', createdAt: 1 }], held: false })
+    const blocks: StreamBlock[] = [{ type: 'text', kind: 'text', content: 'Working on it' }, { type: 'user', content: 'yes' }]
+    useChatStore.setState({ isStreaming: true, streamingBlocks: blocks })
+    renderStream()
+    await waitFor(() => expect(queuedRow()).not.toBeNull())
+    await queueBecomes({ items: [], held: false })
+    expect(queuedRow()?.dataset.phase).toBe('sent')
+
+    act(() => useChatStore.setState({ streamingBlocks: [...blocks, { type: 'text', kind: 'text', content: 'Still working' }] }))
+    expect(queuedRow()?.dataset.phase).toBe('sent')
+    expect(screen.getAllByText('yes')).toHaveLength(2)
+
+    act(() => useChatStore.setState({ streamingBlocks: [...blocks, { type: 'text', kind: 'text', content: 'Still working' }, { type: 'user', content: 'yes' }] }))
+    expect(queuedRow()).toBeNull()
+    expect(screen.getAllByText('yes')).toHaveLength(2)
+  })
+
+  it('is queued again in place, not brought in again, when main puts it back because the turn would not take it', async () => {
+    useChatStore.setState({ isStreaming: true, streamingBlocks: [{ type: 'text', kind: 'text', content: 'Live answer' }] })
+    renderStream()
+    await waitFor(() => expect(client.getQueryData(['run-queue', 'chat'])).toEqual({ items: [], held: false }))
+    await queueBecomes({ items: [{ id: 'q-1', content: 'Queued one', createdAt: 1 }], held: false })
+    const row = bubbleRow('Queued one')
+    await queueBecomes({ items: [], held: false })
+    expect(row.dataset.phase).toBe('sent')
+
+    await queueBecomes({ items: [{ id: 'q-1', content: 'Queued one', createdAt: 1 }], held: false })
+    expect(bubbleRow('Queued one')).toBe(row)
+    expect(row.dataset.phase).toBe('queued')
+    expect(shown('Queued')).toBe(true)
+    expect(screen.getAllByText('Queued one')).toHaveLength(1)
+    expect(popsIn('Queued one')).toBe(false)
+    expect(screen.getByRole('button', { name: 'Cancel queued message' }).hasAttribute('disabled')).toBe(false)
+
+    // And it leaves as sent again when main hands it over the next time.
+    await queueBecomes({ items: [], held: false })
+    expect(row.dataset.phase).toBe('sent')
+  })
+
+  it('keeps the second of two hand-overs with the same words until its own live message, when both left before the first one’s', async () => {
+    run.queueList.mockResolvedValue({ items: [{ id: 'q-1', content: 'yes', createdAt: 1 }], held: false })
+    const blocks: StreamBlock[] = [{ type: 'text', kind: 'text', content: 'Working on it' }]
+    useChatStore.setState({ isStreaming: true, streamingBlocks: blocks })
+    renderStream()
+    const rows = (): HTMLElement[] => Array.from(document.querySelectorAll<HTMLElement>('[data-queued-message]'))
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    await queueBecomes({ items: [], held: false })
+    await queueBecomes({ items: [{ id: 'q-2', content: 'yes', createdAt: 2 }], held: false })
+    await queueBecomes({ items: [], held: false })
+    expect(rows().map((row) => row.dataset.phase)).toEqual(['sent', 'sent'])
+
+    act(() => useChatStore.setState({ streamingBlocks: [...blocks, { type: 'user', content: 'yes' }] }))
+    expect(rows().map((row) => row.dataset.phase)).toEqual(['sent'])
+    expect(screen.getAllByText('yes')).toHaveLength(2)
+
+    act(() => useChatStore.setState({ streamingBlocks: [...blocks, { type: 'user', content: 'yes' }, { type: 'user', content: 'yes' }] }))
+    expect(rows()).toHaveLength(0)
+    expect(screen.getAllByText('yes')).toHaveLength(2)
+  })
+
+  describe('whose cancel main answered too late', () => {
+    async function cancelRacingHandOver(): Promise<(removed: boolean) => void> {
+      run.queueList.mockResolvedValue({ items: [{ id: 'q-1', content: 'Queued one', createdAt: 1 }], held: false })
+      let answer!: (removed: boolean) => void
+      run.queueRemove.mockImplementationOnce(() => new Promise<boolean>((resolve) => { answer = resolve }))
+      useChatStore.setState({ isStreaming: true, streamingBlocks: [{ type: 'text', kind: 'text', content: 'Live answer' }] })
+      renderStream()
+      await screen.findByText('Queued one')
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel queued message' }))
+      // Main handed it to the turn: its queue reaches the view before its answer.
+      run.queueList.mockResolvedValue({ items: [], held: false })
+      await queueBecomes({ items: [], held: false })
+      return answer
+    }
+    const putBack = { items: [{ id: 'q-1', content: 'Queued one', createdAt: 1 }], held: false }
+    /** Cancelled again: it leaves, still the user's cancel, and once main has removed it the bubble is gone. */
+    async function leavesCancelled(): Promise<void> {
+      expect(run.queueRemove).toHaveBeenCalledTimes(2)
+      expect(run.queueRemove).toHaveBeenLastCalledWith('chat', 'q-1')
+      expect(bubbleRow('Queued one').dataset.phase).toBe('leaving')
+      expect(useChatStore.getState().cancelledQueuedIds).toContain('q-1')
+      run.queueList.mockResolvedValue({ items: [], held: false })
+      await queueBecomes({ items: [], held: false })
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)) })
+      expect(document.querySelector('[data-queued-message]')).toBeNull()
+      expect(useChatStore.getState().cancelledQueuedIds).toContain('q-1')
+    }
+
+    it('cancels it again when main puts it back after answering, and drops "Already sent"', async () => {
+      const answer = await cancelRacingHandOver()
+      await act(async () => { answer(false) })
+      expect(bubbleRow('Queued one').dataset.phase).toBe('sent')
+      expect(useChatStore.getState().sendError).toBe(QUEUED_CANCEL_TOO_LATE)
+
+      run.queueList.mockResolvedValue(putBack)
+      await queueBecomes(putBack)
+      expect(useChatStore.getState().sendError).toBeNull()
+      await leavesCancelled()
+      expect(useChatStore.getState().sendError).toBeNull()
+    })
+
+    it('leaves another error in its place alone', async () => {
+      const answer = await cancelRacingHandOver()
+      await act(async () => { answer(false) })
+      act(() => useChatStore.getState().setSendError('Could not change who answers'))
+
+      run.queueList.mockResolvedValue(putBack)
+      await queueBecomes(putBack)
+      expect(bubbleRow('Queued one').dataset.phase).toBe('leaving')
+      expect(useChatStore.getState().sendError).toBe('Could not change who answers')
+    })
+
+    it('cancels it again, saying nothing, when main had put the message back before it answered', async () => {
+      const answer = await cancelRacingHandOver()
+      run.queueList.mockResolvedValue(putBack)
+      await queueBecomes(putBack)
+      await act(async () => { answer(false) })
+      expect(useChatStore.getState().sendError).toBeNull()
+      await leavesCancelled()
+      expect(useChatStore.getState().sendError).toBeNull()
+    })
+
+    it('leaves it queued, saying nothing, when main answers the second cancel too late as well', async () => {
+      const answer = await cancelRacingHandOver()
+      await act(async () => { answer(false) })
+      run.queueRemove.mockResolvedValueOnce(false)
+      run.queueList.mockResolvedValue(putBack)
+      await queueBecomes(putBack)
+      await act(async () => {})
+      expect(run.queueRemove).toHaveBeenCalledTimes(2)
+      expect(bubbleRow('Queued one').dataset.phase).toBe('queued')
+      expect(useChatStore.getState().sendError).toBeNull()
+      expect(useChatStore.getState().cancelledQueuedIds).not.toContain('q-1')
+      // Past the fade it is still there, queued.
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)) })
+      expect(bubbleRow('Queued one').dataset.phase).toBe('queued')
+    })
+  })
+})
+
 describe('sending', () => {
   it('re-engages following for a send with no optimistic bubble', () => {
     renderStream()
@@ -309,5 +470,7 @@ describe('a message the running turn took in', () => {
     expect(follows(groups[0], message)).toBe(true)
     expect(follows(message, groups[1])).toBe(true)
     expect(message.closest('[data-queued-message]')).toBeNull()
+    // A message steered straight in, with no queued bubble before it, pops in.
+    expect(message.closest('.anim-user-bubble-pop')).not.toBeNull()
   })
 })

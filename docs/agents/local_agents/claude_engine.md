@@ -212,9 +212,13 @@ The distinction between a background *subagent* and a background *shell* is ther
 business now, not the desktop's, and the twenty-minute ceiling is what covers a turn that never ends
 at all — see [The Agent Turn](agent_turn.md#a-turn-always-settles).
 
-### A message sent mid-turn goes into the running turn
+### A message sent mid-turn goes into the running turn, between tool calls
 
-The adapter advertises the ACP steering extension, so a message the user sends to this agent while its turn runs is taken into that turn instead of waiting for it to end, and it is saved in the transcript where it landed. The desktop asks with `idleBehavior: promptRequired` — with no turn running, start nothing — which is the only idle behaviour the adapter accepts. Whether a message is steered at all is decided in [Pending Messages](../../chat/pending_messages/pending_messages.md); the window it can arrive in is [The Agent Turn](agent_turn.md#a-message-sent-mid-turn-is-taken-only-while-the-prompt-is-in-flight). No live steer against the real CLI has been recorded yet ([the ACP contract](acp_contract.md#the-steering-extension)).
+The adapter advertises the ACP steering extension, so a message the user sends to this agent while its turn runs is taken into that turn instead of waiting for it to end, and it is saved in the transcript where it landed. The desktop asks with `idleBehavior: promptRequired` — with no turn running, start nothing — which is the only idle behaviour the adapter accepts.
+
+**Not while a tool runs.** The adapter delivers a steered message at the CLI's `now` priority, and the CLI aborts whatever it is executing to take it. A message sent during a `Bash` command killed the command, and the agent answered the message instead of finishing the work. So a message sent while a tool call runs is queued as a visible bubble, and main hands it to the turn once the call ends.
+
+Whether a message is steered at all is decided in [Pending Messages](../../chat/pending_messages/pending_messages.md); the window it can arrive in is [The Agent Turn](agent_turn.md#a-message-sent-mid-turn-is-taken-only-while-the-prompt-is-in-flight-and-no-tool-is-running); why the priority is not changed in the adapter is [the ACP contract](acp_contract.md#the-steering-extension). No live steer against the real CLI has been recorded yet ([the ACP contract](acp_contract.md#the-steering-extension)).
 
 ### No tool is pre-approved, because pre-approving one bypasses the asking
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { X } from 'lucide-react'
+import type { RunQueueView } from '../../../../shared/ipcPayloads'
 import { useRunQueue } from '../../hooks/useRunQueue'
 import { useChatStore } from '../../stores/chat.store'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -26,6 +27,12 @@ interface Tracked {
    * ended turn took in and saves with its rows. Its row is the one after these.
    */
   rowsBefore?: number
+  /**
+   * For `sent`: the running turn's live user messages with that text when it
+   * was sent. Main can hand it to that turn, whose live message then shows it
+   * well before its saved row: its own live message is the one after these.
+   */
+  liveBefore?: number
   /** For `sent`: which send it left in. Bubbles merged into one message share it. */
   send?: number
   /** When a `sent` or `leaving` bubble stops being shown regardless. */
@@ -43,6 +50,12 @@ interface Tracked {
 /** Main sent the message before the cancel reached it. */
 export const QUEUED_CANCEL_TOO_LATE = "Already sent — it couldn't be cancelled."
 
+/** Drops the too-late cancel notice, and only that one. */
+function clearCancelTooLate(): void {
+  const store = useChatStore.getState()
+  if (store.sendError === QUEUED_CANCEL_TOO_LATE) store.setSendError(null)
+}
+
 export interface QueuedBubble {
   id: string
   content: string
@@ -56,7 +69,10 @@ export interface QueuedMessagesView {
   bubbles: QueuedBubble[]
   /** A sent bubble is still standing in for its saved row. */
   holdsSent: boolean
-  /** The saved user row with this text is taking over from sent bubble(s) in this render. */
+  /**
+   * The saved user row — or the live user message of the running turn — with
+   * this text is taking over from sent bubble(s) in this render.
+   */
   handsOver: (content: string) => boolean
   cancel: (id: string) => void
 }
@@ -79,7 +95,10 @@ const countOf = (texts: readonly string[], text: string): number =>
  * difference between two lists: an item that leaves a queue that is not held,
  * without the user cancelling it here, was sent — that is the only other way
  * out (take happens only on a held queue). Leaving together means sent
- * together, as one message.
+ * together, as one message. Sent can mean handed to the running turn, and
+ * that can come back: an id that reappears in a queue that is not held was
+ * put back because the turn would not take it, and is queued again — or, when
+ * the user cancelled it and main answered too late, cancelled again.
  *
  * `liveUserTexts` are the messages the running (or just ended) turn took in,
  * which reach the saved transcript only with that turn's rows.
@@ -98,6 +117,8 @@ export function useQueuedMessages(
   const loadedRef = useRef(false)
   const heldRef = useRef(false)
   const cancelledRef = useRef(new Set<string>())
+  // Messages whose cancel main answered too late, the notice saying so shown.
+  const cancelTooLateRef = useRef(new Set<string>())
   const sendsRef = useRef(0)
 
   // One MessageStream serves every chat: start clean for another one.
@@ -106,15 +127,81 @@ export function useQueuedMessages(
     loadedRef.current = false
     heldRef.current = false
     cancelledRef.current = new Set()
+    cancelTooLateRef.current = new Set()
   }, [chatId])
+
+  /**
+   * Asks main to remove a message the user cancelled, and settles its bubble on
+   * the answer. `again` is a cancel main answered too late, asked once more
+   * because main put the message back: the turn it was handed to would not
+   * take it. Too late a second time, it stays queued.
+   */
+  const removeQueued = useCallback((id: string, again: boolean): void => {
+    useChatStore.getState().noteQueuedCancelled(id)
+    cancelledRef.current.add(id)
+    // The cancel did not happen: main sent the message first, or the call
+    // failed. It is no longer a cancel the composer should keep quiet about,
+    // and the bubble comes back rather than fading. If it already left the
+    // queue it was sent, and stands in for its row like any sent bubble; if
+    // not, it is queued, and the queue's next push says where it went.
+    const refused = (notice: string | null): void => {
+      cancelledRef.current.delete(id)
+      useChatStore.getState().forgetQueuedCancelled(id)
+      const now = Date.now()
+      setTracked((previous) =>
+        previous.map((entry) => {
+          if (entry.id !== id || entry.phase !== 'leaving') return entry
+          return entry.sentAs !== undefined
+            ? { ...entry, phase: 'sent', cancelling: false, endsAt: now + SENT_FALLBACK_MS }
+            : { ...entry, phase: 'queued', cancelling: false, endsAt: undefined }
+        })
+      )
+      if (notice) setSendError(notice)
+    }
+    const ask = (retry: boolean): void => {
+      void window.api.run.queueRemove(chatId, id)
+        .then((removed) => {
+          if (!removed) {
+            if (retry) return refused(null)
+            // Main had it out of the queue. Handed to the running turn, it may be
+            // back already, put back because the turn would not take it: main's
+            // queue changes reach the view before this answer. Then it was
+            // never sent, the cancel still stands, and it is asked for again.
+            const view = queryClient.getQueryData<RunQueueView>(['run-queue', chatId])
+            if (view && !view.held && (view.items ?? []).some((item) => item.id === id)) return ask(true)
+            cancelTooLateRef.current.add(id)
+            return refused(QUEUED_CANCEL_TOO_LATE)
+          }
+          setTracked((previous) =>
+            previous.map((entry) => (entry.id === id && entry.cancelling ? { ...entry, cancelling: false } : entry))
+          )
+        })
+        .catch((error) => refused(unwrapIpcError(error, 'The queued message could not be cancelled.')))
+        .finally(() => void queryClient.invalidateQueries({ queryKey: ['run-queue', chatId] }))
+    }
+    ask(again)
+  }, [chatId, queryClient, setSendError])
 
   useEffect(() => {
     if (!data) return
+    // Too late to cancel because main had handed it to the running turn, which
+    // would not take it: back in a queue that is not held, it was never sent,
+    // and the user's cancel still stands. It leaves again, cancelled once more,
+    // and "Already sent" would contradict it.
+    const cancelAgain = new Set<string>()
+    if (!data.held) {
+      for (const item of data.items ?? []) {
+        if (!cancelTooLateRef.current.delete(item.id)) continue
+        clearCancelTooLate()
+        cancelAgain.add(item.id)
+      }
+    }
     const wasHeld = heldRef.current
     const firstLoad = !loadedRef.current
     heldRef.current = data.held
     loadedRef.current = true
     const now = Date.now()
+    const leavesAt = now + (reducedMotion() ? 0 : LEAVE_MS)
     const texts = textsRef.current
     const send = ++sendsRef.current
     setTracked((previous) => {
@@ -122,7 +209,22 @@ export function useQueuedMessages(
       // A start main refused puts what it drained back, held, under the same
       // ids — pushed right after the queue that lost them, so a render between
       // the two has already called them sent. They were not.
-      const standing = previous.filter((entry) => !(entry.phase === 'sent' && data.held && present.has(entry.id)))
+      // Handed to the running turn, which would not take it after all: main
+      // put it back, and it is queued where it stood, without coming in again.
+      // A cancel still unanswered is no longer one that raced a send.
+      const standing = previous
+        .filter((entry) => !(entry.phase === 'sent' && data.held && present.has(entry.id)))
+        .map((entry): Tracked => {
+          if (data.held || !present.has(entry.id)) return entry
+          if (cancelAgain.has(entry.id)) {
+            return { id: entry.id, content: entry.content, phase: 'leaving', endsAt: leavesAt, cancelling: true, animateIn: false }
+          }
+          if (entry.phase === 'sent') return { id: entry.id, content: entry.content, phase: 'queued', animateIn: false }
+          if (entry.phase === 'leaving' && entry.cancelling && entry.sentAs !== undefined) {
+            return { ...entry, sentAs: undefined, rowsBefore: undefined, liveBefore: undefined, send: undefined }
+          }
+          return entry
+        })
       // A cancel main has not answered leaves with the rest: if main sent it
       // first, it went out merged with them.
       const leavesUnanswered = (entry: Tracked): boolean =>
@@ -141,10 +243,20 @@ export function useQueuedMessages(
           .map((entry) => entry.send)
       ).size
       const rowsBefore = countOf(texts.saved, sentAs) + countOf(texts.live, sentAs) + earlierSends
+      // The same for the running turn's live messages: an earlier send with
+      // the same words, still waiting for its live message, is owed the next.
+      const earlierLiveSends = new Set(
+        standing
+          .filter((entry) =>
+            entry.phase === 'sent' && entry.sentAs === sentAs && entry.liveBefore !== undefined &&
+            countOf(texts.live, sentAs) <= entry.liveBefore)
+          .map((entry) => entry.send)
+      ).size
+      const liveBefore = countOf(texts.live, sentAs) + earlierLiveSends
       const next: Tracked[] = []
       for (const entry of standing) {
         if (leavesUnanswered(entry) && !present.has(entry.id)) {
-          if (!takenBack) next.push({ ...entry, sentAs, rowsBefore, send })
+          if (!takenBack) next.push({ ...entry, sentAs, rowsBefore, liveBefore, send })
           continue
         }
         if (entry.phase !== 'queued') {
@@ -153,7 +265,7 @@ export function useQueuedMessages(
         }
         const item = present.get(entry.id)
         if (item) next.push(item.content === entry.content ? entry : { ...entry, content: item.content })
-        else if (!takenBack) next.push({ ...entry, phase: 'sent', sentAs, rowsBefore, send, endsAt: now + SENT_FALLBACK_MS })
+        else if (!takenBack) next.push({ ...entry, phase: 'sent', sentAs, rowsBefore, liveBefore, send, endsAt: now + SENT_FALLBACK_MS })
       }
       const known = new Set(standing.map((entry) => entry.id))
       for (const item of data.items ?? []) {
@@ -162,13 +274,20 @@ export function useQueuedMessages(
       }
       return next
     })
-  }, [data])
+    for (const id of cancelAgain) removeQueued(id, true)
+  }, [data, removeQueued])
 
-  // A sent bubble retires in the same render its saved row appears in, so
-  // there is never a frame with neither.
+  // A sent bubble retires in the same render its saved row appears in — or its
+  // live message, when main handed it to the running turn — so there is never
+  // a frame with both, nor one with neither.
   const retired = new Set(
     tracked
-      .filter((entry) => entry.phase === 'sent' && countOf(savedUserTexts, entry.sentAs ?? entry.content) > (entry.rowsBefore ?? 0))
+      .filter((entry) => {
+        if (entry.phase !== 'sent') return false
+        const text = entry.sentAs ?? entry.content
+        return countOf(savedUserTexts, text) > (entry.rowsBefore ?? 0) ||
+          (entry.liveBefore !== undefined && countOf(liveUserTexts, text) > entry.liveBefore)
+      })
       .map((entry) => entry.id)
   )
   const retiredKey = [...retired].join(',')
@@ -191,41 +310,12 @@ export function useQueuedMessages(
   }, [tracked])
 
   const cancel = useCallback((id: string) => {
-    useChatStore.getState().noteQueuedCancelled(id)
-    cancelledRef.current.add(id)
     const endsAt = Date.now() + (reducedMotion() ? 0 : LEAVE_MS)
     setTracked((previous) =>
       previous.map((entry) => (entry.id === id && entry.phase === 'queued' ? { ...entry, phase: 'leaving', endsAt, cancelling: true } : entry))
     )
-    // The cancel did not happen: main sent the message first, or the call
-    // failed. It is no longer a cancel the composer should keep quiet about,
-    // and the bubble comes back rather than fading. If it already left the
-    // queue it was sent, and stands in for its row like any sent bubble; if
-    // not, it is queued, and the queue's next push says where it went.
-    const refused = (notice: string): void => {
-      cancelledRef.current.delete(id)
-      useChatStore.getState().forgetQueuedCancelled(id)
-      const now = Date.now()
-      setTracked((previous) =>
-        previous.map((entry) => {
-          if (entry.id !== id || entry.phase !== 'leaving') return entry
-          return entry.sentAs !== undefined
-            ? { ...entry, phase: 'sent', cancelling: false, endsAt: now + SENT_FALLBACK_MS }
-            : { ...entry, phase: 'queued', cancelling: false, endsAt: undefined }
-        })
-      )
-      setSendError(notice)
-    }
-    void window.api.run.queueRemove(chatId, id)
-      .then((removed) => {
-        if (!removed) return refused(QUEUED_CANCEL_TOO_LATE)
-        setTracked((previous) =>
-          previous.map((entry) => (entry.id === id && entry.cancelling ? { ...entry, cancelling: false } : entry))
-        )
-      })
-      .catch((error) => refused(unwrapIpcError(error, 'The queued message could not be cancelled.')))
-      .finally(() => void queryClient.invalidateQueries({ queryKey: ['run-queue', chatId] }))
-  }, [chatId, queryClient, setSendError])
+    removeQueued(id, false)
+  }, [removeQueued])
 
   const bubbles = tracked
     .filter((entry) => !retired.has(entry.id) && !(entry.phase === 'queued' && data?.held))

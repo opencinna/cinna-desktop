@@ -392,21 +392,89 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   /**
    * Mid-turn messages, over the steering extension.
    *
-   * **Open only while this turn's `session/prompt` is in flight**, and closed
-   * synchronously — before anything awaits — the moment the prompt settles or
-   * a stop is asked for. A message offered after that is `unavailable`, and the
-   * caller waits for the next turn instead: otherwise it could land in a turn
-   * whose result has already been read, and belong to no row. A request already
-   * sent is awaited before the turn finishes, for the same reason.
+   * **Open only while this turn's `session/prompt` is in flight, and not before
+   * the agent has started the turn.** The window opens at the first turn
+   * content — a message or thought chunk, a tool call or its update — that
+   * arrives after the prompt was sent, not when it is sent. An agent can take a
+   * steer only into a turn it has already registered: codex-acp answers one
+   * that arrives earlier only once the whole turn is over, with
+   * `startedNewTurn`, and the Claude adapter answers it `promptRequired`. A mode
+   * or command update is not the turn starting, nor is a plan: the Claude
+   * adapter republishes the plan an earlier turn left before it registers the
+   * new turn. A turn that streams no content before its prompt settles never
+   * offers steering: a message sent meanwhile queues and drains when the turn
+   * ends.
+   *
+   * It closes synchronously — before anything awaits — the moment the prompt
+   * settles or a stop is asked for, and a window closed before it opened stays
+   * closed. A message offered after that is `unavailable`, and the caller waits
+   * for the next turn instead: otherwise it could land in a turn whose result
+   * has already been read, and belong to no row. A request already sent is
+   * awaited before the turn finishes, for the same reason.
+   *
+   * **And only while no tool call is in flight.** The Claude adapter steers at
+   * `priority: "now"`, and the CLI aborts the running cycle for a `now` command:
+   * a message sent while `Bash` ran killed the command, and the agent answered
+   * the message instead. A call is in flight from its `tool_call`, or from a
+   * `tool_call_update` that says `pending` or `in_progress`, until one says
+   * `completed` or `failed`; a status-less update for a call never announced
+   * does not start one. A call that never ends keeps steering withdrawn for the
+   * rest of the turn, and a message sent meanwhile queues and drains when the
+   * turn ends. Every engine gets the rule, not only Claude: waiting for the tool
+   * boundary costs Codex nothing, and it protects against any adapter that
+   * pre-empts. The window and the tools are separate state, so a tool finishing
+   * after the window closed never re-offers.
    */
-  let steerOpen = false
+  let steerWindow: 'waiting' | 'armed' | 'open' | 'closed' = 'waiting'
+  /** Tool calls the agent has started and not yet reported `completed` or `failed`. */
+  const toolsInFlight = new Set<string>()
+  /**
+   * Tool calls already reported `completed` or `failed`. **An update after that
+   * does not reopen one**: the Claude adapter sends status-less updates past
+   * completion — the PostToolUse `toolResponse`, a compaction's enriched
+   * result — and reading those as a call starting would withdraw steering for
+   * the rest of the turn.
+   */
+  const toolsDone = new Set<string>()
+  /** The function the window offers, while it exists; `offered` is whether the caller holds it now. */
+  let steerOffer: SteerFn | null = null
+  let offered = false
   /** Set once the turn stopped waiting for steers: its result no longer takes one. */
   let steeringSettled = false
   const steering = new Set<Promise<'injected' | 'late' | 'unavailable'>>()
+  const steerable = (): boolean => steerWindow === 'open' && toolsInFlight.size === 0
+  /** Closed for good, from whichever state; only a window that was open had anything to withdraw. */
   const closeSteering = (): void => {
-    if (!steerOpen) return
-    steerOpen = false
+    const wasOpen = steerWindow === 'open'
+    steerWindow = 'closed'
+    if (!wasOpen) return
+    offered = false
     input.registerSteer?.(null)
+  }
+  /** Offer or withdraw after a tool call started or ended; the window itself is untouched. */
+  const reofferSteering = (): void => {
+    const want = steerable() && !!steerOffer
+    if (want === offered) return
+    offered = want
+    input.registerSteer?.(want ? steerOffer : null)
+  }
+  const trackToolCall = (notification: SessionNotification): void => {
+    // Not before this turn's prompt went out: a re-bound session flushes the
+    // pen, which can hold the tail of a stopped turn — a call that never ends,
+    // and would keep steering withdrawn for the whole of this one.
+    if (steerWindow === 'waiting') return
+    const update = notification.update
+    if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') return
+    if (update.status === 'completed' || update.status === 'failed') {
+      toolsInFlight.delete(update.toolCallId)
+      toolsDone.add(update.toolCallId)
+    } else if (!toolsDone.has(update.toolCallId) &&
+      (update.sessionUpdate === 'tool_call' || update.status === 'pending' || update.status === 'in_progress')) {
+      // A status-less update for a call never announced is not a call starting:
+      // reading it as one would withdraw steering for the rest of the turn.
+      toolsInFlight.add(update.toolCallId)
+    }
+    reofferSteering()
   }
   const deliverSteer = async (to: AcpConnection, session: string, text: string): Promise<'injected' | 'late' | 'unavailable'> => {
     let outcome: unknown
@@ -463,19 +531,28 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     }
     return 'unavailable'
   }
+  /** The prompt is on the wire: the agent's first turn content opens the window. */
+  const armSteering = (): void => {
+    if (steerWindow === 'waiting') steerWindow = 'armed'
+  }
+  /** The agent has started the turn: open the window, when this turn can offer one at all. */
   const openSteering = (): void => {
+    if (steerWindow !== 'armed') return
     const to = connection
     const session = sessionId
-    if (!to || !session || !turn.open || !input.registerSteer || !advertisesSteering(to)) return
-    steerOpen = true
-    const steer: SteerFn = (text) => {
-      if (!steerOpen) return Promise.resolve('unavailable')
+    if (!to || !session || !turn.open || !input.registerSteer || !advertisesSteering(to)) {
+      steerWindow = 'closed'
+      return
+    }
+    steerWindow = 'open'
+    steerOffer = (text) => {
+      if (!steerable()) return Promise.resolve('unavailable')
       const request = deliverSteer(to, session, text)
       steering.add(request)
       void request.finally(() => steering.delete(request))
       return request
     }
-    input.registerSteer(steer)
+    reofferSteering()
   }
   const settleSteering = async (): Promise<void> => {
     closeSteering()
@@ -592,9 +669,13 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         // reading it here would only give the fallback notice a stale value to
         // compare against.
         if (turn.replaying) return
+        trackToolCall(notification)
         const update = stream.apply(notification)
         if (update.modeId) reportedMode = update.modeId
         emit(update.message)
+        // After the call is tracked, so a turn that starts with a tool call
+        // opens its window withdrawn rather than offering and withdrawing.
+        if (TURN_CONTENT.has(notification.update.sessionUpdate)) openSteering()
       },
       onPermission: (params: RequestPermissionRequest): Promise<RequestPermissionResponse> =>
         answerPermission(deps, ctx, { stream, emit, turn }, params),
@@ -752,7 +833,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         { sessionId, prompt: [{ type: 'text', text: input.wireContent }] },
         cancelRequested,
         agent.id,
-        openSteering
+        armSteering
       ).finally(settleSteering)
       if (!answer) {
         // The grace expired: the agent never acknowledged the cancel. What was
@@ -827,7 +908,10 @@ async function promptWithCancelGrace(
   params: Parameters<AcpConnection['prompt']>[0],
   cancelRequested: Promise<void>,
   agentId: string,
-  /** Called once the prompt is on the wire: the window mid-turn messages can use. */
+  /**
+   * Called once the prompt is on the wire. It arms the window mid-turn messages
+   * use; the agent's first turn content, not this call, opens it.
+   */
   onSent?: () => void
 ): Promise<Awaited<ReturnType<AcpConnection['prompt']>> | null> {
   const prompt = connection.prompt(params)
@@ -887,6 +971,15 @@ function noteModeFallback(
     ).message
   )
 }
+
+/**
+ * The `session/update` kinds that mean the agent has started the turn, and so
+ * open its steering window. A mode, command or usage update can precede a turn
+ * the agent has not registered yet, and a steer sent then finds no turn to join.
+ * So can a plan: `claude-agent-acp` (0.76.0) `prompt()` republishes the tasks an
+ * earlier turn left before it queues the new turn.
+ */
+const TURN_CONTENT: ReadonlySet<string> = new Set(['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'])
 
 /**
  * Whether the agent advertised the steering extension: top-level

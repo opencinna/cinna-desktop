@@ -522,6 +522,173 @@ describe('a mid-turn message (the steering extension)', () => {
     expect(retire).toHaveBeenCalledWith(AGENT_ID)
     await waitFor(() => w.pool.status(AGENT_ID).state !== 'running', 'the process to be retired')
   })
+
+  const toolCall = (status?: 'pending' | 'in_progress' | 'completed' | 'failed'): FakeAcpStep => ({
+    kind: 'update',
+    update: { sessionUpdate: 'tool_call', toolCallId: 'call_bash', title: 'Bash', kind: 'execute', ...(status ? { status } : {}) }
+  })
+  const toolUpdate = (status?: 'in_progress' | 'completed' | 'failed'): FakeAcpStep => ({
+    kind: 'update',
+    update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_bash', ...(status ? { status } : {}) }
+  })
+
+  it('is withdrawn while a tool call runs, so a message cannot abort the command, and offered again once it completes', async () => {
+    // The Claude adapter steers at `now`, and the CLI aborts the running tool for it.
+    const w = world({
+      script: {
+        ...STEERABLE,
+        prompt: {
+          emit: [chunk('Running it. '), toolCall('in_progress'), toolUpdate(), { kind: 'delay', ms: 400 }, toolUpdate('completed'),
+            { kind: 'awaitSteer' }, { kind: 'delay', ms: 150 }, chunk('Done.')]
+        }
+      }
+    })
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    await steerable(w, capture)
+    await waitFor(() => capture.withdrawn() === 1, 'steering to be withdrawn for the tool call')
+    // Withdrawn, and the function the caller still holds refuses too: nothing reaches the agent.
+    expect(await capture.offered[0]('2+2?')).toBe('unavailable')
+    expect(w.fake.received('_session/steering')).toEqual([])
+    // An update with no status is the call still running, not a second offer.
+    expect(capture.offered).toHaveLength(1)
+
+    await waitFor(() => capture.offered.length === 2, 'steering to be offered again once the tool completed')
+    expect(await capture.offered[1]('2+2?')).toBe('injected')
+    const result = await running
+    expect(w.fake.received('_session/steering')).toHaveLength(1)
+    expect(result.steers).toEqual([{ afterPart: expect.any(Number), text: '2+2?' }])
+    expect(capture.withdrawn()).toBe(2)
+  })
+
+  it('counts a failed tool call as ended, and offers steering again', async () => {
+    const w = world({
+      script: {
+        ...STEERABLE,
+        prompt: { emit: [chunk('Trying. '), toolCall('pending'), toolUpdate('failed'), { kind: 'awaitSteer' }, { kind: 'delay', ms: 100 }] }
+      }
+    })
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    await waitFor(() => capture.offered.length === 2, 'steering to be offered again after the failed call')
+    expect(capture.withdrawn()).toBe(1)
+    expect(await capture.offered[1]('next')).toBe('injected')
+    await running
+  })
+
+  it('is not withdrawn by an update that arrives after its tool call completed', async () => {
+    // The Claude adapter sends the PostToolUse `toolResponse` as a status-less update past completion.
+    const w = world({
+      script: {
+        ...STEERABLE,
+        prompt: { emit: [chunk('Running it. '), toolCall('in_progress'), toolUpdate('completed'), toolUpdate(), { kind: 'awaitSteer' }, { kind: 'delay', ms: 100 }] }
+      }
+    })
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    await waitFor(() => capture.offered.length === 2, 'steering to be offered again once the tool completed')
+    expect(await capture.offered[1]('2+2?')).toBe('injected')
+    expect(capture.withdrawn()).toBe(1)
+    await running
+  })
+
+  it('is not offered again by a tool call that ends after the prompt settled', async () => {
+    // The steer keeps the turn waiting past its prompt, and the call's end arrives in that wait.
+    const w = world({
+      deps: { cancelGraceMs: 2000 },
+      script: {
+        ...STEERABLE,
+        steer: { emit: [{ kind: 'delay', ms: 300 }, toolUpdate('completed')] },
+        prompt: { emit: [chunk('Working.'), { kind: 'delay', ms: 100 }, toolCall('in_progress')] }
+      }
+    })
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    await steerable(w, capture)
+    const steered = capture.offered[0]('meanwhile')
+    await running
+    expect(await steered).toBe('injected')
+    expect(capture.offered).toHaveLength(1)
+  })
+
+  it('is not offered between the prompt going out and the agent’s first turn content, and is once that arrives', async () => {
+    // An agent takes a steer only into a turn it has registered: codex-acp would answer an earlier one after the whole turn.
+    const w = world({
+      script: { ...STEERABLE, prompt: { emit: [{ kind: 'delay', ms: 300 }, chunk('Started. '), { kind: 'awaitSteer' }, { kind: 'delay', ms: 100 }] } }
+    })
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    await waitFor(() => w.fake.received('session/prompt').length === 1, 'the prompt to reach the agent')
+    expect(capture.offered).toEqual([])
+    await steerable(w, capture)
+    expect(capture.offered).toHaveLength(1)
+    expect(await capture.offered[0]('meanwhile')).toBe('injected')
+    await running
+    expect(capture.withdrawn()).toBe(1)
+  })
+
+  it('is not opened by updates that are not turn content', async () => {
+    const w = world({
+      script: {
+        ...STEERABLE,
+        prompt: {
+          emit: [
+            { kind: 'update', update: { sessionUpdate: 'current_mode_update', currentModeId: 'default' } },
+            { kind: 'update', update: { sessionUpdate: 'available_commands_update', availableCommands: [] } },
+            // The Claude adapter republishes an earlier turn's tasks before it registers this turn.
+            { kind: 'update', update: { sessionUpdate: 'plan', entries: [{ content: 'An earlier task', priority: 'medium', status: 'pending' }] } },
+            // A point all three updates were read by: the ask comes behind them on the same pipe.
+            { kind: 'permission' },
+            chunk('Started. '), { kind: 'awaitSteer' }, { kind: 'delay', ms: 100 }
+          ]
+        }
+      }
+    })
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    const asked = await askedFor(w)
+    expect(capture.offered).toEqual([])
+    w.driver.respond(
+      { requestId: asked.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission' },
+      { kind: 'permission', reply: 'once' }
+    )
+    await steerable(w, capture)
+    expect(await capture.offered[0]('meanwhile')).toBe('injected')
+    await running
+  })
+
+  it('is not withdrawn by a status-less update for a tool call it never saw start', async () => {
+    const w = world({
+      script: { ...STEERABLE, prompt: { emit: [chunk('Before. '), toolUpdate(), chunk('After. '), { kind: 'awaitSteer' }, { kind: 'delay', ms: 100 }] } }
+    })
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    await waitFor(() => w.events.some((event) => event.type === 'delta' && event.text === 'After. '), 'the text after the update')
+    expect(capture.withdrawn()).toBe(0)
+    expect(await capture.offered[0]('2+2?')).toBe('injected')
+    await running
+    expect(capture.offered).toHaveLength(1)
+  })
+
+  it('is not withdrawn for the turn by a tool call that arrived before its prompt went out', async () => {
+    // Emitted before `session/new` answers, so it waits in the pre-bind pen and
+    // the bind flushes it into this turn: as the tail of a stopped turn would
+    // reach a session bound again, a call that never ends.
+    const w = world({
+      script: {
+        ...STEERABLE,
+        newSession: { emit: [toolCall('in_progress')] },
+        prompt: { emit: [chunk('Started. '), { kind: 'awaitSteer' }, { kind: 'delay', ms: 100 }] }
+      }
+    })
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    await waitFor(() => w.events.some((event) => event.type === 'delta' && event.text === 'Started. '), 'the turn’s first text')
+    expect(capture.offered).toHaveLength(1)
+    expect(capture.withdrawn()).toBe(0)
+    expect(await capture.offered[0]('meanwhile')).toBe('injected')
+    await running
+  })
 })
 
 describe('a remembered session', () => {

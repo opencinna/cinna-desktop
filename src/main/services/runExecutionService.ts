@@ -56,6 +56,16 @@ export interface RunHandle {
    * turn's driver offered mid-turn delivery and still does. Never rejects.
    */
   steer(content: string): Promise<'injected' | 'saved' | 'unavailable'>
+  /**
+   * The driver offers mid-turn delivery right now. It can go false and true
+   * again within one turn: an ACP driver withdraws it while a tool call runs.
+   */
+  readonly steerable: boolean
+  /**
+   * Told each time the driver offers mid-turn delivery again while the run is
+   * neither closed nor cancelled. Listeners are dropped when the run closes.
+   */
+  onSteerable(listener: () => void): () => void
   /** The agent answering this turn, once resolved; null for the local model or before routing. */
   readonly agentId: string | null
 }
@@ -145,6 +155,7 @@ export const runExecutionService = {
     let context: RunEventContext | null = null
     let terminalObserved = false
     let steerFn: SteerFn | null = null
+    const steerableListeners = new Set<() => void>()
     const handle: RunHandle = {
       id: runId,
       accepted: new Promise<void>((resolve, reject) => { accept = resolve; refuse = reject }),
@@ -159,6 +170,14 @@ export const runExecutionService = {
       },
       get agentId() {
         return context?.agentId ?? null
+      },
+      get steerable() {
+        return !!steerFn && !closed && !cancelRequested
+      },
+      onSteerable(listener) {
+        if (closed) return () => {}
+        steerableListeners.add(listener)
+        return () => { steerableListeners.delete(listener) }
       },
       async steer(content) {
         const steer = steerFn
@@ -217,6 +236,7 @@ export const runExecutionService = {
         }
         closed = true
         steerFn = null
+        steerableListeners.clear()
         if (!accepted) refuse(new Error(failure ?? 'The turn could not be started.'))
         if (activeChats.get(payload.chatId) === handle) activeChats.delete(payload.chatId)
         try { options.port?.close() } catch { /* subscriber already disconnected */ }
@@ -270,7 +290,16 @@ export const runExecutionService = {
       context: (ctx) => { context = ctx; live.setAgentId(ctx.agentId) },
       persisted: (ctx) => options.onAccepted?.({ ...ctx, turnId: handle.id, rootRunId: handle.id, completionOwner: options.runnerTaskId ? 'runner' : 'turn' }),
       accepted: () => { accepted = true; accept(); live.accepted() },
-      registerSteer: (steer) => { steerFn = closed || cancelRequested ? null : steer },
+      registerSteer: (steer) => {
+        steerFn = closed || cancelRequested ? null : steer
+        if (!steerFn) return
+        // The queue learns the turn can take a message again, at a tool boundary.
+        for (const listener of [...steerableListeners]) {
+          try { listener() } catch (error) {
+            logger.warn('a steerable listener failed', { chatId: payload.chatId, error: String(error) })
+          }
+        }
+      },
       refusal,
       agentId: options.agentId,
       coordinator: options.coordinator,

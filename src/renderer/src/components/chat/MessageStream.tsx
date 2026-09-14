@@ -1021,11 +1021,13 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             if (streamConsumed.has(i)) return
             if (block.type === 'user') {
               // Sent while the turn ran and taken into it, where it landed. A
-              // plain node, so it also splits a run of tool dots in two.
+              // plain node, so it also splits a run of tool dots in two. One
+              // taking over from a queued bubble main handed to the turn does
+              // not pop in again: the bubble it replaces already did.
               renderNodes.push({
                 slot: 'plain',
                 key: `stream-user-${i}`,
-                node: <MessageBubble role="user" content={block.content} animate />
+                node: <LiveUserBubble content={block.content} animate={!queuedView.handsOver(block.content)} />
               })
               return
             }
@@ -1322,4 +1324,14 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
       {messageContextMenu.menu}
     </TranscriptExpansionContext.Provider>
   )
+}
+
+/**
+ * A user message the running turn took in. Whether it pops in is decided when
+ * it mounts: the hand-over from a queued bubble is a single render, and an
+ * animation class added on the render after would play the pop anyway.
+ */
+function LiveUserBubble({ content, animate }: { content: string; animate: boolean }): React.JSX.Element {
+  const [animateOnMount] = useState(animate)
+  return <MessageBubble role="user" content={content} animate={animateOnMount} />
 }

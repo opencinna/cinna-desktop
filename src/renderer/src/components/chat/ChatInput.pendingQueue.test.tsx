@@ -345,7 +345,14 @@ describe('message history', () => {
   })
 
   it('says the same when main answers that the message is no longer queued, until the text is cleared', async () => {
-    run.queueEdit.mockResolvedValue(false)
+    let notify!: (payload: { chatId: string; view?: RunQueueView }) => void
+    run.onQueueChanged.mockImplementation((handler) => { notify = handler; return () => undefined })
+    // Main's queue without it reaches the cache ahead of the answer, as main pushes it first.
+    run.queueEdit.mockImplementation(async () => {
+      run.queueList.mockResolvedValue(queued())
+      notify({ chatId: 'chat-1', view: queued() })
+      return false
+    })
     await mountWithQueue('run-1', [], queued('queued A'))
     key('ArrowUp')
     key('Enter')
@@ -405,6 +412,140 @@ describe('message history', () => {
     await nextFrame()
     expect(box().value).toBe('queued A, better')
     expect(useChatStore.getState().sendError).toBeNull()
+  })
+
+  describe('an edited message main handed to the running turn and put back', () => {
+    let notify!: (payload: { chatId: string; view?: RunQueueView }) => void
+    /** Main's queue as it now stands, pushed to the view. */
+    async function queueBecomes(view: RunQueueView): Promise<void> {
+      run.queueList.mockResolvedValue(view)
+      act(() => notify({ chatId: 'chat-1', view }))
+      // The cache tells its observers a tick later; then the effects run.
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+      await act(async () => {})
+    }
+    async function editHandedOver(): Promise<void> {
+      run.onQueueChanged.mockImplementation((handler) => { notify = handler; return () => undefined })
+      await mountWithQueue('run-1', [], queued('queued A'))
+      key('ArrowUp')
+      fireEvent.change(box(), { target: { value: 'queued A, better' } })
+      await queueBecomes(queued())
+      expect(useChatStore.getState().sendError).toBe(QUEUED_EDIT_TOO_LATE)
+      expect(useChatStore.getState().editingQueued).toBeNull()
+    }
+
+    it('is edited again, not sent a second time: edit mode returns with the text as it stands, and the notice goes', async () => {
+      await editHandedOver()
+      fireEvent.change(box(), { target: { value: 'queued A, better still' } })
+
+      await queueBecomes(queued('queued A'))
+      expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
+      expect(box().value).toBe('queued A, better still')
+      expect(useChatStore.getState().sendError).toBeNull()
+      expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
+
+      key('Enter')
+      await waitFor(() => expect(run.queueEdit).toHaveBeenCalledWith('chat-1', 'q-1', 'queued A, better still'))
+      expect(run.start).not.toHaveBeenCalled()
+    })
+
+    it('stays a message of its own once the edit was sent as one', async () => {
+      await editHandedOver()
+      key('Enter')
+      await waitFor(() => expect(run.start).toHaveBeenCalledWith(expect.objectContaining({ content: 'queued A, better' })))
+      await waitFor(() => expect(box().value).toBe(''))
+      fireEvent.change(box(), { target: { value: 'something new' } })
+
+      await queueBecomes(queued('queued A'))
+      expect(useChatStore.getState().editingQueued).toBeNull()
+      expect(box().value).toBe('something new')
+      expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()
+    })
+
+    it('is left alone once the edit was emptied from the input', async () => {
+      await editHandedOver()
+      fireEvent.change(box(), { target: { value: '' } })
+      fireEvent.change(box(), { target: { value: 'something new' } })
+
+      await queueBecomes(queued('queued A'))
+      expect(useChatStore.getState().editingQueued).toBeNull()
+      expect(box().value).toBe('something new')
+    })
+
+    it('is edited again after Save found it gone, once the queue has shown it leaving and coming back', async () => {
+      run.onQueueChanged.mockImplementation((handler) => { notify = handler; return () => undefined })
+      await mountWithQueue('run-1', [], queued('queued A'))
+      key('ArrowUp')
+      fireEvent.change(box(), { target: { value: 'queued A, better' } })
+      // Main handed it to the turn before the save reached it: that push reaches the cache ahead of the answer.
+      run.queueEdit.mockImplementationOnce(async () => {
+        run.queueList.mockResolvedValue(queued())
+        notify({ chatId: 'chat-1', view: queued() })
+        return false
+      })
+      key('Enter')
+      await waitFor(() => expect(useChatStore.getState().sendError).toBe(QUEUED_EDIT_TOO_LATE))
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+      await act(async () => {})
+      expect(useChatStore.getState().editingQueued).toBeNull()
+      expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()
+
+      await queueBecomes(queued())
+      expect(useChatStore.getState().editingQueued).toBeNull()
+      expect(useChatStore.getState().sendError).toBe(QUEUED_EDIT_TOO_LATE)
+      await queueBecomes(queued('queued A'))
+      expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
+      expect(box().value).toBe('queued A, better')
+      expect(useChatStore.getState().sendError).toBeNull()
+    })
+
+    it('stays in edit mode, saying nothing, when Save finds it gone but main has already put it back', async () => {
+      run.onQueueChanged.mockImplementation((handler) => { notify = handler; return () => undefined })
+      await mountWithQueue('run-1', [], queued('queued A'))
+      key('ArrowUp')
+      fireEvent.change(box(), { target: { value: 'queued A, better' } })
+      // Handed to the turn and put back before the answer: both pushes reach the cache ahead of it, and no render between them.
+      run.queueEdit.mockImplementationOnce(async () => {
+        notify({ chatId: 'chat-1', view: queued() })
+        notify({ chatId: 'chat-1', view: queued('queued A') })
+        return false
+      })
+      key('Enter')
+      await waitFor(() => expect(run.queueEdit).toHaveBeenCalledTimes(1))
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+      await act(async () => {})
+      expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
+      expect(box().value).toBe('queued A, better')
+      expect(useChatStore.getState().sendError).toBeNull()
+      expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
+
+      // Enter saves the edit onto the original, rather than sending it beside it.
+      key('Enter')
+      await waitFor(() => expect(run.queueEdit).toHaveBeenCalledTimes(2))
+      expect(run.queueEdit).toHaveBeenLastCalledWith('chat-1', 'q-1', 'queued A, better')
+      expect(run.start).not.toHaveBeenCalled()
+    })
+
+    it('returns to edit mode as Save ends, when the queue showed it leaving and main put it back before answering', async () => {
+      run.onQueueChanged.mockImplementation((handler) => { notify = handler; return () => undefined })
+      await mountWithQueue('run-1', [], queued('queued A'))
+      key('ArrowUp')
+      fireEvent.change(box(), { target: { value: 'queued A, better' } })
+      let answer!: (saved: boolean) => void
+      run.queueEdit.mockImplementationOnce(() => new Promise<boolean>((resolve) => { answer = resolve }))
+      key('Enter')
+      await waitFor(() => expect(run.queueEdit).toHaveBeenCalledTimes(1))
+      await queueBecomes(queued())
+      expect(useChatStore.getState().editingQueued).toBeNull()
+      await queueBecomes(queued('queued A'))
+
+      await act(async () => { answer(false) })
+      await act(async () => {})
+      expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
+      expect(box().value).toBe('queued A, better')
+      expect(useChatStore.getState().sendError).toBeNull()
+      expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
+    })
   })
 
   it('leaves edit mode silently, keeping the text, when the user cancels the edited message from its bubble', async () => {
