@@ -22,6 +22,7 @@ All colors use CSS variables `var(--color-*)` defined in `src/renderer/src/asset
 | `--color-danger` | Destructive actions, errors |
 | `--color-success` | Connected status, valid states |
 | `--color-warning` | Default star, awaiting-auth status |
+| `--color-send-queued` | The composer's Send while a turn runs (joins that turn or its queue); idle Send stays `--color-success` |
 
 Custom CSS must go inside `@layer base` in `main.css` (otherwise it overrides Tailwind v4 utilities).
 

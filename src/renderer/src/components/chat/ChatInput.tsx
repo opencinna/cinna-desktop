@@ -121,6 +121,9 @@ interface ChatInputProps {
 }
 
 const DOUBLE_ESC_WINDOW_MS = 400
+// Stop takes the place of the Send that was just clicked; a click this soon
+// after is the second half of a double-click, not a request to stop.
+const STOP_CLICK_GRACE_MS = 500
 
 /**
  * Shown when main sent a queued message being edited before the edit was saved.
@@ -437,9 +440,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // also when the edited message comes back held after leaving, a drained start
   // main refused: that effect takes the sentence back.
   const editingId = chatId ? activeRecall?.queuedId : undefined
-  // While a turn runs, an empty composer offers Stop alone: the Send slot keeps
-  // its place, unseen and unreachable, until there is something to send.
-  const sendSlotHidden = isStreaming && !editingId && !input.trim()
   const setEditingQueued = useChatStore((state) => state.setEditingQueued)
   useEffect(() => {
     setEditingQueued(chatId && editingId ? { chatId, id: editingId } : null)
@@ -782,6 +782,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       ? selectedAgent ?? null
       : null
   const readiness = useComposerReadiness(directTarget, input)
+  // While a turn runs the row's one button is Stop on an empty input, and Send
+  // once there is text or a queued message is being edited — unless readiness
+  // refuses the target, whose Send would leave no way to stop but the keyboard.
+  // The refusal, not `blocksSend`: that one follows the typed text (a catalog
+  // command gets through), and the button must not flip while typing. A new
+  // chat has no Send to offer mid-stream, so it keeps Stop.
+  const showStop = isStreaming && (!chatId || (!editingId && (!input.trim() || readiness.refusal !== null)))
+  const sendClickedAt = useRef(0)
   // Read by `handleSend` at call time, so Enter cannot slip past a refusal that
   // arrived after the callback was built.
   const blocksSendRef = useRef(readiness.blocksSend)
@@ -1754,29 +1762,34 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               modelName={badgeInfo.modelName}
             />
           )}
-          {/* Stop left of the Send slot, so Send is always the rightmost button:
-              a turn ending removes Stop and moves nothing under the pointer.
-              While a turn runs the slot keeps its place but is invisible (and
-              unfocusable) until there is text to send or a queued message is
-              being edited, so typing never changes the row (ux_rules §1). */}
-          {isStreaming && (
+          {/* One button, always the rightmost, the same size in every state, so
+              swapping it moves nothing (ux_rules §1). Idle: green Send. While a
+              turn runs: Stop on an empty input, a blue Send (into the turn or
+              its queue) while there is text. Esc Esc stops the turn in either,
+              except while a queued message is edited, where Esc leaves the edit. */}
+          {/* Separate keys, so focus never passes from Send to Stop on one node;
+              a click on Send hands focus back to the input instead. */}
+          {showStop ? (
             <button
-              onClick={handleCancel}
+              key="stop"
+              onClick={() => { if (Date.now() - sendClickedAt.current >= STOP_CLICK_GRACE_MS) handleCancel() }}
               aria-label="Stop"
               title="Stop (Esc Esc)"
               className="p-1.5 rounded-lg bg-[var(--color-danger)] hover:opacity-80 text-white transition-opacity"
             >
               <Square size={16} />
             </button>
-          )}
-          {(!isStreaming || chatId) && (
+          ) : (
             <button
-              onClick={handleSend}
+              key="send"
+              onClick={() => {
+                sendClickedAt.current = Date.now()
+                textareaRef.current?.focus()
+                void handleSend()
+              }}
               aria-label={editingId ? 'Save' : 'Send'}
-              aria-hidden={sendSlotHidden || undefined}
-              tabIndex={sendSlotHidden ? -1 : undefined}
               aria-describedby={!editingId && readiness.text ? readinessReasonId : undefined}
-              title={editingId ? 'Save queued message' : readiness.title ?? undefined}
+              title={editingId ? 'Save queued message' : readiness.title ?? (isStreaming ? 'Send a follow-up · Esc Esc to stop' : undefined)}
               disabled={
                 sending ||
                 (editingId
@@ -1791,8 +1804,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                             pendingNotes.length > 0)
                         )))
               }
-              className={`p-1.5 rounded-lg bg-[var(--color-success)] hover:opacity-80 text-white
-                disabled:opacity-20 disabled:cursor-not-allowed transition-opacity ${sendSlotHidden ? 'invisible' : ''}`}
+              className={`p-1.5 rounded-lg ${isStreaming ? 'bg-[var(--color-send-queued)]' : 'bg-[var(--color-success)]'} hover:opacity-80 text-white
+                disabled:opacity-20 disabled:cursor-not-allowed transition-opacity`}
             >
               {editingId ? <Check size={16} /> : <SendHorizontal size={16} />}
             </button>

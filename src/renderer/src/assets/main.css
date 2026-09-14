@@ -59,6 +59,8 @@
     --color-danger: #ef4444;
     --color-success: #22c55e;
     --color-warning: #eab308;
+    /* Send while a turn runs: the message joins that turn or its queue. */
+    --color-send-queued: #3b82f6;
 
     /* Agent status severity palette. -text are tuned for dark-on-dark legibility. */
     --color-severity-error: #ef4444;
@@ -98,6 +100,7 @@
     --color-danger: #dc2626;
     --color-success: #16a34a;
     --color-warning: #ca8a04;
+    --color-send-queued: #2563eb;
 
     /* -text shades darken in light theme for contrast against light backgrounds. */
     --color-severity-error: #dc2626;

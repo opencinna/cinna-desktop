@@ -279,7 +279,7 @@ test('4 ArrowUp recalls a queued message for editing, and Enter saves the edit i
   })
 })
 
-test('5 while a turn runs the composer offers Stop, and typing reveals Send without moving Stop', async ({ cinna }) => {
+test('5 while a turn runs the composer offers Stop, typing puts Send in its place, and emptying the input brings Stop back', async ({ cinna }) => {
   test.setTimeout(90_000)
   const peer = await arrange(cinna, RUNS_UNTIL_STOPPED)
   await startTurn(cinna, peer)
@@ -296,7 +296,10 @@ test('5 while a turn runs the composer offers Stop, and typing reveals Send with
   await input.pressSequentially('x')
   await expect(sendButton(cinna)).toBeVisible()
   await expect(sendButton(cinna)).toBeEnabled()
-  expect(await stop.boundingBox()).toEqual(before)
-  const send = await sendButton(cinna).boundingBox()
-  expect(send!.x).toBeGreaterThan(before!.x + before!.width - 1)
+  await expect(stop).toHaveCount(0)
+  expect(await sendButton(cinna).boundingBox()).toEqual(before)
+
+  await input.press('Backspace')
+  await expect(stop).toBeVisible()
+  await expect(sendButton(cinna)).toHaveCount(0)
 })

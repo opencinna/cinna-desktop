@@ -6,7 +6,8 @@ import type { RunQueueView, RunStartResult } from '../../../../shared/ipcPayload
 
 /**
  * Typing while a turn runs: the text goes to main (into the turn, or queued
- * behind it), the composer row keeps Stop and Send for the whole turn, a queue
+ * behind it), the composer's one button is Stop on an empty input and Send with
+ * text, a queue
  * the turn left held comes back into the input, and ArrowUp/ArrowDown recall
  * the user's own messages — a queued one recalled for editing.
  */
@@ -71,7 +72,7 @@ function mount(activeRunId: string | null, userTexts: string[] = [], options: { 
 }
 
 const box = (): HTMLTextAreaElement => screen.getByRole('combobox') as HTMLTextAreaElement
-/** The Send slot by its attribute: hidden, it has no accessible name for a role query to match. */
+/** The Send button by its label; null while Stop is in its place. */
 const sendSlot = (): HTMLElement | null => document.querySelector('button[aria-label="Send"]')
 const key = (name: string): void => { fireEvent.keyDown(box(), { key: name }) }
 const queued = (...texts: string[]): RunQueueView => ({
@@ -123,34 +124,55 @@ describe('the composer while a turn runs', () => {
     expect(run.cancelChat).not.toHaveBeenCalled()
   })
 
-  it('offers Stop alone on an empty input, with the Send slot held invisible at the right end', () => {
+  it('offers Stop on an empty input, a blue Send in its place while there is text, and Stop again once emptied', () => {
     mount('run-1')
     const stop = screen.getByRole('button', { name: 'Stop' })
     expect(stop.getAttribute('title')).toBe('Stop (Esc Esc)')
-    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
-    const slot = sendSlot()!
-    expect(slot.getAttribute('aria-hidden')).toBe('true')
-    expect(slot.getAttribute('tabindex')).toBe('-1')
-    expect(slot.classList.contains('invisible')).toBe(true)
+    expect(sendSlot()).toBeNull()
     const row = stop.parentElement!
-    expect(row.lastElementChild).toBe(slot)
-    const stopIndex = Array.from(row.children).indexOf(stop)
-    expect(stopIndex).toBe(row.children.length - 2)
+    expect(row.lastElementChild).toBe(stop)
 
     fireEvent.change(box(), { target: { value: 'a' } })
-    // The same nodes in the same places: typing shows Send, never moves the row.
     const send = screen.getByRole('button', { name: 'Send' })
-    expect(send).toBe(slot)
     expect(send.hasAttribute('disabled')).toBe(false)
-    expect(send.classList.contains('invisible')).toBe(false)
-    expect(screen.getByRole('button', { name: 'Stop' })).toBe(stop)
-    expect(Array.from(row.children).indexOf(stop)).toBe(stopIndex)
+    expect(send.className).toContain('bg-[var(--color-send-queued)]')
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
     expect(row.lastElementChild).toBe(send)
 
     fireEvent.change(box(), { target: { value: '' } })
-    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
-    expect(Array.from(row.children).indexOf(stop)).toBe(stopIndex)
-    expect(row.lastElementChild).toBe(slot)
+    expect(sendSlot()).toBeNull()
+    expect(row.lastElementChild).toBe(screen.getByRole('button', { name: 'Stop' }))
+  })
+
+  it('ignores a click on Stop within half a second of clicking Send in its place, and gives focus back to the input', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(10_000)
+    try {
+      mount('run-1')
+      fireEvent.change(box(), { target: { value: 'a' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(box().value).toBe(''))
+      expect(document.activeElement).toBe(box())
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+      expect(run.cancelChat).not.toHaveBeenCalled()
+      now.mockReturnValue(10_600)
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+      expect(run.cancelChat).toHaveBeenCalledWith('chat-1')
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('stops on an immediate click when Stop appeared without a click on Send, as when a turn starts', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(10_000)
+    try {
+      mount(null)
+      expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()
+      act(() => { useChatStore.setState({ activeChatId: 'chat-1', isStreaming: true }) })
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+      expect(run.cancelChat).toHaveBeenCalledWith('chat-1')
+    } finally {
+      now.mockRestore()
+    }
   })
 
   it('says how to stop in the placeholder while a turn runs, and not otherwise', () => {
@@ -250,6 +272,7 @@ describe('message history', () => {
     expect(save.getAttribute('title')).toBe('Save queued message')
     expect(save.parentElement!.lastElementChild).toBe(save)
     expect(sendSlot()).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
     expect(useChatStore.getState().editingQueued).toEqual({ chatId: 'chat-1', id: 'q-1' })
 
     fireEvent.change(box(), { target: { value: 'queued A, better' } })
@@ -257,10 +280,10 @@ describe('message history', () => {
     await waitFor(() => expect(run.queueEdit).toHaveBeenCalledWith('chat-1', 'q-1', 'queued A, better'))
     expect(run.start).not.toHaveBeenCalled()
     await waitFor(() => expect(box().value).toBe(''))
-    // Back to an empty composer in a running turn: Stop alone, the slot held.
+    // Back to an empty composer in a running turn: Stop alone.
     expect(document.querySelector('button[aria-label="Save"]')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
-    expect(sendSlot()!.getAttribute('aria-hidden')).toBe('true')
+    expect(sendSlot()).toBeNull()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy()
     expect(useChatStore.getState().editingQueued).toBeNull()
   })
 
@@ -296,7 +319,7 @@ describe('message history', () => {
     key('Escape')
     expect(box().value).toBe('')
     expect(document.querySelector('button[aria-label="Save"]')).toBeNull()
-    expect(sendSlot()!.getAttribute('aria-hidden')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy()
     key('Escape')
     expect(run.cancelChat).not.toHaveBeenCalled()
   })

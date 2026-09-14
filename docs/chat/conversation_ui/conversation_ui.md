@@ -93,8 +93,8 @@ Defines message presentation, transcript text actions and unsent composer state.
 
 ### Sending while a turn runs
 
-1. While a turn runs the composer shows Stop, with the Send slot held empty at its right, and the placeholder reads "Send a follow-up · Esc Esc to stop".
-2. Typing reveals Send in that slot. Sending re-pins the transcript, and the message is taken into the running turn or queued behind it. See [Pending Messages](../pending_messages/pending_messages.md).
+1. While a turn runs, the button at the right end of the composer is Stop and the placeholder reads "Send a follow-up · Esc Esc to stop".
+2. Typing turns that button into a blue Send, and emptying the input turns it back into Stop. Sending re-pins the transcript, and the message is taken into the running turn or queued behind it. See [Pending Messages](../pending_messages/pending_messages.md).
 
 ## Business Rules
 

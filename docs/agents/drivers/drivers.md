@@ -27,7 +27,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 1. The user opens a direct chat with one agent, or a human-routed chat addressed to that agent
 2. The agent list answers at once with whatever readiness is already known: `null` for an agent not checked yet. It also starts a background check for every enabled agent whose answer is missing or old
 3. The check comes back, say, `unreachable`. The answer changed, so main pushes it and the renderer re-reads the list
-4. A warning panel above the input shows the full reason in the state's tone, with **Check again** below it. Healthy composers show no panel or empty reserved slot. Send is disabled and described by the reason; its tooltip retains the raw detail where the driver kept one
+4. A warning panel above the input shows the full reason in the state's tone, with **Check again** below it. Healthy composers show no panel or empty reserved slot. Send is disabled and described by the reason; its tooltip retains the raw detail where the driver kept one. While a turn runs in the chat the button stays Stop instead, so the panel alone carries the reason
 5. Enter does nothing more. Nothing is cleared, so the message is still in the box when the agent comes back
 6. The user fixes the agent and presses **Check again**. The check runs fresh and the list is re-read when it finishes. The reason goes away, Send is enabled, and focus lands in the message box
 
