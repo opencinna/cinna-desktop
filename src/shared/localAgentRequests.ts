@@ -73,6 +73,19 @@ export function isEngineRequestId(toolId?: string): boolean {
 }
 
 /**
+ * The tool call a local agent's question was raised from, out of the question
+ * part's `toolInput` — the sibling of {@link LocalPermissionRequest.callId}.
+ *
+ * Present when the engine named one: the Claude adapter sends its own
+ * `AskUserQuestion` call's id with the elicitation. Absent on questions
+ * persisted before it was recorded.
+ */
+export function questionCallId(toolInput?: Record<string, unknown>): string | undefined {
+  const callId = toolInput?.callId
+  return typeof callId === 'string' && callId !== '' ? callId : undefined
+}
+
+/**
  * How long a request may sit unanswered before the runner rejects it for the
  * user.
  *

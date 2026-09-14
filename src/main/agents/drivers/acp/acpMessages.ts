@@ -233,10 +233,19 @@ export class AcpMessageStream {
    * because the probe declared no elicitation capability. Either way the driver
    * has already normalised them to {@link InputQuestion}, so this end of the
    * pipe writes the same shape the HTTP path used to.
+   *
+   * `callId` is the tool call the elicitation names, when it names one — the
+   * Claude adapter sends its own `AskUserQuestion` call's id as `toolCallId`.
+   * The question is filed beside that call, as a permission ask is, and the id
+   * rides in the input: that call's result only restates the answer, and the
+   * renderer needs the id to fold it into this block rather than show it twice.
    */
-  askQuestion(requestId: string, questions: InputQuestion[]): AcpStreamUpdate {
+  askQuestion(requestId: string, questions: InputQuestion[], callId?: string): AcpStreamUpdate {
     if (questions.length === 0) return {}
-    const messageId = this.requestMessage.get(requestId) ?? this.owner()
+    const messageId =
+      (callId ? this.toolMessage.get(callId) : undefined) ??
+      this.requestMessage.get(requestId) ??
+      this.owner()
     this.requestMessage.set(requestId, messageId)
     return this.writePart(
       messageId,
@@ -245,7 +254,7 @@ export class AcpMessageStream {
         [KIND_METADATA_KEY]: 'tool',
         [TOOL_NAME_METADATA_KEY]: QUESTION_TOOL_NAME,
         [TOOL_ID_METADATA_KEY]: requestId,
-        [TOOL_INPUT_METADATA_KEY]: { questions }
+        [TOOL_INPUT_METADATA_KEY]: callId ? { questions, callId } : { questions }
       },
       questions.length > 1 ? `Asked ${questions.length} questions.` : 'Asked a question.'
     )

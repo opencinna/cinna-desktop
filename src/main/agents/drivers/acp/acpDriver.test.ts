@@ -1049,6 +1049,40 @@ describe('a question', () => {
     expect(result.parts.map((part) => part.text)).toContain('Answered: Blue.')
   })
 
+  it('records the AskUserQuestion call the adapter says the question came from', async () => {
+    const [elicitation] = ASKS_QUESTION.prompt?.emit ?? []
+    const script: FakeAcpScript = {
+      prompt: {
+        emit: [
+          {
+            kind: 'update',
+            update: {
+              sessionUpdate: 'tool_call',
+              toolCallId: 'toolu_ask',
+              title: 'AskUserQuestion',
+              status: 'pending',
+              _meta: { claudeCode: { toolName: 'AskUserQuestion' } }
+            }
+          },
+          {
+            kind: 'elicitation',
+            params: {
+              ...(elicitation?.kind === 'elicitation' ? elicitation.params : {}),
+              toolCallId: 'toolu_ask'
+            }
+          }
+        ]
+      }
+    }
+    const w = world({ script, launcher: 'claude' })
+    const running = w.run()
+    const asked = await askedFor(w)
+    pendingRequests.resolve(asked.requestId, { kind: 'question', answers: [['Blue']] })
+    const result = await running
+    const question = result.parts.find((part) => part.toolId === asked.requestId)
+    expect(question?.toolInput).toEqual(expect.objectContaining({ callId: 'toolu_ask' }))
+  })
+
   it('declines a form it cannot render, rather than cancelling the tool call', async () => {
     const w = world({
       script: { prompt: { emit: [{ kind: 'elicitation' }] } },

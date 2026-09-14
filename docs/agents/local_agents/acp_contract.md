@@ -214,6 +214,15 @@ option's label because that is what the tool records as the answer), plus a `que
 free-text companion marked with `_meta._askUserQuestionCustomAnswer` — dropped rather than rendered,
 because the desktop's widget supplies its own Other answer and the companion would otherwise appear as a second question. Codex companions use a different marker, described below.
 
+**The request names the call it came from, and that call answers twice.** `handleAskUserQuestion`
+passes the SDK's `toolUseID` to `askUserQuestionsToCreateRequest`, which sends it as the
+elicitation's `toolCallId`. This is the same id the adapter's `AskUserQuestion` `tool_call`
+notification carries. Once answered, that call completes with the CLI's own result restating the
+answer ("Your questions have been answered: …"). The desktop therefore files the question beside the
+call and folds that result into the question block, instead of printing the answer a second time.
+The id and the wording were read from the adapter's source and the CLI binary (2.1.270), not from a
+recording.
+
 ### `permissionMode` in `_meta` is overridden by the user's own settings
 
 The adapter reads `_meta.claudeCode.options` as SDK options, so `settingSources: []`,

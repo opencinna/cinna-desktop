@@ -64,7 +64,8 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 ### The agent asks a question
 1. Claude and Codex advertise `elicitation.form`: Claude bridges `AskUserQuestion`, and Codex bridges native `requestUserInput`, into `elicitation/create`. OpenCode has no question bridge. Companion free-text fields are folded into the existing Other answer rather than shown as extra questions
 2. The question block renders, the answer is delivered by request id while the turn streams on, and the turn does **not** end to ask
-3. On OpenCode nothing arrives here — its `question` tool is not registered under ACP — so a model that wants to ask asks in prose
+3. When the elicitation names the tool call it came from, as the Claude adapter's does with its own `AskUserQuestion` call, the block is filed in that call's message, as a permission block is, and records the call as `callId`. That call later completes with a result restating the answer. The block already shows the answer, so the renderer folds both the call and that result into it ([Ask User Question](../../chat/ask_user_question/ask_user_question.md#a-local-questions-answer-is-shown-once)). The fold needs the call, the question and the result in one saved row, and they always are: a turn is saved as one row, split only where a steered message landed, and steering is withdrawn while a tool call runs, for the call's whole life. Filing beside the call only mirrors a permission ask; it changes nothing saved or rendered, because the parts of every ACP message are flattened into one list in arrival order
+4. On OpenCode nothing arrives here — its `question` tool is not registered under ACP — so a model that wants to ask asks in prose
 
 ### Cancelling
 1. The user presses Stop mid-answer

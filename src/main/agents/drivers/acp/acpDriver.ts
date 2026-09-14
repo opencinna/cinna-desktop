@@ -1258,7 +1258,17 @@ async function answerElicitation(
   })
   ctx.parkedRuntimes.set(requestId, ctx.runtime)
   world.turn.parked.set(requestId, handle.cancel)
-  world.emit(world.stream.askQuestion(requestId, form.questions).message)
+  // The call the question belongs to. The Claude adapter names its own
+  // `AskUserQuestion` call here; the field is optional in the schema and an MCP
+  // server's elicitation may name its tool call or nothing.
+  const callId = (params as { toolCallId?: unknown }).toolCallId
+  world.emit(
+    world.stream.askQuestion(
+      requestId,
+      form.questions,
+      typeof callId === 'string' && callId !== '' ? callId : undefined
+    ).message
+  )
   if (world.turn.open) {
     input.onEvent?.({
       type: 'needs_input',

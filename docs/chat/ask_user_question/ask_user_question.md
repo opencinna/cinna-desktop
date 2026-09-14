@@ -31,6 +31,14 @@ Renders a remote agent's `AskUserQuestion` tool call as an interactive prompt in
 
 Claude and Codex folder agents reuse the question modal through ACP form elicitation, while the turn is parked. Their answer goes through the shared request/Inbox reply path, not a new user turn; the next-message rules below describe the remote transcript-tool variant. Codex's `_meta.codex.isOtherAnswer` companion field is folded into the existing Other choice, and selected/custom text returns under the original question ID. Live reply requests expire on run teardown or restart. OpenCode has no native question bridge over ACP. See [The Agent Turn](../../agents/local_agents/agent_turn.md) and [Codex](../../agents/local_agents/codex_engine.md).
 
+### A local question's answer is shown once
+
+- A settled local question carries its outcome inside the block — the runner's `Answered: …` line — so the block itself says what the user chose, live and after a reload.
+- A Claude agent's question comes from the adapter's own `AskUserQuestion` tool call, and once answered that call completes with a result restating the answer ("Your questions have been answered: …"). That result used to render as a standalone Output block directly under the card that already said the same thing. The question now records the call it was raised from, and the transcript folds that call and its result into the block.
+- The call goes too, not only its result. By name it is itself a question tool. It normally shows nothing because its part carries no input, but one that kept its questions would render a second, answerable card for a question already asked, and answering it would send a new user turn.
+- The fold is narrow on purpose. It happens only when the recorded call is in the transcript and is itself an `AskUserQuestion` call — a tool that asks mid-call has output of its own, which the user still needs. A `stderr` result is never hidden, because a failed call is news.
+- A question persisted before the call was recorded names no call, so its restatement still renders. Nothing rewrites old transcripts.
+
 ### Detection
 
 - A `tool`-kind part (or live tool delta) is treated as an interactive question solely by tool name: lower-cased and stripped of non-letters, it must equal `askuserquestion`. This tolerates `AskUserQuestion`, `ask_user_question`, and the normalised `askuserquestion`. No other tool name triggers the rendering.

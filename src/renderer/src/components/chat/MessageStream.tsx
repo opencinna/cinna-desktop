@@ -32,7 +32,8 @@ import { isAskUserQuestionTool, parseAskQuestions } from '../../utils/askUserQue
 import {
   isEngineRequestId,
   isPermissionRequestTool,
-  parsePermissionRequest
+  parsePermissionRequest,
+  questionCallId
 } from '../../../../shared/localAgentRequests'
 import { PermissionRequestBlock } from './PermissionRequestBlock'
 import { useAgentRequests } from '../../hooks/useAgentRequests'
@@ -58,7 +59,14 @@ import type { ToolStream } from '../../../../shared/messageParts'
  * result indices to skip (they're consumed by the wrapper).
  */
 function pairCommandTools<
-  T extends { kind: string; toolId?: string; commandInvocation?: string }
+  T extends {
+    kind: string
+    toolId?: string
+    toolName?: string
+    toolInput?: Record<string, unknown>
+    toolStream?: ToolStream
+    commandInvocation?: string
+  }
 >(items: T[]): { pairResultIdx: Map<number, number>; consumed: Set<number> } {
   const pairResultIdx = new Map<number, number>()
   const consumed = new Set<number>()
@@ -76,6 +84,25 @@ function pairCommandTools<
       pairResultIdx.set(idx, ri)
       consumed.add(ri)
     }
+    // A local agent's question raised from its own `AskUserQuestion` call: that
+    // call's result is the tool restating the answer ("Your questions have been
+    // answered: …") beside the block that already shows it. Hidden only when the
+    // question names the call **and** the call is that tool — an MCP tool that
+    // asked mid-call has output of its own — and never when the call failed.
+    const callId = isAskUserQuestionTool(item.toolName) ? questionCallId(item.toolInput) : undefined
+    if (!callId) return
+    const call = items.findIndex(
+      (q) => q.kind === 'tool' && q.toolId === callId && isAskUserQuestionTool(q.toolName)
+    )
+    if (call === -1) return
+    // The call itself goes too. It is a question tool by name, so one whose
+    // part kept its input would render as a second card — answerable, under a
+    // non-engine id — for a question this block already asked.
+    consumed.add(call)
+    const echo = items.findIndex(
+      (q, j) => j > idx && q.kind === 'tool_result' && q.toolId === callId && q.toolStream !== 'stderr'
+    )
+    if (echo !== -1) consumed.add(echo)
   })
   return { pairResultIdx, consumed }
 }
@@ -1009,7 +1036,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
           // even before the stream finishes.
           const streamingTextBlocks = streamingBlocks.map((b) =>
             b.type === 'text'
-              ? { kind: b.kind, toolId: b.toolId, commandInvocation: b.commandInvocation, toolName: b.toolName, toolInput: b.toolInput }
+              ? { kind: b.kind, toolId: b.toolId, commandInvocation: b.commandInvocation, toolName: b.toolName, toolInput: b.toolInput, toolStream: b.toolStream }
               : { kind: b.type }
           )
           const { pairResultIdx: streamPairResultIdx, consumed: streamConsumed } =

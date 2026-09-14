@@ -393,6 +393,8 @@ spawn: <this app, ELECTRON_RUN_AS_NODE=1> <claude-agent-acp>/dist/index.js
         │                              └ covered → allow_once, silently
         │                              └ else → parked block → answered
         elicitation/create ──────► question block  (this engine only)
+        │                            └ filed beside its AskUserQuestion call,
+        │                              whose restating result is folded into it
         current_mode_update ≠ asked ──► notice in the transcript
         → stopReason
    │

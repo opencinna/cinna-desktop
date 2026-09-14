@@ -349,6 +349,33 @@ describe('Claude', () => {
     expect(refusal?.metadata?.[TOOL_STREAM_METADATA_KEY]).toBe('stderr')
   })
 
+  it('files a question beside the AskUserQuestion call it came from, and names the call', () => {
+    const stream = new AcpMessageStream({ launcher: 'claude' })
+    stream.apply(chunk('msg_1', 'Checking before I write.'))
+    stream.apply({
+      sessionId: 'ses_test',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'toolu_ask',
+        title: 'AskUserQuestion',
+        status: 'pending',
+        _meta: { claudeCode: { toolName: 'AskUserQuestion' } }
+      }
+    } as unknown as SessionNotification)
+    // The current message has moved on by the time the elicitation arrives.
+    stream.apply(chunk('msg_2', 'Waiting.'))
+    const questions: InputQuestion[] = [
+      { question: 'Write it?', multiSelect: false, options: [{ label: 'Yes' }] }
+    ]
+
+    const asked = stream.askQuestion('que_acp_1', questions, 'toolu_ask')
+    expect(asked.message?.messageId).toBe('msg_1')
+    const part = asked.message!.parts.find((p) => toolNameOf(p) === QUESTION_TOOL_NAME)
+    expect(part?.metadata?.[TOOL_INPUT_METADATA_KEY]).toEqual({ questions, callId: 'toolu_ask' })
+    // Its answer joins it there too.
+    expect(stream.settleQuestion('que_acp_1', 'Answered: Yes.').message?.messageId).toBe('msg_1')
+  })
+
   it('drops the replayed user message without letting it own the tool calls', () => {
     const { updates, messages } = foldAll(
       new AcpMessageStream({ launcher: 'claude' }),
