@@ -41,6 +41,7 @@ vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
 vi.mock('./_wrap', () => ({ ipcHandle: () => undefined }))
+vi.mock('../index', () => ({ getMainWindow: () => null }))
 
 vi.mock('../db/messages', () => ({
   messageRepo: {
@@ -187,6 +188,7 @@ describe('run:send — the /run: dispatch call site', () => {
       wireContent: '/run:check',
       fileIds: [],
       signal: io.signal,
+      registerSteer: expect.any(Function),
       onEvent: io.onEvent
     })
   })

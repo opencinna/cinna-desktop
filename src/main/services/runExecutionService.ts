@@ -17,7 +17,7 @@ import { chatStreamingService } from './chatStreamingService'
 import { buildCatchUpPacket, withCatchUp } from './threadContextService'
 import { driverFor } from '../agents/drivers'
 import { resolveCommandRunner } from './localAgents/commandService'
-import { routingOf } from '../../shared/chatRouting'
+import { routingOf, type RoutableChat, type RunTarget } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
 import type { StreamPort } from './a2aStreamingService'
 import type { RunSendPayload } from '../../shared/ipcPayloads'
@@ -28,6 +28,7 @@ import { activeRunsByChat as activeChats } from './runExecutionState'
 import { handingOffChats } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import type { CoordinatorToolProvider } from './coordinatorToolProvider'
+import type { SteerFn } from '../agents/drivers/driver'
 
 const logger = createLogger('run')
 export interface RunScope { profileUserId: string; settingsUserId: string }
@@ -47,10 +48,36 @@ export interface RunHandle {
   /** Resolves when the stream closes, including the model's asynchronous loop. */
   completed: Promise<RunOutcome>
   cancel(): void
+  /**
+   * Hand a user message to this turn while it runs. `injected` when the turn
+   * took it and saves it with its own rows; `saved` when the engine took it
+   * after those rows were built, so it was saved here as a row of its own —
+   * possibly after a view already read the chat; `unavailable` unless the
+   * turn's driver offered mid-turn delivery and still does. Never rejects.
+   */
+  steer(content: string): Promise<'injected' | 'saved' | 'unavailable'>
+  /** The agent answering this turn, once resolved; null for the local model or before routing. */
+  readonly agentId: string | null
+}
+
+/**
+ * Who answers `payload` in `chat`: the routing rule every send goes by, with
+ * the addressing only a `human` chat reads (and only it pays the two reads for).
+ */
+export function answererOf(chat: RoutableChat, payload: Pick<RunSendPayload, 'chatId' | 'addressedAgentId'>): RunTarget {
+  const routing = routingOf(chat)
+  if (routing.router !== 'human') return routing.answerer()
+  return routing.answerer({
+    addressed: payload.addressedAgentId,
+    lastAddressed: messageRepo.lastAddressedAgentId(payload.chatId),
+    attached: chatOnDemandAgentRepo.listAgentIds(payload.chatId)
+  })
 }
 
 /** Main owns the turn. A renderer is an optional subscriber, never its lifetime. */
 export const runExecutionService = {
+  answererOf,
+
   isRunning(chatId: string): boolean { return activeChats.has(chatId) || !!taskRunnersByChat.get(chatId)?.working },
 
   cancelChat(userId: string, chatId: string): void {
@@ -117,16 +144,44 @@ export const runExecutionService = {
     let failure: string | null = null
     let context: RunEventContext | null = null
     let terminalObserved = false
+    let steerFn: SteerFn | null = null
     const handle: RunHandle = {
       id: runId,
       accepted: new Promise<void>((resolve, reject) => { accept = resolve; refuse = reject }),
       completed: new Promise<RunOutcome>((resolve) => { complete = resolve }),
       cancel() {
         cancelRequested = true
+        steerFn = null
         if (requestId) {
           a2aStreamingService.cancel(requestId)
           chatStreamingService.cancel(requestId)
         }
+      },
+      get agentId() {
+        return context?.agentId ?? null
+      },
+      async steer(content) {
+        const steer = steerFn
+        if (!steer || closed || cancelRequested) return 'unavailable'
+        const agentId = context?.agentId ?? null
+        let outcome: Awaited<ReturnType<SteerFn>>
+        try { outcome = await steer(content) } catch (error) {
+          logger.warn('a mid-turn message failed', { chatId: payload.chatId, error: String(error) })
+          return 'unavailable'
+        }
+        if (outcome !== 'late') return outcome
+        // The engine has the message, but the turn's rows were already built
+        // without it. Keep the user's words in the transcript on their own.
+        logger.warn('a mid-turn message landed after the turn was saved; saving it separately', { chatId: payload.chatId })
+        try {
+          messageRepo.saveUser({ chatId: payload.chatId, content, addressedAgentId: agentId })
+          messageRepo.touchChat(payload.chatId)
+        } catch (error) {
+          logger.warn('a late mid-turn message could not be saved', { chatId: payload.chatId, error: String(error) })
+          // No row to show, and the engine already has it: sending it again would say it twice.
+          return 'injected'
+        }
+        return 'saved'
       }
     }
     // The IPC caller need not await acceptance, but headless callers can.
@@ -161,6 +216,7 @@ export const runExecutionService = {
           port.postMessage(event)
         }
         closed = true
+        steerFn = null
         if (!accepted) refuse(new Error(failure ?? 'The turn could not be started.'))
         if (activeChats.get(payload.chatId) === handle) activeChats.delete(payload.chatId)
         try { options.port?.close() } catch { /* subscriber already disconnected */ }
@@ -214,6 +270,7 @@ export const runExecutionService = {
       context: (ctx) => { context = ctx; live.setAgentId(ctx.agentId) },
       persisted: (ctx) => options.onAccepted?.({ ...ctx, turnId: handle.id, rootRunId: handle.id, completionOwner: options.runnerTaskId ? 'runner' : 'turn' }),
       accepted: () => { accepted = true; accept(); live.accepted() },
+      registerSteer: (steer) => { steerFn = closed || cancelRequested ? null : steer },
       refusal,
       agentId: options.agentId,
       coordinator: options.coordinator,
@@ -243,6 +300,8 @@ interface RunLifecycle {
   context(ctx: RunEventContext): void
   persisted(ctx: RunEventContext): void
   accepted(): void
+  /** The driver offering (a function) or withdrawing (`null`) mid-turn delivery. */
+  registerSteer(steer: SteerFn | null): void
   refusal(chatId: string, message: string): void
 }
 
@@ -257,18 +316,9 @@ async function resolveAndRun(
   const { profileUserId, settingsUserId } = scope
   lifecycle.context({ userId: profileUserId, chatId, agentId: null })
   const routing = routingOf(chat)
-  // Only `human` reads any of this, and only `human` pays for the two reads.
-  const addressing =
-    routing.router === 'human'
-      ? {
-          addressed: payload.addressedAgentId,
-          lastAddressed: messageRepo.lastAddressedAgentId(chatId),
-          attached: chatOnDemandAgentRepo.listAgentIds(chatId)
-        }
-      : undefined
-  const target = lifecycle.agentId
+  const target: RunTarget = lifecycle.agentId
     ? { kind: 'agent' as const, agentId: lifecycle.agentId }
-    : routing.answerer(addressing)
+    : answererOf(chat, payload)
 
   // Every event is observed once whether or not a renderer is attached, which makes this the one place
   // that sees a `needs_input` from any driver, in any router — including one a
@@ -304,6 +354,7 @@ async function resolveAndRun(
     settingsUserId,
     persisted: () => lifecycle.persisted(context),
     accepted: () => lifecycle.accepted(),
+    registerSteer: lifecycle.registerSteer,
     refusal: lifecycle.refusal,
     finish: lifecycle.finish,
     inputOrigin: lifecycle.inputOrigin,
@@ -346,6 +397,7 @@ interface AgentTurnInput {
   settingsUserId: string
   persisted: () => void
   accepted: () => void
+  registerSteer?: (steer: SteerFn | null) => void
   refusal: (chatId: string, message: string) => void
   finish: TurnCompletion
   agentId: string
@@ -428,6 +480,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
         signal: io.signal,
         ...(input.queueWhenBusy ? { queueWhenBusy: true } : {}),
         ...(input.handbackEligible ? { handbackEligible: true } : {}),
+        ...(input.registerSteer ? { registerSteer: input.registerSteer } : {}),
         onEvent: io.onEvent
       })
   )

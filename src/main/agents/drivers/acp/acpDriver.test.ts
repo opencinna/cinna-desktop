@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentKind } from '../../../../shared/localAgents'
 import type { LocalPermissionRequest } from '../../../../shared/localAgentRequests'
 import type { RunEvent } from '../../../../shared/runEvents'
-import type { AgentDriver } from '../driver'
+import type { AgentDriver, SteerFn } from '../driver'
 import { pendingRequests } from '../pendingRequests'
 import {
   describeDriverContract,
@@ -30,7 +30,7 @@ import { createAcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntim
 import { createAcpProcessPool } from './acpProcessPool'
 import { startAcpConnection } from './acpConnection'
 import type { AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
-import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpScript } from './testSupport/fakeAcp'
+import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpScript, type FakeAcpStep } from './testSupport/fakeAcp'
 import { ACP_PROTOCOL_VERSION, type AcpLauncherId, type AcpProcessPool } from './types'
 
 /** The one `needs_input` a turn posted, waited for. */
@@ -94,6 +94,7 @@ interface World {
     signal?: AbortSignal
     chatId?: string
     onEvent?: (event: RunEvent) => void
+    registerSteer?: (steer: SteerFn | null) => void
   }): ReturnType<AgentDriver['run']>
   cleanup(): void
 }
@@ -183,7 +184,8 @@ function makeWorld(options: WorldOptions = {}): World {
         handbackEligible: overrides.handbackEligible,
         wireContent: 'hello',
         signal: overrides.signal ?? new AbortController().signal,
-        onEvent: overrides.onEvent ?? ((event) => void events.push(event))
+        onEvent: overrides.onEvent ?? ((event) => void events.push(event)),
+        ...(overrides.registerSteer ? { registerSteer: overrides.registerSteer } : {})
       }),
     cleanup: () => {
       void deps.pool.shutdown()
@@ -365,6 +367,160 @@ describe('manifest-authorized coordinator handback', () => {
     expect(w.fake.received('session/load')).toHaveLength(1)
     expect(result.text).toBe('Current work is ready.')
     expect(result.handback).toBeUndefined()
+  })
+})
+
+describe('a mid-turn message (the steering extension)', () => {
+  const STEERABLE: FakeAcpScript = { initialize: { response: { _meta: { steering: { supported: true } } } } }
+  const chunk = (text: string): FakeAcpStep => ({
+    kind: 'update',
+    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }
+  })
+
+  /** What the driver offered through `registerSteer`, and how often it withdrew it. */
+  function steerCapture(): { offered: SteerFn[]; withdrawn: () => number; registerSteer: (steer: SteerFn | null) => void } {
+    const offered: SteerFn[] = []
+    let withdrawn = 0
+    return {
+      offered,
+      withdrawn: () => withdrawn,
+      registerSteer: (steer) => { if (steer) offered.push(steer); else withdrawn += 1 }
+    }
+  }
+
+  const steerable = (w: World, capture: ReturnType<typeof steerCapture>): Promise<boolean> =>
+    waitFor(() => capture.offered.length > 0 && w.events.some((event) => event.type === 'delta'), 'the turn to take messages')
+
+  it('is taken into a prompt in flight, posted as a user message, and lands between the parts around it', async () => {
+    const w = world({
+      script: { ...STEERABLE, prompt: { emit: [chunk('Before. '), { kind: 'awaitSteer' }, { kind: 'delay', ms: 150 }, chunk('After.')] } }
+    })
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    await steerable(w, capture)
+    expect(await capture.offered[0]('also this')).toBe('injected')
+    const result = await running
+
+    expect(w.fake.received('_session/steering').map((entry) => entry.params)).toEqual([{
+      sessionId: 'ses_fake',
+      prompt: [{ type: 'text', text: 'also this' }],
+      _meta: { steering: { idleBehavior: 'promptRequired' } }
+    }])
+    const order = w.events.flatMap((event) =>
+      event.type === 'delta' ? [event.text] : event.type === 'user_message' ? [`user: ${event.text}`] : [])
+    expect(order).toEqual(['Before. ', 'user: also this', 'After.'])
+    // Two parts, not one: the text after the message must not merge into the text before it.
+    expect(result.parts).toEqual([{ kind: 'text', text: 'Before. ' }, { kind: 'text', text: 'After.' }])
+    expect(result.steers).toEqual([{ afterPart: 1, text: 'also this' }])
+    expect(capture.withdrawn()).toBe(1)
+  })
+
+  it('is never offered by an agent that does not advertise steering', async () => {
+    const w = world({ script: SAYS_HELLO })
+    const capture = steerCapture()
+    const result = await w.run({ registerSteer: capture.registerSteer })
+    expect(result.error).toBeUndefined()
+    expect(capture.offered).toEqual([])
+    expect(w.fake.received('_session/steering')).toEqual([])
+  })
+
+  it('is unavailable once the prompt has settled, and nothing reaches the agent', async () => {
+    const w = world({ script: { ...STEERABLE, ...SAYS_HELLO } })
+    const capture = steerCapture()
+    await w.run({ registerSteer: capture.registerSteer })
+    expect(capture.offered).toHaveLength(1)
+    expect(capture.withdrawn()).toBe(1)
+    // The process is still up and would answer `injected`: only the driver's
+    // own closing of the window keeps this message out of a finished turn.
+    expect(await capture.offered[0]('too late')).toBe('unavailable')
+    await settle()
+    expect(w.fake.received('_session/steering')).toEqual([])
+  })
+
+  it('is withdrawn the moment the turn is stopped', async () => {
+    const controller = new AbortController()
+    const w = world({
+      script: { ...STEERABLE, prompt: { emit: [chunk('Working.'), { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' } } }
+    })
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer, signal: controller.signal })
+    await steerable(w, capture)
+    controller.abort()
+    expect(capture.withdrawn()).toBe(1)
+    expect(await capture.offered[0]('and also')).toBe('unavailable')
+    await running
+    expect(w.fake.received('_session/steering')).toEqual([])
+  })
+
+  it('cancels a turn the agent started on its own for the message, and reports it unavailable', async () => {
+    const w = world({
+      script: {
+        ...STEERABLE,
+        steer: { response: { outcome: 'startedNewTurn' } },
+        prompt: { emit: [chunk('Working.'), { kind: 'awaitSteer' }, { kind: 'delay', ms: 100 }] }
+      }
+    })
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    await steerable(w, capture)
+    expect(await capture.offered[0]('next')).toBe('unavailable')
+    await waitFor(() => w.fake.received('session/cancel').length > 0, 'the orphan turn to be cancelled')
+    const result = await running
+    expect(w.events.some((event) => event.type === 'user_message')).toBe(false)
+    expect(result.steers).toBeUndefined()
+    // Retired, so the next turn cannot prompt a session the orphan may still be running in.
+    await waitFor(() => w.pool.status(AGENT_ID).state !== 'running', 'the process to be retired')
+  })
+
+  it('reports a message the agent took after the turn stopped waiting as late, and keeps it out of the result', async () => {
+    const w = world({
+      script: { ...STEERABLE, steer: { delayMs: 900 }, prompt: { emit: [chunk('Working.'), { kind: 'delay', ms: 150 }] } }
+    })
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    await steerable(w, capture)
+    const late = capture.offered[0]('too slow')
+    const result = await running
+    expect(result.steers).toBeUndefined()
+    expect(await late).toBe('late')
+    expect(w.events.some((event) => event.type === 'user_message')).toBe(false)
+  })
+
+  /** Codex's answer to a mid-turn message, arriving only after the turn stopped waiting for it. */
+  const LATE_NEW_TURN: FakeAcpScript = {
+    ...STEERABLE,
+    steer: { delayMs: 900, response: { outcome: 'startedNewTurn' } },
+    prompt: { emit: [chunk('Working.'), { kind: 'delay', ms: 150 }] }
+  }
+
+  it('cancels an unowned turn that arrives after the turn stopped waiting, and leaves a process another turn holds', async () => {
+    const w = world({ script: LATE_NEW_TURN })
+    const retire = vi.spyOn(w.pool, 'retire')
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    await steerable(w, capture)
+    const late = capture.offered[0]('next')
+    await running
+    // The next turn on this agent: a retire would wait for it, then kill its process.
+    const release = w.pool.hold(AGENT_ID)
+    expect(await late).toBe('unavailable')
+    await waitFor(() => w.fake.received('session/cancel').length > 0, 'the orphan turn to be cancelled')
+    expect(retire).not.toHaveBeenCalled()
+    release()
+    expect(w.pool.status(AGENT_ID).state).toBe('running')
+  })
+
+  it('retires the process when nothing holds it once an unowned turn arrives after the turn stopped waiting', async () => {
+    const w = world({ script: LATE_NEW_TURN })
+    const retire = vi.spyOn(w.pool, 'retire')
+    const capture = steerCapture()
+    const running = w.run({ registerSteer: capture.registerSteer })
+    await steerable(w, capture)
+    const late = capture.offered[0]('next')
+    await running
+    expect(await late).toBe('unavailable')
+    expect(retire).toHaveBeenCalledWith(AGENT_ID)
+    await waitFor(() => w.pool.status(AGENT_ID).state !== 'running', 'the process to be retired')
   })
 })
 

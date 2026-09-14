@@ -29,6 +29,7 @@
  *   "setMode":         { "emit": [] },
  *   "setConfigOption": { "emit": [] },
  *   "prompt":          { "emit": [], "response": { "stopReason": "end_turn" } }
+ *   "steer":           { "response": { "outcome": "injected" } }   // _session/steering
  *
  *   // `error` replaces the response, after whatever `emit` streamed:
  *   // "prompt":       { "error": { "code": -32603, "message": "model not found" } }
@@ -51,6 +52,7 @@
  * { "kind": "delay", "ms": 20 }
  * { "kind": "stderr", "text": "…" }
  * { "kind": "awaitCancel" }            // block until session/cancel arrives
+ * { "kind": "awaitSteer", "after": 0 } // block until more than `after` steering requests arrived
  * { "kind": "exit", "code": 1 }
  * ```
  */
@@ -78,6 +80,8 @@ export interface FakeAcpScript {
   setMode?: FakeAcpHandlerScript
   setConfigOption?: FakeAcpHandlerScript
   prompt?: FakeAcpHandlerScript
+  /** `_session/steering`; answers `{ outcome: 'injected' }` unless `response` overrides it. */
+  steer?: FakeAcpHandlerScript
 }
 
 export interface FakeAcpHandlerScript {
@@ -114,6 +118,7 @@ export type FakeAcpStep =
   | { kind: 'delay'; ms: number }
   | { kind: 'stderr'; text: string }
   | { kind: 'awaitCancel'; sessionId?: string }
+  | { kind: 'awaitSteer'; after?: number }
   | { kind: 'exit'; code?: number }
 
 /** One line of the fake's log: what it received, and what it was answered. */

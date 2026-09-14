@@ -27,7 +27,7 @@ export interface StartRunOptions {
 
 /** Apply the shared event vocabulary to the selected chat's projection. */
 export function useRunEventHandler(): (chatId: string, event: RunEvent) => void {
-  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, addInputRequest, resolveInputRequest, dropInputRequestsFor, finishStreaming } = useChatStore()
+  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, appendUserMessage, addInputRequest, resolveInputRequest, dropInputRequestsFor, finishStreaming } = useChatStore()
   // One handler for both send paths: an LLM chat and an agent chat post the
   // same vocabulary, so a case cannot exist on one path and silently not on
   // the other.
@@ -110,6 +110,10 @@ export function useRunEventHandler(): (chatId: string, event: RunEvent) => void 
           }
           break
         }
+        case 'user_message':
+          // Sent while the turn ran and taken into it: shown where it landed.
+          appendUserMessage(event.text)
+          break
         case 'done':
         case 'error':
           if (event.type === 'error') console.error('Stream error:', event.error)
@@ -117,7 +121,7 @@ export function useRunEventHandler(): (chatId: string, event: RunEvent) => void 
           break
       }
     },
-    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, addInputRequest, resolveInputRequest, dropInputRequestsFor, finishStreaming]
+    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, appendUserMessage, addInputRequest, resolveInputRequest, dropInputRequestsFor, finishStreaming]
   )
 
   return handleRun
@@ -131,18 +135,48 @@ export function useChatStream(): {
   const queryClient = useQueryClient()
   const startRun = useCallback((chatId: string, content: string, opts?: StartRunOptions): void => {
     const state = useChatStore.getState()
-    const pending = {
-      content,
-      baselineUserCount: queryClient.getQueryData<CachedChat>(['chat', chatId])?.messages?.filter((m) => m.role === 'user').length ?? 0,
-      attachments: opts?.attachments
+    const cached = queryClient.getQueryData<CachedChat>(['chat', chatId])
+    // With a turn running, main takes the message into it or queues it. The
+    // optimistic bubble renders above the live turn and retires by user-row
+    // count, so it would sit in the wrong place until that turn ended: the
+    // `user_message` event or the queue shows the message instead.
+    const running = !!cached?.activeRunId || (state.activeChatId === chatId && state.isStreaming)
+    // Measured at send time either way: a bubble shown later must still retire
+    // on this message's own row, not on one that landed in between.
+    const baselineUserCount = cached?.messages?.filter((m) => m.role === 'user').length ?? 0
+    const pending = running ? null : { content, baselineUserCount, attachments: opts?.attachments }
+    if (state.activeChatId === chatId) {
+      state.noteSent()
+      if (pending) state.setPendingUserMessage(pending)
     }
-    if (state.activeChatId === chatId) state.setPendingUserMessage(pending)
     void window.api.run.start({ chatId, content, attachments: opts?.attachments,
       addressedAgentId: opts?.target?.kind === 'agent' ? opts.target.agentId : null
-    }).catch((error) => {
+    }).then((result) => {
       const current = useChatStore.getState()
-      if (current.activeChatId !== chatId || current.pendingUserMessage !== pending) return
-      current.setPendingUserMessage(null)
+      if (result.kind === 'started') {
+        // This view believed a turn was running, and it had already ended: the
+        // message started a turn of its own. Show it the way an idle send does.
+        if (!pending && current.activeChatId === chatId && !current.pendingUserMessage) {
+          current.setPendingUserMessage({ content, baselineUserCount, attachments: opts?.attachments })
+        }
+        return
+      }
+      // Main found a turn running that this view had not seen yet.
+      if (pending && current.pendingUserMessage === pending) current.setPendingUserMessage(null)
+      if (result.kind === 'queued') void queryClient.invalidateQueries({ queryKey: ['run-queue', chatId] })
+      // The engine took it after the turn's rows were built, so main saved it
+      // on its own: nothing else will show it, or move the chat up the list.
+      else if (result.saved) {
+        void queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
+        void queryClient.invalidateQueries({ queryKey: ['chats'] })
+      }
+    }, (error) => {
+      const current = useChatStore.getState()
+      if (current.activeChatId !== chatId) return
+      if (pending) {
+        if (current.pendingUserMessage !== pending) return
+        current.setPendingUserMessage(null)
+      }
       current.setSendError(unwrapIpcError(error, 'This turn could not be started.'))
     })
   }, [queryClient])

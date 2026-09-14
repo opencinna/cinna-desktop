@@ -40,6 +40,7 @@ vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
 vi.mock('./_wrap', () => ({ ipcHandle: () => undefined }))
+vi.mock('../index', () => ({ getMainWindow: () => null }))
 
 vi.mock('../auth/activation', () => ({
   userActivation: { isActivated: () => activated, requireActivated: () => undefined }
@@ -77,10 +78,12 @@ vi.mock('../services/jobService', () => ({
 }))
 
 const saveError = vi.fn()
+const saveUser = vi.fn()
+const touchChat = vi.fn()
 const lastAddressedAgentId = vi.fn((): string | null => null)
 const lastId = vi.fn((): string | null => 'm-last')
 vi.mock('../db/messages', () => ({
-  messageRepo: { saveError, lastAddressedAgentId, lastId }
+  messageRepo: { saveError, saveUser, touchChat, lastAddressedAgentId, lastId }
 }))
 
 let attached: string[] = []
@@ -278,6 +281,69 @@ describe('run:send — who answers', () => {
   it('reads none of the addressing bookkeeping for a chat that is not human', async () => {
     await send({ chatId: 'chat-1', content: 'hello' })
     expect(lastAddressedAgentId).not.toHaveBeenCalled()
+  })
+})
+
+describe('a message the running turn takes in', () => {
+  type SteerOutcome = 'injected' | 'late' | 'unavailable'
+  /** Start a turn whose driver offers a steer the test resolves by hand. */
+  async function steerableTurn(): Promise<{
+    handle: ReturnType<typeof runExecutionService.start>
+    resolveSteer: (outcome: SteerOutcome) => void
+    close: () => void
+  }> {
+    let resolveSteer!: (outcome: SteerOutcome) => void
+    driverRun.mockImplementationOnce((async (_owner: string, _agent: AgentRow, input: { registerSteer?: (steer: unknown) => void }) => {
+      input.registerSteer?.(() => new Promise<SteerOutcome>((resolve) => { resolveSteer = resolve }))
+      return { text: '', parts: [], notices: [] }
+    }) as never)
+    const handle = runExecutionService.start({ profileUserId: 'profile-user', settingsUserId: 'settings-user' },
+      { chatId: 'chat-1', content: 'hello' }, { observe: vi.fn() })
+    const turn = streamToAgent.mock.calls.at(-1)![0] as unknown as {
+      run: (io: { signal: AbortSignal; onEvent: () => void }) => Promise<unknown>
+      port: { close(): void }
+    }
+    await turn.run({ signal: new AbortController().signal, onEvent: vi.fn() })
+    return { handle, resolveSteer: (outcome) => resolveSteer(outcome), close: () => turn.port.close() }
+  }
+
+  it('knows which agent the turn is for', async () => {
+    const { handle } = await steerableTurn()
+    expect(handle.agentId).toBe('a-1')
+  })
+
+  it('saves a message the engine took after the turn was saved, addressed to the turn’s agent', async () => {
+    const { handle, resolveSteer, close } = await steerableTurn()
+    const steered = handle.steer('and this')
+    close()
+    resolveSteer('late')
+    expect(await steered).toBe('saved')
+    expect(saveUser).toHaveBeenCalledWith({ chatId: 'chat-1', content: 'and this', addressedAgentId: 'a-1' })
+  })
+
+  it('answers run:start with a saved injection, and exactly one user row, when the engine takes the message after the turn stopped waiting', async () => {
+    const { runQueueService } = await import('../services/runQueueService')
+    const scope = { profileUserId: 'profile-user', settingsUserId: 'settings-user' }
+    const { resolveSteer, close } = await steerableTurn()
+    const submitted = runQueueService.submit(scope, { chatId: 'chat-1', content: 'and this' }, () => ({ observe: vi.fn() }))
+    // The driver's grace ran out and the turn ended; only then does the engine confirm.
+    close()
+    resolveSteer('late')
+    expect(await submitted).toEqual({ kind: 'injected', saved: true })
+    expect(saveUser).toHaveBeenCalledTimes(1)
+    expect(saveUser).toHaveBeenCalledWith({ chatId: 'chat-1', content: 'and this', addressedAgentId: 'a-1' })
+    // Neither queued nor started again: that would be the message twice.
+    expect(runQueueService.list(scope, 'chat-1').items).toEqual([])
+    expect(streamToAgent).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves a message the turn kept to the turn', async () => {
+    const { handle, resolveSteer, close } = await steerableTurn()
+    const steered = handle.steer('and this')
+    resolveSteer('injected')
+    expect(await steered).toBe('injected')
+    close()
+    expect(saveUser).not.toHaveBeenCalled()
   })
 })
 

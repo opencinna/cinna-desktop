@@ -267,6 +267,13 @@ const ALL_RUN_STATES: Record<RunState, true> = {
 
 const AGENT_ROWS: Row<RunEvent>[] = [
   {
+    name: 'user_message puts a message the turn took in after the live blocks so far',
+    seed: [REQUEST_ID, AGENT_TEXT],
+    event: { type: 'user_message', text: 'also this' },
+    settled: { streamingBlocks: [textBlock('text', 'Working on it'), { type: 'user', content: 'also this' }] },
+    invalidates: []
+  },
+  {
     name: 'request-id starts the stream: blocks, sendError and incremental flag reset, pending bubble kept',
     seed: [],
     seedState: {
@@ -905,6 +912,7 @@ const LLM_ROWS: Row<RunEvent>[] = [
   childRow('child tool_use is ignored', MCP_CALL, null),
   childRow('child tool_result is ignored', { type: 'tool_result', id: 'call-1', result: 'x' }, null),
   childRow('child tool_error is ignored', { type: 'tool_error', id: 'call-1', error: 'x' }, null),
+  childRow('child user_message is ignored: a sub-thread shows the nested agent’s parts only', { type: 'user_message', text: 'x' }, null),
   {
     name: 'child needs_input adds an entry naming the tool call that raised it',
     seed: [REQUEST_ID, AGENT_CALL],
@@ -1069,6 +1077,7 @@ const RUN_EVENT_TYPES: Record<RunEvent['type'], true> = {
   needs_input: true,
   input_resolved: true,
   child: true,
+  user_message: true,
   done: true,
   error: true
 }

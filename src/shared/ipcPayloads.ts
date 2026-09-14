@@ -31,3 +31,38 @@ export interface RunSendPayload {
    */
   addressedAgentId?: string | null
 }
+
+/**
+ * What `run:start` did with a message. A chat with a turn already running
+ * either takes it into that turn (`injected`, where the engine supports it) or
+ * holds it in main until the turn ends (`queued`).
+ */
+export type RunStartResult =
+  | { kind: 'started'; runId: string }
+  /**
+   * `saved`: the engine took the message only after the turn's rows were
+   * saved, so main saved it as a row of its own — possibly after a view had
+   * already refetched the chat, which then has to read it again.
+   */
+  | { kind: 'injected'; saved?: true }
+  | { kind: 'queued'; queuedId: string }
+
+/** One message waiting for the chat's running turn to end. Text only. */
+export interface RunQueueItem {
+  id: string
+  content: string
+  createdAt: number
+}
+
+/**
+ * A chat's queue. `held` means the turn ended without finishing (stopped,
+ * failed, out of budget): nothing is sent, and the composer takes the items
+ * back.
+ */
+export interface RunQueueView {
+  items: RunQueueItem[]
+  held: boolean
+}
+
+/** Main → renderer: a chat's queue changed. Payload `{ chatId, view }`, `view` being the queue as it now stands. */
+export const RUN_QUEUE_CHANGED_CHANNEL = 'run:queue-changed'

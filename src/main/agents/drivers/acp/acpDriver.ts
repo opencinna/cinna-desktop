@@ -58,7 +58,7 @@ import type {
   SessionNotification
 } from '@agentclientprotocol/sdk'
 import type { AgentRow } from '../../../db/agents'
-import type { RunAgentTurnResult } from '../../../services/a2aStreamingService'
+import type { RunAgentTurnResult, TurnSteer } from '../../../services/a2aStreamingService'
 import type { RunEvent } from '../../../../shared/runEvents'
 import { describeQuestionAnswers } from '../../../../shared/localAgentRequests'
 import type {
@@ -71,7 +71,7 @@ import { createLogger } from '../../../logger/logger'
 import { capabilitiesFor } from '../capabilities'
 import { launcherOfFolder } from '../driverOf'
 import type { AgentEngine } from '../../../../shared/engine'
-import type { AgentDriver, ParkedAsk, RespondOutcome, RunInput, ReadinessOptions } from '../driver'
+import type { AgentDriver, ParkedAsk, RespondOutcome, RunInput, ReadinessOptions, SteerFn } from '../driver'
 import { AcpMessageStream } from './acpMessages'
 import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } from './acpLaunchers'
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
@@ -271,9 +271,9 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
 
       try {
         if (input.queueWhenBusy) return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes }), input.signal)
+          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, steers: [] }), input.signal)
         return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes })
+          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, steers: [] })
         )
       } catch (err) {
         // `turnLock.acquire` throws rather than queueing, and its message is
@@ -313,6 +313,8 @@ interface TurnContext {
   launcherId: AcpLauncherId
   plan: AcpLaunchPlan
   input: RunInput
+  /** User messages the agent took into this turn, where they landed. */
+  steers: TurnSteer[]
 }
 
 /**
@@ -388,6 +390,105 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   let reportedAuth: { kind: string; label: string | null } | null = null
 
   /**
+   * Mid-turn messages, over the steering extension.
+   *
+   * **Open only while this turn's `session/prompt` is in flight**, and closed
+   * synchronously — before anything awaits — the moment the prompt settles or
+   * a stop is asked for. A message offered after that is `unavailable`, and the
+   * caller waits for the next turn instead: otherwise it could land in a turn
+   * whose result has already been read, and belong to no row. A request already
+   * sent is awaited before the turn finishes, for the same reason.
+   */
+  let steerOpen = false
+  /** Set once the turn stopped waiting for steers: its result no longer takes one. */
+  let steeringSettled = false
+  const steering = new Set<Promise<'injected' | 'late' | 'unavailable'>>()
+  const closeSteering = (): void => {
+    if (!steerOpen) return
+    steerOpen = false
+    input.registerSteer?.(null)
+  }
+  const deliverSteer = async (to: AcpConnection, session: string, text: string): Promise<'injected' | 'late' | 'unavailable'> => {
+    let outcome: unknown
+    try {
+      outcome = (await to.steer({
+        sessionId: session,
+        prompt: [{ type: 'text', text }],
+        _meta: { steering: { idleBehavior: 'promptRequired' } }
+      }))?.outcome
+    } catch (err) {
+      logger.info('an ACP agent did not take a mid-turn message', {
+        agentId: agent.id,
+        chatId,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      return 'unavailable'
+    }
+    if (outcome === 'injected') {
+      if (steeringSettled) {
+        // The turn gave up waiting and its result is already built: this
+        // message belongs to no row of it. The caller saves it on its own.
+        logger.warn('an ACP agent took a mid-turn message after the turn was finished', { agentId: agent.id, chatId })
+        return 'late'
+      }
+      ctx.steers.push({ afterPart: accumulator.partCount(), text })
+      accumulator.breakContinuation()
+      try { input.onEvent?.({ type: 'user_message', text }) } catch { /* a lost subscriber, not a lost message */ }
+      return 'injected'
+    }
+    if (outcome === 'startedNewTurn') {
+      // Codex ignores `promptRequired`: the turn had ended underneath, and it
+      // started a turn of its own that nobody here is reading. Stop it; the
+      // message goes to the next turn instead.
+      logger.warn('an ACP agent started an unowned turn for a mid-turn message; cancelling it', {
+        agentId: agent.id,
+        chatId
+      })
+      void to.cancel(session).catch(() => {})
+      if (!steeringSettled || !deps.pool.held(agent.id)) {
+        // Retired too, as an unacknowledged cancel retires it: nothing confirms
+        // the orphan has stopped, and the next prompt on this session would run
+        // beside it. While this turn still waits, the retire waits for this
+        // turn's hold, so the next turn starts clean.
+        deps.pool.retire(agent.id)
+      } else {
+        // This turn has let go, so the hold is someone else's — the next turn,
+        // a drained one, or another chat on this agent. A retire would wait for
+        // it and then kill the process under that turn. Left running, and said.
+        logger.warn('an ACP agent’s unowned turn may still be running beside another turn; its process was left up', {
+          agentId: agent.id,
+          chatId
+        })
+      }
+    }
+    return 'unavailable'
+  }
+  const openSteering = (): void => {
+    const to = connection
+    const session = sessionId
+    if (!to || !session || !turn.open || !input.registerSteer || !advertisesSteering(to)) return
+    steerOpen = true
+    const steer: SteerFn = (text) => {
+      if (!steerOpen) return Promise.resolve('unavailable')
+      const request = deliverSteer(to, session, text)
+      steering.add(request)
+      void request.finally(() => steering.delete(request))
+      return request
+    }
+    input.registerSteer(steer)
+  }
+  const settleSteering = async (): Promise<void> => {
+    closeSteering()
+    if (steering.size) {
+      await Promise.race([
+        Promise.allSettled([...steering]),
+        new Promise<void>((resolve) => { const timer = setTimeout(resolve, deps.cancelGraceMs ?? ACP_CANCEL_GRACE_MS); timer.unref?.() })
+      ])
+    }
+    steeringSettled = true
+  }
+
+  /**
    * Both ways a turn is told to stop, in one signal.
    *
    * The user's Stop and the ceiling do the same two things — send
@@ -426,6 +527,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
    * swallowed rather than reported.
    */
   const askAgentToStop = (): void => {
+    closeSteering()
     turn.open = false
     // **Only the user's Stop, not the ceiling.** The ceiling shares this
     // function, and a park it releases genuinely *was* never answered in time —
@@ -649,8 +751,9 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         connection,
         { sessionId, prompt: [{ type: 'text', text: input.wireContent }] },
         cancelRequested,
-        agent.id
-      )
+        agent.id,
+        openSteering
+      ).finally(settleSteering)
       if (!answer) {
         // The grace expired: the agent never acknowledged the cancel. What was
         // streamed is kept, and a stop the user asked for is not an error — but
@@ -723,9 +826,12 @@ async function promptWithCancelGrace(
   connection: AcpConnection,
   params: Parameters<AcpConnection['prompt']>[0],
   cancelRequested: Promise<void>,
-  agentId: string
+  agentId: string,
+  /** Called once the prompt is on the wire: the window mid-turn messages can use. */
+  onSent?: () => void
 ): Promise<Awaited<ReturnType<AcpConnection['prompt']>> | null> {
   const prompt = connection.prompt(params)
+  onSent?.()
   // Nothing is bounded while the turn is simply running: an agent that takes
   // ten minutes to think is working, and the ceiling is what covers one that
   // never finishes. The clock starts only once a cancel has been asked for.
@@ -780,6 +886,15 @@ function noteModeFallback(
         : `This agent asked to run in “${asked}” and the engine ran it in “${reportedMode}” instead.`
     ).message
   )
+}
+
+/**
+ * Whether the agent advertised the steering extension: top-level
+ * `initialize._meta.steering.supported` (the Claude Code and Codex adapters).
+ */
+function advertisesSteering(connection: AcpConnection): boolean {
+  const steering = connection.initialized._meta?.steering
+  return !!steering && typeof steering === 'object' && (steering as { supported?: unknown }).supported === true
 }
 
 /** The adapter's own notification about which login is paying for the turn. */
@@ -1188,6 +1303,7 @@ function finish(
     text: answer || parts.map((part) => part.text).join(''),
     parts,
     notices: accumulator.snapshotNotices(),
+    ...(ctx.steers.length ? { steers: ctx.steers.slice() } : {}),
     ...(sessionId ? { contextId: sessionId } : {}),
     ...(error ? { error: { message: error, raw: raw ?? error } } : {})
   }

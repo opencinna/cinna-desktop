@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import { Bot, ChevronRight, Loader2, X } from 'lucide-react'
 import type { MessagePart } from '../../../../shared/messageParts'
 import { presetForAgentId } from '../../utils/agentColors'
 import { AgentContribution } from './AgentContribution'
+import { TranscriptVisibleContext, useTranscriptDisclosure } from './transcriptExpansion'
 
 interface AgentToolSubThreadProps {
   agentName: string
@@ -36,21 +37,27 @@ export function AgentToolSubThread({
   errorText,
   verbose
 }: AgentToolSubThreadProps): React.JSX.Element {
-  const [expanded, setExpanded] = useState<boolean>(!!isStreaming || !!verbose)
+  const [expanded, setExpanded, setAutoExpanded] = useTranscriptDisclosure(
+    !!isStreaming || !!verbose
+  )
+  // The body stays mounted while closed, so blocks inside must know it is hidden.
+  const visible = useContext(TranscriptVisibleContext)
 
   // Live → persisted transition: collapse once the agent sub-turn finishes
   // (unless verbose mode keeps everything open). Auto-open again if it goes
-  // live (e.g. a re-invocation reusing the block).
+  // live (e.g. a re-invocation reusing the block). These go through the auto
+  // setter, which moves the default with the state, so the transcript's
+  // "Collapse expanded" never counts an opening the user did not make.
   const [wasStreaming, setWasStreaming] = useState<boolean>(!!isStreaming)
   useEffect(() => {
     if (isStreaming && !wasStreaming) {
-      setExpanded(true)
+      setAutoExpanded(true)
       setWasStreaming(true)
     } else if (!isStreaming && wasStreaming) {
-      setExpanded(verbose ? true : false)
+      setAutoExpanded(verbose ? true : false)
       setWasStreaming(false)
     }
-  }, [isStreaming, wasStreaming, verbose])
+  }, [isStreaming, wasStreaming, verbose, setAutoExpanded])
 
   // Color by stable agent id when known so a given agent shows the same color
   // whether the model called it (here) or the user addressed it directly
@@ -108,6 +115,7 @@ export function AgentToolSubThread({
         style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
       >
         <div className="overflow-hidden">
+          <TranscriptVisibleContext.Provider value={visible && expanded}>
           <div
             className="mt-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2.5 py-2 pl-3"
             style={{ borderLeft: `2px solid ${color.border}` }}
@@ -131,6 +139,7 @@ export function AgentToolSubThread({
               </pre>
             )}
           </div>
+          </TranscriptVisibleContext.Provider>
         </div>
       </div>
     </div>

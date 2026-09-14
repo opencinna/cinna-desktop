@@ -102,9 +102,9 @@ test('an unknown driver survives restart, remains visible, and refuses UI and ma
 
     // UI refusal is not the main boundary: call the real public API independently.
     // start acknowledges persisted input, then the unsupported driver records failure.
-    const runId = await cinna.page.evaluate(({ chatId, content }) => window.api.run.start({ chatId, content }),
+    const started = await cinna.page.evaluate(({ chatId, content }) => window.api.run.start({ chatId, content }),
       { chatId, content: MAIN_PROMPT })
-    expect(runId).toEqual(expect.any(String))
+    expect(started).toEqual({ kind: 'started', runId: expect.any(String) })
     await expect.poll(async () => {
       const chat = await cinna.page.evaluate((id) => window.api.chat.get(id), chatId)
       return { activeRunId: chat?.activeRunId ?? null, roles: chat?.messages.map((row) => row.role) }

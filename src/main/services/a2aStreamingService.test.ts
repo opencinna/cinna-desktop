@@ -18,15 +18,24 @@ import type { RunEvent } from '../../shared/runEvents'
 const saved: { short: string }[] = []
 const savedAssistant: Record<string, unknown>[] = []
 const runCompletions: { status: string; message?: string }[] = []
+/** Every row written, in insertion — and so `sortOrder` — order. */
+const rows: Record<string, unknown>[] = []
 
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
 vi.mock('../db/messages', () => ({
   messageRepo: {
-    saveError: (i: { short: string }) => saved.push(i),
-    saveAssistant: (i: Record<string, unknown>) => void savedAssistant.push(i),
-    saveTransition: () => {},
+    saveError: (i: { short: string }) => { saved.push(i); rows.push({ role: 'error', content: i.short }) },
+    saveAssistant: (i: Record<string, unknown>) => {
+      savedAssistant.push(i)
+      rows.push({ role: 'assistant', content: i.content, parts: i.parts })
+    },
+    saveUser: (i: Record<string, unknown>) => {
+      rows.push({ role: 'user', content: i.content, addressedAgentId: i.addressedAgentId })
+      return 'user-row'
+    },
+    saveTransition: (i: Record<string, unknown>) => void rows.push({ role: 'agent_transition', content: i.content }),
     touchChat: () => {}
   }
 }))
@@ -76,6 +85,58 @@ describe('a2aStreamingService.streamToAgent', () => {
     saved.length = 0
     savedAssistant.length = 0
     runCompletions.length = 0
+    rows.length = 0
+  })
+
+  it('persists a message steered into the turn between the parts streamed before and after it', async () => {
+    const p = fakePort()
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1',
+      agentId: 'folder:abc',
+      port: p.port,
+      run: async () => ({
+        text: 'ac',
+        parts: [
+          { kind: 'text', text: 'a' },
+          { kind: 'tool', toolName: 'Read', text: 'b' },
+          { kind: 'text', text: 'c' }
+        ],
+        notices: [{ partKey: 'n', text: 'Starting up' }],
+        steers: [{ afterPart: 2, text: 'also check d' }]
+      })
+    })
+    expect(rows).toEqual([
+      { role: 'agent_transition', content: 'Starting up' },
+      { role: 'assistant', content: 'a', parts: [{ kind: 'text', text: 'a' }, { kind: 'tool', toolName: 'Read', text: 'b' }] },
+      { role: 'user', content: 'also check d', addressedAgentId: 'folder:abc' },
+      { role: 'assistant', content: 'c', parts: [{ kind: 'text', text: 'c' }] }
+    ])
+    expect(p.posted.at(-1)).toEqual({ type: 'done', stopReason: 'end_turn' })
+  })
+
+  it('keeps one row with the turn’s own text when nothing was steered', async () => {
+    const p = fakePort()
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1', agentId: 'folder:abc', port: p.port,
+      run: async () => ({ text: 'whole answer', parts: [{ kind: 'thinking', text: 'hm' }, { kind: 'text', text: 'whole answer' }], notices: [] })
+    })
+    expect(rows).toEqual([{ role: 'assistant', content: 'whole answer', parts: [{ kind: 'thinking', text: 'hm' }, { kind: 'text', text: 'whole answer' }] }])
+  })
+
+  it('keeps a steered message ahead of the error when the turn fails after it', async () => {
+    const p = fakePort()
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1', agentId: 'folder:abc', port: p.port,
+      run: async () => ({
+        text: '', parts: [{ kind: 'text', text: 'a' }], notices: [],
+        steers: [{ afterPart: 1, text: 'more' }],
+        error: { message: 'The agent crashed.', raw: 'exit 1' }
+      })
+    })
+    expect(rows).toEqual([
+      { role: 'user', content: 'more', addressedAgentId: 'folder:abc' },
+      { role: 'error', content: 'The agent crashed.' }
+    ])
   })
 
   it('posts an error when a runner throws instead of returning', async () => {

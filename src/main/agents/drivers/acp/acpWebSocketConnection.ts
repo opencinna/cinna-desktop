@@ -1,7 +1,7 @@
 import { WebSocket } from 'undici'
 import type { AnyMessage, InitializeRequest, InitializeResponse, Stream } from '@agentclientprotocol/sdk'
 import { connectAcpClient } from './acpClient'
-import { ACP_START_TIMEOUT_MS, type AcpConnection, type AcpExit } from './types'
+import { ACP_START_TIMEOUT_MS, ACP_STEER_METHOD, type AcpConnection, type AcpExit, type AcpSteerRequest, type AcpSteerResponse } from './types'
 import { parseRemoteAcpConfig, parseAcpAccessToken, type RemoteAcpConfig } from '../../../../shared/customAgents'
 
 /** Cinna-core/Python SDK profile: one UTF-8 JSON-RPC object per text frame. */
@@ -92,6 +92,7 @@ export async function startAcpWebSocketConnection(
       setSessionConfigOption: (params) => call.request('session/set_config_option', params),
       prompt: (params) => call.request('session/prompt', params),
       cancel: (sessionId) => call.notify('session/cancel', { sessionId }),
+      steer: (params) => call.request<AcpSteerResponse, AcpSteerRequest>(ACP_STEER_METHOD, params),
       stderrTail: () => failure?.message ?? '', dispose
     }
   } catch (error) {

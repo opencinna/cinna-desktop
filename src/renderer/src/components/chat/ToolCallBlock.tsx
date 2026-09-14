@@ -1,5 +1,6 @@
 import { Wrench, X, Loader2, Plug, ChevronRight } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useRef } from 'react'
+import { useTranscriptDisclosure } from './transcriptExpansion'
 import { ToolCallSummary } from './ToolCallSummary'
 import { ApplyPatchBlock } from './ApplyPatchBlock'
 import { parsePatch } from '../../utils/applyPatch'
@@ -117,22 +118,23 @@ export function ToolCallBlock({
   status,
   provider
 }: ToolCallBlockProps): React.JSX.Element {
+  // Hooks first, above the apply_patch return below: a call whose input starts
+  // or stops parsing as a patch (or gains an error) must keep its hook order.
+  const verboseMode = useUIStore((s) => s.verboseMode)
+  const [expanded, setExpanded] = useTranscriptDisclosure(false)
+  const contentRef = useRef<HTMLDivElement>(null)
+
   // OpenCode / Codex `apply_patch` renders as a git-diff view rather than the
   // generic tool block — but errors keep the standard block so the failure
   // shows. The single parse doubles as the guard (null → not a valid patch).
-  // Kept above the hooks below so it must stay hook-free.
   const patchFiles = name === 'apply_patch' && !error && input ? parsePatch(input.patch_text) : null
   if (patchFiles) {
     return <ApplyPatchBlock files={patchFiles} />
   }
 
-  const verboseMode = useUIStore((s) => s.verboseMode)
-  const [expanded, setExpanded] = useState(false)
-
   const isPending = status === 'pending'
 
   const parsedResult = result != null ? parseResult(result) : null
-  const contentRef = useRef<HTMLDivElement>(null)
 
   const cliCommand = cinnaCliCommand(name, input)
   if (cliCommand) {

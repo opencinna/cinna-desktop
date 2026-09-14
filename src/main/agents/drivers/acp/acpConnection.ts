@@ -94,6 +94,9 @@ import { createLogger } from '../../../logger/logger'
 import {
   ACP_START_TIMEOUT_MS,
   ACP_STDERR_TAIL_LINES,
+  ACP_STEER_METHOD,
+  type AcpSteerRequest,
+  type AcpSteerResponse,
   type AcpConnection,
   type AcpExit,
   type AcpLaunchSpec,
@@ -418,6 +421,8 @@ export async function startAcpConnection(
     ): Promise<SetSessionConfigOptionResponse> => call.request('session/set_config_option', params),
     prompt: (params: PromptRequest): Promise<PromptResponse> => call.request('session/prompt', params),
     cancel: (sessionId: string): Promise<void> => call.notify('session/cancel', { sessionId }),
+    steer: (params: AcpSteerRequest): Promise<AcpSteerResponse> =>
+      call.request<AcpSteerResponse, AcpSteerRequest>(ACP_STEER_METHOD, params),
     bindSession,
     stderrTail,
     dispose

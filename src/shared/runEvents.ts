@@ -178,6 +178,16 @@ export interface RunChildEvent {
   event: RunEvent
 }
 
+/**
+ * A message the user sent while this turn was running, taken into it by the
+ * engine (ACP steering). Posted when the engine accepted it, at the point in
+ * the turn's output where it landed; the turn persists it as a user row there.
+ */
+export interface RunUserMessageEvent {
+  type: 'user_message'
+  text: string
+}
+
 /** The run ended cleanly. */
 export interface RunDoneEvent {
   type: 'done'
@@ -207,6 +217,7 @@ export type RunEvent =
   | RunNeedsInputEvent
   | RunInputResolvedEvent
   | RunChildEvent
+  | RunUserMessageEvent
   | RunDoneEvent
   | RunErrorEvent
 
@@ -224,6 +235,7 @@ const RUN_EVENT_TYPES: Record<RunEvent['type'], true> = {
   needs_input: true,
   input_resolved: true,
   child: true,
+  user_message: true,
   done: true,
   error: true
 }

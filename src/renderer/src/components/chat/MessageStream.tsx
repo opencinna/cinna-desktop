@@ -1,5 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowDown, CheckCircle, ChevronRight, RefreshCw } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import {
+  AlertTriangle,
+  ArrowDown,
+  CheckCircle,
+  ChevronRight,
+  ChevronsDownUp,
+  RefreshCw
+} from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
 import { isLiveInputRequest, isSettledInputRequest, useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
@@ -31,10 +38,17 @@ import { PermissionRequestBlock } from './PermissionRequestBlock'
 import { useAgentRequests } from '../../hooks/useAgentRequests'
 import { useStickToBottom } from '../../hooks/useStickToBottom'
 import { MessageMetaFooter } from './MessageMetaFooter'
+import { QueuedMessages, useQueuedMessages } from './QueuedMessages'
+import { holdCollapseAnchor } from './transcriptAnchor'
 import {
   type RenderNode,
   groupConsecutiveCollapsibles
 } from './CollapsibleGroup'
+import {
+  TranscriptExpansionContext,
+  createTranscriptExpansionStore,
+  type TranscriptExpansionStore
+} from './transcriptExpansion'
 import type { ToolStream } from '../../../../shared/messageParts'
 
 /**
@@ -135,6 +149,71 @@ function renderCommandToolPair(opts: {
 interface MessageStreamProps {
   chatId: string
   bottomPadding?: number
+}
+
+const PILL_CLASS = `pointer-events-auto inline-flex items-center gap-1.5
+  px-3 py-1 rounded-full text-xs
+  text-[var(--color-text-secondary)] hover:text-[var(--color-text)]
+  bg-[var(--color-bg-secondary)]/80 hover:bg-[var(--color-bg-secondary)]
+  border border-[var(--color-border)] shadow-sm backdrop-blur transition-colors`
+
+/**
+ * The transcript's floating actions: "Collapse expanded" while the user has
+ * opened any block, "Jump to latest" while the view is not following. Its own
+ * component so a block toggling re-renders this row, not the transcript.
+ *
+ * Sits low enough to straddle the composer's fade band rather than clear of
+ * it: centred over undimmed prose the pill hid about twenty characters
+ * mid-sentence. Each text node is its button's accessible name, so neither
+ * carries an `aria-label` or `title` restating it.
+ */
+function TranscriptPills({
+  store,
+  pinned,
+  onCollapse,
+  onJumpToLatest,
+  bottomPadding
+}: {
+  store: TranscriptExpansionStore
+  pinned: boolean
+  onCollapse: () => void
+  onJumpToLatest: () => void
+  bottomPadding?: number
+}): React.JSX.Element | null {
+  const hasExpanded = useSyncExternalStore(store.subscribe, store.hasExpanded)
+  if (pinned && !hasExpanded) return null
+  // Three columns so neither pill moves when the other comes or goes: "Jump to
+  // latest" keeps the centre it always had, and "Collapse expanded" is pinned
+  // to its left. Centring the pair as one row slid the survivor under the
+  // pointer the moment its neighbour was clicked away (ux_rules §1). The
+  // centre pill is kept in layout but `invisible` while the view is pinned,
+  // which also takes it out of the tab order and the accessibility tree.
+  return (
+    <div
+      className="absolute inset-x-0 z-10 grid grid-cols-[1fr_auto_1fr] items-center gap-2 whitespace-nowrap pointer-events-none"
+      style={{ bottom: Math.max(0, (bottomPadding ?? 0) - 8) }}
+    >
+      <div className="flex justify-end">
+        {hasExpanded && (
+          <button type="button" onClick={onCollapse} className={PILL_CLASS}>
+            <ChevronsDownUp size={12} className="shrink-0" />
+            Collapse expanded
+          </button>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onJumpToLatest}
+        aria-hidden={pinned || undefined}
+        tabIndex={pinned ? -1 : undefined}
+        className={`${PILL_CLASS} ${pinned ? 'invisible' : ''}`}
+      >
+        <ArrowDown size={12} className="shrink-0" />
+        Jump to latest
+      </button>
+      <div />
+    </div>
+  )
 }
 
 function SystemMessage({
@@ -286,7 +365,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
   const messageContextMenu = useMessageContextMenu(chatId)
   const { data: chatData } = useChatDetail(chatId)
   const { data: agents } = useAgents()
-  const { streamingBlocks, isStreaming, liveBaselineMessageIds, pendingUserMessage, streamedIncrementallyChatId, inputRequests, settledInputRequestIds } = useChatStore()
+  const { streamingBlocks, isStreaming, liveBaselineMessageIds, pendingUserMessage, streamedIncrementallyChatId, inputRequests, settledInputRequestIds, sentVersion } = useChatStore()
   const verboseMode = useUIStore((s) => s.verboseMode)
   // **While a request block is answerable, new content must not move it.** A
   // second ask arriving under a pinned view scrolled the first block's buttons
@@ -300,6 +379,28 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
   const { containerRef, contentRef, pinned, scrollToBottom } = useStickToBottom(chatId, {
     hold: holdForAnswer
   })
+  // Which blocks the user opened, for "Collapse expanded". One per chat: this
+  // component is not remounted when the active chat changes, and a new chat
+  // must not inherit the last one's registrations.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const expansionStore = useMemo(() => createTranscriptExpansionStore(), [chatId])
+  // Collapsing must not move what the reader is looking at (ux_rules §1). A
+  // pinned transcript simply stays at the bottom; an unpinned one holds its
+  // anchor through the groups' height transition — see `transcriptAnchor.ts`.
+  const releaseAnchorRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => {
+    releaseAnchorRef.current?.()
+    releaseAnchorRef.current = null
+  }, [chatId])
+  const collapseExpanded = useCallback(() => {
+    releaseAnchorRef.current?.()
+    releaseAnchorRef.current = null
+    const container = containerRef.current
+    const content = contentRef.current
+    // A group header lands below the top padding, clear of the top bar.
+    if (!pinned && container && content) releaseAnchorRef.current = holdCollapseAnchor(container, content)
+    expansionStore.collapseAll()
+  }, [pinned, containerRef, contentRef, expansionStore])
   const agentNameById = useMemo(() => {
     const map = new Map<string, string>()
     for (const a of agents ?? []) map.set(a.id, a.name)
@@ -317,6 +418,12 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
   useEffect(() => {
     if (pendingUserMessage) scrollToBottom()
   }, [pendingUserMessage, scrollToBottom])
+  // The same for a send that shows no optimistic bubble — one taken into the
+  // running turn or queued behind it.
+  const mountedSentVersion = useRef(sentVersion)
+  useEffect(() => {
+    if (sentVersion !== mountedSentVersion.current) scrollToBottom()
+  }, [sentVersion, scrollToBottom])
 
   // A model can persist completed tool rounds while its turn is still live.
   // Replay represents those same rows until the terminal transcript refetch.
@@ -324,6 +431,12 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
   const messages = (chatData?.messages ?? []).filter((message) =>
     !baselineIds || message.role === 'user' || message.role === 'system' || baselineIds.has(message.id))
   const hasStreamingContent = streamingBlocks.length > 0
+  const queuedView = useQueuedMessages(
+    chatId,
+    messages.filter((message) => message.role === 'user').map((message) => message.content),
+    // Messages the turn took in are saved only when it ends: rows on their way.
+    streamingBlocks.flatMap((block) => (block.type === 'user' ? [block.content] : []))
+  )
 
   // The agent's `AskUserQuestion` tool is answerable only while the chat is
   // waiting on it: it's the final turn (no user reply after it) and nothing is
@@ -447,11 +560,12 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
   }, [chatId, messages])
 
   return (
-    // A fragment, not a wrapper: the button is absolutely positioned against
-    // MainArea's `relative` chat container (the same one the composer overlay
-    // anchors to), so it needs no layout box of its own and the scroll element
-    // stays the direct flex child it has always been.
-    <>
+    // No wrapper element (the provider renders no DOM): the pills are
+    // absolutely positioned against MainArea's `relative` chat container (the
+    // same one the composer overlay anchors to), so they need no layout box of
+    // their own and the scroll element stays the direct flex child it has
+    // always been.
+    <TranscriptExpansionContext.Provider value={expansionStore}>
     <div
       ref={containerRef}
       onContextMenu={messageContextMenu.onContextMenu}
@@ -554,7 +668,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               )
               // In verbose mode the per-message footer must stay attached, so
               // skip grouping (push as plain) — otherwise circles can be grouped
-              // across consecutive tool_call / thinking blocks.
+              // across consecutive tool_call blocks.
               if (verboseMode) {
                 renderNodes.push({
                   slot: 'plain',
@@ -591,8 +705,10 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             // when its persisted row lands mid-handoff (same content, pending
             // not yet retired) the swap must be silent — otherwise the bubble
             // animates a second time. Mirrors the assistant suppression above.
+            // Likewise a row taking over from a queued bubble that was sent.
             const suppressOptimisticReanimation =
-              msg.role === 'user' && pendingUserMessage?.content === msg.content
+              msg.role === 'user' &&
+              (pendingUserMessage?.content === msg.content || queuedView.handsOver(msg.content))
             const shouldAnimate =
               msg.id === newMessageId &&
               !suppressStreamReanimation &&
@@ -640,7 +756,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                           })
                         }
                         if (p.kind === 'thinking') {
-                          return <ThinkingBlock key={k} content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
+                          return <ThinkingBlock key={k} content={p.text} defaultExpanded animate={shouldAnimate} animateDelay={idx * 80} />
                         }
                         if (
                           p.kind === 'tool' &&
@@ -733,14 +849,12 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                       })
                     })
                   } else if (p.kind === 'thinking') {
+                    // Never folded into a dots group: open, on its own, so it
+                    // breaks a long run of tool dots into readable steps.
                     renderNodes.push({
-                      slot: 'collapsible',
-                      item: {
-                        key: k,
-                        kind: 'thinking',
-                        status: 'done',
-                        node: <ThinkingBlock content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
-                      }
+                      slot: 'plain',
+                      key: k,
+                      node: <ThinkingBlock content={p.text} defaultExpanded animate={shouldAnimate} animateDelay={idx * 80} />
                     })
                   } else if (
                     p.kind === 'tool' &&
@@ -874,7 +988,9 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             })
           }
 
-          if (isStreaming && !hasStreamingContent) {
+          // While a sent queued bubble stands in for its row, the dots go below
+          // it — where they will be once the row takes its place.
+          if (isStreaming && !hasStreamingContent && !queuedView.holdsSent) {
             renderNodes.push({
               slot: 'plain',
               key: 'stream-dots-pre',
@@ -894,7 +1010,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
           const streamingTextBlocks = streamingBlocks.map((b) =>
             b.type === 'text'
               ? { kind: b.kind, toolId: b.toolId, commandInvocation: b.commandInvocation, toolName: b.toolName, toolInput: b.toolInput }
-              : { kind: 'tool_call' }
+              : { kind: b.type }
           )
           const { pairResultIdx: streamPairResultIdx, consumed: streamConsumed } =
             pairCommandTools(streamingTextBlocks)
@@ -903,6 +1019,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
           streamingBlocks.forEach((block, i) => {
             const isLastBlock = i === streamingBlocks.length - 1
             if (streamConsumed.has(i)) return
+            if (block.type === 'user') {
+              // Sent while the turn ran and taken into it, where it landed. A
+              // plain node, so it also splits a run of tool dots in two.
+              renderNodes.push({
+                slot: 'plain',
+                key: `stream-user-${i}`,
+                node: <MessageBubble role="user" content={block.content} animate />
+              })
+              return
+            }
             const cliCall = streamingCli.calls.get(i)
             if (cliCall && block.type === 'text') {
               const results = cliCall.resultIndices.flatMap((index) => {
@@ -956,21 +1082,19 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             if (block.type === 'text') {
               if (block.kind === 'thinking') {
                 const live = isStreaming && isLastBlock
-                const node = (
-                  <ThinkingBlock
-                    content={block.content}
-                    isStreaming={live}
-                    defaultExpanded={verboseMode ? undefined : false}
-                  />
-                )
-                if (verboseMode) {
-                  renderNodes.push({ slot: 'plain', key: `stream-think-${i}`, node })
-                } else {
-                  renderNodes.push({
-                    slot: 'collapsible',
-                    item: { key: `stream-think-${i}`, kind: 'thinking', status: 'done', isLive: live, node }
-                  })
-                }
+                // Plain in both modes; compact opens it, as on the persisted
+                // path, so the live → persisted swap does not close it.
+                renderNodes.push({
+                  slot: 'plain',
+                  key: `stream-think-${i}`,
+                  node: (
+                    <ThinkingBlock
+                      content={block.content}
+                      isStreaming={live}
+                      defaultExpanded
+                    />
+                  )
+                })
                 return
               }
               if (
@@ -1069,7 +1193,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 const live = isStreaming && isLastBlock
                 // Tool output is the payload the user is actually waiting on
                 // (especially for `/run:*` CLI commands), so leave it expanded
-                // by default during streaming — unlike tool/thinking blocks
+                // by default during streaming — unlike tool narration blocks
                 // which default collapsed because their content is auxiliary
                 // narration. Persisted reload uses the default collapsed
                 // behavior from ToolResultBlock to keep long outputs from
@@ -1172,28 +1296,30 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             <span className="w-1 h-1 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '300ms' }} />
           </div>
         )}
+
+        {/* Sent while the turn runs, waiting for it to end. Inside the content
+            box, so following the bottom keeps them in view. */}
+        <QueuedMessages view={queuedView} />
+        {isStreaming && !hasStreamingContent && queuedView.holdsSent && (
+          <div className="flex gap-1 py-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '0ms' }} />
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '150ms' }} />
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '300ms' }} />
+          </div>
+        )}
       </div>
     </div>
-      {/* Sits low enough to straddle the composer's fade band rather than clear
-          of it: centred over undimmed prose it hid about twenty characters
-          mid-sentence. The text node is the button's accessible name, so it
-          carries no `aria-label` or `title` restating it. */}
-      {!pinned && (
-        <button
-          type="button"
-          onClick={scrollToBottom}
-          className="absolute left-1/2 -translate-x-1/2 z-10 inline-flex items-center gap-1.5
-            px-3 py-1 rounded-full text-xs
-            text-[var(--color-text-secondary)] hover:text-[var(--color-text)]
-            bg-[var(--color-bg-secondary)]/80 hover:bg-[var(--color-bg-secondary)]
-            border border-[var(--color-border)] shadow-sm backdrop-blur transition-colors"
-          style={{ bottom: Math.max(0, (bottomPadding ?? 0) - 8) }}
-        >
-          <ArrowDown size={12} className="shrink-0" />
-          Jump to latest
-        </button>
-      )}
+      {/* A sibling of the scroll container, never inside it: useStickToBottom
+          observes those boxes, and a pill mounting inside them would resize
+          → settle → re-render → resize. */}
+      <TranscriptPills
+        store={expansionStore}
+        pinned={pinned}
+        onCollapse={collapseExpanded}
+        onJumpToLatest={scrollToBottom}
+        bottomPadding={bottomPadding}
+      />
       {messageContextMenu.menu}
-    </>
+    </TranscriptExpansionContext.Provider>
   )
 }

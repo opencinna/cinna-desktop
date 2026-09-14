@@ -26,6 +26,7 @@ const EVERY_VARIANT: { [T in RunEvent['type']]: Extract<RunEvent, { type: T }> }
     agentId: 'agent-1',
     event: { type: 'delta', kind: 'thinking', text: 'Hmm' }
   },
+  user_message: { type: 'user_message', text: 'also check the tests' },
   done: { type: 'done', stopReason: 'end_turn' },
   error: { type: 'error', error: 'boom', code: 'cinna_reauth_required', errorDetail: '401' }
 }

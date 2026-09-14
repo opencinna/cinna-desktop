@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
+import { useTranscriptDisclosure } from './transcriptExpansion'
 
 /**
  * Shared collapsible-disclosure shell for the chat transcript's auxiliary
@@ -57,7 +58,10 @@ export function DisclosureBlock({
   animate,
   animateDelay
 }: DisclosureBlockProps): React.JSX.Element {
-  const [expanded, setExpanded] = useState(defaultExpanded ?? !!isStreaming)
+  // The mount-time default is what "expanded by the user" is measured
+  // against: a block that opened because it was streaming stays uncounted
+  // after its stream ends.
+  const [expanded, setExpanded] = useTranscriptDisclosure(defaultExpanded ?? !!isStreaming)
 
   const headerColor =
     tone === 'error'

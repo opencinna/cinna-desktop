@@ -222,6 +222,8 @@ export class StreamPartsAccumulator {
    */
   private seenFileIds = new Set<string>()
   private parts: MessagePart[] = []
+  /** Parts below this index are closed to "continue the last part" merging. */
+  private boundary = 0
   private answer = ''
   /**
    * Per-part-key accumulated text for `notice`-kind parts. Insertion order is
@@ -337,7 +339,10 @@ export class StreamPartsAccumulator {
     toolStream?: ToolStream,
     commandInvocation?: string
   ): void {
-    const index = continuingPartIndex(this.parts, { kind, toolName, toolId, toolStream })
+    let index = continuingPartIndex(this.parts, { kind, toolName, toolId, toolStream })
+    // Past a boundary only a tool call named by id may still grow (its input
+    // can fill in later); text on the far side starts a part of its own.
+    if (index >= 0 && index < this.boundary && !(kind === 'tool' && toolId)) index = -1
     const last = this.parts[index]
     if (last) {
       last.text += delta
@@ -360,6 +365,20 @@ export class StreamPartsAccumulator {
     // (the agent stream did not run), so it joins `text` in the preview
     // string used for chat list snippets and title generation.
     if (kind === 'text' || kind === 'command_result') this.answer += delta
+  }
+
+  /** How many parts the turn has so far — the position a mid-turn user message lands at. */
+  partCount(): number {
+    return this.parts.length
+  }
+
+  /**
+   * End the current run of text here: the next fragment starts a new part even
+   * when it is the same kind. A user message taken into the running turn sits
+   * between the two, so they must persist as two parts.
+   */
+  breakContinuation(): void {
+    this.boundary = this.parts.length
   }
 
   snapshotParts(): MessagePart[] {

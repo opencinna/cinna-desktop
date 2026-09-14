@@ -71,6 +71,21 @@ if (script.exitOnStart) {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** Steering requests received so far, and the `awaitSteer` steps waiting for the next. */
+let steers = 0
+const steerWaiters = []
+
+function noteSteer() {
+  steers += 1
+  for (const resolve of steerWaiters.splice(0)) resolve()
+}
+
+/** Resolves once a steering request arrives after `seen` of them had. */
+function awaitSteer(seen) {
+  if (steers > seen) return Promise.resolve()
+  return new Promise((resolve) => steerWaiters.push(resolve))
+}
+
 /** Session ids the client has cancelled, and whoever is waiting to hear it. */
 const cancelled = new Set()
 const cancelWaiters = new Map()
@@ -167,6 +182,9 @@ async function emit(client, steps, sessionId) {
       case 'awaitCancel':
         await awaitCancel(target)
         break
+      case 'awaitSteer':
+        await awaitSteer(step.after ?? 0)
+        break
       case 'exit':
         log({ dir: 'exit', code: step.code ?? 0 })
         process.exit(step.code ?? 0)
@@ -242,6 +260,16 @@ const app = agent({ name: 'fake-acp' })
   .onRequest(
     'session/prompt',
     handler('prompt', 'session/prompt', () => ({ stopReason: 'end_turn' }))
+  )
+  // The steering extension. Always answers `injected` unless the script says
+  // otherwise — whether a turn is running is the client's business to know.
+  .onRequest(
+    '_session/steering',
+    (params) => params,
+    handler('steer', '_session/steering', () => {
+      noteSteer()
+      return { outcome: 'injected' }
+    })
   )
   .onNotification('session/cancel', (ctx) => {
     log({ dir: 'in', kind: 'notification', method: 'session/cancel', params: ctx.params })

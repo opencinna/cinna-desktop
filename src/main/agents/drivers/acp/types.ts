@@ -110,6 +110,26 @@ export interface AcpSessionHandlers {
   onExtNotification?(method: string, params: Record<string, unknown>): void
 }
 
+/** The steering extension's request method (Claude Code and Codex adapters). */
+export const ACP_STEER_METHOD = '_session/steering'
+
+export interface AcpSteerRequest {
+  sessionId: string
+  prompt: { type: 'text'; text: string }[]
+  /** `promptRequired`: with no turn running, start nothing and say so. */
+  _meta?: { steering: { idleBehavior: 'promptRequired' } }
+}
+
+/**
+ * `injected` — taken into the running turn. `promptRequired` — no turn was
+ * running. `failed` — refused. `startedNewTurn` — the agent started a turn of
+ * its own (Codex ignores `idleBehavior`). Anything else is a newer adapter.
+ */
+export interface AcpSteerResponse {
+  outcome?: string
+  [key: string]: unknown
+}
+
 export interface AcpConnection {
   readonly pid: number | undefined
   /** The agent's `initialize` answer. */
@@ -126,6 +146,12 @@ export interface AcpConnection {
   prompt(params: PromptRequest): Promise<PromptResponse>
   /** `session/cancel` — a notification; the pending `prompt` then answers `cancelled`. */
   cancel(sessionId: string): Promise<void>
+  /**
+   * `_session/steering` — the steering extension an agent advertises with
+   * `initialize._meta.steering.supported`. Rejects like any request when the
+   * agent does not implement it.
+   */
+  steer(params: AcpSteerRequest): Promise<AcpSteerResponse>
 
   /**
    * Route one session's traffic to `handlers` until the returned function runs.
@@ -167,6 +193,8 @@ export interface AcpProcessPool {
   hold(agentId: string): () => void
   /** Stop an agent's process — now if nothing holds it, else when the last hold releases. */
   retire(agentId: string): void
+  /** A turn holds the agent's process, or a start is in flight: a retire now would wait for it. */
+  held(agentId: string): boolean
   status(agentId: string): AcpProcessState
   /** Called with the agent id whenever its state changes. Returns unsubscribe. */
   onStatus(listener: (agentId: string, state: AcpProcessState) => void): () => void

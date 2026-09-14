@@ -206,6 +206,55 @@ export interface RunAgentTurnResult {
   taskState?: string
   /** Set when the turn failed. Direct mode renders this as an error row. */
   error?: { message: string; raw: string; code?: string }
+  /**
+   * Messages the user sent into this turn while it ran (ACP steering), in
+   * arrival order. Direct mode persists each as a user row between the parts
+   * streamed before and after it.
+   */
+  steers?: TurnSteer[]
+}
+
+/** A user message taken into a running turn, after `afterPart` of its parts. */
+export interface TurnSteer {
+  afterPart: number
+  text: string
+}
+
+/**
+ * The preview text of a slice of parts, the way a whole turn's `text` is
+ * derived: the answer (`text` and `command_result`), else everything.
+ */
+function sliceText(parts: MessagePart[]): string {
+  const answer = parts
+    .filter((part) => part.kind === 'text' || part.kind === 'command_result')
+    .map((part) => part.text)
+    .join('')
+  return answer || parts.map((part) => part.text).join('')
+}
+
+/**
+ * The turn's assistant rows, with each steered user message in the place it
+ * landed. A turn nobody steered is exactly one row, with the turn's own text.
+ */
+function saveTurnRows(chatId: string, agentId: string, result: RunAgentTurnResult): void {
+  const steers = result.steers ?? []
+  if (!steers.length) {
+    if (result.parts.length > 0) {
+      messageRepo.saveAssistant({ chatId, content: result.text, parts: result.parts, sourceAgentId: agentId })
+    }
+    return
+  }
+  let from = 0
+  const saveUpTo = (to: number): void => {
+    const slice = result.parts.slice(from, to)
+    from = Math.max(from, to)
+    if (slice.length) messageRepo.saveAssistant({ chatId, content: sliceText(slice), parts: slice, sourceAgentId: agentId })
+  }
+  for (const steer of steers) {
+    saveUpTo(Math.min(Math.max(steer.afterPart, from), result.parts.length))
+    messageRepo.saveUser({ chatId, content: steer.text, addressedAgentId: agentId })
+  }
+  saveUpTo(result.parts.length)
 }
 
 /**
@@ -554,6 +603,10 @@ export const a2aStreamingService = {
             ? { type: 'error', error: failure.message, code: failure.code }
             : { type: 'error', error: failure.message }
         )
+        // What the user said into the turn is theirs whatever became of it.
+        for (const steer of result.steers ?? []) {
+          messageRepo.saveUser({ chatId, content: steer.text, addressedAgentId: agentId })
+        }
         messageRepo.saveError({
           chatId,
           short: failure.message,
@@ -575,14 +628,7 @@ export const a2aStreamingService = {
         })
       }
 
-      if (result.parts.length > 0) {
-        messageRepo.saveAssistant({
-          chatId,
-          content: result.text,
-          parts: result.parts,
-          sourceAgentId: agentId
-        })
-      }
+      saveTurnRows(chatId, agentId, result)
 
       messageRepo.touchChat(chatId)
       port.postMessage({

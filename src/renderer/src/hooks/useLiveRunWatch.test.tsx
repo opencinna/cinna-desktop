@@ -142,6 +142,75 @@ describe('selected chat live subscription', () => {
     expect(useChatStore.getState().liveBaselineMessageIds).toEqual(['old'])
     view.unmount()
   })
+  it('holds a run started as the last one ended until that run’s saved read lands, so its output never leaves first', async () => {
+    let land!: (value: unknown) => void
+    get.mockReturnValueOnce(new Promise((resolve) => { land = resolve }))
+    client.setQueryData(['chats'], [{ id: 'a', activeRunId: 'r' }])
+    const view = mount()
+    emit(snapshot('r', [delta('first')]))
+    emit({ type: 'closed', runId: 'r', sequence: 1, agentId: null })
+    await waitFor(() => expect(get).toHaveBeenCalled())
+    // A queued message drained: main starts the next turn at once.
+    emit(snapshot('r2', [delta('second')]))
+    emit({ type: 'event', runId: 'r2', sequence: 1, agentId: null, event: delta(' and more') })
+    expect(text()).toBe('first')
+    expect(useChatStore.getState().isStreaming).toBe(false)
+    // The sidebar still learns at once that the chat is running.
+    expect(client.getQueryData(['chats'])).toEqual([{ id: 'a', activeRunId: 'r2' }])
+
+    await act(async () => { land({ messages: [], activeRunId: null }) })
+    expect(text()).toBe('second and more')
+    expect(useChatStore.getState().isStreaming).toBe(true)
+    expect(useChatStore.getState().liveRunId).toBe('r2')
+    expect(useChatStore.getState().liveBaselineMessageIds).toEqual(['old'])
+    view.unmount()
+  })
+  it('shows a held run after 2s when the ended run’s saved read has not landed, and a late read does not clear it', async () => {
+    vi.useFakeTimers()
+    let land!: (value: unknown) => void
+    get.mockReturnValueOnce(new Promise((resolve) => { land = resolve }))
+    const view = mount()
+    try {
+      emit(snapshot('r', [delta('first')]))
+      emit({ type: 'closed', runId: 'r', sequence: 1, agentId: null })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+      expect(get).toHaveBeenCalled()
+      emit(snapshot('r2', [delta('second')]))
+      emit({ type: 'event', runId: 'r2', sequence: 1, agentId: null, event: delta(' and more') })
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_990) })
+      expect(text()).toBe('first')
+
+      // The read is still out: the next turn shows anyway.
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+      expect(text()).toBe('second and more')
+      expect(useChatStore.getState().isStreaming).toBe(true)
+      expect(useChatStore.getState().liveRunId).toBe('r2')
+      emit({ type: 'event', runId: 'r2', sequence: 2, agentId: null, event: delta('!') })
+      expect(text()).toBe('second and more!')
+
+      await act(async () => { land({ messages: [], activeRunId: null }); await vi.advanceTimersByTimeAsync(10) })
+      expect(text()).toBe('second and more!')
+      expect(useChatStore.getState().isStreaming).toBe(true)
+      expect(useChatStore.getState().liveBaselineMessageIds).toEqual(['old'])
+    } finally {
+      view.unmount()
+      vi.useRealTimers()
+    }
+  })
+  it('applies a held run at once when the ended run’s saved read fails, rather than waiting on a read nothing retries', async () => {
+    let fail!: (error: Error) => void
+    get.mockReturnValueOnce(new Promise((_resolve, reject) => { fail = reject }))
+    const view = mount()
+    emit(snapshot('r', [delta('first')]))
+    emit({ type: 'closed', runId: 'r', sequence: 1, agentId: null })
+    await waitFor(() => expect(get).toHaveBeenCalled())
+    emit(snapshot('r2', [delta('second')]))
+    expect(text()).toBe('first')
+    await act(async () => { fail(new Error('DB busy')) })
+    expect(text()).toBe('second')
+    expect(useChatStore.getState().isStreaming).toBe(true)
+    view.unmount()
+  })
   it('an old read cannot clear a rebuilt projection after leaving and returning to the same chat', async () => {
     let finish!: (value: unknown) => void
     get.mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))

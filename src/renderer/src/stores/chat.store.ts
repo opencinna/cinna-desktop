@@ -148,7 +148,17 @@ interface TextBlock {
   file?: MessagePartFile
 }
 
-export type StreamBlock = TextBlock | ToolCallBlock
+/**
+ * A message the user sent that the running turn took in (a `user_message`
+ * event), at the point in the live output where it landed. The turn persists it
+ * as a user row in the same place.
+ */
+export interface UserBlock {
+  type: 'user'
+  content: string
+}
+
+export type StreamBlock = TextBlock | ToolCallBlock | UserBlock
 
 /**
  * Optimistic user message — rendered the instant the user sends, before the
@@ -202,8 +212,28 @@ interface ChatStore {
   // not silently re-point the message at somebody else. `null` — or no entry —
   // means "whoever answered last", which main resolves from the transcript.
   addressedAgentByChat: Record<string, string>
+  /**
+   * Bumped by every send from this window, whatever main does with it —
+   * started, taken into the running turn or queued. The transcript re-engages
+   * following on it: the user just acted, and what they acted on is at the bottom.
+   */
+  sentVersion: number
+  /** The queued message the active composer is editing, so its bubble can say so. */
+  editingQueued: { chatId: string; id: string } | null
+  /**
+   * Queued messages the user cancelled from their bubble, most recent last, so
+   * the composer editing one can tell a cancel from main sending it first.
+   * Queue ids are unique across chats; only the last few are kept.
+   */
+  cancelledQueuedIds: string[]
 
   setActiveChatId: (id: string | null) => void
+  noteSent: () => void
+  setEditingQueued: (editing: { chatId: string; id: string } | null) => void
+  /** The user cancelled this queued message from its bubble. */
+  noteQueuedCancelled: (id: string) => void
+  /** Main answered that the cancel came too late: the message was sent, not cancelled. */
+  forgetQueuedCancelled: (id: string) => void
   setAddressedAgent: (chatId: string, agentId: string) => void
   startStreaming: (requestId: string) => void
   setPendingUserMessage: (message: PendingUserMessage | null) => void
@@ -225,6 +255,8 @@ interface ChatStore {
     providerType?: 'mcp' | 'agent' | 'coordinator'
     agentId?: string
   }) => void
+  /** A user message taken into the running turn, after the blocks so far. */
+  appendUserMessage: (text: string) => void
   resolveToolCall: (id: string, result: unknown) => void
   failToolCall: (id: string, error: string) => void
   /** Accumulate one nested agent's stream event into an agent tool's sub-thread. */
@@ -242,6 +274,8 @@ interface ChatStore {
   reset: () => void
 }
 
+/** A cancel is read back within one queue refresh; this many is ample. */
+const CANCELLED_QUEUED_KEPT = 20
 
 export const useChatStore = create<ChatStore>((set) => ({
   activeChatId: null,
@@ -257,6 +291,30 @@ export const useChatStore = create<ChatStore>((set) => ({
   inputRequests: [],
   settledInputRequestIds: [],
   addressedAgentByChat: {},
+  sentVersion: 0,
+  editingQueued: null,
+  cancelledQueuedIds: [],
+
+  noteSent: () => set((state) => ({ sentVersion: state.sentVersion + 1 })),
+
+  noteQueuedCancelled: (id) =>
+    set((state) => ({
+      cancelledQueuedIds: [...state.cancelledQueuedIds.filter((known) => known !== id).slice(-(CANCELLED_QUEUED_KEPT - 1)), id]
+    })),
+
+  forgetQueuedCancelled: (id) =>
+    set((state) =>
+      state.cancelledQueuedIds.includes(id)
+        ? { cancelledQueuedIds: state.cancelledQueuedIds.filter((known) => known !== id) }
+        : state
+    ),
+
+  setEditingQueued: (editing) =>
+    set((state) =>
+      state.editingQueued?.chatId === editing?.chatId && state.editingQueued?.id === editing?.id
+        ? state
+        : { editingQueued: editing }
+    ),
 
   setAddressedAgent: (chatId, agentId) =>
     set((state) => ({
@@ -276,7 +334,8 @@ export const useChatStore = create<ChatStore>((set) => ({
       streamedIncrementallyChatId: null,
       sendError: null,
       inputRequests: [],
-      settledInputRequestIds: []
+      settledInputRequestIds: [],
+      editingQueued: null
     })),
 
   setPendingUserMessage: (message) =>
@@ -351,6 +410,11 @@ export const useChatStore = create<ChatStore>((set) => ({
       ],
       streamedIncrementallyChatId: state.activeChatId
     })),
+
+  appendUserMessage: (text) =>
+    // A block that is not text also ends the run of text before it, so the
+    // agent's next words start a block of their own below the message.
+    set((state) => ({ streamingBlocks: [...state.streamingBlocks, { type: 'user', content: text }] })),
 
   appendToolSubEvent: (toolCallId, event) =>
     set((state) => {
@@ -481,6 +545,8 @@ export const useChatStore = create<ChatStore>((set) => ({
       sendError: null,
       inputRequests: [],
       settledInputRequestIds: [],
-      addressedAgentByChat: {}
+      addressedAgentByChat: {},
+      editingQueued: null,
+      cancelledQueuedIds: []
     }))
 }))

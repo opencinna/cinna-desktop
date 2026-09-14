@@ -59,7 +59,12 @@ import {
   type AgentReadiness,
   type AgentReadinessChangedPayload
 } from '../shared/agentDrivers'
-import type { RunSendPayload } from '../shared/ipcPayloads'
+import {
+  RUN_QUEUE_CHANGED_CHANNEL,
+  type RunQueueView,
+  type RunSendPayload,
+  type RunStartResult
+} from '../shared/ipcPayloads'
 import type { ChatRouter } from '../shared/chatRouting'
 import { isRunEvent, type RunEvent } from '../shared/runEvents'
 import type { MessageAttachment, PendingAttachment } from '../shared/attachments'
@@ -783,7 +788,27 @@ const api = {
    * single-port interface for callers that own the whole turn subscription.
    */
   run: {
-    start: (payload: RunSendPayload): Promise<string> => ipcRenderer.invoke('run:start', payload),
+    /**
+     * Send a message. With no turn running it starts one; with one running it
+     * is taken into that turn where the engine can, and otherwise queued in
+     * main until the turn ends. Files are refused while a turn runs.
+     */
+    start: (payload: RunSendPayload): Promise<RunStartResult> => ipcRenderer.invoke('run:start', payload),
+    /** The messages main is holding for this chat until its turn ends. */
+    queueList: (chatId: string): Promise<RunQueueView> => ipcRenderer.invoke('run:queue-list', chatId),
+    /** Every queued message's text, in order; the queue is empty afterwards. */
+    queueTake: (chatId: string): Promise<string[]> => ipcRenderer.invoke('run:queue-take', chatId),
+    queueRemove: (chatId: string, id: string): Promise<boolean> =>
+      ipcRenderer.invoke('run:queue-remove', chatId, id),
+    /** Replace a queued message's text; false when it is no longer queued. */
+    queueEdit: (chatId: string, id: string, content: string): Promise<boolean> =>
+      ipcRenderer.invoke('run:queue-edit', chatId, id, content),
+    /** Fires whenever a chat's queue changes, with the queue as it now stands. Returns an unsubscribe function. */
+    onQueueChanged: (handler: (payload: { chatId: string; view: RunQueueView }) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: { chatId: string; view: RunQueueView }): void => handler(payload)
+      ipcRenderer.on(RUN_QUEUE_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(RUN_QUEUE_CHANGED_CHANNEL, listener)
+    },
     watch: (chatId: string, onMessage: (message: RunWatchMessage) => void): (() => void) => {
       const channel = new MessageChannel()
       channel.port1.onmessage = (event) => {

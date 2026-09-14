@@ -27,8 +27,9 @@ interface AgentContributionProps {
   isStreaming?: boolean
   /**
    * Verbose mode renders every part inline; compact (default) folds runs of
-   * consecutive auxiliary blocks (thinking / tool / tool_result) into a dots
-   * group — the same treatment the main transcript uses.
+   * consecutive tool blocks (tool / tool_result / Cinna CLI) into a dots
+   * group, with thinking as an open block between them — the same treatment
+   * the main transcript uses.
    */
   verbose?: boolean
 }
@@ -82,12 +83,13 @@ export function AgentContribution({
       return
     }
     if (p.kind === 'thinking') {
-      const node = <ThinkingBlock content={p.text} isStreaming={live} defaultExpanded={false} />
-      renderNodes.push(
-        verbose
-          ? { slot: 'plain', key: k, node }
-          : { slot: 'collapsible', item: { key: k, kind: 'thinking', status: 'done', isLive: live, node } }
-      )
+      // Never folded into a dots group: thinking stands alone, open, in both
+      // modes, and breaks a run of tool dots.
+      renderNodes.push({
+        slot: 'plain',
+        key: k,
+        node: <ThinkingBlock content={p.text} isStreaming={live} defaultExpanded />
+      })
     } else if (p.kind === 'tool') {
       const node = (
         <ToolNarrationBlock

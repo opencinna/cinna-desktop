@@ -269,6 +269,10 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
     acquire,
     hold,
     retire,
+    held: (agentId) => {
+      const entry = entries.get(agentId)
+      return !!entry && (entry.holds > 0 || !!entry.starting)
+    },
     status: (agentId) => entries.get(agentId)?.state ?? { state: 'stopped' },
     onStatus: (listener) => {
       listeners.add(listener)

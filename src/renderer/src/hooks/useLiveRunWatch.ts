@@ -1,9 +1,13 @@
 import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import type { RunWatchMessage } from '../../../shared/runWatch'
 import { useChatStore } from '../stores/chat.store'
 import { useAuthStore } from '../stores/auth.store'
 import { useRunEventHandler } from './useChatStream'
 import { useAfterTurnAgentStatus } from './useAgentStatus'
+
+/** The longest a next turn waits on the ended turn's saved read before it shows anyway. */
+export const HELD_RUN_MAX_MS = 2000
 
 /** Mounted once by MainArea. Switching views only changes the subscription. */
 export function useLiveRunWatch(): void {
@@ -20,6 +24,22 @@ export function useLiveRunWatch(): void {
     let replayAvailable = true
     let needsSettlement = false
     let settling = false
+    // A run that started while the ended run's saved read was in flight, and
+    // every message after it, in arrival order. See the snapshot branch below.
+    let held: RunWatchMessage[] | null = null
+    let heldTimer: ReturnType<typeof setTimeout> | undefined
+    // True while the held messages replay: their snapshot is applied now, even
+    // though the read it waited on may still be in flight.
+    let releasing = false
+    const release = (): void => {
+      clearTimeout(heldTimer)
+      heldTimer = undefined
+      const waiting = held
+      held = null
+      if (!waiting) return
+      releasing = true
+      try { waiting.forEach(receive) } finally { releasing = false }
+    }
     const current = (): boolean => !disposed && useChatStore.getState().activeChatId === chatId && useAuthStore.getState().currentUser?.id === userId
     const settle = async (): Promise<void> => {
       if (settling || !needsSettlement || !current()) return
@@ -40,6 +60,11 @@ export function useLiveRunWatch(): void {
       } catch { /* Keep the projection until a fresh read succeeds. */ }
       finally {
         settling = false
+        // The held run goes in now whatever the read did. After a success the
+        // saved rows are in the cache; after a failure nothing would retry the
+        // read on the held run's behalf, so it replaces the projection as it
+        // would have on arrival.
+        release()
         if (current() && needsSettlement && useChatStore.getState().liveProjectionVersion !== version) void settle()
       }
     }
@@ -47,13 +72,13 @@ export function useLiveRunWatch(): void {
       if (event.type === 'updated' && event.action.type === 'success' && event.query.queryKey[0] === 'chat' && event.query.queryKey[1] === chatId) void settle()
     })
     const refresh = (): void => { void queryClient.invalidateQueries({ queryKey: ['chat', chatId] }) }
-    const unwatch = window.api.run.watch(chatId, (message) => {
+    const receive = (message: RunWatchMessage): void => {
       if (!current()) return
+      if (held) {
+        held.push(message)
+        return
+      }
       if (message.type === 'snapshot') {
-        runId = message.runId
-        sequence = message.sequence
-        replayAvailable = message.replayAvailable
-        needsSettlement = !message.active
         if (message.active) {
           // Persist activity outside the selected transcript before switching
           // chats can clear isStreaming. Cancel older list reads so an idle
@@ -62,6 +87,30 @@ export function useLiveRunWatch(): void {
           queryClient.setQueryData<Awaited<ReturnType<typeof window.api.chat.list>>>(['chats'], (chats) =>
             chats?.map((chat) => chat.id === chatId ? { ...chat, activeRunId: message.runId } : chat))
         }
+        // A run starting while the ended one's saved transcript is still being
+        // read — a queued message drained the moment that turn ended — would
+        // reset the projection a round trip before those saved rows reach the
+        // cache: the ended turn's output vanished and the transcript shrank to
+        // the top of the chat for a few frames (ux_rules §1). Hold the new run
+        // until that read ends. `settle` clears the old projection and replays
+        // these messages in the same task, so the saved rows and the new run
+        // render together. Nothing stale can outlive it: the held snapshot is
+        // applied exactly once, and applying a snapshot always resets the blocks.
+        //
+        // For at most HELD_RUN_MAX_MS, though: a slow read, or a refetch that
+        // replaced it mid-flight, must not keep the next turn off screen. The
+        // read carries on. When it lands late, `settle` finds the projection
+        // version bumped by the snapshot released here, skips the clear, and
+        // leaves the new run alone.
+        if (message.active && needsSettlement && settling && !releasing) {
+          held = [message]
+          heldTimer = setTimeout(release, HELD_RUN_MAX_MS)
+          return
+        }
+        runId = message.runId
+        sequence = message.sequence
+        replayAvailable = message.replayAvailable
+        needsSettlement = !message.active
         useChatStore.setState({ liveRunId: runId,
           liveProjectionVersion: useChatStore.getState().liveProjectionVersion + 1,
           liveBaselineMessageIds: message.active && replayAvailable ? message.baselineMessageIds : null,
@@ -99,7 +148,8 @@ export function useLiveRunWatch(): void {
           if (message.event.type === 'error') void window.api.agents.checkReadiness(agentId).catch(() => {})
         }
       }
-    })
-    return () => { disposed = true; stopReading(); unwatch() }
+    }
+    const unwatch = window.api.run.watch(chatId, receive)
+    return () => { disposed = true; clearTimeout(heldTimer); stopReading(); unwatch() }
   }, [chatId, userId, handleRun, queryClient, refreshStatus])
 }

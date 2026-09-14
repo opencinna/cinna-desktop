@@ -1,5 +1,5 @@
-import { useState } from 'react'
 import { Info } from 'lucide-react'
+import { useTranscriptDisclosure } from './transcriptExpansion'
 
 interface NoticeBlockProps {
   /** The notice text emitted by the agent (e.g. "Starting up the agent environment…"). */
@@ -32,7 +32,7 @@ interface NoticeBlockProps {
  * swap from streaming to persisted has no visual seam.
  */
 export function NoticeBlock({ content, live, defaultExpanded }: NoticeBlockProps): React.JSX.Element {
-  const [expanded, setExpanded] = useState(defaultExpanded ?? false)
+  const [expanded, setExpanded] = useTranscriptDisclosure(defaultExpanded ?? false)
 
   if (live) {
     return (

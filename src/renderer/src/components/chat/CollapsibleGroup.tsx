@@ -1,8 +1,13 @@
-import { useState } from 'react'
+import { useContext } from 'react'
 import { ChevronRight } from 'lucide-react'
+import { TranscriptVisibleContext, useTranscriptDisclosure } from './transcriptExpansion'
 
 export type CollapsibleStatus = 'pending' | 'done' | 'error'
-export type CollapsibleKind = 'thinking' | 'tool_narration' | 'tool_call' | 'tool_result'
+/**
+ * Only tool-ish steps fold into a dots group. Thinking is a standalone block
+ * in every mode: folded in, a long agent turn read as one row of dots.
+ */
+export type CollapsibleKind = 'tool_narration' | 'tool_call' | 'tool_result'
 
 export interface CollapsibleGroupItem {
   key: string
@@ -22,21 +27,22 @@ function dotClass(item: CollapsibleGroupItem): string {
   if (item.status === 'pending') return 'bg-[var(--color-warning)]/45'
   if (item.status === 'error') return 'bg-[var(--color-danger)]/45'
   if (item.status === 'done') return 'bg-[var(--color-success)]/45'
-  if (item.kind === 'thinking') return 'bg-[var(--color-accent)]/40'
   return 'bg-[var(--color-text-muted)]/50'
 }
 
 export function CollapsibleGroup({ items }: CollapsibleGroupProps): React.JSX.Element {
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useTranscriptDisclosure(false)
+  const visible = useContext(TranscriptVisibleContext)
 
   return (
     <div className="rounded-lg">
       <button
         type="button"
+        data-group-header
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
         aria-label={`${expanded ? 'Collapse' : 'Expand'} ${items.length} ${items.length === 1 ? 'step' : 'steps'}`}
-        className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md
+        className="inline-flex items-start gap-1.5 px-2 py-1 rounded-md max-w-full
           text-[var(--color-text-muted)]
           hover:text-[var(--color-text-secondary)]
           hover:bg-[var(--color-bg-secondary)]/60
@@ -44,9 +50,13 @@ export function CollapsibleGroup({ items }: CollapsibleGroupProps): React.JSX.El
       >
         <ChevronRight
           size={11}
-          className={`transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
+          className={`shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
         />
-        <span className="flex items-center gap-1">
+        {/* Dots wrap within the transcript width rather than scrolling it
+            sideways. The 1.5px vertical padding makes each 8px row as tall as
+            the 11px chevron, so the chevron sits level with the first row and
+            a single row keeps its old height. */}
+        <span className="flex flex-wrap items-center gap-1 min-w-0 py-[1.5px]">
           {items.map((it) => {
             const animate = it.status === 'pending' || it.isLive
             return (
@@ -73,9 +83,11 @@ export function CollapsibleGroup({ items }: CollapsibleGroupProps): React.JSX.El
               expanded ? 'opacity-100' : 'opacity-0'
             }`}
           >
-            {items.map((it) => (
-              <div key={it.key}>{it.node}</div>
-            ))}
+            <TranscriptVisibleContext.Provider value={visible && expanded}>
+              {items.map((it) => (
+                <div key={it.key}>{it.node}</div>
+              ))}
+            </TranscriptVisibleContext.Provider>
           </div>
         </div>
       </div>

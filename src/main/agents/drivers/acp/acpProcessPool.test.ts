@@ -50,6 +50,7 @@ function stubConnection(pid: number): StubConnection {
     setSessionConfigOption: async () => ({ configOptions: [] }),
     prompt: async () => ({ stopReason: 'end_turn' }),
     cancel: async () => undefined,
+    steer: async () => ({ outcome: 'promptRequired' }),
     bindSession: () => () => undefined,
     stderrTail: () => '',
     dispose: async () => {

@@ -51,7 +51,23 @@ export interface RunInput {
   signal: AbortSignal
   /** Live event sink; omit for a buffered turn. */
   onEvent?: (event: RunEvent) => void
+  /**
+   * Where a driver that can take a message mid-turn offers to. Called with a
+   * function while the turn can take one, and with `null` the moment it no
+   * longer can. A driver without mid-turn delivery never calls it.
+   */
+  registerSteer?: (steer: SteerFn | null) => void
 }
+
+/**
+ * Deliver a user message into the running turn. `injected` means the engine
+ * took it and the turn posted a `user_message` event for it and will persist
+ * it; `late` means the engine took it after the turn's result was built, so
+ * the turn will **not** persist it and the caller must; `unavailable` means
+ * nothing was delivered and the caller should wait for the turn to end.
+ * Never rejects.
+ */
+export type SteerFn = (content: string) => Promise<'injected' | 'late' | 'unavailable'>
 
 /**
  * One turn's output — `RunAgentTurnResult`, unchanged in phase 2 so the golden

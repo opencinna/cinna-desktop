@@ -4,23 +4,56 @@ import { ipcMain, type MessagePortMain } from 'electron'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { inboxService } from '../services/inboxService'
-import { runExecutionService } from '../services/runExecutionService'
+import { runExecutionService, type RunScope } from '../services/runExecutionService'
+import { runQueueService } from '../services/runQueueService'
 import { createLogger } from '../logger/logger'
+import { getMainWindow } from '../index'
 import { postRunError } from './_streamPort'
 import { ipcHandle } from './_wrap'
-import type { RunSendPayload } from '../../shared/ipcPayloads'
+import { RUN_QUEUE_CHANGED_CHANNEL, type RunSendPayload, type RunStartResult } from '../../shared/ipcPayloads'
 
 const logger = createLogger('run')
 
+/** The active profile's scope, for a chat it owns. Every queue channel asks. */
+function ownedChatScope(chatId: unknown): RunScope {
+  userActivation.requireActivated()
+  const profileUserId = getProfileScopeUserId()
+  if (typeof chatId !== 'string' || !chatRepo.getOwned(profileUserId, chatId)) throw new Error('Chat not found')
+  return { profileUserId, settingsUserId: getSettingsScopeUserId() }
+}
+
 export function registerRunHandlers(): void {
-  ipcHandle('run:start', (_event, payload: RunSendPayload) => {
+  runQueueService.onChange((chatId, view) => {
+    // Only the active profile's queues reach the window; another profile's
+    // chat ids mean nothing to it.
+    if (!userActivation.isActivated() || !chatRepo.getOwned(getProfileScopeUserId(), chatId)) return
+    const win = getMainWindow()
+    if (win && !win.isDestroyed()) win.webContents.send(RUN_QUEUE_CHANGED_CHANNEL, { chatId, view })
+  })
+  ipcHandle('run:start', (_event, payload: RunSendPayload): Promise<RunStartResult> => {
     userActivation.requireActivated()
     const userId = getProfileScopeUserId()
-    return runExecutionService.start({ profileUserId: userId, settingsUserId: getSettingsScopeUserId() }, payload, {
-      preserveOnRefusal: inboxService.hasNextMessage(userId, payload.chatId),
-      observe: (ctx, event) => inboxService.recordRunEvent(ctx, event),
-      onAccepted: (ctx) => inboxService.resumeChat(ctx, payload.content)
-    }).id
+    return runQueueService.submit({ profileUserId: userId, settingsUserId: getSettingsScopeUserId() }, payload, (sent) => {
+      // A queued message can start long after this handler returned. It starts
+      // only for the profile that sent it, and only while that profile is in.
+      userActivation.requireActivated()
+      if (getProfileScopeUserId() !== userId) throw new Error('The profile changed before the queued message was sent.')
+      return {
+        preserveOnRefusal: inboxService.hasNextMessage(userId, sent.chatId),
+        observe: (ctx, event) => inboxService.recordRunEvent(ctx, event),
+        onAccepted: (ctx) => inboxService.resumeChat(ctx, sent.content)
+      }
+    })
+  })
+  ipcHandle('run:queue-list', (_event, chatId: string) => runQueueService.list(ownedChatScope(chatId), chatId))
+  ipcHandle('run:queue-take', (_event, chatId: string) => runQueueService.take(ownedChatScope(chatId), chatId))
+  ipcHandle('run:queue-remove', (_event, chatId: string, id: string) => {
+    const scope = ownedChatScope(chatId)
+    return typeof id === 'string' && runQueueService.remove(scope, chatId, id)
+  })
+  ipcHandle('run:queue-edit', (_event, chatId: string, id: string, content: string) => {
+    const scope = ownedChatScope(chatId)
+    return typeof id === 'string' && runQueueService.edit(scope, chatId, id, content)
   })
   ipcMain.on('run:watch', (event, chatId: string) => {
     const port = event.ports?.[0]

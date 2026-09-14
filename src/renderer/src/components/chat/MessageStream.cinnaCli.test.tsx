@@ -12,6 +12,10 @@ vi.mock('../../hooks/useAgents', () => ({ useAgents: () => ({ data: [] }) }))
 vi.mock('../../hooks/useAgentRequests', () => ({ useAgentRequests: () => ({ isPending: () => false }) }))
 vi.mock('../../hooks/useStickToBottom', () => ({ useStickToBottom: () => ({ containerRef: { current: null }, contentRef: { current: null }, pinned: true, scrollToBottom: () => {} }) }))
 vi.mock('./MessageMetaFooter', () => ({ MessageMetaFooter: () => null }))
+vi.mock('./QueuedMessages', () => ({
+  QueuedMessages: () => null,
+  useQueuedMessages: () => ({ chatId: 'chat', bubbles: [], holdsSent: false, handsOver: () => false, cancel: () => {} })
+}))
 
 const parts: MessagePart[] = [
   { kind: 'tool', toolId: 'one', toolName: 'Bash', toolInput: { command: 'cinna account agents --all' }, text: 'Bash: cinna account agents --all' },

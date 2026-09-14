@@ -2,7 +2,9 @@ import { PendingHandoffControl } from '../tasks/PendingHandoffControl'
 import { AmbientGrid } from '../ui/AmbientGrid'
 import { AutonomousTaskDialog } from '../tasks/AutonomousTaskDialog'
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef } from 'react'
-import { SendHorizontal, Square, Bot } from 'lucide-react'
+import { SendHorizontal, Square, Bot, Check } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import type { RunQueueView } from '../../../../shared/ipcPayloads'
 import { useChatDetail, useSetChatRouter } from '../../hooks/useChat'
 import { useModels } from '../../hooks/useModels'
 import { useChatStream } from '../../hooks/useChatStream'
@@ -44,6 +46,7 @@ import type { ComposerAttachment, MessageAttachment } from '../../../../shared/a
 import type { NoteData } from '../../../../shared/notes'
 import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
 import { useComposerDraftStore } from '../../stores/composerDraft.store'
+import { useRunQueue } from '../../hooks/useRunQueue'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type TriggerChar = '@' | '#' | '/' | '?'
@@ -119,6 +122,35 @@ interface ChatInputProps {
 
 const DOUBLE_ESC_WINDOW_MS = 400
 
+/**
+ * Shown when main sent a queued message being edited before the edit was saved.
+ * Not for a cancel from its bubble or a stop: the user did those themselves.
+ */
+export const QUEUED_EDIT_TOO_LATE = 'Sent before your edit was saved — your edit is still here.'
+
+/**
+ * A message recalled into the composer with ArrowUp/ArrowDown: the chat it was
+ * recalled in, which history entry, its text as recalled (cycling continues
+ * only while the input still holds exactly that), and the queue id when it is
+ * a queued message being edited.
+ */
+interface Recall {
+  chatId: string
+  index: number
+  text: string
+  queuedId?: string
+}
+
+/**
+ * Whether the caret is on the input's first line (ArrowUp, -1) or its last
+ * (ArrowDown, 1), by line breaks. Anywhere else the arrow moves the caret.
+ */
+function caretOnEdgeLine(el: HTMLTextAreaElement, direction: -1 | 1): boolean {
+  return direction < 0
+    ? !el.value.slice(0, el.selectionStart).includes('\n')
+    : !el.value.slice(el.selectionEnd).includes('\n')
+}
+
 /** Find a trigger token (@, #, /, or ?) at the cursor position. */
 function findTriggerToken(
   value: string,
@@ -170,6 +202,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const [input, setInput] = useComposerDraftField(draftKey, 'text')
   const [sending] = useComposerDraftField(draftKey, 'sending')
   const [autonomousGoal, setAutonomousGoal] = useState<string | null>(null)
+  // Component state on purpose: navigating away drops edit mode and leaves the
+  // text as an ordinary draft.
+  const [recall, setRecall] = useState<Recall | null>(null)
+  // Read against this chat only: on the first render after a chat switch the
+  // state still holds the last chat's recall, until the reset effect below.
+  const activeRecall = recall && recall.chatId === chatId ? recall : null
+  const activeRecallRef = useRef(activeRecall)
+  activeRecallRef.current = activeRecall
   const [capabilityPickerOpen, setCapabilityPickerOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const lastEscapeAt = useRef(0)
@@ -215,6 +255,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   )
   const setAddressedAgent = useChatStore((state) => state.setAddressedAgent)
   const setSendError = useChatStore((state) => state.setSendError)
+  // Drops the too-late notice, and only that one, once the text it speaks of is
+  // sent or cleared.
+  const clearEditTooLate = useCallback(() => {
+    if (useChatStore.getState().sendError === QUEUED_EDIT_TOO_LATE) setSendError(null)
+  }, [setSendError])
+  const queryClient = useQueryClient()
   const { data: models } = useModels()
   const answerTarget = useMemo(
     () =>
@@ -302,8 +348,158 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     el.style.height = Math.min(el.scrollHeight, 180) + 'px'
   }, [input, draftKey])
   const { cancel: cancelStream } = useChatStream()
-  const { isStreaming: hasPortStream, activeRequestId } = useChatStore()
+  const { isStreaming: hasPortStream, activeRequestId, activeChatId: storeChatId, streamingBlocks } = useChatStore()
   const isStreaming = hasPortStream || !!chatData?.activeRunId
+
+  // A turn that ended without finishing (stopped, failed) leaves what was
+  // queued behind it held rather than sending it into a conversation that just
+  // stopped. It comes back here, after anything typed since, for the user to
+  // send or drop.
+  const { data: runQueue } = useRunQueue(chatId)
+  const heldQueueCount = runQueue?.held ? runQueue.items?.length ?? 0 : 0
+  const restoringQueueRef = useRef(false)
+  // The queued message being edited when it left the queue and ended edit mode.
+  const vanishedEditRef = useRef<{ chatId: string; id: string } | null>(null)
+  const draftKeyRef = useRef(draftKey)
+  draftKeyRef.current = draftKey
+  useEffect(() => {
+    if (!chatId || !heldQueueCount || restoringQueueRef.current) return
+    restoringQueueRef.current = true
+    const key = draftKey
+    // A queued message being edited is held with the rest. Edit mode ends now,
+    // before the take empties the queue and that reads as main having sent it;
+    // the input holds the edit, which takes the original's place in the queue.
+    const heldItems = queryClient.getQueryData<RunQueueView>(['run-queue', chatId])?.items ?? []
+    const recalledId = activeRecallRef.current?.queuedId
+    // A drained start main refused: the edited message left the queue, which
+    // ended edit mode as though main had sent it, and is back, held, under the
+    // same id. It was never sent, so the edit still takes its place.
+    const vanished = vanishedEditRef.current
+    vanishedEditRef.current = null
+    const returnedId = !recalledId && vanished?.chatId === chatId ? vanished.id : undefined
+    const editedId = recalledId ?? returnedId
+    const editedIndex = editedId ? heldItems.findIndex((item) => item.id === editedId) : -1
+    if (editedIndex >= 0) {
+      setRecall(null)
+      if (editedId === returnedId) clearEditTooLate()
+    }
+    void window.api.run.queueTake(chatId)
+      .then((texts) => {
+        if (!texts.length) return
+        useComposerDraftStore.getState().update(key, (draft) => {
+          const kept = draft.text.replace(/\n+$/, '')
+          const index = editedIndex < 0
+            ? -1
+            : texts.length === heldItems.length ? editedIndex : texts.indexOf(heldItems[editedIndex].content)
+          if (index >= 0) {
+            // An emptied edit was never savable; the original stands.
+            return { text: texts.map((text, at) => (at === index && kept.trim() ? kept : text)).join('\n\n') }
+          }
+          const joined = texts.join('\n\n')
+          return { text: kept ? `${kept}\n\n${joined}` : joined }
+        })
+        requestAnimationFrame(() => {
+          const el = textareaRef.current
+          if (!el || draftKeyRef.current !== key) return
+          el.style.height = 'auto'
+          el.style.height = Math.min(el.scrollHeight, 180) + 'px'
+          if (document.activeElement === document.body) el.focus()
+          el.setSelectionRange(el.value.length, el.value.length)
+          el.scrollTop = el.scrollHeight
+        })
+      })
+      .catch((error) => setSendError(unwrapIpcError(error, 'Queued messages could not be restored.')))
+      .finally(() => { restoringQueueRef.current = false })
+  }, [chatId, draftKey, heldQueueCount, queryClient, setSendError, clearEditTooLate])
+
+  // Message history for ArrowUp/ArrowDown: the user's own saved messages in
+  // this chat, oldest first, then those the running turn took in (saved only
+  // when the turn ends), then what is queued (non-held), which is newest.
+  const historyEntries = useMemo((): { text: string; queuedId?: string }[] => {
+    if (!chatId) return []
+    const delivered = (chatData?.messages ?? [])
+      .filter((message) => message.role === 'user' && typeof message.content === 'string' && message.content.trim())
+      .map((message) => ({ text: message.content }))
+    const steered = storeChatId === chatId
+      ? streamingBlocks.flatMap((block) => (block.type === 'user' && block.content.trim() ? [{ text: block.content }] : []))
+      : []
+    const queued = runQueue && !runQueue.held
+      ? (runQueue.items ?? []).map((item) => ({ text: item.content, queuedId: item.id }))
+      : []
+    return [...delivered, ...steered, ...queued]
+  }, [chatId, chatData?.messages, storeChatId, streamingBlocks, runQueue])
+
+  // Editing a recalled queued message. The bubble shows it. If the message
+  // leaves the queue first, edit mode ends and the text stays here as an
+  // ordinary draft: silently when the user cancelled it from its bubble, with a
+  // sentence when main sent it first (ux_rules §6). A queue held by a stop is
+  // the held-take effect's, above, which folds the edit into the held texts —
+  // also when the edited message comes back held after leaving, a drained start
+  // main refused: that effect takes the sentence back.
+  const editingId = chatId ? activeRecall?.queuedId : undefined
+  // While a turn runs, an empty composer offers Stop alone: the Send slot keeps
+  // its place, unseen and unreachable, until there is something to send.
+  const sendSlotHidden = isStreaming && !editingId && !input.trim()
+  const setEditingQueued = useChatStore((state) => state.setEditingQueued)
+  useEffect(() => {
+    setEditingQueued(chatId && editingId ? { chatId, id: editingId } : null)
+  }, [chatId, editingId, setEditingQueued])
+  useEffect(() => () => setEditingQueued(null), [setEditingQueued])
+  useEffect(() => {
+    if (!editingId || !runQueue) return
+    if ((runQueue.items ?? []).some((item) => item.id === editingId)) return
+    setRecall(null)
+    if (chatId) vanishedEditRef.current = { chatId, id: editingId }
+    if (!useChatStore.getState().cancelledQueuedIds.includes(editingId)) setSendError(QUEUED_EDIT_TOO_LATE)
+  }, [chatId, editingId, runQueue, setSendError])
+
+  const saveQueuedEdit = useCallback(async (targetChatId: string, id: string): Promise<void> => {
+    const text = input
+    if (!text.trim() || !useComposerDraftStore.getState().beginSend(draftKey)) return
+    try {
+      if (await window.api.run.queueEdit(targetChatId, id, text)) {
+        useComposerDraftStore.getState().update(draftKey, (draft) => ({ text: draft.text === text ? '' : draft.text }))
+        clearEditTooLate()
+      } else {
+        setSendError(QUEUED_EDIT_TOO_LATE)
+      }
+      setRecall(null)
+    } catch (error) {
+      setSendError(unwrapIpcError(error, 'The queued message could not be saved.'))
+    } finally {
+      useComposerDraftStore.getState().endSend(draftKey)
+    }
+  }, [input, draftKey, setSendError, clearEditTooLate])
+
+  /**
+   * Step through the history (-1 older, +1 newer). Active only while the input
+   * is empty or still holds the recalled entry unchanged; past the newest the
+   * input empties. Returns whether the key was used.
+   */
+  const recallHistory = (direction: -1 | 1): boolean => {
+    if (!chatId) return false
+    const current = activeRecall && input === activeRecall.text ? activeRecall.index : input === '' ? historyEntries.length : null
+    if (current === null || !historyEntries.length) return false
+    const index = current + direction
+    if (index < 0) return true
+    if (index >= historyEntries.length) {
+      if (current >= historyEntries.length) return false
+      setRecall(null)
+      setInput('')
+      return true
+    }
+    const entry = historyEntries[index]
+    setRecall({ chatId, index, text: entry.text, queuedId: entry.queuedId })
+    setInput(entry.text)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (!el) return
+      el.style.height = 'auto'
+      el.style.height = Math.min(el.scrollHeight, 180) + 'px'
+      el.setSelectionRange(el.value.length, el.value.length)
+    })
+    return true
+  }
 
   // Trigger popup state — shared between @ (agents/MCP), # (example prompts),
   // / (CLI commands), and ? (notes).
@@ -354,6 +550,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     setTriggerFilter('')
     setCapabilityPickerOpen(false)
     setAutonomousGoal(null)
+    setRecall(null)
   }, [draftKey])
 
   // Hold the hint rotation while the composer has something open — changing the
@@ -918,7 +1115,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim()
-    if (isStreaming) return
+    if (isStreaming && !chatId) return
+
+    // A recalled queued message: Enter saves the edit, it does not send anew.
+    if (chatId && editingId) {
+      await saveQueuedEdit(chatId, editingId)
+      return
+    }
 
     // Double-Enter note expansion: right after the user picked a note via
     // the `?` popup, an Enter on an empty composer means "drop the note's
@@ -958,6 +1161,24 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // note paste above on purpose: that sends nothing, so a refusal must not
     // stop it.
     if (blocksSendRef.current) return
+
+    // A turn is running here: the text goes to main, which takes it into the
+    // turn or holds it until the turn ends. Files and notes stay in the draft
+    // for a turn of their own.
+    if (chatId && isStreaming) {
+      if (!trimmed || !useComposerDraftStore.getState().beginSend(draftKey)) return
+      try {
+        if (await composer.submit(trimmed)) {
+          useComposerDraftStore.getState().update(draftKey, (draft) => ({
+            text: draft.text === input ? '' : draft.text
+          }))
+          clearEditTooLate()
+        }
+      } finally {
+        useComposerDraftStore.getState().endSend(draftKey)
+      }
+      return
+    }
 
     // Allow attachment-only sends (no text) so users can drop a file in and
     // hit send with a quick "look at this" — only for active chats where the
@@ -1039,7 +1260,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           : persistedAttachments
       const dispatched = await composer.submit(trimmed, mergedAttachments)
       // Consume submitted values from the source draft, even after navigation.
-      if (dispatched) clearComposer()
+      if (dispatched) {
+        clearComposer()
+        clearEditTooLate()
+      }
     } finally {
       useComposerDraftStore.getState().endSend(draftKey)
     }
@@ -1062,7 +1286,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     pendingExpansionNoteId,
     removePendingNote,
     fetchNote,
-    observeHint
+    observeHint,
+    editingId,
+    saveQueuedEdit,
+    clearEditTooLate
   ])
 
   const handleCancel = useCallback(() => {
@@ -1161,6 +1388,30 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       }
     }
 
+    // Esc while editing a queued message leaves the edit and empties the input.
+    // It is its own gesture: it does not arm the Esc Esc stop.
+    if (e.key === 'Escape' && chatId && editingId) {
+      e.preventDefault()
+      lastEscapeAt.current = 0
+      setRecall(null)
+      setInput('')
+      clearEditTooLate()
+      return
+    }
+
+    // Within a multi-line entry the arrows move the caret; only past its first
+    // or last line do they step through the history.
+    if (
+      chatId &&
+      (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+      !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey &&
+      caretOnEdgeLine(e.currentTarget, e.key === 'ArrowUp' ? -1 : 1) &&
+      recallHistory(e.key === 'ArrowUp' ? -1 : 1)
+    ) {
+      e.preventDefault()
+      return
+    }
+
     if (e.key === 'Escape' && onDoubleEscape) {
       e.preventDefault()
       const now = Date.now()
@@ -1177,6 +1428,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       return
     }
 
+    // The same chord stops a running turn in an active chat, exactly as the
+    // Stop button does. A lone Esc only arms it. No hints here: those belong to
+    // the new-chat screen above.
+    if (e.key === 'Escape' && chatId && isStreaming) {
+      e.preventDefault()
+      const now = Date.now()
+      if (now - lastEscapeAt.current <= DOUBLE_ESC_WINDOW_MS) {
+        lastEscapeAt.current = 0
+        handleCancel()
+      } else {
+        lastEscapeAt.current = now
+      }
+      return
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       void handleSend()
@@ -1187,6 +1453,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const value = e.target.value
     const prevValue = input
     setInput(value)
+    if (!value) clearEditTooLate()
 
     const el = e.target
     el.style.height = 'auto'
@@ -1338,7 +1605,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           value={input}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message..."
+          placeholder={chatId && isStreaming ? 'Send a follow-up · Esc Esc to stop' : 'Type a message...'}
           rows={1}
           role="combobox"
           aria-autocomplete="list"
@@ -1487,34 +1754,47 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               modelName={badgeInfo.modelName}
             />
           )}
-          {isStreaming ? (
+          {/* Stop left of the Send slot, so Send is always the rightmost button:
+              a turn ending removes Stop and moves nothing under the pointer.
+              While a turn runs the slot keeps its place but is invisible (and
+              unfocusable) until there is text to send or a queued message is
+              being edited, so typing never changes the row (ux_rules §1). */}
+          {isStreaming && (
             <button
               onClick={handleCancel}
               aria-label="Stop"
+              title="Stop (Esc Esc)"
               className="p-1.5 rounded-lg bg-[var(--color-danger)] hover:opacity-80 text-white transition-opacity"
             >
               <Square size={16} />
             </button>
-          ) : (
+          )}
+          {(!isStreaming || chatId) && (
             <button
               onClick={handleSend}
-              aria-label="Send"
-              aria-describedby={readiness.text ? readinessReasonId : undefined}
-              title={readiness.title ?? undefined}
+              aria-label={editingId ? 'Save' : 'Send'}
+              aria-hidden={sendSlotHidden || undefined}
+              tabIndex={sendSlotHidden ? -1 : undefined}
+              aria-describedby={!editingId && readiness.text ? readinessReasonId : undefined}
+              title={editingId ? 'Save queued message' : readiness.title ?? undefined}
               disabled={
                 sending ||
-                readiness.blocksSend ||
-                (!input.trim() &&
-                  !(
-                    chatId !== null &&
-                    ((targetSupportsAttachments && pendingAttachments.length > 0) ||
-                      pendingNotes.length > 0)
-                  ))
+                (editingId
+                  ? !input.trim()
+                  : readiness.blocksSend ||
+                    (isStreaming
+                      ? !input.trim()
+                      : !input.trim() &&
+                        !(
+                          chatId !== null &&
+                          ((targetSupportsAttachments && pendingAttachments.length > 0) ||
+                            pendingNotes.length > 0)
+                        )))
               }
-              className="p-1.5 rounded-lg bg-[var(--color-success)] hover:opacity-80 text-white
-                disabled:opacity-20 disabled:cursor-not-allowed transition-opacity"
+              className={`p-1.5 rounded-lg bg-[var(--color-success)] hover:opacity-80 text-white
+                disabled:opacity-20 disabled:cursor-not-allowed transition-opacity ${sendSlotHidden ? 'invisible' : ''}`}
             >
-              <SendHorizontal size={16} />
+              {editingId ? <Check size={16} /> : <SendHorizontal size={16} />}
             </button>
           )}
         </div>
