@@ -65,7 +65,7 @@ Table: `chat_agent_cursors`
 
 ## IPC Channels
 
-- `run:start` — activated invoke with `RunSendPayload`, returning the run ID; main resolves the answerer. `run:watch` independently sends the owned chat’s snapshot and sequenced events over MessagePort. `run:send` remains the lower-level combined send/port route. See [live-run IPC](../messaging/live_runs.md#architecture-and-ipc).
+- `run:start` — activated invoke with `RunSendPayload`, returning `RunStartResult` (a new run, or a message steered into or queued behind a running one — [Pending Messages](../pending_messages/pending_messages_tech.md)); main resolves the answerer, and a queued message keeps the answerer resolved when it was queued. `run:watch` independently sends the owned chat’s snapshot and sequenced events over MessagePort. `run:send` remains the lower-level combined send/port route. See [live-run IPC](../messaging/live_runs.md#architecture-and-ipc).
 - `chat:set-router` — `(chatId: string, router: string) => { success: true }`. Validates via `isChatRouter` and throws `ChatError('invalid_router', …)` otherwise
 - `chat:update` — also accepts `router`, and validates it the same way, because a new chat sets several fields in one call
 - The normal Stop path uses owned `run:cancel-chat`, so a watch snapshot can be stopped before the protocol request ID arrives. Legacy `window.api.run.cancel` still invokes both protocol cancellation channels for an existing request ID.

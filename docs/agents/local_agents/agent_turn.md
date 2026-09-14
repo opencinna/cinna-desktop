@@ -176,6 +176,19 @@ Inside that, the order is the point:
 
 **The abort is re-checked between acquiring the process and sending the prompt.** Everything before that awaited — a spawn, `session/new`, the setup calls — which is one to two seconds in which a Stop lands with no session to cancel. Sending the prompt anyway would start the agent on work the user cancelled and then kill its process three seconds later. And a listener added to an **already-aborted** signal never fires, so a stop that lands while the launcher is still planning is checked for explicitly — that window used to be dropped entirely, and the turn ran to completion after the user had stopped it.
 
+### A message sent mid-turn is taken only while the prompt is in flight
+
+An agent that advertises the steering extension (`initialize._meta.steering.supported`, as the Claude Code and Codex adapters do) can take a user message into a running turn over `_session/steering`. The driver offers that to the executor only inside a window, and the window's edges are the rules:
+
+- **It opens once `session/prompt` is on the wire, and closes synchronously** — before anything awaits — when the prompt settles or a stop is asked for. A message offered outside it is answered unavailable and waits for the next turn; otherwise it could land in a turn whose result had already been read, and belong to no row
+- **A request already sent is waited for**, bounded by the cancel grace, before the result is built — for the same reason
+- **The request says `idleBehavior: promptRequired`**: if the turn has in fact ended underneath, start nothing
+- **An accepted message splits the output.** It is posted as `user_message`, and the accumulator closes the current part, so the words after the message never merge into the words before it; the result records where it landed, and the direct-chat wrapper saves assistant, user and assistant rows in that order. A failed turn still saves the message
+- **A confirmation that arrives after the turn stopped waiting is `late`** and is kept out of the result; the executor saves the message as a row of its own
+- **A turn the agent started on its own is cancelled.** Codex ignores `promptRequired` and answers `startedNewTurn`. Nobody reads that turn, and the next prompt on the session would run beside it, so the driver sends `session/cancel` and retires the process, as an unacknowledged cancel does. Once this turn has let go of the process, though, a hold on it belongs to another turn, and a retire would wait for that turn and then kill its process — so the process is left up and the case is logged
+
+Which messages to steer — only for this turn's agent, and never past one already queued — is not the driver's decision; see [Pending Messages](../../chat/pending_messages/pending_messages.md).
+
 ### The setup is a refusal, not a warning
 
 `session/set_mode` and the mandatory `session/set_config_option` calls are what make the desktop's own choices true: OpenCode's `mode` selects the agent definition (without it the turn runs the engine's stock coding agent in the user's folder), and Claude's `session/set_mode` is the only thing that overrides a `defaultMode` from the user's own settings — which can be `bypassPermissions`. Codex also sets its chosen sandbox/reviewer mode after every new/load, before prompting. A turn that ran anyway would run under a policy nobody chose.
@@ -247,6 +260,8 @@ ACP notifications pass through AcpMessageStream and StreamPartsAccumulator into 
 
 Permission/question → captured pending registration → tool part + needs_input → transcript/Inbox answer → owned runtime validation → grant/resolve/commit → input_resolved while the turn remains open. Stop and the turn ceiling cover setup as well as a pending prompt; leaving the view only detaches its watch.
 
+Message sent mid-turn → run:start → runQueueService → RunHandle.steer → registered SteerFn → _session/steering → user_message → rows split around it at turn end.
+
 ## Integration Points
 
 - [The Local Engine, Runtimes & Prompt Assembly](engine.md) — the launchers this turn plans with, the per-agent config, the process pool and the binary behind it
@@ -257,6 +272,7 @@ Permission/question → captured pending registration → tool part + needs_inpu
 - [Local Agent Permissions](permissions.md) — what an ask can be about, and where a standing grant lives. This document owns the parking and the reply; that one owns the decision and the store
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the `enabled` flag this driver gates on, the readiness values it refuses, and the per-agent turn lock
 - [Ask User Question](../../chat/ask_user_question/ask_user_question.md) — the tool-part convention permission and question blocks follow
+- [Pending Messages](../../chat/pending_messages/pending_messages.md) — when a message sent mid-turn is steered into this turn and when it is queued
 - [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — an orchestrated tool goes through `driverFor` just as a direct chat does
 - [Agents (A2A streaming)](../agents/agents.md) — the direct-chat wrapper, the parts accumulator and the session table this turn reuses whole
 

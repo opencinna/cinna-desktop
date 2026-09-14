@@ -13,12 +13,12 @@
 | File | Role |
 |------|------|
 | `src/renderer/src/components/layout/Sidebar.tsx` | Renders the Eye / EyeOff toggle button in the sidebar bottom bar, immediately before the theme toggle. Uses the same active-state visual (`bg-[var(--color-bg-tertiary)]`) as the Settings and Logs buttons. |
-| `src/renderer/src/components/chat/MessageStream.tsx` | Subscribes to `verboseMode` with a selector. Wraps each persisted message in a `<div>` so the footer can render beneath it; applies `defaultExpanded={verboseMode ? undefined : false}` to streaming `ThinkingBlock` / `ToolNarrationBlock` blocks. |
+| `src/renderer/src/components/chat/MessageStream.tsx` | Subscribes to `verboseMode` with a selector. Wraps each persisted message in a `<div>` so the footer can render beneath it; applies `defaultExpanded={verboseMode ? undefined : false}` to streaming `ToolNarrationBlock` blocks; every `ThinkingBlock` is passed `defaultExpanded` in both modes. |
 | `src/renderer/src/components/chat/MessageMetaFooter.tsx` | Single-message footer: relative timestamp span + info button. Uses `useRelativeNow()` for the tick and `MetaPopup` for the info panel. Owns `buildMeta()` which selects and labels the fields surfaced in the popup. |
 | `src/renderer/src/components/chat/MetaPopup.tsx` | Shared popup used by both `MessageMetaFooter` and `MessageBubble`. Accepts `meta`, `align`, `onClose`. Positions itself with `absolute bottom-full mb-1` above the nearest `relative` parent. Closes on `mousedown` outside the popup. |
 | `src/renderer/src/components/chat/MessageBubble.tsx` | Consumes the shared `MetaPopup` for its own hover-info use case (assistant messages with a `meta` prop). Verbose mode does not touch the hover popup path — it only adds the persistent footer. |
-| `src/renderer/src/components/chat/ThinkingBlock.tsx` | Unchanged API. The `defaultExpanded` prop (already present) is what `MessageStream` uses to gate verbose vs compact expansion during streaming. Behaviour: `useState(defaultExpanded ?? !!isStreaming)` — when `defaultExpanded` is `false`, the block mounts collapsed even while `isStreaming` is true; when `undefined`, it falls back to `!!isStreaming`. |
-| `src/renderer/src/components/chat/ToolNarrationBlock.tsx` | Same `defaultExpanded` gating as `ThinkingBlock` for the initial expansion state. Additionally subscribes to `useUIStore((s) => s.verboseMode)` to decide its header rendering: when verbose and `cinna.tool_input` is present, the header renders `<ToolCallSummary variant="inline">` (name + truncated args); otherwise it falls back to `Tool: <toolName>`. The expanded body always renders the structured `<ToolCallSummary variant="block">` when input is present, so compact mode never hides information — it only collapses the always-visible header. Reading the store inside the leaf component (not via prop) keeps the verbose toggle reactive at every mount site without prop-drilling. |
+| `src/renderer/src/components/chat/ThinkingBlock.tsx` | Not gated by verbose mode. `MessageStream` and `AgentContribution` pass `defaultExpanded` in both modes, so thinking mounts open live and persisted; its body is height-capped with its own scroll — see [Conversation UI tech](../../chat/conversation_ui/conversation_ui_tech.md). |
+| `src/renderer/src/components/chat/ToolNarrationBlock.tsx` | `defaultExpanded` gates the initial expansion state: `DisclosureBlock` resolves `defaultExpanded ?? !!isStreaming`, so `false` mounts collapsed even while streaming and `undefined` falls back to `!!isStreaming`. Additionally subscribes to `useUIStore((s) => s.verboseMode)` to decide its header rendering: when verbose and `cinna.tool_input` is present, the header renders `<ToolCallSummary variant="inline">` (name + truncated args); otherwise it falls back to `Tool: <toolName>`. The expanded body always renders the structured `<ToolCallSummary variant="block">` when input is present, so compact mode never hides information — it only collapses the always-visible header. Reading the store inside the leaf component (not via prop) keeps the verbose toggle reactive at every mount site without prop-drilling. |
 
 ### Renderer — Hooks
 
@@ -34,7 +34,7 @@
 2. `ui.store.ts` flips the `verboseMode` flag and writes `localStorage['cinna-verbose-mode']`
 3. `MessageStream.tsx` (subscribed via `useUIStore((s) => s.verboseMode)`) re-renders
 4. Every `MessageMetaFooter` either mounts (verbose → compact becomes verbose) or unmounts (compact)
-5. Any streaming `ThinkingBlock` / `ToolNarrationBlock` keeps its current `useState` value — only **new** mounts pick up the new `defaultExpanded` — which is the intended behaviour (mode switch does not forcibly collapse or expand in-flight blocks)
+5. Any streaming `ToolNarrationBlock` keeps its current expand state — only **new** mounts pick up the new `defaultExpanded` — which is the intended behaviour (mode switch does not forcibly collapse or expand in-flight blocks)
 
 ### Relative-time tick
 
@@ -53,11 +53,11 @@
 
 ### Streaming block expansion gating
 
-1. `MessageStream.tsx` maps `streamingBlocks`. For `text`-kind entries with `kind === 'thinking'` or `'tool'`, it passes `defaultExpanded={verboseMode ? undefined : false}` to the corresponding block component.
-2. Block components read `useState(defaultExpanded ?? !!isStreaming)`:
+1. `MessageStream.tsx` maps `streamingBlocks`. For `text`-kind entries with `kind === 'tool'`, it passes `defaultExpanded={verboseMode ? undefined : false}` to `ToolNarrationBlock`; `kind === 'thinking'` is always passed `defaultExpanded`.
+2. `DisclosureBlock` reads `useTranscriptDisclosure(defaultExpanded ?? !!isStreaming)`:
    - Compact (`defaultExpanded === false`) → mounts collapsed regardless of `isStreaming`
    - Verbose (`defaultExpanded === undefined`) → falls back to `!!isStreaming`, matching legacy behaviour
-3. When streaming completes, `streamingBlocks` clears and the persisted message renders via `parts[]`. Fresh block instances mount there with no `defaultExpanded` and `isStreaming` undefined — they default to collapsed in both modes (unchanged).
+3. When streaming completes, `streamingBlocks` clears and the persisted message renders via `parts[]`. Fresh tool narration instances mount there with no `defaultExpanded` and `isStreaming` undefined — they default to collapsed in both modes. Persisted thinking is passed `defaultExpanded` and stays open.
 
 ### Tool narration header gating
 

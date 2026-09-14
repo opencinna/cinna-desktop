@@ -285,6 +285,16 @@ The pinned adapter is **1.11.0**, with an upstream Codex dependency range **^0.1
 
 The [Codex technical reference](codex_engine_tech.md) owns the exact configuration, diagnostics and test inventory. Native CLI sandbox behavior, real reviewer decisions, login/provider variants and version compatibility remain separate live validation work; the original OpenCode/Claude measurements above are not claims about Codex.
 
+## The steering extension
+
+**Read from the pinned adapter sources, not watched against a live CLI.**
+
+- **Claude Code (`@agentclientprotocol/claude-agent-acp` 0.76.0)** advertises `_meta.steering.supported: true` at the top level of its `initialize` answer and implements `_session/steering`, which injects a follow-up into the running turn instead of queueing a separate `session/prompt`. It validates `_meta.steering.idleBehavior` and accepts only `promptRequired`.
+- **Codex (`@agentclientprotocol/codex-acp` 1.11.0)** advertises the same flag and serialises steering requests per session. It does not read `idleBehavior`: with no live turn, it **starts a new turn from the steering prompt** and answers `startedNewTurn`. The driver cancels that turn and the message is queued instead — see [The Agent Turn](agent_turn.md#a-message-sent-mid-turn-is-taken-only-while-the-prompt-is-in-flight).
+- **OpenCode** has not been checked for the extension. The driver steers only an agent that advertises it, so an engine that does not is queued, never guessed at.
+
+The driver's side — the window, `late`, the orphan-turn cancel and retire — runs only against the fake agent's `steer` handler and `awaitSteer` step.
+
 ## 5. Corrections, and what a fake could not have caught
 
 Worth stating plainly, because it generalises past this feature.
@@ -331,6 +341,7 @@ Three corrections from this phase, all found by the real binaries after the fake
   nothing here has exercised Cinna per-session MCP injection. Codex may still load MCP servers from its own configuration
 - **The Claude adapter's own `session/load`** is covered by a fixture rather than by a live run
 - **How each engine behaves on a session id it has forgotten** has been watched on OpenCode only
+- **Steering against a real CLI.** Both adapters' support is read from source. No live steer has been recorded: not where a real engine places an injected message relative to the output the desktop recorded before it, nor how either behaves when a steer races the end of a turn
 
 ## 7. Runbook — how to re-verify
 

@@ -43,12 +43,12 @@ Renders agent-side system messages — startup pings, environment transitions, a
 
 ### Rendering
 
-- Both live and persisted notices render through `NoticeBlock`. Left-aligned in the transcript column (not centred), so visually they sit alongside the green collapsible-group dots from `thinking` / `tool` / `tool_result` parts rather than floating in the middle.
+- Both live and persisted notices render through `NoticeBlock`. Left-aligned in the transcript column (not centred), so visually they sit alongside the green collapsible-group dots from `tool` / `tool_result` parts rather than floating in the middle.
 - **Live (streaming):** `<NoticeBlock content={…} live />` — forced expanded view, no collapse affordance, since the user is actively waiting on the in-flight ping. Renders as a left-aligned `Info`+text row in `--color-text-muted`.
 - **Persisted (compact mode):** `<NoticeBlock content={…} defaultExpanded={false} />` — collapses to a small info-toned dot (`--color-severity-info` at 70% opacity, brightens on hover — blue in both light and dark themes). Hovering the dot exposes a 120-char preview via the native `title` attribute; clicking expands to the same `Info`+text row the live view used; clicking again collapses back.
 - **Persisted (verbose mode):** `<NoticeBlock content={…} defaultExpanded={true} />` — stays expanded inline, matching the rest of verbose mode's surfaced meta. Clicking still toggles back to the collapsed dot.
 - The swap from live row to persisted view happens when the chat detail query invalidates after stream `done` — `clearStreamingBlocks()` removes the live block on the next frame, and the now-saved `agent_transition` row renders via `NoticeBlock` with `defaultExpanded={verboseMode}`. The shared expanded styling means the verbose-mode swap is seamless; in compact mode the row collapses to a dot.
-- Notices do not participate in the `CollapsibleGroup` run-merging used for `thinking` / `tool` / `tool_result` parts; each notice owns its own dot so the user can disambiguate individual notices when there are multiple in a turn.
+- Notices do not participate in the `CollapsibleGroup` run-merging used for `tool` / `tool_result` parts; each notice owns its own dot so the user can disambiguate individual notices when there are multiple in a turn.
 
 ### Verbose mode
 

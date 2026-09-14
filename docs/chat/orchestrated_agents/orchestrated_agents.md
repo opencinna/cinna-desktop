@@ -48,7 +48,7 @@ The composer’s **Run on its own…** action explicitly starts a [task runner](
 ### Watching an agent work inside a tool call
 
 1. During a coordinated turn the model calls an agent tool.
-2. That tool renders as a sub-thread headed by the agent's badge (with `· {n} steps · {status}` appended in verbose mode), auto-expanded while the agent streams, inset with a left border in the agent's color. Inside, consecutive thinking/tool/tool_result steps fold into expandable dots in compact mode; verbose shows every step inline.
+2. That tool renders as a sub-thread headed by the agent's badge (with `· {n} steps · {status}` appended in verbose mode), auto-expanded while the agent streams, inset with a left border in the agent's color. Inside, consecutive tool/tool_result steps fold into expandable dots in compact mode, with the agent's thinking open between them; verbose shows every step inline.
 3. The orchestrator-authored task message is shown as the first line ("the ask that went to the agent").
 4. When the agent finishes, the sub-thread collapses to its header (unless verbose mode is on). The orchestrator receives only the agent's compact final text and continues.
 
@@ -79,8 +79,8 @@ The composer’s **Run on its own…** action explicitly starts a [task runner](
 - **In-chat `@`-agent does not always add a tool.** An `@`-agent pick attaches an on-demand agent, but what that *means* now depends on the chat: a plain LLM chat becomes coordinated (the model is the counterparty already, and an arriving agent is a tool it can call, not a replacement for it), while a chat with an agent in it becomes `human` and the pick addresses that agent instead. Re-picking the sole bound agent of a `direct` chat is still a no-op — it is already the conversation partner. See [Chat Routing](../chat_routing/chat_routing.md).
 - **Abort cancels the remote agent.** Aborting an orchestrated turn aborts the orchestrator's `AbortController`, which both stops the in-flight agent sub-turn's stream *and* sends a `cancelTask` to the remote agent (so it doesn't keep running server-side).
 - **Capability chips in active chats.** Attached agents and MCPs render as removable chips below the composer in active chats (DB-backed), mirroring on-demand MCP chips. Removing a chip detaches that capability from the chat immediately.
-- **Sub-thread auto-expand.** The active sub-thread is expanded while streaming and collapses on completion; verbose mode keeps it expanded. Notices (agent startup pings) are excluded from the persisted/streamed sub-thread parts.
-- **Sub-thread step grouping.** Inside an expanded sub-thread, runs of consecutive auxiliary steps (thinking / tool / tool_result) fold into a single expandable **dots group** in compact mode — the same `groupConsecutiveCollapsibles` treatment the main transcript uses — while the agent's text bubbles render inline between groups. Verbose mode renders every step inline. This keeps a multi-step agent turn from flooding the conductor's transcript.
+- **Sub-thread auto-expand.** The active sub-thread is expanded while streaming and collapses on completion; verbose mode keeps it expanded. Notices (agent startup pings) are excluded from the persisted/streamed sub-thread parts. These automatic opens and closes are not the user's, so the transcript's **Collapse expanded** never counts them.
+- **Sub-thread step grouping.** Inside an expanded sub-thread, runs of consecutive tool steps (tool / tool_result / Cinna CLI) fold into a single expandable **dots group** in compact mode — the same `groupConsecutiveCollapsibles` treatment the main transcript uses — while the agent's text bubbles and its thinking, open by default, render inline between groups. Verbose mode renders every step inline. This keeps a multi-step agent turn from flooding the conductor's transcript.
 
 ## Architecture Overview
 

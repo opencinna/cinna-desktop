@@ -25,7 +25,7 @@
 
 | Channel | Contract |
 |---|---|
-| run:start | Activated RunSendPayload command → run ID. Main chooses the router/agent and owns acceptance/completion. |
+| run:start | Activated RunSendPayload command → `RunStartResult`: a new run, or a message steered into or queued behind the chat's running turn. Main chooses the router/agent and owns acceptance/completion. |
 | run:watch | Owned chat MessagePort subscription → initial snapshot and sequenced live envelopes. Detaching does not stop execution. |
 | run:cancel-chat | Cancel the owned chat's main run, including early startup. |
 | run:send | Retained lower-level RunSendPayload + MessagePort path through the same executor; not the normal renderer selection route. |
@@ -44,6 +44,7 @@ The old agent/model-specific send forwards are removed. Custom and Managed confi
 - runExecutionService.start reserves a chat, persists/adopts input, resolves shared routing and invokes the selected driver or model/script path. Acceptance and completion are separate. liveRunHub observes output even without a subscriber; stream services persist it. See [live attachment](../../chat/messaging/live_runs.md) and [turn outcomes](../../chat/messaging/turn_completion.md).
 - A2AAsMcpProvider invokes the same driver for specialist tool calls and supplies trusted attribution/event framing. Coordinator controls are separate ToolProvider implementations; an LLM coordinator is not an AgentDriver.
 - AgentDriver.run takes owner, row and RunInput and returns a result carrying failures. Readiness never throws; capabilities are pure. Synchronous respond is ACP; Managed's actual reply destination is its captured asynchronous registration. Shared contracts validate both families.
+- **Mid-turn delivery is offered, not declared.** `RunInput.registerSteer` receives a `SteerFn` while the driver can take a user message into the running turn and `null` the moment it cannot; a `SteerFn` answers `injected`, `late` or `unavailable` and never rejects. Only the ACP driver calls it, and only for an agent whose `initialize` answer advertised `_meta.steering.supported`. That is why it is not an `AgentCapabilities` field: capabilities are computed from the row without I/O, and this is known only once a process has answered. `runExecutionService` exposes it as `RunHandle.steer`, and [Pending Messages](../../chat/pending_messages/pending_messages_tech.md) decides when to use it. A2A, Managed and the model path never offer it.
 
 ### Capabilities per driver
 

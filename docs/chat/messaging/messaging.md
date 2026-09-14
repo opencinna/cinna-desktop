@@ -32,6 +32,11 @@ Full conversation management — creating chats, sending messages, streaming LLM
    - Appends messages to history, continues the loop
 6. Events stream back through the port in the one vocabulary every chat uses ([Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md)): `request-id` -> `delta` (kind `text`) -> `tool_use` -> `tool_result` -> `done`. An agent called as a tool streams its own work as `child` events
 
+### Sending while a turn runs
+1. User sends a message while the chat's turn is still running
+2. Main hands it to the running turn when that turn's engine takes mid-turn messages and the message is for its agent; otherwise main queues it until the turn ends
+3. A completed turn drains the queue as a new turn; a stopped, failed or out-of-budget turn gives the queued text back to the composer. See [Pending Messages](../pending_messages/pending_messages.md)
+
 ### Tool-call flow
 1. LLM adapter returns tool calls in the `StreamResult`
 2. `chatStreamingService` notifies renderer via port (`tool_use` event with tool name, input, and MCP provider name)
@@ -59,6 +64,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 - The provider/model for a new chat comes from the active [chat mode](../chat_modes/chat_modes.md) (auto-applied default mode if the user hasn't picked one explicitly); the model defaults to the mode's `modelId`, falling back to the provider's `default_model_id` and finally the first available model. There is no provider-level "default" flag — if no mode or agent is chosen, sending raises an inline "can't determine destination" error
 - Streaming errors are parsed by the adapter's `parseError()` into user-friendly short + raw detail messages, then persisted to DB as `role: 'error'` messages so they survive navigation
 - A stop ends the turn and keeps what arrived: the reply so far is saved as an ordinary assistant message and the chat leaves its streaming state. The stop itself is never saved or shown as an error message — only a real failure is; the one error-flagged record a stop writes is the "not run" result of a tool call it skipped, which the next request needs. The renderer's Stop clears nothing itself, so a stop that posted no ending used to leave the chat stuck offering only Stop
+- A running turn is not a reason to refuse a message: it is steered into that turn or queued behind it, text only. Files wait for a turn of their own. See [Pending Messages](../pending_messages/pending_messages.md)
 - Tool calls are only available when MCP servers are connected and enabled for the chat
 - The user's sent message renders instantly (an optimistic bubble) and stays visible without flicker through the entire streaming turn, swapping seamlessly to its persisted row once the chat refetches; sending the same text twice in a row still shows a distinct bubble for each turn (see the optimistic user-message lifecycle in `messaging_tech.md`)
 
@@ -67,6 +73,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 ```
 User -> ChatInput (renderer) -> useChatStream.startRun()
   -> run:start command (RunSendPayload); independent run:watch MessagePort
+  -> runQueueService: start a turn, or — with one running — steer into it or queue behind it
   -> main resolves who answers from chats.router  (see docs/chat/chat_routing/)
      -> { kind: 'agent' } : the driver path
      -> { kind: 'model' } : below
@@ -95,4 +102,5 @@ The shared executor owns a turn after dispatch, even if its renderer port closes
 
 - [LLM Adapters](../../llm/adapters/adapters.md) — Each provider adapter handles the actual streaming and tool-use protocol
 - [MCP Connections](../../mcp/connections/connections.md) — Tool aggregation and execution via MCPManager
+- [Pending Messages](../pending_messages/pending_messages.md) — Messages sent while a turn runs: steered, queued, drained or handed back
 - Database — Chats, messages, and chat-MCP junction persisted in SQLite

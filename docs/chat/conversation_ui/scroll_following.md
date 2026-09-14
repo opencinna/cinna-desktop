@@ -10,18 +10,20 @@ The chat transcript follows the bottom of the conversation while a reply streams
 - **The bottom band** — 64 px. Both the definition of "at the bottom" and the width of the zone in which the user still counts as following. Wide enough that a sub-pixel `scrollHeight` rounding or the last line of a growing paragraph does not silently unpin; narrow enough that one deliberate wheel notch does.
 - **Sticking** — how following is implemented: an immediate assignment of the scroll position, performed after layout and before paint, in response to the content resizing. It is not an animation and not a per-render effect.
 - **Wheel suspension** — a short window (150 ms) opened by an upward wheel or trackpad gesture during which sticking does not run, so a chunk landing mid-gesture cannot pull the view back out from under it.
-- **Jump to latest** — the pill shown while unpinned, centred just above the composer. Clicking it re-pins and jumps to the bottom. It is the only way back other than scrolling there.
+- **Jump to latest** — the pill shown while unpinned, in the centre of the pill row just above the composer. Clicking it re-pins and jumps to the bottom. It is the only way back other than scrolling there. It shares the row with **Collapse expanded**, which closes the blocks the user opened ([Conversation UI](conversation_ui.md#collapsing-what-you-opened)).
+- **Reading anchor** — what the reader is looking at when Collapse expanded is clicked in an unpinned view: the first top-level transcript node that reaches the viewport top, or, when that node is a group about to close, the group's header. It is held in place while the blocks close.
 - **Hold** — the transcript's owner asking it to stop following new content for a while. While held, growth still inside the bottom band moves nothing, and growth past it unpins — which is what shows the pill — instead of moving the view. `MessageStream` holds while a local agent's ask on the current stream is waiting for an answer.
 
 ## User Flows
 
-1. **Sending.** The user submits a message; the view re-engages following and jumps to the bottom. The user just acted, and the thing they acted on is at the bottom.
+1. **Sending.** The user submits a message; the view re-engages following and jumps to the bottom. The user just acted, and the thing they acted on is at the bottom. That includes a message sent while a turn is still running, which shows no optimistic bubble — it is taken into the turn or queued below it ([Pending Messages](../pending_messages/pending_messages.md)) — and re-pins all the same.
 2. **Watching a reply.** Text, thinking blocks, tool results and tables arrive; the view stays at the bottom with no visible movement other than the content itself growing. Blocks that reflow without a re-render (a code block laying out, a collapsible opening, a partial markdown table becoming a real one) are followed too.
 3. **Reading back mid-stream.** The user scrolls up. Following stops, the "Jump to latest" pill appears, and the position holds for the rest of the turn.
 4. **Coming back.** The user scrolls to within the bottom band, or clicks the pill. Following resumes mid-stream and the pill disappears.
 5. **Switching chats.** Opening a different chat starts at that chat's latest message, whatever the previous chat's scroll position was. Scroll position is not remembered per chat.
 6. **The viewport changing underneath.** The window is resized, or the composer grows a line and the transcript's bottom padding grows with it. A pinned view stays at the bottom; it does not leave the newest line drifting under the composer.
 7. **An ask waiting for an answer.** A local agent stops to ask permission or a question. Its block is followed into view like any other content; from then until the ask is settled, whatever arrives below it does not move the view, and the pill appears once it would have. The composer growing a line is still followed. When the ask settles, following resumes if the view is still pinned.
+8. **Collapsing what was opened.** The user has opened several groups and outputs and clicks Collapse expanded. A pinned view stays at the bottom. An unpinned view keeps the block being read at the same distance from the viewport top while everything closes; a reader halfway through an open group lands on that group's header, at the top of the scroll area just below the top bar.
 
 ## Rules
 
@@ -41,6 +43,9 @@ Each rule below exists because of a specific way the transcript misbehaved.
 - **A pending ask holds the view.** Two asks can arrive back to back. With the view pinned, the second ask's block scrolled the first one's buttons away and put its own "Allow once" exactly where the pointer was, so a click meant for one permission approved the other. A moving view is worse than a stale one only when the user is about to click something, and this is the one exception to following. It is scoped to top-level asks announced on the current stream: a nested agent's ask has no block on screen to protect, and a block that went live from the registry poll alone — after a reload — does not hold the view.
 - **The hold engages two frames late, and releases at once.** An ask's block and the event that turns the hold on usually commit in the same frame, and that block is exactly what must be followed into view. A hold that engaged immediately guarded the block's own growth, unpinned the view on it and left the first ask below the fold behind the pill. Animation-frame callbacks run *before* the resize-observer step, so one frame does not get past the observer run of the frame the block paints in; two do.
 - **A hold guards against new content, never against the viewport.** Only growth of the transcript content itself is held. When the viewport changes instead — the composer gains a line, a banner appears — the pointer is on the composer, and not following would slide the ask's own buttons under the composer overlay. A wheel suspension that closes while held does not catch up either.
+- **Collapsing keeps the reader's place.** A group closes over a 300 ms height transition, and the browser keeps `scrollTop` while the content moves under it: closing a 90-step group the reader was halfway through took the view from 3845 px to 317 px, into a part of the conversation they had not been reading. The anchor is re-applied every frame for the length of the transition rather than once, because the height keeps changing across it; a frame callback runs after the commit and before paint, so no frame is drawn with the view in the wrong place. The group keeps its animation. A wheel ends the hold at once, and so does reaching the bottom band, where following owns the view.
+- **A group header is held at the top, not where it was.** For a reader halfway through an open group the header is far above the viewport, and holding it at that offset would leave the view past the collapsed group, on whatever follows it. Holding it at the top lands the reader on the group they were in. The top is the scroll area's top padding, not the viewport's edge: flush with the edge the header sat under the transcript's top fade and the window's drag strip, where it could not be clicked.
+- **Neither pill moves when the other comes or goes.** The row has three columns: Jump to latest keeps the centre it always had, Collapse expanded is pinned to its left, and a pinned view keeps Jump to latest in layout but invisible. Centring the pair as one row slid the survivor under the pointer the moment its neighbour was clicked away.
 
 ## Why the window shook: two independent causes
 
@@ -55,7 +60,7 @@ The reported symptom — a local agent streaming a long markdown table, the chat
 - **No remembered scroll position.** Chat switches land at the bottom; there is no "continue where you left off", and no per-message read anchor.
 - **No auto-scroll to anything but the bottom.** Nothing scrolls a specific message into view.
 - **The composer's height belongs to `ChatWorkspace`**, which measures it and passes it down as the transcript's bottom padding and the pill's offset. The scroll model only reacts to that padding changing.
-- **Nested scrollers own their own scrolling.** The transcript neither delegates to them nor takes wheel events from them; it only declines to treat their gestures as its own.
+- **Nested scrollers own their own scrolling.** The transcript neither delegates to them nor takes wheel events from them; it only declines to treat their gestures as its own. A streaming thinking block follows the bottom of its own capped box unless that box was scrolled up — the box's rule, which never touches the transcript's pinned state.
 - **The transcript is not the only scroller in the app**, but it is the only one that follows. The scrollbar thickness rule is global; the following behaviour is not.
 
 ## Architecture Overview
@@ -66,7 +71,10 @@ ChatWorkspace (relative container, owns composer height)
   │      hold = a top-level, unsettled `reply` ask in the chat store's inputRequests
   │      scroll container (ref) ── ResizeObserver ──> stick (instant, pre-paint)
   │      content box (ref)      ── scroll / wheel  ──> pinned / unpinned
-  └── "Jump to latest" pill (rendered while unpinned, offset by composer height)
+  │      send (optimistic bubble, or sentVersion for a pending message) ──> scrollToBottom
+  └── TranscriptPills (sibling of the scroll container, offset by composer height)
+         Collapse expanded (while a user-opened block is visible) | Jump to latest (while unpinned)
+         Collapse expanded ──> collapseAnchor + holdAnchor (unpinned only) ──> collapseAll
 ```
 
 ## Integration Points

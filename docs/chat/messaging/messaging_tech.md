@@ -19,7 +19,8 @@
 - `src/main/llm/factory.ts` — `createAdapter(type, apiKey, providerId)` + `isProviderType()` (extracted from `llm.ipc.ts`)
 - `src/main/ipc/chat.ipc.ts` — Thin `chat:*` handlers, all wrapped with `ipcHandle()` and gated by `userActivation.requireActivated()`, delegate to `chatService`
 - `src/main/ipc/run.ipc.ts` — `run:start` command and owned `run:watch` subscription; the lower-level run:send port route shares the executor; old agent/model forwards are removed. `src/main/ipc/llm.ipc.ts` retains model listing and `llm:cancel`.
-- `src/shared/ipcPayloads.ts` — RunSendPayload is the single routed send input; the old agent/model-specific payload types are removed
+- `src/main/services/runQueueService.ts` — what `run:start` does when the chat already has a turn running: steer the message into it or queue it; see [Pending Messages tech](../pending_messages/pending_messages_tech.md)
+- `src/shared/ipcPayloads.ts` — RunSendPayload is the single routed send input; the old agent/model-specific payload types are removed. `RunStartResult` and `RunQueueView` are what `run:start` and the queue channels return
 - `src/main/errors.ts` — `ChatError` + `ChatErrorCode` (`not_found`, `not_configured`, `adapter_unavailable`, `not_activated`)
 
 ### Preload
@@ -69,9 +70,11 @@ DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-d
 | `chat:add-message` | invoke | Add a message to a chat |
 | `chat:set-mcp-providers` | invoke | Set active MCP providers for a chat |
 | `chat:get-mcp-providers` | invoke | Get active MCP providers for a chat |
-| `run:start` | invoke | Start a main-owned turn; returns run ID |
+| `run:start` | invoke | Start a main-owned turn, or steer into / queue behind a running one; returns `RunStartResult` |
 | `run:watch` | postMessage + MessagePort | Snapshot and subsequent selected-chat run events |
 | `run:cancel-chat` | invoke | Cancel owned active chat, including before transport request ID |
+| `run:queue-list` / `run:queue-take` / `run:queue-remove` / `run:queue-edit` | invoke | A chat's queued messages; see [Pending Messages tech](../pending_messages/pending_messages_tech.md#ipc-channels) |
+| `run:queue-changed` | main → renderer | `{ chatId, view }` after every queue change |
 | run:send | postMessage + MessagePort | Lower-level routed send through shared executor |
 | `llm:cancel` | invoke | Abort in-flight request |
 
@@ -100,12 +103,14 @@ Events are `RunEvent`s (`src/shared/runEvents.ts`), the one vocabulary every cha
 7. `{ type: 'done', stopReason }` — Stream finished: `end_turn`, or `canceled` whenever a stop ended the turn, wherever the stop landed (see [Cancellation](#cancellation))
 8. `{ type: 'error', error, errorDetail }` — Error (adapter-parsed short + raw detail). Also persisted to DB as a `role: 'error'` message by `messageRepo.saveError()` so it survives navigation. The projector finishes streaming; authoritative hub closure starts a fresh transcript read and guarded cleanup. A failed read preserves the projection for recovery.
 
+An agent turn can also post `{ type: 'user_message', text }` where its engine took a message the user sent mid-turn; see [Pending Messages](../pending_messages/pending_messages.md).
+
 ## Optimistic user-message lifecycle
 
 The user's bubble is shown the instant they send — before the persisted row arrives via the `['chat', chatId]` refetch — and must stay continuously visible across the optimistic→persisted handoff (no flicker, no vanishing while the assistant streams). Mirrors the `streamingBlocks` "no visual gap" pattern.
 
 - **Store field** — `src/renderer/src/stores/chat.store.ts` — `pendingUserMessage: { content, baselineUserCount, attachments? } | null` (type `PendingUserMessage`). `baselineUserCount` snapshots how many persisted `role: 'user'` rows the chat already had at send time. `attachments?: MessageAttachment[]` carries the turn's already-ingested file attachments so the optimistic bubble shows its badges immediately.
-- **Set on send** — `startRun` snapshots the cached chat’s persisted user count and stores the optimistic message only for the selected chat. Attachments are the resolved `MessageAttachment[]` passed to `window.api.run.start`; the new-chat flow resolves them before sending.
+- **Set on send** — `startRun` snapshots the cached chat’s persisted user count and stores the optimistic message only for the selected chat. Attachments are the resolved `MessageAttachment[]` passed to `window.api.run.start`; the new-chat flow resolves them before sending. No optimistic message is set when the chat already has a turn running (cached `activeRunId`, or this chat streaming): it would render above the live turn. See [Pending Messages tech](../pending_messages/pending_messages_tech.md#usechatstreamstartrun).
 - **Rendered** — `src/renderer/src/components/chat/MessageStream.tsx` shows the optimistic bubble while `persistedUserCount <= baselineUserCount`, passing `attachments={pendingUserMessage.attachments ?? null}`. Without this the file badges only appeared once the persisted row refetched, lagging the bubble itself until the stream ended. **Count-keyed, not content-keyed** — repeating the previous turn's exact text still shows a bubble (content-keyed dedup hid the second of two identical consecutive messages until its own row refetched). The optimistic bubble's user-turn prop set is kept in lockstep with the persisted bubble (`addressedAgent*` passed `null` — no persisted addressed-agent yet).
 - **Cleared** — `useLiveRunWatch` retires the matching optimistic message and live blocks only after a successful fresh terminal transcript read. Failure keeps them until recovery; profile/chat/projection-version and pending-object checks prevent a stale read from clearing a newer send. Idle attachment after fast completion and replay-unavailable closure use the same settlement. Chat switch/reset also clears pending state. See [live-run settlement](live_runs.md#user-flow-and-rules).
 - **Send re-entrancy** — `src/renderer/src/components/chat/ChatInput.tsx` acquires `composerDraft.store.beginSend(key)` before new-chat preparation or active-chat note materialization and releases it in `finally`. The watch starts streaming only once main begins the turn, so it cannot guard these earlier awaits. The lock survives navigation/remount of that draft and does not block other drafts.

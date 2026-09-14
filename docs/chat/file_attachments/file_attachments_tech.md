@@ -120,7 +120,7 @@ Index: `idx_chat_files_chat_id ON chat_files(chat_id)`. Migration is additive �
 | `files:download` | renderer → main | `{ fileId, filename, source? }` | `{ success: true, savedPath }` / `canceled: true` / `{ success: false, error, code? }` |
 | `files:download-task-attachment` | renderer → main | `{ taskId, attachmentId, filename }` | (same shape) |
 | `llm:get-model-capability` | renderer → main | `{ providerId, modelId }` | `ModelCapability` |
-| run:start | renderer → main invoke | RunSendPayload including attachments | run ID; output via independent run:watch |
+| run:start | renderer → main invoke | RunSendPayload including attachments | `RunStartResult`; output via independent run:watch. Attachments are refused while the chat has a turn running — see [Pending Messages](../pending_messages/pending_messages.md) |
 | run:send | renderer → main MessagePort | Same RunSendPayload | lower-level event port |
 
 ## Services & Key Methods

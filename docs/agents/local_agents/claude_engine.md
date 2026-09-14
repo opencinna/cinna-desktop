@@ -212,6 +212,10 @@ The distinction between a background *subagent* and a background *shell* is ther
 business now, not the desktop's, and the twenty-minute ceiling is what covers a turn that never ends
 at all — see [The Agent Turn](agent_turn.md#a-turn-always-settles).
 
+### A message sent mid-turn goes into the running turn
+
+The adapter advertises the ACP steering extension, so a message the user sends to this agent while its turn runs is taken into that turn instead of waiting for it to end, and it is saved in the transcript where it landed. The desktop asks with `idleBehavior: promptRequired` — with no turn running, start nothing — which is the only idle behaviour the adapter accepts. Whether a message is steered at all is decided in [Pending Messages](../../chat/pending_messages/pending_messages.md); the window it can arrive in is [The Agent Turn](agent_turn.md#a-message-sent-mid-turn-is-taken-only-while-the-prompt-is-in-flight). No live steer against the real CLI has been recorded yet ([the ACP contract](acp_contract.md#the-steering-extension)).
+
 ### No tool is pre-approved, because pre-approving one bypasses the asking
 
 A bare tool name in `allowedTools` auto-approves that tool *before* the permission request reaches the desktop — the SDK says so itself at runtime — so the two mechanisms cancel rather than compose. **No `allowedTools` is passed at all.** This is the half that has to be true before the desktop's grants mean anything.
