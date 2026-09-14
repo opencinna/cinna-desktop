@@ -63,6 +63,27 @@ function runToCompletion(file: string, args: string[]): Promise<void> {
   })
 }
 
+/**
+ * Hand `target` — a folder or a single file — to an installed editor.
+ *
+ * `code <target>` / `cursor <target>` where the CLI shim exists, else the
+ * bundle and the target to LaunchServices with `open -a`. Never
+ * `shell.openExternal`: nothing user-influenced is parsed as a URL, and the
+ * target is always its own argv element. Validating `target` is the caller's
+ * job — this launches whatever it is given.
+ */
+export async function launchEditor(
+  tool: DetectedTool & { path: string },
+  target: string,
+  cwd: string
+): Promise<void> {
+  if (tool.source === 'path') {
+    await launchDetached(tool.path, [target], cwd)
+    return
+  }
+  await runToCompletion('open', ['-a', tool.path, target])
+}
+
 async function isDirectory(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory()
@@ -258,19 +279,7 @@ export function createOpenInService(deps: OpenInDeps) {
     async openFolderInEditor(folder: string, toolId: LocalToolId | undefined): Promise<void> {
       const resolved = await resolveAllowedFolder(folder)
       const tool = await requireTool(toolId, ['editor'])
-      const target = tool.path
-
-      await guardLaunch(`open ${tool.label}`, async () => {
-        if (tool.source === 'path') {
-          // `code <folder>` / `cursor <folder>` — folder is its own argv entry.
-          await launchDetached(target, [resolved], resolved)
-          return
-        }
-        // No CLI shim: hand the bundle and the folder to LaunchServices. Note
-        // this is `open -a`, not `shell.openExternal` — nothing user-influenced
-        // is ever parsed as a URL, and both operands stay discrete arguments.
-        await runToCompletion('open', ['-a', target, resolved])
-      })
+      await guardLaunch(`open ${tool.label}`, () => launchEditor(tool, resolved, resolved))
       logger.info('opened folder in editor', { tool: tool.id, via: tool.source })
     },
 

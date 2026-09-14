@@ -3,49 +3,256 @@ import {
   ArrowUp,
   ArrowUpDown,
   Download,
+  ExternalLink,
   FileText,
   Filter,
+  Folder,
+  FolderOpen,
   Loader2,
   X
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { markdownComponents } from '../../utils/markdownComponents'
-import { useFilePreviewStore } from '../../stores/filePreview.store'
+import {
+  actionErrorRepeatsBody,
+  actionErrorText,
+  agentFileErrorText,
+  useFilePreviewStore
+} from '../../stores/filePreview.store'
 import { useFileDownloadStore } from '../../stores/fileDownload.store'
 import type { PreviewRenderKind } from '../../../../shared/filePreview'
+import { agentFileName } from '../../../../shared/agentFiles'
+
+/** Labelled secondary button at the app-chrome scale (Open folder / Open). */
+const HEADER_ACTION_CLASS =
+  'inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium border ' +
+  'border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] ' +
+  'hover:bg-[var(--color-bg-hover)] disabled:opacity-50 transition-colors'
+
+/** Entrance timing: short enough to never be waited on. */
+const ENTRANCE: KeyframeAnimationOptions = { duration: 170, easing: 'cubic-bezier(0.2, 0, 0, 1)' }
 
 /**
- * Single global modal that previews a small text attachment (txt / csv / md /
- * json / yaml). Driven by {@link useFilePreviewStore} — a previewable badge
- * click opens it. The header's Download button reuses the standard
- * `files:download` save-as flow so preview never replaces the ability to keep
- * the file. Mounted once at the app root.
+ * How long the card stays hidden waiting for its first settled state (content,
+ * a notice or an error). A slower load runs the entrance on the loading card.
+ */
+export const ENTRANCE_WAIT_MS = 150
+
+/**
+ * How long after an open a press outside the card is ignored. The second press
+ * of a double-click on a link lands on the overlay the first click just
+ * opened, and would close it again.
+ */
+export const OPEN_PRESS_GUARD_MS = 500
+
+/**
+ * The card's entrance, and focus in and out of it.
+ *
+ * The card expands from the click, so the origin has to be measured on the
+ * rect the user will see. The loading card is a fraction of the loaded one, so
+ * a new open keeps card and backdrop invisible (opacity only — the layout is
+ * already final) until the first settled state, then measures and animates.
+ * A load slower than {@link ENTRANCE_WAIT_MS} animates the loading card
+ * instead; the card is pinned to the top, so its growth cannot move the origin.
+ *
+ * Once the entrance starts, focus moves into the card so Tab reaches its
+ * buttons. On close it returns to whatever held it before the open, if that
+ * is still in the document — but only after a keyboard open (no origin). After
+ * a click, focus handed back to the link would wear its focus-visible ring
+ * once the user closes with Escape; the card's focus is simply let go.
+ */
+function useCardEntrance({
+  cardRef,
+  backdropRef,
+  open,
+  openSeq,
+  settled,
+  exiting
+}: {
+  cardRef: RefObject<HTMLDivElement | null>
+  backdropRef: RefObject<HTMLDivElement | null>
+  open: boolean
+  openSeq: number
+  settled: boolean
+  /** The preview is fading out: an entrance still waiting must never start. */
+  exiting: boolean
+}): void {
+  const exitingRef = useRef(exiting)
+  exitingRef.current = exiting
+  const entrance = useRef<{ started: boolean; timer: ReturnType<typeof setTimeout> | null; animations: Animation[] }>({
+    started: false,
+    timer: null,
+    animations: []
+  })
+  const returnFocus = useRef<HTMLElement | null>(null)
+  /** Whether the latest open came from the keyboard, which is when focus is returned. */
+  const keyboardOpen = useRef(false)
+
+  const start = useCallback((): void => {
+    const state = entrance.current
+    const card = cardRef.current
+    if (state.started || !card || exitingRef.current) return
+    state.started = true
+    if (state.timer) clearTimeout(state.timer)
+    state.timer = null
+    if (typeof card.animate === 'function') {
+      // Keyboard opens have no point and grow from the centre; reduced motion
+      // only fades. The rect is read before any transform applies.
+      const { origin } = useFilePreviewStore.getState()
+      const rect = card.getBoundingClientRect()
+      card.style.transformOrigin = origin ? `${origin.x - rect.left}px ${origin.y - rect.top}px` : 'center'
+      const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+      card.style.opacity = ''
+      const animations = [
+        card.animate(
+          reduceMotion
+            ? [{ opacity: 0 }, { opacity: 1 }]
+            : [
+                { opacity: 0, transform: 'scale(0.92)' },
+                { opacity: 1, transform: 'scale(1)' }
+              ],
+          ENTRANCE
+        )
+      ]
+      const backdrop = backdropRef.current
+      if (backdrop) {
+        backdrop.style.opacity = ''
+        const fade = backdrop.animate?.([{ opacity: 0 }, { opacity: 1 }], ENTRANCE)
+        if (fade) animations.push(fade)
+      }
+      state.animations = animations
+    }
+    card.focus({ preventScroll: true })
+  }, [cardRef, backdropRef])
+
+  // Give focus back on close. Declared first so its cleanup sees the element
+  // captured by the open below.
+  useLayoutEffect(() => {
+    if (!open) return
+    return () => {
+      const element = returnFocus.current
+      returnFocus.current = null
+      if (keyboardOpen.current && element?.isConnected) element.focus({ preventScroll: true })
+    }
+  }, [open])
+
+  // A new open: remember who had focus, hide until settled or the wait ends.
+  useLayoutEffect(() => {
+    if (!open) return
+    const card = cardRef.current
+    const state = entrance.current
+    state.started = false
+    keyboardOpen.current = useFilePreviewStore.getState().origin === null
+    // Replacing an open preview keeps the element from before the first open.
+    const active = document.activeElement
+    if (!returnFocus.current && active instanceof HTMLElement && active !== document.body && !card?.contains(active)) {
+      returnFocus.current = active
+    }
+    if (card && typeof card.animate === 'function') {
+      card.style.opacity = '0'
+      if (backdropRef.current) backdropRef.current.style.opacity = '0'
+    }
+    state.timer = setTimeout(start, ENTRANCE_WAIT_MS)
+    return () => {
+      if (state.timer) clearTimeout(state.timer)
+      state.timer = null
+      for (const animation of state.animations) animation.cancel()
+      state.animations = []
+    }
+  }, [open, openSeq, start, cardRef, backdropRef])
+
+  // Runs after the open above in the same commit, so an open that is settled
+  // at once (a notice, an error) animates without waiting.
+  useLayoutEffect(() => {
+    if (open && settled) start()
+  }, [open, openSeq, settled, start])
+}
+
+/**
+ * Single global modal that previews a small text file: a message attachment
+ * (txt / csv / md / json / yaml) or a file a folder agent named in its chat.
+ * Driven by {@link useFilePreviewStore}. For an attachment the header's
+ * Download button reuses the standard `files:download` save-as flow so preview
+ * never replaces the ability to keep the file; an agent file is already on
+ * disk, so its header offers Open folder and Open instead. The card expands
+ * from the click that opened it. Mounted once at the app root.
  */
 export function FilePreviewModal(): React.JSX.Element | null {
-  const { attachment, kind, text, isLoading, truncated, error, close } = useFilePreviewStore()
+  const live = useFilePreviewStore()
+  const { close, openAgentFileExternally, revealAgentFile } = live
+  // Closing fades out as fast as opening faded in. The store closes at once;
+  // the modal keeps rendering the last open state until its exit ends. A new
+  // open during the fade cancels it.
+  const lastOpen = useRef(live)
+  useLayoutEffect(() => {
+    if (live.target) lastOpen.current = live
+  })
+  const [prevTarget, setPrevTarget] = useState(live.target)
+  const [exitView, setExitView] = useState<typeof live | null>(null)
+  if (live.target !== prevTarget) {
+    setPrevTarget(live.target)
+    setExitView(live.target === null && prevTarget !== null ? lastOpen.current : null)
+  }
+  const exiting = live.target === null && exitView !== null
+  const {
+    target,
+    attachment,
+    kind,
+    text,
+    isLoading,
+    truncated,
+    error,
+    errorCode,
+    failedStep,
+    notice,
+    openSeq,
+    pendingAction,
+    actionError
+  } = exiting && exitView ? exitView : live
   const download = useFileDownloadStore((s) => s.download)
   const isDownloading = useFileDownloadStore((s) =>
     attachment ? s.downloadingIds.has(attachment.id) : false
   )
   const cardRef = useRef<HTMLDivElement>(null)
+  const backdropRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
+  const targetKey = !target
+    ? null
+    : target.type === 'attachment'
+      ? `attachment:${target.attachment.id}`
+      : `agent-file:${target.agentId}:${target.ref.path}`
   // CSV-only: toggles the per-column filter/sort controls. Reset whenever a
   // different file opens so the controls don't carry over between previews.
   const [filtersEnabled, setFiltersEnabled] = useState(false)
   useEffect(() => {
     setFiltersEnabled(false)
-  }, [attachment?.id])
+  }, [targetKey])
+
+  // When the current preview opened, for the press guard below.
+  const openedAt = useRef(0)
+  useLayoutEffect(() => {
+    openedAt.current = Date.now()
+  }, [openSeq])
 
   useEffect(() => {
-    if (!attachment) return
+    // A preview that is fading out is already closed.
+    if (!targetKey || exiting) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') close()
     }
     const onMouse = (e: MouseEvent): void => {
-      if (cardRef.current && !cardRef.current.contains(e.target as Node)) close()
+      if (!cardRef.current || cardRef.current.contains(e.target as Node)) return
+      // The second press of a double-click on the link that opened this lands
+      // outside the card: leave it alone entirely, focus included.
+      if (Date.now() - openedAt.current < OPEN_PRESS_GUARD_MS) return
+      // A press on the backdrop would otherwise move focus to the page after
+      // close has handed it back to the element that opened the preview.
+      if (overlayRef.current?.contains(e.target as Node)) e.preventDefault()
+      close()
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('mousedown', onMouse)
@@ -53,29 +260,99 @@ export function FilePreviewModal(): React.JSX.Element | null {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('mousedown', onMouse)
     }
-  }, [attachment, close])
+  }, [targetKey, exiting, close])
 
-  if (!attachment || !kind) return null
+  useCardEntrance({ cardRef, backdropRef, open: target !== null, openSeq, settled: !isLoading, exiting })
+
+  // The exit: the entrance played backwards, from the same origin and at the
+  // same speed, holding its last frame until the modal unmounts. A card closed
+  // while it was still hidden, waiting for its first settled state, was never
+  // seen: it unmounts at once rather than flashing in to fade out.
+  useLayoutEffect(() => {
+    if (!exiting) return
+    const card = cardRef.current
+    const neverShown = card?.style.opacity === '0'
+    const animations: Animation[] = []
+    if (card && !neverShown && typeof card.animate === 'function') {
+      const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+      const exit: KeyframeAnimationOptions = { ...ENTRANCE, fill: 'forwards' }
+      animations.push(
+        card.animate(
+          reduceMotion
+            ? [{ opacity: 1 }, { opacity: 0 }]
+            : [
+                { opacity: 1, transform: 'scale(1)' },
+                { opacity: 0, transform: 'scale(0.92)' }
+              ],
+          exit
+        )
+      )
+      const fade = backdropRef.current?.animate?.([{ opacity: 1 }, { opacity: 0 }], exit)
+      if (fade) animations.push(fade)
+    }
+    const timer = setTimeout(() => setExitView(null), animations.length > 0 ? Number(ENTRANCE.duration) : 0)
+    return () => {
+      clearTimeout(timer)
+      for (const animation of animations) animation.cancel()
+    }
+  }, [exiting])
+
+  if (!target) return null
+  const agentFile = target.type === 'agentFile' ? target : null
+  const attachmentTarget = target.type === 'attachment' ? target.attachment : null
+  const filename = agentFile ? agentFileName(agentFile.ref.path) : (attachmentTarget?.filename ?? '')
+  // A folder only reaches the modal when showing it failed: no file actions.
+  const fileActions = agentFile?.ref.kind === 'file'
+  // A file the body already says has gone: its actions could only fail, and
+  // their error would repeat the body, so a click would look like nothing.
+  const fileGone = !isLoading && error !== null && errorCode === 'not_found'
+  const bodyError =
+    error === null
+      ? null
+      : agentFile
+        ? agentFileErrorText(agentFile.ref, failedStep, errorCode, error)
+        : `Couldn't load preview: ${error}`
+  const showActionError =
+    agentFile !== null && actionError !== null && !actionErrorRepeatsBody({ actionError, error, errorCode, isLoading })
+  const TitleIcon = agentFile?.ref.kind === 'dir' ? Folder : FileText
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 px-4">
+    // Pinned to the top rather than centred: the card only grows downward, so
+    // content landing or an error row appearing never moves the button the
+    // user just pressed.
+    <div
+      ref={overlayRef}
+      className={`fixed inset-0 z-50 flex items-start justify-center px-4 pt-[10vh]${exiting ? ' pointer-events-none' : ''}`}
+    >
+      <div ref={backdropRef} aria-hidden className="absolute inset-0 bg-black/25" />
       <div
         ref={cardRef}
-        className="w-full max-w-3xl max-h-[80vh] flex flex-col rounded-xl border
-          border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg"
+        tabIndex={-1}
+        className="relative w-full max-w-3xl max-h-[80vh] flex flex-col rounded-xl border
+          border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg focus:outline-none"
       >
         <div
           className="flex items-center justify-between gap-2 px-5 py-3 border-b
             border-[var(--color-border)]"
         >
           <div className="flex items-center gap-2 min-w-0">
-            <FileText size={16} className="text-[var(--color-text-muted)] shrink-0" />
-            <div className="text-sm font-semibold text-[var(--color-text)] truncate">
-              {attachment.filename}
+            <TitleIcon size={16} className="text-[var(--color-text-muted)] shrink-0" />
+            <div
+              title={filename}
+              className={
+                'text-sm font-semibold text-[var(--color-text)] truncate' +
+                (agentFile ? ' shrink-0 max-w-[60%]' : '')
+              }
+            >
+              {filename}
             </div>
+            {/* A file at the agent folder's top level would show its name twice. */}
+            {agentFile && agentFile.ref.displayPath !== filename && (
+              <CopyablePath path={agentFile.ref.displayPath} />
+            )}
           </div>
-          <div className="flex items-center gap-1 shrink-0">
-            {kind === 'csv' && (
+          <div className={`flex items-center shrink-0 ${agentFile ? 'gap-1.5' : 'gap-1'}`}>
+            {kind === 'csv' && !notice && (
               <button
                 type="button"
                 onClick={() => setFiltersEnabled((v) => !v)}
@@ -92,22 +369,54 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 <Filter size={14} />
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => void download(attachment)}
-              disabled={isDownloading}
-              className="p-1 rounded text-[var(--color-text-muted)]
-                hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]
-                disabled:opacity-50 transition-colors"
-              title={`Download ${attachment.filename}`}
-              aria-label={`Download ${attachment.filename}`}
-            >
-              {isDownloading ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Download size={14} />
-              )}
-            </button>
+            {fileActions && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void revealAgentFile()}
+                  disabled={pendingAction !== null || fileGone}
+                  className={HEADER_ACTION_CLASS}
+                >
+                  {pendingAction === 'reveal' ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <FolderOpen size={12} />
+                  )}
+                  Open folder
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void openAgentFileExternally()}
+                  disabled={pendingAction !== null || fileGone}
+                  className={HEADER_ACTION_CLASS}
+                >
+                  {pendingAction === 'open' ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <ExternalLink size={12} />
+                  )}
+                  Open
+                </button>
+              </>
+            )}
+            {attachmentTarget && (
+              <button
+                type="button"
+                onClick={() => void download(attachmentTarget)}
+                disabled={isDownloading}
+                className="p-1 rounded text-[var(--color-text-muted)]
+                  hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]
+                  disabled:opacity-50 transition-colors"
+                title={`Download ${attachmentTarget.filename}`}
+                aria-label={`Download ${attachmentTarget.filename}`}
+              >
+                {isDownloading ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Download size={14} />
+                )}
+              </button>
+            )}
             <button
               type="button"
               onClick={close}
@@ -120,36 +429,131 @@ export function FilePreviewModal(): React.JSX.Element | null {
             </button>
           </div>
         </div>
+        {showActionError && actionError && (
+          <div
+            role="alert"
+            className="px-5 py-2 text-xs text-[var(--color-danger)] border-b border-[var(--color-border)]"
+          >
+            {actionErrorText(actionError)}
+          </div>
+        )}
 
-        <div className="px-5 py-4 overflow-auto flex-1">
+        {/* Scrollable, so Tab reaches it: the accent ring the links wear, drawn
+            inside so it does not cover the header's rule. */}
+        <div
+          className="px-5 py-4 overflow-auto flex-1 rounded-b-xl focus-visible:outline-2
+            focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+        >
           {isLoading ? (
             <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
               <Loader2 size={12} className="animate-spin" />
               <span>Loading preview…</span>
             </div>
-          ) : error ? (
-            <div className="text-xs text-[var(--color-danger)]">
-              Couldn&apos;t load preview: {error}
+          ) : bodyError ? (
+            <div className="text-xs text-[var(--color-danger)]">{bodyError}</div>
+          ) : notice ? (
+            <div className="text-xs text-[var(--color-text-muted)]">
+              {notice === 'credential'
+                ? 'Preview is off for credential files.'
+                : 'No preview for this file type.'}
             </div>
-          ) : (
+          ) : kind ? (
             <>
               <PreviewBody
-                key={attachment.id}
+                key={targetKey}
                 kind={kind}
                 text={text}
                 filtersEnabled={filtersEnabled}
               />
               {truncated && (
                 <div className="mt-3 text-[10px] italic text-[var(--color-text-muted)]">
-                  Preview truncated — download the file to see the full content.
+                  {agentFile
+                    ? 'Preview truncated — open the file to see the full content.'
+                    : 'Preview truncated — download the file to see the full content.'}
                 </div>
               )}
             </>
-          )}
+          ) : null}
         </div>
       </div>
     </div>,
     document.body
+  )
+}
+
+/** How long "Copied" stands before the hint fades out. */
+const COPIED_HINT_MS = 1200
+
+/**
+ * The header path, copied on click. A hint under it says so on hover or focus,
+ * turns into "Copied" after a click and then fades; it stays hidden until the
+ * pointer leaves, so it does not flip straight back to "Click to copy". The
+ * hint is absolutely positioned, so showing it moves nothing.
+ */
+function CopyablePath({ path }: { path: string }): React.JSX.Element {
+  const [hovered, setHovered] = useState(false)
+  const [result, setResult] = useState<'copied' | 'failed' | null>(null)
+  const [suppressed, setSuppressed] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => clearTimeout(timer.current ?? undefined), [])
+
+  const copy = async (): Promise<void> => {
+    let outcome: 'copied' | 'failed' = 'copied'
+    try {
+      await navigator.clipboard.writeText(path)
+    } catch {
+      outcome = 'failed'
+    }
+    setResult(outcome)
+    setSuppressed(false)
+    clearTimeout(timer.current ?? undefined)
+    timer.current = setTimeout(() => {
+      setResult(null)
+      setSuppressed(true)
+    }, COPIED_HINT_MS)
+  }
+
+  const visible = result !== null || (hovered && !suppressed)
+  const hint = result === 'copied' ? 'Copied' : result === 'failed' ? "Couldn't copy" : 'Click to copy'
+  // The text stays what it was while the hint fades out, so "Copied" does not
+  // flip back to "Click to copy" (or go blank) mid-fade.
+  const shownHint = useRef(hint)
+  if (visible) shownHint.current = hint
+
+  return (
+    <div className="relative min-w-0 flex">
+      <button
+        type="button"
+        onClick={() => void copy()}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => {
+          setHovered(false)
+          setSuppressed(false)
+        }}
+        onFocus={() => setHovered(true)}
+        onBlur={() => {
+          setHovered(false)
+          setSuppressed(false)
+        }}
+        className="min-w-0 truncate text-left text-xs text-[var(--color-text-muted)]
+          hover:text-[var(--color-text-secondary)] cursor-pointer transition-colors"
+        title={path}
+      >
+        {path}
+      </button>
+      <span
+        role="status"
+        aria-live="polite"
+        className={
+          'pointer-events-none absolute left-0 top-full mt-1 z-10 whitespace-nowrap rounded-md border ' +
+          'border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-2 py-0.5 text-[10px] ' +
+          'text-[var(--color-text)] shadow-sm transition-opacity duration-200 ' +
+          (visible ? 'opacity-100' : 'opacity-0')
+        }
+      >
+        {shownHint.current}
+      </span>
+    </div>
   )
 }
 
@@ -164,7 +568,7 @@ function PreviewBody({
 }): React.JSX.Element {
   if (kind === 'markdown') {
     return (
-      <div className="markdown-body text-sm text-[var(--color-text)] leading-relaxed">
+      <div className="file-preview-markdown markdown-body text-sm text-[var(--color-text)] leading-relaxed">
         <Markdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeHighlight]}
@@ -353,7 +757,7 @@ function CsvPreview({
 
   return (
     <div className="overflow-x-auto">
-      <table className="text-xs border-collapse w-full">
+      <table className="file-preview-table text-xs border-collapse w-full">
         <thead>
           <tr>
             {header.map((cell, i) => (

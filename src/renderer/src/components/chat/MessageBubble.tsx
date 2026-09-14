@@ -1,10 +1,10 @@
-import { memo, useState } from 'react'
+import { memo, useContext, useState } from 'react'
 import { Info, Bot, ArrowRight, X } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { MetaPopup } from './MetaPopup'
-import { markdownComponents } from '../../utils/markdownComponents'
+import { FileRefContext, chatMarkdownComponents } from './fileRefs'
 
 /**
  * Memoized markdown renderer. Two reasons it's split out:
@@ -27,7 +27,7 @@ const MarkdownContent = memo(function MarkdownContent({
     <Markdown
       remarkPlugins={[remarkGfm]}
       rehypePlugins={highlight ? [rehypeHighlight] : []}
-      components={markdownComponents}
+      components={chatMarkdownComponents}
     >
       {content}
     </Markdown>
@@ -91,6 +91,10 @@ export function MessageBubble({
     dismissError
   } = useFileDownload()
   const openAttachment = useAttachmentOpen()
+  // File references link only once the message is persisted: a streaming
+  // bubble renders plain inline code whatever scope surrounds it.
+  const inheritedFileRefs = useContext(FileRefContext)
+  const fileRefs = isStreaming ? null : inheritedFileRefs
   const downloadErrorForThisBubble =
     isUser && downloadError && attachments?.some((a) => a.id === errorFileId)
       ? downloadError
@@ -105,7 +109,9 @@ export function MessageBubble({
             className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
           >
             <div className={animate ? 'anim-user-bubble-content' : ''}>
-              <MarkdownContent content={content} highlight />
+              <FileRefContext.Provider value={fileRefs}>
+                <MarkdownContent content={content} highlight />
+              </FileRefContext.Provider>
             </div>
             {addressedAgentName && (
               <div className="mt-0.5 flex justify-end">
@@ -166,10 +172,12 @@ export function MessageBubble({
         {/* Strip any `<cinna_attach>` tag the agent streamed raw — the file is
             rendered as a separate badge. Streaming pass also hides partial tags
             mid-stream so no fragment flashes before the turn finalizes. */}
-        <MarkdownContent
-          content={stripCinnaAttachTags(content, { streaming: isStreaming })}
-          highlight={!isStreaming}
-        />
+        <FileRefContext.Provider value={fileRefs}>
+          <MarkdownContent
+            content={stripCinnaAttachTags(content, { streaming: isStreaming })}
+            highlight={!isStreaming}
+          />
+        </FileRefContext.Provider>
         {isStreaming && (
           <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-[var(--color-accent)] animate-pulse rounded-sm" />
         )}

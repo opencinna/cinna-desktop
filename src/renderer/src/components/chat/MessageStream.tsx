@@ -15,6 +15,7 @@ import { useAuthStore } from '../../stores/auth.store'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { CINNA_REAUTH_REQUIRED_CODE } from '../../../../shared/cinnaErrors'
 import { MessageBubble } from './MessageBubble'
+import { FileRefContext, FileRefResolver, collectFileRefSources, type FileRefScope } from './fileRefs'
 import { useMessageContextMenu } from './MessageContextMenu'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ThinkingBlock } from './ThinkingBlock'
@@ -388,6 +389,8 @@ function ReauthErrorBubble({ detail }: { detail?: string }): React.JSX.Element {
   )
 }
 
+const NO_FILE_REF_SCOPES: ReadonlyMap<string, FileRefScope> = new Map()
+
 export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): React.JSX.Element {
   const messageContextMenu = useMessageContextMenu(chatId)
   const { data: chatData } = useChatDetail(chatId)
@@ -434,6 +437,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
     return map
   }, [agents])
   const rootAgentId = chatData?.agentId ?? null
+  // Inline file references in folder agents' bubbles, resolved per agent over
+  // the persisted transcript. The resolver is a sibling of the transcript (see
+  // `FileRefResolver`) and reports the scopes here.
+  const fileRefSources = useMemo(
+    () => collectFileRefSources(chatData?.messages, agents, rootAgentId),
+    [chatData?.messages, agents, rootAgentId]
+  )
+  const [fileRefScopes, setFileRefScopes] = useState<ReadonlyMap<string, FileRefScope>>(NO_FILE_REF_SCOPES)
+  const fileRefScopeFor = (agentId: string | null): FileRefScope | null =>
+    agentId ? fileRefScopes.get(agentId) ?? null : null
   const prevRef = useRef<{ chatId: string | null; messageIds: string[] }>({
     chatId: null,
     messageIds: []
@@ -593,6 +606,9 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
     // their own and the scroll element stays the direct flex child it has
     // always been.
     <TranscriptExpansionContext.Provider value={expansionStore}>
+    {/* Keyed by chat: the resolver remembers each agent's last answer, which
+        belongs to this transcript only. */}
+    {fileRefSources.size > 0 && <FileRefResolver key={chatId} sources={fileRefSources} onChange={setFileRefScopes} />}
     <div
       ref={containerRef}
       onContextMenu={messageContextMenu.onContextMenu}
@@ -823,15 +839,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                           return <AgentAttachment key={k} file={p.file} align="left" />
                         }
                         return (
-                          <MessageBubble
-                            key={k}
-                            role="assistant"
-                            content={p.text}
-                            animate={shouldAnimate}
-                            animateDelay={idx * 80}
-                            agentName={idx === 0 ? sourceAgentName : null}
-                            agentId={sourceAgentId}
-                          />
+                          <FileRefContext.Provider key={k} value={fileRefScopeFor(sourceAgentId ?? rootAgentId)}>
+                            <MessageBubble
+                              role="assistant"
+                              content={p.text}
+                              animate={shouldAnimate}
+                              animateDelay={idx * 80}
+                              agentName={idx === 0 ? sourceAgentName : null}
+                              agentId={sourceAgentId}
+                            />
+                          </FileRefContext.Provider>
                         )
                       })}
                       {footer}
@@ -951,14 +968,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                       slot: 'plain',
                       key: k,
                       node: (
-                        <MessageBubble
-                          role="assistant"
-                          content={p.text}
-                          animate={shouldAnimate}
-                          animateDelay={idx * 80}
-                          agentName={idx === 0 ? sourceAgentName : null}
-                          agentId={sourceAgentId}
-                        />
+                        <FileRefContext.Provider value={fileRefScopeFor(sourceAgentId ?? rootAgentId)}>
+                          <MessageBubble
+                            role="assistant"
+                            content={p.text}
+                            animate={shouldAnimate}
+                            animateDelay={idx * 80}
+                            agentName={idx === 0 ? sourceAgentName : null}
+                            agentId={sourceAgentId}
+                          />
+                        </FileRefContext.Provider>
                       )
                     })
                   }
@@ -971,16 +990,22 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               key: msg.id,
               node: (
                 <>
-                  <MessageBubble
-                    role={msg.role as 'user' | 'assistant'}
-                    content={msg.content}
-                    animate={shouldAnimate}
-                    agentName={sourceAgentName}
-                    agentId={sourceAgentId}
-                    addressedAgentName={addressedAgentName}
-                    addressedAgentId={addressedAgentId}
-                    attachments={msg.role === 'user' ? msg.attachments ?? null : null}
-                  />
+                  <FileRefContext.Provider
+                    value={fileRefScopeFor(
+                      msg.role === 'user' ? addressedAgentId ?? rootAgentId : sourceAgentId ?? rootAgentId
+                    )}
+                  >
+                    <MessageBubble
+                      role={msg.role as 'user' | 'assistant'}
+                      content={msg.content}
+                      animate={shouldAnimate}
+                      agentName={sourceAgentName}
+                      agentId={sourceAgentId}
+                      addressedAgentName={addressedAgentName}
+                      addressedAgentId={addressedAgentId}
+                      attachments={msg.role === 'user' ? msg.attachments ?? null : null}
+                    />
+                  </FileRefContext.Provider>
                   {footer}
                 </>
               )

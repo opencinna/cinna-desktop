@@ -80,16 +80,21 @@ export function configuredHomePath(): string {
  * also reads the filesystem, and this answer is needed before the first read.
  * Both spellings are in the list instead.
  *
+ * Compared without case: APFS ignores it by default, so `~/downloads/q3.csv`
+ * is the Downloads folder and raises the same prompt. On a case-sensitive
+ * volume that folds a path that is not guarded into one that is — the safe
+ * direction for a question asked before any read.
+ *
  * Always false off macOS: Linux and Windows have no equivalent, and a modal
  * explaining a prompt that will not arrive is worse than no modal.
  */
 export function isGuardedLocation(path: string, platform: string = process.platform): boolean {
   if (platform !== 'darwin') return false
   const home = resolve(homedir())
-  const target = resolve(path)
+  const target = resolve(path).toLowerCase()
   // `isWithin` is true for the guarded folder itself as well as for anything
   // under it. The home can never *be* `~/Documents` — the default and
   // `assertUsableRoot` both put it at least one level down — but a folder that
   // is guarded is guarded either way.
-  return MAC_GUARDED_DIRS.some((dirs) => isWithin(join(home, ...dirs), target))
+  return MAC_GUARDED_DIRS.some((dirs) => isWithin(join(home, ...dirs).toLowerCase(), target))
 }

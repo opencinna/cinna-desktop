@@ -22,6 +22,7 @@ import { registerTrayHandlers } from './tray.ipc'
 import { registerSyncHandlers } from './sync.ipc'
 import { registerLocalToolsHandlers } from './local_tools.ipc'
 import { registerLocalAgentHandlers } from './local_agent.ipc'
+import { registerAgentFileHandlers } from './agent_files.ipc'
 import { registerEngineHandlers } from './engine.ipc'
 import { registerConnectHandlers } from './connect.ipc'
 import { registerLocalDevHandlers } from './localdev.ipc'
@@ -53,6 +54,7 @@ export function registerAllIpcHandlers(): void {
   registerSyncHandlers()
   registerLocalToolsHandlers()
   registerLocalAgentHandlers()
+  registerAgentFileHandlers()
   registerEngineHandlers()
   registerConnectHandlers()
   registerLocalDevHandlers()

@@ -10,6 +10,7 @@ import { tmpdir } from 'os'
 import { basename, join } from 'path'
 import { pipeline } from 'stream/promises'
 import type { MessageAttachment, PendingAttachment } from '../../shared/attachments'
+import { decodePreviewText } from '../../shared/filePreview'
 
 const logger = createLogger('file-service')
 
@@ -267,13 +268,7 @@ export const fileService = {
       bytes = read.bytes
       truncated = read.truncated
     }
-    // When truncated, decode with `stream: true` and skip the final flush so a
-    // multi-byte UTF-8 sequence severed by the byte cap is dropped rather than
-    // surfacing a trailing replacement char. A complete (non-truncated) buffer
-    // decodes normally — genuinely-invalid bytes still become � (intended).
-    const decoder = new TextDecoder('utf-8')
-    const text = truncated ? decoder.decode(bytes, { stream: true }) : decoder.decode(bytes)
-    return { text, truncated }
+    return { text: decodePreviewText(bytes, truncated), truncated }
   }
 }
 

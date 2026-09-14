@@ -68,6 +68,21 @@ After right-clicking a message body or selected transcript text, Copy text recei
 
 Outside pointer input, wheel/touch scrolling, window resize/blur and chat/profile navigation also close it. Programmatic transcript following leaves it open. See [Conversation UI](../../chat/conversation_ui/conversation_ui.md#reusing-message-text).
 
+### Transcript — file references (`MarkdownCode` in `fileRefs.tsx`)
+
+A resolved file reference in a folder agent's chat is a focusable `code` with `role="button"`, so `Tab` reaches it. See [File References](../../chat/file_references/file_references.md).
+
+| Key | Action |
+|-----|--------|
+| `Enter` / `Space` | Preview the focused file; for a folder, show it in Finder. The preview grows from the modal's centre, since a key has no click point. `Space` does not scroll the page. |
+
+### File preview modal (`FilePreviewModal`)
+
+| Key | Action |
+|-----|--------|
+| `Esc` | Close the preview. It fades out as fast as it appeared. After a keyboard open, focus returns to the reference once the fade ends. Registered on `window` while a preview is open, and off during the fade. |
+| `Tab` | After a keyboard open, focus starts on the card. Tab goes through the header path (click-to-copy), the CSV Filter toggle, Open folder, Open, Close, then the scrolling body. |
+
 ### Logs overlay (`LogsOverlay`)
 
 | Combo | Action |

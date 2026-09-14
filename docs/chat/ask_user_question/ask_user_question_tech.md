@@ -41,7 +41,7 @@ None added. The answer turn flows through the existing send path: `useChatCompos
 - `AnswerAffordance({ questions, chatId })` — inner component rendered only when active, so the `useChatComposer` subscription attaches only to the answerable prompt. Owns modal open state; `handleSubmit` calls `submit(text)` then closes.
 
 ### `src/renderer/src/components/chat/AnswerQuestionsModal.tsx`
-- `AnswerQuestionsModal({ questions, onSubmit, onClose })` — `createPortal` modal; Escape + outside-click close (mirrors `FilePreviewModal`).
+- `AnswerQuestionsModal({ questions, onSubmit, onClose })` — `createPortal` modal; Escape and an outside click close it at once. It has none of `FilePreviewModal`'s entrance/exit fade or its 500 ms outside-press guard.
 - Local state `answers: Record<number, CollectedAnswer>` (`{ selected: string[]; custom: string }`). `setSelected` toggles (multi) or replaces (single); `setCustom` updates free text.
 - `allAnswered` gates the Send button via `isQuestionAnswered` over every question; `handleSend` formats and calls `onSubmit`.
 - Progress counter row renders only when `questions.length > 1`; `scrollToQuestion(i)` scrolls via `data-question-index`.

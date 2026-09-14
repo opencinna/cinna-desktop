@@ -105,6 +105,18 @@ describe('which folders macOS guards', () => {
     expect(isGuardedLocation(iCloud, 'darwin')).toBe(true)
   })
 
+  it('guards a guarded folder spelled in another case, as APFS reads it', () => {
+    expect(isGuardedLocation(join(holder.home, 'downloads', 'q3.csv'), 'darwin')).toBe(true)
+    expect(isGuardedLocation(join(holder.home, 'DOCUMENTS'), 'darwin')).toBe(true)
+    expect(isGuardedLocation(join(holder.home, 'DeskTop', 'x'), 'darwin')).toBe(true)
+    expect(isGuardedLocation(join(holder.home, 'library', 'mobile documents', 'x'), 'darwin')).toBe(true)
+    // The home's own spelling folds too.
+    expect(isGuardedLocation(join(holder.home.toUpperCase(), 'Documents'), 'darwin')).toBe(true)
+    // Folding does not widen a prefix into a sibling.
+    expect(isGuardedLocation(join(holder.home, 'documents-old'), 'darwin')).toBe(false)
+    expect(isGuardedLocation(join(holder.home, 'cinnaagents'), 'darwin')).toBe(false)
+  })
+
   it('leaves the rest of the home directory alone', () => {
     // The escape hatch a refused Documents folder leads to: nothing in TCC
     // guards the home directory itself, so this needs no prompt and no modal.

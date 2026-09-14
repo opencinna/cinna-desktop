@@ -394,7 +394,7 @@ function seedCredentialsFile(agentDir: string, rootPath: string, agent: LocalAge
 }
 
 /** `open -t <file>` — macOS's "open this in the default text editor". */
-function openInTextEditor(target: string): Promise<void> {
+export function openInTextEditor(target: string): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile('open', ['-t', target], { timeout: 15_000 }, (err) => {
       if (err) reject(err)

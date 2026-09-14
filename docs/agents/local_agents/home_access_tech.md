@@ -54,7 +54,11 @@ Implementation reference for [The Agents Folder Question](home_access.md). The h
 ### `src/main/services/localAgents/homePath.ts`
 - `defaultHomePath()` — `~/Documents/CinnaAgents`, resolved with **no filesystem work at all**. That is the invariant the gate rests on
 - `configuredHomePath()` — the `localAgentsHome` setting through `assertUsableRoot`, falling back to the default when it no longer passes. A *configured* path is `realpath`ed and that is accepted: it exists only because the user picked it in the OS directory panel, and a folder chosen that way is already granted
-- `isGuardedLocation(path, platform = process.platform)` — a prefix test with `isWithin`, on the **unresolved** path, against `Documents`, `Desktop`, `Downloads` and `Library/Mobile Documents` under `homedir()`. `realpath` would follow a synced `~/Documents` to its iCloud location — which is guarded too — but it also reads the filesystem, so both spellings are listed instead. Always `false` off `darwin`
+- `isGuardedLocation(path, platform = process.platform)` — a prefix test with `isWithin`, on the **unresolved** path, against `Documents`, `Desktop`, `Downloads` and `Library/Mobile Documents` under `homedir()`
+  - **Case is ignored:** both sides are lower-cased. APFS ignores case by default, so `~/downloads/q3.csv` is the Downloads folder and raises the same prompt; a case-sensitive comparison let that spelling through. On a case-sensitive volume the fold can mark an unguarded path as guarded, which is the safe direction for a question asked before any read
+  - **No `realpath`:** it would follow a synced `~/Documents` to its iCloud location — which is guarded too — but it also reads the filesystem, so both spellings are listed instead
+  - **Also used by the [file-reference resolver](../../chat/file_references/file_references_tech.md)**, which must not probe a guarded folder while a chat opens
+  - Always `false` off `darwin`
 
 ### `src/main/services/localAgents/homeAccessService.ts`
 - `state(userId)` → `AgentsHomeState` — path, `guarded`, and `access`. Never reports `denied` except from the in-memory refusal, because a refusal is not stored and only an attempt can produce one

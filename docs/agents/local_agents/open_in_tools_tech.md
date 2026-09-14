@@ -71,6 +71,7 @@ All four `local-tools:*` handlers call `userActivation.requireActivated()` and a
 - `launchDetached(file, args, cwd)` — `spawn` with `detached: true`, `stdio: 'ignore'`; the error event gets one tick before `unref()`
 - `runToCompletion(file, args)` — `execFile` with a 15 s timeout, surfacing `stderr`; used for `osascript` and `open -a`
 - `guardLaunch(what, run)` — passes `LocalToolsError` through, wraps anything else as `launch_failed`
+- `launchEditor(tool, target, cwd)` — exported: `launchDetached(tool.path, [target])` for a CLI shim, else `open -a <bundle> <target>`. `openFolderInEditor` calls it with the resolved folder. [File references](../../chat/file_references/file_references_tech.md) call it with a single file after their own containment and consent checks. It validates nothing itself, so the roots guard stays in `openFolderInEditor`
 - Public surface: `openInTerminalWithCommand`, `openFolderInEditor`, `revealInFileManager`, `openTerminalAt`, and `openIn(request)` — the single entry point the IPC layer calls, which switches on `request.action` and rejects an unknown one with `unsupported_action`
 
 ### `src/main/services/localAgents/terminalCommand.ts`

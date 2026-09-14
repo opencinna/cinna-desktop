@@ -39,6 +39,14 @@ import type {
 import { LOCAL_AGENT_CHANGED_CHANNEL } from '../shared/localAgents'
 import type { StoredPermissionGrant } from '../shared/localAgentRequests'
 import type {
+  AgentFileActionResult,
+  AgentFilePathInput,
+  AuthorizeAgentFileResult,
+  ReadAgentFilePreviewResult,
+  ResolveAgentFileRefsInput,
+  ResolveAgentFileRefsResult
+} from '../shared/agentFiles'
+import type {
   ClaudeApproval,
   CodexAuthStatus,
   ClaudeAuthStatus,
@@ -1325,6 +1333,33 @@ const api = {
       ipcRenderer.on(TOOL_INSTALL_CHANNEL, listener)
       return () => ipcRenderer.off(TOOL_INSTALL_CHANNEL, listener)
     }
+  },
+
+  /**
+   * Inline file references in a folder agent's chat. The renderer names paths
+   * it was given by `resolve`; main locates the agent folder itself and
+   * re-checks containment or the user's approval on every call. Failures come
+   * back as `{ success: false, code }`.
+   */
+  agentFiles: {
+    /** Which inline code spans (in transcript order) name a real file or folder. */
+    resolve: (input: ResolveAgentFileRefsInput): Promise<ResolveAgentFileRefsResult> =>
+      ipcRenderer.invoke('agent-files:resolve', input),
+    /**
+     * May the renderer act on this path? Inside the agent folder, or approved
+     * before, answers at once; otherwise main asks with a native dialog.
+     */
+    authorize: (input: AgentFilePathInput): Promise<AuthorizeAgentFileResult> =>
+      ipcRenderer.invoke('agent-files:authorize', input),
+    /** Capped UTF-8 text for the preview modal. Refuses credential files. */
+    readPreview: (input: AgentFilePathInput): Promise<ReadAgentFilePreviewResult> =>
+      ipcRenderer.invoke('agent-files:read-preview', input),
+    /** Open with the default editor, the default app or a text editor — never executed. */
+    open: (input: AgentFilePathInput): Promise<AgentFileActionResult> =>
+      ipcRenderer.invoke('agent-files:open', input),
+    /** Select the file or folder in Finder / Explorer. */
+    reveal: (input: AgentFilePathInput): Promise<AgentFileActionResult> =>
+      ipcRenderer.invoke('agent-files:reveal', input)
   },
 
   /**

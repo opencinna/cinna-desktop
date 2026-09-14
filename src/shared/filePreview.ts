@@ -60,6 +60,18 @@ export function previewKindFor(filename: string, mimeType?: string): PreviewRend
   return null
 }
 
+/**
+ * Decode preview bytes as UTF-8 for the modal. When the read was truncated,
+ * decode with `stream: true` and skip the final flush so a multi-byte sequence
+ * severed by the byte cap is dropped rather than surfacing a trailing
+ * replacement char. A complete buffer decodes normally — genuinely-invalid
+ * bytes still become � (intended).
+ */
+export function decodePreviewText(bytes: Uint8Array, truncated: boolean): string {
+  const decoder = new TextDecoder('utf-8')
+  return truncated ? decoder.decode(bytes, { stream: true }) : decoder.decode(bytes)
+}
+
 /** Convenience predicate for badge click-routing. */
 export function isPreviewable(filename: string, mimeType?: string): boolean {
   return previewKindFor(filename, mimeType) !== null
