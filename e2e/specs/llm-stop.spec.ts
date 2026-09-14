@@ -152,7 +152,11 @@ test('Stop mid-reply ends streaming, and the part that streamed stays in the tra
   model.closedByClient = 0
   await arrange(cinna)
   const page = cinna.page
-  const input = page.getByPlaceholder('Type a message...')
+  // By role, not placeholder: for ~260ms after the first send the chat curtain
+  // (`ChatTransition`) keeps an inert, aria-hidden clone of the new-chat
+  // composer, placeholder included, and this spec reaches the composer again
+  // inside that window.
+  const input = page.getByRole('combobox', { name: 'Type a message...', exact: true })
   const stop = page.getByRole('button', { name: 'Stop', exact: true })
   const send = page.getByRole('button', { name: 'Send', exact: true })
   const reply = page.getByRole('paragraph').filter({ hasText: PARTIAL })

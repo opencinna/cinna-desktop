@@ -88,6 +88,15 @@ async function serve(streaming: boolean): Promise<{
   return { host, server, requests, closed: () => closed }
 }
 
+/**
+ * The composer by role, not placeholder: for ~260ms after the first send the
+ * chat curtain (`ChatTransition`) keeps an inert, aria-hidden clone of the
+ * new-chat composer, placeholder included, and Stop lands inside that window.
+ */
+function composer(cinna: CinnaApp) {
+  return cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })
+}
+
 async function arrange(cinna: CinnaApp, host: string): Promise<void> {
   await cinna.skipOnboarding()
   const agent = await cinna.page.evaluate(({ host, name }) => window.api.agents.upsert({
@@ -97,11 +106,11 @@ async function arrange(cinna: CinnaApp, host: string): Promise<void> {
   expect(agent.id).toBeTruthy()
   await cinna.relaunch()
   await cinna.skipOnboarding()
-  await cinna.page.getByPlaceholder('Type a message...').fill('@')
+  await composer(cinna).fill('@')
   await cinna.page.getByRole('listbox', { name: 'Agents and MCP servers' })
     .getByRole('option').filter({ hasText: AGENT }).click()
-  await cinna.page.getByPlaceholder('Type a message...').fill(PROMPT)
-  await cinna.page.getByPlaceholder('Type a message...').press('Enter')
+  await composer(cinna).fill(PROMPT)
+  await composer(cinna).press('Enter')
 }
 
 async function messages(cinna: CinnaApp): Promise<{ role: string; content: string }[]> {
@@ -145,9 +154,9 @@ for (const streaming of [true, false]) {
         expect(fake.requests.filter((request) => request.method === 'tasks/cancel')).toEqual([])
       }
       expect(fake.requests.filter((request) => request.method.startsWith('message/'))).toHaveLength(1)
-      await cinna.page.getByPlaceholder('Type a message...').fill('Continue when I am ready.')
+      await composer(cinna).fill('Continue when I am ready.')
       await expect(cinna.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
-      await cinna.page.getByPlaceholder('Type a message...').fill('')
+      await composer(cinna).fill('')
       expect(await cinna.page.evaluate(() => window.api.providers.list())).toEqual([])
       expect(await cinna.page.evaluate(() => window.api.chatModes.list())).toEqual([])
     } finally {
