@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentFileRef } from '../../../../shared/agentFiles'
+import { extractFileRefCandidates, type AgentFileRef } from '../../../../shared/agentFiles'
 
 vi.mock('../../stores/logger.store', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
@@ -169,6 +169,17 @@ describe('collectFileRefSources', () => {
     expect([...sources.keys()]).toEqual(['folder:a', 'folder:b'])
     expect(sources.get('folder:a')).toEqual(['check `u.md`', 'wrote `x.md`'])
     expect(sources.get('folder:b')).toEqual(['from b `b.md`', 'to b `b2.md`'])
+  })
+
+  it('resolves over the repaired text, so prose after a nested block still yields its paths', () => {
+    // Unrepaired, the outer closer opens a block that swallows the prose after it.
+    const nested = ['```markdown', '### Step', '```bash', 'uv run x', '```', 'Read-only.', '```', '', 'Then open `data/omp.csv`.'].join('\n')
+    const messages = [
+      { role: 'user', content: nested.replace('data/omp.csv', 'u.md'), addressedAgentId: null },
+      { role: 'assistant', content: '', sourceAgentId: null, parts: [{ kind: 'text', text: nested }] }
+    ]
+    const markdowns = collectFileRefSources(messages, agents, 'folder:a').get('folder:a') ?? []
+    expect(extractFileRefCandidates(markdowns)).toEqual(['u.md', 'data/omp.csv'])
   })
 
   it('is empty when no agent runs in a folder', () => {

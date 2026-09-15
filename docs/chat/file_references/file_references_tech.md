@@ -214,8 +214,9 @@ None.
   - **Keyboard**: a keyboard-generated click (`detail === 0`), Enter or Space passes a null origin.
 - `chatMarkdownComponents`: `markdownComponents` plus the two overrides. It is defined at module level, so the memoized `MarkdownContent` never sees a new identity.
 - `collectFileRefSources(messages, agents, rootAgentId)`: returns `Map<agentId, markdown[]>` in transcript order.
-  - User rows go under `addressedAgentId ?? rootAgentId`, using their content.
-  - Assistant rows go under `sourceAgentId ?? rootAgentId`, using their `text` and `notice` parts (or their content when there are no parts), with `<cinna_attach>` tags stripped.
+  - User rows go under `addressedAgentId ?? rootAgentId`, using their content with nested code fences repaired.
+  - Assistant rows go under `sourceAgentId ?? rootAgentId`, using their `text` and `notice` parts (or their content when there are no parts), with `<cinna_attach>` tags stripped and then nested code fences repaired.
+  - Both repairs call `repairNestedFences` (`src/renderer/src/utils/nestedFences.ts`) the way `MessageBubble` does, so the scanner reads the text the bubble renders; see [Conversation UI tech](../conversation_ui/conversation_ui_tech.md#nested-code-fences).
   - Only agents with `capabilities.cwd === true` are included.
 - `FileRefResolver({sources, onChange})`: renders nothing.
   - It runs the hook, reports scopes upward, and reports an empty map on unmount.

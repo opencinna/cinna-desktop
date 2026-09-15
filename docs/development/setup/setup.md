@@ -34,7 +34,7 @@ Run the runtime commands from a checkout with dependencies installed and on a co
 | LLM | @anthropic-ai/sdk, openai, @google/generative-ai |
 | MCP | @modelcontextprotocol/sdk (stdio + SSE + streamable-http, OAuth DCR) |
 | IDs | nanoid |
-| Markdown | react-markdown + remark-gfm + rehype-highlight |
+| Markdown | react-markdown + remark-gfm + rehype-highlight; unified + remark-parse for the nested code fence repair |
 
 ## Project Structure
 

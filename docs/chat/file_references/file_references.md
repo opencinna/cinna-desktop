@@ -64,6 +64,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **Inline code only.** A `code` element inside a fenced or indented block never links, even when its text exactly matches a resolved span.
 - **Not while streaming.** Resolution reads the saved transcript, so a bubble still receiving tokens shows plain inline code. Its links appear once the message is saved.
 - **Keyed by span text.** Every inline occurrence of the same text in one agent's bubbles links to the same path.
+- **Over the text the bubble renders.** Resolution reads each message with attachment tags stripped and nested code fences repaired, which is the same string its bubble shows. Unrepaired, the outer closer of an unescaped nested block opened a new block that swallowed the prose after it, so a path named in that prose was taken for code and never looked up.
 
 ### Which spans are candidates
 - **The shape rule.** A candidate must pass every check:

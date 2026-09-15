@@ -1,10 +1,11 @@
-import { memo, useContext, useState } from 'react'
+import { memo, useContext, useMemo, useState } from 'react'
 import { Info, Bot, ArrowRight, X } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { MetaPopup } from './MetaPopup'
 import { FileRefContext, chatMarkdownComponents } from './fileRefs'
+import { repairNestedFences } from '../../utils/nestedFences'
 
 /**
  * Memoized markdown renderer. Two reasons it's split out:
@@ -95,6 +96,16 @@ export function MessageBubble({
   // bubble renders plain inline code whatever scope surrounds it.
   const inheritedFileRefs = useContext(FileRefContext)
   const fileRefs = isStreaming ? null : inheritedFileRefs
+  // One text for what the bubble shows and what Copy text / Save to Notes take,
+  // so a copied snippet carries neither the model's broken nesting nor its
+  // zero-width escapes (see `utils/nestedFences.ts`).
+  const markdown = useMemo(
+    () =>
+      isUser
+        ? repairNestedFences(content)
+        : repairNestedFences(stripCinnaAttachTags(content, { streaming: isStreaming }), { streaming: isStreaming }),
+    [content, isUser, isStreaming]
+  )
   const downloadErrorForThisBubble =
     isUser && downloadError && attachments?.some((a) => a.id === errorFileId)
       ? downloadError
@@ -105,12 +116,12 @@ export function MessageBubble({
       <div className="flex flex-col items-end gap-1">
         <div className="relative group max-w-[80%]">
           <div
-            data-message-markdown={content}
+            data-message-markdown={markdown}
             className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
           >
             <div className={animate ? 'anim-user-bubble-content' : ''}>
               <FileRefContext.Provider value={fileRefs}>
-                <MarkdownContent content={content} highlight />
+                <MarkdownContent content={markdown} highlight />
               </FileRefContext.Provider>
             </div>
             {addressedAgentName && (
@@ -165,7 +176,7 @@ export function MessageBubble({
         </div>
       )}
       <div
-        data-message-markdown={stripCinnaAttachTags(content, { streaming: isStreaming })}
+        data-message-markdown={markdown}
         className={`text-sm leading-relaxed markdown-body text-[var(--color-text)] ${animate ? 'anim-assistant-bubble' : ''}`}
         style={animate && animateDelay ? { animationDelay: `${animateDelay}ms` } : undefined}
       >
@@ -173,10 +184,7 @@ export function MessageBubble({
             rendered as a separate badge. Streaming pass also hides partial tags
             mid-stream so no fragment flashes before the turn finalizes. */}
         <FileRefContext.Provider value={fileRefs}>
-          <MarkdownContent
-            content={stripCinnaAttachTags(content, { streaming: isStreaming })}
-            highlight={!isStreaming}
-          />
+          <MarkdownContent content={markdown} highlight={!isStreaming} />
         </FileRefContext.Provider>
         {isStreaming && (
           <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-[var(--color-accent)] animate-pulse rounded-sm" />

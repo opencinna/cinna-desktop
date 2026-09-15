@@ -4,6 +4,7 @@ import { stripCinnaAttachTags } from '../../../../shared/cinnaAttach'
 import { useFilePreviewStore } from '../../stores/filePreview.store'
 import { markdownComponents } from '../../utils/markdownComponents'
 import { useAgentFileRefs, type FileRefScope } from '../../hooks/useAgentFileRefs'
+import { repairNestedFences } from '../../utils/nestedFences'
 
 export type { FileRefScope }
 
@@ -111,7 +112,9 @@ interface FileRefAgent {
  * transcript order: an assistant row under `sourceAgentId ?? rootAgentId`, a
  * user row under `addressedAgentId ?? rootAgentId`, and only agents that run
  * in a folder (`capabilities.cwd`). Mirrors what the transcript renders
- * through `MessageBubble` — the text parts of a turn, with attach tags stripped.
+ * through `MessageBubble` — the text parts of a turn, with attach tags stripped
+ * and nested fences repaired, so a path in prose a broken fence would have
+ * swallowed is still resolved.
  */
 export function collectFileRefSources(
   messages: readonly FileRefMessage[] | undefined,
@@ -126,15 +129,15 @@ export function collectFileRefSources(
     let texts: string[]
     if (message.role === 'user') {
       agentId = message.addressedAgentId ?? rootAgentId
-      texts = [message.content]
+      texts = [repairNestedFences(message.content)]
     } else if (message.role === 'assistant') {
       agentId = message.sourceAgentId ?? rootAgentId
       texts =
         Array.isArray(message.parts) && message.parts.length > 0
           ? message.parts
               .filter((part) => part.kind === 'text' || part.kind === 'notice')
-              .map((part) => stripCinnaAttachTags(part.text))
-          : [stripCinnaAttachTags(message.content)]
+              .map((part) => repairNestedFences(stripCinnaAttachTags(part.text)))
+          : [repairNestedFences(stripCinnaAttachTags(message.content))]
     } else {
       continue
     }
