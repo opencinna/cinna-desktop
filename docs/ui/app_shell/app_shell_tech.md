@@ -61,7 +61,7 @@
 | `settingsTab` | Active settings sub-section (consumed by `Sidebar` + `SettingsPage`) |
 | `theme` | Resolved `'dark' \| 'light'`, applied via document `data-theme` and `window.api.app.setTheme(theme)` for dock/window icons |
 | `themePreference` | `'system' \| 'dark' \| 'light'`, persisted as `cinna-theme`; Features chooses any value, InterfaceMenu selects a fixed opposite resolved theme |
-| `extraUIAnimation` | Default-on renderer preference, persisted as `cinna-extra-ui-animation`; gates grid, surface/button borders and header wave |
+| `extraUIAnimation` | Default-on renderer preference, persisted as `cinna-extra-ui-animation`; gates grid, surface/button borders, header wave and the new-chat logo's draw and sweep |
 | `verboseMode` | Toggled from `InterfaceMenu`; persisted via `localStorage` |
 | `logsOpen` | Toggled from `InterfaceMenu` and via ⌘\` |
 | `agentStatusOpen` | Toggled from `AgentStatusButton` |
@@ -139,7 +139,7 @@ Layout is unmeasurable in jsdom, so the behaviour is covered by an E2E assertion
 ### Shared chat workspace
 
 - `src/renderer/src/components/layout/ChatWorkspace.tsx` owns the former chat branch of `MainArea`: pending agent/MCP lists, reactive chat-mode selection, example prompts, tilde popup state, send errors, new-chat submission and active-chat layout/composer measurement.
-- `agentId` seeds the pending agent list. `embedded` forces the new-chat branch regardless of the stored active chat, omits the dashboard welcome heading and HintBar, and leaves the global `pendingAgentId` handoff to the dashboard instance. Agent selection remains editable through the shared composer.
+- `agentId` seeds the pending agent list. `embedded` forces the new-chat branch regardless of the stored active chat, omits the dashboard welcome heading (with its logo) and HintBar, and leaves the global `pendingAgentId` handoff to the dashboard instance. Agent selection remains editable through the shared composer.
 - `src/renderer/src/components/agents/local/LocalAgentPage.tsx` embeds a workspace keyed by agent id; `src/renderer/src/components/agents/ExternalAgentPage.tsx` keys it by profile and agent id. Both hide its wrapper in settings mode instead of unmounting it. Draft content lives in the profile/surface-keyed `composerDraft.store`, so it also survives navigation away and remount. Dashboard and individual agent keys remain independent; hidden settings mode still preserves the mounted composer.
 - On an embedded dispatch confirmed by `startNewChat`'s boolean result, `handleNewChat` switches `activeView` to chat and `sidebarTab` to chats, then consumes only unchanged submitted selections. A false preparation result keeps the draft for retry; it is not inferred from unrelated global stream errors. The ordinary workspace reads the active chat id and renders its transcript.
 - `RuntimePanel compact` is the folder landing/connection-tooltip summary; the full runtime form mounts only in folder Settings. Shared resolution supplies engine, credential/model and setup state. Claude subscription wording requires logged-in authentication with `authMethod === 'claude.ai'` or a subscription type; unknown auth is not a confirmed subscription.
@@ -148,6 +148,7 @@ Layout is unmeasurable in jsdom, so the behaviour is covered by an E2E assertion
 ### Appearance integration
 
 - `MainArea` wraps only its main `ChatWorkspace` branch in `ChatTransition`, keyed by active chat ID and the shared preference. An ID change (including null for dashboard) takes an inert outgoing DOM snapshot while the real workspace updates immediately. Agent/settings/Notes route changes do not gain a global page transition. Timing and cancellation belong to [Appearance](../appearance/appearance_tech.md#chat-switch-transitions).
+- The non-embedded new-chat heading renders `src/renderer/src/components/ui/CinnaLogoDraw.tsx`. Its shown state is component-local and resets whenever the new-chat branch unmounts; drawing, sweep timing and theme colors belong to [Appearance](../appearance/appearance_tech.md#new-chat-logo).
 
 - `Shell` mounts `src/renderer/src/hooks/useAmbientButtons.ts` once. `TopBar` owns its independent header-wave timer and passes the shared decorative class to all four controls.
 - `Sidebar` marks its card as `ambient-grid-surface` and mounts `src/renderer/src/components/ui/AmbientGrid.tsx` with explicit border glow and `active={sidebarOpen}`; collapse cancels decoration without unmounting the sidebar.

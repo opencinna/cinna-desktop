@@ -18,7 +18,8 @@ Implementation companion to [Appearance](appearance.md).
 - `src/renderer/src/hooks/useAmbientButtons.ts` — one secondary-button scheduler per mounted Shell.
 - `src/renderer/src/components/layout/TopBar.tsx` — header-wave scheduler.
 - `src/renderer/src/components/layout/ChatTransition.tsx` — chat-switch DOM snapshot and diagonal fading curtain; hosted by `MainArea`.
-- `src/renderer/src/assets/main.css` — theme tokens, grid/edge animations, masked traveling borders and staggered header backgrounds.
+- `src/renderer/src/components/ui/CinnaLogoDraw.tsx` — new-chat logo: `OUTLINES` (the wordmark of `resources/cinna-desktop-icon-dark.png` / `resources/cinna-desktop-icon-light.png` as closed SVG paths, committed as a constant), local shown state, `DRAW_MS` and the band-sweep scheduler.
+- `src/renderer/src/assets/main.css` — theme tokens (including `--color-logo-from` / `--color-logo-to`), grid/edge animations, masked traveling borders, staggered header backgrounds, and the `cinna-logo-*` draw transitions and sweep keyframes.
 - `src/renderer/src/trayPanel.tsx` — independent popup theme application and listeners.
 
 ### Renderer — hosts and controls
@@ -67,8 +68,9 @@ System is resolved before IPC; main never receives `system`. The handler updates
 | Input/sidebar border | 18–35 s | 4.2–6 s | 35–70 s; also used after interaction ends |
 | Secondary-button border | 4–9 s | 4.2–5.6 s | 8–18 s; no eligible button retries in 8–16 s |
 | Header wave | 8–18 s | 2 s scheduling window | 28–55 s |
+| New-chat logo sweep | 6–9 s after the logo is shown (5 s draw + 1–4 s); 4–9 s after a visibility/motion change, never before the draw has finished | 4.2–5.6 s | 8–18 s |
 
-Grid/border state is per host; the secondary-button singleton and header scheduler are independent, so their effects can overlap with a surface burst.
+Grid/border state is per host; the secondary-button singleton, header scheduler and logo sweep are independent, so their effects can overlap with a surface burst.
 
 ### Secondary buttons and header wave
 
@@ -83,6 +85,15 @@ Grid/border state is per host; the secondary-button singleton and header schedul
 - `getSnapshotBeforeUpdate` clones the outgoing workspace before React mutates it. The clone is inert, aria-hidden and pointer-transparent, with duplicate IDs/autofocus removed. Descendant scroll offsets are captured and restored after insertion. Clone descendants have CSS animations/transitions disabled and cannot receive pointer input. No second React chat tree or subscriptions mount; navigation, streaming and composer state keep their existing lifecycle.
 - Web Animations sweeps oversized diagonal gradient masks across each layout to create a soft curtain edge. The outgoing copy wipes/fades over 110 ms; only then does live content reveal over 150 ms (260 ms total). Text and layout stay stationary: only mask position and opacity animate, with no transforms. Backwards fill hides the incoming layout during the exit. The host clips the curtain to the workspace; masks disappear when the animation ends. The shell classes use the CSS base layer so Tailwind utilities can override their layout defaults, following the repository convention.
 - Rapid switches cancel prior animations and remove the old snapshot before capturing another. Completion only cleans its own snapshot. Disabling the preference, OS motion changes, document visibility changes and unmount cancel running effects; hidden documents, reduced motion and unavailable Web Animations skip them.
+
+### New-chat logo
+
+- `ChatWorkspace` renders `CinnaLogoDraw` above the heading only in its non-embedded new-chat branch. The SVG (viewBox 352×216, drawn at 101×62 px) is always mounted there, so its box is reserved. It is `aria-hidden` and `focusable="false"`; `onClick` flips a component-local `shown` that starts false. No store or localStorage key holds it: an active chat renders a different branch and other views replace the workspace in `MainArea`, so each new-chat screen mounts it hidden.
+- `data-shown` and `data-animate` (the preference) on the SVG drive the CSS. Each outline has `pathLength=1` with `stroke-dasharray: 1 1`, so one `stroke-dashoffset` change from 1 to 0 draws every path over the same 5 s whatever its real length. These are transitions, not keyframes, so a click mid-draw reverses from the current offset. Draw-in uses `cubic-bezier(0.45, 0, 0.2, 1)` with a 1.5 s opacity fade at its start; draw-out uses the mirrored curve with the fade delayed 3.5 s so it closes the draw. Without `data-animate`, and under reduced motion, the paths have no transition.
+- `DRAW_MS` in the component restates the 5000 ms in `main.css`, and the first sweep is timed from it; change both together.
+- Strokes use one `linearGradient` (id from `useId`, a user-space diagonal across the viewBox) from `--color-logo-from` to `--color-logo-to`: the dark icon's copper in Dark, the light icon's blue into teal in Light. The paint is set as inline style, `url(#id) var(--color-logo-from)`, because `ChatTransition` strips ids from its outgoing snapshot; without the fallback colour the logo would paint nothing for the length of the exit wipe. The 4.2-unit stroke renders about a pixel wide, because thinner lines break into stair-steps. The `.cinna-logo-draw-lines` group sits at 0.35 opacity (0.45 in Light, where the palette is paler against white) so a sweep has visible room to raise it.
+- The sweep effect runs only while `extraUIAnimation` and `shown` are both true and `matchMedia` exists. Each sweep picks an angle (0–360°) and a duration. The render then adds a luminance `mask` holding a 110×600 band, white at opacity 0 → 0.5 → 0 across its width and rotated about the centre, over a second, undashed copy of the outlines. `.cinna-logo-sweep` translates the band from −270 to 270 viewBox units over `--sweep-duration`, starting and ending clear of the logo. The copy shows only under the band, so the lines it crosses read less transparent.
+- `restart` clears the timer and any sweep on document visibility or reduced-motion changes, and reschedules only when visible with motion allowed; `play` rechecks both. Effect cleanup (hiding the logo, turning the preference off, unmount) clears the timer, the sweep and both listeners. Under reduced motion, CSS also hides `.cinna-logo-sweep`.
 
 ## Renderer Components
 
@@ -105,7 +116,7 @@ No environment variable or per-agent override controls these effects. Timing and
 
 ## Security
 
-Appearance storage contains presentation preferences only. Decoration performs no network, filesystem or agent operation and cannot intercept input. The existing icon IPC accepts only fixed themes; it grants no OS appearance control. Builder identity and connection detail safety remain in [Chat Routing](../../chat/chat_routing/chat_routing_tech.md#connection-detail-lookup).
+Appearance storage contains presentation preferences only. Decoration performs no network, filesystem or agent operation and cannot intercept input; the new-chat logo's click lands only on its own box and changes nothing but its local shown state. The existing icon IPC accepts only fixed themes; it grants no OS appearance control. Builder identity and connection detail safety remain in [Chat Routing](../../chat/chat_routing/chat_routing_tech.md#connection-detail-lookup).
 
 ## Validation
 
@@ -114,3 +125,4 @@ Appearance storage contains presentation preferences only. Decoration performs n
 - `src/renderer/src/components/settings/FeaturesSettingsSection.test.tsx` — accessible controls, immediate persistence and operation while service settings are unavailable.
 - `src/renderer/src/components/ui/AmbientGrid.test.tsx` — autofocus versus actual interaction, fade/blur quiet intervals, unmount timer cleanup, live tint and independent sidebar border behavior.
 - `src/renderer/src/components/layout/TopBar.agentStatusButton.test.tsx` — four header controls and preference/reduced-motion cancellation. These focused contracts do not verify the visual rendering of randomized artwork or a full Electron workflow.
+- No unit or E2E test covers `CinnaLogoDraw`: its shown toggle, draw transitions and sweep scheduler are unverified by the suite.

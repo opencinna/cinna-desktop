@@ -61,6 +61,9 @@
     --color-warning: #eab308;
     /* Send while a turn runs: the message joins that turn or its queue. */
     --color-send-queued: #3b82f6;
+    /* The new-chat logo's stroke gradient, after the dark app icon's copper. */
+    --color-logo-from: #c8693d;
+    --color-logo-to: #eab08a;
 
     /* Agent status severity palette. -text are tuned for dark-on-dark legibility. */
     --color-severity-error: #ef4444;
@@ -101,6 +104,9 @@
     --color-success: #16a34a;
     --color-warning: #ca8a04;
     --color-send-queued: #2563eb;
+    /* The light app icon's blue into teal. */
+    --color-logo-from: #1d4e76;
+    --color-logo-to: #4aa7a3;
 
     /* -text shades darken in light theme for contrast against light backgrounds. */
     --color-severity-error: #dc2626;
@@ -846,5 +852,51 @@
   .example-prompt-tag.is-leaving .example-prompt-tag-text {
     opacity: 1;
     animation: none;
+  }
+
+  /* New-chat logo, hidden until its space is clicked: every outline of the
+     wordmark draws itself in at the same time, and back out on the next click.
+     Transitions rather than an animation, so a click part-way turns the lines
+     round from where they are. Each path has pathLength=1, so one dash length
+     fits all of them. Drawing out runs the draw-in curve backwards, and the
+     fade that opens the draw-in closes the draw-out. */
+  .cinna-logo-draw-lines path {
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 1;
+    opacity: 0;
+    transition: stroke-dashoffset 5000ms cubic-bezier(0.8, 0, 0.55, 1), opacity 1500ms ease 3500ms;
+  }
+  .cinna-logo-draw[data-shown] .cinna-logo-draw-lines path {
+    stroke-dashoffset: 0;
+    opacity: 1;
+    transition: stroke-dashoffset 5000ms cubic-bezier(0.45, 0, 0.2, 1), opacity 1500ms ease;
+  }
+  .cinna-logo-draw:not([data-animate]) .cinna-logo-draw-lines path {
+    transition: none;
+  }
+  /* The outlines are drawn about a pixel wide, since thinner ones break into
+     stair-steps, and kept faint so the sweep that brings them up reads. */
+  .cinna-logo-draw-lines {
+    opacity: 0.35;
+  }
+  /* The light icon's blue into teal is paler against white. */
+  [data-theme="light"] .cinna-logo-draw-lines {
+    opacity: 0.45;
+  }
+  /* Now and then a soft band sweeps across the logo at a random angle, as the
+     secondary buttons' border glow comes and goes. It is the mask over a second
+     copy of the outlines (CinnaLogoDraw), so the lines it passes lose some of
+     their transparency and then fade back. On an SVG element these px are the
+     viewBox's units: the band starts and ends clear of the 352x216 logo. */
+  .cinna-logo-sweep {
+    animation: cinna-logo-sweep var(--sweep-duration) ease-in-out both;
+  }
+  @keyframes cinna-logo-sweep {
+    from { transform: translateX(-270px); }
+    to { transform: translateX(270px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cinna-logo-draw[data-animate] .cinna-logo-draw-lines path { transition: none; }
+    .cinna-logo-sweep { display: none; }
   }
 }

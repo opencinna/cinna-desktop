@@ -20,7 +20,7 @@ import { useApplyChatMode } from '../../hooks/useApplyChatMode'
 import { newChatRouter } from '../../../../shared/chatRouting'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
-import { Sparkles } from 'lucide-react'
+import { CinnaLogoDraw } from '../ui/CinnaLogoDraw'
 import type { ComposerAttachment } from '../../../../shared/attachments'
 import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
 import { useComposerDraftStore } from '../../stores/composerDraft.store'
@@ -353,7 +353,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
         }`}
       >
         {!embedded && <div className="mb-8 text-center">
-          <Sparkles size={32} className="mx-auto mb-3 text-[var(--color-accent)] opacity-60" />
+          <CinnaLogoDraw className="mx-auto mb-3" />
           <h1 className="text-lg font-semibold text-[var(--color-text)]">What can I help with?</h1>
         </div>}
         <RefusableExamplePrompts refusal={exampleRefusal}>
