@@ -21,7 +21,7 @@ Three of these produce a silent, green-suite failure — and each fails in the d
 - `src/shared/localAgents.ts:302` — `LocalAgentDesktopSummary.claudeApproval: ClaudeApproval | null`, the field the Permissions card reads
 
 ### Main process
-- `src/main/engine/configGenerator.ts` — the static profile. `SECRET_FILES` (`:218`), `IDENTITY_FILES` (`:239`), `CONVERSATION_PERMISSIONS` (`:244`), `mergePermissions()` (`:667`), applied per agent entry at `:543`
+- `src/main/engine/configGenerator.ts` — the static profile. `SECRET_FILES` (`:246`), `IDENTITY_FILES` (`:299`), `CONVERSATION_PERMISSIONS` (`:308`), `mergePermissions()` (`:771`), applied per agent entry at `:647`
 - `src/main/services/localAgents/permissionGrantService.ts` — the desktop's own store. `list()` (`:56`), `covers()` (`:70`), `remember()` (`:90`), `forget()` (`:110`), `forgetAll()` (`:120`). Reads disk on every call, deliberately uncached
 - `src/main/services/localAgents/desktopStateService.ts:66` — `DesktopState.permissionGrants`; `:107-124` — the coercion, which drops a row naming no action or pattern and reads a missing `scope` as `exact`; `:122` — `DesktopState.claudeApproval`; `:213` — its coercion through `isClaudeApproval`, anything else to null; `:429` — copied into `summarize()`
 - `src/main/services/localAgents/localAgentService.ts:1648` — `setClaudeApproval(userId, agentId, approval: unknown)`. `locate()` first, then `invalid_input` for anything that is not `auto`, `ask` or null, then `turnLock.acquire(agentId, 'editor')` around `desktopStateService.patch(agentDir, kindOf(root), {claudeApproval})`, then `scannerService.markRootDirty` and a re-scan of the folder — the watcher acts on neither state file (a bare one is under `userData`, a kit one under `app-data/`, which it ignores by segment), so without the re-read the page would keep rendering the choice it had before the click
@@ -111,7 +111,7 @@ The ACP branch of `agent:answer-request` writes the grant **before** delivering 
 |---|---|---|---|
 | `CONVERSATION_PERMISSIONS` | `configGenerator.ts:244` | see [permissions.md](permissions.md#business-rules) | The static profile. Same for every folder agent unless its manifest overrides it |
 | `SECRET_FILES` | `configGenerator.ts:218` | `credentials/.env`, `*.env`, `*.pem`, `*.key` → `deny` | Spread into `read`, `edit` **and** `write`. `credentials/.env` is redundant against `*.env` and listed anyway, so a reader need not run the matcher in their head |
-| `IDENTITY_FILES` | `configGenerator.ts:247` | `cinna-agent.json`, `docs/WORKFLOW_PROMPT.md`, `AGENT.md` → `ask` | Exact relative paths, because that is what the tools name. One list for both folder shapes, kit and bare | <!-- nocheck -->
+| `IDENTITY_FILES` | `configGenerator.ts:299` | `cinna-agent.json`, `docs/WORKFLOW_PROMPT.md`, `AGENT.md` → `ask` | Exact relative paths, because that is what the tools name. One list for both folder shapes, kit and bare | <!-- nocheck -->
 | `ACP_CANCEL_GRACE_MS` | `acpDriver.ts` | 3 s | The bounded wait for a `session/cancel` acknowledgement. The parked asks are answered **before** the cancel, so an agent blocked inside a permission request can unwind and read it |
 | `REQUEST_PARK_TIMEOUT_MS` | `src/shared/localAgentRequests.ts` | 10 min | Bounds an abandoned dialog. **Does not apply to an auto-answered ask**, which is why that path retries instead |
 | `DEFAULT_CLAUDE_APPROVAL` | `src/shared/engine.ts:150` | `'auto'` | What a Claude agent with no choice made runs on. `auto` because `default` asked for `ls`. Applied at read time, never written |

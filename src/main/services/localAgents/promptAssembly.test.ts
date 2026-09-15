@@ -161,15 +161,45 @@ describe('assembleAgentPrompt', () => {
     expect(prompt).toContain('no instructions yet')
   })
 
-  it('always states the desktop rules: conversation mode, uv run, app-data, locale, not the builder', () => {
+  it('always states the desktop rules: conversation mode, uv run, app-data, locale, building mode', () => {
     write('docs/WORKFLOW_PROMPT.md', '# A\n\nreal text')
     const prompt = assembleAgentPrompt(dir, manifest(), CONTEXT)
     expect(prompt).toContain('conversation mode')
     expect(prompt).toContain('uv run scripts/')
-    expect(prompt).toContain('Write files only under `app-data/`')
+    expect(prompt).toContain('In conversation mode, write files only under `app-data/`')
     expect(prompt).toContain('en-GB')
     expect(prompt).toContain('Europe/Berlin')
-    expect(prompt).toContain('Do not switch to the Builder role')
+    expect(prompt).toContain('## Building mode')
+    expect(prompt).not.toContain('Do not switch to the Builder role')
+  })
+
+  it('lets only a person switch it into building mode, and keeps it there', () => {
+    // The two limits on building mode: the switch is the person's, never the
+    // agent's own idea or an unattended task's, and it lasts the conversation
+    // rather than one reply.
+    write('docs/WORKFLOW_PROMPT.md', '# A\n\nreal text')
+    const prompt = assembleAgentPrompt(dir, manifest(), CONTEXT)
+    expect(prompt).toContain('do not refuse it, do not ask them to confirm it')
+    expect(prompt).toContain('never for an unattended or handed-over task')
+    expect(prompt).toContain('Stay in building mode for the rest of this conversation')
+    // An edit that breaks the manifest makes the folder `invalid`, and an
+    // invalid folder runs no further turn to repair it from.
+    expect(prompt).toContain('Keep `cinna-agent.json` and `docs/CLI_COMMANDS.yaml` valid')
+  })
+
+  it('sends building mode to the folder’s AGENTS.md only when there is one', () => {
+    // Naming a guide that does not exist is how a model ends up refusing the
+    // work; a kit folder without `AGENTS.md` gets the definition's three files.
+    write('docs/WORKFLOW_PROMPT.md', '# A\n\nreal text')
+    const without = assembleAgentPrompt(dir, manifest(), CONTEXT)
+    expect(without).not.toContain('`AGENTS.md`')
+    expect(without).toContain('`scripts/README.md` catalogues every script')
+
+    write('AGENTS.md', '# A\n\nThe build loop.')
+    const withGuide = assembleAgentPrompt(dir, manifest(), CONTEXT)
+    expect(withGuide).toContain('read `AGENTS.md` in this folder and follow it')
+    // Named, never inlined: it is the builder's document, not the agent's.
+    expect(withGuide).not.toContain('The build loop.')
   })
 
   it('describes coordinator return only for its explicit role, leaving plain coordinator as a sibling', () => {
@@ -215,7 +245,7 @@ describe('assembleAgentPrompt', () => {
     // there, or a too-large file would silently become a promptless agent.
     expect(prompt).toContain('# A')
     // And the desktop appendix still follows it.
-    expect(prompt).toContain('Do not switch to the Builder role')
+    expect(prompt).toContain('## Building mode')
   })
 
   it('is deterministic for the same folder', () => {
@@ -299,12 +329,22 @@ describe('assembleBareAgentPrompt', () => {
     expect(assembleBareAgentPrompt(dir, 'Invoice watcher', context)).toContain('is empty')
   })
 
-  it('keeps the do-not-become-the-builder line', () => {
-    // The line that stops an agent rewriting `AGENT.md` while the user is
-    // talking to it — the same folder is opened by a builder whose job is
-    // exactly that.
+  it('keeps building mode, pointed at README.md only when the folder has one', () => {
+    // A bare folder's README is its builder guide. Named when it exists, never
+    // inlined (see above); without it the agent works from AGENT.md alone.
     writeFileSync(join(dir, 'AGENT.md'), 'Do the thing.\n')
-    expect(assembleBareAgentPrompt(dir, 'Alpha', context)).toContain('Do not switch to the Builder role')
+    const without = assembleBareAgentPrompt(dir, 'Alpha', context)
+    expect(without).toContain('## Building mode')
+    expect(without).toContain('never for an unattended or handed-over task')
+    expect(without).toContain('work from `AGENT.md`, which is your whole definition')
+    expect(without).not.toContain('`README.md`')
+
+    writeFileSync(join(dir, 'README.md'), '# Setup\n')
+    const withGuide = assembleBareAgentPrompt(dir, 'Alpha', context)
+    expect(withGuide).toContain('read `README.md` in this folder for how this agent is organised')
+    // Background, never a checklist: a repository README is setup steps too.
+    expect(withGuide).toContain('not as setup steps to run')
+    expect(withGuide).toContain('edit `AGENT.md` and `README.md`')
   })
 
   it('states no rule about files a bare folder does not have', () => {

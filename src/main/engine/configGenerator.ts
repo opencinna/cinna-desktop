@@ -187,11 +187,11 @@ function engineBaseUrl(type: EngineProviderType, credentialBaseUrl: string | nul
  * - **The agent's own identity files are `ask`.** `cinna-agent.json` and
  *   `docs/WORKFLOW_PROMPT.md` are what the agent *is*: the system prompt this
  *   very conversation is running on, and the manifest that binds it to a
- *   credential. The assembled prompt ends by telling the agent not to switch to
- *   the builder role for exactly this reason, and an instruction is not a
- *   control. Rewriting them is the one edit inside the folder that is worth one
- *   dialog — and now it is worth exactly one, because *Always allow* remembers
- *   it.
+ *   credential. The assembled prompt lets the agent rewrite them only in
+ *   building mode, which only the person's own request enters — and an
+ *   instruction is not a control. Rewriting them is the one edit inside the
+ *   folder that is worth one dialog — and now it is worth exactly one, because
+ *   *Always allow* remembers it.
  * - **`sudo`, `rm -r` and `rm -rf` still ask.** Not a security boundary — a
  *   pattern over a command line can be walked around with a `&&`, and anything
  *   that runs a shell can do anything the user can. It is an *accident*
@@ -261,16 +261,18 @@ const SECRET_FILES: Record<string, string> = {
  * folder rarely has an `AGENT.md`, and where it does, asking before rewriting it
  * is right for the same reason; the cost of one dialog on a file that is not the
  * agent's identity is far below the cost of an agent silently rewriting the file
- * that *is*. The assembled prompt ends by telling the agent not to switch to the
- * builder role for exactly this reason — and an instruction is not a control.
+ * that *is*. The assembled prompt reserves these edits for building mode, which
+ * only the person's own request enters — and an instruction is not a control.
+ * This entry is what still stands between an agent that talks itself into
+ * building and its own prompt.
  *
- * ### `README.md` is deliberately not here, and the rule is kept halfway
+ * ### `README.md` is deliberately not here
  *
- * A bare agent's closing prompt line names `AGENT.md` **and** `README.md` as the
- * builder's, because for that shape the README is the briefing an assistant
- * opening the folder reads (`localAgentService.initPrompt`). Only the first is
- * enforced, so half that sentence is backed by a control and half is an
- * instruction. That is a considered position, not an oversight:
+ * For a bare agent the README is the builder's guide — the briefing an
+ * assistant opening the folder reads (`localAgentService.initPrompt`), and what
+ * building mode tells the agent to follow — so rewriting it is as much a build
+ * step as rewriting `AGENT.md`. Only `AGENT.md` asks. That is a considered
+ * position, not an oversight:
  *
  * - This list is **global**. Adding `README.md` asks on every *kit* agent's
  *   plain documentation, which the template ships — the "fires constantly, so

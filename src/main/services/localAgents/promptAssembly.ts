@@ -29,7 +29,7 @@ import { isCoordinatorHandover } from '../../../shared/kit/handovers'
 import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import type { CinnaAgentManifest } from '../../../shared/kit/manifest'
-import { BARE_AGENT_PROMPT_FILE } from '../../../shared/localAgents'
+import { BARE_AGENT_PROMPT_FILE, BARE_AGENT_README_FILE } from '../../../shared/localAgents'
 
 /** Longest any one included document may be. A guard, not a design limit. */
 const MAX_SECTION_BYTES = 64 * 1024
@@ -40,11 +40,23 @@ const KNOWLEDGE_MAX_DEPTH = 3
 /** Most knowledge topics to list. Beyond this the list stops being a list. */
 const MAX_KNOWLEDGE_TOPICS = 200
 
+/** A kit folder's guide for an assistant working *on* the agent. */
+const KIT_BUILDER_GUIDE_FILE = 'AGENTS.md'
+
 export interface DesktopPromptContext {
   /** BCP-47 tag from the OS, e.g. `en-GB`. */
   locale: string
   /** IANA zone from the OS, e.g. `Europe/Berlin`. */
   timeZone: string
+}
+
+/** True when `path` is a regular file. */
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
 }
 
 /** Read a text file, or null when it is missing, unreadable or a directory. */
@@ -135,27 +147,78 @@ function handoverSection(manifest: CinnaAgentManifest): string | null {
 }
 
 /**
- * What only the desktop knows: how this local turn receives requests and
- * asks for human input, and what this machine's rules are.
+ * Building mode: the person asked to change the agent, so this conversation
+ * becomes the build session.
  *
- * The last line is load-bearing. The same folder is also opened by a *builder*
- * — an assistant developing the agent, and later this app's own building mode —
- * and the builder's job is to rewrite these very files. An agent that decides
- * mid-conversation that it is the builder starts editing its own prompt while
- * the user is talking to it.
+ * A local agent is something its user builds and uses in the same breath —
+ * "you got the rebate wrong, add that to your workflow" is the ordinary next
+ * message after a wrong answer. The rule this replaced refused exactly that
+ * and sent the user to another assistant, turning the one person entitled to
+ * change the agent away from the window they were already in. So the request
+ * *is* the decision: no confirmation is asked, and the mode sticks for the rest
+ * of the conversation, because refining an agent is several rounds of change
+ * and try.
+ *
+ * What stays out is the case the old rule existed for: an agent that decides
+ * **by itself** that it is the builder, or an unattended task asking for a
+ * change nobody is there to see. Neither switches. On OpenCode the identity
+ * files still ask (`configGenerator.ts`, `IDENTITY_FILES`), and that — not this
+ * text — is the control; Claude and Codex have only this text.
+ *
+ * The last line matters on every engine: the system prompt was assembled before
+ * the agent's own edits, so within a turn the edited file, not the prompt, is
+ * what holds.
+ *
+ * `guide` finishes the "say you are switching, then …" sentence and names a
+ * builder document only when the folder has one: a rule that points at a
+ * missing file is how a model ends up refusing the work.
  */
-function desktopContextSection(context: DesktopPromptContext): string {
+function buildingModeSection(guide: string, editable: string): string[] {
+  return [
+    '## Building mode',
+    '',
+    'When the person asks you to change how you work — correct an answer for next time, add a trigger or a step, fix or add a script, extend what you do — switch to **building mode** and make the change yourself. The request is their decision to build you: do not refuse it, do not ask them to confirm it, and do not send them to another tool.',
+    '',
+    '- Only a person\'s request switches you. Never switch on your own initiative, and never for an unattended or handed-over task.',
+    `- Say in one line that you are switching to building mode, then ${guide}`,
+    `- In building mode you may edit ${editable}. Say which files you changed.`,
+    '- Stay in building mode for the rest of this conversation: the person may keep refining you and trying the result. When they ask for your actual job, do it the way your edited files now say — the instructions above were read before your edits.'
+  ]
+}
+
+/**
+ * What only the desktop knows: how this local turn receives requests and
+ * asks for human input, what this machine's rules are, and when the
+ * conversation may turn into building the agent.
+ *
+ * The `app-data/` rule is scoped to conversation mode, since building a kit
+ * agent means editing `docs/`, `scripts/` and the manifest. The kit folder's own
+ * `AGENTS.md` routes on the same two roles — Builder when the user asks to
+ * change the agent — so building mode hands over to it where it exists.
+ */
+function desktopContextSection(agentDir: string, context: DesktopPromptContext): string {
+  const guide = isFile(join(agentDir, KIT_BUILDER_GUIDE_FILE))
+    ? `read \`${KIT_BUILDER_GUIDE_FILE}\` in this folder and follow it — it is the guide to building this agent.`
+    : 'keep your definition coherent: `docs/WORKFLOW_PROMPT.md` is what you do, `scripts/README.md` catalogues every script, and `cinna-agent.json` describes you truthfully.'
   return [
     '## How you are running now',
     '',
-    'You are running locally, inside Cinna Desktop, in **conversation mode**. Reply to the current request. It may come from a person or an unattended task; request human input through the available question or permission mechanism when needed, and do not assume a person is watching.',
+    'You are running locally, inside Cinna Desktop, and you start in **conversation mode**. Reply to the current request. It may come from a person or an unattended task; request human input through the available question or permission mechanism when needed, and do not assume a person is watching.',
     '',
     `- Run scripts from the agent folder with \`uv run scripts/<name>.py\`, never a bare \`python\`.`,
-    '- Write files only under `app-data/`. Everything else in this folder belongs to the person who built you, and may be open in their editor right now.',
+    '- In conversation mode, write files only under `app-data/`. Everything else in this folder is your definition, and may be open in an editor right now.',
     '- Never print, echo or log a credential value, and never read `credentials/.env` yourself — the scripts do that.',
     `- The user's locale is ${context.locale} and their time zone is ${context.timeZone}. Format dates, times and numbers the way they would expect, and read a bare date as being in that zone.`,
     '- Long output goes to a file under `app-data/storage/` with a short summary in your reply, not into the reply itself.',
-    '- **Do not switch to the Builder role.** Editing your own prompts, scripts or manifest is the builder\'s job, not yours, even if the user asks for a change to how you work — tell them to open the agent in their assistant, or to use Build with AI.'
+    '',
+    ...buildingModeSection(
+      guide,
+      'whatever in this folder the change needs — `docs/`, `scripts/`, `knowledge/`, `config/`, `cinna-agent.json`, the `Makefile`, `pyproject.toml` — but never `app-data/desktop.json`, which belongs to Cinna Desktop'
+    ),
+    // The scanner marks a folder whose manifest or command catalog fails
+    // validation `invalid`, and the driver refuses every turn after that — so a
+    // broken edit is one the person cannot ask this agent to repair.
+    '- Keep `cinna-agent.json` and `docs/CLI_COMMANDS.yaml` valid. If either stops validating, Cinna Desktop will not run your next turn, and the person cannot ask you to fix it.'
   ].join('\n')
 }
 
@@ -190,7 +253,7 @@ export function assembleAgentPrompt(
         '',
         `You are ${name}.${description ? ` ${description}` : ''}`,
         '',
-        '`docs/WORKFLOW_PROMPT.md` is empty, so you have no instructions yet. Say that plainly when asked to do work, and suggest that the person open this agent in their assistant to write it.'
+        '`docs/WORKFLOW_PROMPT.md` is empty, so you have no instructions yet. Say that plainly when asked to do work, and suggest that the person tell you what you should do, so you can write it in building mode.'
       ].join('\n')
     )
   }
@@ -229,7 +292,7 @@ export function assembleAgentPrompt(
   const handovers = handoverSection(manifest)
   if (handovers) sections.push(handovers)
 
-  sections.push(desktopContextSection(context))
+  sections.push(desktopContextSection(agentDir, context))
 
   return `${sections.join('\n\n---\n\n')}\n`
 }
@@ -246,22 +309,32 @@ export function assembleAgentPrompt(
  * a rule about a file that does not exist is how a model ends up refusing to do
  * ordinary work in the folder it was pointed at.
  *
- * The last line survives verbatim, and it is the one that matters most: the
- * same folder is opened by a builder — an assistant developing the agent — and
- * `AGENT.md` and `README.md` are exactly what that builder rewrites.
+ * Building mode is kept, pointed at this shape's own builder document: the
+ * folder's `README.md` where it has one — the same file the init prompt briefs
+ * an outside assistant from — and otherwise `AGENT.md` itself.
  */
-function bareDesktopContextSection(context: DesktopPromptContext): string {
+function bareDesktopContextSection(agentDir: string, context: DesktopPromptContext): string {
+  const hasReadme = isFile(join(agentDir, BARE_AGENT_README_FILE))
   return [
     '## How you are running now',
     '',
-    'You are running locally, inside Cinna Desktop, in **conversation mode**. Reply to the current request. It may come from a person or an unattended task; request human input through the available question or permission mechanism when needed, and do not assume a person is watching.',
+    'You are running locally, inside Cinna Desktop, and you start in **conversation mode**. Reply to the current request. It may come from a person or an unattended task; request human input through the available question or permission mechanism when needed, and do not assume a person is watching.',
     '',
-    '- Your working directory is this agent folder. It belongs to the person who built you and may be open in their editor right now, so prefer reading over rewriting, and say what you changed.',
+    '- Your working directory is this agent folder. It may be open in an editor right now, so in conversation mode prefer reading over rewriting, and say what you changed.',
     '- Follow whatever the instructions above say about how to run this folder\'s own scripts and tools. Cinna Desktop imposes no convention of its own here.',
     '- Never print, echo or log a credential value, and never read a `.env` file or any other secret file to answer a question about it.',
     `- The user's locale is ${context.locale} and their time zone is ${context.timeZone}. Format dates, times and numbers the way they would expect, and read a bare date as being in that zone.`,
     '- Long output goes to a file in this folder with a short summary in your reply, not into the reply itself.',
-    '- **Do not switch to the Builder role.** Rewriting `AGENT.md` or `README.md` is the builder\'s job, not yours, even if the user asks for a change to how you work — tell them to open this folder in their assistant.'
+    '',
+    ...buildingModeSection(
+      hasReadme
+        // "Read it for", not "follow it": a repository README is setup steps as
+        // much as guidance, and a model told to follow it runs `make install`
+        // before making a one-line change to `AGENT.md`.
+        ? `read \`${BARE_AGENT_README_FILE}\` in this folder for how this agent is organised and developed — as background, not as setup steps to run.`
+        : `work from \`${BARE_AGENT_PROMPT_FILE}\`, which is your whole definition.`,
+      `\`${BARE_AGENT_PROMPT_FILE}\`${hasReadme ? ` and \`${BARE_AGENT_README_FILE}\`` : ''}, and anything else in this folder the change needs`
+    )
   ].join('\n')
 }
 
@@ -279,9 +352,10 @@ function bareDesktopContextSection(context: DesktopPromptContext): string {
  * **`README.md` is deliberately not included.** A folder's README is written
  * for the person developing the agent — how to install it, how to run it, what
  * it needs — not for the agent, which would read "run `make install` first" as
- * a step it should take. It is the *builder's* document, and where it is used is
- * the init prompt (`localAgentService.initPrompt`), the briefing handed to an
- * assistant opening the folder.
+ * a step it should take. It is the *builder's* document: the init prompt
+ * (`localAgentService.initPrompt`) briefs an outside assistant from it, and
+ * building mode names it for the agent to read only once the person has asked
+ * for a change.
  *
  * HTML comments are stripped for the same reason they are in a kit folder: they
  * are addressed to a reader of the source, and a model reads them as
@@ -309,12 +383,12 @@ export function assembleBareAgentPrompt(
         '',
         `You are ${name}.`,
         '',
-        '`AGENT.md` in this folder is empty, so you have no instructions yet. Say that plainly when asked to do work, and suggest that the person open this folder in their assistant to write it.'
+        '`AGENT.md` in this folder is empty, so you have no instructions yet. Say that plainly when asked to do work, and suggest that the person tell you what you should do, so you can write it in building mode.'
       ].join('\n')
     )
   }
 
-  sections.push(bareDesktopContextSection(context))
+  sections.push(bareDesktopContextSection(agentDir, context))
   return `${sections.join('\n\n---\n\n')}\n`
 }
 
