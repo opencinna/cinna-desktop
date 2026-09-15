@@ -12,6 +12,7 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 - **Profile Menu** — Avatar-only trigger that opens an upward dropdown listing local profiles, the Settings entry, "Add Account", and "Sign Out".
 - **Interface Menu** — Popover above the gear-toggle button containing three preference toggles: **Console** (app logs overlay), **Verbose**, and **Theme**.
 - **Main Area** — Everything to the right of the sidebar; routes chats, app settings, Inbox, tasks, jobs, notes and folder/external agent pages.
+- **Window State** — The main window's normal (un-maximized) size and position plus whether it was maximized, kept by the main process in a small file in the app's data folder and reapplied whenever the main window is created. Belongs to the machine, not to a profile.
 
 ## User Stories / Flows
 
@@ -20,6 +21,14 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 1. User clicks the collapse icon in the top bar (or the expand icon when already collapsed).
 2. Sidebar slides left and fades out (or slides in and fades in). Top-bar buttons stay put.
 3. Main area smoothly expands or contracts as the sidebar's reserved width changes.
+4. The choice is remembered: the next launch opens with the sidebar the way it was left.
+
+### Reopening the App
+
+1. User resizes, moves or maximizes the window, collapses the sidebar, opens a chat or Settings, and quits — or closes the window, which on macOS leaves the app running.
+2. On the next launch, or on clicking the Dock icon after closing the window on macOS, the window opens at the same size and position, maximized again if it was, with the sidebar open or collapsed as left.
+3. The main area shows the new-chat screen whatever was open before; the chat, page and sidebar tab are not remembered.
+4. If the saved position is no longer on any attached display (an unplugged monitor, a changed arrangement), the window opens centred at its saved size, reduced to fit the screen.
 
 ### Starting a New Chat
 
@@ -70,6 +79,18 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 - **Profile/Interface popovers are portaled.** They render into `document.body` (via `createPortal`) so the sidebar's `overflow: hidden` (needed for rounded-corner clipping) does not clip them.
 - **Base font size is 17 px on `html`.** All rem-based Tailwind sizes (`text-xs`, `text-sm`, …) scale from this baseline. Changing it rescales the entire app uniformly.
 
+### Across launches
+
+- **The window reopens where it was left, never where it cannot be reached.** A saved position is kept only while enough of the window's top strip — the part with the traffic lights that the user drags — lies on an attached display to grab (at least 100 × 20 px of its top 40 px). Otherwise the position is dropped and the window opens centred, because restoring it faithfully after a monitor was unplugged would put it off every screen with nothing to drag it back by.
+- **The size fits the display the window lands on.** It is capped to the work area of the display holding most of the top strip, so a large window on a large external monitor keeps its size rather than shrinking to the laptop's. When the position is dropped, or capping the size would pull the strip off that display, the size is capped to the primary display instead. It is never below the 800 × 600 minimum.
+- **First launch and a bad file open at 1200 × 800, centred.** No saved state is a first launch and says nothing; an unreadable file, or one with any field missing or of the wrong type, is logged and ignored. Reading and writing window state never throws, so it can cost the user a remembered size but never the window.
+- **A maximized window comes back maximized and still un-maximizes to a real size.** What is saved is the window's normal frame plus the maximized flag, and the window is created at that frame and maximized before it is shown. Saving the maximized frame instead would leave a window that can never be made smaller than the screen.
+- **Fullscreen is deliberately not restored.** Launching straight into a macOS fullscreen Space is disorienting. A window quit in fullscreen reopens at its normal frame, maximized only if it was maximized before it went fullscreen.
+- **Saved as it settles, and again on close.** A drag or resize is written once it has been still for half a second, so a crash keeps the last settled size; closing the window writes immediately, so a resize made just before closing is not lost. The size a maximized window returns to is only taken from a settled window, since the maximize animation passes through near-maximized sizes that must not be mistaken for it. So a resize followed by a maximize within that half second is forgotten, and the window un-maximizes to the size it had before.
+- **The sidebar's open state is remembered for the machine, not the profile.** Stored in renderer `localStorage` beside the theme, so every local profile shares it and nothing syncs it. It is read when the UI store is created, so the first paint already has the sidebar in its remembered state instead of rendering open and then collapsing. Only the toggle writes it; no stored value means open.
+- **Nothing else about the layout is remembered.** Active view, sidebar tab, settings tab, open chat and agent page all start fresh, so every launch lands on the new-chat screen. A remembered chat, task or agent page can have been deleted, hidden or belong to a different profile by the next launch, and the new-chat screen is valid in every one of those cases.
+- **Window state belongs to the main window only.** The menu-bar tray popover is positioned from its icon and is neither saved nor restored.
+
 ## Architecture Overview
 
 ```
@@ -90,9 +111,25 @@ App
         └── MainArea (view router + live-run watch; ChatWorkspace or selected feature page)
 ```
 
+Across launches:
+
+```
+Launch / macOS Dock reopen
+  -> Main: createWindow -> read window state -> fit to the displays attached now
+  -> BrowserWindow at those bounds -> ready-to-show -> maximize (if saved) -> show
+  resize / move / maximize / unmaximize -> save once settled;  close -> save now
+
+Renderer boot
+  -> UI store reads the sidebar's stored open state -> sidebarOpen
+  -> activeView = chat, no active chat -> new-chat screen
+```
+
 ## Integration Points
 
-- **UI Store** — Owns `sidebarOpen`, `activeView`, `settingsTab`, `theme`, `verboseMode`, `logsOpen`, `agentStatusOpen`. See `src/renderer/src/stores/ui.store.ts`.
+- **UI Store** — Owns `sidebarOpen` (the only one of these kept across launches), `activeView`, `settingsTab`, `theme`, `verboseMode`, `logsOpen`, `agentStatusOpen`. See `src/renderer/src/stores/ui.store.ts`.
+- [Settings Scope](../../core/settings_scope/settings_scope.md) — Window state and the sidebar's open state are machine-wide, like the theme.
+- [Boot Resilience](../../core/boot_resilience/boot_resilience.md) — Window state is read inside `createWindow()`, within the startup boundary where a throw is fatal; it falls back to the defaults instead of throwing, so a bad state file can never become a ghost app.
+- [End-to-End Tests](../../development/e2e/e2e.md) — `window-state.spec.ts` covers size and sidebar state across a quit and across a window close.
 - [Inbox](../../jobs/tasks/inbox.md) — Global waiting asks, opened from the top bar.
 - [Appearance](../appearance/appearance.md) — Theme preference/resolution, shared storage and decorative motion across shell and composers.
 - [Settings](../settings/settings.md) — The settings page rendered in the main area; entered via the profile dropdown.

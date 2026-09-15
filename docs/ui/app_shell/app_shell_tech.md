@@ -2,6 +2,11 @@
 
 ## File Locations
 
+### Main Process — Window
+
+- `src/main/index.ts:createWindow()` — builds the main `BrowserWindow` from `loadWindowState()`, attaches `trackWindowState()` immediately, and maximizes in `ready-to-show` before `show()` / `showInactive()`. The `activate` handler calls it again when no window exists, which is how a macOS Dock reopen gets the saved state too (the tray popover is destroyed with the main window, so it does not count as one)
+- `src/main/window/windowState.ts` — load, resolve and save of window state; `DEFAULT_WINDOW_WIDTH`/`HEIGHT` (1200 × 800) and `MIN_WINDOW_WIDTH`/`HEIGHT` (800 × 600), which `createWindow` passes as `minWidth`/`minHeight`. See [Window State](#window-state)
+
 ### Renderer — Composition Root
 
 - `src/renderer/src/App.tsx` — `App` (QueryClientProvider + AuthGate), `Shell` (relative container with `p-2` window padding; sidebar/main flex row + absolutely positioned TopBar overlaying the top so MainArea can claim full window height)
@@ -47,7 +52,7 @@
 
 | State | Purpose |
 |-------|---------|
-| `sidebarOpen` | Drives `.is-collapsed` on the sidebar wrapper |
+| `sidebarOpen` | Drives `.is-collapsed` on the sidebar wrapper. Persisted as `cinna-sidebar-open`: read synchronously in the store initializer (only `0` collapses; missing or anything else is open) and written by `toggleSidebar` as `1`/`0`. Direct `setState` calls — tests only — do not write it |
 | `activeView` | `ActiveView` — chat, settings, inbox, task, job-detail, job-edit, cinna-task-run, note-detail, local-agent or external-agent |
 | `sidebarTab` | Chats / Jobs / Notes / Agents, retained when opening a cross-tab view such as Inbox |
 | `activeLocalAgentId`, `activeExternalAgentId` | Mutually exclusive agent selections; each setter clears the other |
@@ -62,6 +67,8 @@
 | `agentStatusOpen` | Toggled from `AgentStatusButton` |
 
 Most shell components select individual store keys to limit unrelated renders; `ChatWorkspace` also reads the whole UI store for its view and pending selection.
+
+**What survives a relaunch.** `sidebarOpen`, `themePreference`, `extraUIAnimation` and `verboseMode` read `localStorage` at store creation. Everything navigational — `activeView` (`chat`), `sidebarTab` (`chats`), `settingsTab`, the agent/job/task/note selections, and `activeChatId` in `src/renderer/src/stores/chat.store.ts` (`null`) — starts from its literal default, which is what puts every launch on the new-chat screen. Persisting any of them would change that; the comment on `SIDEBAR_KEY` says so at the point someone would add one.
 
 ## IPC Channels
 
@@ -154,8 +161,38 @@ Layout is unmeasurable in jsdom, so the behaviour is covered by an E2E assertion
 - `src/renderer/src/components/ui/DesktopToast.tsx` mounts in `Shell` above every view. The single toast in `src/renderer/src/stores/toast.store.ts` replaces any previous toast, uses `role="status"`, dismisses after ten seconds or manually, and offers Settings → Profile → Agents for restoring hidden Cinna agents.
 - `e2e/specs/agent-landing.spec.ts` checks local/A2A landing, settings transitions and draft preservation; `e2e/specs/agent-sidebar-sections.spec.ts` checks the setting through real UI, label activation and restart persistence.
 
+## Window State
+
+Behavioural rules are in [App Shell → Across launches](./app_shell.md#across-launches); this is how they are held.
+
+### Storage
+
+- **A JSON file in `userData`, `window-state.json`**, holding `{x, y, width, height, isMaximized}` — every field required. Not an `appSettings` key: that schema is shared with the renderer through the settings IPC, and window bounds are read and written only by main, so putting them there would hand the renderer a value it has no use for and a write path it must never take. No IPC channel, preload method or migration exists for it.
+- Because the file lives under `userData`, the E2E suite's `CINNA_USER_DATA` sandbox covers it with no extra seam: a test never reads or overwrites the developer's own window position.
+- Written to `window-state.json.<pid>.tmp` and renamed into place, so a crash mid-write leaves the previous file rather than half of one. A failed write removes the temp file and logs `window state not saved`.
+
+### Services & Key Methods
+
+- `src/main/window/windowState.ts:resolveWindowBounds()` — pure and Electron-free; takes the parsed value, the displays and the primary work area, so every display arrangement is unit-testable. Anything failing the type guard returns the defaults with no `x`/`y`. Otherwise it picks the **home display** as the one with the largest overlap with the window's 40 px top strip (counting only overlaps of at least 100 × 20 px), caps the size to that work area, and keeps the position only if the capped window still has a grabbable strip there. With no home, or a strip lost to the cap, it omits `x`/`y` — Electron centres a window created without them — and caps to the primary work area. `isMaximized` passes through either way.
+- `src/main/window/windowState.ts:loadWindowState()` — reads and resolves against `screen`, so it can only run after `app` is ready. `ENOENT` is silent (first launch); any other read or parse failure, and anything the resolver throws, logs a warning and returns the defaults.
+- `src/main/window/windowState.ts:trackWindowState()` — attach before the window is maximized, so the first bounds it records are the normal ones. `resize`, `move`, `maximize` and `unmaximize` schedule a save 500 ms after the last of them (`SAVE_DEBOUNCE_MS`); `close` saves synchronously, because by `closed` the window has no bounds left to read; `closed` cancels any pending save.
+
+### Why the normal bounds are tracked, not read
+
+The tracker keeps its own copy of the normal frame instead of calling `getNormalBounds()` at save time. On macOS, once a maximized window has been minimized, `getNormalBounds()` returns the maximized frame until the next `unmaximize()`; saving that restores a window that can never be made smaller than the screen. The maximized flag is only read while the window is neither minimized nor fullscreen, because neither state says whether the window the user returns to is maximized, and entering fullscreen may report it as maximized.
+
+**The frame is taken only once the window has settled**, in the debounced save and on `close`, when the window is neither maximized, minimized nor fullscreen, and not from each `resize`/`move` event. The macOS zoom animation fires dozens of `resize` events with frames growing towards the maximized one while `isMaximized()` is still false (about 35 on Electron 41). Recording on each event saved a near-maximized frame as the normal size, which is the same can-never-shrink window by a different route. The accepted cost: a resize followed by a maximize within the 500 ms debounce is never seen settled, so the saved normal size is the one from before that resize.
+
+### Tests
+
+- `src/main/window/windowState.test.ts` — the resolver over malformed input, off-screen, partly-visible and multi-monitor layouts; load and save over a real temp `userData` with a fake window whose `getNormalBounds()` reproduces the macOS behaviour above, so a tracker that trusted it fails, and a replay of the maximize animation's growing frames, so a tracker that recorded per event fails too.
+- `src/renderer/src/stores/ui.appearance.test.ts` — `sidebar open state`: default open, written on every toggle, a fresh store reads it back and still starts on `chat` / `chats`.
+- `e2e/specs/window-state.spec.ts` — see [End-to-End Tests](../../development/e2e/e2e.md). A plain relaunch cannot prove the save on `close` (Playwright's teardown outlasts the debounce), so the spec also resizes and closes in one tick; the reasoning is in [Writing E2E Tests](../../development/e2e/e2e_llm.md).
+
 ## Configuration
 
+- **Window size** — default 1200 × 800 and minimum 800 × 600, exported from `src/main/window/windowState.ts`; the saved state lives in `<userData>/window-state.json`. No setting or environment variable changes either.
+- **Sidebar open state** — `localStorage` key `cinna-sidebar-open`, `1`/`0`.
 - **macOS traffic-light position** — `src/main/index.ts` `BrowserWindow` config: `titleBarStyle: 'hiddenInset'`, `trafficLightPosition: { x: 15, y: 10 }`. The renderer's `pl-[76px]` gutter in `TopBar.tsx` mirrors this offset (~58 px cluster width + small margin). Keep them in sync.
 - **Agent sidebar sections** — `showAgentSidebarSections: boolean`, default `true`, in `src/shared/appSettings.ts` and `src/main/db/appSettings.ts`; persisted via installation-wide `app_settings`. Features settings surfaces read/save failures, including the restart guidance for an unknown key.
 - **Base font size** — `html { font-size: 17px }` in `main.css`. Scales every rem-based size.
@@ -165,7 +202,7 @@ Layout is unmeasurable in jsdom, so the behaviour is covered by an E2E assertion
 
 ## Security
 
-No new surface. Console/Verbose/Theme toggles only mutate UI state (`localStorage` + the UI store). Profile actions reuse the existing user-account IPC channels.
+No new surface. Console/Verbose/Theme toggles and the sidebar toggle only mutate UI state (`localStorage` + the UI store). Profile actions reuse the existing user-account IPC channels. `window-state.json` holds only screen coordinates and is never exposed to the renderer; a hand-edited or corrupt file can at worst open the window at the defaults, because every value is type-checked and fitted to the attached displays before use.
 
 ## Related
 

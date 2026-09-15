@@ -25,6 +25,12 @@ import {
   registerConnectScheme
 } from './services/connectIntentService'
 import { BACKGROUND_WINDOW, focusMainWindow, installWindowResolver } from './window/focus'
+import {
+  loadWindowState,
+  MIN_WINDOW_HEIGHT,
+  MIN_WINDOW_WIDTH,
+  trackWindowState
+} from './window/windowState'
 
 // A disposable profile for the E2E suite (`e2e/`). Read once, before anything
 // derives a path from `userData` — the startup log, the database, the session
@@ -177,11 +183,14 @@ process.on('uncaughtException', (err) => handleFatal(err, 'uncaughtException'))
 process.on('unhandledRejection', (reason) => handleFatal(reason, 'unhandledRejection'))
 
 function createWindow(): void {
+  // Where the user left the window last time — validated against the displays
+  // attached now, and falling back to a centered default size.
+  const { isMaximized, ...bounds } = loadWindowState()
+
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 800,
-    minHeight: 600,
+    ...bounds,
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
     show: false,
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 15, y: 10 },
@@ -195,7 +204,10 @@ function createWindow(): void {
     }
   })
 
+  trackWindowState(mainWindow)
+
   mainWindow.on('ready-to-show', () => {
+    if (isMaximized) mainWindow!.maximize()
     // `showInactive` under a background run: showing a window on macOS
     // activates the app, and an E2E suite that launches one app per test would
     // otherwise take the foreground away from whatever the developer is doing,

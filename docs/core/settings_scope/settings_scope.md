@@ -65,6 +65,7 @@ Cross-cutting model that splits app data into two scopes: **Default** (shared ac
 - **The default guest user is treated as the only profile when active.** No "Profile" group is shown; the agent list collapses to Default-scope-only.
 - **Sidebar section headings are installation-wide.** `showAgentSidebarSections` is a boolean in `app_settings`, defaults to true, and is edited under Settings → Features → Interface. It changes labels/spacing without changing scope or group ordering.
 - **Theme is not scoped.** Stored in `localStorage` and shared across all profiles on the machine (unchanged from prior behavior).
+- **Window and sidebar layout are not scoped either.** The main window's saved bounds live in main's `window-state.json` and the sidebar's open state in `localStorage`; both belong to the machine. See [App Shell → Across launches](../../ui/app_shell/app_shell.md#across-launches).
 
 ## Architecture Overview
 

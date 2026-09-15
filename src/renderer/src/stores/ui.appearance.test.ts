@@ -62,3 +62,35 @@ describe('appearance preferences', () => {
     expect(useUIStore.getState().extraUIAnimation).toBe(false)
   })
 })
+
+// Last in the file: the fresh store modules imported below install their own
+// window listeners, and nothing after them should share a window with them.
+describe('sidebar open state', () => {
+  it('starts open when nothing is stored', async () => {
+    localStorage.removeItem('cinna-sidebar-open')
+    vi.resetModules()
+    const { useUIStore: freshStore } = await import('./ui.store')
+    expect(freshStore.getState().sidebarOpen).toBe(true)
+  })
+
+  it('writes the key on every toggle', () => {
+    useUIStore.setState({ sidebarOpen: true })
+    useUIStore.getState().toggleSidebar()
+    expect(useUIStore.getState().sidebarOpen).toBe(false)
+    expect(localStorage.getItem('cinna-sidebar-open')).toBe('0')
+    useUIStore.getState().toggleSidebar()
+    expect(useUIStore.getState().sidebarOpen).toBe(true)
+    expect(localStorage.getItem('cinna-sidebar-open')).toBe('1')
+  })
+
+  it('starts closed after it was closed, and still starts on the new-chat screen', async () => {
+    localStorage.setItem('cinna-sidebar-open', '0')
+    vi.resetModules()
+    const { useUIStore: freshStore } = await import('./ui.store')
+    const state = freshStore.getState()
+    expect(state.sidebarOpen).toBe(false)
+    expect(state.activeView).toBe('chat')
+    expect(state.sidebarTab).toBe('chats')
+    localStorage.removeItem('cinna-sidebar-open')
+  })
+})

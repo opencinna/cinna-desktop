@@ -54,6 +54,9 @@ export const PROFILE_SCOPE_TABS: readonly SettingsMenu[] = [
 ]
 const VERBOSE_KEY = 'cinna-verbose-mode'
 const ANIMATION_KEY = 'cinna-extra-ui-animation'
+// Only the sidebar's open state is remembered; the view, tab and chat are not,
+// so the app always starts on the new-chat screen.
+const SIDEBAR_KEY = 'cinna-sidebar-open'
 
 function applyTheme(theme: Theme): void {
   document.documentElement.setAttribute('data-theme', theme)
@@ -126,7 +129,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   activeExternalAgentId: null,
   activeLocalAgentId: null,
   pendingDraftAgentId: null,
-  sidebarOpen: true,
+  sidebarOpen: localStorage.getItem(SIDEBAR_KEY) !== '0',
   theme: resolveTheme(readThemePreference()),
   themePreference: readThemePreference(),
   extraUIAnimation: localStorage.getItem(ANIMATION_KEY) !== '0',
@@ -146,7 +149,12 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setActiveExternalAgentId: (id) => set({ activeExternalAgentId: id, activeLocalAgentId: null }),
   setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id, activeExternalAgentId: null }),
   setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),
-  toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+  toggleSidebar: () =>
+    set((state) => {
+      const next = !state.sidebarOpen
+      localStorage.setItem(SIDEBAR_KEY, next ? '1' : '0')
+      return { sidebarOpen: next }
+    }),
   // The footer always chooses a fixed theme, including when following System.
   toggleTheme: () => get().setThemePreference(get().theme === 'dark' ? 'light' : 'dark'),
   setThemePreference: (themePreference) => {
