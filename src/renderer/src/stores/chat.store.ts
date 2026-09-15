@@ -322,7 +322,13 @@ export const useChatStore = create<ChatStore>((set) => ({
     })),
 
   setActiveChatId: (id) =>
-    set((state) => ({
+    // Re-selecting the chat on screen (its sidebar row, or the Chats tab
+    // landing on it) changes nothing. The live watcher re-subscribes only when
+    // the id changes, so a reset here wiped a running turn's blocks and its
+    // streaming state with no snapshot coming to restore them. Selecting no
+    // chat always resets: there is no watcher to lose, and profile switches and
+    // the new-chat screen rely on it to clear a stale `sendError`.
+    set((state) => id !== null && state.activeChatId === id ? state : ({
       liveProjectionVersion: state.liveProjectionVersion + 1,
       activeChatId: id,
       activeRequestId: null,

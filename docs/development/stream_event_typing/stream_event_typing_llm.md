@@ -95,8 +95,8 @@ Rules, each pinned by a driver-contract clause (see [The driver contract](../../
 
 Store lifecycle (`src/renderer/src/stores/chat.store.ts`):
 
-- `inputRequests` — asks this stream announced and has not settled. Cleared by `startStreaming`, `setActiveChatId` and `reset`. `finishStreaming`, `clearStreamingBlocks` and `stopStreaming` drop only the `reply` entries, whose parked turn just died; a `next_message` ask stays until the next turn, which is its answer
-- `settledInputRequestIds` — cleared only by `startStreaming`, `setActiveChatId` and `reset`, because the registry poll's last read can land after the stream has ended
+- `inputRequests` — asks this stream announced and has not settled. Cleared by `startStreaming`, `setActiveChatId` to a different chat and `reset`. `finishStreaming`, `clearStreamingBlocks` and `stopStreaming` drop only the `reply` entries, whose parked turn just died; a `next_message` ask stays until the next turn, which is its answer
+- `settledInputRequestIds` — cleared only by `startStreaming`, `setActiveChatId` to a different chat and `reset`, because the registry poll's last read can land after the stream has ended
 
 Liveness of an ask's block (`MessageStream.renderRequestBlock`): the part has an engine id, the id is **not** settled (`isSettledInputRequest`), and either the registry poll lists it (`useAgentRequests.isPending`) or the stream announced it as a `reply` ask (`isLiveInputRequest`).
 

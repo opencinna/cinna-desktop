@@ -116,6 +116,27 @@ describe('selected chat live subscription', () => {
     expect(useChatStore.getState().isStreaming).toBe(true)
     view.unmount()
   })
+  it('keeps a running turn’s blocks and streaming state when the chat on screen is selected again', () => {
+    const view = mount()
+    const tool = (id: string): RunEvent => ({ type: 'delta', kind: 'tool', text: `Running ${id}`, toolName: 'Bash', toolId: id })
+    emit(snapshot('r', [{ type: 'request-id', requestId: 'req' }, tool('t1')], 2))
+    // Back from another view: the sidebar selects the chat that never stopped being active.
+    act(() => useChatStore.getState().setActiveChatId('a'))
+    expect(window.api.run.watch).toHaveBeenCalledTimes(1)
+    emit({ type: 'event', runId: 'r', sequence: 3, agentId: null, event: tool('t2') })
+    const state = useChatStore.getState()
+    expect(state.streamingBlocks.map((b) => b.type === 'text' ? b.toolId : null)).toEqual(['t1', 't2'])
+    expect(state.isStreaming).toBe(true)
+    expect(state.liveRunId).toBe('r')
+    expect(state.liveBaselineMessageIds).toEqual(['old'])
+    view.unmount()
+  })
+  it('still clears a send error when no chat is selected again, as a profile switch or the new-chat screen does', () => {
+    act(() => useChatStore.getState().setActiveChatId(null))
+    act(() => useChatStore.getState().setSendError("Can't send message"))
+    act(() => useChatStore.getState().setActiveChatId(null))
+    expect(useChatStore.getState().sendError).toBeNull()
+  })
   it('retains the projection on a failed terminal read and retires it after read recovery', async () => {
     const view = mount()
     emit(snapshot('r', [delta('partial')], 1))
