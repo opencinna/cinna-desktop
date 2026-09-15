@@ -152,46 +152,6 @@ test('a folder of three agents is adopted, and nothing is written into it', asyn
   })
 })
 
-test('a folder that is itself one agent is named by the user, not by its heading', async ({
-  cinna
-}) => {
-  await cinna.skipOnboarding()
-  const folder = writeBareAgent(homeDir(cinna, 'nightly-reporter'), 'Nightly Reporter')
-  const before = treeOf(folder)
-
-  await openAddDialog(cinna)
-  await cinna.stubDirectoryPicker(folder)
-  await cinna.page
-    .getByRole('dialog', { name: 'Add an agent' })
-    .getByRole('button', { name: /^Add a folder/ })
-    .click()
-
-  const found = cinna.page.getByRole('dialog', { name: 'Add a folder' })
-  await expect(found).toBeVisible()
-  // One folder, one field: a name prefilled from the `AGENT.md` heading, and
-  // no checkbox list to choose from.
-  await expect(found.getByLabel('Name')).toHaveValue('Nightly Reporter')
-  await expect(found.getByRole('checkbox')).toHaveCount(0)
-  await expect(found).toContainText(
-    'AGENT.md is its instructions. README.md briefs an assistant that opens the folder to work on it.'
-  )
-  await expect(found.getByRole('button', { name: 'Add agent', exact: true })).toBeVisible()
-
-  await found.getByLabel('Name').fill('Weekly Digest')
-  await found.getByRole('button', { name: 'Add agent', exact: true }).click()
-  await expect(cinna.page.getByRole('dialog')).toHaveCount(0)
-
-  const row = cinna.page.getByRole('button', { name: 'Weekly Digest', exact: true })
-  await expect(row).toHaveText('Weekly Digest')
-  await row.click()
-  await expect(cinna.page.getByRole('heading', { level: 1 })).toHaveText('Weekly Digest')
-
-  // The name the user gave is held on this machine: the folder still says what
-  // it always said, and gained nothing.
-  expect(readFileSync(join(folder, 'AGENT.md'), 'utf8')).toContain('# Nightly Reporter')
-  expect(treeOf(folder)).toEqual(before)
-})
-
 test('a folder with no AGENT.md is refused, and the dialog stays open', async ({ cinna }) => {
   await cinna.skipOnboarding()
   const folder = homeDir(cinna, 'holiday-photos')
@@ -208,7 +168,7 @@ test('a folder with no AGENT.md is refused, and the dialog stays open', async ({
   // (ux_rules.md rule 6), so it is still the choice step and it names the file
   // the user needs to look for.
   await expect(choice.getByRole('alert')).toHaveText(
-    "Nothing in this folder has an AGENT.md. Choose the agent's own folder, or a folder that holds several of them."
+    "Nothing in this folder has an AGENT.md, AGENTS.md or CLAUDE.md. Choose the agent's own folder, or a folder that holds several of them."
   )
   await expect(choice).toBeVisible()
   await expect(cinna.page.getByRole('dialog', { name: 'Add a folder' })).toHaveCount(0)
@@ -216,88 +176,157 @@ test('a folder with no AGENT.md is refused, and the dialog stays open', async ({
   await expect(choice.getByRole('button', { name: /^Add a folder/ })).toBeVisible()
 })
 
-test('a bare agent has no Commands tab, its README on Overview and AGENT.md on Prompts', async ({
-  cinna
-}) => {
-  await cinna.skipOnboarding()
-  const folder = writeBareAgent(homeDir(cinna, 'exchange-rates'), 'Exchange Rates Agent')
-  await adoptFolder(cinna, folder)
+/**
+ * `AGENTS.md` and `CLAUDE.md` define a bare agent too — the first of
+ * `AGENT.md`, `AGENTS.md`, `CLAUDE.md` a folder has. They are the *weak*
+ * names, and each weak-name rule gets a test: a heading that only repeats the
+ * file's name is not a name, a repository's root `CLAUDE.md` does not swallow
+ * the `AGENT.md` agents below it, and a kit folder's scaffolded pair is not an
+ * agent at all.
+ */
+test.describe('a folder defined by CLAUDE.md or AGENTS.md', () => {
+  /** + → Add a folder, with the OS picker answering `dir`. */
+  async function pickFolder(cinna: CinnaApp, dir: string): Promise<Locator> {
+    await openAddDialog(cinna)
+    await cinna.stubDirectoryPicker(dir)
+    const choice = cinna.page.getByRole('dialog', { name: 'Add an agent' })
+    await choice.getByRole('button', { name: /^Add a folder/ }).click()
+    return choice
+  }
 
-  const { page } = cinna
-  await page.getByRole('button', { name: 'Agents', exact: true }).click()
-  await answerAgentsFolder(cinna)
-  await page.getByRole('button', { name: 'Exchange Rates Agent', exact: true }).click()
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Exchange Rates Agent')
+  test('a project folder with only a CLAUDE.md is adopted, named by its folder', async ({
+    cinna
+  }) => {
+    await cinna.skipOnboarding()
+    const folder = homeDir(cinna, 'ledger-tools')
+    // `# CLAUDE.md` is how very many of these files open: a title naming the
+    // file, not the agent.
+    writeFileSync(
+      join(folder, 'CLAUDE.md'),
+      '# CLAUDE.md\n\nYou reconcile the monthly ledger against the bank export.\n'
+    )
+    writeFileSync(join(folder, 'README.md'), '# Ledger Tools\n\nRun it with `make reconcile`.\n')
+    const before = treeOf(folder)
 
-  await test.step('four tabs, and Commands is not one of them', async () => {
-    await page.getByRole('button', { name: 'Settings', exact: true }).click()
-    const tabs = page.getByRole('tablist', { name: 'Agent details' })
-    // No badges: a bare folder with an `AGENT.md` has no errors and no
-    // warnings, and has granted no permissions.
-    await expect(tabs.getByRole('tab')).toHaveText([
-      'Overview',
-      'Prompts',
-      'Permissions',
-      'Folder'
-    ])
-    await expect(tabs.getByRole('tab', { name: /^Commands/ })).toHaveCount(0)
+    await test.step('the single-folder step names the folder, and the file it found', async () => {
+      await pickFolder(cinna, folder)
+      const found = cinna.page.getByRole('dialog', { name: 'Add a folder' })
+      await expect(found).toBeVisible()
+      await expect(found.getByRole('checkbox')).toHaveCount(0)
+      // The folder name, not "CLAUDE.md": a heading that is just the file's own
+      // name is skipped, and there is no other heading to take.
+      await expect(found.getByLabel('Name')).toHaveValue('ledger-tools')
+      // Exact, so the generic "AGENT.md, AGENTS.md or CLAUDE.md is its
+      // instructions" fallback cannot pass for it.
+      await expect(
+        found.getByText(
+          'CLAUDE.md is its instructions. README.md briefs an assistant that opens the folder to work on it.',
+          { exact: true }
+        )
+      ).toBeVisible()
+      await found.getByRole('button', { name: 'Add agent', exact: true }).click()
+      await expect(cinna.page.getByRole('dialog')).toHaveCount(0)
+    })
+
+    await test.step('Prompts → Instructions is a view over CLAUDE.md', async () => {
+      const { page } = cinna
+      const row = page.getByRole('button', { name: 'ledger-tools', exact: true })
+      await expect(row).toHaveText('ledger-tools')
+      await row.click()
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('ledger-tools')
+      await page.getByRole('button', { name: 'Settings', exact: true }).click()
+      await page.getByRole('tab', { name: 'Prompts' }).click()
+      await expect(page.getByRole('tab', { name: 'Prompts' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+
+      const instructions = page
+        .locator('section')
+        .filter({ has: page.getByRole('heading', { level: 2, name: 'Instructions' }) })
+      const file = instructions.getByRole('button', { name: 'CLAUDE.md', exact: true })
+      await expect(file).toHaveAttribute('title', 'Reveal CLAUDE.md')
+      await expect(instructions.getByRole('button', { name: 'AGENT.md', exact: true })).toHaveCount(
+        0
+      )
+      await expect(instructions).toContainText(
+        'You reconcile the monthly ledger against the bank export.'
+      )
+    })
+
+    await test.step('the folder on disk is exactly the one that was picked', async () => {
+      expect(treeOf(folder)).toEqual(before)
+      expect(existsSync(join(folder, 'AGENT.md'))).toBe(false)
+    })
   })
 
-  await test.step('Overview: the name the desktop holds, then the folder’s README', async () => {
-    await expect(page.getByRole('heading', { level: 2, name: 'Name' })).toBeVisible()
-    await expect(page.getByPlaceholder('What this agent is called')).toHaveValue(
-      'Exchange Rates Agent'
+  test('a root CLAUDE.md over local_agents/*/AGENT.md lists those agents, not the root', async ({
+    cinna
+  }) => {
+    await cinna.skipOnboarding()
+    const repo = homeDir(cinna, 'ops-agents')
+    // The team's own notes for people working on the repository — which, read
+    // as an agent, would be the one row and hide both agents below it.
+    writeFileSync(
+      join(repo, 'CLAUDE.md'),
+      '# Ops Repository\n\nConventions for people working on these agents.\n'
     )
+    writeBareAgent(join(repo, 'local_agents', 'alpha'), 'Alpha Agent')
+    writeBareAgent(join(repo, 'local_agents', 'beta'), 'Beta Agent')
+    const before = treeOf(repo)
 
-    // The README is what the folder says about itself, so it answers the tab's
-    // question — not Prompts, where it read as part of what the agent is told.
-    const readme = page
-      .locator('section')
-      .filter({ has: page.getByRole('heading', { level: 2, name: 'Readme' }) })
-    await expect(readme.getByRole('button', { name: 'README.md', exact: true })).toHaveAttribute(
-      'title',
-      'Reveal README.md'
+    await pickFolder(cinna, repo)
+    const found = cinna.page.getByRole('dialog', { name: 'Add a folder' })
+    await expect(found).toBeVisible()
+    await expect(found.getByText('2 agents in ops-agents', { exact: true })).toBeVisible()
+    // The list step, not the single-folder one.
+    await expect(found.getByLabel('Name')).toHaveCount(0)
+    await expect(found.getByRole('checkbox')).toHaveCount(2)
+    await expect(
+      found.getByRole('checkbox', { name: 'Alpha Agent local_agents/alpha' })
+    ).toBeChecked()
+    await expect(found.getByRole('checkbox', { name: 'Beta Agent local_agents/beta' })).toBeChecked()
+    await expect(found.getByRole('checkbox', { name: /^Ops Repository/ })).toHaveCount(0)
+
+    await found.getByRole('button', { name: 'Add 2 agents', exact: true }).click()
+    await expect(cinna.page.getByRole('dialog')).toHaveCount(0)
+
+    const { page } = cinna
+    await expect(page.getByTitle(repo)).toHaveText('ops-agents')
+    await expect(page.getByRole('button', { name: 'Alpha Agent', exact: true })).toHaveText(
+      'Alpha Agent'
     )
-    // Rendered, not raw: the fixture's backticks arrive as a `code` element, so
-    // the card reads as the document rather than as its source.
-    await expect(readme).toContainText('Run it with uv run.')
-    await expect(readme.getByText('`uv run`')).toHaveCount(0)
-    // And its own `# heading` is demoted, so the page keeps exactly one `h1`.
-    await expect(readme.getByRole('heading', { level: 3 })).toHaveText('Exchange Rates Agent')
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Exchange Rates Agent')
-
-    // Read-only: the click that opens the Instructions editor does nothing here.
-    await readme.getByText('Run it with').click()
-    await expect(readme.getByRole('textbox')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Beta Agent', exact: true })).toHaveText(
+      'Beta Agent'
+    )
+    await expect(page.getByRole('button', { name: 'Ops Repository', exact: true })).toHaveCount(0)
+    expect(treeOf(repo)).toEqual(before)
   })
 
-  await test.step('Prompts is AGENT.md alone — the one document the agent is told', async () => {
-    await page.getByRole('tab', { name: 'Prompts' }).click()
-    await expect(page.getByRole('tab', { name: 'Prompts' })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    )
+  test('a Cinna agents folder is refused with the kit copy, and the dialog stays open', async ({
+    cinna
+  }) => {
+    await cinna.skipOnboarding()
+    // The shape the kit scaffolds into a workshop root: both weak names, and
+    // `.cinna-kit/` beside them to say whose they are.
+    const folder = homeDir(cinna, 'agent-workshop')
+    writeFileSync(join(folder, 'AGENTS.md'), '# AGENTS.md\n\nHow to build an agent here.\n')
+    writeFileSync(join(folder, 'CLAUDE.md'), '# CLAUDE.md\n\nRead AGENTS.md first.\n')
+    mkdirSync(join(folder, '.cinna-kit'))
+    const before = treeOf(folder)
 
-    const card = (title: string) =>
-      page.locator('section').filter({ has: page.getByRole('heading', { level: 2, name: title }) })
-    const instructions = card('Instructions')
-    // The README is not here: it is the folder's briefing for a person, and a
-    // second card on this tab read as though it too reached the agent.
-    await expect(card('Readme')).toHaveCount(0)
-    // The card names the file it is a view over: the button's name is the
-    // file, its `title` the action ("Reveal AGENT.md").
-    const instructionsFile = instructions.getByRole('button', { name: 'AGENT.md', exact: true })
-    await expect(instructionsFile).toHaveAttribute('title', 'Reveal AGENT.md')
-    await expect(instructions).toContainText('You answer questions about Exchange Rates Agent.')
-
-    // Rendered while it is read, raw while it is written: the click puts the
-    // file's own bytes in a textbox, heading marker and all.
-    await instructions.getByText('You answer questions about Exchange Rates Agent.').click()
-    const box = instructions.getByRole('textbox')
-    await expect(box).toHaveCount(1)
-    await expect(box).toHaveValue(
-      '# Exchange Rates Agent\n\nYou answer questions about Exchange Rates Agent.\n'
+    const choice = await pickFolder(cinna, folder)
+    // Not "Nothing in this folder has an AGENT.md, AGENTS.md or CLAUDE.md" —
+    // untrue in front of the user's eyes — but what the folder is and where it
+    // belongs.
+    await expect(choice.getByRole('alert')).toHaveText(
+      'This is a Cinna agents folder: its AGENTS.md and CLAUDE.md guide building agents. Add it under Settings → Agents → Add an agents folder.'
     )
+    await expect(choice).toBeVisible()
+    await expect(cinna.page.getByRole('dialog', { name: 'Add a folder' })).toHaveCount(0)
+    await expect(choice.getByRole('button', { name: /^New agent/ })).toBeVisible()
+    await expect(choice.getByRole('button', { name: /^Add a folder/ })).toBeVisible()
+    expect(treeOf(folder)).toEqual(before)
   })
 })
 

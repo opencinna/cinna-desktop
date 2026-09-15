@@ -316,17 +316,54 @@ describe('assembleBareAgentPrompt', () => {
     expect(prompt).not.toContain('note to the author')
   })
 
-  it('never produces a promptless agent for an empty or missing AGENT.md', () => {
+  it('never produces a promptless agent for an empty or missing instructions file', () => {
     // Same rule as the kit path: without the stand-in the model gets only the
     // context block and answers as a generic assistant, which reads as "the
     // agent is broken" rather than as "the file is empty".
     writeFileSync(join(dir, 'AGENT.md'), '   \n')
     const empty = assembleBareAgentPrompt(dir, 'Invoice watcher', context)
     expect(empty).toContain('You are Invoice watcher.')
-    expect(empty).toContain('is empty')
+    expect(empty).toContain('`AGENT.md` in this folder is empty')
 
+    // Missing is not "empty" — there is no file to be empty — and the stand-in
+    // names every file that would give the agent instructions.
     rmSync(join(dir, 'AGENT.md'))
-    expect(assembleBareAgentPrompt(dir, 'Invoice watcher', context)).toContain('is empty')
+    const missing = assembleBareAgentPrompt(dir, 'Invoice watcher', context)
+    expect(missing).toContain('You are Invoice watcher.')
+    expect(missing).toContain('This folder has no `AGENT.md`, `AGENTS.md` or `CLAUDE.md`')
+    expect(missing).not.toContain('is empty')
+  })
+
+  it.each(['AGENTS.md', 'CLAUDE.md'] as const)(
+    'runs on %s when that is the file the folder has, and building mode names it',
+    (file) => {
+      // Mutation: read `AGENT.md` whatever the folder has and an adopted
+      // `CLAUDE.md` agent runs on the empty stand-in — a working folder that
+      // tells every person it has no instructions.
+      writeFileSync(join(dir, file), '# Support\n\nAnswer tickets politely.\n')
+      const prompt = assembleBareAgentPrompt(dir, 'Support', context)
+      expect(prompt).toContain('Answer tickets politely.')
+      expect(prompt).not.toContain('no instructions yet')
+      // The file building mode edits is the one this agent actually runs on,
+      // never an `AGENT.md` that is not in the folder.
+      expect(prompt).toContain(`work from \`${file}\`, which is your whole definition`)
+      expect(prompt).not.toContain('`AGENT.md`')
+
+      writeFileSync(join(dir, 'README.md'), '# Setup\n')
+      expect(assembleBareAgentPrompt(dir, 'Support', context)).toContain(
+        `edit \`${file}\` and \`README.md\``
+      )
+    }
+  )
+
+  it('reads AGENT.md first when the folder has several', () => {
+    // The scan's priority, kept here too: the page must edit the file the
+    // agent runs on. Mutation: reverse the order and the two disagree.
+    writeFileSync(join(dir, 'CLAUDE.md'), 'CLAUDE_MARKER\n')
+    writeFileSync(join(dir, 'AGENT.md'), 'AGENT_MARKER\n')
+    const prompt = assembleBareAgentPrompt(dir, 'Alpha', context)
+    expect(prompt).toContain('AGENT_MARKER')
+    expect(prompt).not.toContain('CLAUDE_MARKER')
   })
 
   it('keeps building mode, pointed at README.md only when the folder has one', () => {

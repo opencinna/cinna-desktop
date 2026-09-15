@@ -29,7 +29,7 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 - `homeAccessService.ts` — the consent gate in front of the first write into a guarded home
 - `scaffoldService.ts` — the TypeScript port of `kit.py new`
 - `scannerService.ts` — folder → `LocalAgentDto` → index; the per-root scan cache; `scanExternalRoot()` / `scanBareAgentFolder()`
-- `externalScan.ts` — the `AGENT.md` walk an external root is scanned by ([Bare Agents](bare_agents.md))
+- `externalScan.ts` — the instructions-file walk (`AGENT.md`, `AGENTS.md`, `CLAUDE.md`) an external root is scanned by ([Bare Agents](bare_agents.md))
 - `desktopStateService.ts` — typed, total read/write of one agent's state, at whichever of its two locations the caller's `LocalAgentKind` names; `forgetAt(path)` deletes one by path, resolved before the folder moves
 - `gitService.ts` — the update check on a root that is a git working tree ([Agents Folder Updates](folder_updates.md))
 - `watcherService.ts` — one debounced watcher per root; `classifyEvent()` and `classifyExternalEvent()`

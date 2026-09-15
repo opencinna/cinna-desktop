@@ -304,11 +304,41 @@ describe('classifyExternalEvent', () => {
     writeFileSync(full, 'x')
   }
 
-  it('acts on the two files that say what an agent is', () => {
-    file('local_agents/alpha/AGENT.md')
-    file('local_agents/alpha/README.md')
-    expect(classifyExternalEvent(root, 'local_agents/alpha/AGENT.md')).toEqual({ kind: 'root' })
-    expect(classifyExternalEvent(root, 'local_agents/alpha/README.md')).toEqual({ kind: 'root' })
+  it('acts on the files that say what an agent is', () => {
+    // Mutation: drop a name and a `CLAUDE.md` folder's edits never rescan, so
+    // its name and readiness stay whatever they were when it was adopted.
+    for (const name of ['AGENT.md', 'AGENTS.md', 'CLAUDE.md', 'README.md']) {
+      file(`local_agents/alpha/${name}`)
+      expect(classifyExternalEvent(root, `local_agents/alpha/${name}`)).toEqual({ kind: 'root' })
+    }
+  })
+
+  it('acts on those files whatever their case, as a case-insensitive disk reads them', () => {
+    // On macOS a `claude.md` is the folder's `CLAUDE.md` to the scan. Mutation:
+    // compare names case-sensitively and editing it never rescans, so the agent
+    // keeps its old name and readiness until something unrelated does.
+    for (const name of ['claude.md', 'Agents.md', 'agent.MD', 'readme.md', 'Cinna-Agent.json']) {
+      expect(classifyExternalEvent(root, `local_agents/alpha/${name}`)).toEqual({ kind: 'root' })
+    }
+  })
+
+  it('acts on the kit markers that decide whether AGENTS.md and CLAUDE.md count', () => {
+    // A `cinna-agent.json` or a `.cinna-kit` appearing makes a folder's weak
+    // instruction files stop counting, and going makes them count again.
+    // Mutation: leave the manifest to the depth rule and the `.cinna-kit` to the
+    // dot-entry rule, and a folder the kit just claimed stays listed as a bare
+    // agent until something unrelated rescans.
+    file('local_agents/alpha/cinna-agent.json')
+    expect(classifyExternalEvent(root, 'local_agents/alpha/cinna-agent.json')).toEqual({
+      kind: 'root'
+    })
+    dir('.cinna-kit')
+    expect(classifyExternalEvent(root, '.cinna-kit')).toEqual({ kind: 'root' })
+    // Gone: a removed marker cannot be stat'd, and still rescans.
+    expect(classifyExternalEvent(root, 'local_agents/.cinna-kit')).toEqual({ kind: 'root' })
+    // What is written inside it is still a dot-entry.
+    file('.cinna-kit/kit.json')
+    expect(classifyExternalEvent(root, '.cinna-kit/kit.json')).toEqual({ kind: 'ignore' })
   })
 
   it('ignores an ordinary file an agent writes, at any depth in reach', () => {

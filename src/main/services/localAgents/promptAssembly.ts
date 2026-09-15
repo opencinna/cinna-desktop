@@ -29,7 +29,13 @@ import { isCoordinatorHandover } from '../../../shared/kit/handovers'
 import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import type { CinnaAgentManifest } from '../../../shared/kit/manifest'
-import { BARE_AGENT_PROMPT_FILE, BARE_AGENT_README_FILE } from '../../../shared/localAgents'
+import {
+  BARE_AGENT_INSTRUCTION_FILES,
+  BARE_AGENT_README_FILE,
+  bareInstructionsFileList,
+  type BareInstructionsFile
+} from '../../../shared/localAgents'
+import { resolveBareInstructionsFile } from './externalScan'
 
 /** Longest any one included document may be. A guard, not a design limit. */
 const MAX_SECTION_BYTES = 64 * 1024
@@ -311,9 +317,16 @@ export function assembleAgentPrompt(
  *
  * Building mode is kept, pointed at this shape's own builder document: the
  * folder's `README.md` where it has one — the same file the init prompt briefs
- * an outside assistant from — and otherwise `AGENT.md` itself.
+ * an outside assistant from — and otherwise the instructions file itself.
+ *
+ * `instructionsFile` is the one the folder resolved to; a folder with none is
+ * named `AGENT.md`, the file building mode would write to give it instructions.
  */
-function bareDesktopContextSection(agentDir: string, context: DesktopPromptContext): string {
+function bareDesktopContextSection(
+  agentDir: string,
+  instructionsFile: BareInstructionsFile,
+  context: DesktopPromptContext
+): string {
   const hasReadme = isFile(join(agentDir, BARE_AGENT_README_FILE))
   return [
     '## How you are running now',
@@ -330,17 +343,18 @@ function bareDesktopContextSection(agentDir: string, context: DesktopPromptConte
       hasReadme
         // "Read it for", not "follow it": a repository README is setup steps as
         // much as guidance, and a model told to follow it runs `make install`
-        // before making a one-line change to `AGENT.md`.
+        // before making a one-line change to its instructions file.
         ? `read \`${BARE_AGENT_README_FILE}\` in this folder for how this agent is organised and developed — as background, not as setup steps to run.`
-        : `work from \`${BARE_AGENT_PROMPT_FILE}\`, which is your whole definition.`,
-      `\`${BARE_AGENT_PROMPT_FILE}\`${hasReadme ? ` and \`${BARE_AGENT_README_FILE}\`` : ''}, and anything else in this folder the change needs`
+        : `work from \`${instructionsFile}\`, which is your whole definition.`,
+      `\`${instructionsFile}\`${hasReadme ? ` and \`${BARE_AGENT_README_FILE}\`` : ''}, and anything else in this folder the change needs`
     )
   ].join('\n')
 }
 
 /**
- * The system prompt a **bare** agent runs on: `AGENT.md`, and nothing else the
- * folder contains.
+ * The system prompt a **bare** agent runs on: its instructions file — the first
+ * of `AGENT.md`, `AGENTS.md` or `CLAUDE.md` the folder has, resolved the way the
+ * scan resolves it — and nothing else the folder contains.
  *
  * The asymmetry with {@link assembleAgentPrompt} is the whole design. A kit
  * folder has a known shape, so the assembler can safely reach into `scripts/`,
@@ -367,7 +381,8 @@ export function assembleBareAgentPrompt(
   context: DesktopPromptContext
 ): string {
   const sections: string[] = []
-  const raw = readTextFile(join(agentDir, BARE_AGENT_PROMPT_FILE))
+  const instructionsFile = resolveBareInstructionsFile(agentDir)
+  const raw = instructionsFile === null ? null : readTextFile(join(agentDir, instructionsFile))
   const instructions = raw ? stripHtmlComments(raw) : ''
 
   if (instructions !== '') {
@@ -377,18 +392,28 @@ export function assembleBareAgentPrompt(
     // Without this the model gets only the context block and answers as a
     // generic assistant, which reads as "the agent is broken" rather than as
     // "the file is empty".
+    const absence =
+      instructionsFile === null
+        ? `This folder has no ${bareInstructionsFileList((file) => `\`${file}\``)}, so you have no instructions yet.`
+        : `\`${instructionsFile}\` in this folder is empty, so you have no instructions yet.`
     sections.push(
       [
         `# ${name}`,
         '',
         `You are ${name}.`,
         '',
-        '`AGENT.md` in this folder is empty, so you have no instructions yet. Say that plainly when asked to do work, and suggest that the person tell you what you should do, so you can write it in building mode.'
+        `${absence} Say that plainly when asked to do work, and suggest that the person tell you what you should do, so you can write it in building mode.`
       ].join('\n')
     )
   }
 
-  sections.push(bareDesktopContextSection(agentDir, context))
+  sections.push(
+    bareDesktopContextSection(
+      agentDir,
+      instructionsFile ?? BARE_AGENT_INSTRUCTION_FILES[0],
+      context
+    )
+  )
   return `${sections.join('\n\n---\n\n')}\n`
 }
 

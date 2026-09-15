@@ -288,6 +288,7 @@ describe('NewLocalAgentModal — add a folder', () => {
         relPath: '.',
         path: '/repo/alpha',
         name: 'Invoice watcher',
+        instructionsFile: 'CLAUDE.md',
         hasReadme: true,
         alreadyAdded: false,
         addedElsewhere: false

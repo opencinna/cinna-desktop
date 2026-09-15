@@ -5,7 +5,9 @@ import {
   useOpenAgentPath
 } from '../../../hooks/useLocalAgents'
 import {
+  BARE_AGENT_INSTRUCTION_FILES,
   LOCAL_AGENT_DOC_PATHS,
+  type BareInstructionsFile,
   type LocalAgentDocKind,
   type LocalAgentFieldUpdate
 } from '../../../../../shared/localAgents'
@@ -27,8 +29,8 @@ interface PromptDocCardProps {
    * put where — `documentMarkdownComponents` strips raw HTML, as every other
    * viewer of these files does, so rendering them would hide the one line the
    * author most needs to read from a card that claims to be a viewer over the
-   * file. On for a bare agent's `AGENT.md`, which is prose its author wrote and
-   * reads as markdown everywhere else they open it.
+   * file. On for a bare agent's instructions file, which is prose its author
+   * wrote and reads as markdown everywhere else they open it.
    */
   markdown?: boolean
   /**
@@ -39,6 +41,13 @@ interface PromptDocCardProps {
    * scaffold again" is an instruction its owner cannot follow (rule 7).
    */
   missingNote?: string
+  /**
+   * The file a `bare_prompt` card reads: the agent's own
+   * `LocalAgentDto.instructionsFile`, which only main can resolve. Null when
+   * the folder has none of them, and the card then names no file (ux_rules
+   * rule 9). Ignored for every other kind, whose path is fixed.
+   */
+  instructionsFile?: BareInstructionsFile | null
 }
 
 /**
@@ -56,11 +65,19 @@ export function PromptDocCard({
   hint,
   placeholder,
   markdown = false,
-  missingNote
+  missingNote,
+  instructionsFile = null
 }: PromptDocCardProps): React.JSX.Element {
   const { data: doc, isLoading } = useLocalAgentDoc(agentId, prompt)
   const openPath = useOpenAgentPath()
-  const relPath = LOCAL_AGENT_DOC_PATHS[prompt]
+  // With no instructions file the editor still needs a key for its stamp
+  // lookup; `AGENT.md` holds no stamp in that folder, so nothing can be saved
+  // against it, and the card below does not name it.
+  const relPath =
+    prompt === 'bare_prompt'
+      ? (instructionsFile ?? BARE_AGENT_INSTRUCTION_FILES[0])
+      : LOCAL_AGENT_DOC_PATHS[prompt]
+  const namesFile = prompt !== 'bare_prompt' || instructionsFile !== null
 
   const snapshot = useMemo(
     () => (doc ? { text: doc.text, stamp: doc.stamp } : undefined),
@@ -74,10 +91,10 @@ export function PromptDocCard({
         // read-only on Overview, in `BareReadmeCard`, with no textarea behind
         // it. It throws rather than falling through to `bare_prompt`, which is
         // what a plausible edit here would do — and that would write the
-        // README's text over `AGENT.md`, which is the agent's whole system
-        // prompt. (Main would refuse it on the stamp, since the two files'
-        // stamps differ, but "your save was refused" is not the message this
-        // deserves.)
+        // README's text over the instructions file, which is the agent's whole
+        // system prompt. (Main would refuse it on the stamp, since the two
+        // files' stamps differ, but "your save was refused" is not the message
+        // this deserves.)
         throw new Error('README.md is read-only here — open the folder to edit it.')
       }
       return { field: 'prompt', prompt, value: text }
@@ -96,8 +113,8 @@ export function PromptDocCard({
   return (
     <AgentCard
       title={title}
-      file={relPath}
-      onReveal={() => openPath.mutate({ agentId, relPath })}
+      file={namesFile ? relPath : undefined}
+      onReveal={namesFile ? () => openPath.mutate({ agentId, relPath }) : undefined}
       actions={
         editor.isSaving ? (
           <span className="text-[10px] text-[var(--color-text-muted)]">Saving…</span>

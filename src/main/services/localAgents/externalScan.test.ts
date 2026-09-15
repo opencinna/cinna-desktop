@@ -8,7 +8,7 @@
  *
  * Each test names the mutation it kills.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,7 +16,8 @@ import {
   discoverBareAgents,
   isBareAgentDir,
   MAX_DISCOVERED_AGENTS,
-  readBareAgentName
+  readBareAgentName,
+  resolveBareInstructionsFile
 } from './externalScan'
 import { BARE_AGENT_MAX_DEPTH } from '../../../shared/localAgents'
 
@@ -167,6 +168,190 @@ describe('isBareAgentDir', () => {
     // becomes an agent with no instructions in it.
     const dir = join(root, 'odd')
     mkdirSync(join(dir, 'AGENT.md'), { recursive: true })
+    mkdirSync(join(dir, 'CLAUDE.md'), { recursive: true })
     expect(isBareAgentDir(dir)).toBe(false)
+  })
+})
+
+/** A folder at `segments` whose instructions are `file`. */
+function instructionsAt(file: string, ...segments: string[]): string {
+  const dir = join(root, ...segments)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, file), '# Whatever\n\nDo the thing.\n')
+  return dir
+}
+
+describe('which file makes a folder an agent', () => {
+  it('finds a folder by each of AGENT.md, AGENTS.md and CLAUDE.md', () => {
+    // Mutation: drop a name from the list and a project folder carrying only
+    // that file is "nothing in this folder" again.
+    instructionsAt('AGENT.md', 'a')
+    instructionsAt('AGENTS.md', 'b')
+    instructionsAt('CLAUDE.md', 'c')
+    expect(discoverBareAgents(root).found.map((f) => [f.relPath, f.instructionsFile])).toEqual([
+      ['a', 'AGENT.md'],
+      ['b', 'AGENTS.md'],
+      ['c', 'CLAUDE.md']
+    ])
+  })
+
+  it('takes AGENT.md, then AGENTS.md, then CLAUDE.md when a folder has several', () => {
+    // Mutation: reorder the list and the agent runs on whichever file sorts
+    // first, which is not the one its author wrote for it.
+    const dir = instructionsAt('CLAUDE.md', 'x')
+    writeFileSync(join(dir, 'AGENTS.md'), '# Agents\n')
+    expect(resolveBareInstructionsFile(dir)).toBe('AGENTS.md')
+    writeFileSync(join(dir, 'AGENT.md'), '# Agent\n')
+    expect(resolveBareInstructionsFile(dir)).toBe('AGENT.md')
+    // One folder, one agent, whichever file won.
+    expect(discoverBareAgents(root).found.map((f) => [f.relPath, f.instructionsFile])).toEqual([
+      ['x', 'AGENT.md']
+    ])
+  })
+
+  it('does not count AGENTS.md or CLAUDE.md in a folder the kit made', () => {
+    // The kit scaffolds both into every agent folder and every workshop root.
+    // Mutation: drop the guard and adopting a tree of kit agents lists each one
+    // as a bare agent, with no commands, credential slots or runtime.
+    const kitAgent = instructionsAt('AGENTS.md', 'Local', 'alpha')
+    writeFileSync(join(kitAgent, 'CLAUDE.md'), '# alpha\n')
+    writeFileSync(join(kitAgent, 'cinna-agent.json'), '{}')
+    const workshop = instructionsAt('CLAUDE.md', 'workshop')
+    mkdirSync(join(workshop, '.cinna-kit'))
+
+    expect(resolveBareInstructionsFile(kitAgent)).toBeNull()
+    expect(resolveBareInstructionsFile(workshop)).toBeNull()
+    expect(discoverBareAgents(root).found).toEqual([])
+
+    // `AGENT.md` keeps counting beside a manifest, exactly as it always did.
+    writeFileSync(join(kitAgent, 'AGENT.md'), '# Alpha\n')
+    expect(resolveBareInstructionsFile(kitAgent)).toBe('AGENT.md')
+  })
+
+  it('lists the AGENT.md agents under a root CLAUDE.md, not the root', () => {
+    // The shape the walk rule exists for: a team repository of agents with a
+    // `CLAUDE.md` at the top for the people working on it. Mutation: let a weak
+    // root be the agent and this finds `.` alone — and rescanning a root already
+    // registered prunes both agents, taking their sessions with them.
+    writeFileSync(join(root, 'CLAUDE.md'), '# Team repository\n')
+    agentAt('local_agents', 'a')
+    agentAt('local_agents', 'b')
+    expect(discoverBareAgents(root).found.map((f) => f.relPath)).toEqual([
+      'local_agents/a',
+      'local_agents/b'
+    ])
+  })
+
+  it('walks a weak folder with AGENT.md below it like any other, rule and all', () => {
+    // Mutation: once the root is ruled out, stop applying the rule — `w` is
+    // then an agent and hides `w/inner`, or `y` is skipped for not being strong.
+    writeFileSync(join(root, 'CLAUDE.md'), '# Team repository\n')
+    agentAt('x')
+    instructionsAt('CLAUDE.md', 'y')
+    instructionsAt('AGENTS.md', 'w')
+    agentAt('w', 'inner')
+    expect(discoverBareAgents(root).found.map((f) => [f.relPath, f.instructionsFile])).toEqual([
+      ['w/inner', 'AGENT.md'],
+      ['x', 'AGENT.md'],
+      ['y', 'CLAUDE.md']
+    ])
+  })
+
+  it('is the agent itself when only weak files sit below it', () => {
+    // A nested `CLAUDE.md` is part of that agent's working tree, the same rule
+    // as a nested `AGENT.md` under a strong one. Mutation: let any match below
+    // disqualify a weak folder and this lists `sub` instead of the agent.
+    writeFileSync(join(root, 'CLAUDE.md'), '# One agent\n')
+    instructionsAt('CLAUDE.md', 'sub')
+    expect(discoverBareAgents(root).found.map((f) => [f.relPath, f.instructionsFile])).toEqual([
+      ['.', 'CLAUDE.md']
+    ])
+  })
+
+  it('looks for AGENT.md below a weak folder only where the walk itself would', () => {
+    // Out of reach, inside a dependency tree or inside a dot-directory, an
+    // `AGENT.md` is one the walk would never list — so it must not stop the
+    // weak folder above it being the agent. Mutation: an unbounded or unfiltered
+    // probe finds `.`'s agents nowhere and the folder has no agent at all.
+    writeFileSync(join(root, 'AGENTS.md'), '# One agent\n')
+    agentAt('a', 'b', 'c')
+    agentAt('node_modules', 'pkg')
+    agentAt('.claude', 'skill')
+    expect(discoverBareAgents(root).found.map((f) => f.relPath)).toEqual(['.'])
+  })
+
+  it('does not count its look below toward the cap', () => {
+    // Mutation: count the probe's `AGENT.md` towards the limit and a root
+    // holding exactly as many agents as the cap reports itself truncated,
+    // dropping the last one.
+    writeFileSync(join(root, 'CLAUDE.md'), '# Team repository\n')
+    agentAt('local_agents', 'a')
+    agentAt('local_agents', 'b')
+    const capped = discoverBareAgents(root, BARE_AGENT_MAX_DEPTH, { limit: 2 })
+    expect(capped.found.map((f) => f.relPath)).toEqual(['local_agents/a', 'local_agents/b'])
+    expect(capped.truncated).toBe(false)
+  })
+})
+
+describe('readBareAgentName — other instruction files', () => {
+  it('reads the heading from the file the folder has', () => {
+    const dir = instructionsAt('AGENTS.md', 'folder-name')
+    writeFileSync(join(dir, 'AGENTS.md'), '# Support Desk\n\nBody.\n')
+    expect(readBareAgentName(dir)).toBe('Support Desk')
+  })
+
+  it('falls back to the folder name when the heading is only the file’s own name', () => {
+    // `# CLAUDE.md` is a very common first line. Mutation: accept it and every
+    // such agent is listed as "CLAUDE.md", a sidebar of identical rows.
+    const dir = instructionsAt('CLAUDE.md', 'support-bot')
+    for (const heading of ['CLAUDE.md', 'Claude', 'claude.MD']) {
+      writeFileSync(join(dir, 'CLAUDE.md'), `# ${heading}\n\nBody.\n`)
+      expect(readBareAgentName(dir)).toBe('support-bot')
+    }
+    const agents = instructionsAt('AGENTS.md', 'triage')
+    writeFileSync(join(agents, 'AGENTS.md'), '# Agents\n')
+    expect(readBareAgentName(agents)).toBe('triage')
+    const agent = instructionsAt('AGENT.md', 'nightly')
+    writeFileSync(join(agent, 'AGENT.md'), '# AGENT.md\n')
+    expect(readBareAgentName(agent)).toBe('nightly')
+  })
+})
+
+describe('keep — a weak folder already known as an agent', () => {
+  it('stays the agent when an AGENT.md sits below it, and is not descended into', () => {
+    // A repository adopted by its `CLAUDE.md`, then a `git pull` adds an example
+    // agent inside it. Mutation: ignore `keep` and `.` turns into a container
+    // listing `examples/bot`, which prunes the adopted agent on the next rescan.
+    writeFileSync(join(root, 'CLAUDE.md'), '# Repo helper\n')
+    agentAt('examples', 'bot')
+    const keep = vi.fn((absPath: string) => absPath === root)
+    expect(
+      discoverBareAgents(root, BARE_AGENT_MAX_DEPTH, { keep }).found.map((f) => [
+        f.relPath,
+        f.instructionsFile
+      ])
+    ).toEqual([['.', 'CLAUDE.md']])
+    expect(keep).toHaveBeenCalledWith(root)
+    // Not known: the ordinary rule, `AGENT.md` below wins.
+    expect(
+      discoverBareAgents(root, BARE_AGENT_MAX_DEPTH, { keep: () => false }).found.map(
+        (f) => f.relPath
+      )
+    ).toEqual(['examples/bot'])
+  })
+
+  it('is asked only about a weak folder with an AGENT.md below it', () => {
+    // The common path must not pay for it. Mutation: consult `keep` before the
+    // strong check or before the probe below, and it is asked about `strong` or
+    // `weak-alone` too, which would be one index read per walk on every scan.
+    agentAt('strong')
+    agentAt('strong', 'nested')
+    instructionsAt('CLAUDE.md', 'weak-alone')
+    instructionsAt('AGENTS.md', 'weak-over')
+    agentAt('weak-over', 'inner')
+    const keep = vi.fn((_absPath: string) => false)
+    const { found } = discoverBareAgents(root, BARE_AGENT_MAX_DEPTH, { keep })
+    expect(found.map((f) => f.relPath)).toEqual(['strong', 'weak-alone', 'weak-over/inner'])
+    expect(keep.mock.calls).toEqual([[join(root, 'weak-over')]])
   })
 })

@@ -485,7 +485,7 @@ export function registerLocalAgentHandlers(): void {
    * Re-open the agent list of a root **already registered**, without a picker.
    *
    * Settings' Manage agents needs exactly what the adopt dialog shows — every
-   * `AGENT.md` folder under the root, with the ones currently in the list
+   * agent folder the walk finds under the root, with the ones currently in the list
    * ticked — for a folder the user chose once already. Making them re-pick it
    * in an OS dialog to change one tick is the round trip this removes.
    *
@@ -659,7 +659,7 @@ export function registerLocalAgentHandlers(): void {
    * Fast-forward one root, then rescan it.
    *
    * The rescan is the point: a pull that adds an agent folder, removes one, or
-   * rewrites an `AGENT.md` has to be visible without the user knowing to press
+   * rewrites an agent's instructions has to be visible without the user knowing to press
    * Rescan. The watcher would get there eventually, but a pull rewrites many
    * files at once and the debounce is not a promise.
    */

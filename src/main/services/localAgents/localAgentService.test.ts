@@ -1152,7 +1152,57 @@ describe('adopting an existing folder', () => {
     const pick = localAgentService.pickedAgentFolder(USER, outside)
     expect(pick.cancelled).toBe(false)
     if (pick.cancelled) return
-    expect(pick.refusal).toMatch(/AGENT\.md/)
+    // All three names: a user pointing at a folder of `CLAUDE.md` agents that
+    // the walk cannot see must not be sent looking for an `AGENT.md` alone.
+    expect(pick.refusal).toBe(
+      "Nothing in this folder has an AGENT.md, AGENTS.md or CLAUDE.md. Choose the agent's own folder, or a folder that holds several of them."
+    )
+  })
+
+  it('says why a kit folder’s own AGENTS.md and CLAUDE.md did not count', () => {
+    // The user can see both files in the folder they picked; "nothing here has
+    // one" would be false, and would not say where the folder belongs.
+    writeFileSync(join(outside, 'AGENTS.md'), '# Workshop\n')
+    writeFileSync(join(outside, 'CLAUDE.md'), '@AGENTS.md\n')
+    mkdirSync(join(outside, '.cinna-kit'), { recursive: true })
+    const workshop = localAgentService.pickedAgentFolder(USER, outside)
+    if (workshop.cancelled) throw new Error('unexpected cancel')
+    expect(workshop.refusal).toBe(
+      'This is a Cinna agents folder: its AGENTS.md and CLAUDE.md guide building agents. Add it under Settings → Agents → Add an agents folder.'
+    )
+
+    rmSync(join(outside, '.cinna-kit'), { recursive: true })
+    writeFileSync(join(outside, 'cinna-agent.json'), '{}\n')
+    const agent = localAgentService.pickedAgentFolder(USER, outside)
+    if (agent.cancelled) throw new Error('unexpected cancel')
+    expect(agent.refusal).toBe(
+      'This is a Cinna kit agent: its AGENTS.md and CLAUDE.md guide building it. Add the agents folder it lives in under Settings → Agents → Add an agents folder.'
+    )
+
+    // Only the files that are there. Mutation: name both whenever the folder
+    // is kit-shaped, and each of these names a file the user cannot find.
+    rmSync(join(outside, 'AGENTS.md'))
+    const oneAgent = localAgentService.pickedAgentFolder(USER, outside)
+    if (oneAgent.cancelled) throw new Error('unexpected cancel')
+    expect(oneAgent.refusal).toBe(
+      'This is a Cinna kit agent: its CLAUDE.md guides building it. Add the agents folder it lives in under Settings → Agents → Add an agents folder.'
+    )
+
+    rmSync(join(outside, 'cinna-agent.json'))
+    mkdirSync(join(outside, '.cinna-kit'), { recursive: true })
+    const oneWorkshop = localAgentService.pickedAgentFolder(USER, outside)
+    if (oneWorkshop.cancelled) throw new Error('unexpected cancel')
+    expect(oneWorkshop.refusal).toBe(
+      'This is a Cinna agents folder: its CLAUDE.md guides building agents. Add it under Settings → Agents → Add an agents folder.'
+    )
+
+    // Neither file: the generic copy, which is then simply true.
+    rmSync(join(outside, 'CLAUDE.md'))
+    const none = localAgentService.pickedAgentFolder(USER, outside)
+    if (none.cancelled) throw new Error('unexpected cancel')
+    expect(none.refusal).toBe(
+      "Nothing in this folder has an AGENT.md, AGENTS.md or CLAUDE.md. Choose the agent's own folder, or a folder that holds several of them."
+    )
   })
 
   it('refuses a folder that overlaps a registered root', () => {
@@ -1280,6 +1330,62 @@ describe('adopting an existing folder', () => {
       ['local_agents/alpha', true],
       ['local_agents/beta', false]
     ])
+  })
+
+  it('lists an AGENT.md agent that lands inside a CLAUDE.md folder the user unticked', () => {
+    // Unticking writes `hidden: true` for the folder. That says "declined", so
+    // it must not keep the folder an agent once an `AGENT.md` appears below it
+    // (one `git pull` away). Mutation: count any state file as known, and the
+    // re-pick offers the declined `svc` again while `svc/bot` is never listed.
+    // `svc/bot` rather than deeper: the walk reaches two levels below the root.
+    mkdirSync(join(outside, 'svc'), { recursive: true })
+    writeFileSync(join(outside, 'svc', 'CLAUDE.md'), '# Service\n')
+    const alpha = bareAgent('alpha')
+    localAgentService.pickedAgentFolder(USER, outside)
+    localAgentService.addAgentFolder(USER, { path: outside, relPaths: ['alpha'] })
+    expect(desktopStateService.read(join(outside, 'svc'), 'bare').hidden).toBe(true)
+
+    const bot = bareAgent('svc/bot')
+    const again = localAgentService.pickedAgentFolder(USER, outside)
+    if (again.cancelled) throw new Error('unexpected cancel')
+    expect(again.found.map((f) => [f.relPath, f.alreadyAdded])).toEqual([
+      ['alpha', true],
+      ['svc/bot', false]
+    ])
+
+    const { root } = localAgentService.addAgentFolder(USER, {
+      path: outside,
+      relPaths: ['alpha', 'svc/bot']
+    })
+    const agents = localAgentService.list(USER).agents.filter((a) => a.rootId === root.id)
+    expect(agents.map((a) => a.path).sort()).toEqual([alpha, bot].sort())
+  })
+
+  it('previews a re-selected root exactly as its rescan indexes it, keeping a known CLAUDE.md agent', () => {
+    // The preview and the scan must walk alike, or the dialog ticks rows that
+    // are not what adopting indexes. Mutation: drop `keep` from the preview's
+    // walk, and it offers `sub/x` in place of the adopted `.` the rescan keeps.
+    writeFileSync(join(outside, 'CLAUDE.md'), '# Repo helper\n')
+    localAgentService.pickedAgentFolder(USER, outside)
+    const { root } = localAgentService.addAgentFolder(USER, { path: outside, relPaths: ['.'] })
+    // Known by its index row alone, which only the re-selecting root can see.
+    expect(existsSync(desktopStatePath(outside, 'bare'))).toBe(false)
+
+    bareAgent('sub/x')
+    const again = localAgentService.pickedAgentFolder(USER, outside)
+    if (again.cancelled) throw new Error('unexpected cancel')
+    scannerService.markRootDirty(root.id)
+    const rescan = scannerService.scanRoot(USER, agentRootRepo.getOwned(USER, root.id)!)
+
+    expect(again.reselecting?.rootId).toBe(root.id)
+    expect(again.found.map((f) => f.relPath)).toEqual(['.'])
+    expect(again.found.map((f) => f.path)).toEqual(rescan.agents.map((a) => a.path))
+    expect(
+      agentRepo
+        .listFolder(USER)
+        .filter((r) => r.localRootId === root.id)
+        .map((r) => r.localPath)
+    ).toEqual([outside])
   })
 
   it('adds the agent left out the first time, and keeps the one already there', () => {
@@ -1490,6 +1596,83 @@ describe('adopting an existing folder', () => {
     if (parent.cancelled) return
     expect(parent.refusal).toMatch(/overlaps/i)
     expect(parent.reselecting).toBeNull()
+  })
+})
+
+/**
+ * A bare agent whose instructions are a `CLAUDE.md`. The reader, the editor and
+ * the briefing each have to use the file the folder actually has — a static
+ * `AGENT.md` path reads nothing, and a write to it would create a second file
+ * claiming to be the system prompt.
+ */
+describe('a bare agent defined by CLAUDE.md', () => {
+  let outside: string
+  let bareId: string
+  let bareDir: string
+
+  beforeEach(() => {
+    outside = mkdtempSync(join(tmpdir(), 'cinna-bare-claude-'))
+    bareDir = join(outside, 'support')
+    mkdirSync(bareDir, { recursive: true })
+    writeFileSync(join(bareDir, 'CLAUDE.md'), '# Support\n\nAnswer tickets.\n')
+    localAgentService.pickedAgentFolder(USER, outside)
+    const { root } = localAgentService.addAgentFolder(USER, {
+      path: outside,
+      relPaths: ['support']
+    })
+    bareId = localAgentService.list(USER).agents.filter((a) => a.rootId === root.id)[0].id
+  })
+  afterEach(() => {
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  it('reads the Instructions document from CLAUDE.md', () => {
+    // Mutation: a static `AGENT.md` path, and the Prompts tab shows "This
+    // folder has no …" over a folder whose instructions are right there.
+    const doc = localAgentService.readDoc(USER, bareId, 'bare_prompt')
+    expect(doc.relPath).toBe('CLAUDE.md')
+    expect(doc.text).toContain('Answer tickets.')
+    expect(doc.stamp).not.toBeNull()
+    // The same key the DTO's stamps use, which is what the editor saves against.
+    expect(localAgentService.get(USER, bareId).stamps[doc.relPath]).toEqual(doc.stamp)
+  })
+
+  it('saves an Instructions edit into CLAUDE.md, never into a new AGENT.md', () => {
+    const agent = localAgentService.get(USER, bareId)
+    expect(agent.instructionsFile).toBe('CLAUDE.md')
+
+    const saved = localAgentService.updateField(USER, {
+      agentId: bareId,
+      update: { field: 'bare_prompt', value: '# Support\n\nAnswer tickets within a day.\n' },
+      expectedStamp: agent.stamps['CLAUDE.md']!
+    })
+
+    expect(readFileSync(join(bareDir, 'CLAUDE.md'), 'utf8')).toContain('within a day')
+    expect(existsSync(join(bareDir, 'AGENT.md'))).toBe(false)
+    expect(saved.stamps['CLAUDE.md']).not.toEqual(agent.stamps['CLAUDE.md'])
+  })
+
+  it('refuses a save read from a file the folder no longer runs on', () => {
+    // An `AGENT.md` added beside it now wins. The editor's stamp was taken from
+    // `CLAUDE.md`, so writing its text over `AGENT.md` would clobber a file the
+    // user never saw in the editor. Mutation: trust the stamp's file rather than
+    // resolving at write time — or skip the guard — and one of these fails.
+    const agent = localAgentService.get(USER, bareId)
+    writeFileSync(join(bareDir, 'AGENT.md'), '# Newer\n')
+
+    expect(() =>
+      localAgentService.updateField(USER, {
+        agentId: bareId,
+        update: { field: 'bare_prompt', value: 'overwritten' },
+        expectedStamp: agent.stamps['CLAUDE.md']!
+      })
+    ).toThrow(/changed on disk/)
+    expect(readFileSync(join(bareDir, 'AGENT.md'), 'utf8')).toBe('# Newer\n')
+    expect(readFileSync(join(bareDir, 'CLAUDE.md'), 'utf8')).toContain('Answer tickets.')
+  })
+
+  it('briefs an assistant from CLAUDE.md when the folder has no README', () => {
+    expect(localAgentService.initPrompt(USER, bareId)).toContain('Read `CLAUDE.md` in that folder first')
   })
 })
 

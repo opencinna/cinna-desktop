@@ -77,7 +77,7 @@ export interface DesktopState {
    * folder has no file that states one, and the desktop must not invent a place
    * inside the user's own repository to write it — so the name is held here,
    * beside the rest of that agent's machine-local state. Null means "use what
-   * `AGENT.md` or the folder name says", which is what a fresh adoption does.
+   * instructions file or the folder name says", which is what a fresh adoption does.
    */
   displayName: string | null
   /**
@@ -287,8 +287,9 @@ function externalStateRoot(): string {
  * existing caller could keep its one-argument signature. That was wrong twice,
  * and both are reachable:
  *
- * - `discoverBareAgents` tests for `AGENT.md` and nothing else, so a folder
- *   carrying **both** files is adopted as a bare agent — and the probe would
+ * - `discoverBareAgents` counts an `AGENT.md` whatever sits beside it, so a
+ *   folder carrying **both** it and a manifest is adopted as a bare agent — and
+ *   the probe would
  *   then send `addAgentFolder`'s own `hidden` write *into* it, creating the
  *   untracked `app-data/` this location exists to avoid, on the very first
  *   action of adopting the folder.

@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Loader2 } from 'lucide-react'
-import type { AgentRootDto, DiscoveredBareAgent } from '../../../../shared/localAgents'
+import {
+  BARE_AGENT_INSTRUCTION_FILES,
+  type AgentRootDto,
+  type DiscoveredBareAgent
+} from '../../../../shared/localAgents'
 import { useAddAgentFolder, useManageRootAgents } from '../../hooks/useLocalAgents'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { useDialogChrome } from './SettingsLayout'
@@ -58,7 +62,10 @@ export function ManageRootAgentsDialog({
         // Ticked = in the list today. `addedElsewhere` rows are ticked and
         // locked below: this folder's selection cannot speak for another root.
         setChecked(new Set(result.found.filter((a) => a.alreadyAdded).map((a) => a.relPath)))
-        if (result.refusal) setError(result.refusal)
+        // An empty list already says nothing was found, in the list's own
+        // place; the refusal would repeat it in red and point at a folder
+        // picker this dialog does not have.
+        if (result.refusal && result.found.length > 0) setError(result.refusal)
       },
       onError: (err) => setError(unwrapIpcError(err, 'That folder could not be read.'))
     })
@@ -166,7 +173,14 @@ export function ManageRootAgentsDialog({
             </div>
           ) : found.length === 0 ? (
             <p className="py-6 text-[13px] text-[var(--color-text-muted)]">
-              No <code className="font-mono">AGENT.md</code> folders were found here.
+              No folders with an{' '}
+              {BARE_AGENT_INSTRUCTION_FILES.map((file, index) => (
+                <span key={file}>
+                  {index === 0 ? '' : index === BARE_AGENT_INSTRUCTION_FILES.length - 1 ? ' or ' : ', '}
+                  <code className="font-mono">{file}</code>
+                </span>
+              ))}{' '}
+              were found here.
             </p>
           ) : (
             <div className="space-y-1">

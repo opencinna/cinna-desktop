@@ -25,7 +25,7 @@ import { useDefaultTool, useOpenIn, useSetDefaultTool } from '../../../hooks/use
 import { useSetAppSetting } from '../../../hooks/useAppSettings'
 import {
   describeAgentSlug,
-  BARE_AGENT_PROMPT_FILE,
+  bareInstructionsFileList,
   type DiscoveredBareAgent,
   type LocalAgentDto
 } from '../../../../../shared/localAgents'
@@ -425,8 +425,8 @@ export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, 
                   {pickFolder.isPending ? 'Choosing…' : 'Add a folder'}
                 </span>
                 <span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-                  Any folder with an {BARE_AGENT_PROMPT_FILE}, or a folder holding several of
-                  them. Adding it changes nothing inside it.
+                  Any project folder with an {bareInstructionsFileList()}, or a folder that
+                  holds several such projects. Adding it changes nothing inside it.
                 </span>
               </span>
             </button>
@@ -825,9 +825,10 @@ function FolderStep({
             className={INPUT}
           />
           <div className="text-[10px] text-[var(--color-text-muted)]">
+            {/* The file main found in this folder, not the first name on the list. */}
             {pick.found[0]?.hasReadme
-              ? `${BARE_AGENT_PROMPT_FILE} is its instructions. README.md briefs an assistant that opens the folder to work on it.`
-              : `${BARE_AGENT_PROMPT_FILE} is its instructions. Add a README.md to brief an assistant that opens the folder.`}
+              ? `${pick.found[0]?.instructionsFile ?? bareInstructionsFileList()} is its instructions. README.md briefs an assistant that opens the folder to work on it.`
+              : `${pick.found[0]?.instructionsFile ?? bareInstructionsFileList()} is its instructions. Add a README.md to brief an assistant that opens the folder.`}
           </div>
         </div>
       ) : (

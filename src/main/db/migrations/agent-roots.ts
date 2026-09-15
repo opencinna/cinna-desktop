@@ -40,7 +40,8 @@ export function migrateAgentRoots(sqlite: Database.Database): void {
   `)
 
   // `kind` — 'workshop' (the kit shape this table was built for) or 'external'
-  // (a folder the user pointed at, walked for `AGENT.md`). The default is what
+  // (a folder the user pointed at, walked for `AGENT.md`, `AGENTS.md` or
+  // `CLAUDE.md`). The default is what
   // makes this safe to add to an existing table: every root registered before
   // external roots existed is a workshop, so no backfill is needed and none is
   // written.

@@ -44,33 +44,38 @@ export const LOCAL_AGENT_CHANGED_CHANNEL = 'local-agent:changed'
 export const AGENTS_SUBDIR = 'Local'
 
 /**
- * The one file that makes an arbitrary folder an agent.
+ * The files that make an arbitrary folder an agent, in priority order.
  *
- * A folder holding `AGENT.md` and no `cinna-agent.json` is a **bare** agent:
- * outside the kit contract, with no manifest, no credential slots and no
- * command catalog, but with a system prompt and a folder the engine can run a
- * session in. See {@link LocalAgentKind}.
+ * A folder holding one of them is a **bare** agent: outside the kit contract,
+ * with no manifest, no credential slots and no command catalog, but with a
+ * system prompt — the first of these the folder has — and a folder the engine
+ * can run a session in. See {@link LocalAgentKind}.
+ *
+ * `AGENT.md` is the strong match; `AGENTS.md` and `CLAUDE.md` are weak ones,
+ * and two rules keep them from misreading a tree (see `externalScan`):
+ *
+ * - They do not count in a kit-shaped folder — one holding `cinna-agent.json`
+ *   or a `.cinna-kit/` — because the kit scaffolds both into every agent and
+ *   workshop root, and counting them would demote kit agents to bare ones.
+ * - A weak folder with an `AGENT.md` folder below it, within the walk's reach,
+ *   is not an agent: a repository of `local_agents/<x>/AGENT.md` very often
+ *   carries a root `CLAUDE.md`, and reading that root as the one agent would
+ *   prune every agent already adopted from it.
  */
-export const BARE_AGENT_PROMPT_FILE = 'AGENT.md'
+export const BARE_AGENT_INSTRUCTION_FILES = ['AGENT.md', 'AGENTS.md', 'CLAUDE.md'] as const
+
+/** One of {@link BARE_AGENT_INSTRUCTION_FILES}. */
+export type BareInstructionsFile = (typeof BARE_AGENT_INSTRUCTION_FILES)[number]
 
 /**
- * **Deliberately singular, and the likeliest support question this feature has.**
- *
- * `AGENTS.md` is the emerging cross-tool convention and is what the kit's own
- * `templates/agent/` scaffolds, so a user pointing at a repository full of them
- * is told "nothing in this folder has an AGENT.md". That is the requested
- * contract, not an oversight.
- *
- * If it is widened, two things have to hold together:
- *
- * - `AGENTS.md` counts **only** when no `cinna-agent.json` sits beside it,
- *   or every kit agent in an adopted tree is demoted to a bare one and loses
- *   its commands, credential slots and declared runtime.
- * - The walk must still stop at the **first** match in a folder and not
- *   descend, or a folder holding both files at different levels yields two
- *   agents for one directory. `discoverBareAgents` already keeps that rule for
- *   `AGENT.md`; it has to survive the widening rather than be re-derived.
+ * The instruction files as a sentence — "AGENT.md, AGENTS.md or CLAUDE.md" —
+ * for copy that has no one file to name. `format` wraps each name (backticks
+ * in a prompt).
  */
+export function bareInstructionsFileList(format: (file: string) => string = (file) => file): string {
+  const names = BARE_AGENT_INSTRUCTION_FILES.map(format)
+  return `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`
+}
 
 /**
  * The document a *builder* reads first in a bare agent folder.
@@ -79,13 +84,13 @@ export const BARE_AGENT_PROMPT_FILE = 'AGENT.md'
  * not for the agent: it explains what the folder is, how to run it and what it
  * needs. So it is the entry document of the init prompt — the briefing handed
  * to an assistant opening the folder — and deliberately **not** part of the
- * agent's own system prompt, which is `AGENT.md` alone.
+ * agent's own system prompt, which is its instructions file alone.
  */
 export const BARE_AGENT_README_FILE = 'README.md'
 
 /**
- * How deep {@link discoverBareAgents} looks for `AGENT.md` under a folder the
- * user added.
+ * How deep {@link discoverBareAgents} looks for instruction files under a
+ * folder the user added.
  *
  * Depth 0 is the folder itself, so a repository laid out as
  * `<repo>/local_agents/<agent>/AGENT.md` — the shape this was built against —
@@ -99,8 +104,9 @@ export const BARE_AGENT_MAX_DEPTH = 2
  *
  * - `kit` — a kit-contract folder: `cinna-agent.json` at its root, validated,
  *   with prompts, credential slots, commands and a runtime the manifest names.
- * - `bare` — any folder holding an `AGENT.md`. It has none of the above; the
- *   desktop reads `AGENT.md` as the system prompt, runs it on the default
+ * - `bare` — any folder holding an `AGENT.md`, `AGENTS.md` or `CLAUDE.md`. It
+ *   has none of the above; the desktop reads that file as the system prompt,
+ *   runs it on the default
  *   runtime, and keeps its own per-agent state outside the folder. Adopted by
  *   path from an `external` root, never scaffolded.
  *
@@ -118,7 +124,8 @@ export type LocalAgentKind = 'kit' | 'bare'
  *   into it, agents scanned from `Local/*​/`, each with a manifest.
  * - `external` — a folder the user pointed at. **Nothing is written into it**:
  *   no templates, no `.cinna-kit/`, no `app-data/`. It is walked up to
- *   {@link BARE_AGENT_MAX_DEPTH} for folders holding an `AGENT.md`, and each
+ *   {@link BARE_AGENT_MAX_DEPTH} for folders holding an instructions file
+ *   ({@link BARE_AGENT_INSTRUCTION_FILES}), and each
  *   one becomes a bare agent.
  *
  * A single adopted agent folder is an external root whose only agent is the
@@ -197,7 +204,8 @@ export function duplicateFolderAgentId(rootId: string, folderName: string): stri
 }
 
 /**
- * The `agents` row id of a bare agent — a folder adopted for its `AGENT.md`.
+ * The `agents` row id of a bare agent — a folder adopted for its instructions
+ * file.
  *
  * Positional, like {@link legacyFolderAgentId}, and for the same reason: there
  * is no manifest and therefore no durable id to key on. Keyed by **root id and
@@ -336,6 +344,13 @@ export interface LocalAgentDto {
    * is null only until the user makes a choice.
    */
   kind: LocalAgentKind
+  /**
+   * A bare agent's instructions file — the first of
+   * {@link BARE_AGENT_INSTRUCTION_FILES} its folder has, resolved in main.
+   * Null for a kit agent, and for a bare folder that has none of them right
+   * now. Surfaces name this file rather than assuming `AGENT.md`.
+   */
+  instructionsFile: BareInstructionsFile | null
   rootId: string
   rootPath: string
   /** Absolute path of the agent folder. */
@@ -467,12 +482,14 @@ export type LocalAgentFieldUpdate =
   | { field: 'status_refresh_command'; value: string | null }
   | { field: 'prompt'; prompt: LocalAgentPromptKind; value: string }
   /**
-   * A **bare** agent's `AGENT.md` — its whole system prompt.
+   * A **bare** agent's instructions file — its whole system prompt. Carries no
+   * file name: main resolves it at write time, and the stamp guard refuses a
+   * save whose stamp was read from a different file.
    *
    * A separate field rather than a fourth {@link LocalAgentPromptKind}, because
    * the kinds are the kit's three documents and every kit surface enumerates
-   * them: adding a fourth would put an "AGENT.md" card on the Prompts tab of
-   * every kit agent, naming a file those folders do not have.
+   * them: adding a fourth would put an "Instructions" card on the Prompts tab
+   * of every kit agent, naming a file those folders do not have.
    */
   | { field: 'bare_prompt'; value: string }
   /**
@@ -576,7 +593,7 @@ export interface DeleteLocalAgentResult {
   trashed: boolean
 }
 
-/** One folder holding an `AGENT.md`, found under a folder the user picked. */
+/** One folder holding an instructions file, found under a folder the user picked. */
 export interface DiscoveredBareAgent {
   /**
    * Root-relative POSIX path, `'.'` for the picked folder itself. It is what
@@ -588,13 +605,15 @@ export interface DiscoveredBareAgent {
   path: string
   /**
    * What to call it: the user's own name for the agent where they have given
-   * one, else the `AGENT.md` heading, else the folder name.
+   * one, else the heading in its instructions file, else the folder name.
    *
    * The stored name comes first because this list is answering "which of these
    * do you want" — an agent the user renamed, listed under the heading in its
    * file, is a row they cannot recognise.
    */
   name: string
+  /** The instructions file that made this folder an agent. */
+  instructionsFile: BareInstructionsFile
   /** Whether the folder also has a `README.md` to brief a builder with. */
   hasReadme: boolean
   /** True when this exact folder is already an agent in some registered root. */
@@ -748,20 +767,28 @@ export const LOCAL_AGENT_PROMPT_PATHS: Record<LocalAgentPromptKind, string> = {
 }
 
 /**
- * Agent-relative path each {@link LocalAgentDocKind} reads. Built from
- * {@link LOCAL_AGENT_PROMPT_PATHS} rather than repeating it, so the two cannot
- * disagree about where a kit prompt lives.
+ * Agent-relative path each fixed-path {@link LocalAgentDocKind} reads. Built
+ * from {@link LOCAL_AGENT_PROMPT_PATHS} rather than repeating it, so the two
+ * cannot disagree about where a kit prompt lives.
+ *
+ * `bare_prompt` is not here: its file differs per folder
+ * ({@link LocalAgentDto.instructionsFile}), so a static lookup would name the
+ * wrong one. Leaving it out makes such a lookup a type error.
  */
-export const LOCAL_AGENT_DOC_PATHS: Record<LocalAgentDocKind, string> = {
+export const LOCAL_AGENT_DOC_PATHS: Record<Exclude<LocalAgentDocKind, 'bare_prompt'>, string> = {
   ...LOCAL_AGENT_PROMPT_PATHS,
-  bare_prompt: BARE_AGENT_PROMPT_FILE,
   bare_readme: BARE_AGENT_README_FILE
 }
 
-/** The one file a given update writes, as a key into {@link LocalAgentDto.stamps}. */
+/**
+ * The one file a given update writes, as a key into {@link LocalAgentDto.stamps}.
+ * For `bare_prompt` this is `AGENT.md`, the strong name; the file actually
+ * written differs per folder, so a surface keying a bare agent's stamp reads
+ * {@link LocalAgentDto.instructionsFile} instead.
+ */
 export function fieldFilePath(update: LocalAgentFieldUpdate): string {
   if (update.field === 'prompt') return LOCAL_AGENT_PROMPT_PATHS[update.prompt]
-  if (update.field === 'bare_prompt') return BARE_AGENT_PROMPT_FILE
+  if (update.field === 'bare_prompt') return BARE_AGENT_INSTRUCTION_FILES[0]
   return MANIFEST_FILE
 }
 
@@ -935,7 +962,7 @@ export function describeAgentSlug(name: string): AgentSlugCheck {
  * The three kit prompt kinds, plus a bare folder's two files. A union rather
  * than two more {@link LocalAgentPromptKind} members: the prompt kinds are the
  * kit's three documents and several kit surfaces enumerate them, so a fourth
- * would put an "AGENT.md" card on every kit agent's Prompts tab.
+ * would put an "Instructions" card on every kit agent's Prompts tab.
  */
 export type LocalAgentDocKind = LocalAgentPromptKind | 'bare_prompt' | 'bare_readme'
 

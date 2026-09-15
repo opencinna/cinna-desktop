@@ -446,15 +446,16 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
                         Not "read only", which this claimed first. Cinna
                         installs nothing here — no templates, no `.cinna-kit/`,
                         no `app-data/` — but the agent page's Instructions card
-                        is a live editor over `AGENT.md`, so a folder the user
-                        edits there *is* written to. Promising otherwise leaves
-                        them with a modified working tree in a repository they
-                        may share, and — since a dirty tree refuses a
-                        fast-forward — a blocked Update two rows below, with
-                        neither surface admitting the two are connected.
+                        is a live editor over the agent's instructions file, so
+                        a folder the user edits there *is* written to. Promising
+                        otherwise leaves them with a modified working tree in a
+                        repository they may share, and — since a dirty tree
+                        refuses a fast-forward — a blocked Update two rows
+                        below, with neither surface admitting the two are
+                        connected.
                       */}
                       {root.kind === 'external' && (
-                        <SettingsBadge title="Cinna installs nothing here. The only file it writes is an agent's AGENT.md, and only when you edit it on the agent's page.">
+                        <SettingsBadge title="Cinna installs nothing here. The only file it writes is an agent's instructions file (AGENT.md, AGENTS.md or CLAUDE.md), and only when you edit it on the agent's page.">
                           Added folder
                         </SettingsBadge>
                       )}

@@ -302,7 +302,8 @@ export const agentRoots = sqliteTable('agent_roots', {
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   /**
    * `'workshop'` — the kit shape: templates installed, agents under `Local/`.
-   * `'external'` — a folder the user pointed at, walked for `AGENT.md`, never
+   * `'external'` — a folder the user pointed at, walked for `AGENT.md` /
+   * `AGENTS.md` / `CLAUDE.md`, never
    * written into. See `AgentRootKind` in `src/shared/localAgents.ts`.
    */
   kind: text('kind').notNull().default('workshop'),

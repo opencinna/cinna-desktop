@@ -40,6 +40,7 @@ function agent(overrides: Partial<LocalAgentDto> = {}): LocalAgentDto {
     name: 'Alpha',
     slug: 'alpha',
     kind: 'bare',
+    instructionsFile: 'AGENT.md',
     identity: 'external',
     manifestId: '',
     manifest: {},
@@ -60,6 +61,21 @@ function renderTab(a: LocalAgentDto): ReturnType<typeof render> {
 }
 
 describe('FolderTab — a bare agent', () => {
+  it('names the instructions file this folder has, and no other', () => {
+    // Mutation: list `AGENT.md` for every bare folder and a `CLAUDE.md` agent's
+    // Files card offers to reveal a file that is not there (ux_rules rule 9).
+    const { unmount } = renderTab(agent({ instructionsFile: 'CLAUDE.md' }))
+    expect(screen.getByText('CLAUDE.md')).toBeTruthy()
+    expect(screen.queryByText('AGENT.md')).toBeNull()
+    unmount()
+
+    // None right now (between the file going and the rescan): the three names
+    // it could have, and a row that reveals the folder rather than a file.
+    renderTab(agent({ instructionsFile: null }))
+    expect(screen.getByText('AGENT.md, AGENTS.md or CLAUDE.md')).toBeTruthy()
+    expect(screen.getByTitle('Reveal the folder')).toBeTruthy()
+  })
+
   it('lists the folder’s own two files, not the kit layout', () => {
     renderTab(agent())
 

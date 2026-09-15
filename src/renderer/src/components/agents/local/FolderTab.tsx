@@ -2,8 +2,8 @@ import { CheckCircle2, FileText } from 'lucide-react'
 import { useOpenAgentPath } from '../../../hooks/useLocalAgents'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import {
-  BARE_AGENT_PROMPT_FILE,
   BARE_AGENT_README_FILE,
+  bareInstructionsFileList,
   LOCAL_AGENT_PROMPT_PATHS,
   type LocalAgentDto
 } from '../../../../../shared/localAgents'
@@ -13,7 +13,7 @@ import { CredentialsCard, PublishedCard, RunsCard } from './ReadOnlyCards'
 const EMPTY = 'text-[10px] italic text-[var(--color-text-muted)]'
 
 /** The files the page reads, in the order the folder model lists them. */
-const FILES: { rel: string; what: string }[] = [
+const FILES: { rel: string; label?: string; what: string }[] = [
   { rel: MANIFEST_FILE, what: 'name, description, runtime, example prompts' },
   { rel: LOCAL_AGENT_PROMPT_PATHS.workflow, what: 'the system prompt' },
   { rel: LOCAL_AGENT_PROMPT_PATHS.entrypoint, what: 'first message of an unattended run' },
@@ -30,11 +30,19 @@ const FILES: { rel: string; what: string }[] = [
  * it: rendering it listed seven files that do not exist, each with a Reveal
  * button, under a heading claiming they are the files the page reads. Nothing
  * else on the page names the folder's *own* two, so this is where they belong.
+ *
+ * The first is the agent's own instructions file, as main resolved it. A folder
+ * that has none right now lists the three names it could have, and that row
+ * reveals the folder rather than a file that is not there.
  */
-const BARE_FILES: { rel: string; what: string }[] = [
-  { rel: BARE_AGENT_PROMPT_FILE, what: 'the system prompt' },
-  { rel: BARE_AGENT_README_FILE, what: 'what an assistant opening the folder reads first' }
-]
+function bareFiles(agent: LocalAgentDto): { rel: string; label?: string; what: string }[] {
+  return [
+    agent.instructionsFile
+      ? { rel: agent.instructionsFile, what: 'the system prompt' }
+      : { rel: '', label: bareInstructionsFileList(), what: 'the system prompt' },
+    { rel: BARE_AGENT_README_FILE, what: 'what an assistant opening the folder reads first' }
+  ]
+}
 
 /** The validator's findings in full — the same codes `kit.py validate` prints. */
 function ValidationCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
@@ -177,17 +185,19 @@ function FilesCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
       onReveal={() => openPath.mutate({ agentId: agent.id })}
     >
       <ul className="space-y-1">
-        {(agent.kind === 'bare' ? BARE_FILES : FILES).map((file) => (
-          <li key={file.rel} className="flex items-center gap-2 text-xs">
+        {(agent.kind === 'bare' ? bareFiles(agent) : FILES).map((file) => (
+          <li key={file.label ?? file.rel} className="flex items-center gap-2 text-xs">
             <button
               type="button"
-              onClick={() => openPath.mutate({ agentId: agent.id, relPath: file.rel })}
-              title={`Reveal ${file.rel}`}
+              onClick={() =>
+                openPath.mutate({ agentId: agent.id, relPath: file.rel || undefined })
+              }
+              title={file.rel ? `Reveal ${file.rel}` : 'Reveal the folder'}
               className="flex min-w-0 items-center gap-1 font-mono text-[10px] text-[var(--color-text)]
                 transition-colors hover:text-[var(--color-accent)]"
             >
               <FileText size={11} className="shrink-0 text-[var(--color-text-muted)]" />
-              <span className="truncate">{file.rel}</span>
+              <span className="truncate">{file.label ?? file.rel}</span>
             </button>
             <span className="min-w-0 flex-1 truncate text-[10px] text-[var(--color-text-muted)]">
               {file.what}

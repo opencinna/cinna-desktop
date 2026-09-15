@@ -7,8 +7,8 @@ import {
   useRenameLocalAgent
 } from '../../../hooks/useLocalAgents'
 import {
-  BARE_AGENT_PROMPT_FILE,
   BARE_AGENT_README_FILE,
+  bareInstructionsFileList,
   type LocalAgentDto
 } from '../../../../../shared/localAgents'
 import {
@@ -100,7 +100,8 @@ export function BareNameCard({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
       </div>
       <div className="text-[10px] text-[var(--color-text-muted)]">
         Kept on this machine, not in the folder — it may be a repository you share with other
-        people. Cleared, the name falls back to the heading in {BARE_AGENT_PROMPT_FILE}.
+        people. Cleared, the name falls back to the heading in{' '}
+        {agent.instructionsFile ?? bareInstructionsFileList()}, or to the folder name.
       </div>
     </AgentCard>
   )
@@ -112,7 +113,7 @@ export function BareNameCard({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
  * On Overview and not on Prompts, because it is not a prompt: the README is
  * what the folder tells a *person* — or an assistant opening it to work on the
  * agent — and no part of it reaches the agent, whose whole system prompt is
- * {@link BARE_AGENT_PROMPT_FILE}. Prompts showing both invited exactly that
+ * its instructions file. Prompts showing both invited exactly that
  * confusion, and put the folder's longest document on the tab where the one
  * that matters is edited.
  *
@@ -150,7 +151,7 @@ export function BareReadmeCard({ agent }: { agent: LocalAgentDto }): React.JSX.E
       </div>
       <div className="mt-3 text-[10px] text-[var(--color-text-muted)]">
         Read here, edited in the folder. This is what an assistant opening the folder is briefed
-        from; the agent itself is told only {BARE_AGENT_PROMPT_FILE}.
+        from; the agent itself is told only {agent.instructionsFile ?? bareInstructionsFileList()}.
       </div>
     </AgentCard>
   )

@@ -104,19 +104,25 @@ function countAgents(rootPath: string): number {
  * removed from the list.
  *
  * This walks rather than counting directory entries, because an external root's
- * agents are not its immediate children — they are wherever an `AGENT.md` is,
+ * agents are not its immediate children — they are wherever an instructions
+ * file (`AGENT.md`, `AGENTS.md`, `CLAUDE.md`) is,
  * up to {@link BARE_AGENT_MAX_DEPTH}. The hidden count is what lets Settings
  * offer them back: without it, "remove from list" is a one-way door with no
  * sign that it happened.
  */
-function countBareAgents(rootPath: string): {
+function countBareAgents(row: AgentRootRow): {
   total: number
   hidden: number
   truncated: boolean
 } {
   // Names are not needed for a count, and this runs for every registered root
   // on every `local-agent:list` — see the `withNames` note in `externalScan`.
-  const { found, truncated } = discoverBareAgents(rootPath, undefined, { withNames: false })
+  // `keep` is the scan's own, so this count agrees with what the scan indexes.
+  // It is keyed on the row's owner because this has no other user to ask about.
+  const { found, truncated } = discoverBareAgents(row.path, undefined, {
+    withNames: false,
+    keep: scannerService.knownBareAgentFilter(row.userId, row.id)
+  })
   let hidden = 0
   for (const folder of found) {
     if (desktopStateService.read(folder.path, 'bare').hidden) hidden += 1
@@ -143,7 +149,7 @@ function toDto(row: AgentRootRow): AgentRootDto {
   const counts = cached
     ? { total: cached.agents.length, hidden: cached.hiddenCount, truncated: cached.truncated }
     : kind === 'external' && isDirectory(row.path)
-      ? countBareAgents(row.path)
+      ? countBareAgents(row)
       : { total: countAgents(row.path), hidden: 0, truncated: false }
   return {
     id: row.id,
@@ -539,7 +545,7 @@ export const agentsHomeService = {
   },
 
   /**
-   * Register a folder as an **external** root: walked for `AGENT.md`, never
+   * Register a folder as an **external** root: walked for instruction files, never
    * written into.
    *
    * The three things `addRoot` does that this deliberately does not: install

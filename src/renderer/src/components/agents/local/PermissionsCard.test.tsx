@@ -212,14 +212,23 @@ describe('PermissionsCard', () => {
  * one that matters, about a command reaching anything they can.
  */
 describe('PermissionsCard — a bare agent', () => {
-  const bare = { id: 'folder:external:r1:a', name: 'Alpha', kind: 'bare' } as LocalAgentDto
+  const bare = {
+    id: 'folder:external:r1:a',
+    name: 'Alpha',
+    kind: 'bare',
+    instructionsFile: 'CLAUDE.md'
+  } as LocalAgentDto
 
   it('names only files the folder actually has', async () => {
     grantsList.mockResolvedValue([])
     renderCard(bare)
     await waitFor(() => expect(grantsList).toHaveBeenCalled())
 
-    expect(await screen.findByText('AGENT.md')).toBeTruthy()
+    // The file this folder resolved to, not the first name on the list: a
+    // `CLAUDE.md` folder told it may not edit "its own AGENT.md" is told about
+    // a file it does not have.
+    expect(await screen.findByText('CLAUDE.md')).toBeTruthy()
+    expect(screen.queryByText('AGENT.md')).toBeNull()
     expect(screen.queryByText('credentials/.env')).toBeNull()
     expect(screen.queryByText(/prompt or manifest/)).toBeNull()
     // The half of the key-file sentence that is true for any folder survives.

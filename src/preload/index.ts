@@ -1488,7 +1488,8 @@ const api = {
     rootRemove: (rootId: string): Promise<{ pruned: number }> =>
       ipcRenderer.invoke('local-agent:root-remove', rootId),
     /**
-     * Ask for a folder and report the `AGENT.md` folders in it, up to two
+     * Ask for a folder and report the agent folders in it (`AGENT.md`,
+     * `AGENTS.md` or `CLAUDE.md`), up to two
      * levels deep. Reads only — nothing is registered until `folderAdd`.
      */
     folderPick: (): Promise<PickAgentFolderResult> =>

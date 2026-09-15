@@ -64,13 +64,14 @@ import type { AgentRootRow } from '../../db/agentRoots'
 import { createLogger } from '../../logger/logger'
 import {
   AGENTS_SUBDIR,
+  BARE_AGENT_INSTRUCTION_FILES,
   BARE_AGENT_MAX_DEPTH,
-  BARE_AGENT_PROMPT_FILE,
   BARE_AGENT_README_FILE,
   LOCAL_AGENT_CHANGED_CHANNEL,
   type LocalAgentChangedPayload
 } from '../../../shared/localAgents'
-import { discoverBareAgents } from './externalScan'
+import { MANIFEST_FILE } from '../../../shared/kit/manifest'
+import { discoverBareAgents, KIT_WORKSHOP_DIR } from './externalScan'
 import { isWithin } from './pathRules'
 import { getMainWindow } from '../../index'
 import { turnLock } from './turnLock'
@@ -132,6 +133,13 @@ export interface WatcherDeps {
   agentIdForPath: (agentDir: string) => string | null
   /** Every indexed agent of a root, so a root rescan can wait for their turns. */
   agentIdsForRoot: (root: AgentRootRow) => string[]
+  /**
+   * Which weak folders of an external root stay agents whatever appears below
+   * them — the scanner's `knownBareAgentFilter`, so the fallback watch set is
+   * built from the same agents the scan indexes. Optional only so a test can
+   * configure the watcher without a database.
+   */
+  keepBareAgent?: (root: AgentRootRow) => (absPath: string) => boolean
 }
 
 const watches = new Map<string, RootWatch>()
@@ -197,6 +205,22 @@ export function classifyEvent(rootPath: string, filename: string | null): WatchT
 }
 
 /**
+ * Basenames whose change rescans an external root: what an agent is (its
+ * instructions or README), and the manifest whose presence decides whether the
+ * weak instruction names count in that folder.
+ *
+ * Lower-cased, and compared lower-cased: on a case-insensitive disk (macOS by
+ * default) a `claude.md` *is* the folder's `CLAUDE.md` to the scan, so an edit
+ * to it has to rescan too. On a case-sensitive disk the same match costs a
+ * rescan that finds nothing new, which is harmless.
+ */
+const EXTERNAL_ROOT_FILES: ReadonlySet<string> = new Set<string>(
+  [...BARE_AGENT_INSTRUCTION_FILES, BARE_AGENT_README_FILE, MANIFEST_FILE].map((name) =>
+    name.toLowerCase()
+  )
+)
+
+/**
  * Classify an event under an **external** root.
  *
  * A separate rule because an external root is not kit-shaped: there is no
@@ -207,9 +231,12 @@ export function classifyEvent(rootPath: string, filename: string | null): WatchT
  * it into a whole-root rescan.
  *
  * So the filter is inverted: **only what can change the agents list is acted
- * on.** Exactly two things can — an `AGENT.md` or a `README.md` (what an agent
- * *is*), and a directory appearing or disappearing within the scan depth (which
- * agents there *are*). Everything else is ignored outright.
+ * on.** That is the files that say what an agent *is* — `AGENT.md`,
+ * `AGENTS.md`, `CLAUDE.md` or a `README.md` — plus the two kit markers that
+ * decide whether the weak instruction names count (a `cinna-agent.json`, or a
+ * path ending in `.cinna-kit`, checked before dot-entries are ignored); and a
+ * directory appearing or disappearing within the scan depth (which agents there
+ * *are*). Everything else is ignored outright.
  *
  * The answer is always a whole-root rescan rather than a per-agent one. A bare
  * agent's id is derived from its path by the walk, not read out of a file, so
@@ -223,13 +250,17 @@ export function classifyExternalEvent(rootPath: string, filename: string | null)
   const normalized = filename.replace(/\\/g, sep)
   const segments = normalized.split(sep).filter((s) => s !== '' && s !== '.')
   if (segments.length === 0) return { kind: 'root' }
+  const last = segments[segments.length - 1]
+  // A `.cinna-kit` appearing or going decides whether that folder's `AGENTS.md`
+  // and `CLAUDE.md` count, so it is the one dot-entry acted on — and only as
+  // the last segment, never for what is written inside it.
+  if (last === KIT_WORKSHOP_DIR) return { kind: 'root' }
   // A dot-entry anywhere on the path: `.git` writing an index, `.venv`, an
   // editor's bookkeeping. `.git` alone would otherwise fire on every command
   // the update check runs.
   if (segments.some((segment) => segment.startsWith('.'))) return { kind: 'ignore' }
 
-  const last = segments[segments.length - 1]
-  if (last === BARE_AGENT_PROMPT_FILE || last === BARE_AGENT_README_FILE) return { kind: 'root' }
+  if (EXTERNAL_ROOT_FILES.has(last.toLowerCase())) return { kind: 'root' }
   if (segments.length > BARE_AGENT_MAX_DEPTH) return { kind: 'ignore' }
 
   // Within the walk's reach, a **directory** appearing or disappearing changes
@@ -416,7 +447,9 @@ function armFallbackWatchers(state: RootWatch): void {
     if (!addWatcher(state, state.root.path, false)) return
     for (const dir of externalFallbackDirs(
       state.root.path,
-      discoverBareAgents(state.root.path).found.map((folder) => folder.path)
+      discoverBareAgents(state.root.path, undefined, {
+        keep: deps?.keepBareAgent?.(state.root)
+      }).found.map((folder) => folder.path)
     )) {
       addWatcher(state, dir, false)
     }
@@ -484,7 +517,7 @@ function listAgentDirsSafely(agentsDir: string): string[] {
 }
 
 function armWatchers(state: RootWatch): void {
-  // An external root has no `Local/`; its agents are wherever an `AGENT.md` is,
+  // An external root has no `Local/`; its agents are wherever an instructions file is,
   // so the whole root is what has to be watched.
   const agentsDir =
     state.root.kind === 'external' ? state.root.path : join(state.root.path, AGENTS_SUBDIR)

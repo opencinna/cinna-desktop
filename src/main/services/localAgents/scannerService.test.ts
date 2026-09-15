@@ -52,13 +52,34 @@ vi.mock('../../db/client', () => ({
   }
 }))
 
+/**
+ * The walk's cap, narrowed for a truncated scan without building two hundred
+ * folders. Null leaves the walk exactly as the scanner calls it. The seam it
+ * goes through clamps, so this can only ever lower the cap.
+ */
+const walkCap = vi.hoisted(() => ({ limit: null as number | null }))
+vi.mock('./externalScan', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./externalScan')>()
+  return {
+    ...actual,
+    discoverBareAgents: (...args: Parameters<typeof actual.discoverBareAgents>) => {
+      const [rootPath, maxDepth, options = {}] = args
+      return actual.discoverBareAgents(
+        rootPath,
+        maxDepth,
+        walkCap.limit === null ? options : { ...options, limit: walkCap.limit }
+      )
+    }
+  }
+})
+
 const { agentRepo } = await import('../../db/agents')
 const { agentRootRepo } = await import('../../db/agentRoots')
 const { clearContractCache, getLayoutView } = await import('../../kit/contractStore')
 const { manifestPath, readManifest, writeManifest } = await import('../../kit/manifestIo')
 const { scaffoldService } = await import('./scaffoldService')
 const { scannerService } = await import('./scannerService')
-const { desktopStateService } = await import('./desktopStateService')
+const { desktopStatePath, desktopStateService } = await import('./desktopStateService')
 
 const USER = '__default__'
 
@@ -67,6 +88,7 @@ let root: Awaited<ReturnType<typeof agentRootRepo.create>>
 
 beforeEach(() => {
   holder.current = createTestDatabase()
+  walkCap.limit = null
   clearContractCache()
   scannerService.markAllRootsDirty()
   workshop = mkdtempSync(join(tmpdir(), 'cinna-workshop-'))
@@ -978,6 +1000,166 @@ describe('external roots', () => {
     expect(scannerService.scanRoot(USER, externalRoot).agents).toHaveLength(0)
   })
 
+  it('indexes a folder whose only instructions are a CLAUDE.md, under that file', () => {
+    // Mutation: read or stamp `AGENT.md` regardless of what the folder has, and
+    // the agent reads as having no instructions while its editor has no stamp
+    // to save against — every edit refused as "changed on disk".
+    const dir = join(external, 'support')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'CLAUDE.md'), '# Support desk\n\nAnswer tickets.\n')
+
+    const [agent] = scannerService.scanRoot(USER, externalRoot).agents
+
+    expect(agent.kind).toBe('bare')
+    expect(agent.instructionsFile).toBe('CLAUDE.md')
+    expect(agent.name).toBe('Support desk')
+    expect(agent.readiness).toBe('ok')
+    expect(agent.validation.errors).toEqual([])
+    expect(agent.stamps['CLAUDE.md']).toEqual(expect.objectContaining({ hash: expect.any(String) }))
+    expect(Object.keys(agent.stamps)).not.toContain('AGENT.md')
+  })
+
+  it('keeps a registered root’s agents when an AGENTS.md appears at its top', () => {
+    // The loss the walk's rule exists to prevent. Team repositories of
+    // `local_agents/<x>/AGENT.md` very often carry a root `AGENTS.md`; read as
+    // the one agent at `.`, the next rescan would index that and prune every
+    // agent already adopted — and `a2a_sessions` cascades from their ids.
+    bareAgent('local_agents/alpha')
+    bareAgent('local_agents/beta')
+    const before = scannerService.scanRoot(USER, externalRoot).agents.map((a) => a.id)
+    expect(before).toHaveLength(2)
+
+    writeFileSync(join(external, 'AGENTS.md'), '# Team agents\n\nHow we build these.\n')
+    scannerService.markRootDirty(externalRoot.id)
+    const after = scannerService.scanRoot(USER, externalRoot)
+
+    expect(after.agents.map((a) => a.id)).toEqual(before)
+    expect(after.pruned).toBe(0)
+    for (const id of before) expect(agentRepo.getOwned(USER, id)).toBeDefined()
+  })
+
+  it('keeps a root adopted for its CLAUDE.md, and its chat, when an AGENT.md lands below it', () => {
+    // A repository adopted as one agent by its `CLAUDE.md`; a `git pull` then
+    // adds an example agent inside it. Mutation: stop passing the known-agent
+    // filter to the walk, or drop its index half, and the rescan demotes `.` to
+    // a container — `sub/x` is listed, the row is pruned and the session
+    // cascades away.
+    writeFileSync(join(external, 'CLAUDE.md'), '# Repo helper\n\nHelp with this repository.\n')
+    const before = scannerService.scanRoot(USER, externalRoot)
+    expect(before.agents.map((a) => a.path)).toEqual([external])
+    const agentId = before.agents[0].id
+    // Known by its row alone: nothing has written a state file for it.
+    expect(existsSync(desktopStatePath(external, 'bare'))).toBe(false)
+
+    holder.current!.raw
+      .prepare('INSERT INTO chats (id, title, created_at, updated_at) VALUES (?,?,?,?)')
+      .run('c1', 'chat', Date.now(), Date.now())
+    holder.current!.raw
+      .prepare(
+        `INSERT INTO a2a_sessions (id, chat_id, agent_id, context_id, created_at, updated_at)
+         VALUES (?,?,?,?,?,?)`
+      )
+      .run('s1', 'c1', agentId, 'engine-session-1', Date.now(), Date.now())
+
+    bareAgent('sub/x')
+    scannerService.markRootDirty(externalRoot.id)
+    const after = scannerService.scanRoot(USER, externalRoot)
+
+    expect(after.agents.map((a) => a.id)).toEqual([agentId])
+    expect(after.pruned).toBe(0)
+    expect(agentRepo.getOwned(USER, agentId)).toBeDefined()
+    expect(
+      holder.current!.raw.prepare('SELECT context_id FROM a2a_sessions').all()
+    ).toEqual([{ context_id: 'engine-session-1' }])
+  })
+
+  it('lists the AGENT.md agent below a hidden CLAUDE.md agent, and not the hidden one', () => {
+    // A hidden state file is what `addAgentFolder` writes for every folder the
+    // user unticks, and `removeRoot` leaves behind, so it says "declined", not
+    // "an agent". Hiding already deleted the row, so letting the folder become
+    // a plain one loses nothing. Mutation: count any state file as known, and
+    // the rescan keeps `.` a hidden agent and `sub/x` is never listed.
+    writeFileSync(join(external, 'CLAUDE.md'), '# Repo helper\n')
+    scannerService.scanRoot(USER, externalRoot)
+    desktopStateService.patch(external, 'bare', { hidden: true })
+    scannerService.markRootDirty(externalRoot.id)
+    expect(scannerService.scanRoot(USER, externalRoot).hiddenCount).toBe(1)
+    const rowsOfRoot = (): (string | null)[] =>
+      agentRepo
+        .listFolder(USER)
+        .filter((r) => r.localRootId === externalRoot.id)
+        .map((r) => r.localPath)
+    expect(rowsOfRoot()).toEqual([])
+
+    const below = bareAgent('sub/x')
+    scannerService.markRootDirty(externalRoot.id)
+    const after = scannerService.scanRoot(USER, externalRoot)
+
+    expect(after.agents.map((a) => a.path)).toEqual([below])
+    expect(after.hiddenCount).toBe(0)
+    expect(rowsOfRoot()).toEqual([below])
+  })
+
+  it('keeps a CLAUDE.md agent of a removed and re-added root when an AGENT.md lands below it', () => {
+    // Removing the root dropped the row; the agent's state file (its name, its
+    // sessions) outlives that and is what still says it was an agent. Mutation:
+    // drop the state-file half of the known-agent filter, and the re-added
+    // root's scan demotes `.` to a container and lists `sub/x` instead.
+    writeFileSync(join(external, 'CLAUDE.md'), '# Repo helper\n')
+    scannerService.scanRoot(USER, externalRoot)
+    desktopStateService.patch(external, 'bare', { displayName: 'My helper' })
+    agentRootRepo.delete(USER, externalRoot.id)
+
+    bareAgent('sub/x')
+    const readded = agentRootRepo.create(USER, {
+      path: external,
+      label: 'Support agents',
+      kind: 'external'
+    })
+    expect(
+      agentRepo.listFolder(USER).filter((r) => r.localRootId === readded.id)
+    ).toEqual([])
+    const after = scannerService.scanRoot(USER, readded)
+
+    expect(after.agents.map((a) => [a.path, a.name])).toEqual([[external, 'My helper']])
+    expect(after.hiddenCount).toBe(0)
+  })
+
+  it('keeps an indexed agent the capped walk did not reach, and still says it stopped', () => {
+    // A root like `~/dev`: the cap counts folders in walk order, so an agent
+    // adopted long ago can sit past it. Mutation: drop the past-cap backfill and
+    // the capped rescan prunes `b` and `c`, taking their sessions with them.
+    // `c` is indexed before the other two, so the index hands the kept rows back
+    // as `c`, `b`. Mutation: append them in that order rather than in walk
+    // order, and the capped list stops matching the uncapped one.
+    const c = bareAgent('c')
+    scannerService.scanRoot(USER, externalRoot)
+    const a = bareAgent('a')
+    const b = bareAgent('b')
+    scannerService.markRootDirty(externalRoot.id)
+    const uncapped = scannerService.scanRoot(USER, externalRoot).agents
+    expect(uncapped.map((agent) => agent.path)).toEqual([a, b, c])
+    const ids = uncapped.map((agent) => agent.id)
+
+    walkCap.limit = 1
+    scannerService.markRootDirty(externalRoot.id)
+    const capped = scannerService.scanRoot(USER, externalRoot)
+
+    expect(capped.truncated).toBe(true)
+    expect(capped.agents.map((agent) => agent.path)).toEqual([a, b, c])
+    expect(capped.pruned).toBe(0)
+    for (const id of ids) expect(agentRepo.getOwned(USER, id)).toBeDefined()
+
+    // Only while it is still an agent: past the cap, a folder that lost its
+    // instructions is pruned exactly as it would be within it.
+    rmSync(join(b, 'AGENT.md'))
+    scannerService.markRootDirty(externalRoot.id)
+    const lost = scannerService.scanRoot(USER, externalRoot)
+    expect(lost.truncated).toBe(true)
+    expect(lost.agents.map((agent) => agent.path)).toEqual([a, c])
+    expect(agentRepo.getOwned(USER, ids[1])).toBeUndefined()
+  })
+
   it('reads a folder whose AGENT.md vanished as invalid, never as a throw', () => {
     // Reached through the *page*, not the scan: `localAgentService.get` re-reads
     // one folder from its row, and between an assistant deleting the file and
@@ -986,8 +1168,12 @@ describe('external roots', () => {
     rmSync(join(dir, 'AGENT.md'))
     const dto = scannerService.scanBareAgentFolder(dir, externalRoot, 'alpha')
     expect(dto.readiness).toBe('invalid')
+    expect(dto.instructionsFile).toBeNull()
     expect(dto.validation.errors.map((f) => f.code)).toEqual(['bare.prompt.missing'])
-    expect(dto.readinessReason).toContain('AGENT.md')
+    // Every name it could have had, since it has none of them.
+    expect(dto.readinessReason).toBe(
+      'This folder has no AGENT.md, AGENTS.md or CLAUDE.md, so it has no instructions.'
+    )
   })
 
   it('warns rather than erroring on an empty AGENT.md', () => {

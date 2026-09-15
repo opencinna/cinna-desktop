@@ -58,8 +58,9 @@ import { MANIFEST_FILE } from '../../../shared/kit/manifest'
 import { AGENT_INIT_ENTRY_FILES, buildAgentInitPrompt } from '../../../shared/agentInitPrompt'
 import {
   describedAs,
-  BARE_AGENT_PROMPT_FILE,
+  BARE_AGENT_INSTRUCTION_FILES,
   BARE_AGENT_README_FILE,
+  bareInstructionsFileList,
   FOLDER_AGENT_ID_PREFIX,
   FOLDER_AGENT_SOURCE,
   externalFolderAgentId,
@@ -89,7 +90,7 @@ import {
 } from '../../../shared/localAgents'
 import { isClaudeApproval, type LocalAgentRuntimeInput } from '../../../shared/engine'
 import { desktopStatePath, desktopStateService } from './desktopStateService'
-import { discoverBareAgents } from './externalScan'
+import { discoverBareAgents, kitFolderShape, resolveBareInstructionsFile } from './externalScan'
 import { isWithin } from './pathRules'
 import { setAllowedRootsProvider } from './openInService'
 import { agentsHomeService } from './agentsHomeService'
@@ -529,7 +530,8 @@ export const localAgentService = {
         agentRepo
           .listFolder(getUserId())
           .filter((row) => row.localRootId === root.id)
-          .map((row) => row.id)
+          .map((row) => row.id),
+      keepBareAgent: (root) => scannerService.knownBareAgentFilter(getUserId(), root.id)
     })
     logger.info('local agents configured')
   },
@@ -739,12 +741,22 @@ export const localAgentService = {
         // system prompt, only one of which the engine reads, is the worst
         // outcome available here.
         if (root.kind !== 'external') {
-          throw new LocalAgentError('invalid_input', 'This agent has no AGENT.md to edit.')
+          throw new LocalAgentError(
+            'invalid_input',
+            'Only an added folder has an instructions file to edit here.'
+          )
         }
         if (typeof update.value !== 'string' || update.value.length > MAX_PROMPT_BYTES) {
           throw new LocalAgentError('invalid_input', 'That prompt document is too large to save.')
         }
-        writeTextIfUnchanged(join(agentDir, BARE_AGENT_PROMPT_FILE), update.value, expected)
+        // Resolved now, not taken from the editor: the file the agent runs on is
+        // whichever of the three the folder has at write time. The stamp guard
+        // is what makes that safe — a save whose stamp was read from another
+        // file (or from a file that has since gone) is refused, never written
+        // over the wrong one. With none, `AGENT.md` has no stamp and refuses too.
+        const instructionsFile =
+          resolveBareInstructionsFile(agentDir) ?? BARE_AGENT_INSTRUCTION_FILES[0]
+        writeTextIfUnchanged(join(agentDir, instructionsFile), update.value, expected)
       } else {
         const path = manifestPath(agentDir)
         const { manifest } = readWithStamp(path)
@@ -869,11 +881,17 @@ export const localAgentService = {
    * not scaffold.
    */
   readDoc(userId: string, agentId: string, prompt: LocalAgentDocKind): LocalAgentDocDto {
-    const relPath = LOCAL_AGENT_DOC_PATHS[prompt]
-    if (!relPath) {
+    if (prompt !== 'bare_prompt' && !LOCAL_AGENT_DOC_PATHS[prompt]) {
       throw new LocalAgentError('invalid_input', 'Unknown prompt document.')
     }
     const { agentDir } = this.locate(userId, agentId)
+    // A bare agent's instructions file differs per folder, so it is resolved
+    // here, the way the scan resolves it. With none, `AGENT.md` is read — it is
+    // not there either, so the answer is the ordinary "no such document".
+    const relPath =
+      prompt === 'bare_prompt'
+        ? (resolveBareInstructionsFile(agentDir) ?? BARE_AGENT_INSTRUCTION_FILES[0])
+        : LOCAL_AGENT_DOC_PATHS[prompt]
     const path = join(agentDir, relPath)
     try {
       const bytes = readFileSync(path)
@@ -920,14 +938,17 @@ export const localAgentService = {
     }
     const row = agentRepo.getOwned(userId, agentId)
     // A **bare** folder is briefed from its `README.md`, and only then from its
-    // `AGENT.md`. That order is the point of the distinction: `README.md` is
+    // instructions file (whichever of `AGENT.md`, `AGENTS.md`, `CLAUDE.md` it
+    // resolves to). That order is the point of the distinction: `README.md` is
     // written for whoever develops the agent — what it is, how to run it, what
     // it needs — which is exactly what an assistant opening the folder should
-    // read first, while `AGENT.md` is the agent's own instructions and reads to
+    // read first, while the instructions file is the agent's own and reads to
     // a builder as a job description rather than a briefing.
     const entryFiles =
       root.kind === 'external'
-        ? [BARE_AGENT_README_FILE, BARE_AGENT_PROMPT_FILE]
+        ? [BARE_AGENT_README_FILE, resolveBareInstructionsFile(agentDir)].filter(
+            (file): file is string => file !== null
+          )
         : AGENT_INIT_ENTRY_FILES
     const entryFile = entryFiles.find((file) => existsSync(join(agentDir, file))) ?? null
     return buildAgentInitPrompt({
@@ -1189,7 +1210,6 @@ export const localAgentService = {
    */
   pickedAgentFolder(userId: string, path: string): PickAgentFolderResult {
     const roots = agentsHomeService.listRootRows(userId)
-    const { found, truncated } = discoverBareAgents(path)
 
     // Which of these are already agents somewhere, and **whose**. Reported per
     // folder rather than refused wholesale: re-picking a repository after new
@@ -1243,6 +1263,14 @@ export const localAgentService = {
         break
       }
     }
+    // Walked after the overlap check because it is walked the way the scan
+    // walks it, and that depends on which root this is. For a re-selected root,
+    // its known weak agents stay agents, so the preview lists exactly what
+    // adopting will index. A first pick has no rows, but a state file still
+    // counts.
+    const { found, truncated } = discoverBareAgents(path, undefined, {
+      keep: scannerService.knownBareAgentFilter(userId, reselecting?.rootId ?? null)
+    })
     const discovered: DiscoveredBareAgent[] = found.map((folder) => ({
       relPath: folder.relPath,
       path: folder.path,
@@ -1252,6 +1280,7 @@ export const localAgentService = {
       // want". Falls back to the heading and then the folder name, which is the
       // scanner's own order.
       name: bareName(folder.path, folder.name),
+      instructionsFile: folder.instructionsFile,
       hasReadme: folder.hasReadme,
       alreadyAdded: known.has(folder.path),
       // An agent of *another* root. This pick cannot add or remove it — the
@@ -1264,7 +1293,31 @@ export const localAgentService = {
     }))
 
     if (refusal === null && discovered.length === 0) {
-      refusal = `Nothing in this folder has an ${BARE_AGENT_PROMPT_FILE}. Choose the agent's own folder, or a folder that holds several of them.`
+      // A kit folder holds an `AGENTS.md` and a `CLAUDE.md` the kit scaffolded,
+      // which the walk skips on purpose. "Nothing here has one" would be false
+      // in front of the user's own eyes (ux_rules rule 9), and it would not say
+      // where such a folder does belong. Only the files the folder actually
+      // holds are named: with neither, "nothing here has one" is the true
+      // thing, and naming absent files would be the same mistake reversed.
+      const kitShape = kitFolderShape(path)
+      const kitFiles =
+        kitShape === null
+          ? []
+          : ['AGENTS.md', 'CLAUDE.md'].filter((file) => {
+              try {
+                return statSync(join(path, file)).isFile()
+              } catch {
+                return false
+              }
+            })
+      const named = kitFiles.join(' and ')
+      const guide = kitFiles.length === 1 ? 'guides' : 'guide'
+      refusal =
+        kitFiles.length === 0
+          ? `Nothing in this folder has an ${bareInstructionsFileList()}. Choose the agent's own folder, or a folder that holds several of them.`
+          : kitShape === 'workshop'
+            ? `This is a Cinna agents folder: its ${named} ${guide} building agents. Add it under Settings → Agents → Add an agents folder.`
+            : `This is a Cinna kit agent: its ${named} ${guide} building it. Add the agents folder it lives in under Settings → Agents → Add an agents folder.`
     } else if (
       refusal === null &&
       reselecting === null &&
@@ -1341,7 +1394,9 @@ export const localAgentService = {
     }
     const dto = agentsHomeService.addExternalRoot(userId, path)
     const root = agentsHomeService.requireRoot(userId, dto.id)
-    const { found } = discoverBareAgents(root.path)
+    const { found } = discoverBareAgents(root.path, undefined, {
+      keep: scannerService.knownBareAgentFilter(userId, root.id)
+    })
 
     /**
      * Every agent this call would take *out* of the list, checked for a turn in
@@ -1716,7 +1771,10 @@ export const localAgentService = {
     const root = agentsHomeService.requireNamedRoot(userId, rootId)
     if (root.kind !== 'external') return { restored: 0 }
     const restoredFolders: string[] = []
-    for (const folder of discoverBareAgents(root.path).found) {
+    const walk = discoverBareAgents(root.path, undefined, {
+      keep: scannerService.knownBareAgentFilter(userId, root.id)
+    })
+    for (const folder of walk.found) {
       if (!desktopStateService.read(folder.path, 'bare').hidden) continue
       desktopStateService.patch(folder.path, 'bare', { hidden: false })
       restoredFolders.push(folder.path)

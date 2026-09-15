@@ -11,6 +11,7 @@ import {
   useStampAgentIdentity
 } from '../../../hooks/useLocalAgents'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
+import { bareInstructionsFileList } from '../../../../../shared/localAgents'
 import { describedAs } from '../../../utils/localAgents'
 import { ChatWorkspace } from '../../layout/ChatWorkspace'
 import { RuntimePanel } from './RuntimePanel'
@@ -380,19 +381,22 @@ export function LocalAgentPage(): React.JSX.Element {
             ))}
           {activeTab === 'prompts' &&
             (agent.kind === 'bare' ? (
-              /* One document, because a bare agent has one: `AGENT.md` is the
-                 whole system prompt. The folder's README moved to Overview,
-                 where a description of the agent is what the tab is for — here
-                 it was the longer of two cards on the tab whose point is the
-                 shorter one, and read as though it too were sent to the agent. */
+              /* One document, because a bare agent has one: its instructions
+                 file (`AGENT.md`, `AGENTS.md` or `CLAUDE.md`, as main resolved
+                 it) is the whole system prompt. The folder's README moved to
+                 Overview, where a description of the agent is what the tab is
+                 for — here it was the longer of two cards on the tab whose
+                 point is the shorter one, and read as though it too were sent
+                 to the agent. */
               <PromptDocCard
                 agentId={agent.id}
                 prompt="bare_prompt"
+                instructionsFile={agent.instructionsFile}
                 title="Instructions"
                 hint="This file is the agent: it is loaded as the system prompt for every conversation."
                 placeholder="Describe what this agent does, step by step, addressed to the agent."
                 markdown
-                missingNote="AGENT.md is not in this folder. Add it there — it is the file that makes this folder an agent."
+                missingNote={`This folder has no ${bareInstructionsFileList()}. Add one — it is the file that makes this folder an agent.`}
               />
             ) : (
               <>

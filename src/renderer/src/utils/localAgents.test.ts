@@ -31,6 +31,7 @@ function agent(overrides: Partial<LocalAgentDto> = {}): LocalAgentDto {
     manifestId: 'a',
     identity: 'manifest',
     kind: 'kit',
+    instructionsFile: null,
     rootId: 'root-1',
     rootPath: '/w',
     path: '/w/Local/alpha',

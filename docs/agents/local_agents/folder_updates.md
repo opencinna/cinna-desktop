@@ -26,7 +26,7 @@ The shape this was built for is a team repository of agents — cloned once and 
 1. **Check** fetches and re-reads. The sentence now says what is true as of a moment ago
 2. When there is something to apply and nothing standing in its way, an **Update** button fills the fixed slot beside Check. A disclosure lists the waiting commits — hash, subject, author. Its tooltip names the repository path when that is not the folder itself, because the button acts on the repository
 3. **Update** re-reads *with a fetch first*, fast-forwards, then rescans the root. The line becomes "Updated — N commits pulled", and the same disclosure now says what changed
-4. A pull that added an agent folder, removed one or rewrote an `AGENT.md` is visible immediately: the rescan is part of the action, not left to the watcher
+4. A pull that added an agent folder, removed one or rewrote an agent's instructions file is visible immediately: the rescan is part of the action, not left to the watcher
 
 ### Being told to sort it out yourself
 

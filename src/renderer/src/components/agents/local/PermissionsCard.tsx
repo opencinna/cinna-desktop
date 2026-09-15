@@ -10,7 +10,11 @@ import { formatRelativeFromDate } from '../../../utils/cinnaTime'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { DESKTOP_STATE_FILE } from '../../../../../shared/kit/manifest'
 import { describePermissionAction } from '../../../../../shared/localAgentRequests'
-import type { LocalAgentDto } from '../../../../../shared/localAgents'
+import {
+  bareInstructionsFileList,
+  type BareInstructionsFile,
+  type LocalAgentDto
+} from '../../../../../shared/localAgents'
 import {
   DEFAULT_AGENT_ENGINE,
   DEFAULT_CLAUDE_APPROVAL,
@@ -195,7 +199,11 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
       ) : onClaude ? (
         <ClaudeApprovals agent={agent} />
       ) : (
-        <OpenCodeProfile bare={bare} overriddenNames={overriddenNames} />
+        <OpenCodeProfile
+          bare={bare}
+          instructionsFile={agent.instructionsFile ?? null}
+          overriddenNames={overriddenNames}
+        />
       )}
 
       <div className="mt-3 text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]">
@@ -302,9 +310,12 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
  */
 function OpenCodeProfile({
   bare,
+  instructionsFile,
   overriddenNames
 }: {
   bare: boolean
+  /** A bare agent's own instructions file, as main resolved it. */
+  instructionsFile: BareInstructionsFile | null
   overriddenNames: string[]
 }): React.JSX.Element {
   return (
@@ -325,7 +336,8 @@ function OpenCodeProfile({
       first before opening a file outside the folder, fetching a URL, editing{' '}
       {bare ? (
         <>
-          its own <span className="font-mono">AGENT.md</span>
+          its own{' '}
+          <span className="font-mono">{instructionsFile ?? bareInstructionsFileList()}</span>
         </>
       ) : (
         'its own prompt or manifest'

@@ -16,7 +16,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, join, relative, sep } from 'node:path'
 import { agentRepo, type FolderIndexEntry } from '../../db/agents'
 import { launcherOfFolder } from '../../agents/drivers/driverOf'
 import { defaultEngineService } from './defaultEngineService'
@@ -45,8 +45,9 @@ import {
 import {
   describedAs,
   AGENTS_SUBDIR,
-  BARE_AGENT_PROMPT_FILE,
+  BARE_AGENT_MAX_DEPTH,
   BARE_AGENT_README_FILE,
+  bareInstructionsFileList,
   duplicateFolderAgentId,
   externalFolderAgentId,
   folderAgentId,
@@ -61,8 +62,14 @@ import {
   type LocalAgentStatusSummary,
   type LocalAgentValidation
 } from '../../../shared/localAgents'
-import { desktopStateService } from './desktopStateService'
-import { discoverBareAgents, readBareAgentName } from './externalScan'
+import { desktopStatePath, desktopStateService } from './desktopStateService'
+import {
+  discoverBareAgents,
+  readBareAgentName,
+  resolveBareInstructionsFile
+} from './externalScan'
+import { isWithin } from './pathRules'
+import type { BareInstructionsFile } from '../../../shared/localAgents'
 
 const logger = createLogger('local-agent-scan')
 
@@ -341,6 +348,7 @@ function unreadableAgent(
     manifestId: '',
     identity: 'unresolved',
     kind: 'kit',
+    instructionsFile: null,
     rootId: root.id,
     rootPath: root.path,
     path: agentDir,
@@ -365,39 +373,112 @@ function unreadableAgent(
 }
 
 /**
+ * The indexed agents of an external root that a **truncated** walk did not
+ * return.
+ *
+ * The cap counts folders in walk order, so a root such as `~/dev` — a few
+ * adopted `AGENT.md` agents among hundreds of `CLAUDE.md` repositories — can
+ * stop before it reaches some of them. The index is rebuilt from what the scan
+ * lists, so an agent the walk did not reach would be pruned and its sessions
+ * cascaded away. The cap exists to bound a pick, not to take agents out of a
+ * list the user already built.
+ *
+ * A row comes back only while its folder would still be an agent to an
+ * uncapped walk, as far as that can be told without doing that walk: it is
+ * inside the root within {@link BARE_AGENT_MAX_DEPTH}, it still resolves an
+ * instructions file, and it does not sit inside another agent the scan lists
+ * (the walk never descends into an agent). A row failing any of those is left
+ * to the ordinary prune.
+ */
+function indexedPastTheCap(
+  userId: string,
+  root: AgentRootRow,
+  found: readonly { path: string }[]
+): { path: string; relPath: string }[] {
+  const listed = new Set(found.map((folder) => folder.path))
+  const candidates: { path: string; relPath: string }[] = []
+  for (const row of agentRepo.listFolder(userId)) {
+    if (row.localRootId !== root.id || row.localPath === null) continue
+    const path = row.localPath
+    if (listed.has(path) || !isWithin(root.path, path)) continue
+    const rel = relative(root.path, path)
+    const segments = rel === '' ? [] : rel.split(sep)
+    if (segments.length > BARE_AGENT_MAX_DEPTH) continue
+    if (resolveBareInstructionsFile(path) === null) continue
+    candidates.push({ path, relPath: segments.length === 0 ? '.' : segments.join('/') })
+  }
+  const agentPaths = [...listed, ...candidates.map((candidate) => candidate.path)]
+  return candidates.filter(
+    (candidate) =>
+      !agentPaths.some((other) => other !== candidate.path && isWithin(other, candidate.path))
+  )
+}
+
+/**
+ * The walk's order for two root-relative paths: segment by segment, each
+ * compared the way the walk sorts a directory's children, and a folder before
+ * anything inside it. A whole-string compare is not the same order, since `-`
+ * collates before `/` and would put `a-b` ahead of `a/x`.
+ */
+function compareWalkOrder(a: string, b: string): number {
+  const left = a === '.' ? [] : a.split('/')
+  const right = b === '.' ? [] : b.split('/')
+  for (let i = 0; i < Math.min(left.length, right.length); i += 1) {
+    const order = left[i].localeCompare(right[i])
+    if (order !== 0) return order
+  }
+  return left.length - right.length
+}
+
+/**
  * A bare agent's own findings — everything the desktop can say about a folder
  * that never promised to be kit-shaped.
  *
  * There is deliberately no *error* case for "it has no manifest": that is what
- * a bare agent **is**. The one error is a missing or unreadable `AGENT.md`,
- * because that is the whole contract, and a folder that has lost it is not an
- * agent any more. An empty one is a warning and not an error, matching the kit
- * path exactly — `promptAssembly` produces a stand-in section saying the file is
- * empty rather than a promptless agent, and erroring would instead drop the
- * folder out of the engine config with nothing on screen to explain it.
+ * a bare agent **is**. The one error is a missing or unreadable instructions
+ * file, because that is the whole contract, and a folder that has lost it is
+ * not an agent any more. An empty one is a warning and not an error, matching
+ * the kit path exactly — `promptAssembly` produces a stand-in section saying
+ * the file is empty rather than a promptless agent, and erroring would instead
+ * drop the folder out of the engine config with nothing on screen to explain it.
+ *
+ * Each message names the file the folder actually resolved to; a folder with
+ * none of them is told all three names, and its finding carries no path.
  */
-function bareValidation(agentDir: string, promptText: string | null): LocalAgentValidation {
+function bareValidation(
+  agentDir: string,
+  instructionsFile: BareInstructionsFile | null,
+  promptText: string | null
+): LocalAgentValidation {
   const errors: LocalAgentFinding[] = []
   const warnings: LocalAgentFinding[] = []
   const infos: LocalAgentFinding[] = []
 
-  if (promptText === null) {
+  if (instructionsFile === null) {
     errors.push({
       code: 'bare.prompt.missing',
-      message: `${BARE_AGENT_PROMPT_FILE} is missing or could not be read, so this folder has no instructions.`,
-      path: BARE_AGENT_PROMPT_FILE
+      message: `This folder has no ${bareInstructionsFileList()}, so it has no instructions.`
+    })
+  } else if (promptText === null) {
+    errors.push({
+      code: 'bare.prompt.missing',
+      message: `${instructionsFile} could not be read, so this folder has no instructions.`,
+      path: instructionsFile
     })
   } else if (promptText.trim() === '') {
     warnings.push({
       code: 'bare.prompt.empty',
-      message: `${BARE_AGENT_PROMPT_FILE} is empty, so this agent has no instructions yet.`,
-      path: BARE_AGENT_PROMPT_FILE
+      message: `${instructionsFile} is empty, so this agent has no instructions yet.`,
+      path: instructionsFile
     })
   }
   if (!existsSync(join(agentDir, BARE_AGENT_README_FILE))) {
     infos.push({
       code: 'bare.readme.missing',
-      message: `No ${BARE_AGENT_README_FILE}, so an assistant opening this folder is briefed from ${BARE_AGENT_PROMPT_FILE} instead.`,
+      message:
+        instructionsFile === null
+          ? `No ${BARE_AGENT_README_FILE} either, so an assistant opening this folder has nothing to be briefed from.`
+          : `No ${BARE_AGENT_README_FILE}, so an assistant opening this folder is briefed from ${instructionsFile} instead.`,
       path: BARE_AGENT_README_FILE
     })
   }
@@ -504,6 +585,7 @@ export const scannerService = {
       manifestId,
       identity,
       kind: 'kit',
+      instructionsFile: null,
       rootId: root.id,
       rootPath: root.path,
       path: agentDir,
@@ -532,7 +614,8 @@ export const scannerService = {
   },
 
   /**
-   * Read one **bare** agent folder — a folder adopted for its `AGENT.md`.
+   * Read one **bare** agent folder — a folder adopted for its instructions
+   * file (`AGENT.md`, `AGENTS.md` or `CLAUDE.md`, resolved per folder).
    *
    * Nothing kit-shaped is consulted: no manifest, no contract, no layout, no
    * command catalog, no credential slots. What comes back is the same DTO
@@ -540,29 +623,33 @@ export const scannerService = {
    * empty, so the agents list, the page header, the readiness dot and the
    * counterparty pickers need no bare-agent branch of their own.
    *
-   * Like {@link scanAgentFolder} it never throws: an unreadable `AGENT.md` is a
-   * folder that is `invalid` with a finding naming the file, never an exception
-   * that takes the root's whole scan with it.
+   * Like {@link scanAgentFolder} it never throws: an unreadable instructions
+   * file is a folder that is `invalid` with a finding naming the file, never an
+   * exception that takes the root's whole scan with it.
    */
   scanBareAgentFolder(agentDir: string, root: AgentRootRow, relPath: string): LocalAgentDto {
     const scannedAt = Date.now()
-    const promptStamp = readStamp(join(agentDir, BARE_AGENT_PROMPT_FILE))
+    const instructionsFile = resolveBareInstructionsFile(agentDir)
+    const promptPath = instructionsFile === null ? null : join(agentDir, instructionsFile)
+    const promptStamp = promptPath === null ? null : readStamp(promptPath)
     let promptText: string | null = null
-    try {
-      promptText = readFileSync(join(agentDir, BARE_AGENT_PROMPT_FILE), 'utf8')
-    } catch {
-      promptText = null
+    if (promptPath !== null) {
+      try {
+        promptText = readFileSync(promptPath, 'utf8')
+      } catch {
+        promptText = null
+      }
     }
 
-    const validation = bareValidation(agentDir, promptText)
+    const validation = bareValidation(agentDir, instructionsFile, promptText)
     const desktop = desktopStateService.read(agentDir, 'bare')
     // The user's own name wins over the file's, and the file's over the folder
     // name — the order the user would expect, and the only one where a rename
-    // survives an edit to `AGENT.md`'s heading.
+    // survives an edit to the instructions file's heading.
     const name =
       desktop.displayName && desktop.displayName.trim() !== ''
         ? desktop.displayName.trim()
-        : readBareAgentName(agentDir)
+        : readBareAgentName(agentDir, instructionsFile)
 
     const readinessState: LocalAgentReadiness = validation.errors.length > 0 ? 'invalid' : 'ok'
 
@@ -571,6 +658,7 @@ export const scannerService = {
       manifestId: '',
       identity: 'external',
       kind: 'bare',
+      instructionsFile,
       rootId: root.id,
       rootPath: root.path,
       path: agentDir,
@@ -601,8 +689,10 @@ export const scannerService = {
       status: null,
       validation,
       desktop: desktopStateService.summarize(desktop),
+      // Keyed by the file the folder resolved to, which is the key the editor
+      // looks its stamp up under. A folder with none has no stamp to save on.
       stamps: {
-        [BARE_AGENT_PROMPT_FILE]: promptStamp,
+        ...(instructionsFile === null ? {} : { [instructionsFile]: promptStamp }),
         [BARE_AGENT_README_FILE]: readStamp(join(agentDir, BARE_AGENT_README_FILE))
       },
       scannedAt
@@ -806,23 +896,79 @@ export const scannerService = {
   },
 
   /**
+   * Which folders of an external root are already agents — the `keep` answer
+   * `discoverBareAgents` asks for a weak folder with an `AGENT.md` below it.
+   *
+   * Either of two things makes a folder known:
+   *
+   * - an index row of **this** root at that path: adopted and listed;
+   * - a bare state file for that path that does **not** read `hidden: true`:
+   *   an agent the user renamed, chatted with or put back, whose row is gone
+   *   because its root was removed and added again.
+   *
+   * A **hidden** state file does not count. `addAgentFolder` writes one for
+   * every folder the user unticks and `removeRoot` leaves them behind, so
+   * counting it would keep a folder the user declined as a hidden agent
+   * forever, and the `AGENT.md` agents that later land below it could never be
+   * listed or reached from Manage agents. Hiding already deleted the row, so a
+   * hidden weak agent becoming a plain folder loses nothing.
+   *
+   * **Every caller that answers "which agents are in this root" passes it**:
+   * the scan, the pick preview, adopt, restore, the settings count and the
+   * fallback watcher. If one of them walked without it, a re-selected root
+   * would preview rows that are not what gets indexed.
+   *
+   * `rootId` null is a folder not registered yet (a first pick). It has no rows,
+   * so only the state-file half applies. The index is read lazily, on the first
+   * question, and the walk only asks about the uncommon shape, so most walks
+   * never read it.
+   */
+  knownBareAgentFilter(userId: string, rootId: string | null): (absPath: string) => boolean {
+    let indexed: Set<string> | null = null
+    return (absPath) => {
+      if (rootId !== null) {
+        indexed ??= new Set(
+          agentRepo
+            .listFolder(userId)
+            .flatMap((row) =>
+              row.localRootId === rootId && row.localPath !== null ? [row.localPath] : []
+            )
+        )
+        if (indexed.has(absPath)) return true
+      }
+      // Asked only for a weak folder with an `AGENT.md` below it, so the one
+      // small JSON read is not on the common path.
+      return (
+        existsSync(desktopStatePath(absPath, 'bare')) &&
+        !desktopStateService.read(absPath, 'bare').hidden
+      )
+    }
+  },
+
+  /**
    * Scan an **external** root: a folder the user pointed at, walked for
-   * `AGENT.md`.
+   * `AGENT.md`, `AGENTS.md` or `CLAUDE.md` (see `discoverBareAgents` for when
+   * the last two count).
    *
    * The differences from a workshop scan are all consequences of one thing —
    * nothing here has a manifest:
    *
    * - Identity is positional, from the root-relative path, so there is no id
-   *   collision to arbitrate and no `unresolved` case to protect. A folder that
-   *   has lost its `AGENT.md` is still *found* (the walk found it before, and it
-   *   is only unreadable now, which is a readiness question) — no: the walk is
-   *   what defines membership here, so a folder without `AGENT.md` is simply not
-   *   an agent any more and its row is pruned like any other absent folder.
+   *   collision to arbitrate and no `unresolved` case to protect. The walk is
+   *   what defines membership here, so a folder that no longer holds an
+   *   instructions file the walk counts is simply not an agent any more, and
+   *   its row is pruned like any other absent folder.
    * - There are no unresolved paths to protect from the prune, because the id
    *   is a pure function of where the folder sits: as long as it is there, the
    *   scan reproduces the same id and the row survives on the ordinary ground.
    * - Hidden agents are dropped *before* the index is built, which is what makes
    *   "remove from the list" outlive a rescan.
+   * - Two things the walk alone would take away are held in place, because a
+   *   pruned row cascades its sessions. A weak agent already known
+   *   ({@link knownBareAgentFilter}) stays an agent when an `AGENT.md` appears
+   *   below it. When the walk hits its cap, an indexed agent it did not reach
+   *   is still listed and indexed ({@link indexedPastTheCap}), and `truncated`
+   *   is still reported.
    *
    * A root whose folder has gone leaves the index untouched, exactly as a
    * workshop does, and for the same reason: an empty index would prune every
@@ -853,7 +999,12 @@ export const scannerService = {
       }
     }
 
-    const { found, truncated } = discoverBareAgents(root.path)
+    const { found, truncated } = discoverBareAgents(root.path, undefined, {
+      keep: this.knownBareAgentFilter(userId, root.id)
+    })
+    // Only when the walk stopped early: otherwise it reached every folder, and a
+    // row it did not return is genuinely not an agent any more.
+    const keptPastCap = truncated ? indexedPastTheCap(userId, root, found) : []
     const agents: LocalAgentDto[] = []
     const entries: FolderIndexEntry[] = []
     // Counted here rather than walked again by the settings row: this loop has
@@ -861,7 +1012,14 @@ export const scannerService = {
     // the same question.
     let hiddenCount = 0
 
-    for (const folder of found) {
+    // In walk order. The rows kept past the cap come off the index in whatever
+    // order it holds them, so the merged list is put back into the order an
+    // uncapped walk would have produced, which is what the list shows.
+    const folders = [...found, ...keptPastCap].sort((a, b) =>
+      compareWalkOrder(a.relPath, b.relPath)
+    )
+
+    for (const folder of folders) {
       // Read before scanning: a hidden folder must cost one small JSON read,
       // not a full DTO build, and must never reach the index.
       if (desktopStateService.read(folder.path, 'bare').hidden) {
@@ -887,6 +1045,7 @@ export const scannerService = {
     logger.info('external agents folder scanned', {
       rootId: root.id,
       found: found.length,
+      keptPastCap: keptPastCap.length,
       listed: agents.length,
       indexed,
       pruned,
