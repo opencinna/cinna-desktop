@@ -47,4 +47,16 @@ describe('the ACP process pool at quit', () => {
     // synchronously by then. The kill is what matters; the wait is a courtesy.
     expect(code).toMatch(/void\s+acpProcessPool\.shutdown\(\)/)
   })
+
+  it('is killed only after the turns it runs have saved what they streamed', () => {
+    // A direct chat writes its rows when the turn returns, and a turn whose
+    // process is killed never does. The flush has to be in the same handler
+    // and ahead of the kill — anywhere after it, or after an await, and the
+    // turn the user left parked on a question is gone from the transcript.
+    const quit = code.indexOf("app.on('will-quit'")
+    const flush = code.indexOf('a2aStreamingService.saveInFlight()')
+    expect(flush, 'saveInFlight() inside the will-quit handler').toBeGreaterThan(quit)
+    expect(flush).toBeLessThan(code.indexOf('acpProcessPool.shutdown()'))
+    expect(flush).toBeLessThan(code.indexOf('await', quit))
+  })
 })

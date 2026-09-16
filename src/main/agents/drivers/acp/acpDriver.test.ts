@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentKind } from '../../../../shared/localAgents'
 import type { LocalPermissionRequest } from '../../../../shared/localAgentRequests'
 import type { RunEvent } from '../../../../shared/runEvents'
-import type { AgentDriver, SteerFn } from '../driver'
+import type { AgentDriver, RunInput, SteerFn } from '../driver'
 import { pendingRequests } from '../pendingRequests'
 import {
   describeDriverContract,
@@ -95,6 +95,7 @@ interface World {
     chatId?: string
     onEvent?: (event: RunEvent) => void
     registerSteer?: (steer: SteerFn | null) => void
+    registerSnapshot?: RunInput['registerSnapshot']
   }): ReturnType<AgentDriver['run']>
   cleanup(): void
 }
@@ -185,7 +186,8 @@ function makeWorld(options: WorldOptions = {}): World {
         wireContent: 'hello',
         signal: overrides.signal ?? new AbortController().signal,
         onEvent: overrides.onEvent ?? ((event) => void events.push(event)),
-        ...(overrides.registerSteer ? { registerSteer: overrides.registerSteer } : {})
+        ...(overrides.registerSteer ? { registerSteer: overrides.registerSteer } : {}),
+        ...(overrides.registerSnapshot ? { registerSnapshot: overrides.registerSnapshot } : {})
       }),
     cleanup: () => {
       void deps.pool.shutdown()
@@ -1081,6 +1083,23 @@ describe('a question', () => {
     const result = await running
     const question = result.parts.find((part) => part.toolId === asked.requestId)
     expect(question?.toolInput).toEqual(expect.objectContaining({ callId: 'toolu_ask' }))
+  })
+
+  it('has saved its new session, and offers what it streamed, while it waits on the answer', async () => {
+    // The case this guards: a turn parked on a question, the app quit under it, and the
+    // next turn opened a fresh session because the id was only saved at the
+    // exit. Mutation: drop the early `rememberSession` → `saved` is empty here;
+    // drop the `savedSession` check → it holds the id twice at the end.
+    const w = world({ script: ASKS_QUESTION, launcher: 'claude' })
+    let snapshot: Parameters<NonNullable<RunInput['registerSnapshot']>>[0] | undefined
+    const running = w.run({ registerSnapshot: (read) => { snapshot = read } })
+    const asked = await askedFor(w)
+    expect(w.saved).toEqual(['ses_fake'])
+    expect(snapshot?.().parts.some((part) => part.toolId === asked.requestId)).toBe(true)
+    pendingRequests.resolve(asked.requestId, { kind: 'question', answers: [['Blue']] })
+    const result = await running
+    expect(result.error).toBeUndefined()
+    expect(w.saved).toEqual(['ses_fake'])
   })
 
   it('declines a form it cannot render, rather than cancelling the tool call', async () => {

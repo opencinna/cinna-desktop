@@ -87,13 +87,18 @@ For each event (status-update | artifact-update | message | task):
       (request = a2aInputRequestOf: one open question from the status message's
        text parts, or { kind: 'auth', message } for auth-required)
   ↓
-On stream completion:
+On stream completion (the runner):
   - parts   = accumulator.snapshotParts()
   - answer  = accumulator.answerText()    # concat of 'text'-kind parts
   - notices = accumulator.snapshotNotices()  # one entry per distinct notice part
-  - For each notice: messageRepo.saveTransition({ chatId, content, sourceAgentId })
-  - messageRepo.saveAssistant({ chatId, content: answer, parts })
   - agentSessionRepo.upsert(...) only for a successful, non-aborted exchange
+  - return { text: answer, parts, notices, ... }
+  ↓
+The direct-chat wrapper (streamToAgent), persistTurn past its cursor:
+  - For each notice not yet saved: messageRepo.saveTransition({ chatId, content, sourceAgentId })
+  - messageRepo.saveAssistant({ chatId, content: answer, parts })   # split around steers
+  - messageRepo.touchChat(chatId)
+  - on failure only: messageRepo.saveError(...) after the rows
   - port.postMessage({ type: 'done', stopReason })   # 'canceled' if the request was aborted, else 'end_turn'
 
 Notices are persisted *before* the assistant message so transcript ordering
@@ -104,7 +109,9 @@ preceded. Notices never appear in `messages.parts[]`; they live on their own
 
 ## Terminal Outcome
 
-`runAgentTurn` treats nonstream JSON-RPC error envelopes and failed/rejected/unfinished A2A task endings as failures. The direct wrapper persists the error rather than turning an empty answer into success. Input-required/auth-required report `needs_input`; canceled reports `canceled`. Its once-only `onFinished` callback runs after persistence and before close, with standalone job reporting as the default when no callback is supplied. The executor owns the final result and explicit runner completion policy; see [turn outcomes](../../chat/messaging/turn_completion.md).
+`runAgentTurn` treats nonstream JSON-RPC error envelopes and failed/rejected/unfinished A2A task endings as failures. The direct wrapper never turns a failure into an empty success: it persists what the turn streamed, its steered user messages in place, and then the error row under the output it ended. A turn that ran for minutes and then failed would otherwise leave only the error.
+
+A task that ends `failed` carries its own answer as the error text. When that text equals the answer and the turn has parts, the error row says only "The agent reported that its task failed." — the answer is already a row above it, and repeating it would show the agent's words twice. The shortening is the row's alone: the error posted to the port uses the same generic sentence, but the job run's outcome keeps the agent's own reason. Input-required/auth-required report `needs_input`; canceled reports `canceled`. Its once-only `onFinished` callback runs after persistence and before close, with standalone job reporting as the default when no callback is supplied. The executor owns the final result and explicit runner completion policy; see [turn outcomes](../../chat/messaging/turn_completion.md).
 
 ## Cancellation and session checkpoints
 
@@ -112,7 +119,18 @@ Stop aborts the underlying card/message fetch, including body reads and silent S
 
 Task identity reaches the driver before any message or artifact can emit its first delta. The event sink checks abort before and after forwarding, while the accumulator records the current part first. A Stop triggered inside that callback therefore keeps the part just shown and prevents subsequent events.
 
-An aborted pump returns accumulated text, parts and notices alongside an error; it does not return a newly learned session checkpoint or upsert the session row. A previous checkpoint is preserved, and a fresh stopped turn leaves none. The direct-chat wrapper persists partial output, emits a canceled terminal event and releases its active request; it skips completed-only bookkeeping. Tool callers retain the error-bearing result. Remote `tasks/cancel` is best effort and does not delay local completion, so local Stop is not confirmation of remote cancellation.
+An aborted pump returns accumulated text, parts and notices alongside an error; it does not return a newly learned session checkpoint or upsert the session row. A previous checkpoint is preserved, and a fresh stopped turn leaves none. The direct-chat wrapper persists partial output, emits a canceled terminal event and releases its active request when the turn returns — `cancel()` only aborts, and leaves the entry in place so a turn still unwinding when the app quits is found by the quit flush below; it skips completed-only bookkeeping. Tool callers retain the error-bearing result. Remote `tasks/cancel` is best effort and does not delay local completion, so local Stop is not confirmation of remote cancellation.
+
+## What a direct turn keeps when it never returns
+
+The wrapper writes a turn's rows when the runner returns, and at quit some never do: Electron does not await `will-quit`, and the process kills that follow end a turn parked on a question or minutes into its tool calls. So `will-quit` calls `a2aStreamingService.saveInFlight()` **first and synchronously** — ahead of the scheduler stops and `acpProcessPool.shutdown()`, and ahead of any `await` — and it persists what every active request has streamed so far. SQLite writes are synchronous, which is what lets the flush complete inside a handler nobody waits for.
+
+- **The flush reads a snapshot the driver offers.** `RunInput.registerSnapshot` hands the wrapper a function returning copies of the turn's parts, notices and steers. Only the ACP driver registers one; an A2A or Managed turn, and a `/run:` command, is still lost from the transcript if the app quits under it
+- **Only rows, not an outcome.** The flush records no turn result. A parked ask left open is expired by the boot cleanup (`taskInputRequestRepo.expireOpen`), which is acceptable because the question itself is now in the transcript
+- **Each turn has a persist cursor** — parts and steers saved so far by count, notices by `partKey`. Notices are tracked by key rather than position because `snapshotNotices` skips a notice whose text is still empty, so positions shift when it fills in. Every path that keeps output (the normal end, a failure, a throw, the quit flush) saves only what lies past the cursor, so a killed run that still returns does not write its turn twice. The cursor moves with each write, so a write that throws leaves it on what actually reached the transcript
+- **The cursor counts whole parts.** A part still growing when the flush runs keeps the text it had then; whatever the killed process adds to it afterwards is not saved. The cost is a clipped tail at quit, never a duplicate. A row saved past the cursor takes its `content` from its own slice, not from the turn's full `text`
+- **A runner that throws** has its snapshot flushed before the error row, so it keeps what it offered. A runner that registered no snapshot keeps nothing on a throw
+- **A flush that fails is logged, never thrown**, so one broken turn does not stop the rest of the quit handler
 
 ## Why per-`(messageId, partIndex)` keying
 

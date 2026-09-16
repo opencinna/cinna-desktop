@@ -133,9 +133,72 @@ describe('a2aStreamingService.streamToAgent', () => {
         error: { message: 'The agent crashed.', raw: 'exit 1' }
       })
     })
+    // A failure keeps what it streamed: the parts, the steer after them, then the error.
     expect(rows).toEqual([
+      { role: 'assistant', content: 'a', parts: [{ kind: 'text', text: 'a' }] },
       { role: 'user', content: 'more', addressedAgentId: 'folder:abc' },
       { role: 'error', content: 'The agent crashed.' }
+    ])
+  })
+
+  it('keeps the parts and notices of a failed turn, ahead of its error', async () => {
+    // Mutation: drop the `persistTurn` call in the failure branch → only the
+    // error row is left, which is how a long turn that failed used to vanish.
+    const p = fakePort()
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1', agentId: 'folder:abc', port: p.port,
+      run: async () => ({
+        text: 'done half',
+        parts: [{ kind: 'tool', toolName: 'Read', text: 'r' }, { kind: 'text', text: 'done half' }],
+        notices: [{ partKey: 'n', text: 'Starting up' }],
+        error: { message: 'The agent crashed.', raw: 'exit 1' }
+      })
+    })
+    expect(rows).toEqual([
+      { role: 'agent_transition', content: 'Starting up' },
+      { role: 'assistant', content: 'done half', parts: [{ kind: 'tool', toolName: 'Read', text: 'r' }, { kind: 'text', text: 'done half' }] },
+      { role: 'error', content: 'The agent crashed.' }
+    ])
+    expect(p.posted.at(-1)).toEqual({ type: 'error', error: 'The agent crashed.' })
+  })
+
+  it('does not repeat a failed A2A task’s answer as its error', async () => {
+    // The A2A pump uses the answer as the error message of a `failed` task. The
+    // answer is kept as a row now, so the error row says only that it failed.
+    // Mutation: save `failure.message` → the answer appears twice.
+    const p = fakePort()
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1', agentId: 'agent_1', port: p.port,
+      run: async () => ({
+        text: 'Could not reach the ledger.',
+        parts: [{ kind: 'text', text: 'Could not reach the ledger.' }],
+        notices: [],
+        taskState: 'failed',
+        error: { message: 'Could not reach the ledger.', raw: 'A2A task state: failed', code: 'agent_task_failed' }
+      })
+    })
+    expect(rows).toEqual([
+      { role: 'assistant', content: 'Could not reach the ledger.', parts: [{ kind: 'text', text: 'Could not reach the ledger.' }] },
+      { role: 'error', content: 'The agent reported that its task failed.' }
+    ])
+    expect(p.posted.at(-1)).toEqual({ type: 'error', error: 'The agent reported that its task failed.', code: 'agent_task_failed' })
+    // The job run still gets the agent's own reason.
+    expect(runCompletions).toEqual([{ status: 'failed', message: 'Could not reach the ledger.' }])
+  })
+
+  it('keeps what a runner offered before it threw', async () => {
+    // Mutation: drop the `flush()` in the `catch` → only the error row.
+    const p = fakePort()
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1', agentId: 'folder:abc', port: p.port,
+      run: async (io) => {
+        io.registerSnapshot?.(() => ({ parts: [{ kind: 'text', text: 'so far' }], notices: [], steers: [] }))
+        throw new Error('The runner broke.')
+      }
+    })
+    expect(rows).toEqual([
+      { role: 'assistant', content: 'so far', parts: [{ kind: 'text', text: 'so far' }] },
+      { role: 'error', content: 'The runner broke.' }
     ])
   })
 
@@ -277,6 +340,110 @@ describe('a2aStreamingService.streamToAgent', () => {
     expect(p.posted.at(-1)).toEqual({ type: 'done', stopReason: 'canceled' })
   })
 
+  describe('saveInFlight', () => {
+    /** A turn that registers `read` and resolves only when told to. */
+    function heldTurn(chatId: string, read: () => { parts: { kind: 'text'; text: string }[]; notices: { partKey: string; text: string }[]; steers: { afterPart: number; text: string }[] }) {
+      let release: (result: Awaited<ReturnType<Parameters<typeof a2aStreamingService.streamToAgent>[0]['run']>>) => void = () => {}
+      let registered: () => void = () => {}
+      const ready = new Promise<void>((resolve) => { registered = resolve })
+      const done = a2aStreamingService.streamToAgent({
+        chatId, agentId: 'folder:abc', port: fakePort().port,
+        run: (io) => {
+          io.registerSnapshot?.(read)
+          registered()
+          return new Promise((resolve) => { release = resolve })
+        }
+      })
+      return { ready, done, release: (r: Parameters<typeof release>[0]) => release(r) }
+    }
+
+    it('saves what a running turn streamed, and only the rest when the turn later returns', async () => {
+      // Mutation: make `saveInFlight` a no-op → nothing before the release;
+      // drop the cursor (persist from 0 every time) → 'Hello' is saved twice.
+      const streamed = {
+        parts: [{ kind: 'text' as const, text: 'Hello' }],
+        notices: [{ partKey: 'n', text: 'Starting up' }],
+        steers: [] as { afterPart: number; text: string }[]
+      }
+      const turn = heldTurn('chat_1', () => ({ parts: streamed.parts.slice(), notices: streamed.notices.slice(), steers: streamed.steers.slice() }))
+      await turn.ready
+      a2aStreamingService.saveInFlight()
+      expect(rows).toEqual([
+        { role: 'agent_transition', content: 'Starting up' },
+        { role: 'assistant', content: 'Hello', parts: [{ kind: 'text', text: 'Hello' }] }
+      ])
+
+      turn.release({
+        text: 'Hello',
+        parts: [{ kind: 'text', text: 'Hello' }, { kind: 'tool', toolName: 'Read', text: 'r' }, { kind: 'text', text: 'World' }],
+        notices: [{ partKey: 'n', text: 'Starting up' }],
+        // Landed before the flush's cursor; still saved, and ahead of the new parts.
+        steers: [{ afterPart: 1, text: 'and more' }]
+      })
+      await turn.done
+      expect(rows).toEqual([
+        { role: 'agent_transition', content: 'Starting up' },
+        { role: 'assistant', content: 'Hello', parts: [{ kind: 'text', text: 'Hello' }] },
+        { role: 'user', content: 'and more', addressedAgentId: 'folder:abc' },
+        { role: 'assistant', content: 'World', parts: [{ kind: 'tool', toolName: 'Read', text: 'r' }, { kind: 'text', text: 'World' }] }
+      ])
+    })
+
+    it('saves a turn that was stopped but has not returned yet', async () => {
+      // Mutation: delete the entry in `cancel` → the stopped turn is skipped.
+      const posted: { type: string; requestId?: string }[] = []
+      let release: (r: { text: string; parts: []; notices: [] }) => void = () => {}
+      let registered: () => void = () => {}
+      const ready = new Promise<void>((resolve) => { registered = resolve })
+      const done = a2aStreamingService.streamToAgent({
+        chatId: 'chat_1', agentId: 'folder:abc',
+        port: { postMessage: (e) => { posted.push(e as never) }, close: () => {} },
+        run: (io) => {
+          io.registerSnapshot?.(() => ({ parts: [{ kind: 'text', text: 'before stop' }], notices: [], steers: [] }))
+          registered()
+          return new Promise((resolve) => { release = resolve })
+        }
+      })
+      await ready
+      const requestId = posted.find((e) => e.type === 'request-id')!.requestId!
+      expect(a2aStreamingService.cancel(requestId)).toBe(true)
+      a2aStreamingService.saveInFlight()
+      expect(rows).toEqual([{ role: 'assistant', content: 'before stop', parts: [{ kind: 'text', text: 'before stop' }] }])
+      release({ text: '', parts: [], notices: [] })
+      await done
+      // Gone once the turn has returned.
+      expect(a2aStreamingService.cancel(requestId)).toBe(false)
+    })
+
+    it('saves a notice that filled in after a flush, and no other notice twice', async () => {
+      // An empty notice is left out of the snapshot, so counting by position
+      // would skip it and save the next one again. Mutation: count notices → fails.
+      const notices = [{ partKey: 'b', text: 'Second' }]
+      const turn = heldTurn('chat_1', () => ({ parts: [], notices: notices.slice(), steers: [] }))
+      await turn.ready
+      a2aStreamingService.saveInFlight()
+      turn.release({ text: '', parts: [], notices: [{ partKey: 'a', text: 'First' }, { partKey: 'b', text: 'Second' }] })
+      await turn.done
+      expect(rows).toEqual([
+        { role: 'agent_transition', content: 'Second' },
+        { role: 'agent_transition', content: 'First' }
+      ])
+    })
+
+    it('still saves the other turns when one of them cannot be read', async () => {
+      // Two guards: `flush` catches its own read, `saveInFlight` each entry.
+      // Mutation: drop both → the throw escapes and the second turn is never saved.
+      const broken = heldTurn('chat_1', () => { throw new Error('unreadable') })
+      const fine = heldTurn('chat_2', () => ({ parts: [{ kind: 'text', text: 'kept' }], notices: [], steers: [] }))
+      await Promise.all([broken.ready, fine.ready])
+      expect(() => a2aStreamingService.saveInFlight()).not.toThrow()
+      expect(rows).toEqual([{ role: 'assistant', content: 'kept', parts: [{ kind: 'text', text: 'kept' }] }])
+      broken.release({ text: '', parts: [], notices: [] })
+      fine.release({ text: 'kept', parts: [{ kind: 'text', text: 'kept' }], notices: [] })
+      await Promise.all([broken.done, fine.done])
+    })
+  })
+
   it('still posts done on the ordinary path', async () => {
     const p = fakePort()
     await a2aStreamingService.streamToAgent({
@@ -385,7 +552,8 @@ describe('typed agent turn outcomes', () => {
     })
     expect(finish).toHaveBeenCalledTimes(1)
     expect(finish).toHaveBeenCalledWith(expect.objectContaining({ state, text: 'Agent response' }))
-    expect(timing).toEqual([{ closed: false, saved: 1 }])
+    // A failed turn keeps its streamed answer beside the error row.
+    expect(timing).toEqual([{ closed: false, saved: state === 'failed' ? 2 : 1 }])
     expect(runCompletions).toEqual([])
     expect(p.closed).toBe(true)
     expect(finish.mock.calls[0][0].usage).toBeUndefined()

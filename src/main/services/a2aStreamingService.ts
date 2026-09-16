@@ -100,6 +100,12 @@ export function a2aInputRequestOf(
 
 interface ActiveRequest {
   controller: AbortController
+  /**
+   * Persist what the turn has streamed and not yet saved, from its registered
+   * snapshot. Synchronous, and a no-op for a turn that registered none. Never
+   * throws.
+   */
+  flush: () => void
 }
 
 const activeRequests = new Map<string, ActiveRequest>()
@@ -108,6 +114,8 @@ const activeRequests = new Map<string, ActiveRequest>()
 export interface TurnIO {
   signal: AbortSignal
   onEvent: (event: RunEvent) => void
+  /** See `RunInput.registerSnapshot`. A `/run:` command never registers. */
+  registerSnapshot?: (snapshot: () => TurnSnapshot) => void
 }
 
 /** One turn, already bound to its agent. Never throws by contract — and is not trusted to. */
@@ -220,6 +228,25 @@ export interface TurnSteer {
   text: string
 }
 
+/** What a turn has streamed so far — the persisted slice of its result. */
+export type TurnSnapshot = Pick<RunAgentTurnResult, 'parts' | 'notices' | 'steers'>
+
+/**
+ * How much of one turn is already in the transcript: parts, steers and notices
+ * saved so far. A turn can be persisted more than once — a flush at quit, then
+ * the result the killed run still returns — and each pass saves only what lies
+ * past this.
+ */
+interface PersistCursor {
+  parts: number
+  steers: number
+  /**
+   * Notices by `partKey`, not by count: `snapshotNotices` skips a notice whose
+   * text is still empty, so positions shift when it fills in later.
+   */
+  notices: Set<string>
+}
+
 /**
  * The preview text of a slice of parts, the way a whole turn's `text` is
  * derived: the answer (`text` and `command_result`), else everything.
@@ -233,28 +260,72 @@ function sliceText(parts: MessagePart[]): string {
 }
 
 /**
- * The turn's assistant rows, with each steered user message in the place it
- * landed. A turn nobody steered is exactly one row, with the turn's own text.
+ * The turn's assistant rows from `cursor` on, with each steered user message in
+ * the place it landed. A turn nobody steered is exactly one row — with the
+ * turn's own `text` when nothing of it was saved before. A steer that landed
+ * before the cursor (a flush saved the parts after it, not the steer) is saved
+ * first, still ahead of every part it preceded that is not yet saved.
+ *
+ * The cursor moves with each write, so a write that throws leaves it on what
+ * actually reached the transcript and a later pass does not save it twice.
+ * It counts whole parts: a part that keeps growing after a flush keeps the
+ * text it had then. Only the quit flush is followed by more output — whatever
+ * the killed process had already written — so the cost is a clipped tail at
+ * quit, never a duplicate.
  */
-function saveTurnRows(chatId: string, agentId: string, result: RunAgentTurnResult): void {
-  const steers = result.steers ?? []
+function saveTurnRows(
+  chatId: string,
+  agentId: string,
+  turn: TurnSnapshot & { text?: string },
+  cursor: PersistCursor
+): void {
+  const steers = (turn.steers ?? []).slice(cursor.steers)
   if (!steers.length) {
-    if (result.parts.length > 0) {
-      messageRepo.saveAssistant({ chatId, content: result.text, parts: result.parts, sourceAgentId: agentId })
+    if (turn.parts.length > cursor.parts) {
+      const slice = turn.parts.slice(cursor.parts)
+      const content = cursor.parts === 0 && turn.text !== undefined ? turn.text : sliceText(slice)
+      messageRepo.saveAssistant({ chatId, content, parts: slice, sourceAgentId: agentId })
+      cursor.parts = turn.parts.length
     }
     return
   }
-  let from = 0
   const saveUpTo = (to: number): void => {
-    const slice = result.parts.slice(from, to)
-    from = Math.max(from, to)
+    const slice = turn.parts.slice(cursor.parts, to)
     if (slice.length) messageRepo.saveAssistant({ chatId, content: sliceText(slice), parts: slice, sourceAgentId: agentId })
+    cursor.parts = Math.max(cursor.parts, to)
   }
   for (const steer of steers) {
-    saveUpTo(Math.min(Math.max(steer.afterPart, from), result.parts.length))
+    saveUpTo(Math.min(Math.max(steer.afterPart, cursor.parts), turn.parts.length))
     messageRepo.saveUser({ chatId, content: steer.text, addressedAgentId: agentId })
+    cursor.steers++
   }
-  saveUpTo(result.parts.length)
+  saveUpTo(turn.parts.length)
+}
+
+/**
+ * Everything of a turn past `cursor`, in transcript order: its notices first —
+ * startup pings sit above the answer they preceded on the wire — then its
+ * assistant rows with the steered user rows between them. Used by every path
+ * that keeps a turn's output: the normal end, a failure, a throw, and the
+ * flush at quit.
+ */
+function persistTurn(
+  chatId: string,
+  agentId: string,
+  turn: TurnSnapshot & { text?: string },
+  cursor: PersistCursor
+): void {
+  for (const notice of turn.notices) {
+    if (cursor.notices.has(notice.partKey)) continue
+    messageRepo.saveTransition({
+      chatId,
+      content: notice.text,
+      sourceAgentId: agentId
+    })
+    cursor.notices.add(notice.partKey)
+  }
+  saveTurnRows(chatId, agentId, turn, cursor)
+  messageRepo.touchChat(chatId)
 }
 
 /**
@@ -572,13 +643,29 @@ export const a2aStreamingService = {
 
     const abortController = new AbortController()
     const requestId = nanoid()
-    activeRequests.set(requestId, { controller: abortController })
+    const cursor: PersistCursor = { parts: 0, steers: 0, notices: new Set() }
+    let snapshot: (() => TurnSnapshot) | undefined
+    /** Persist the registered snapshot past the cursor; logs, never throws. */
+    const flush = (): void => {
+      if (!snapshot) return
+      try {
+        persistTurn(chatId, agentId, snapshot(), cursor)
+      } catch (err) {
+        logger.error('could not save what an unfinished turn streamed', {
+          chatId,
+          agentId,
+          error: err instanceof Error ? err.message : String(err)
+        })
+      }
+    }
+    activeRequests.set(requestId, { controller: abortController, flush })
     port.postMessage({ type: 'request-id', requestId })
 
     try {
       const result = await run({
         signal: abortController.signal,
-        onEvent: (event) => port.postMessage(event)
+        onEvent: (event) => port.postMessage(event),
+        registerSnapshot: (read) => { snapshot = read }
       })
 
       // **A stopped turn that also carries an error is a stop, not a failure.**
@@ -598,39 +685,35 @@ export const a2aStreamingService = {
         : result.taskState === 'input-required' || result.taskState === 'auth-required' ? 'needs_input' : 'completed'
       const failure = result.error ?? (state === 'failed' ? { message: 'The agent reported that its task failed.', raw: result.taskState ?? '' } : undefined)
       if (failure && !canceled) {
+        // An A2A task that ends `failed` uses its own answer as the error. Now
+        // that the answer is kept as a row, the error says only that it failed,
+        // or the transcript would show the agent's words twice.
+        const message = failure.message === result.text && result.parts.length > 0
+          ? 'The agent reported that its task failed.'
+          : failure.message
         port.postMessage(
           failure.code
-            ? { type: 'error', error: failure.message, code: failure.code }
-            : { type: 'error', error: failure.message }
+            ? { type: 'error', error: message, code: failure.code }
+            : { type: 'error', error: message }
         )
-        // What the user said into the turn is theirs whatever became of it.
-        for (const steer of result.steers ?? []) {
-          messageRepo.saveUser({ chatId, content: steer.text, addressedAgentId: agentId })
-        }
+        // **A failure keeps what it streamed**, and what the user said into
+        // the turn is theirs whatever became of it: a turn that ran for
+        // minutes and then failed would otherwise leave only the error row.
+        // The error goes last, under the output it ended.
+        persistTurn(chatId, agentId, result, cursor)
         messageRepo.saveError({
           chatId,
-          short: failure.message,
+          short: message,
           detail: failure.raw,
           code: failure.code
         })
+        // The job run keeps the agent's own reason; only the row was shortened.
         finish({ state: 'failed', text: result.text, error: { message: failure.message, code: failure.code } })
         return
       }
 
-      // Persist notices first so they precede the assistant message in
-      // transcript order — startup pings should sit above the answer they
-      // preceded on the wire.
-      for (const notice of result.notices) {
-        messageRepo.saveTransition({
-          chatId,
-          content: notice.text,
-          sourceAgentId: agentId
-        })
-      }
-
-      saveTurnRows(chatId, agentId, result)
-
-      messageRepo.touchChat(chatId)
+      // Notices, then the assistant rows — past whatever a flush already saved.
+      persistTurn(chatId, agentId, result, cursor)
       port.postMessage({
         type: 'done',
         stopReason: canceled ? 'canceled' : state === 'budget' ? 'budget' : 'end_turn'
@@ -673,14 +756,17 @@ export const a2aStreamingService = {
         error: message,
         stack: err instanceof Error ? err.stack : undefined
       })
+      // What the runner offered before it threw is kept, ahead of the error.
+      flush()
       if (!abortController.signal.aborted) {
         port.postMessage({ type: 'error', error: message })
         messageRepo.saveError({ chatId, short: message, detail: String(err) })
         finish({ state: 'failed', text: '', error: { message } })
       } else {
         // The other way a stopped turn leaves this function, and it needs the
-        // same ending for the same reasons — the renderer included. Nothing the
-        // runner streamed survives a throw, so there is nothing to keep.
+        // same ending for the same reasons — the renderer included. What the
+        // runner streamed survives only through its registered snapshot,
+        // already kept above.
         port.postMessage({ type: 'done', stopReason: 'canceled' })
         finish({ state: 'canceled', text: '' })
       }
@@ -689,6 +775,27 @@ export const a2aStreamingService = {
       finish({ state: 'failed', text: '', error: { message: 'The agent turn ended without a persisted outcome.' } })
       activeRequests.delete(requestId)
       port.close()
+    }
+  },
+
+  /**
+   * Persist, synchronously, what every in-flight direct-chat turn has streamed
+   * so far — for the quit path, where Electron does not wait for a turn to end
+   * and the processes running them are about to be killed. Only the rows: the
+   * turn's outcome is not recorded, and its parked ask is expired by the boot
+   * cleanup, which is fine now that the question is in the transcript. A turn
+   * that later returns anyway saves only what lies past this. Never throws.
+   */
+  saveInFlight(): void {
+    for (const [requestId, request] of activeRequests) {
+      try {
+        request.flush()
+      } catch (err) {
+        logger.error('could not save an in-flight turn at quit', {
+          requestId,
+          error: err instanceof Error ? err.message : String(err)
+        })
+      }
     }
   },
 
@@ -702,8 +809,10 @@ export const a2aStreamingService = {
     const request = activeRequests.get(requestId)
     if (!request) return false
 
+    // The entry stays until the turn returns (`finally`): a turn stopped just
+    // before the app quits is still unwinding, and the flush at quit has to
+    // find it to keep what it streamed.
     request.controller.abort()
-    activeRequests.delete(requestId)
     return true
   }
 }

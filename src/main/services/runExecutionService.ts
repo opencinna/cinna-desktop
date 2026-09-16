@@ -510,6 +510,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
         ...(input.queueWhenBusy ? { queueWhenBusy: true } : {}),
         ...(input.handbackEligible ? { handbackEligible: true } : {}),
         ...(input.registerSteer ? { registerSteer: input.registerSteer } : {}),
+        ...(io.registerSnapshot ? { registerSnapshot: io.registerSnapshot } : {}),
         onEvent: io.onEvent
       })
   )

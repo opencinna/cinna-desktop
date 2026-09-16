@@ -271,9 +271,9 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
 
       try {
         if (input.queueWhenBusy) return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, steers: [] }), input.signal)
+          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, steers: [], savedSession: null }), input.signal)
         return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, steers: [] })
+          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, steers: [], savedSession: null })
         )
       } catch (err) {
         // `turnLock.acquire` throws rather than queueing, and its message is
@@ -315,6 +315,11 @@ interface TurnContext {
   input: RunInput
   /** User messages the agent took into this turn, where they landed. */
   steers: TurnSteer[]
+  /**
+   * The session id this turn already handed to `saveSession`, so the exit does
+   * not write the same id twice. See {@link rememberSession}.
+   */
+  savedSession: string | null
 }
 
 /**
@@ -348,6 +353,13 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     onToolCall: ({ name, input: toolInput }) =>
       logger.info(`tool call → ${name}`, { input: toolInput })
   })
+  // What the turn has streamed so far, for a caller that has to persist it
+  // before the turn ends — the app quitting mid-turn. Copies, read on demand.
+  input.registerSnapshot?.(() => ({
+    parts: accumulator.snapshotParts(),
+    notices: accumulator.snapshotNotices(),
+    steers: ctx.steers.slice()
+  }))
   const deltaPort = { postMessage: (event: RunEvent): void => input.onEvent?.(event) }
   const emit: EmitMessage = (message) => {
     if (message) accumulator.ingestMessage(message, deltaPort)
@@ -752,6 +764,12 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       // read as the answer often enough that a turn binding here would
       // otherwise never see it.
       unbind = connection.bindSession(sessionId, handlers)
+      // **Saved now, not at the exit.** A direct chat sends no catch-up packet,
+      // so this id is the only thing that carries the conversation into the
+      // next turn — and a turn the app is quit under (parked on a question,
+      // minutes into its tool calls) never reaches `finish`. Without this the
+      // next turn opened a fresh session and the agent remembered nothing.
+      rememberSession(ctx, sessionId)
     }
 
     if (plan.spec.remote) {
@@ -1383,19 +1401,7 @@ function finish(
   completed = false,
   canceled = ctx.input.signal.aborted
 ): RunAgentTurnResult {
-  if (sessionId) {
-    try {
-      ctx.runtime.validate(ctx.input.chatId)
-      ctx.runtime.saveSession(ctx.input.chatId, sessionId)
-    } catch (err) {
-      // Continuity is a convenience; losing it must not fail a turn that
-      // otherwise worked.
-      logger.warn('could not record the ACP session', {
-        agentId: ctx.agent.id,
-        error: err instanceof Error ? err.message : String(err)
-      })
-    }
-  }
+  if (sessionId) rememberSession(ctx, sessionId)
   const parts = accumulator.snapshotParts()
   const answer = accumulator.answerText()
   const note = completed && !error && !ctx.input.signal.aborted && ctx.input.handbackEligible &&
@@ -1409,6 +1415,27 @@ function finish(
     ...(ctx.steers.length ? { steers: ctx.steers.slice() } : {}),
     ...(sessionId ? { contextId: sessionId } : {}),
     ...(error ? { error: { message: error, raw: raw ?? error } } : {})
+  }
+}
+
+/**
+ * Hand the turn's session id to the runtime, once per id per turn — a fresh
+ * session is saved the moment it exists and `finish` then has nothing to add,
+ * while a loaded one is saved at the exit as it always was.
+ */
+function rememberSession(ctx: TurnContext, sessionId: string): void {
+  if (ctx.savedSession === sessionId) return
+  try {
+    ctx.runtime.validate(ctx.input.chatId)
+    ctx.runtime.saveSession(ctx.input.chatId, sessionId)
+    ctx.savedSession = sessionId
+  } catch (err) {
+    // Continuity is a convenience; losing it must not fail a turn that
+    // otherwise worked.
+    logger.warn('could not record the ACP session', {
+      agentId: ctx.agent.id,
+      error: err instanceof Error ? err.message : String(err)
+    })
   }
 }
 

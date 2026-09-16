@@ -8,6 +8,7 @@ import { toolInstallService } from './services/localAgents/toolInstallService'
 import { initDatabase } from './db/client'
 import { mcpManager } from './mcp/manager'
 import { acpProcessPool } from './agents/drivers'
+import { a2aStreamingService } from './services/a2aStreamingService'
 import { getCurrentUserId, initSession } from './auth/session'
 import { initAutoUpdater, checkForUpdatesManual } from './updater/updater'
 import { appIconService } from './services/appIconService'
@@ -420,6 +421,13 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', async () => {
+  // **What the running turns streamed, before anything can end them.** A direct
+  // chat writes its rows only when the turn returns, and the kills below end
+  // turns that never will — a question the user left parked, minutes of tool
+  // calls — so without this the whole turn vanished from the transcript. First
+  // and synchronous: Electron does not await this handler, the SQLite writes
+  // are sync, and nothing below may run ahead of them.
+  a2aStreamingService.saveInFlight()
   localScheduleScheduler.stop()
   taskRuntimeService.interruptAll('Execution stopped when the app closed. Review the conversation before resuming.')
   taskSyncScheduler.stop()

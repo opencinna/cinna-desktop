@@ -31,7 +31,7 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 - **Driver** — one agent turn, whatever kind of agent it is: the shared input in, the shared result out, and it **never throws**. Three transports, a2a/acp/managed, and `driverFor(agent)` is the one dispatch point ([Agent Drivers & Readiness](../drivers/drivers.md))
 - **Launcher** — the engine-specific half of an ACP turn: what to spawn, what to declare, what `session/new` carries, and what must be set on the session before the first prompt. It also answers with a **refusal** in place of a plan
 - **Process pool** — one child per agent, started by the turn that needs it, held for that turn's length, reaped after two minutes idle ([The Local Engine](engine.md))
-- **Session** — an ACP session id created against the agent's folder. One per (chat, agent), remembered so a conversation survives a restart
+- **Session** — an ACP session id created against the agent's folder. One per (chat, agent), remembered the moment it is created, so a conversation survives a restart — including one that ended a turn midway
 - **Replay** — the `session/update` notifications `session/load` emits for the *whole* prior conversation before it answers. Dropped, never ingested
 - **Parked request** — a permission ask or a question the agent is blocked on, mid-turn, waiting for a human. Over ACP the agent is blocked on a JSON-RPC request, so the park **is** the unresolved response
 - **Cancel grace** — the bounded wait for an agent to acknowledge a `session/cancel`. Three seconds, after which its process is retired
@@ -72,6 +72,12 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 2. Anything parked is answered **first**, so an agent blocked inside a permission request can unwind and read the cancel at all
 3. `session/cancel` goes out and the pending `session/prompt` is expected to come back `cancelled`. It gets three seconds; an agent that never acknowledges has its **process retired**, because a turn is still running inside it and the next prompt on that session would interleave with work the user stopped
 4. Whatever streamed before the cancel is kept, and the stop is not reported as an error
+
+### Quitting the app mid-turn
+1. The user quits while a turn is streaming, parked on a question, or in the middle of its tool calls
+2. Before any process is killed, what the turn has streamed so far is saved to the transcript, the parked question included
+3. The process is killed and the turn never returns. Its parked ask can no longer be answered and is expired on the next launch; the question stays readable in the transcript
+4. The next message in the chat resumes the same session through `session/load`, because its id was saved when the session was created
 
 ### The agent's process dies
 1. The connection closes. The turn ends with the failure the stream reports, and the parts already streamed are kept
@@ -197,7 +203,7 @@ Which messages to steer, and when to hand queued ones to a turn that offers agai
 
 `session/set_mode` and the mandatory `session/set_config_option` calls are what make the desktop's own choices true: OpenCode's `mode` selects the agent definition (without it the turn runs the engine's stock coding agent in the user's folder), and Claude's `session/set_mode` is the only thing that overrides a `defaultMode` from the user's own settings — which can be `bypassPermissions`. Codex also sets its chosen sandbox/reviewer mode after every new/load, before prompting. A turn that ran anyway would run under a policy nobody chose.
 
-The refusal goes out through the same exit every other path takes, so the session this turn *did* create is still recorded: a bare failure leaves it behind engine-side and mints another on every retry, and the chat never gets a session to continue from.
+The session this turn *did* create is already recorded by then — it is saved as soon as `session/new` answers — so the refusal does not orphan it: an unrecorded session is left behind engine-side, another is minted on every retry, and the chat never gets a session to continue from.
 
 One option is exempt, and only one: OpenCode's `model` set, which the config's top-level `model` has already selected. See [The Local Engine](engine.md#a-config-per-agent-written-where-the-users-folder-is-not).
 
@@ -209,7 +215,9 @@ A notice, not a status line, because it belongs beside the turn it describes: a 
 
 ### An error after a partial answer does not blank the answer
 
-Parts already streamed are kept and returned alongside the error, on every exit — including the ceiling and a cancel whose grace expired. The A2A path behaves the same way, so the transcript reads the same for both kinds of agent.
+Parts already streamed are kept and returned alongside the error, on every exit — including the ceiling and a cancel whose grace expired — and the direct-chat wrapper saves them above the error row. The A2A path behaves the same way, so the transcript reads the same for both kinds of agent.
+
+A turn the app is quit under never reaches an exit at all. The driver registers a snapshot of what it has streamed (`RunInput.registerSnapshot`) early in the turn, and the quit handler saves it before the process is killed. A part still growing at that moment keeps the text it had then. See [What a direct turn keeps when it never returns](../agents/streaming_pipeline.md#what-a-direct-turn-keeps-when-it-never-returns).
 
 `max_tokens`, `max_turn_requests` and `refusal` stop reasons are reported as errors rather than swallowed: a reply that stops mid-sentence with no explanation reads as a bug in this app.
 
@@ -247,6 +255,8 @@ What the renderer receives is what it has always received for an agent turn: str
 ### Session continuity reuses the A2A column, on purpose
 
 A folder agent's session id is stored in the A2A session table's `context_id` column, and the column names stay A2A-flavoured deliberately: that column is what the existing session lookup reads to decide a chat is an agent chat, so putting the session there means every existing reader keeps working.
+
+**A new session is saved the moment `session/new` answers, not when the turn ends.** A direct chat sends no catch-up of the earlier conversation, so the session id is the only thing that carries it into the next turn — and a turn the app is quit under never reaches its exit. Saving only at the exit would make the next turn open a fresh session with no memory of the chat. A loaded session is saved at the exit, and a turn never writes the same id twice.
 
 There are **two stores**, answering different questions. The SQLite row carries continuity on this machine; the copy in the agent's desktop state is the durable one — `app-data/desktop.json` for a kit agent, a file under `<userData>` keyed on the folder's path for a [bare](bare_agents.md) one, whose folder is never written into. The driver passes the agent's kind with the path rather than probing the folder, so the two callers cannot disagree about which store an agent has. Invariant 1 says the row is a cache, so the folder copy failing to write must not fail the turn.
 

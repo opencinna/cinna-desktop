@@ -23,7 +23,7 @@
  */
 
 import type { AgentRow } from '../../db/agents'
-import type { RunAgentTurnResult } from '../../services/a2aStreamingService'
+import type { RunAgentTurnResult, TurnSnapshot } from '../../services/a2aStreamingService'
 import type { RunEvent } from '../../../shared/runEvents'
 import type {
   LocalPermissionRequest,
@@ -57,6 +57,15 @@ export interface RunInput {
    * longer can. A driver without mid-turn delivery never calls it.
    */
   registerSteer?: (steer: SteerFn | null) => void
+  /**
+   * Where a driver offers what it has streamed so far, as a function the
+   * caller reads on demand. Called once, early in the turn. The direct-chat
+   * wrapper reads it when the app quits mid-turn — Electron does not wait for
+   * a turn to end — and when a driver breaks its never-throws contract, so
+   * what the user watched arrive is persisted either way. A driver that never
+   * calls it loses an unfinished turn's output, as every driver did before.
+   */
+  registerSnapshot?: (snapshot: () => TurnSnapshot) => void
 }
 
 /**
