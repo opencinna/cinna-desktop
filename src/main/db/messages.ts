@@ -47,7 +47,8 @@ export interface SaveToolCallMessage {
 export interface SaveErrorMessage {
   chatId: string
   short: string
-  detail?: string
+  /** Shown behind a Details toggle; `short` when omitted, none when null. */
+  detail?: string | null
   /** Machine-readable error code (e.g. `'cinna_reauth_required'`) persisted
    *  in the row's JSON payload so renderer surfaces can branch type-safely
    *  instead of substring-matching the user-facing `short` string. */
@@ -120,11 +121,12 @@ export const messageRepo = {
     return id
   },
 
-  saveAssistant(msg: SaveAssistantMessage): void {
+  saveAssistant(msg: SaveAssistantMessage): string {
+    const id = nanoid()
     getDb()
       .insert(messages)
       .values({
-        id: nanoid(),
+        id,
         chatId: msg.chatId,
         role: 'assistant',
         content: msg.content,
@@ -135,6 +137,19 @@ export const messageRepo = {
         createdAt: new Date()
       })
       .run()
+    return id
+  },
+
+  /**
+   * Rewrite an assistant row's text and parts in place, keeping its position.
+   * Only the running turn's draft row is written this way.
+   */
+  updateAssistantParts(id: string, content: string, parts: MessagePart[]): void {
+    getDb().update(messages).set({ content, parts }).where(and(eq(messages.id, id), eq(messages.role, 'assistant'))).run()
+  },
+
+  deleteById(id: string): void {
+    getDb().delete(messages).where(eq(messages.id, id)).run()
   },
 
   saveToolCall(msg: SaveToolCallMessage): void {
@@ -184,7 +199,7 @@ export const messageRepo = {
         role: 'error',
         content: JSON.stringify({
           short: msg.short,
-          detail: msg.detail ?? msg.short,
+          ...(msg.detail === null ? {} : { detail: msg.detail ?? msg.short }),
           ...(msg.code ? { code: msg.code } : {})
         }),
         sortOrder: getNextSortOrder(msg.chatId),

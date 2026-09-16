@@ -1,6 +1,7 @@
 {
   "_notes": [
-    "Stop reaches the card/message HTTP transport. No session checkpoint advances on cancellation; the separate tasks/cancel request uses its own deadline and still reaches the remote."
+    "Stop reaches the card/message HTTP transport. No session checkpoint advances on cancellation; the separate tasks/cancel request uses its own deadline and still reaches the remote.",
+    "Crash recovery supersedes the first note's 'no session checkpoint advances on cancellation': the ids from the stream's first event with a task id are saved before the stop (taskState null). The end-of-turn save is still skipped on a stop."
   ],
   "_phase2_note": "Phase 2 drives this scenario through the a2a driver instead of runAgentTurn, so the third request — `tasks/cancel` for the live task, sent once from the driver's abort listener — is now pinned. It is not new behaviour: before phase 2 `streamToAgent.cancel` (direct chat) and `A2AAsMcpProvider` (orchestrated) each sent it, one layer above what phase 0 recorded. The first note's 'neither request' predates it; the cancel carries no signal either.",
   "requests": [
@@ -58,7 +59,22 @@
   "sessionReads": [
     null
   ],
-  "sessionUpserts": [],
+  "sessionUpserts": [
+    {
+      "chatId": "chat-golden",
+      "agentId": "agent-remote-1",
+      "contextId": "ctx-cancel-1",
+      "taskId": "task-cancel-1",
+      "taskState": null
+    },
+    {
+      "chatId": "chat-golden",
+      "agentId": "agent-remote-1",
+      "contextId": null,
+      "taskId": "task-cancel-1",
+      "taskState": "canceled"
+    }
+  ],
   "taskIdsSurfaced": [
     "task-cancel-1"
   ],

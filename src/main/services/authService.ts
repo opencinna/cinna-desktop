@@ -338,6 +338,9 @@ export const authService = {
     // a profile switch: save its tokens above, but do not reactivate its setup.
     if (userActivation.isActivated() && getCurrentUserId() === userId) {
       void localDevService.reconcile(userId)
+      // Work that waited on a usable session — a remote turn the app was
+      // closed under, say — can go on now.
+      userActivation.credentialsRenewed(userId)
     }
 
     const refreshed = userRepo.get(userId)

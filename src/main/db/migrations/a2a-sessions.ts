@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { hasColumn } from './helpers'
 
 export function migrateA2aSessions(sqlite: Database.Database): void {
   sqlite.exec(`
@@ -23,4 +24,14 @@ export function migrateA2aSessions(sqlite: Database.Database): void {
       UNIQUE(chat_id, agent_id)
     );
   `)
+  // The acknowledged id of the turn's `user.message`: relaunch recovery
+  // follows the session from it. Null for a turn that never got that far.
+  if (!hasColumn(sqlite, 'managed_agent_sessions', 'kickoff_event_id')) {
+    sqlite.exec('ALTER TABLE managed_agent_sessions ADD COLUMN kickoff_event_id TEXT')
+  }
+  // The chat's user row that kickoff answers, so a kickoff is followed only
+  // for its own turn.
+  if (!hasColumn(sqlite, 'managed_agent_sessions', 'kickoff_message_id')) {
+    sqlite.exec('ALTER TABLE managed_agent_sessions ADD COLUMN kickoff_message_id TEXT')
+  }
 }

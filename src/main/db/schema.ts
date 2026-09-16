@@ -173,6 +173,18 @@ export const chatRunResults = sqliteTable('chat_run_results', {
   unread: integer('unread', { mode: 'boolean' }).notNull().default(true)
 })
 
+/** A direct-chat agent turn that has started and not yet ended. See `migrations/inflight-turns.ts`. */
+export const inflightTurns = sqliteTable('inflight_turns', {
+  id: text('id').primaryKey(),
+  profileId: text('profile_id').notNull(),
+  chatId: text('chat_id').notNull().references(() => chats.id, { onDelete: 'cascade' }),
+  agentId: text('agent_id').notNull(),
+  driver: text('driver').notNull(),
+  userMessageId: text('user_message_id'),
+  draftMessageId: text('draft_message_id'),
+  startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull()
+})
+
 export const chatMcpProviders = sqliteTable(
   'chat_mcp_providers',
   {
@@ -413,6 +425,10 @@ export const managedAgentSessions = sqliteTable('managed_agent_sessions', {
   binding: text('binding').notNull(),
   sessionId: text('session_id').notNull(),
   state: text('state').notNull(),
+  /** The current turn's acknowledged `user.message` id; relaunch recovery follows from it. */
+  kickoffEventId: text('kickoff_event_id'),
+  /** The chat's user row that kickoff answers; recovery follows it only for that row's turn. */
+  kickoffMessageId: text('kickoff_message_id'),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date())
 })
 

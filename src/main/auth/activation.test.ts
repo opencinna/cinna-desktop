@@ -110,3 +110,28 @@ describe('local development invalidation through ordinary activation', () => {
     expect(state.localDevReconcile).toHaveBeenCalledExactlyOnceWith('cinna-a')
   })
 })
+
+describe('profile-ready listeners', () => {
+  beforeEach(() => { vi.resetModules(); vi.clearAllMocks(); state.current = ''; state.disconnect.mockResolvedValue(undefined); state.reload.mockResolvedValue(undefined); state.user.mockReturnValue({ type: 'local_user' }) })
+
+  it('hear a finished activation, not a superseded one, and a renewal only for the active profile', async () => {
+    const { userActivation } = await import('./activation')
+    const ready: string[] = []
+    userActivation.onProfileReady((id) => { ready.push(id) })
+    let finish = () => {}
+    state.reload.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve }))
+    const first = userActivation.activate('a'); await flush()
+    const second = userActivation.activate('b'); await flush()
+    expect(ready).toEqual([])
+    finish(); await Promise.all([first, second])
+    expect(ready).toEqual(['b'])
+
+    userActivation.credentialsRenewed('a')
+    userActivation.credentialsRenewed('b')
+    expect(ready).toEqual(['b', 'b'])
+
+    await userActivation.deactivate()
+    userActivation.credentialsRenewed('b')
+    expect(ready).toEqual(['b', 'b'])
+  })
+})

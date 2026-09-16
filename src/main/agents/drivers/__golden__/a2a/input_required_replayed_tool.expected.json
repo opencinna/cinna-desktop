@@ -1,0 +1,115 @@
+{
+  "_notes": [
+    "The final status repeats the tool part streamed while working; replay mode keeps ONE tool part with its text once, and posts no second tool delta.",
+    "The `needs_input` question comes from the ask-user tool part's `cinna.tool_input` (question, header, options, multiSelect): the final status message carries no text part."
+  ],
+  "events": [
+    {
+      "type": "status",
+      "state": "submitted",
+      "taskId": "task-irt-1",
+      "contextId": "ctx-irt-1"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Let me ask."
+    },
+    {
+      "type": "delta",
+      "kind": "tool",
+      "text": "Using tool: askuserquestion\n1 question",
+      "toolName": "askuserquestion",
+      "toolInput": {
+        "questions": [
+          {
+            "question": "Which environment?",
+            "header": "Target",
+            "options": [
+              {
+                "label": "staging",
+                "description": "The test cluster"
+              },
+              {
+                "label": "production"
+              }
+            ],
+            "multiSelect": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "status",
+      "state": "working",
+      "taskId": "task-irt-1",
+      "contextId": "ctx-irt-1"
+    },
+    {
+      "type": "status",
+      "state": "needs_input",
+      "taskId": "task-irt-1",
+      "contextId": "ctx-irt-1"
+    },
+    {
+      "type": "needs_input",
+      "requestId": "task-irt-1",
+      "request": {
+        "kind": "question",
+        "questions": [
+          {
+            "question": "Which environment?",
+            "header": "Target",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "staging",
+                "description": "The test cluster"
+              },
+              {
+                "label": "production"
+              }
+            ]
+          }
+        ]
+      },
+      "resume": "next_message"
+    }
+  ],
+  "result": {
+    "text": "Let me ask.",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "Let me ask."
+      },
+      {
+        "kind": "tool",
+        "text": "Using tool: askuserquestion\n1 question",
+        "toolName": "askuserquestion",
+        "toolInput": {
+          "questions": [
+            {
+              "question": "Which environment?",
+              "header": "Target",
+              "options": [
+                {
+                  "label": "staging",
+                  "description": "The test cluster"
+                },
+                {
+                  "label": "production"
+                }
+              ],
+              "multiSelect": false
+            }
+          ]
+        }
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-irt-1",
+    "taskId": "task-irt-1",
+    "taskState": "input-required"
+  }
+}

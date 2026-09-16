@@ -1,7 +1,8 @@
 {
   "_notes": [
     "onTaskId fires on every task and status-update frame, not once per distinct id, hence three identical entries.",
-    "The upsert saves the taskId with taskState completed. The next turn on this chat sends that taskId again (see resume_remembered_context)."
+    "The upsert saves the taskId with taskState completed. The next turn on this chat sends that taskId again (see resume_remembered_context).",
+    "Crash recovery: the ids are saved from the stream's first event that carries a task id (taskState null, contextId from that event), before the stream ends. The end-of-turn save, when the turn reaches it, follows unchanged."
   ],
   "requests": [
     {
@@ -45,6 +46,13 @@
     null
   ],
   "sessionUpserts": [
+    {
+      "chatId": "chat-golden",
+      "agentId": "agent-remote-1",
+      "contextId": "ctx-plain-1",
+      "taskId": "task-plain-1",
+      "taskState": null
+    },
     {
       "chatId": "chat-golden",
       "agentId": "agent-remote-1",

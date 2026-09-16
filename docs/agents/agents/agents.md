@@ -83,6 +83,7 @@ The same capability gesture can attach an agent to an existing chat; the shared 
 3. Main resolves the answerer from the persisted chat router; the A2A driver then loads its protocol session
 4. The stored `contextId` and `taskId` are sent with the new message so the remote agent maintains conversation context
 5. The agent responds within the same context — the session is updated with any new task/context IDs from the response
+6. If the app is quit or killed before the reply finishes, the next launch collects the reply from the agent, or says the app closed before it finished. See [Interrupted Turn Recovery](../turn_recovery/turn_recovery.md)
 
 ## Business Rules
 
@@ -94,7 +95,8 @@ The same capability gesture can attach an agent to an existing chat; the shared 
 - **Protocol extensibility** — The `protocol` field on agents is a discriminator; only `'a2a'` is handled today, but the schema and UI are designed for additional protocols
 - **Network error translation** — When the A2A request fails at the socket/transport layer (server disconnect mid-response, refused, reset, DNS failure, timeout), the raw undici message (e.g. `TypeError: terminated`) is mapped to a short user-readable message shown in the chat error; the raw string is retained as `detail` for debugging
 - **Agent selection is per-chat** — Selecting an agent applies only to the new chat being created; the agent binding is persisted on the chat (`agentId`) and in the `a2a_sessions` table so subsequent messages route through the agent automatically
-- **Session continuity** — Each agent chat has an associated A2A session that stores the remote server's `contextId` and `taskId`. These are sent with every subsequent message so the remote agent maintains full conversation context. The session is created on the first successful message exchange and updated after each response.
+- **Session continuity** — Each agent chat has an associated A2A session that stores the remote server's `contextId` and `taskId`. These are sent with every subsequent message so the remote agent maintains full conversation context. The session row is written from the first stream event that carries a task id and updated again when the turn ends. On Cinna the task id is the session, so saving it only at the end meant that a first turn that was stopped, dropped or killed left no session, and the next message started a new conversation. A turn that fails or is stopped skips the end-of-turn update and keeps the ids its first event saved.
+- **The user row's id is the A2A `messageId`** — the Cinna backend echoes it in `tasks/get` history, which is how an interrupted or dropped turn is found there, and deduplicates a resend by it. A runner-originated send stores a system row and sends a fresh id instead.
 - **Routing and protocol sessions are separate** — Main routes from `chats.router`; A2A session rows hold remote conversation checkpoints, not the choice between an agent and a model. See [Chat Routing](../../chat/chat_routing/chat_routing.md).
 - **Agent and chat mode** — A direct A2A turn uses the agent's own execution; model-coordinated chats may also use the configured model and capabilities. Multiple selected agents follow the shared routing rules.
 - **@-mention trigger** — The `@` character triggers the mention popup only when it appears at the start of input or immediately after whitespace; `@` inside a word (e.g. `email@`) does not trigger it
@@ -127,7 +129,7 @@ Chat Flow — First Message (agent page, capability picker or @-mention):
                                    → agent_a2a.ipc.ts → createA2AClient() → External Agent
                                    → SSE events → StreamPartsAccumulator (per-part deltas, kind+toolName)
                                    → Deltas streamed back via MessagePort → chat.store → UI
-                                   → a2a_sessions row created (contextId, taskId from response)
+                                   → a2a_sessions row created at the first event with a task id
                                    → On done: messageRepo.saveAssistant({ content, parts })
 
 Chat Flow — Subsequent Messages:
@@ -135,7 +137,7 @@ Chat Flow — Subsequent Messages:
     → main reads chats.router → the bound agent answers
       → the driver loads the a2a_sessions row → buildSendParams(content, contextId, taskId)
         → External Agent (receives conversation context)
-        → a2a_sessions row updated with latest contextId/taskId
+        → a2a_sessions row updated with latest contextId/taskId (first task event, then turn end)
 ```
 
 ## Integration Points

@@ -54,6 +54,7 @@ import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
 import { DEFAULT_CLAUDE_APPROVAL } from '../../../shared/engine'
 import type { AcpLauncherId, AgentDriverId } from '../../../shared/agentDrivers'
 import { createA2aDriver } from './a2aDriver'
+import { createA2aTurnRecoverer } from './a2aTurnRecoverer'
 import { createAcpDriver, respondToAcpAsk, type AcpFolderView } from './acp/acpDriver'
 import { acpProcessPool } from './acp/acpPool'
 export { acpProcessPool } from './acp/acpPool'
@@ -70,6 +71,8 @@ import { resolveAccessToken, resolveEndpointIfNeeded } from './a2aConnection'
 import { driverOfRow } from './driverOf'
 import { unsupportedDriver } from './unsupportedDriver'
 import { createManagedDriver } from './managed/managedDriver'
+import { createManagedTurnRecoverer } from './managed/managedTurnRecoverer'
+import { agentService } from '../../services/agentService'
 import { managedAgentService } from '../../services/managedAgentService'
 import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
 
@@ -438,6 +441,21 @@ export const acpDriver = createAcpDriver({
     ? turnLock.withQueuedLock(agentId, owner, queuedSignal, fn) : turnLock.withLock(agentId, owner, fn)
 })
 
+/** Relaunch recovery of `a2a` turns, with the driver's own credential resolution. */
+export const a2aTurnRecoverer = createA2aTurnRecoverer({
+  resolveEndpoint: resolveEndpointIfNeeded,
+  resolveAccessToken,
+  isReauthRequired: (err) => err instanceof CinnaReauthRequired
+})
+
+/** Relaunch recovery of `managed` turns, with the driver's own binding resolution. */
+export const managedTurnRecoverer = createManagedTurnRecoverer({
+  findAgent: (settingsUserId, profileUserId, agentId) => agentService.findAgent(settingsUserId, profileUserId, agentId),
+  readiness: (agent) => managedAgentService.readiness(agent),
+  prepare: (ownerId, agent, chatId) => managedAgentService.prepare(ownerId, agent, chatId),
+  registerRequest: (input) => pendingRequests.register(input)
+})
+
 /* ------------------------------------------------------------ the resolver */
 
 const drivers: Record<AgentDriverId, AgentDriver> = {
@@ -446,7 +464,9 @@ const drivers: Record<AgentDriverId, AgentDriver> = {
     resolveEndpoint: resolveEndpointIfNeeded,
     resolveAccessToken,
     fetchCard: fetchAgentCard,
-    isReauthRequired: (err) => err instanceof CinnaReauthRequired
+    isReauthRequired: (err) => err instanceof CinnaReauthRequired,
+    saveTaskState: ({ chatId, agentId, taskId, taskState }) =>
+      agentSessionRepo.upsert({ chatId, agentId, contextId: null, taskId, taskState })
   }),
   acp: acpDriver,
   managed: createManagedDriver({

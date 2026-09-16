@@ -32,6 +32,8 @@ export interface FixtureInput {
   accessToken?: string
   wireContent: string
   fileIds?: string[]
+  /** The A2A `messageId` to send (the user row id in a direct chat). */
+  messageId?: string
   isCinnaTokenAuth?: boolean
 }
 
@@ -55,6 +57,15 @@ export type Reply =
   /** A `message/send` answer: one JSON-RPC body with the request's id. */
   | { rpc: Frame }
 
+/**
+ * One `tasks/get` answer: a JSON-RPC frame, or a failure below it — `fetch`
+ * rejecting (`network`), or a bare HTTP status such as a proxy's 502.
+ */
+export type TasksGetAnswer =
+  | Frame
+  | { network: { message: string; causeCode?: string; causeMessage?: string } }
+  | { status: number; statusText?: string }
+
 export interface SessionRow {
   contextId: string | null
   taskId: string | null
@@ -72,6 +83,13 @@ export interface A2aFixture {
     card: Reply
     /** `POST` to the endpoint: `message/stream` or `message/send`. */
     rpc?: Reply
+    /**
+     * Answers to `tasks/get`, one per call in order; the last one repeats.
+     * Absent: a JSON-RPC "method not found", as a server without it answers.
+     */
+    tasksGet?: TasksGetAnswer[]
+    /** The answer to `tasks/cancel`. Absent: the task, `canceled`. */
+    cancel?: Frame
   }
   script?: {
     /** Abort the turn's signal synchronously inside the Nth `onEvent` call. */
@@ -94,6 +112,12 @@ export interface FakeAgent {
   requests: RecordedRequest[]
   /** Close a held stream now. */
   close(): void
+  /**
+   * Fail a held stream the way undici does when the socket closes
+   * mid-response: `TypeError: terminated` with a socket cause. Call it only
+   * once the turn has read the frames — failing a stream drops what it holds.
+   */
+  drop(): void
   /** Close a held stream when `signal` aborts — what the server does once cancelled. */
   closeOnAbort(signal: AbortSignal): void
 }
@@ -112,6 +136,7 @@ export function fakeA2aAgent(fixture: A2aFixture): FakeAgent {
   let held: ReadableStreamDefaultController<Uint8Array> | null = null
   let closed = false
   let removeAbort = (): void => {}
+  let tasksGetCalls = 0
 
   const close = (): void => {
     if (closed || !held) return
@@ -174,17 +199,34 @@ export function fakeA2aAgent(fixture: A2aFixture): FakeAgent {
       ...(body ? { body } : {})
     })
     if (method === 'GET') return answer(fixture.http.card, undefined, init?.signal)
-    if (body?.method === 'tasks/cancel') return answer({ rpc: { result: {
+    if (body?.method === 'tasks/cancel') return answer({ rpc: fixture.http.cancel ?? { result: {
       kind: 'task', id: (body.params as { id: string }).id, contextId: 'cancel-context', status: { state: 'canceled' }
     } } }, body.id, init?.signal)
+    if (body?.method === 'tasks/get') {
+      const answers = fixture.http.tasksGet
+      const next: TasksGetAnswer = answers?.length
+        ? answers[Math.min(tasksGetCalls++, answers.length - 1)]
+        : { error: { code: -32601, message: 'Method not found' } }
+      if ('network' in next || 'status' in next) return answer(next, body.id, init?.signal)
+      return answer({ rpc: next }, body.id, init?.signal)
+    }
     if (!fixture.http.rpc) throw new Error(`fake agent: unexpected ${method} ${urlOf(input)}`)
     return answer(fixture.http.rpc, body?.id, init?.signal)
   }) as typeof fetch
+
+  const drop = (): void => {
+    if (closed || !held) return
+    closed = true
+    removeAbort()
+    const cause = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' })
+    held.error(new TypeError('terminated', { cause }))
+  }
 
   return {
     fetch: fakeFetch,
     requests,
     close,
+    drop,
     closeOnAbort(signal) {
       if (signal.aborted) close()
       else signal.addEventListener('abort', close, { once: true })

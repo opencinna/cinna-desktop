@@ -43,6 +43,16 @@ vi.mock('../db/messages', () => ({
   }
 }))
 vi.mock('../db/agents', () => ({ agentSessionRepo: { getByChatAndAgent: () => undefined, upsert: () => {} } }))
+// No draft is written here (no fake timers, no `needs_input`); the marker and
+// the draft have their own suite against a real database.
+vi.mock('../db/inflightTurns', () => ({
+  inflightTurnRepo: {
+    open: () => {},
+    delete: () => {},
+    writeDraft: () => 'draft',
+    replaceDraft: (_marker: string | null, _draft: string | null, write: () => void) => write()
+  }
+}))
 vi.mock('./jobService', () => ({
   jobService: {
     reportRunCompletion: (_c: string, status: string, message?: string) =>
@@ -552,6 +562,65 @@ describe('a2aInputRequestOf', () => {
 
   it('offers a free-text answer when input-required carries no text', () => {
     expect(a2aInputRequestOf('input-required', undefined)).toEqual({ kind: 'question', questions: [{ question: 'What should the agent do next?', multiSelect: false, options: [] }] })
+  })
+
+  describe('a question asked through Cinna’s ask-user tool', () => {
+    const askTool = (input: unknown, name = 'askuserquestion') => ({
+      kind: 'text',
+      text: 'Using tool: askuserquestion\n2 questions',
+      metadata: { 'cinna.content_kind': 'tool', 'cinna.tool_name': name, 'cinna.tool_input': input }
+    })
+
+    it('asks the tool’s questions, with their headers and options', () => {
+      // Mutation: skip `askToolQuestionsOf` → the generic fallback question.
+      const request = a2aInputRequestOf('input-required', message(
+        { kind: 'text', text: 'deciding', metadata: { 'cinna.content_kind': 'thinking' } },
+        askTool({
+          questions: [
+            {
+              question: 'Which colour?', header: 'Colour', multiSelect: false,
+              options: [{ label: 'Blue', description: 'Calm' }, { label: 'Red' }, { description: 'no label' }]
+            },
+            { question: 'Which days?', multiSelect: true, options: [{ label: 'Mon' }, { label: 'Tue' }] },
+            { question: '   ' },
+            'not a question'
+          ]
+        })
+      ))
+      expect(request).toEqual({
+        kind: 'question',
+        questions: [
+          {
+            question: 'Which colour?', header: 'Colour', multiSelect: false,
+            options: [{ label: 'Blue', description: 'Calm' }, { label: 'Red' }]
+          },
+          { question: 'Which days?', multiSelect: true, options: [{ label: 'Mon' }, { label: 'Tue' }] }
+        ]
+      })
+    })
+
+    it('keeps the message’s own text as the question when it has some', () => {
+      const request = a2aInputRequestOf('input-required', message(
+        { kind: 'text', text: 'Pick one below.' },
+        askTool({ questions: [{ question: 'Which colour?', options: [] }] })
+      ))
+      expect(request).toEqual({ kind: 'question', questions: [{ question: 'Pick one below.', multiSelect: false, options: [] }] })
+    })
+
+    it.each([
+      ['another tool', askTool({ questions: [{ question: 'Which colour?' }] }, 'bash')],
+      ['no questions array', askTool({ question: 'Which colour?' })],
+      ['only empty questions', askTool({ questions: [{ question: '' }, {}] })]
+    ])('falls back to the open question for %s', (_label, part) => {
+      expect(a2aInputRequestOf('input-required', message(part))).toEqual({
+        kind: 'question', questions: [{ question: 'What should the agent do next?', multiSelect: false, options: [] }]
+      })
+    })
+
+    it('does not turn an auth-required message into questions', () => {
+      expect(a2aInputRequestOf('auth-required', message(askTool({ questions: [{ question: 'Which colour?' }] }))))
+        .toEqual({ kind: 'auth', message: A2A_AUTH_REQUIRED_FALLBACK })
+    })
   })
 })
 

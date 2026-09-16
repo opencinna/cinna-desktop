@@ -58,6 +58,7 @@ vi.mock('../auth/activation', () => ({
     activate: vi.fn(async () => {}),
     deactivate: vi.fn(async () => {}),
     forgetUnlock: vi.fn(),
+    credentialsRenewed: vi.fn(),
     isActivated: () => holder.activated
   }
 }))
@@ -82,6 +83,7 @@ const { authService } = await import('./authService')
 const { userRepo } = await import('../db/users')
 const { localDevService } = await import('../localdev/localDevService')
 const { storeCinnaTokens } = await import('../auth/cinna-tokens')
+const { userActivation } = await import('../auth/activation')
 
 /** The browser flow, answering for `email` with whatever server it was aimed at. */
 function oauthAnswers(email: string): void {
@@ -99,6 +101,7 @@ beforeEach(() => {
   holder.currentUserId = null
   holder.activated = false
   vi.mocked(localDevService.reconcile).mockClear()
+  vi.mocked(userActivation.credentialsRenewed).mockClear()
   vi.mocked(storeCinnaTokens).mockClear()
   oauth.flow.mockReset()
   sync.resetCursors.mockReset()
@@ -188,8 +191,10 @@ describe('reauthentication that outlives its activated profile', () => {
       expect(storeCinnaTokens).toHaveBeenCalledExactlyOnceWith(id, tokens)
       if (transition === 'unchanged') {
         expect(localDevService.reconcile).toHaveBeenCalledExactlyOnceWith(id)
+        expect(userActivation.credentialsRenewed).toHaveBeenCalledExactlyOnceWith(id)
       } else {
         expect(localDevService.reconcile).not.toHaveBeenCalled()
+        expect(userActivation.credentialsRenewed).not.toHaveBeenCalled()
       }
     }
   )

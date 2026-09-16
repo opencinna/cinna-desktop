@@ -32,7 +32,15 @@ export class ManagedEvents {
   private interruptProcessed = false
   private stopping = false
 
-  constructor(private readonly maxEvents = 50_000) {}
+  constructor(
+    private readonly maxEvents = 50_000,
+    /**
+     * Count a queued (unprocessed) `user.tool_confirmation` as an answer. For
+     * a followed turn, whose confirmations may have been sent before a kill;
+     * a live turn guards its own through its permission barriers.
+     */
+    private readonly options: { queuedConfirmationsAnswer?: boolean } = {}
+  ) {}
 
   get budgetPaused(): boolean { return this.latestStatus === 'budget_reached' }
 
@@ -42,8 +50,15 @@ export class ManagedEvents {
       if (event.type === 'agent.tool_use' || event.type === 'agent.mcp_tool_use') this.tools.set(event.id, event)
       if (event.type === 'agent.tool_result') this.resolvedTools.add(event.tool_use_id)
       if (event.type === 'agent.mcp_tool_result') this.resolvedTools.add(event.mcp_tool_use_id)
-      if (event.type === 'user.tool_confirmation' && event.processed_at) this.resolvedTools.add(event.tool_use_id)
+      if (event.type === 'user.tool_confirmation' && (event.processed_at || this.options.queuedConfirmationsAnswer)) {
+        this.resolvedTools.add(event.tool_use_id)
+      }
     }
+  }
+
+  /** Whether an event with this id is in what was read so far. */
+  seen(id: string): boolean {
+    return this.stages.has(id)
   }
 
   baseline(event: ManagedEvent): void {
@@ -57,9 +72,16 @@ export class ManagedEvents {
     if (this.latestStatus === 'budget_reached') {
       throw new Error('This Managed session is paused at its remote budget. Review the budget in Claude before continuing.')
     }
-    if (this.queuedInputs.size || (!newlyCreated && status !== 'idle') ||
-      (this.latestStatus !== null && this.latestStatus !== 'end_turn')) {
-      throw new Error('This Managed session still has unfinished work. Resolve it in Claude before continuing.')
+    // `retries_exhausted` is ready: the SDK documents that the dead turn's
+    // queued inputs are flushed and the client may send a new prompt.
+    if ((!newlyCreated && status !== 'idle') || this.latestStatus === 'running') {
+      throw new Error('This Managed session is still working on an earlier message. Wait for it to finish, or stop it in Claude, before continuing.')
+    }
+    if (this.queuedInputs.size) {
+      throw new Error('An earlier message to this Managed session is still queued. Wait for Claude to take it, or clear it in Claude, before continuing.')
+    }
+    if (this.latestStatus === 'requires_action') {
+      throw new Error('This Managed session is waiting for a permission decision. Answer it in Claude before continuing.')
     }
   }
 
@@ -153,7 +175,12 @@ export class ManagedEvents {
         break
       case 'agent.tool_use':
       case 'agent.mcp_tool_use': this.tools.set(event.id, event); break
-      case 'session.status_idle': this.latestStatus = event.stop_reason.type; break
+      case 'session.status_idle':
+        this.latestStatus = event.stop_reason.type
+        // The SDK: "This turn is dead; queued inputs are flushed". An input
+        // queued before this event never gets its `processed_at`.
+        if (event.stop_reason.type === 'retries_exhausted') this.queuedInputs.clear()
+        break
       case 'session.status_running':
       case 'session.status_rescheduled': this.latestStatus = 'running'; break
       case 'session.deleted':

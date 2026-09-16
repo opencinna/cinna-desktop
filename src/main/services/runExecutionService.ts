@@ -1,13 +1,13 @@
 import { nanoid } from 'nanoid'
 import { taskRunnersByChat } from './taskRunnerState'
 import { liveRunHub } from './liveRunHub'
-import { reportStandaloneTurn, type TurnCompletion, type TurnOutcome } from './turnCompletion'
+import type { TurnCompletion, TurnOutcome } from './turnCompletion'
+import { recordTurnResult, terminalEventOf } from './turnRecord'
 import { taskRepo } from '../db/tasks'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { syncRepo } from '../db/sync'
 import { messageRepo } from '../db/messages'
 import { chatRepo } from '../db/chats'
-import { chatRunResultRepo } from '../db/chatRunResults'
 import { chatAgentCursorRepo } from '../db/chatAgentCursors'
 import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { agentService } from './agentService'
@@ -28,7 +28,9 @@ import { activeRunsByChat as activeChats } from './runExecutionState'
 import { handingOffChats } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import type { CoordinatorToolProvider } from './coordinatorToolProvider'
-import type { SteerFn } from '../agents/drivers/driver'
+import type { AgentDriver, SteerFn } from '../agents/drivers/driver'
+import type { AgentRow } from '../db/agents'
+import type { TurnRun } from './a2aStreamingService'
 
 const logger = createLogger('run')
 export interface RunScope { profileUserId: string; settingsUserId: string }
@@ -70,6 +72,22 @@ export interface RunHandle {
   readonly agentId: string | null
 }
 
+/** What {@link runExecutionService.adopt} hands the code that drives an adopted turn. */
+export interface AdoptedRunIO {
+  /** Aborted when the user stops the run. */
+  signal: AbortSignal
+  /** A live event for the chat's watchers. Nothing is saved. */
+  post(event: RunEvent): void
+  /** Record an event the way a live turn's observer does (an ask opening). Also posts it. */
+  observe(event: RunEvent): void
+  /**
+   * Run the agent's turn again for a user row that is already saved: sent
+   * with the row's id as its `messageId`, no new user row, its output saved
+   * and streamed as any turn's. Resolves with the turn's outcome; never rejects.
+   */
+  resend(userMessageId: string): Promise<TurnOutcome>
+}
+
 /**
  * Who answers `payload` in `chat`: the routing rule every send goes by, with
  * the addressing only a `human` chat reads (and only it pays the two reads for).
@@ -95,6 +113,118 @@ export const runExecutionService = {
     const runner = taskRunnersByChat.get(chatId)
     if (runner?.userId === userId) runner.cancel()
     else activeChats.get(chatId)?.cancel()
+  },
+
+  /**
+   * Show a turn that is not a send as the chat's running turn: a turn the app
+   * was closed under, being collected from its agent. It holds the chat as
+   * `start` does — the sidebar spinner, the live view, Stop (which aborts
+   * `io.signal`, and a resent turn), and the queue for messages sent
+   * meanwhile — but saves nothing and records no result of its own: `drive`
+   * writes the rows and settles the bookkeeping before it resolves, and the
+   * run closes after that. Throws, and opens nothing, when the chat is busy.
+   * `hiddenMessageIds` are left out of the live view's baseline: rows `drive`
+   * will replace, which the live replay stands in for until then.
+   */
+  adopt(scope: RunScope, input: { chatId: string; agentId: string; runId: string; observe: RunObserver; hiddenMessageIds?: string[] },
+    drive: (io: AdoptedRunIO) => Promise<TurnOutcome>): RunHandle {
+    const { chatId, agentId, runId } = input
+    if (activeChats.has(chatId) || taskRunnersByChat.has(chatId) || handingOffChats.has(chatId) ||
+      taskHandoffRepo.unresolvedForChat(scope.profileUserId, chatId)) {
+      throw new Error('This conversation already has a turn running.')
+    }
+    if (!chatRepo.getOwned(scope.profileUserId, chatId)) throw new Error('Chat not found')
+    const hidden = new Set(input.hiddenMessageIds ?? [])
+    const live = liveRunHub.begin(scope.profileUserId, chatId, runId,
+      chatRepo.listMessageIds(chatId).filter((id) => !hidden.has(id)))
+    live.setAgentId(agentId)
+    const controller = new AbortController()
+    let complete!: (outcome: RunOutcome) => void
+    let closed = false
+    let terminalPosted = false
+    let requestId: string | null = null
+    const ctx: RunEventContext = { userId: scope.profileUserId, chatId, agentId, turnId: runId, rootRunId: runId, completionOwner: 'turn' }
+    const handle: RunHandle = {
+      id: runId,
+      accepted: Promise.resolve(),
+      completed: new Promise<RunOutcome>((resolve) => { complete = resolve }),
+      cancel() {
+        controller.abort()
+        if (requestId) a2aStreamingService.cancel(requestId)
+      },
+      agentId,
+      steerable: false,
+      onSteerable: () => () => {},
+      steer: async () => 'unavailable'
+    }
+    activeChats.set(chatId, handle)
+    live.accepted()
+    const post = (event: RunEvent): void => {
+      if (closed) return
+      if (event.type === 'request-id') {
+        requestId = event.requestId
+        if (controller.signal.aborted) a2aStreamingService.cancel(requestId)
+      }
+      if (event.type === 'done' || event.type === 'error') terminalPosted = true
+      live.push(event)
+    }
+    const observe = (event: RunEvent): void => {
+      try { input.observe(ctx, event) } catch (error) {
+        logger.warn('run observer failed', { chatId, error: String(error) })
+      }
+    }
+    const io: AdoptedRunIO = {
+      signal: controller.signal,
+      post,
+      observe(event) {
+        if (closed) return
+        observe(event)
+        post(event)
+      },
+      resend: (userMessageId) => new Promise<TurnOutcome>((resolve) => {
+        let settled = false
+        const finish: TurnCompletion = (outcome) => {
+          if (settled) return
+          settled = true
+          resolve(outcome)
+        }
+        const port: StreamPort = {
+          // The driver's asks are recorded as a live turn's are. Its ending is
+          // not: `drive` settles the turn once, with its own bookkeeping.
+          postMessage(event) {
+            if (event.type !== 'done' && event.type !== 'error') observe(event)
+            post(event)
+          },
+          close() {}
+        }
+        resendAgentTurn(port, { chatId, profileUserId: scope.profileUserId, settingsUserId: scope.settingsUserId, agentId, userMessageId, finish })
+          .catch((error) => logger.error('a resent turn failed', { chatId, error: String(error) }))
+          .finally(() => finish({ state: 'failed', text: '', error: { message: 'The resent turn ended without an outcome.' } }))
+      })
+    }
+    const close = (outcome: TurnOutcome): void => {
+      if (closed) return
+      if (!terminalPosted) post(terminalEventOf(outcome))
+      closed = true
+      if (activeChats.get(chatId) === handle) activeChats.delete(chatId)
+      let inputRequestIds: string[] = []
+      try {
+        inputRequestIds = taskInputRequestRepo.listOpenForRun(chatId, runId)
+          .filter((row) => row.resume === 'next_message' || row.deliveryOwner === 'runner').map((row) => row.id)
+      } catch (error) {
+        logger.warn('could not read remaining turn requests', { chatId, error: String(error) })
+      }
+      live.close()
+      complete({ ...outcome, state: outcome.state === 'completed' && inputRequestIds.length ? 'needs_input' : outcome.state,
+        runId, accepted: true, inputRequestIds })
+    }
+    void Promise.resolve()
+      .then(() => drive(io))
+      .then(close, (error) => {
+        logger.error('an adopted run failed', { chatId, error: error instanceof Error ? error.message : String(error) })
+        close({ state: 'failed', text: '', error: { message: error instanceof Error ? error.message : String(error) } })
+      })
+    return handle
   },
 
   start(scope: RunScope, payload: RunSendPayload, options: {
@@ -227,10 +357,7 @@ export const runExecutionService = {
         if (closed) return
         if (!outcome) finish({ state: 'failed', text: '', error: { message: failure ?? 'The turn closed without a terminal outcome.' } })
         if (!terminalObserved && context) {
-          const result = outcome!
-          const event: RunEvent = result.state === 'failed'
-            ? { type: 'error', error: result.error?.message ?? 'The turn failed.' }
-            : { type: 'done', stopReason: result.state === 'canceled' ? 'canceled' : result.state === 'budget' ? 'budget' : 'end_turn' }
+          const event: RunEvent = terminalEventOf(outcome!)
           observe(context, event)
           port.postMessage(event)
         }
@@ -256,21 +383,13 @@ export const runExecutionService = {
         const result = outcome!
         const final: RunOutcome = { ...result, state: result.state === 'completed' && inputRequestIds.length ? 'needs_input' : result.state,
           runId: handle.id, accepted, inputRequestIds, ...(inputRequestReadError ? { inputRequestReadError } : {}) }
-        try {
-          // A runner owns the session outcome: a successful leaf may continue,
-          // and its cancellation can be the controller enforcing a time limit.
-          if (!options.runnerTaskId && (accepted || !options.preserveOnRefusal)) {
-            chatRunResultRepo.record(payload.chatId, handle.id,
-              cancelRequested ? 'canceled' : final.state === 'budget' || final.inputRequestReadError ? 'failed' : final.state)
-          }
-        } catch (error) {
-          logger.warn('could not save sidebar run result', { chatId: payload.chatId, error: String(error) })
+        // A runner owns the session outcome: a successful leaf may continue,
+        // and its cancellation can be the controller enforcing a time limit.
+        // The boot pass records a killed turn through the same function.
+        if (!options.runnerTaskId && (accepted || !options.preserveOnRefusal)) {
+          recordTurnResult(payload.chatId, handle.id, final, { canceled: cancelRequested })
         }
         live.close()
-        if (!options.runnerTaskId && (accepted || !options.preserveOnRefusal)) {
-          try { reportStandaloneTurn(payload.chatId, final) }
-          catch (error) { logger.warn('turn status projection failed', { chatId: payload.chatId, error: String(error) }) }
-        }
         complete(final)
       }
     }
@@ -388,6 +507,7 @@ async function resolveAndRun(
     finish: lifecycle.finish,
     inputOrigin: lifecycle.inputOrigin,
     includeToolResults: lifecycle.runnerOwned,
+    runnerOwned: lifecycle.runnerOwned,
     queueWhenBusy: lifecycle.runnerOwned,
     handbackEligible: lifecycle.handbackEligible,
     agentId: target.agentId,
@@ -418,6 +538,8 @@ function observeAsks(port: StreamPort, ctx: RunEventContext, observe: RunObserve
 
 interface AgentTurnInput {
   handbackEligible?: boolean
+  /** A task runner owns this turn's outcome, and its checkpoint is the in-flight record. */
+  runnerOwned?: boolean
   queueWhenBusy?: boolean
   includeToolResults?: boolean
   inputOrigin?: 'user' | 'runner'
@@ -475,7 +597,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
 
   // Persist the user message + fire title generation in one place. The message
   // is stored as the user typed it; the packet travels on the wire only.
-  const { wireContent } = messageRoutingService.prepareAgentSend({
+  const { wireContent, userMessageId } = messageRoutingService.prepareAgentSend({
     userId: profileUserId,
     chatId,
     agentId,
@@ -486,34 +608,23 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
   })
   input.accepted()
 
-  // `/run:<name>` for an agent whose commands come from a folder catalog is
-  // intercepted **here**, before the driver is ever reached — OpenCode has no
-  // such convention, so the desktop itself has to recognise the message.
-  // Deliberately not inside the driver: a command is not a model turn. See
-  // `resolveCommandRunner`'s own docstring for why the decision lives there.
-  //
-  // It matches on the *typed* text, not on the packet in front of it: a
-  // `/run:` prefixed by a catch-up transcript is still the command the user
-  // typed, and a packet is never built for one anyway (a command runs a script
-  // on this machine, so there is nothing to catch it up on).
-  const run = resolveCommandRunner(
-    driver.capabilities(agent).commands,
-    wireContent,
+  // `/run:<name>` is intercepted before the driver: see `bindTurn`.
+  const run = bindTurn({
+    driver,
+    agent,
     agentOwnerId,
-    agentId,
-    (io) =>
-      driver.run(agentOwnerId, agent, {
-        chatId,
-        wireContent: withCatchUp(packet, wireContent),
-        fileIds,
-        signal: io.signal,
-        ...(input.queueWhenBusy ? { queueWhenBusy: true } : {}),
-        ...(input.handbackEligible ? { handbackEligible: true } : {}),
-        ...(input.registerSteer ? { registerSteer: input.registerSteer } : {}),
-        ...(io.registerSnapshot ? { registerSnapshot: io.registerSnapshot } : {}),
-        onEvent: io.onEvent
-      })
-  )
+    chatId,
+    wireContent,
+    packet,
+    fileIds,
+    // The user row's id is the A2A `messageId`: the Cinna backend echoes
+    // it back in `tasks/get` history and deduplicates a resend by it. A
+    // runner-originated send stores a system row instead, so it sends none.
+    messageId: input.inputOrigin !== 'runner' ? userMessageId : undefined,
+    queueWhenBusy: input.queueWhenBusy,
+    handbackEligible: input.handbackEligible,
+    registerSteer: input.registerSteer
+  })
 
   await handOff(port, () =>
     a2aStreamingService.streamToAgent({
@@ -522,6 +633,9 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
       agentId,
       port,
       onFinished: input.finish,
+      ...(input.runnerOwned ? {} : {
+        marker: { profileId: profileUserId, userMessageId: userMessageId ?? null, driver: driver.id }
+      }),
       // Only a turn that finished moves the cursor. A failed or stopped one
       // leaves the gap for the retry to carry.
       onCompleted: () => {
@@ -530,6 +644,146 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
       }
     }),
     (message) => input.refusal(chatId, message)
+  )
+}
+
+/**
+ * The turn a driver runs for one message, or the `/run:` command it names.
+ *
+ * `/run:<name>` for an agent whose commands come from a folder catalog is
+ * intercepted **here**, before the driver is ever reached — OpenCode has no
+ * such convention, so the desktop itself has to recognise the message.
+ * Deliberately not inside the driver: a command is not a model turn. See
+ * `resolveCommandRunner`'s own docstring for why the decision lives there.
+ *
+ * It matches on the *typed* text, not on the packet in front of it: a
+ * `/run:` prefixed by a catch-up transcript is still the command the user
+ * typed, and a packet is never built for one anyway (a command runs a script
+ * on this machine, so there is nothing to catch it up on).
+ */
+function bindTurn(input: {
+  driver: AgentDriver
+  agent: AgentRow
+  agentOwnerId: string
+  chatId: string
+  wireContent: string
+  packet: string | null
+  fileIds?: string[]
+  messageId?: string
+  queueWhenBusy?: boolean
+  handbackEligible?: boolean
+  registerSteer?: (steer: SteerFn | null) => void
+}): TurnRun {
+  const { driver, agent, agentOwnerId, wireContent } = input
+  return resolveCommandRunner(
+    driver.capabilities(agent).commands,
+    wireContent,
+    agentOwnerId,
+    agent.id,
+    (io) =>
+      driver.run(agentOwnerId, agent, {
+        chatId: input.chatId,
+        wireContent: withCatchUp(input.packet, wireContent),
+        fileIds: input.fileIds,
+        ...(input.messageId ? { messageId: input.messageId } : {}),
+        signal: io.signal,
+        ...(input.queueWhenBusy ? { queueWhenBusy: true } : {}),
+        ...(input.handbackEligible ? { handbackEligible: true } : {}),
+        ...(input.registerSteer ? { registerSteer: input.registerSteer } : {}),
+        ...(io.registerSnapshot ? { registerSnapshot: io.registerSnapshot } : {}),
+        onEvent: io.onEvent
+      })
+  )
+}
+
+/**
+ * The agent's turn for a user row that is already saved — a send the agent
+ * never received. Built as {@link runAgentTurn} builds a send, from the row
+ * (its text, its files, the catch-up of what came before it), with the row's
+ * id as the `messageId`, and saved and streamed by the same wrapper. No marker:
+ * the turn being recovered keeps its own until it is settled.
+ */
+async function resendAgentTurn(port: StreamPort, input: {
+  chatId: string
+  profileUserId: string
+  settingsUserId: string
+  agentId: string
+  userMessageId: string
+  finish: TurnCompletion
+}): Promise<void> {
+  const { chatId, profileUserId, settingsUserId, agentId, userMessageId } = input
+  const fail = (message: string): void => {
+    logger.error(message, { chatId, agentId })
+    input.finish({ state: 'failed', text: '', error: { message } })
+  }
+  /** The error row a resend that never streamed leaves: all the transcript keeps of the turn. */
+  const saveErrorRow = (message: string): void => {
+    try {
+      messageRepo.saveError({ chatId, short: message })
+    } catch (error) {
+      logger.error('a refused resend could not save its error', { chatId, error: String(error) })
+    }
+  }
+  /**
+   * A resend that fails before it streams: the turn's rows were removed for
+   * it, so the error row is what the transcript keeps of it, and the error
+   * event ends the live view.
+   */
+  const refuse = (message: string): void => {
+    saveErrorRow(message)
+    port.postMessage({ type: 'error', error: message })
+    fail(message)
+  }
+  const located = agentService.findAgent(settingsUserId, profileUserId, agentId)
+  if (!located) return refuse('Agent not found or not configured')
+  const chat = chatRepo.getOwned(profileUserId, chatId)
+  const messages = chatRepo.listMessages(chatId)
+  const row = messages.find((message) => message.id === userMessageId)
+  if (!chat || !row || row.role !== 'user') return refuse('The message to send again is no longer in the chat.')
+  const { row: agent, userId: agentOwnerId } = located
+  let run: ReturnType<typeof bindTurn>
+  try {
+    const catchUp = routingOf(chat).router === 'human' || chat.agentId !== agentId
+    const packet = catchUp
+      ? buildCatchUpPacket({
+          messages: messages.filter((message) => message.sortOrder < row.sortOrder),
+          agentId,
+          cursorMessageId: chatAgentCursorRepo.get(chatId, agentId)?.lastMessageId ?? null,
+          names: agentNames(settingsUserId, profileUserId)
+        })
+      : null
+    run = bindTurn({
+      driver: driverFor(agent),
+      agent,
+      agentOwnerId,
+      chatId,
+      wireContent: row.content,
+      packet,
+      fileIds: row.attachments?.map((attachment) => attachment.id),
+      messageId: userMessageId
+    })
+  } catch (error) {
+    return refuse(error instanceof Error ? error.message : String(error))
+  }
+  await handOff(port, () =>
+    a2aStreamingService.streamToAgent({
+      run,
+      chatId,
+      agentId,
+      port,
+      // A recovery's turn: its rows land without moving the chat up the list.
+      touchChat: false,
+      onFinished: input.finish,
+      onCompleted: () => {
+        const last = messageRepo.lastId(chatId)
+        if (last) chatAgentCursorRepo.advance(chatId, agentId, last)
+      }
+    }),
+    // `handOff` has posted the error event already; only the row is missing.
+    (message) => {
+      saveErrorRow(message)
+      fail(message)
+    }
   )
 }
 

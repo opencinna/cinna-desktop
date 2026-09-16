@@ -8,7 +8,7 @@ Connect an existing Claude workspace agent and environment to a Cinna chat. Clau
 
 - **Managed agent** — a locally configured agent row using the `managed` driver. This is distinct from a Cinna account-provisioned AI credential, which is also called managed elsewhere in Settings.
 - **Credential** — an enabled Anthropic API credential already present in AI Credentials. A Claude CLI login cannot authenticate this service.
-- **Session** — the remote conversation associated with one local chat and agent. Only a session whose saved state is ready and whose credential/configuration still matches may accept another turn.
+- **Session** — the remote conversation associated with one local chat and agent. A session accepts another turn only while its credential/configuration still matches and the session itself, read from Claude, is idle with nothing pending. The locally saved state (ready, inflight, uncertain, budget) records what the desktop knows. It is not a lock, and it is checked against the remote session before every send.
 - **Permission** — a remote tool action explicitly awaiting allow or deny. Its answer belongs to the original session and, where present, its child thread.
 
 ## User Stories / Flows
@@ -17,9 +17,10 @@ Connect an existing Claude workspace agent and environment to a Cinna chat. Clau
 2. Choose an API credential and press **Load workspace**. Select an existing agent and environment. **More options** exposes a local name, workspace ID and agent version; leaving version empty uses latest.
 3. Press **Add agent**. Main verifies the selected remote resources before saving the local configuration; the new agent opens in chat. Failed loading or saving retains the dialog and entered values; the Load workspace control keeps its width while loading.
 4. Send a message. The first turn creates a remote session; later ready turns reuse that exact session. The transcript shows authoritative message text and tool activity as they arrive.
-5. Answer a permission in the transcript or Inbox with **Allow once** or **Deny**. Continuation waits for both the remote acknowledgment and local durable settlement.
-6. Select an existing Managed sidebar entry to open its chat landing page. **Settings → Connection → Configure** opens configuration; **Start chat** returns to the preserved page draft. Saved agent/environment IDs appear immediately; loading the workspace verifies the available choices before Save becomes available. Saving a configuration revision makes previous session bindings incompatible; start a new chat for the changed configuration.
-7. **More actions → Delete agent** confirms removal of the Desktop connection. Existing chats and the remote Claude agent/environment remain. Enabled direct connections have no Disable action; previously disabled connections can be enabled again.
+5. If the app is quit or killed mid-turn, the next launch follows the same session from the message already sent: output streams into the chat, a waiting permission is offered again, and Stop still interrupts. The message is never sent twice. See [Interrupted Turn Recovery](../turn_recovery/turn_recovery.md).
+6. Answer a permission in the transcript or Inbox with **Allow once** or **Deny**. Continuation waits for both the remote acknowledgment and local durable settlement.
+7. Select an existing Managed sidebar entry to open its chat landing page. **Settings → Connection → Configure** opens configuration; **Start chat** returns to the preserved page draft. Saved agent/environment IDs appear immediately; loading the workspace verifies the available choices before Save becomes available. Saving a configuration revision makes previous session bindings incompatible; start a new chat for the changed configuration.
+8. **More actions → Delete agent** confirms removal of the Desktop connection. Existing chats and the remote Claude agent/environment remain. Enabled direct connections have no Disable action; previously disabled connections can be enabled again.
 
 ## Business Rules
 
@@ -28,7 +29,12 @@ Connect an existing Claude workspace agent and environment to a Cinna chat. Clau
 - A missing acknowledgment is uncertain, not permission to resend. Transcript and Inbox keep the error visible and disable further decisions across navigation and renderer reload. A newly opened live Managed permission stays disabled until main has checked its current acknowledgment state; a failed check keeps it disabled while polling retries. If remote acceptance succeeded but local settlement failed, retry only commits the same answer locally.
 - Old history cannot complete the new turn. Cinna waits for the acknowledged new user message to be processed before accepting output or a root session ending. Child-thread idle events cannot end the parent turn.
 - Stop sends at most one interrupt and waits for its processed marker followed by a root idle/terminated event, with a bounded drain. Partial output is retained. Without confirmation, the transcript says only local waiting stopped and the saved session becomes uncertain.
-- A remote budget ending preserves partial text and records a budget pause. It is not task completion. Saved budget, inflight and uncertain checkpoints are revalidated against remote status and full history before another kickoff. Once the remote session is idle with completed work, the chat can continue. Pending work or a live budget pause still requires resolution in Claude.
+- A remote budget ending preserves partial text and records a budget pause. It is not task completion. Saved budget, inflight and uncertain checkpoints are revalidated against remote status and full history before another kickoff. The chat can continue once the remote session is idle after a finished turn, or after a turn that ran out of retries: Claude flushes that dead turn's queued input and accepts a new message. Each refusal names its cause, so the user knows what to do in Claude:
+  - still working on an earlier message
+  - an earlier message still queued
+  - waiting for a permission decision
+  - paused at its budget
+  - terminated
 - Changing the credential, active profile or agent configuration invalidates held work. A saved session is never silently rebound to a replacement credential or configuration. Routine account sync carrying the identical key preserves credential identity.
 - This integration does not create remote agents/environments, configure budgets, attach files, inject desktop MCP tools, run local commands or expose a local working folder. It supports tool permissions, not custom-tool-result submission, questions, auth asks or elicitation. Thinking events show progress; preview text deltas and usage are not exposed as authoritative transcript output.
 

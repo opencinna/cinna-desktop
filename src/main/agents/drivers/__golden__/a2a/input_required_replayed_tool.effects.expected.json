@@ -1,0 +1,65 @@
+{
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://agent.example.test/a2a/.well-known/agent-card.json",
+      "authorization": "Bearer tok-cinna-golden",
+      "signal": true
+    },
+    {
+      "method": "POST",
+      "url": "https://agent.example.test/a2a/",
+      "authorization": "Bearer tok-cinna-golden",
+      "signal": true,
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "message/stream",
+        "params": {
+          "message": {
+            "kind": "message",
+            "messageId": "<messageId#1>",
+            "role": "user",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "Deploy the app"
+              }
+            ]
+          },
+          "configuration": {
+            "acceptedOutputModes": [
+              "text/plain",
+              "application/json"
+            ]
+          }
+        },
+        "id": 1
+      }
+    }
+  ],
+  "sessionReads": [
+    null
+  ],
+  "sessionUpserts": [
+    {
+      "chatId": "chat-golden",
+      "agentId": "agent-remote-1",
+      "contextId": "ctx-irt-1",
+      "taskId": "task-irt-1",
+      "taskState": null
+    },
+    {
+      "chatId": "chat-golden",
+      "agentId": "agent-remote-1",
+      "contextId": "ctx-irt-1",
+      "taskId": "task-irt-1",
+      "taskState": "input-required"
+    }
+  ],
+  "taskIdsSurfaced": [
+    "task-irt-1",
+    "task-irt-1",
+    "task-irt-1"
+  ],
+  "clientsSurfaced": 1
+}

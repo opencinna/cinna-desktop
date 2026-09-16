@@ -30,11 +30,12 @@ Parents before children; pure table-creation before backfills; legacy-table back
 4. `migrateAgents` — `agents` (must precede `chats`: `chat_on_demand_agents` FK-references it)
 5. `migrateAgentRoots` — `agent_roots` (the workshop folders local agents are scanned from). Placed beside the table it extends; it creates only its own table + indexes and touches nothing else. **Deliberately no FK** from `agents.local_root_id` — a folder row is a derived index pruned explicitly, and a second FK edge on `agents` is what caused the `no such table: main.agents` crash
 6. `migrateChats` — `chats` + `chat_mcp_providers` + `chat_on_demand_mcps` + `chat_on_demand_agents`
+    - Followed by `migrateInflightTurns` (`migrations/inflight-turns.ts`) — `inflight_turns` (FK → chats, creation only, no DML). See [Interrupted Turn Recovery](../../agents/turn_recovery/turn_recovery_tech.md#database-schema)
 7. `migrateMessages` — `messages`
 8. `migrateChatModes` — `chat_modes`
 9. `migrateAccountConfig` — managed-provider/mode columns + `managed_overrides` (after providers + chat-modes)
 10. `migrateAgentOverrides` — `agent_overrides` (no FK, survives resync)
-11. `migrateA2aSessions` — `a2a_sessions` (FK → agents)
+11. `migrateA2aSessions` — `a2a_sessions` (FK → agents), `managed_agent_sessions`, and its `hasColumn`-gated `kickoff_event_id` / `kickoff_message_id` columns
 12. `migrateChatFiles` — chat file tables
 13. `migrateJobs` — `jobs`, `job_mcp_providers`, `job_runs`, `job_folders`, `job_agents` (FK → jobs/chats/mcp_providers/agents)
 14. `migrateNotes` — notes tables

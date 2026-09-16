@@ -4,6 +4,7 @@ import { migrateMcp } from './mcp'
 import { migrateChats } from './chats'
 import { migrateChatRouter } from './chat-router'
 import { migrateChatRunResults } from './chat-run-results'
+import { migrateInflightTurns } from './inflight-turns'
 import { migrateRetireChatMirror } from './retire-chat-mirror'
 import { migrateMessages } from './messages'
 import { migrateChatModes } from './chat-modes'
@@ -65,6 +66,8 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateAgentRoots(sqlite)
   migrateChats(sqlite)
   migrateChatRunResults(sqlite)
+  // In-flight turn markers reference `chats`; creation only, no DML.
+  migrateInflightTurns(sqlite)
   migrateMessages(sqlite)
   migrateChatModes(sqlite)
   // Account-provisioned (Cinna-managed) provider/mode columns + overrides table.

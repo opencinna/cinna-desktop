@@ -96,7 +96,12 @@ it.each(['card headers', 'card body', 'JSON headers', 'JSON body', 'silent SSE',
         })])
       expect(result.error).toBeDefined()
       expect(events).toHaveLength(eventCount)
-      expect(session.upsert).not.toHaveBeenCalled()
+      // A stop saves nothing past the ids the stream's first task event
+      // carried (crash recovery); a non-streaming turn saves nothing.
+      if (streaming) {
+        expect(session.upsert).toHaveBeenCalledExactlyOnceWith({ chatId: 'chat-silent', agentId: 'agent-silent',
+          contextId: 'context-silent', taskId: 'task-silent', taskState: null })
+      } else expect(session.upsert).not.toHaveBeenCalled()
       expect(result.text).toBe(streaming ? 'Keep this partial answer.' : '')
       if (mode.endsWith('delta')) expect(events).toHaveLength(1)
       if (streaming) {

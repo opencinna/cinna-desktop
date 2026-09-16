@@ -49,7 +49,7 @@ Stopped unread rows use CircleCheck/success, CircleHelp/warning or CircleAlert/d
 
 ## Configuration
 
-No new setting, environment variable, notification permission or sync collection. List refresh uses a 1,000 ms interval; live attachment keeps its existing replay limits and detail-poll fallback. Restarts retain result rows but do not restore process-local active handles or replay; controller recovery follows its own checkpoint rules.
+No new setting, environment variable, notification permission or sync collection. List refresh uses a 1,000 ms interval; live attachment keeps its existing replay limits and detail-poll fallback. Restarts retain result rows but do not restore process-local active handles or replay; controller recovery follows its own checkpoint rules. A remote agent turn recovered after a relaunch is a new handle (`runExecutionService.adopt`), so its chat shows the spinner and interrupt action again until the recovery settles it. See [Interrupted Turn Recovery](../../agents/turn_recovery/turn_recovery.md).
 
 ## Security
 

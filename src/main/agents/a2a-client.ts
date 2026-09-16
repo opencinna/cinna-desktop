@@ -389,13 +389,16 @@ export async function createA2AClient(
 ): Promise<A2AClient> {
   const base = accessToken ? buildAuthFetch(accessToken) : fetch
   // The legacy A2AClient ignores per-call request options. Bind cancellation
-  // at its HTTP seam; the independent cancel RPC must survive a stopped turn.
+  // at its HTTP seam; the independent cancel RPC must survive a stopped turn,
+  // and so must the one `tasks/get` a Stop sends when the cancel answered no
+  // state (a request made once the turn is stopped can only be the stop's).
   const turnFetch: typeof fetch = (input, init) => {
-    let cancel = false
+    let method: unknown
     if (typeof init?.body === 'string') {
-      try { cancel = JSON.parse(init.body).method === 'tasks/cancel' } catch { /* SDK owns JSON encoding. */ }
+      try { method = JSON.parse(init.body).method } catch { /* SDK owns JSON encoding. */ }
     }
-    const requestSignal = cancel ? AbortSignal.timeout(10_000) : signal
+    const independent = method === 'tasks/cancel' || (method === 'tasks/get' && signal?.aborted === true)
+    const requestSignal = independent ? AbortSignal.timeout(10_000) : signal
     return base(input, requestSignal ? {
       ...init, signal: init?.signal ? AbortSignal.any([init.signal, requestSignal]) : requestSignal
     } : init)
@@ -423,17 +426,23 @@ export async function createA2AClient(
  * `metadata` is forwarded as the message-level `metadata` map — Cinna
  * agents recognise `cinna_file_ids` here and attach the matching uploaded
  * files to the user turn before passing it into the agent environment.
+ *
+ * `messageId` is the id of the user row this send stores, when there is one:
+ * the Cinna backend echoes it back as `cinna.client_message_id`, which is how
+ * an interrupted turn is found in its history, and deduplicates a resend by
+ * it. Without one, a fresh id is minted.
  */
 export function buildSendParams(
   content: string,
   contextId?: string,
   taskId?: string,
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  messageId?: string
 ): MessageSendParams {
   return {
     message: {
       kind: 'message',
-      messageId: nanoid(),
+      messageId: messageId ?? nanoid(),
       role: 'user',
       parts: [{ kind: 'text', text: content }],
       ...(contextId && { contextId }),

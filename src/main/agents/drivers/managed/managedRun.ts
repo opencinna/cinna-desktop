@@ -1,4 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk'
+import { APIConnectionError, APIError, AuthenticationError, PermissionDeniedError } from '@anthropic-ai/sdk'
 import type { BetaManagedAgentsUserToolConfirmationEvent } from '@anthropic-ai/sdk/resources/beta/sessions/events'
 import { nanoid } from 'nanoid'
 import type { ManagedAgentConfig } from '../../../../shared/managedAgents'
@@ -6,10 +7,20 @@ import { PERMISSION_TOOL_NAME, type RequestResolution } from '../../../../shared
 import type { MessagePart } from '../../../../shared/messageParts'
 import type { RunInput, RunResult } from '../driver'
 import type { pendingRequests } from '../pendingRequests'
+import { createLogger } from '../../../logger/logger'
 import { ManagedEvents, type ManagedEffect, type ManagedEvent, type ManagedPermissionTool } from './managedEvents'
 
+const logger = createLogger('managed-run')
+
 export type ManagedSessionState = 'ready' | 'inflight' | 'uncertain' | 'budget'
-export interface ManagedSessionCheckpoint { sessionId: string; state: ManagedSessionState }
+export interface ManagedSessionCheckpoint {
+  sessionId: string
+  state: ManagedSessionState
+  /** The running turn's acknowledged `user.message` id; stored only with `inflight`. */
+  kickoffEventId?: string | null
+  /** The chat's user row that turn answers (`RunInput.messageId`); stored only with a kickoff. */
+  kickoffMessageId?: string | null
+}
 export interface ManagedRunBinding {
   client: Anthropic
   config: ManagedAgentConfig
@@ -23,28 +34,110 @@ export interface ManagedRunDeps {
   requestTimeoutMs?: number
   stopTimeoutMs?: number
 }
-export type ManagedRunResult = RunResult & { stopReason?: 'end_turn' | 'budget' | 'canceled' }
+export type ManagedRunResult = RunResult & {
+  stopReason?: 'end_turn' | 'budget' | 'canceled'
+  /**
+   * Set only by a follow that could not reach the session (`network`) or was
+   * refused its credential (`auth`). The follow then left the session and its
+   * checkpoint alone: the turn may still be running there.
+   */
+  unreachable?: ManagedUnreachable
+}
+export type ManagedUnreachable = 'network' | 'auth'
+/** A follow's input: a turn's, minus the message it does not send. */
+export type ManagedFollowInput = Omit<RunInput, 'wireContent'>
+/** The turn a follow reads: its session, and the acknowledged id of its `user.message`. */
+export interface ManagedFollowTarget { sessionId: string; kickoffEventId: string }
+export interface ManagedFollowHooks {
+  /**
+   * Called once, when the whole history has been read and the turn has not
+   * ended: the follow is about to wait on the live stream. A turn parked on a
+   * permission reaches this only after the answer is delivered.
+   */
+  onStillRunning?(): void
+}
 
-/** One SDK session turn. The caller owns the captured credential and session binding. */
-export async function runManagedSession(
+/**
+ * One SDK session turn: start it (create or retrieve the session, check it is
+ * ready, save `inflight`, send the message, save its acknowledged id), then
+ * follow it. The caller owns the captured credential and session binding.
+ */
+export function runManagedSession(
   binding: ManagedRunBinding,
   agentId: string,
   input: RunInput,
   deps: ManagedRunDeps
 ): Promise<ManagedRunResult> {
+  return managedSession(binding, agentId, input, deps, { kind: 'turn', wireContent: input.wireContent })
+}
+
+/**
+ * Follow a turn already on the session, from its acknowledged kickoff, until
+ * it ends — relaunch recovery of a turn the app was closed under. Sends no
+ * message and creates nothing: it attaches, reads the whole history (so a
+ * turn that ended meanwhile returns at once), then streams. Everything else is
+ * a live turn's: deltas and permission asks through `input.onEvent`, answers
+ * through the registered park, Stop through `input.signal` (a remote
+ * interrupt), and the same checkpoint on the way out.
+ */
+export function followManagedSession(
+  binding: ManagedRunBinding,
+  agentId: string,
+  input: ManagedFollowInput,
+  deps: ManagedRunDeps,
+  target: ManagedFollowTarget,
+  hooks: ManagedFollowHooks = {}
+): Promise<ManagedRunResult> {
+  return managedSession(binding, agentId, input, deps, { kind: 'follow', ...target, hooks })
+}
+
+type SessionMode = { kind: 'turn'; wireContent: string } | ({ kind: 'follow'; hooks: ManagedFollowHooks } & ManagedFollowTarget)
+
+/** Thrown when a followed turn's kickoff is not in the session's history. */
+class UnknownKickoff extends Error {}
+/** The session's stream kept failing or closing: a transport failure, not an answer. */
+class StreamLost extends Error {}
+
+/**
+ * Whether `error` says the session could not be reached (`network`: no
+ * connection, a timeout, a lost stream, a 5xx, 408 or 429) or refused the
+ * credential (`auth`: 401, 403), rather than answering about the turn. Null for
+ * anything else — a 404, a failed turn, a changed binding.
+ */
+export function unreachableReason(error: unknown): ManagedUnreachable | null {
+  if (error instanceof StreamLost || error instanceof APIConnectionError) return 'network'
+  if (error instanceof AuthenticationError || error instanceof PermissionDeniedError) return 'auth'
+  if (error instanceof APIError) {
+    const status = error.status
+    if (status === undefined || status >= 500 || status === 408 || status === 429) return 'network'
+  }
+  return null
+}
+
+async function managedSession(
+  binding: ManagedRunBinding,
+  agentId: string,
+  input: ManagedFollowInput,
+  deps: ManagedRunDeps,
+  mode: SessionMode
+): Promise<ManagedRunResult> {
   const { client, config } = binding
   const params = config.workspaceId ? { workspace_id: config.workspaceId } : {}
   const requestMs = deps.requestTimeoutMs ?? 30_000
-  const reducer = new ManagedEvents()
+  const following = mode.kind === 'follow'
+  // A followed turn may have sent a confirmation just before the kill; a
+  // queued one is an answer already given, not an ask to offer again.
+  const reducer = new ManagedEvents(undefined, { queuedConfirmationsAnswer: following })
   const io = new AbortController()
   const streamLife = new AbortController()
   const parts: MessagePart[] = []
   const parks = new Map<string, { cancel(): void; answered: Promise<RequestResolution> }>()
   const permissionBarriers = new Map<string, Promise<void>>()
-  let sessionId = binding.checkpoint?.sessionId ?? null
+  let sessionId = following ? mode.sessionId : binding.checkpoint?.sessionId ?? null
   const streamState: { iterator: AsyncIterator<ManagedEvent> | null; controller?: AbortController } = { iterator: null }
   let text = ''
-  let workMayExist = false
+  // A followed turn is remote work from the first line: Stop interrupts it.
+  let workMayExist = following
   let closed = false
   let stopPromise: Promise<void> | null = null
   let stopHistory: ManagedEvent[] = []
@@ -52,10 +145,14 @@ export async function runManagedSession(
   let stopping = false
   let budget = false
   const options = () => ({ signal: io.signal, timeout: requestMs, maxRetries: 0 })
-  const save = (state: ManagedSessionState): void => {
+  const save = (state: ManagedSessionState, kickoff?: { eventId: string; messageId: string | null }): void => {
     binding.validate()
-    if (sessionId) binding.save({ sessionId, state })
+    if (!sessionId) return
+    binding.save(kickoff
+      ? { sessionId, state, kickoffEventId: kickoff.eventId, kickoffMessageId: kickoff.messageId }
+      : { sessionId, state })
   }
+  if (following) reducer.start(mode.kickoffEventId)
   // What the turn has streamed so far, for the quit flush. `parts` only grows,
   // which the flush's cursor relies on. The session itself is already saved
   // `inflight` before the message goes out.
@@ -224,9 +321,15 @@ export async function runManagedSession(
     return result('canceled', false)
   }
 
-  try {
+  /** Admission and kickoff of a new turn. Every failure before the send sends nothing. */
+  const begin = async (wireContent: string): Promise<void> => {
     io.signal.throwIfAborted()
     binding.validate()
+    // An earlier turn's kickoff goes first, before any request: a turn that
+    // was settled without being followed left it, and a relaunch must never
+    // follow that turn for this one. The state is kept, so admission is not.
+    const previous = binding.checkpoint
+    if (sessionId && previous?.kickoffEventId) save(previous.state)
     // Durable checkpoints record uncertainty, not permanent admission locks.
     // Retrieve and reconcile remote history before allowing another message.
     const newlyCreated = !sessionId
@@ -246,16 +349,33 @@ export async function runManagedSession(
     save('inflight')
     workMayExist = true
     const sent = await client.beta.sessions.events.send(sessionId, {
-      ...params, events: [{ type: 'user.message', content: [{ type: 'text', text: input.wireContent }] }]
+      ...params, events: [{ type: 'user.message', content: [{ type: 'text', text: wireContent }] }]
     }, options())
     binding.validate()
-    reducer.start(sent.data?.find((event) => event.type === 'user.message')?.id ?? '')
+    const kickoffId = sent.data?.find((event) => event.type === 'user.message')?.id ?? ''
+    reducer.start(kickoffId)
+    // From here a relaunch can follow this turn instead of losing it. The
+    // turn is running: a write that fails costs only that, so it is logged.
+    try {
+      save('inflight', { eventId: kickoffId, messageId: input.messageId ?? null })
+    } catch (error) {
+      logger.error('could not save a Managed turn’s kickoff; it cannot be followed after a restart', {
+        chatId: input.chatId, error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+  /** Attach, read the whole history, then stream until the turn ends. */
+  const follow = async (): Promise<ManagedRunResult> => {
     // Discard the old stream's pre-kickoff buffer. Attach anew before reading
     // complete history, which establishes the processed kickoff in order and
     // recovers all events in the gap without resending the message.
     await attach()
     const caughtUp = await history(false)
     if (caughtUp) return caughtUp
+    if (following && !reducer.seen(mode.kickoffEventId)) {
+      throw new UnknownKickoff('This Managed session has no record of the interrupted message.')
+    }
+    if (following && !input.signal.aborted) mode.hooks.onStillRunning?.()
     let reconnects = 0
     while (streamState.iterator) {
       if (input.signal.aborted) return await drain()
@@ -263,7 +383,7 @@ export async function runManagedSession(
       try { next = await streamState.iterator.next() }
       catch (error) {
         if (input.signal.aborted) return await drain()
-        if (++reconnects > 2) throw error
+        if (++reconnects > 2) throw unreachableReason(error) ? error : new StreamLost(error instanceof Error ? error.message : 'The Managed stream failed.')
         await attach()
         const terminal = await history(false)
         if (terminal) return terminal
@@ -275,7 +395,7 @@ export async function runManagedSession(
         return await drain()
       }
       if (next.done) {
-        if (++reconnects > 2) throw new Error('The Managed stream closed before the turn completed.')
+        if (++reconnects > 2) throw new StreamLost('The Managed stream closed before the turn completed.')
         await attach()
         const terminal = await history(false)
         if (terminal) return terminal
@@ -285,16 +405,36 @@ export async function runManagedSession(
       const terminal = await apply(reducer.accept(next.value))
       if (terminal) return terminal
     }
-    throw new Error('The Managed stream could not be attached.')
+    throw new StreamLost('The Managed stream could not be attached.')
+  }
+
+  try {
+    if (mode.kind === 'turn') await begin(mode.wireContent)
+    else {
+      io.signal.throwIfAborted()
+      binding.validate()
+    }
+    return await follow()
   } catch (error) {
     if (input.signal.aborted) {
       try { return await drain() } catch { return { text, parts, notices: [], taskState: 'canceled', stopReason: 'canceled' } }
     }
-    if (workMayExist) {
+    const message = error instanceof Error ? error.message : 'The Managed session failed.'
+    const unreachable = following ? unreachableReason(error) : null
+    if (unreachable) {
+      // The turn may still be running there, and a later pass can follow it
+      // again from the same kickoff: interrupt nothing, save nothing.
+      return { text, parts, notices: [], contextId: sessionId ?? undefined, error: { message, raw: message }, unreachable }
+    }
+    if (following && !reducer.seen(mode.kickoffEventId)) {
+      // Nothing read yet proves the session's work is this turn's: interrupt
+      // nothing. The session answered, and this turn will not be followed again.
+      try { save('uncertain') } catch { /* changed owner cannot be written */ }
+    } else if (workMayExist) {
+      // A followed turn whose kickoff was read fails as a live one does.
       await interrupt()
       try { save(budget ? 'budget' : 'uncertain') } catch { /* changed owner cannot be written */ }
     }
-    const message = error instanceof Error ? error.message : 'The Managed session failed.'
     return { text, parts, notices: [], contextId: sessionId ?? undefined, error: { message, raw: message } }
   } finally {
     closed = true

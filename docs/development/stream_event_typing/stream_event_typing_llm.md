@@ -59,7 +59,7 @@ Do not re-split. A new protocol maps onto `RunEvent`; it does not get its own un
 `InputRequest`:
 
 - `permission { action, resources, callId?, allowRemember? }` — ACP and Managed asks; Managed sets allowRemember false. `action` is the engine's own word (`bash`, `Bash`, `WebFetch`)
-- `question { questions: InputQuestion[] }` — `InputQuestion` is `{ question, header?, multiSelect, options }`, the type `acpQuestions.ts:toInputQuestions` returns for a local agent. An A2A question is built from the status message's `text`-kind parts only, as one open question — with ‘What should the agent do next?’ when the agent sent no text — because A2A gives a question no structure <!-- nocheck -->
+- `question { questions: InputQuestion[] }` — `InputQuestion` is `{ question, header?, multiSelect, options }`, the type `acpQuestions.ts:toInputQuestions` returns for a local agent. An A2A question is built from the status message's `text`-kind parts, as one open question, because A2A gives a question no structure. With no text, it is built from the message's last `askuserquestion` tool part (`cinna.tool_input.questions`), with headers and options; with neither, ‘What should the agent do next?’ <!-- nocheck -->
 - `auth { message, method?, url? }` — A2A `auth-required`; `message` falls back to `A2A_AUTH_REQUIRED_FALLBACK` when the status carries no text
 - `elicitation { message, schema }` — declared, posted by nothing yet
 
@@ -81,7 +81,7 @@ Rules, each pinned by a driver-contract clause (see [The driver contract](../../
 - **One `needs_input` per ask**, not repeated on the way out (`park.needs_input`)
 - **One `input_resolved` per ask settled while the turn is open, after its `needs_input`** (`park.input_resolved`). An answer carries the effective posted decision; rejection or timeout carries `{ kind: 'rejected' }` (`park.reject`, `park.timeout`). ACP maps the captured local park once; Managed waits for remote acceptance and durable local commitment before releasing its barrier. The retired engine-specific notification translator is not part of this path.
 - **Teardown posts nothing.** The ACP driver holds an `open` flag and closes it before its `finally` sweeps what is parked, so an ask the turn's own ending settles gets no `input_resolved` — the terminal `done` or `error` already says nothing is parked
-- **A2A normalizes every task response path.** `status-update`, streamed `task` and nonstreaming `message/send` task responses post `status` and the matching `needs_input`. Input-required without text still produces an open question; auth-required produces the existing sign-in fallback.
+- **A2A normalizes every task response path.** `status-update`, streamed `task` and nonstreaming `message/send` task responses post `status` and the matching `needs_input`. Input-required without text produces the ask-user tool part's questions, or an open question; auth-required produces the existing sign-in fallback.
 - **Protocol request identity is not Inbox occurrence identity.** The event carries the A2A task id; main derives a durable next-message address from chat, agent, invocation and protocol request. A child invocation adds its tool-call identity. Normal done/boot preserve those rows; reply parks expire. The Inbox never depends on replaying this live event list.
 
 ## Receiver: useRunEventHandler and the Chat Store

@@ -1,0 +1,36 @@
+{
+  "recorded_from": "hand-written, after the cinna-core f55215fa stream shape",
+  "description": "A question asked through the ask-user tool: the tool part streams in a `working` status, and the final `input-required` status-update repeats it under another messageId with no `cinna.tool_id`. The turn keeps ONE tool part with the text once, and the live delta is not repeated.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Deploy the app",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "task", "id": "task-irt-1", "contextId": "ctx-irt-1", "status": { "state": "submitted" }, "history": [] } },
+        { "result": { "kind": "status-update", "taskId": "task-irt-1", "contextId": "ctx-irt-1", "status": { "state": "working", "message": { "kind": "message", "role": "agent", "messageId": "msg-irt-working", "taskId": "task-irt-1", "contextId": "ctx-irt-1", "parts": [ { "kind": "text", "text": "Let me ask.", "metadata": { "cinna.content_kind": "text" } }, { "kind": "text", "text": "Using tool: askuserquestion\n1 question", "metadata": { "cinna.content_kind": "tool", "cinna.tool_name": "askuserquestion", "cinna.tool_input": { "questions": [ { "question": "Which environment?", "header": "Target", "options": [ { "label": "staging", "description": "The test cluster" }, { "label": "production" } ], "multiSelect": false } ] } } } ] } }, "final": false } },
+        { "result": { "kind": "status-update", "taskId": "task-irt-1", "contextId": "ctx-irt-1", "status": { "state": "input-required", "message": { "kind": "message", "role": "agent", "messageId": "msg-irt-final", "taskId": "task-irt-1", "contextId": "ctx-irt-1", "parts": [ { "kind": "text", "text": "Using tool: askuserquestion\n1 question", "metadata": { "cinna.content_kind": "tool", "cinna.tool_name": "askuserquestion", "cinna.tool_input": { "questions": [ { "question": "Which environment?", "header": "Target", "options": [ { "label": "staging", "description": "The test cluster" }, { "label": "production" } ], "multiSelect": false } ] } } } ] } }, "final": true } }
+      ]
+    }
+  }
+}

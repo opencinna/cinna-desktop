@@ -1,4 +1,5 @@
 import { taskRuntimeService } from './services/taskRuntimeService'
+import { interruptedTurnService } from './services/interruptedTurnService'
 import { app, shell, BrowserWindow, Menu, dialog, powerMonitor } from 'electron'
 import { join } from 'path'
 import { appendFileSync, renameSync, statSync } from 'fs'
@@ -7,7 +8,9 @@ import { registerAllIpcHandlers } from './ipc'
 import { toolInstallService } from './services/localAgents/toolInstallService'
 import { initDatabase } from './db/client'
 import { mcpManager } from './mcp/manager'
-import { acpProcessPool } from './agents/drivers'
+import { acpProcessPool, a2aTurnRecoverer, managedTurnRecoverer } from './agents/drivers'
+import { registerRecoverer, remoteTurnRecoveryService } from './services/remoteTurnRecoveryService'
+import { userActivation } from './auth/activation'
 import { a2aStreamingService } from './services/a2aStreamingService'
 import { getCurrentUserId, initSession } from './auth/session'
 import { initAutoUpdater, checkForUpdatesManual } from './updater/updater'
@@ -367,6 +370,22 @@ function startup(): void {
   initDatabase()
   initSession()
   taskRuntimeService.recover()
+  // Before the boot pass, which leaves the turns of a driver with a recoverer
+  // to `remoteTurnRecoveryService`.
+  registerRecoverer('a2a', a2aTurnRecoverer)
+  registerRecoverer('managed', managedTurnRecoverer)
+  // After `recover()`: turns the app was killed under are settled once the
+  // runtimes have re-reserved what they own, and with this device's id known.
+  interruptedTurnService.finalizeLeftovers()
+  // A remote turn is asked how it ended once its profile can reach the agent:
+  // after the profile's activation, and again after a re-auth for the markers
+  // that waited on it.
+  userActivation.onProfileReady((userId) => { void remoteTurnRecoveryService.resume(userId) })
+  // A marker left because its agent was unreachable is tried again on a timer,
+  // and on wake (below), for the profile that is active then.
+  remoteTurnRecoveryService.onRetryDue((userId) => {
+    if (userActivation.isActivated() && getCurrentUserId() === userId) void remoteTurnRecoveryService.resume(userId)
+  })
   registerAllIpcHandlers()
   // Providers are activated through auth flow (auth:get-startup / auth:login)
 
@@ -405,6 +424,8 @@ function startup(): void {
     // `reconcile` answers `idle` for a local profile, so no guard is needed
     // here beyond asking the session who is active.
     void localDevService.reconcile(getCurrentUserId())
+    // Remote turns that waited on a network the machine lost while asleep.
+    if (userActivation.isActivated()) void remoteTurnRecoveryService.resume(getCurrentUserId())
   })
 
   app.on('activate', () => {

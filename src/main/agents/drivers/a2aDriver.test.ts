@@ -76,6 +76,24 @@ describe('a2a driver — run', () => {
     })
   })
 
+  it('hands runAgentTurn a token renewal that resolves again, and reads a needed sign-in as a 401', async () => {
+    // Mutation: omit `renewAccessToken` → a refused poll ends a collected turn.
+    let reauth = false
+    let calls = 0
+    const d = deps({
+      resolveAccessToken: async () => {
+        calls++
+        if (reauth) throw new Reauth('No Cinna tokens stored')
+        return `jwt-${calls}`
+      }
+    })
+    await createA2aDriver(d).run('owner-1', REMOTE, input())
+    const renew = (d.runTurn.mock.calls[0][0] as A2ARunAgentTurnInput).renewAccessToken!
+    expect(await renew()).toBe('jwt-2')
+    reauth = true
+    await expect(renew()).rejects.toMatchObject({ name: 'A2aHttpError', status: 401 })
+  })
+
   it('passes the snapshot registration on to runAgentTurn', async () => {
     // Mutation: drop the spread in the driver → the quit flush has nothing to read.
     const d = deps()
@@ -223,6 +241,100 @@ describe('a2a driver — run', () => {
     expect(result.text).toBe('partial')
     expect(result.notices).toEqual([expect.objectContaining({ text: expect.stringContaining('stop was not confirmed') })])
     expect(cancelTask).toHaveBeenCalledExactlyOnceWith({ id: 'late-task' })
+  })
+
+  describe('confirming a stop', () => {
+    /** A turn stopped mid-stream with task `task-1`, whose client answers as given. */
+    async function stopWith(client: { cancelTask: () => Promise<unknown>; getTask?: () => Promise<unknown> }) {
+      const controller = new AbortController()
+      const saveTaskState = vi.fn()
+      const d = deps({
+        saveTaskState,
+        runTurn: vi.fn(async (turn: A2ARunAgentTurnInput) => {
+          turn.onClient?.(client as never)
+          turn.onTaskId?.('task-1')
+          controller.abort()
+          return { text: 'half', parts: [], notices: [] }
+        })
+      })
+      const result = await createA2aDriver(d).run('owner-1', REMOTE, input(controller.signal))
+      const unconfirmed = result.notices.some((n) => n.text.includes('stop was not confirmed'))
+      return { unconfirmed, saveTaskState }
+    }
+    const task = (state: string) => ({ jsonrpc: '2.0', id: 1, result: { kind: 'task', id: 'task-1', status: { state } } })
+
+    it.each(['canceled', 'completed'])('takes a Task answered %s as confirmed, and saves its state', async (state) => {
+      const getTask = vi.fn()
+      const { unconfirmed, saveTaskState } = await stopWith({ cancelTask: async () => task(state), getTask })
+      expect(unconfirmed).toBe(false)
+      expect(getTask).not.toHaveBeenCalled()
+      expect(saveTaskState).toHaveBeenCalledExactlyOnceWith({ chatId: 'chat-1', agentId: REMOTE.id, taskId: 'task-1', taskState: state })
+    })
+
+    it('reads the task once when the cancel answers an empty result, and confirms from it', async () => {
+      // Mutation: read `result.status.state` directly → the throw is logged as
+      // "cancelTask failed" and the stop reads as unconfirmed.
+      const getTask = vi.fn(async () => task('canceled'))
+      const { unconfirmed, saveTaskState } = await stopWith({ cancelTask: async () => ({ jsonrpc: '2.0', id: 1, result: {} }), getTask })
+      expect(unconfirmed).toBe(false)
+      expect(getTask).toHaveBeenCalledExactlyOnceWith({ id: 'task-1' })
+      expect(saveTaskState).toHaveBeenCalledWith(expect.objectContaining({ taskState: 'canceled' }))
+    })
+
+    it.each([
+      ['a task still working', async () => task('working')],
+      // An older backend's read still reports the previous turn's ending.
+      // Mutation: confirm the read with `isStopConfirmed` → confirmed.
+      ['a task read answering completed', async () => task('completed')],
+      ['a task read that fails', async () => { throw new Error('boom') }],
+      ['a task read with no state either', async () => ({ jsonrpc: '2.0', id: 2, result: {} })]
+    ])('keeps the stop unconfirmed after an empty cancel answer and %s', async (_label, getTask) => {
+      const { unconfirmed, saveTaskState } = await stopWith({ cancelTask: async () => ({ jsonrpc: '2.0', id: 1, result: {} }), getTask })
+      expect(unconfirmed).toBe(true)
+      expect(saveTaskState).not.toHaveBeenCalled()
+    })
+
+    it('does not read the task after a cancel answered with an error', async () => {
+      const getTask = vi.fn(async () => task('canceled'))
+      const { unconfirmed } = await stopWith({
+        cancelTask: async () => ({ jsonrpc: '2.0', id: 1, error: { code: -32001, message: 'Task not found' } }),
+        getTask
+      })
+      expect(unconfirmed).toBe(true)
+      expect(getTask).not.toHaveBeenCalled()
+    })
+
+    it('gives the task read up to a further second after the cancel answered', async () => {
+      // Mutation: one 500 ms bound around cancel and read together → the
+      // read below lands too late and the stop reads as unconfirmed.
+      const getTask = () => new Promise((resolve) => setTimeout(() => resolve(task('canceled')), 700))
+      const { unconfirmed, saveTaskState } = await stopWith({ cancelTask: async () => ({ jsonrpc: '2.0', id: 1, result: {} }), getTask })
+      expect(unconfirmed).toBe(false)
+      expect(saveTaskState).toHaveBeenCalledWith(expect.objectContaining({ taskState: 'canceled' }))
+    })
+
+    it('bounds a task read that never answers: the stop ends within about a second and a half', async () => {
+      const startedAt = Date.now()
+      const { unconfirmed } = await stopWith({
+        cancelTask: async () => ({ jsonrpc: '2.0', id: 1, result: {} }),
+        getTask: () => new Promise(() => {})
+      })
+      const took = Date.now() - startedAt
+      expect(unconfirmed).toBe(true)
+      expect(took).toBeGreaterThanOrEqual(900)
+      expect(took).toBeLessThan(1_700)
+    })
+
+    it('does not wait for a read when the cancel itself answered after its half second', async () => {
+      const getTask = vi.fn(async () => task('canceled'))
+      const startedAt = Date.now()
+      const { unconfirmed } = await stopWith({
+        cancelTask: () => new Promise((resolve) => setTimeout(() => resolve({ jsonrpc: '2.0', id: 1, result: {} }), 800)),
+        getTask
+      })
+      expect(unconfirmed).toBe(true)
+      expect(Date.now() - startedAt).toBeLessThan(750)
+    })
   })
 
   it('cancels nothing when the stop lands before a task exists', async () => {

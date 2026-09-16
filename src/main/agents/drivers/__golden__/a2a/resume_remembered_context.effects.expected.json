@@ -2,7 +2,8 @@
   "_notes": [
     "The remembered contextId and taskId are both sent on the message.",
     "POSSIBLE BUG: the remembered taskId is sent whatever the remembered taskState is. Here the state is input-required, which is correct, but a completed or failed task's id is resent the same way (plain_text saves one). A spec-compliant server is likely to reject a message addressed to a terminal task.",
-    "onTaskId fires for the remembered taskId before any request is made, then once per status-update."
+    "onTaskId fires for the remembered taskId before any request is made, then once per status-update.",
+    "Crash recovery: the ids are saved from the stream's first event that carries a task id (taskState null, contextId from that event), before the stream ends. The end-of-turn save, when the turn reaches it, follows unchanged."
   ],
   "requests": [
     {
@@ -52,6 +53,13 @@
     }
   ],
   "sessionUpserts": [
+    {
+      "chatId": "chat-golden",
+      "agentId": "agent-remote-1",
+      "contextId": "ctx-remembered-1",
+      "taskId": "task-remembered-1",
+      "taskState": null
+    },
     {
       "chatId": "chat-golden",
       "agentId": "agent-remote-1",

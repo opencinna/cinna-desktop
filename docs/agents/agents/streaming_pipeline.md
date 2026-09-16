@@ -6,7 +6,7 @@ How A2A streaming events from a remote agent become structured, kind-routed mess
 
 ## Durable Input Requests
 
-A2A status-update, streamed task and nonstreaming task responses all emit normalized status and input-request events. An input-required response with no text becomes **What should the agent do next?**; auth-required uses its status text or the existing sign-in fallback. The main executor observes these before optional renderer forwarding and the Inbox stores a durable next-message occurrence separately from transcript parts. Normal turn completion and restart preserve it. Answering starts a new message on the same A2A task/context; it does not attempt to reply to a vanished park. See [Inbox continuation](../../jobs/tasks/inbox.md#durable-continuation-and-refusal).
+A2A status-update, streamed task and nonstreaming task responses all emit normalized status and input-request events. An input-required response with no text becomes the questions of the Cinna ask-user tool part it carries (`askuserquestion`), with their headers and options, and **What should the agent do next?** when it carries none; auth-required uses its status text or the existing sign-in fallback. The main executor observes these before optional renderer forwarding and the Inbox stores a durable next-message occurrence separately from transcript parts. Normal turn completion and restart preserve it. Answering starts a new message on the same A2A task/context; it does not attempt to reply to a vanished park. See [Inbox continuation](../../jobs/tasks/inbox.md#durable-continuation-and-refusal).
 
 ## Desktop Live Attachment
 
@@ -46,6 +46,15 @@ The Cinna backend (`a2a_event_mapper.py`) tags every emitted A2A `TextPart` with
 
 When metadata is absent (non-Cinna A2A servers), parts default to `kind: 'text'` — backward-compatible plain rendering.
 
+Two more keys live on `tasks/get` **history messages**, not on stream parts. The desktop reads them to find a turn after the stream is gone:
+
+| Metadata key | On | Purpose |
+|--------------|----|---------|
+| `cinna.client_message_id` | user messages | Echo of the `messageId` the desktop sent. That id is the local user row's id, so a turn can be found in the task's history, and a resend with the same id is deduplicated by the backend |
+| `cinna.message_state` | agent messages | How that message ended (`streaming`, `complete`, `canceled`, `aborted`, …). `aborted` is a reply cut off by an error or a crash |
+
+A backend whose history carries neither key cannot report turns, and every path that depends on them keeps its older behaviour. See [Interrupted Turn Recovery](../turn_recovery/turn_recovery.md).
+
 The same convention applies to history replay: the backend expands a single `SessionMessage` into N TextParts (one per persisted streaming event), each carrying its original metadata, so a client calling `getTask()` sees the same structured breakdown as a live stream.
 
 ## Streaming Flow
@@ -81,27 +90,36 @@ For each event (status-update | artifact-update | message | task):
         port.postMessage({ type: 'delta', kind, text: delta, toolName, toolInput, toolId, toolStream, commandInvocation })
         if first time we see (toolName, toolInput) for this part -> opts.onToolCall({...})
   - Update latestContextId / latestTaskId / latestTaskState from the event
+  - First event that carries a task id: agentSessionRepo.upsert({ contextId, taskId, taskState: null })
+  - final: true on a status update (or a bare message before any task id) marks the stream finished
   - status-update only: post `{ type: 'status', state: toRunState(state), taskId, contextId }`
       input-required / auth-required -> state 'needs_input', then
       `{ type: 'needs_input', requestId: taskId, request, resume: 'next_message' }`
       (request = a2aInputRequestOf: one open question from the status message's
-       text parts, or { kind: 'auth', message } for auth-required)
+       text parts, else the askuserquestion tool part's questions, or
+       { kind: 'auth', message } for auth-required)
+  - a final status message (or a settled task snapshot) is ingested in replay mode:
+      a part repeating one already accumulated is skipped, so Cinna's closing
+      input-required message does not show the question tool twice
   ↓
 On stream completion (the runner):
+  - no final event seen → collect the turn from tasks/get (below), else:
   - parts   = accumulator.snapshotParts()
   - answer  = accumulator.answerText()    # concat of 'text'-kind parts
   - notices = accumulator.snapshotNotices()  # one entry per distinct notice part
-  - agentSessionRepo.upsert(...) whenever the stream completes, a failed task state included; a throw skips it
+  - agentSessionRepo.upsert(...) whenever the stream completes, a failed task state included; a throw skips this end-of-turn save
   - return { text: answer, parts, notices, ... }
   ↓
 The direct-chat wrapper (streamToAgent):
-  - persistTurn past its cursor:
+  - before the run: open the in-flight marker; while it runs: rewrite the draft row
+  - persistTurn past its cursor, dropping the draft in the same transaction:
     - For each notice not yet saved: messageRepo.saveTransition({ chatId, content, sourceAgentId })
     - messageRepo.saveAssistant({ chatId, content: answer, parts })   # split around steers
-    - messageRepo.touchChat(chatId)
+    - messageRepo.touchChat(chatId)                                  # skipped for touchChat: false
   - on failure only: messageRepo.saveError(...) after the rows,
     then port.postMessage({ type: 'error', ... }) and return        # no 'done'
   - otherwise: port.postMessage({ type: 'done', stopReason })   # 'canceled' if stopped, 'budget' on a budget ending, else 'end_turn'
+  - finally: delete the in-flight marker
 
 Notices are persisted *before* the assistant message so transcript ordering
 matches the on-the-wire order — startup pings sit above the answer they
@@ -113,7 +131,18 @@ preceded. Notices never appear in `messages.parts[]`; they live on their own
 
 `runAgentTurn` treats nonstream JSON-RPC error envelopes and failed/rejected/unfinished A2A task endings as failures. The direct wrapper never turns a failure into an empty success: it persists what the turn streamed, its steered user messages in place, and then the error row under the output it ended. A turn that ran for minutes and then failed would otherwise leave only the error.
 
-A task that ends `failed` (or `rejected`, or any other unfinished state) carries its own answer as the error text. When the error text equals the turn's `text` and the turn has parts, the wrapper replaces it with "The agent reported that its task failed." in two places: the error row and the `error` event posted to the port. The answer is already a row above the error, and repeating it would show the agent's words twice. The outcome passed to `finish()`, which the job run records, keeps the agent's own reason, because the run has no transcript row above it to carry that reason. Input-required/auth-required report `needs_input`; canceled reports `canceled`. Its once-only `onFinished` callback runs after persistence and before close, with standalone job reporting as the default when no callback is supplied. The executor owns the final result and explicit runner completion policy; see [turn outcomes](../../chat/messaging/turn_completion.md).
+A task that ends `failed` (or `rejected`, or any other unfinished state) carries its own answer as the error text. When the error text equals the turn's `text` and the turn has parts, the wrapper replaces it with "The agent reported that its task failed." in two places: the error row and the `error` event posted to the port. The answer is already a row above the error, and repeating it would show the agent's words twice. The outcome passed to `finish()`, which the job run records, keeps the agent's own reason, because the run has no transcript row above it to carry that reason. Input-required/auth-required report `needs_input`; canceled reports `canceled`. A turn the agent reports `aborted` fails with *"The agent's reply was cut off before it finished. Send your message again to retry."* (code `reply_cut_off`), the same words relaunch recovery uses. That error row carries no detail, because there is nothing more to show. Its once-only `onFinished` callback runs after persistence and before close, with standalone job reporting as the default when no callback is supplied. The executor owns the final result and explicit runner completion policy; see [turn outcomes](../../chat/messaging/turn_completion.md).
+
+## A stream that ends without saying so
+
+A stream that closes without a `final` event says nothing about how the turn ended, and on the Cinna backend a dropped connection does not end the turn either: the agent keeps working. So when the stream closes without `final`, or throws a transport drop (`isTransportDrop`) after at least one event, `runAgentTurn` polls `tasks/get` (`collectTask`) until the turn is over. It then takes the collected state and finishes from the agent's history or from what it streamed: a normal ending replaces what streamed, a cut-off one only when it is at least as rich, and a turn the backend kept no reply for keeps what streamed and ends cut off (see [which copy is kept](../turn_recovery/turn_recovery.md#which-copy-of-a-reply-is-kept)). A turn waiting on a question posts its `needs_input` from the collected state. While it polls, the live view shows *"Still running on the agent. The reply will appear here when it finishes."*, which is never saved.
+
+- **Only with a `messageId` and a task id this stream carried.** A remembered task id from an earlier turn is not proof that this turn reached the agent
+- **Only on a backend that proves it can answer.** The first answer must carry a `cinna.*` history key. Otherwise the stream's own outcome stands: a missing `final` is a normal ending, and a drop keeps its parts above the error row
+- **A synced Cinna agent waits for that first answer.** The backend or its proxy may be what just went away, so a first read with no answer, and a 408, 429 or 5xx at any point, is ridden out like a drop. A refused poll is asked again once with a freshly resolved token, and a session that needs a sign-in ends the turn with the re-auth prompt. Any other agent gets one first read, and an unreachable or refusing server, or a 408/429/5xx, leaves the stream's outcome: a third-party server that fails `tasks/get` must not hold a turn open for minutes
+- **Polling rides out drops for ten minutes.** A Cinna backend that restarts reports the turn `failed` a few minutes later, and treating the first dropped poll as the end would report a turn that is still running as failed
+- **Stop ends the polling** and takes the ordinary stop path
+- **The non-streaming branch never collects.** Its single response is the whole answer
 
 ## Cancellation and session checkpoints
 
@@ -121,18 +150,25 @@ Stop aborts the underlying card/message fetch, including body reads and silent S
 
 Task identity reaches the driver before any message or artifact can emit its first delta. The event sink checks abort before and after forwarding, while the accumulator records the current part first. A Stop triggered inside that callback therefore keeps the part just shown and prevents subsequent events.
 
-A pump that throws — aborted or not — returns accumulated text, parts and notices alongside an error, so a connection that drops mid-turn keeps what streamed above its error row. Neither returns a newly learned session checkpoint or upserts the session row. A previous checkpoint is preserved, and a fresh stopped turn leaves none. The direct-chat wrapper persists partial output, emits a canceled terminal event and releases its active request when the turn returns — `cancel()` only aborts, and leaves the entry in place so a turn still unwinding when the app quits is found by the quit flush below; it skips completed-only bookkeeping. Tool callers retain the error-bearing result. Remote `tasks/cancel` is best effort and does not delay local completion, so local Stop is not confirmation of remote cancellation.
+**The session ids are saved from the first stream event that carries a task id**, with `taskState: null`, before any text arrives. On Cinna the task id *is* the session. When the ids were saved only at the end of the turn, a first turn that was stopped, dropped or killed left no session row, and the next message opened a new conversation with no memory of the first. A failed early write is logged and the end-of-turn save tries again.
+
+A pump that throws — aborted or not — returns accumulated text, parts and notices alongside an error, so a connection that drops mid-turn keeps what streamed above its error row. Neither returns a newly learned session checkpoint, and the end-of-turn upsert is skipped. The ids saved from the first event stay. A turn stopped before any task event leaves the previous checkpoint as it was, or none for a first turn. The direct-chat wrapper persists partial output, emits a canceled terminal event and releases its active request when the turn returns — `cancel()` only aborts, and leaves the entry in place so a turn still unwinding when the app quits is found by the quit flush below; it skips completed-only bookkeeping. Tool callers retain the error-bearing result. Remote `tasks/cancel` is best effort and does not delay local completion, so local Stop is not confirmation of remote cancellation. The driver waits up to 500 ms for the cancel's answer and reads the task's state from it defensively. A `canceled` state counts as confirmed, and so does `completed`: an older Cinna backend answers `completed` to a cancel that lands before the agent said anything, and either way the task is not running. An older backend answers with an empty result, so the driver reads the task once (`tasks/get`, up to one more second, sent on its own signal although the turn's is aborted) and accepts only `canceled` there, because that backend still reports the previous turn's `completed` for a turn stopped before its first output. A confirmed stop saves the task state on the session, which the skipped end-of-turn save would otherwise leave behind. Without a confirmation the turn gets the notice *"Stopped waiting locally. The remote agent's stop was not confirmed; check its task before starting more work."*.
 
 ## What a direct turn keeps when it never returns
 
-The wrapper writes a turn's rows when the runner returns, and at quit some never do: Electron does not await `will-quit`, and the process kills that follow end a turn parked on a question or minutes into its tool calls. So `will-quit` calls `a2aStreamingService.saveInFlight()` **first and synchronously** — ahead of the scheduler stops and `acpProcessPool.shutdown()`, and ahead of any `await` — and it persists what every active request has streamed so far. SQLite writes are synchronous, which is what lets the flush complete inside a handler nobody waits for.
+The wrapper writes a turn's rows when the runner returns, and at quit some never do: Electron does not await `will-quit`, and the process kills that follow end a turn parked on a question or minutes into its tool calls. A crash or a force-quit runs no handler at all. Three things cover these cases: the quit flush below, the draft row, and the in-flight marker that the next launch settles (see [Interrupted Turn Recovery](../turn_recovery/turn_recovery.md)).
 
-- **The flush reads a snapshot the driver offers.** `RunInput.registerSnapshot` hands the wrapper a function returning a shallow copy of the turn's parts, notices and steers lists — read and written in the same synchronous pass. Text parts are read in streaming mode, so an attach tag that has opened but not closed is left out rather than saved half-written. All three drivers register one: ACP from its accumulator (steers included), A2A from `runAgentTurn`'s accumulator (forwarded by the A2A driver), and Managed from its push-only parts list. A remote A2A task or Managed session keeps running after the app closes; what is saved is what had reached the desktop. A `/run:` command never registers, and the agent tool a coordinator calls has no wrapper to flush it
-- **Only rows, not an outcome.** The flush records no turn result. A parked ask left open is expired by the boot cleanup (`taskInputRequestRepo.expireOpen`), which is acceptable because the question itself is now in the transcript
+So `will-quit` calls `a2aStreamingService.saveInFlight()` **first and synchronously** — ahead of the scheduler stops and `acpProcessPool.shutdown()`, and ahead of any `await` — and it persists what every active request has streamed so far. SQLite writes are synchronous, which is what lets the flush complete inside a handler nobody waits for.
+
+- **The flush reads a snapshot the driver offers.** `RunInput.registerSnapshot` hands the wrapper a function returning a shallow copy of the turn's parts, notices and steers lists — read and written in the same synchronous pass. Text parts are read in streaming mode, so an attach tag that has opened but not closed is left out rather than saved half-written. All three drivers register one: ACP from its accumulator (steers included), A2A from `runAgentTurn`'s accumulator (forwarded by the A2A driver), and Managed from its push-only parts list. A remote A2A task or Managed session keeps running after the app closes. The flush saves what had reached the desktop, and relaunch recovery later replaces those rows with the agent's full record when the agent can report it. A `/run:` command never registers, and the agent tool a coordinator calls has no wrapper to flush it
+- **Only rows, not an outcome.** The flush records no turn result and leaves the turn's in-flight marker in place. The next launch settles that marker: the boot pass for a local agent, relaunch recovery for A2A and Managed. Boot expires the driver-owned `reply` asks a dead process can no longer take (`taskInputRequestRepo.expireOpen`), and the question stays readable in the transcript. An A2A `next_message` ask is not a park and survives the restart
+- **The chat keeps its place in the list.** The flush saves with `touch: false`, so the next launch shows the sidebar in the order the user left it, not with every running chat moved to the top
+- **The flushed rows replace the draft row** in the same transaction, like every other save of the turn
 - **Each turn has a persist cursor** — parts and steers saved so far by count, notices by `partKey`. Notices are tracked by key rather than position because `snapshotNotices` skips a notice whose text is still empty, so positions shift when it fills in. Every path that keeps output (the normal end, a failure, a throw, the quit flush) saves only what lies past the cursor, so a killed run that still returns does not write its turn twice. The cursor moves with each write, so a write that throws leaves it on what actually reached the transcript
 - **The cursor counts whole parts.** Any part the killed process adds to after the flush keeps the text it had then — usually the last one, but a tool part matched by its `toolId` can be an earlier one — and the addition is not saved. The cost is clipped text at quit, never a duplicate. A row saved past the cursor takes its `content` from its own slice, not from the turn's full `text`
 - **A runner that throws** has its snapshot flushed before the error row, so it keeps what it offered. A runner that registered no snapshot keeps nothing on a throw
 - **A flush that fails is logged, never thrown**, so one broken turn does not stop the rest of the quit handler
+- **The draft row covers what the flush cannot.** While a turn with a marker runs, one assistant row holds its parts past the cursor. It is rewritten every two seconds when they changed, and at once when an ask opens. A kill that skips `will-quit` still leaves that row. It holds parts only: notices and steered user rows are saved with the real rows, and a user row written mid-turn would show twice beside the live view
 
 ## Why per-`(messageId, partIndex)` keying
 

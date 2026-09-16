@@ -17,6 +17,9 @@ export const permissionTool = (id: string, thread?: string): ManagedEvent => thr
   : { type: 'agent.tool_use', id, processed_at: STAMP, name: 'bash', input: { command: 'printf fixture' }, evaluated_permission: 'ask' }
 export const requires = (ids: string[]): ManagedEvent => ({ type: 'session.status_idle', id: `requires-${ids.join('-')}`,
   processed_at: STAMP, stop_reason: { type: 'requires_action', event_ids: ids } })
+export const running = (id: string): ManagedEvent => ({ type: 'session.status_running', id, processed_at: STAMP })
+export const exhausted = (id: string): ManagedEvent => ({ type: 'session.status_idle', id, processed_at: STAMP,
+  stop_reason: { type: 'retries_exhausted' } })
 export const interrupted = (processed: boolean): ManagedEvent => ({ type: 'user.interrupt', id: 'interrupt-peer', processed_at: processed ? STAMP : null })
 export function deferred<T>() {
   let resolve!: (value: T) => void
@@ -29,6 +32,12 @@ export interface PeerOptions {
   pages?: ManagedEvent[][]
   onHistory?: (page: number, res: ServerResponse) => Promise<boolean | void> | boolean | void
   onSend?: (event: SentEvent, peer: ManagedPeer, res: ServerResponse) => Promise<unknown> | unknown
+  /** What `sessions.retrieve` reports; `idle` when omitted. */
+  status?: () => 'idle' | 'running' | 'rescheduling' | 'terminated'
+  /** Answer `sessions.retrieve` instead of the peer (return true); leave `res` open to hang it. */
+  onRetrieve?: (res: ServerResponse) => boolean | void
+  /** Answer an event-stream attach instead of the peer (return true), e.g. `res.end()` to close it at once. */
+  onStream?: (res: ServerResponse) => boolean | void
 }
 export interface ManagedPeer {
   origin: string
@@ -53,6 +62,7 @@ export async function managedPeer(options: PeerOptions = {}): Promise<ManagedPee
       key: req.headers['x-api-key'] as string | undefined, workspace: req.headers['anthropic-workspace-id'] as string | undefined }
     requests.push(row)
     if (req.method === 'GET' && url.pathname.endsWith('/events/stream')) {
+      if (options.onStream?.(res)) return
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' }); res.flushHeaders()
       streams.add(res); res.on('close', () => streams.delete(res)); return
     }
@@ -65,7 +75,8 @@ export async function managedPeer(options: PeerOptions = {}): Promise<ManagedPee
       }); return
     }
     if (req.method === 'GET' && url.pathname === `/v1/sessions/${SESSION}`) {
-      json(res, { id: SESSION, status: 'idle', budget: {}, usage: {} }); return
+      if (options.onRetrieve?.(res)) return
+      json(res, { id: SESSION, status: options.status?.() ?? 'idle', budget: {}, usage: {} }); return
     }
     if (req.method !== 'POST') { res.writeHead(404); res.end(); return }
     let body = ''

@@ -1,6 +1,7 @@
 {
   "_notes": [
-    "POSSIBLE BUG: the error path never upserts. The contextId and taskId learnt from the working status are not saved, so the next turn starts a fresh context."
+    "POSSIBLE BUG: the error path never upserts. The contextId and taskId learnt from the working status are not saved, so the next turn starts a fresh context.",
+    "Crash recovery resolves the POSSIBLE BUG above: the ids from the working status are saved as it arrives (taskState null), so the next turn resumes the session. The end-of-turn save is still skipped on the error path."
   ],
   "requests": [
     {
@@ -43,7 +44,15 @@
   "sessionReads": [
     null
   ],
-  "sessionUpserts": [],
+  "sessionUpserts": [
+    {
+      "chatId": "chat-golden",
+      "agentId": "agent-remote-1",
+      "contextId": "ctx-err-1",
+      "taskId": "task-err-1",
+      "taskState": null
+    }
+  ],
   "taskIdsSurfaced": [
     "task-err-1"
   ],

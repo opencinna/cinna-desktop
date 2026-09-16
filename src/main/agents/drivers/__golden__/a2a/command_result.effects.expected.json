@@ -1,4 +1,7 @@
 {
+  "_notes": [
+    "Crash recovery: the ids are saved from the stream's first event that carries a task id (taskState null, contextId from that event), before the stream ends. The end-of-turn save, when the turn reaches it, follows unchanged."
+  ],
   "requests": [
     {
       "method": "GET",
@@ -41,6 +44,13 @@
     null
   ],
   "sessionUpserts": [
+    {
+      "chatId": "chat-golden",
+      "agentId": "agent-remote-1",
+      "contextId": "ctx-cmd-1",
+      "taskId": "task-cmd-1",
+      "taskState": null
+    },
     {
       "chatId": "chat-golden",
       "agentId": "agent-remote-1",

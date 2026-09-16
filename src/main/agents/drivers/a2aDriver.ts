@@ -16,7 +16,7 @@
 import type { A2AClient } from '@a2a-js/sdk/client'
 import type { AgentRow } from '../../db/agents'
 import type { A2ARunAgentTurnInput, RunAgentTurnResult } from '../../services/a2aStreamingService'
-import { AgentCardFetchError, humanizeA2AError } from '../a2a-client'
+import { A2aHttpError, AgentCardFetchError, humanizeA2AError } from '../a2a-client'
 import { AgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import {
@@ -37,6 +37,11 @@ export const NO_ENDPOINT_CONFIGURED = 'This agent has no endpoint configured.'
 /** How long readiness waits on a card before calling the agent unreachable. */
 export const A2A_READINESS_TIMEOUT_MS = 5_000
 
+/** How long a stopped turn waits for the `tasks/cancel` answer. */
+export const CANCEL_ANSWER_WAIT_MS = 500
+/** How much longer it waits for the one `tasks/get` a cancel answered without a state asks for. */
+export const CANCEL_READ_WAIT_MS = 1_000
+
 export interface A2aDriverDeps {
   /** `runAgentTurn`. */
   runTurn(input: A2ARunAgentTurnInput): Promise<RunAgentTurnResult>
@@ -50,6 +55,11 @@ export interface A2aDriverDeps {
   isReauthRequired(err: unknown): boolean
   /** Override {@link A2A_READINESS_TIMEOUT_MS}. Tests only. */
   readinessTimeoutMs?: number
+  /**
+   * `agentSessionRepo.upsert`, for the state a confirmed Stop leaves the task
+   * in: a stopped turn skips the end-of-turn session save.
+   */
+  saveTaskState?(patch: { chatId: string; agentId: string; taskId: string; taskState: string }): void
 }
 
 function fail(message: string, raw?: string, code?: string): RunAgentTurnResult {
@@ -79,6 +89,26 @@ function resolveForTurn<T>(signal: AbortSignal, resolveValue: () => Promise<T>):
 }
 
 const canceled = (): RunAgentTurnResult => ({ text: '', parts: [], notices: [], taskState: 'canceled' })
+
+/** `result.status.state` of a JSON-RPC answer, read defensively: older backends answer `{"result":{}}`. */
+function answeredState(response: unknown): { answered: boolean; state?: string } {
+  if (!response || typeof response !== 'object' || !('result' in response)) return { answered: false }
+  const result = (response as { result?: { status?: { state?: unknown } } | null }).result
+  const state = result?.status?.state
+  return { answered: true, ...(typeof state === 'string' ? { state } : {}) }
+}
+
+const isStopConfirmed = (state: string | undefined): boolean => state === 'canceled' || state === 'completed'
+
+/** Wait for `promise`, or `ms`, whichever comes first. Never rejects on its own. */
+async function waitAtMost(promise: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([promise, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms) })])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
 
 export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
   return {
@@ -149,16 +179,42 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
       let client: A2AClient | undefined
       let taskId: string | undefined
       let cancelSent = false
-      let cancelConfirmed = false
+      /** The state that confirmed the stop (`canceled` or `completed`), once one did. */
+      let confirmedState: string | undefined
       let cancelAttempt: Promise<void> | undefined
+      /** The `tasks/get` a cancel answered without a state asked for, once it is asked. */
+      let cancelRead: Promise<void> | undefined
       const onAbort = (): void => {
         if (!signal.aborted || cancelSent || !client || !taskId) return
         cancelSent = true
         const id = taskId
+        const cancelClient = client
         logger.info('Sending cancelTask to agent', { taskId: id })
-        cancelAttempt = client
+        cancelAttempt = cancelClient
           .cancelTask({ id })
-          .then((task) => { cancelConfirmed = 'result' in task && task.result.status.state === 'canceled' })
+          .then((answer) => {
+            const read = answeredState(answer)
+            // A cancel that lands before the agent said anything is answered
+            // `completed` by an older Cinna backend: the task is not running
+            // either way, so both count as a confirmed stop.
+            if (read.state !== undefined) {
+              if (isStopConfirmed(read.state)) confirmedState = read.state
+              return
+            }
+            if (!read.answered) return
+            // An older Cinna backend answers the cancel with an empty result.
+            // One `tasks/get` says whether the task stopped; no polling. Only
+            // `canceled` counts there: the same backend's `tasks/get` still
+            // reports the previous turn's `completed` for a turn stopped
+            // before its first output.
+            cancelRead = cancelClient.getTask({ id })
+              .then((task) => {
+                const state = answeredState(task).state
+                logger.debug('cancelTask answered no state; read the task instead', { taskId: id, state })
+                if (state === 'canceled') confirmedState = state
+              })
+              .catch((err) => logger.warn('reading a canceled task failed', { taskId: id, error: String(err) }))
+          })
           .catch((err) => logger.warn('cancelTask failed', { taskId: id, error: String(err) }))
       }
       signal.addEventListener('abort', onAbort, { once: true })
@@ -173,6 +229,7 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
           accessToken,
           wireContent,
           fileIds,
+          ...(input.messageId ? { messageId: input.messageId } : {}),
           // Synced agents authenticate with a Cinna-issued JWT — a stream-level
           // 401/403 means the server revoked the session and the user needs to
           // re-auth. A hand-added agent's token is one the user typed, so a
@@ -181,6 +238,17 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
           signal,
           onEvent,
           ...(input.registerSnapshot ? { registerSnapshot: input.registerSnapshot } : {}),
+          // A turn collected after a drop can outlast its token; a refused
+          // poll asks for a fresh one. A sign-in the user has to make reads
+          // as the refusal it is.
+          renewAccessToken: async () => {
+            try {
+              return await resolveForTurn(signal, () => deps.resolveAccessToken(userId, agent))
+            } catch (err) {
+              if (deps.isReauthRequired(err)) throw new A2aHttpError(401, 'Unauthorized', cardUrl)
+              throw err
+            }
+          },
           onClient: (c) => {
             client = c
             onAbort()
@@ -190,13 +258,20 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
             onAbort()
           }
         })
+        // The cancel answer gets `CANCEL_ANSWER_WAIT_MS`; one that came back
+        // in time without a state, `CANCEL_READ_WAIT_MS` more for its read.
         if (signal.aborted && cancelAttempt) {
-          let timer: ReturnType<typeof setTimeout> | undefined
-          try {
-            await Promise.race([cancelAttempt, new Promise<void>((resolve) => { timer = setTimeout(resolve, 500) })])
-          } finally { if (timer) clearTimeout(timer) }
+          await waitAtMost(cancelAttempt, CANCEL_ANSWER_WAIT_MS)
+          if (cancelRead) await waitAtMost(cancelRead, CANCEL_READ_WAIT_MS)
         }
-        if (signal.aborted && !cancelConfirmed) {
+        if (signal.aborted && confirmedState && taskId && deps.saveTaskState) {
+          try {
+            deps.saveTaskState({ chatId, agentId: agent.id, taskId, taskState: confirmedState })
+          } catch (err) {
+            logger.warn('could not save the state of a stopped task', { chatId, taskId, error: errorText(err) })
+          }
+        }
+        if (signal.aborted && !confirmedState) {
           result.notices = [...result.notices, { partKey: `a2a-stop-${chatId}`, text: 'Stopped waiting locally. The remote agent’s stop was not confirmed; check its task before starting more work.' }]
         }
         return result

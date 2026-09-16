@@ -74,9 +74,9 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 4. Whatever streamed before the cancel is kept, and the stop is not reported as an error
 
 ### Quitting the app mid-turn
-1. The user quits while a turn is streaming, parked on a question, or in the middle of its tool calls
-2. Before any process is killed, what the turn has streamed so far is saved to the transcript, the parked question included
-3. The process is killed and the turn never returns. Its parked ask can no longer be answered and is expired on the next launch; the question stays readable in the transcript
+1. The user quits, force-quits, or the app crashes while a turn is streaming, parked on a question, or in the middle of its tool calls
+2. What the turn has streamed so far is kept, the parked question included. A normal quit saves it before any process is killed. After a crash or force-quit, it is the draft row the turn kept up to date while it ran
+3. The process is killed and the turn never returns. On the next launch its parked ask is expired, because nothing can take the answer any more, and the question stays readable in the transcript. The turn ends with the error row *"The app closed before this turn finished. Send your message again to retry."* and is recorded as failed in the sidebar and in a job run that owns the chat. Nothing is resent: the process that held the turn is gone. See [Interrupted Turn Recovery](../turn_recovery/turn_recovery.md)
 4. The next message in the chat resumes the same session through `session/load`, because its id was saved when the session was created
 
 ### The agent's process dies
@@ -217,7 +217,7 @@ A notice, not a status line, because it belongs beside the turn it describes: a 
 
 Parts already streamed are kept and returned alongside the error, on every exit — including the ceiling and a cancel whose grace expired — and the direct-chat wrapper saves them above the error row. The A2A path keeps them the same way — for a failed task state, a stop, and a transport error mid-stream — so the transcript reads the same for both kinds of agent.
 
-A turn the app is quit under never reaches an exit at all. The driver registers a snapshot of what it has streamed (`RunInput.registerSnapshot`) early in the turn, and the quit handler saves it before the process is killed. A part that is still being written to at that moment keeps the text it had then. See [What a direct turn keeps when it never returns](../agents/streaming_pipeline.md#what-a-direct-turn-keeps-when-it-never-returns).
+A turn the app is quit under never reaches an exit at all. The driver registers a snapshot of what it has streamed (`RunInput.registerSnapshot`) early in the turn, and the quit handler saves it before the process is killed. A part that is still being written to at that moment keeps the text it had then. A crash or force-quit runs no handler: then the turn's draft row, rewritten from the same snapshot every two seconds, is what is left, and the next launch closes the turn with an interrupted error row. See [What a direct turn keeps when it never returns](../agents/streaming_pipeline.md#what-a-direct-turn-keeps-when-it-never-returns).
 
 `max_tokens`, `max_turn_requests` and `refusal` stop reasons are reported as errors rather than swallowed: a reply that stops mid-sentence with no explanation reads as a bug in this app.
 

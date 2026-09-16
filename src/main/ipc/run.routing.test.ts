@@ -110,7 +110,7 @@ vi.mock('../services/agentService', () => ({
   agentService: { findAgent, listMerged: vi.fn(() => AGENTS) }
 }))
 
-const prepareAgentSend = vi.fn((input: { userContent: string }) => ({
+const prepareAgentSend = vi.fn((input: { userContent: string }): { wireContent: string; userMessageId?: string } => ({
   wireContent: input.userContent
 }))
 const prepareLlmSend = vi.fn((input: { userContent: string }) => ({
@@ -195,6 +195,15 @@ async function wireContent(): Promise<string> {
   await input.run({ signal: new AbortController().signal, onEvent: vi.fn() })
   return (driverRun.mock.calls.at(-1) as unknown as [string, AgentRow, { wireContent: string }])[2]
     .wireContent
+}
+
+/** Everything the driver was handed on the last turn that reached it. */
+async function driverInput(): Promise<{ wireContent: string; messageId?: string }> {
+  const input = streamToAgent.mock.calls.at(-1)![0] as {
+    run: (io: { signal: AbortSignal; onEvent: () => void }) => Promise<unknown>
+  }
+  await input.run({ signal: new AbortController().signal, onEvent: vi.fn() })
+  return (driverRun.mock.calls.at(-1) as unknown as [string, AgentRow, { wireContent: string; messageId?: string }])[2]
 }
 
 /** Which agent the turn was routed to. */
@@ -760,6 +769,30 @@ describe('run:watch native subscription', () => {
   })
 })
 
+
+describe('the A2A messageId', () => {
+  it('is the id of the user row the send stored', async () => {
+    // Mutation: drop `messageId` from the driver input → a fresh nanoid goes
+    // out, and the Cinna backend can neither deduplicate nor find the turn.
+    prepareAgentSend.mockImplementationOnce((input) => ({ wireContent: input.userContent, userMessageId: 'user-row-1' }))
+    await send({ chatId: 'chat-1', content: 'hello' })
+    expect((await driverInput()).messageId).toBe('user-row-1')
+  })
+
+  it('is not sent for a runner turn, whose stored row is a system row', async () => {
+    runnerTask.mockReturnValue({ id: 'task', chatId: 'chat-1', executor: 'desktop', executorDevice: null, status: 'in_progress' })
+    prepareAgentSend.mockImplementationOnce((input) => ({ wireContent: input.userContent, userMessageId: 'system-row-1' }))
+    const handle = runExecutionService.start(
+      { profileUserId: 'profile-user', settingsUserId: 'settings-user' },
+      { chatId: 'chat-1', content: 'Continue' },
+      { observe: vi.fn(), runnerTaskId: 'task', inputOrigin: 'runner' }
+    )
+    await handle.accepted
+    const input = await driverInput()
+    expect(input).not.toHaveProperty('messageId')
+    ;(streamToAgent.mock.calls.at(-1)![0] as unknown as { port: { close(): void } }).port.close()
+  })
+})
 
 describe('typed main turn completion', () => {
   const scope = { profileUserId: 'profile-user', settingsUserId: 'settings-user' }

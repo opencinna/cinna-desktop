@@ -47,6 +47,17 @@
  *
  * `answerText()` returns concat of `text` and `command_result` parts — used as
  * the message preview/fallback content (`messages.content`).
+ *
+ * **Replay.** A message ingested with `{ replay: true }` may repeat parts the
+ * stream already delivered under another message id — the Cinna backend ends a
+ * question turn with a final `input-required` status whose message carries the
+ * question tool part streamed earlier. There a part that matches one already
+ * accumulated is skipped (no append, no delta): by `toolId` when both have one,
+ * else by kind, tool name, stream, text and (when both have it) tool input.
+ * Each accumulated part answers at most one part of the replayed message. A
+ * part that matches nothing is ingested as usual. Only the caller decides a
+ * message is a replay; the merge rules above are unchanged, so an agent that
+ * calls the same tool twice still gets two calls.
  */
 import type {
   ContentKind,
@@ -204,6 +215,11 @@ export interface StreamPartsAccumulatorOptions {
   onFile?: (event: AccumulatedFileEvent) => void
 }
 
+export interface IngestOptions {
+  /** The message may repeat parts already accumulated; see "Replay" in the module note. */
+  replay?: boolean
+}
+
 export interface AccumulatedNotice {
   /** Stable identifier per notice part — `(messageId|artifactId, partIndex)`. */
   partKey: string
@@ -238,16 +254,18 @@ export class StreamPartsAccumulator {
     this.opts = opts
   }
 
-  ingestMessage(message: MessageLike, port: DeltaPort): void {
-    this.ingest(`msg:${message.messageId}`, message.parts, port)
+  ingestMessage(message: MessageLike, port: DeltaPort, options: IngestOptions = {}): void {
+    this.ingest(`msg:${message.messageId}`, message.parts, port, options.replay === true)
   }
 
   ingestArtifact(artifact: ArtifactLike, port: DeltaPort): void {
     this.ingest(`art:${artifact.artifactId}`, artifact.parts, port)
   }
 
-  private ingest(idPrefix: string, parts: PartLike[] | undefined, port: DeltaPort): void {
+  private ingest(idPrefix: string, parts: PartLike[] | undefined, port: DeltaPort, replay = false): void {
     if (!Array.isArray(parts)) return
+    // Accumulated parts (and notice keys) a replayed part already matched.
+    const matched = new Set<MessagePart | string>()
     parts.forEach((part, idx) => {
       // A2A FileParts (agent attachments) carry no text — the payload is on
       // `metadata['cinna.file_*']`. Route them through the file path and bail
@@ -264,6 +282,7 @@ export class StreamPartsAccumulator {
       if (!delta) return
       this.seenPartText.set(key, text)
       const kind = partKindOf(part)
+      if (replay && this.replayMatch(part, kind, matched)) return
 
       // Notice parts are agent-side system messages (startup pings, env
       // transitions). They never become part of the assistant message — the
@@ -307,6 +326,37 @@ export class StreamPartsAccumulator {
         this.opts.onToolCall?.({ partKey: key, name: toolName, input: toolInput })
       }
     })
+  }
+
+  /**
+   * Whether a replayed part repeats one already accumulated (see "Replay" in
+   * the module note). Marks the match in `matched` so it answers only once.
+   */
+  private replayMatch(part: PartLike, kind: ContentKind, matched: Set<MessagePart | string>): boolean {
+    const text = part.text ?? ''
+    if (kind === 'notice') {
+      for (const [noticeKey, noticeText] of this.notices) {
+        if (matched.has(noticeKey) || noticeText !== text) continue
+        matched.add(noticeKey)
+        return true
+      }
+      return false
+    }
+    const isTool = kind === 'tool'
+    const isToolResult = kind === 'tool_result'
+    const toolId = isTool || isToolResult ? partToolIdOf(part) : undefined
+    const toolName = isTool ? partToolNameOf(part) : undefined
+    const toolInput = isTool ? partToolInputOf(part) : undefined
+    const toolStream = isToolResult ? partToolStreamOf(part) ?? 'stdout' : undefined
+    const found = this.parts.find((existing) => {
+      if (matched.has(existing) || existing.kind !== kind) return false
+      if (toolId && existing.toolId) return existing.toolId === toolId
+      if (existing.toolName !== toolName || existing.toolStream !== toolStream || existing.text !== text) return false
+      return !toolInput || !existing.toolInput || JSON.stringify(toolInput) === JSON.stringify(existing.toolInput)
+    })
+    if (!found) return false
+    matched.add(found)
+    return true
   }
 
   /**

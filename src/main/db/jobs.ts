@@ -1,7 +1,7 @@
 import { jobRunRefreshMode } from './jobRunRefresh'
 import type { JobRunRefreshMode, JobRuntimeDefinition } from '../../shared/jobs'
 import { nanoid } from 'nanoid'
-import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 import { getDb } from './client'
 import { syncRepo } from './sync'
 import type { ChatRouter } from '../../shared/chatRouting'
@@ -727,6 +727,31 @@ export const jobRunsRepo = {
       .from(jobRuns)
       .where(and(eq(jobRuns.id, runId), eq(jobRuns.userId, userId)))
       .get()
+  },
+
+  /**
+   * Runs of every profile still `pending`/`running` that a legacy
+   * renderer-started chat turn owns: a local run with a chat, of a local job
+   * with no router, script or budget (the gate `prepareRendererTurn` applies).
+   * Coordinator and script runs are owned by their runtimes, `cinna_task` runs
+   * by the remote task. For the boot pass that finalizes runs a kill left open.
+   */
+  listUnfinishedChatTurnRuns(): JobRunRow[] {
+    return getDb()
+      .select({ run: jobRuns })
+      .from(jobRuns)
+      .innerJoin(jobs, eq(jobs.id, jobRuns.jobId))
+      .where(and(
+        eq(jobRuns.type, 'local'),
+        inArray(jobRuns.status, ['pending', 'running']),
+        isNotNull(jobRuns.localChatId),
+        eq(jobs.type, 'local'),
+        isNull(jobs.router),
+        isNull(jobs.script),
+        isNull(jobs.budget)
+      ))
+      .all()
+      .map((row) => row.run)
   },
 
   /** Lookup by originating chat id — used by stream-completion hook. */

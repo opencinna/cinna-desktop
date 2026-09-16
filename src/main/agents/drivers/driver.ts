@@ -47,6 +47,12 @@ export interface RunInput {
   wireContent: string
   /** Cinna file ids to attach (A2A `metadata.cinna_file_ids`). */
   fileIds?: string[]
+  /**
+   * The id of the user row this turn answers, for a driver whose protocol
+   * carries one (A2A sends it as the message's `messageId`). Absent for a
+   * turn with no user row of its own, such as an orchestrated call.
+   */
+  messageId?: string
   /** Cancellation. A driver that can tell the agent to stop does so on abort. */
   signal: AbortSignal
   /** Live event sink; omit for a buffered turn. */

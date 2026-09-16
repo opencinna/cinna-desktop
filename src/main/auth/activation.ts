@@ -27,6 +27,33 @@ class UserActivation {
   private _unlockedUserIds = new Set<string>()
   /** In-flight `activate()` run, used to dedupe concurrent calls for one user. */
   private _pendingActivation?: { userId: string; promise: Promise<void> }
+  private _readyListeners = new Set<(userId: string) => void>()
+  /** The profile the last completed activation opened the gate for. */
+  private _activeUserId: string | null = null
+
+  /**
+   * Told the user id each time a profile becomes usable: once its activation
+   * has finished, and again when its Cinna session is renewed by a re-auth.
+   * Registered by the app's composition root; a listener that throws is
+   * logged and skipped.
+   */
+  onProfileReady(listener: (userId: string) => void): () => void {
+    this._readyListeners.add(listener)
+    return () => { this._readyListeners.delete(listener) }
+  }
+
+  /** A re-auth stored fresh Cinna tokens for `userId`. Only the active profile is told. */
+  credentialsRenewed(userId: string): void {
+    if (this._activated && this._activeUserId === userId) this._notifyReady(userId)
+  }
+
+  private _notifyReady(userId: string): void {
+    for (const listener of [...this._readyListeners]) {
+      try { listener(userId) } catch (err) {
+        console.error('a profile-ready listener failed', err)
+      }
+    }
+  }
 
   isActivated(): boolean {
     return this._activated
@@ -96,9 +123,11 @@ class UserActivation {
       await reloadUserProviders(current)
       if (!current()) return
       this._activated = true
+      this._activeUserId = userId
       taskSyncScheduler.start(userId)
       localScheduleScheduler.start({ profileUserId: userId, settingsUserId: getSettingsScopeUserId() })
       this._startRemoteSync(userId)
+      this._notifyReady(userId)
     })
     this._operations = operation
     await operation
