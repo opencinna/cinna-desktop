@@ -16,16 +16,17 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 
 ### Saving a chat excerpt
 
-1. Select text in a chat transcript and right-click within it, or right-click a message body to use its original Markdown. Choose **Save to Notes**.
+1. Select text in a chat transcript and right-click on the selection, then choose **Save to Notes**. Select a whole message to save its original Markdown. Without a selection under the pointer, no menu opens.
 2. A normal note is created at the top of the root group with the captured text as its body. The title uses the first nonempty line, removes a leading Markdown heading marker and is capped at 80 characters; Chat excerpt is the fallback.
-3. The new note opens for the usual inline editing. If the menu was dismissed or navigation moved away before creation completed, the saved note stays in the list without taking the user back to its detail view.
-4. Copy/Save errors remain in the context menu for retry. Selecting part of rendered text preserves the visible excerpt; whole message bodies preserve Markdown. Capture and menu lifetime belong to [Conversation UI](../../chat/conversation_ui/conversation_ui.md#reusing-message-text).
+3. The sidebar switches to the Notes tab with the new note's row selected and scrolled into view, and the note opens for the usual inline editing. If the menu was dismissed or navigation moved away before creation completed, the saved note stays in the list without taking the user back to its detail view or changing the tab.
+4. Pressing Chats afterwards reopens the chat the excerpt came from.
+5. Copy/Save errors remain in the context menu for retry. Selecting part of rendered text preserves the visible excerpt; a completely selected message preserves its Markdown. Capture and menu lifetime belong to [Conversation UI](../../chat/conversation_ui/conversation_ui.md#reusing-message-text).
 
 ### Switching to Notes
 
 1. User clicks the **NotebookPen** icon on the sidebar's left edge tab rail.
 2. The sidebar body swaps from Chats / Jobs to the notes list. `activeNoteId` is reset to `null`, and the main area lands on the **"Select a note to view."** empty state — auto-selecting the first note would be misleading when notes can live inside a collapsed folder.
-3. Switching back to Chats or Jobs follows the same realignment contract as the Jobs tab.
+3. Switching back to Chats reopens the chat that was open last if it is still in the list, and otherwise the first chat or the New Chat screen. Switching to Jobs lands on its empty pane.
 
 ### Creating a note
 
@@ -69,6 +70,7 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 ## Business Rules
 
 - **A saved excerpt is independent.** Save to Notes snapshots the captured body into an ordinary profile note. Later message streaming, edits or chat deletion do not rewrite the note; it has no live link back to the message.
+- **A note opened from outside the list is brought into view once.** Save to Notes asks for the new note's row to be revealed; the row scrolls itself into view, by the least distance, when it renders active, and the request is then spent. New notes land in the root group, which the list draws below every folder, so without it the note could be highlighted out of sight below a long run of folders. It is a one-time request rather than "whenever a row is active" because collapsing and re-expanding a folder remounts its rows, and the list would jump to the open note each time.
 
 - **Profile scope.** Notes and note folders live in the active profile's `userId` scope — they don't follow the user across profile switches and are invisible from other profiles.
 - **Validation.** `title` must be non-empty on PATCH. The renderer normalizes whitespace-only titles to `Untitled note` before sending, so the user is never blocked while typing. Updates that would null out the title are rejected with `NoteError('invalid_input', ...)`.
@@ -81,7 +83,7 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 
 ## Architecture Overview
 
-Transcript context menu → captured text → Notes create → profile note in root group → note detail while the originating menu remains current.
+Transcript context menu → captured text → Notes create → profile note in root group → Notes sidebar tab, row scrolled into view, and note detail while the originating menu remains current.
 
 ```
 Sidebar

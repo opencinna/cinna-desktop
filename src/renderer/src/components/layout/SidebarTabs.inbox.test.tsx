@@ -79,3 +79,21 @@ describe('SidebarTabs and the inbox', () => {
     expect(useChatStore.getState().activeChatId).toBe('other-chat')
   })
 })
+
+describe('SidebarTabs returning to Chats from another tab', () => {
+  it('reopens the chat that was open last, such as the one a note was saved from', () => {
+    useUIStore.setState({ activeView: 'note-detail', sidebarTab: 'notes', activeNoteId: 'n1' } as never)
+    render(createElement(SidebarTabs))
+    screen.getByRole('button', { name: 'Chats' }).click()
+    expect(useUIStore.getState().activeView).toBe('chat')
+    expect(useChatStore.getState().activeChatId).toBe('other-chat')
+  })
+
+  it.each([null, 'deleted-chat'])('falls back to the first chat when the last one is %s', (lastChatId) => {
+    useUIStore.setState({ activeView: 'job-detail', sidebarTab: 'jobs' } as never)
+    useChatStore.setState({ activeChatId: lastChatId } as never)
+    render(createElement(SidebarTabs))
+    screen.getByRole('button', { name: 'Chats' }).click()
+    expect(useChatStore.getState().activeChatId).toBe('first-chat')
+  })
+})

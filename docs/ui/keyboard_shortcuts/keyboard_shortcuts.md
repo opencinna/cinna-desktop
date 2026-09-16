@@ -57,7 +57,7 @@ Typing `~` into an empty input opens the chat-modes picker above the textarea (s
 
 ### Transcript context menu (`MessageContextMenu`)
 
-After right-clicking a message body or selected transcript text, Copy text receives focus. Pointer movement and keys share the same focused highlight.
+After right-clicking selected transcript text, Copy text receives focus; with no selection under the pointer there is no menu. Pointer movement and keys share the same focused highlight.
 
 | Key | Action |
 |-----|--------|

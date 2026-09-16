@@ -7,7 +7,7 @@ Defines message presentation, transcript text actions and unsent composer state.
 ## Core Concepts
 
 - **Composer draft** — Unsent text, file and note references plus new-chat mode/agent/MCP choices, owned by one profile and composer surface for this renderer session.
-- **Message context menu** — Copy text and Save to Notes actions over a captured transcript excerpt or the clicked message body.
+- **Message context menu** — Copy text and Save to Notes actions over the selected transcript text a right-click lands on. There is no menu without such a selection.
 - **Chat curtain** — The old layout fades away before the new layout is revealed along a diagonal edge; text stays stationary. Its preference and lifecycle belong to [Appearance](../../ui/appearance/appearance.md).
 
 - **User bubble** — A right-aligned rounded bubble with a tinted background. No avatar icon; the alignment and colour are sufficient to identify the sender.
@@ -78,9 +78,9 @@ Defines message presentation, transcript text actions and unsent composer state.
 
 ### Reusing message text
 
-1. Right-click a user or assistant message for **Copy text** and **Save to Notes**. To use an excerpt, select text first and right-click within it; selections can include expanded tool output or several messages.
-2. With no relevant selection, the actions use the Markdown the clicked message body renders, including headings, links, lists and code fences. A reply whose code blocks were nested is taken with its fences repaired and without zero-width escapes. Partial selections use visible text. A structured reply's individual text block is the body under the pointer, not the entire multi-part turn.
-3. Choose Copy text to write the captured payload to the clipboard, or Save to Notes to create and open a profile note with that body. Its title comes from the first nonempty line, with a leading Markdown heading marker removed and a short length cap.
+1. Select text in the transcript, then right-click on the selection for **Copy text** and **Save to Notes**. Selections can include expanded tool output or several messages. A right-click with nothing selected, beside the selection, or on a different message from the selection opens no menu at all.
+2. Selecting a complete message body takes the Markdown it renders, including headings, links, lists and code fences. A reply whose code blocks were nested is taken with its fences repaired and without zero-width escapes. Partial selections use visible text. A structured reply's individual text block is one body, not the entire multi-part turn.
+3. Choose Copy text to write the captured payload to the clipboard, or Save to Notes to create a profile note with that body. The sidebar switches to Notes with the new note selected and its row scrolled into view, and the note opens. Its title comes from the first nonempty line, with a leading Markdown heading marker removed and a short length cap. Pressing Chats afterwards reopens the chat the excerpt came from.
 4. Pointer movement and keyboard navigation move one shared highlight between actions. Errors remain beside the actions for retry; pending actions cannot be submitted twice.
 
 ### Reading a reply that nests a code block
@@ -114,9 +114,11 @@ Defines message presentation, transcript text actions and unsent composer state.
 - **Dispatch is the consumption boundary.** The send result describes handoff to the run path, not successful completion of an agent reply. Cleanup targets the originating draft and removes only submitted fields that are still unchanged. A draft-owned preparation lock survives navigation/remount, preventing duplicate sends before streaming begins while allowing other drafts to prepare independently.
 - **Restore files before judging the destination.** Loading or switching destinations must not silently delete selected files. Unsupported or wrong-scope files block sending with an explanation. Late picker/upload results return to their source draft; explicit file clearing invalidates them. See [File Attachments](../file_attachments/file_attachments.md).
 - **Capture once before menu focus.** A selected excerpt is captured at right-click so focus changes or new streaming text cannot change what Copy or Save uses. Whole-body source excludes message labels and metadata; partial selection is plain visible text, with no Markdown reconstruction.
+- **The menu belongs to a selection under the pointer.** It used to open on any right-click over a message and act on the whole body, so a click that meant nothing produced Copy and Save actions over text the user never chose. The selection must be non-empty, lie wholly inside the transcript, include the right-clicked element and contain text, and the click point must fall on one of the selection's own boxes, stretched to the height of their line. The boxes cover only the glyphs while the highlight fills the line, so a right-click between two selected lines would otherwise open nothing. Right-clicking blank space in a paragraph beside a selection still hits an element that contains the selection, and without the box test that opened the menu off the selection. An event with no pointer position is treated as a keyboard-opened menu and skips the box test. Main registers no native context menu, so a right-click that does not qualify shows nothing. To take a whole message, select all of it.
+- **A complete selection is recognised by the page's text, not the selection's.** The range's own text is compared with the body's text. Chromium's selection text adds line breaks between blocks that the body's text does not have, so a comparison against it never matched a reply with more than one block, and such a reply lost its Markdown.
 - **The menu follows user navigation.** Outside clicks, wheel/touch scrolling, resize, window blur and chat/profile changes close it. Escape, Tab and Page Up/Down dismiss it; arrows and Home/End navigate actions. Programmatic transcript following keeps it open: streaming scroll events previously dismissed the menu before an action could be chosen. Editable inputs retain their normal context menus.
 - **One focus means one highlight.** Copy is focused initially; moving onto Save transfers focus and its highlight. Independent hover/focus backgrounds previously left Copy highlighted too. Reduced motion disables the short highlight transition.
-- **Saving does not reclaim navigation.** A note that finishes saving after menu dismissal remains saved, but does not reopen the note view. An old-profile result neither opens a note nor invalidates the current profile's cache. Notes creation, editing and reversible Trash deletion follow [Notes](../../notes/notes/notes.md).
+- **Saving does not reclaim navigation.** A save that completes while its menu is current moves the sidebar to Notes as well as the centre, so the new note shows as selected rather than with the chat list still beside it. A note that finishes saving after menu dismissal remains saved, but does not reopen the note view or change the sidebar tab. An old-profile result neither opens a note nor invalidates the current profile's cache. Notes creation, editing and reversible Trash deletion follow [Notes](../../notes/notes/notes.md).
 
 - **Pair by identity, never proximity.** Only a recognized structured shell call and later results with its tool ID share a Cinna CLI block. Concurrent stdout/stderr belongs to its originating call; unrelated results stay standalone. Slash-command invocations keep their existing command-specific representation.
 - **Keep details opt-in.** Both compact groups and Cinna CLI disclosures start collapsed, including during streaming. Verbose mode shows the collapsed command headers directly. Ordinary generic output retains its existing streaming expansion behavior. Thinking is the exception: it is the narration that makes a long run of tool steps readable, so it opens by default in both modes.
@@ -146,7 +148,7 @@ Defines message presentation, transcript text actions and unsent composer state.
 
 Profile + composer surface → session draft store → ChatWorkspace / ChatInput → preparation and run dispatch → consume unchanged source fields.
 
-Transcript right-click → captured text → clipboard, or Notes mutation → existing note IPC/service/storage → note detail while the menu remains current.
+Transcript right-click on a selection → captured text → clipboard, or Notes mutation → existing note IPC/service/storage → Notes sidebar tab and note detail while the menu remains current.
 
 MainArea chat selection → stationary-layout curtain; [Appearance](../../ui/appearance/appearance.md) owns the animation, not transcript scrolling.
 

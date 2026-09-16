@@ -1,5 +1,5 @@
 import { Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useUIStore } from '../../stores/ui.store'
 import { useDeleteNote } from '../../hooks/useNotes'
 import type { NoteData } from '../../../../shared/notes'
@@ -25,6 +25,17 @@ export function NoteItem({ note, onDropNote }: NoteItemProps): React.JSX.Element
   const { drag, setDrag } = useNotesDrag()
 
   const isActive = activeNoteId === note.id && activeView === 'note-detail'
+  const revealNoteId = useUIStore((s) => s.revealNoteId)
+  const rowRef = useRef<HTMLDivElement>(null)
+
+  // A note opened from outside the list (Save to Notes) can land below a long
+  // run of folders; bring its row into view rather than highlight it unseen.
+  // Only on that request: a row remounting in a re-expanded folder stays put.
+  useEffect(() => {
+    if (!isActive || revealNoteId !== note.id) return
+    rowRef.current?.scrollIntoView?.({ block: 'nearest' })
+    useUIStore.getState().setRevealNoteId(null)
+  }, [isActive, revealNoteId, note.id])
 
   const canAcceptDrop =
     !!onDropNote && drag?.kind === 'note' && drag.id !== note.id
@@ -73,6 +84,7 @@ export function NoteItem({ note, onDropNote }: NoteItemProps): React.JSX.Element
 
   return (
     <div
+      ref={rowRef}
       draggable
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}

@@ -74,7 +74,12 @@ interface UIStore {
   /** The task whose page is open (when activeView === 'task'). */
   activeTaskId: string | null
   activeNoteId: string | null
-  /** A2A or remote ACP agent selected in the Agents sidebar. */
+  /**
+   * A note whose sidebar row should scroll into view once, when it renders
+   * active. One-shot intent from a note opened outside the list (Save to
+   * Notes), so a row remounting — a folder re-expanded — does not scroll.
+   */
+  revealNoteId: string | null
   activeExternalAgentId: string | null
   /** Folder agent whose page is open (when activeView === 'local-agent'). */
   activeLocalAgentId: string | null
@@ -103,6 +108,7 @@ interface UIStore {
   setActiveCinnaRunId: (id: string | null) => void
   setActiveTaskId: (id: string | null) => void
   setActiveNoteId: (id: string | null) => void
+  setRevealNoteId: (id: string | null) => void
   setActiveExternalAgentId: (id: string | null) => void
   setActiveLocalAgentId: (id: string | null) => void
   setPendingDraftAgentId: (id: string | null) => void
@@ -126,6 +132,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   activeCinnaRunId: null,
   activeTaskId: null,
   activeNoteId: null,
+  revealNoteId: null,
   activeExternalAgentId: null,
   activeLocalAgentId: null,
   pendingDraftAgentId: null,
@@ -146,6 +153,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setActiveCinnaRunId: (id) => set({ activeCinnaRunId: id }),
   setActiveTaskId: (id) => set({ activeTaskId: id }),
   setActiveNoteId: (id) => set({ activeNoteId: id }),
+  setRevealNoteId: (id) => set({ revealNoteId: id }),
   setActiveExternalAgentId: (id) => set({ activeExternalAgentId: id, activeLocalAgentId: null }),
   setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id, activeExternalAgentId: null }),
   setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),

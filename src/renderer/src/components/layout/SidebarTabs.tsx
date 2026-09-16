@@ -60,7 +60,9 @@ export function SidebarTabs(): React.JSX.Element {
 
   // Switching sidebar tabs should also realign the main area so the user
   // doesn't end up with (e.g.) Chats in the sidebar and a job still in the
-  // center. For Chats we jump to the first chat (or the new-chat screen).
+  // center. For Chats we reopen the chat that was open last — Save to Notes,
+  // for one, moves the sidebar off the chat being read — and fall back to the
+  // first chat (or the new-chat screen) when it is gone.
   // For Jobs we intentionally do NOT auto-select — jobs can live inside a
   // collapsed folder, so the "first job" is ambiguous from the user's POV
   // and would silently expand a folder. Instead we land on the empty
@@ -86,9 +88,10 @@ export function SidebarTabs(): React.JSX.Element {
     setActiveCinnaRunId(null)
     setActiveTaskId(null)
     if (target === 'chats') {
-      const firstChat = chats?.[0]
+      const lastChatId = useChatStore.getState().activeChatId
+      const chat = chats?.find((c) => c.id === lastChatId) ?? chats?.[0]
       setActiveView('chat')
-      setActiveChatId(firstChat?.id ?? null)
+      setActiveChatId(chat?.id ?? null)
     } else if (target === 'jobs') {
       setActiveJobId(null)
       setActiveView('job-detail')

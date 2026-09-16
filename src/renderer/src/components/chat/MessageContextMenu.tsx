@@ -13,23 +13,39 @@ interface MenuState {
   text: string
 }
 
-/** Capture before focusing the menu changes the browser selection. */
-export function messageContextText(root: HTMLElement, target: Element, selection: Selection | null): string {
+/**
+ * A range's boxes are as tall as its glyphs, but the highlight fills the line,
+ * so each box is stretched by the half-leading around it: a right-click in the
+ * gap between two selected lines is still on the selection.
+ */
+function pointOnSelection(range: Range, target: Element, { x, y }: { x: number; y: number }): boolean {
+  const style = getComputedStyle(target)
+  const slack = Math.max(0, (parseFloat(style.lineHeight) - parseFloat(style.fontSize)) / 2) || 0
+  return Array.from(range.getClientRects()).some((rect) =>
+    x >= rect.left && x <= rect.right && y >= rect.top - slack && y <= rect.bottom + slack)
+}
+
+/**
+ * Capture before focusing the menu changes the browser selection. Only a
+ * selection the right-click lands on counts; without one there is no menu.
+ * `point` is the pointer position; a keyboard-opened menu has none.
+ */
+export function messageContextText(root: HTMLElement, target: Element, selection: Selection | null, point?: { x: number; y: number }): string {
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return ''
+  const range = selection.getRangeAt(0)
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer) || !range.intersectsNode(target)) return ''
+  // Blank space beside a selection still intersects it as an ancestor.
+  if (point && !pointOnSelection(range, target, point)) return ''
+  const selected = selection.toString()
+  if (!selected.trim()) return ''
+  // Selecting the complete rendered message can retain its exact source. The
+  // range's DOM text is compared: the selection's own text follows layout and
+  // adds line breaks between blocks that `textContent` does not have.
   const message = target.closest<HTMLElement>('[data-message-markdown]')
-  if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
-    const range = selection.getRangeAt(0)
-    if (root.contains(range.startContainer) && root.contains(range.endContainer) && range.intersectsNode(target)) {
-      const selected = selection.toString()
-      if (selected.trim()) {
-        // Selecting the complete rendered message can retain its exact source.
-        if (message && selected.trim() === message.textContent?.trim()) {
-          return message.dataset.messageMarkdown ?? selected
-        }
-        return selected
-      }
-    }
+  if (message && root.contains(message) && range.toString().trim() === message.textContent?.trim()) {
+    return message.dataset.messageMarkdown ?? selected
   }
-  return message && root.contains(message) ? message.dataset.messageMarkdown ?? '' : ''
+  return selected
 }
 
 export function useMessageContextMenu(chatId: string) {
@@ -44,7 +60,8 @@ export function useMessageContextMenu(chatId: string) {
       setMenu(null)
       return
     }
-    const text = messageContextText(event.currentTarget, event.target, window.getSelection())
+    const point = event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined
+    const text = messageContextText(event.currentTarget, event.target, window.getSelection(), point)
     if (!text.trim()) {
       setMenu(null)
       return
@@ -140,6 +157,10 @@ function MessageContextMenu({ x, y, text, onClose }: MenuState & { onClose: () =
       // Saving may finish after the user dismisses the menu or changes chats.
       if (note && mounted.current) {
         const ui = useUIStore.getState()
+        // The sidebar follows the center, so the new note shows as selected,
+        // and its row is brought into view once it renders.
+        ui.setSidebarTab('notes')
+        ui.setRevealNoteId(note.id)
         ui.setActiveNoteId(note.id)
         ui.setActiveView('note-detail')
         onClose()

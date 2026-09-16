@@ -10,17 +10,27 @@ vi.hoisted(() => { window.api = { app: { setTheme: async () => {} } } as never }
 const copy = vi.fn()
 const create = vi.fn()
 const markdown = '# Plan\n\nKeep **formatting** and [links](https://example.com).\n\n```ts\nconst value = 1\n```'
+const originalClientRects = Range.prototype.getClientRects
+/** jsdom has no layout; by default every pointer position is on the selection. */
+function selectionRects(rects = [{ left: 0, top: 0, right: 20000, bottom: 20000 }]) {
+  Range.prototype.getClientRects = () => rects as never
+}
 
 beforeEach(() => {
+  selectionRects()
   copy.mockReset().mockResolvedValue(undefined)
   create.mockReset().mockResolvedValue({ id: 'note-1' })
   vi.stubGlobal('navigator', { clipboard: { writeText: copy } })
   window.api = { notes: { create }, app: { setTheme: async () => {} } } as never
   useAuthStore.setState({ currentUser: { id: 'alice' } as never })
-  useUIStore.setState({ activeView: 'chat', activeNoteId: null })
+  useUIStore.setState({ activeView: 'chat', sidebarTab: 'chats', activeNoteId: null, revealNoteId: null })
   window.getSelection()?.removeAllRanges()
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+  Range.prototype.getClientRects = originalClientRects
+})
 
 function Harness({ chatId = 'chat-1', content = markdown }: { chatId?: string; content?: string }) {
   const context = useMessageContextMenu(chatId)
@@ -44,14 +54,26 @@ function selectText(element: Node, start = 0, end = element.textContent!.length)
   selection.removeAllRanges()
   selection.addRange(range)
 }
-function open() { fireEvent.contextMenu(screen.getByRole('heading', { name: 'Plan' }), { clientX: 150, clientY: 100 }) }
+function selectMessage(inside: Element) {
+  const range = document.createRange()
+  range.selectNodeContents(inside.closest('[data-message-markdown]')!)
+  const selection = window.getSelection()!
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+function open() {
+  const heading = screen.getByRole('heading', { name: 'Plan' })
+  selectMessage(heading)
+  fireEvent.contextMenu(heading, { clientX: 150, clientY: 100 })
+}
 
-it('copies the original Markdown of assistant and user messages', async () => {
+it('copies the original Markdown of a completely selected assistant or user message', async () => {
   mount()
   open()
   fireEvent.click(screen.getByRole('menuitem', { name: 'Copy text' }))
   await waitFor(() => expect(copy).toHaveBeenCalledWith(markdown))
   await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  selectMessage(screen.getByText('question'))
   fireEvent.contextMenu(screen.getByText('question'))
   fireEvent.click(screen.getByRole('menuitem', { name: 'Copy text' }))
   await waitFor(() => expect(copy).toHaveBeenLastCalledWith('My **question**'))
@@ -68,7 +90,7 @@ it('captures the selected excerpt before menu focus or streaming changes it', as
   await waitFor(() => expect(copy).toHaveBeenCalledWith('format'))
 })
 
-it('saves selected text as a new note and opens it', async () => {
+it('saves selected text as a new note and opens it selected in the Notes sidebar', async () => {
   const { client } = mount()
   const invalidated = vi.spyOn(client, 'invalidateQueries')
   const output = screen.getByText('Selected tool output')
@@ -79,11 +101,16 @@ it('saves selected text as a new note and opens it', async () => {
   await waitFor(() => expect(create).toHaveBeenCalledWith({ title: 'Selected', body: 'Selected' }))
   await waitFor(() => expect(useUIStore.getState().activeNoteId).toBe('note-1'))
   expect(useUIStore.getState().activeView).toBe('note-detail')
+  expect(useUIStore.getState().sidebarTab).toBe('notes')
+  expect(useUIStore.getState().revealNoteId).toBe('note-1')
   expect(invalidated).toHaveBeenCalledWith({ queryKey: ['notes'] })
 })
 
-it('uses the full Markdown and a readable title when saving without a selection', async () => {
+it('uses the full Markdown and a readable title when saving a completely selected message', async () => {
   mount()
+  // Chromium's selection text follows layout, with blank lines between blocks
+  // that textContent lacks; jsdom's would match it and hide the difference.
+  vi.spyOn(Selection.prototype, 'toString').mockReturnValue('Plan\n\nKeep formatting and links.\n\nconst value = 1')
   open()
   fireEvent.click(screen.getByRole('menuitem', { name: 'Save to Notes' }))
   await waitFor(() => expect(create).toHaveBeenCalledWith({ title: 'Plan', body: markdown }))
@@ -92,6 +119,7 @@ it('uses the full Markdown and a readable title when saving without a selection'
 it('supports keyboard navigation, viewport clamping and dismissal on navigation', () => {
   const { rerender } = mount()
   screen.getByText('Outside').focus()
+  selectMessage(screen.getByRole('heading'))
   fireEvent.contextMenu(screen.getByRole('heading'), { clientX: 10000, clientY: 10000 })
   const menu = screen.getByRole('menu')
   expect(parseFloat(menu.style.left)).toBeLessThan(window.innerWidth)
@@ -147,8 +175,49 @@ it.each([false, true])('guards a profile change when notes IPC has started=%s', 
   act(() => useAuthStore.setState({ currentUser: { id: 'bob' } as never }))
   await act(async () => finish({ id: 'alice-note' }))
   expect(useUIStore.getState().activeNoteId).toBeNull()
+  expect(useUIStore.getState().sidebarTab).toBe('chats')
   expect(invalidated).not.toHaveBeenCalled()
   expect(create).toHaveBeenCalledTimes(started ? 1 : 0)
+})
+
+it('opens no menu over a message unless the right-click lands on selected text', () => {
+  mount()
+  fireEvent.contextMenu(screen.getByRole('heading', { name: 'Plan' }))
+  expect(screen.queryByRole('menu')).toBeNull()
+  fireEvent.contextMenu(screen.getByText('question'))
+  expect(screen.queryByRole('menu')).toBeNull()
+  // A selection elsewhere in the transcript does not make another message actionable.
+  selectText(screen.getByText('Selected tool output').firstChild!, 0, 8)
+  fireEvent.contextMenu(screen.getByText('question'))
+  expect(screen.queryByRole('menu')).toBeNull()
+})
+
+it('opens no menu when the right-click lands beside the selection rather than on it', () => {
+  mount()
+  const bold = screen.getByText('formatting')
+  selectText(bold.firstChild!, 0, 6)
+  selectionRects([{ left: 100, top: 100, right: 160, bottom: 120 }])
+  fireEvent.contextMenu(bold.closest('p')!, { clientX: 400, clientY: 110 })
+  expect(screen.queryByRole('menu')).toBeNull()
+  fireEvent.contextMenu(screen.getByTestId('transcript'), { clientX: 120, clientY: 300 })
+  expect(screen.queryByRole('menu')).toBeNull()
+  fireEvent.contextMenu(bold, { clientX: 120, clientY: 110 })
+  expect(screen.getByRole('menu')).toBeTruthy()
+})
+
+it('counts the gap between two selected lines as on the selection', () => {
+  mount()
+  const bold = screen.getByText('formatting')
+  selectText(bold.firstChild!, 0, 6)
+  // Glyph boxes of two wrapped lines 7px apart; the highlight fills the gap.
+  selectionRects([{ left: 100, top: 100, right: 160, bottom: 116 }, { left: 100, top: 123, right: 160, bottom: 139 }])
+  const paragraph = bold.closest('p')!
+  paragraph.style.fontSize = '14px'
+  paragraph.style.lineHeight = '23px'
+  fireEvent.contextMenu(paragraph, { clientX: 400, clientY: 119 })
+  expect(screen.queryByRole('menu')).toBeNull()
+  fireEvent.contextMenu(paragraph, { clientX: 120, clientY: 119 })
+  expect(screen.getByRole('menu')).toBeTruthy()
 })
 
 it('leaves blank transcript areas and editable fields to their usual context menu', () => {

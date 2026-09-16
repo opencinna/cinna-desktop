@@ -22,7 +22,7 @@ Let users save reusable units of work (title + description + prompt + execution 
 ### Switching between Chats and Jobs
 1. User clicks the icon tab on the sidebar's left edge (speech bubble = Chats, briefcase = Jobs).
 2. Sidebar body swaps from the chat list to the jobs list, with a separate **Tasks** section below it. Tasks opens durable root work even when it has no job run or Inbox request; parent pages expose their children. See [Tasks](../tasks/tasks.md). The selected tab visually fuses with the sidebar (same surface, no border between them); the other sits as a separate recessed block.
-3. **Main area realigns**. Switching to Chats opens the first chat (or lands on the New Chat screen when none exist). Switching to Jobs lands on the **"Select a job to view." empty state** — auto-selecting the first job would be misleading when jobs can live inside a collapsed folder. `activeCinnaRunId` is cleared on every tab switch and `activeJobId` is reset to null.
+3. **Main area realigns**. Switching to Chats from another tab reopens the chat that was open last when it is still in the list, and otherwise the first chat (or the New Chat screen when none exist). Opening the first chat instead sent a user who had left a chat, for instance by saving an excerpt to Notes, to a different conversation. Switching to Jobs lands on the **"Select a job to view." empty state** — auto-selecting the first job would be misleading when jobs can live inside a collapsed folder. `activeCinnaRunId` is cleared on every tab switch and `activeJobId` is reset to null.
 4. Settings view hides the tab rail entirely (it owns the full sidebar).
 
 ### Creating a job (non-Cinna profile)
