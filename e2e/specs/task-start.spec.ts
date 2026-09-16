@@ -187,7 +187,7 @@ test('a remote task is claimed without execution, then Continue starts its chose
     await expect(cinna.page.getByRole('heading', { name: TITLE, exact: true })).toBeVisible()
     await expect(cinna.page.getByText(GOAL, { exact: true })).toBeVisible()
     await expect(cinna.page.getByText(DESCRIPTION, { exact: true })).toBeVisible()
-    await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+    await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
     await expect(cinna.page.getByRole('region', { name: 'Continue this task' })).toHaveCount(0)
     expect(fake.sends).toEqual([])
 
@@ -204,7 +204,13 @@ test('a remote task is claimed without execution, then Continue starts its chose
     await continuation.getByRole('combobox', { name: 'Continue with' }).selectOption({ label: AGENT })
     await continuation.getByRole('button', { name: 'Continue', exact: true }).click()
     await expect.poll(() => fake.sends.length).toBe(1)
-    await expect(cinna.page.getByPlaceholder('Type a message...')).toBeVisible()
+    // The composer mid-turn, by the name it carries while a turn runs. This
+    // looked for the *idle* placeholder, which the composer stopped showing
+    // during a turn when pending messages replaced it with this one — so from
+    // then on the line found nothing, and the test failed here. (No curtain
+    // copy is involved: opening the chat from the task page mounts the curtain
+    // fresh, and there is exactly one textarea on the page at this point.)
+    await expect(cinna.page.getByRole('combobox', { name: 'Send a follow-up · Esc Esc to stop', exact: true })).toBeVisible()
     await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible()
     const [running] = await tasks()
     expect(running).toMatchObject({ id: remote.id, status: 'in_progress', executor: 'desktop',

@@ -287,7 +287,7 @@ test('a job parks on a permission ask, the user answers it in the Inbox, and the
     await inboxButton().click()
     await expect(cinna.page.getByRole('heading', { name: 'Inbox' })).toBeVisible()
     // The chat is gone from the screen — this is the ask standing on its own.
-    await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+    await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
 
     const rows = cinna.page.getByRole('article')
     await expect(rows).toHaveCount(1)

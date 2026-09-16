@@ -143,7 +143,7 @@ async function start(cinna: CinnaApp, fake: Awaited<ReturnType<typeof serve>>): 
 async function openInbox(cinna: CinnaApp): Promise<void> {
   await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
   await expect(cinna.page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
-  await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+  await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
 }
 async function openTask(cinna: CinnaApp): Promise<void> {
   await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
@@ -196,7 +196,7 @@ test('an autonomous coordinator delegates, survives a durable Inbox gate, hands 
     await expect.poll(() => cinna.page.evaluate((id) => window.api.tasks.get(id), taskId))
       .toMatchObject({ status: 'completed', runtime: { state: 'completed', ownerTurns: 4 } })
     expect(await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)).toEqual([])
-    await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+    await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
     await finalTranscript(cinna, chatId, SUMMARY, [1, 2, 3, 4])
     const chat = await cinna.page.evaluate((id) => window.api.chat.get(id), chatId)
     expect(chat?.messages.filter((message) => message.role === 'user').map((message) => message.content)).toEqual([GOAL, ANSWER])

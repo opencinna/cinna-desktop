@@ -183,7 +183,7 @@ test('remote and local asks share the Inbox; remote failures stay retryable and 
   await expect(inbox()).toHaveAccessibleName('Inbox — 2 waiting', { timeout: 20_000 })
   await inbox().click()
   await expect(cinna.page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
-  await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+  await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
   await expect(cinna.page.getByRole('article')).toHaveCount(2)
   await expect(remote().getByText(QUESTION, { exact: true })).toBeVisible()
   await expect(local().getByText('cat report.txt', { exact: true })).toBeVisible()
@@ -229,7 +229,7 @@ test('remote and local asks share the Inbox; remote failures stay retryable and 
     await expect(inbox()).toHaveAccessibleName('Inbox — 1 waiting')
     expect(state.posts).toEqual(Array(2).fill({ content: `${QUESTION}\nAnswer: ${ANSWER}`, answers_to_message_id: 'remote-question' }))
     expect(state.authorized).toBe(true)
-    await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+    await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
     // An answer is not a remote status update: the service still owns blocked.
     expect((await cinna.page.evaluate((id) => window.api.tasks.get(id), REMOTE_TASK)).status).toBe('blocked')
     await expect(local().getByRole('button', { name: 'Allow once', exact: true })).toBeEnabled()

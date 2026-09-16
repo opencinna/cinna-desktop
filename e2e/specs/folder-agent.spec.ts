@@ -38,7 +38,7 @@ test('D1 # lists the folder agent’s example prompts once it is attached', asyn
   await cinna.skipOnboarding()
   const name = await seedAgentWithPrompts(cinna)
   const { page } = cinna
-  const input = page.getByPlaceholder('Type a message...')
+  const input = page.getByRole('combobox', { name: 'Type a message...', exact: true })
 
   await input.fill('@')
   const mentions = page.getByRole('listbox', { name: 'Agents and MCP servers' })

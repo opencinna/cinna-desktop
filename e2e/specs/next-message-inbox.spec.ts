@@ -118,7 +118,7 @@ async function openInbox(cinna: CinnaApp): Promise<void> {
   await expect(inbox(cinna)).toHaveAccessibleName('Inbox — 1 waiting', { timeout: 20_000 })
   await inbox(cinna).click()
   await expect(cinna.page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
-  await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+  await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
 }
 
 async function answer(cinna: CinnaApp, question: string, text: string): Promise<void> {
@@ -128,7 +128,7 @@ async function answer(cinna: CinnaApp, question: string, text: string): Promise<
   await cinna.page.getByRole('button', { name: 'Send answer', exact: true }).click()
   await expect(rowFor(cinna, question).getByText(`Answered: ${text}.`, { exact: true })).toBeVisible()
   await expect(cinna.page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
-  await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+  await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
 }
 
 async function assertNoModel(cinna: CinnaApp): Promise<void> {
@@ -155,11 +155,11 @@ test('a plain A2A next-message ask survives restart and a second ask gets a new 
     await cinna.relaunch()
     await cinna.skipOnboarding()
     await assertNoModel(cinna)
-    await cinna.page.getByPlaceholder('Type a message...').fill('@')
+    await cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true }).fill('@')
     await cinna.page.getByRole('listbox', { name: 'Agents and MCP servers' })
       .getByRole('option').filter({ hasText: AGENT }).click()
-    await cinna.page.getByPlaceholder('Type a message...').fill(GOAL)
-    await cinna.page.getByPlaceholder('Type a message...').press('Enter')
+    await cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true }).fill(GOAL)
+    await cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true }).press('Enter')
     await expect(cinna.page.getByText(QUESTION_ONE, { exact: true }).first()).toBeVisible({ timeout: 30_000 })
     // The A2A response has ended; this is a durable continuation, not a live park.
     await expect(cinna.page.getByRole('button', { name: 'Send', exact: true })).toBeVisible()

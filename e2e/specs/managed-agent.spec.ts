@@ -46,14 +46,14 @@ async function arrange(cinna: CinnaApp): Promise<void> {
   await form.getByRole('combobox', { name: /^Environment/ }).selectOption(MANAGED_ENVIRONMENT)
   await form.getByRole('button', { name: 'Add agent', exact: true }).click()
   await expect(form).not.toBeVisible()
-  await expect(cinna.page.getByPlaceholder('Type a message...')).toBeVisible()
+  await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toBeVisible()
   expect(await cinna.page.evaluate(() => window.api.localAgents.rootsList())).toEqual([])
   const agents = await cinna.page.evaluate(() => window.api.agents.list())
   expect(agents).toEqual(expect.arrayContaining([expect.objectContaining({ name: MANAGED_NAME, driver: 'managed' })]))
 }
 
 async function send(cinna: CinnaApp, value: string): Promise<void> {
-  const input = cinna.page.getByPlaceholder('Type a message...')
+  const input = cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })
   await input.fill(value); await input.press('Enter')
 }
 function session() { return remote.sessions.get(`sesn_e2e_${startSession + 1}`)! }

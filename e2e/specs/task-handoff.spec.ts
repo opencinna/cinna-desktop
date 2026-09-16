@@ -242,7 +242,7 @@ test('an existing desktop task hands off once and preserves its recipient and no
     await expect(dialog).toHaveCount(0)
     await expect(cinna.page.getByRole('heading', { name: TITLE, level: 1, exact: true })).toBeVisible()
     await expect(cinna.page.getByText('This task is running in the service that holds it.', { exact: true })).toBeVisible()
-    await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+    await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
     expect(calls('POST', '/api/v1/tasks/')).toHaveLength(1)
     expect(calls('POST', `/api/v1/tasks/${REMOTE_ID}/execute`)).toHaveLength(1)
     expect(calls('POST', '/api/v1/tasks/')[0].body).toMatchObject({ original_message: GOAL, external_ref: original.id })

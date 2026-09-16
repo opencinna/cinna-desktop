@@ -84,7 +84,7 @@ test('Codex chats, approves, answers questions, stops, and resumes through the p
   await openAgent(cinna, agent.name)
   await cinna.page.getByRole('button', { name: 'Start chat', exact: true }).click()
   const send = async (text: string) => {
-    const input = cinna.page.getByPlaceholder('Type a message...')
+    const input = cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })
     await input.fill(text)
     await input.press('Enter')
   }

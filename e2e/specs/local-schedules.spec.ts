@@ -84,7 +84,7 @@ async function review(cinna: CinnaApp, prompt: string) {
 async function openInbox(cinna: CinnaApp) {
   await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
   await expect(cinna.page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
-  await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+  await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
 }
 const mainMinute = (cinna: CinnaApp) => cinna.electronApp.evaluate(() => Math.floor(Date.now() / 60_000))
 
@@ -153,7 +153,7 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
     expect(skipped.civilKey).not.toBe(firstCivil)
     expect(acp.received('session/prompt')).toHaveLength(1)
     expect(await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId)).toHaveLength(1)
-    await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+    await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
     await ask.getByRole('button', { name: 'Answer', exact: true }).click()
     await cinna.page.getByRole('button', { name: /^Publish/ }).click()
     await cinna.page.getByRole('button', { name: 'Send answer', exact: true }).click()

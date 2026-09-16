@@ -21,7 +21,7 @@ const NOT_READY = /^Can't send message — no agent, chat mode, or AI credential
  * No user types that fast; a test does, so retry that one refusal.
  */
 async function sendFirstMessage(page: Page, text: string): Promise<void> {
-  const input = page.getByPlaceholder('Type a message...')
+  const input = page.getByRole('combobox', { name: 'Type a message...', exact: true })
   await expect(page.getByRole('button', { name: 'Add to chat' })).toBeVisible()
   await expect
     .poll(
@@ -140,7 +140,7 @@ test.describe('with the engine', () => {
     })
 
     await test.step('attach the folder agent with @ and make the model call it', async () => {
-      const input = cinna.page.getByPlaceholder('Type a message...')
+      const input = cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })
       await input.fill('@')
       const mentions = cinna.page.getByRole('listbox', { name: 'Agents and MCP servers' })
       await mentions.getByRole('option').filter({ hasText: AGENT }).click()

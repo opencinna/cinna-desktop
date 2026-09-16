@@ -47,7 +47,7 @@ async function addAndSend(cinna: CinnaApp): Promise<string> {
   const agent = agents.find(row => row.name === CUSTOM_NAME)
   expect(agent).toMatchObject({ driver: 'acp', capabilities: { cwd: false } })
   expect(await cinna.page.evaluate(id => window.api.customAgents.configuration(id), agent!.id)).toMatchObject({ config: { launcher: 'custom', cwd: CUSTOM_CWD } })
-  const input = cinna.page.getByPlaceholder('Type a message...')
+  const input = cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })
   await input.fill(CUSTOM_PROMPT); await input.press('Enter')
   await expect(cinna.page.getByText(CUSTOM_PARTIAL, { exact: true })).toBeVisible()
   await expect(cinna.page.getByRole('button', { name: 'Allow once', exact: true })).toBeEnabled()

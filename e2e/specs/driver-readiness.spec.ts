@@ -251,5 +251,5 @@ test('an unreachable A2A agent is refused in the composer, and Check again lets 
 })
 
 function input(page: Page) {
-  return page.getByPlaceholder('Type a message...')
+  return page.getByRole('combobox', { name: 'Type a message...', exact: true })
 }

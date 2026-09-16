@@ -104,8 +104,8 @@ async function arrange(cinna: CinnaApp, host: string): Promise<string> {
   await cinna.relaunch()
   await cinna.skipOnboarding()
   await cinna.page.getByText(CHAT, { exact: true }).click()
-  await cinna.page.getByPlaceholder('Type a message...').fill(PROMPT)
-  await cinna.page.getByPlaceholder('Type a message...').press('Enter')
+  await cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true }).fill(PROMPT)
+  await cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true }).press('Enter')
   await expect(cinna.page.getByText(PARTIAL, { exact: true })).toBeVisible()
   return id
 }
@@ -113,9 +113,9 @@ async function arrange(cinna: CinnaApp, host: string): Promise<string> {
 async function switchAway(cinna: CinnaApp): Promise<void> {
   await cinna.page.getByText(OTHER, { exact: true }).click()
   await expect(cinna.page.getByText(NOTE, { exact: true })).toBeVisible()
-  await cinna.page.getByPlaceholder('Type a message...').fill(DRAFT)
+  await cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true }).fill(DRAFT)
   // Ensure both pointer and keyboard focus are outside the running row.
-  await cinna.page.getByPlaceholder('Type a message...').hover()
+  await cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true }).hover()
 }
 
 async function assertSpinner(cinna: CinnaApp): Promise<void> {
@@ -147,7 +147,7 @@ test('a background session keeps its spinner and can be interrupted then deleted
       .toEqual(expect.objectContaining({ status: 'canceled', unread: false }))
     await expect(row(cinna).getByRole('img')).toHaveCount(0)
     await expect(cinna.page.getByText(NOTE, { exact: true })).toBeVisible()
-    await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveValue(DRAFT)
+    await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveValue(DRAFT)
     await row(cinna).getByRole('button', { name: 'Delete session', exact: true }).click()
     await expect(cinna.page.getByText(CHAT, { exact: true })).toHaveCount(0)
     await expect.poll(() => cinna.page.evaluate(() => window.api.chat.list()))
@@ -170,7 +170,7 @@ for (const outcome of ['completed', 'needs_input', 'failed'] as const) {
       await expect.poll(async () => (await saved(cinna, id))?.lastRunResult)
         .toEqual(expect.objectContaining({ status: outcome, unread: true }))
       await expect(cinna.page.getByText(NOTE, { exact: true })).toBeVisible()
-      await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveValue(DRAFT)
+      await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveValue(DRAFT)
       await cinna.relaunch()
       await cinna.skipOnboarding()
       await expect(row(cinna).getByRole('img', { name: labels[outcome], exact: true })).toHaveCSS('opacity', '1')

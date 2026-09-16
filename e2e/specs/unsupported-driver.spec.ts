@@ -89,7 +89,7 @@ test('an unknown driver survives restart, remains visible, and refuses UI and ma
     await expect(cinna.page.getByRole('tabpanel').getByText(REASON, { exact: true })).toBeVisible()
     await cinna.page.getByRole('button', { name: 'Chats', exact: true }).click()
     await cinna.page.getByText(TITLE, { exact: true }).click()
-    const input = cinna.page.getByPlaceholder('Type a message...')
+    const input = cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })
     await input.fill(DRAFT)
     const send = cinna.page.getByRole('button', { name: 'Send', exact: true })
     await expect(send).toBeDisabled()

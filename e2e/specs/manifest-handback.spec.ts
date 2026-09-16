@@ -118,7 +118,7 @@ for (const typed of [true, false]) {
       await expect.poll(() => fake.requests.length).toBe(1)
       await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
       await expect(cinna.page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
-      await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+      await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
       fake.releaseFirst()
       await expect.poll(() => fake.requests.length).toBe(2)
       expect(acp.received('session/prompt')).toHaveLength(1)

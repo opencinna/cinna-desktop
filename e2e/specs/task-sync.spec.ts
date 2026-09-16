@@ -141,7 +141,7 @@ test('scheduled sync discovers a remote-only task and its ask, then the open tas
   await expect(row().getByText(INITIAL_TITLE, { exact: true })).toBeVisible()
   await expect(row().getByText(QUESTION, { exact: true })).toBeVisible()
   await expect(row().getByRole('button', { name: 'Answer', exact: true })).toBeEnabled()
-  await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+  await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
 
   await test.step('the unattended delta carrier refreshes the task while the Inbox stays open', async () => {
     service.task = { ...service.task, title: DELTA_TITLE, updated_at: new Date().toISOString() }

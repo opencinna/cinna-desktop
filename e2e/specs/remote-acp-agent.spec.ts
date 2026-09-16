@@ -33,7 +33,7 @@ test('adds a remote ACP connector, tests its token, streams, answers permission,
     const config = await cinna.page.evaluate((id) => window.api.customAgents.configuration(id), agent!.id)
     expect(config).toMatchObject({ config: { transport: 'websocket', cwd: '/app/workspace' }, hasAccessToken: true })
     expect(JSON.stringify(config)).not.toContain('acp_e2e_fixture')
-    const input = cinna.page.getByPlaceholder('Type a message...')
+    const input = cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })
     await input.fill('Hello from desktop'); await input.press('Enter')
     await expect(cinna.page.getByRole('button', { name: 'Allow once', exact: true })).toBeEnabled()
     await cinna.page.getByRole('button', { name: 'Allow once', exact: true }).click()

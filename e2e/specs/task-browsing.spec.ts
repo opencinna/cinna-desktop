@@ -143,7 +143,7 @@ test('remote work with no ask or job opens from Tasks and a delegated child open
     await expect(cinna.page.getByRole('heading', { name: CHILD_TITLE, level: 1, exact: true })).toBeVisible()
     await expect(cinna.page.getByText(CHILD_GOAL, { exact: true })).toBeVisible()
     await expect(cinna.page.getByText('in progress', { exact: true })).toBeVisible()
-    await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
+    await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
     await cinna.page.getByRole('button', { name: 'Parent task', exact: true }).click()
     await expect(cinna.page.getByRole('heading', { name: ROOT_TITLE, level: 1, exact: true })).toBeVisible()
     await expect(subtasks.getByRole('button', { name: CHILD_TITLE })).toBeVisible()

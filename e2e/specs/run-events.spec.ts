@@ -260,7 +260,7 @@ async function sendToAgent(cinna: CinnaApp, text: string): Promise<void> {
   await answerAgentsFolder(cinna)
   // Opacity-hidden until hover, but in the tree and clickable.
   await page.getByRole('button', { name: `Start a new chat with ${AGENT}` }).click()
-  const input = page.getByPlaceholder('Type a message...')
+  const input = page.getByRole('combobox', { name: 'Type a message...', exact: true })
   await input.fill(text)
   await input.press('Enter')
 }

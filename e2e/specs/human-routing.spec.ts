@@ -173,7 +173,7 @@ async function addAgent(cinna: CinnaApp, agent: FakeAgent): Promise<string> {
 }
 
 function input(page: Page) {
-  return page.getByPlaceholder('Type a message...')
+  return page.getByRole('combobox', { name: 'Type a message...', exact: true })
 }
 
 /** Pick an agent from the composer's `@` popup. */

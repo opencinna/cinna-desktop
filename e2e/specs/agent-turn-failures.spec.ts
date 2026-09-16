@@ -92,7 +92,7 @@ for (const streaming of [true, false]) {
       expect(chat?.messages[0].content).toBe(PROMPT)
       expect(JSON.parse(chat!.messages[1].content)).toMatchObject({ short: error })
       await expect(cinna.page.getByText(error, { exact: true })).toHaveCount(1)
-      await cinna.page.getByPlaceholder('Type a message...').fill('I can retry after fixing the report.')
+      await cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true }).fill('I can retry after fixing the report.')
       await expect(cinna.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
       await cinna.page.getByRole('button', { name: `From job ${title}`, exact: true }).click()
       await expect(cinna.page.getByText('Failed', { exact: true })).toBeVisible()
