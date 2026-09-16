@@ -612,17 +612,17 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
       reauth: isReauth,
       stack: err instanceof Error ? err.stack : undefined
     })
-    // **A stop keeps what it streamed.** When the user had already stopped the
-    // turn, a throw from the stream — a server dropping the connection after
-    // `tasks/cancel`, say — is how the stop ended, not a verdict on what came
-    // before it. `streamToAgent` treats an aborted result as a stop and saves
-    // its parts, so the text the user watched arrive does not vanish on the
-    // refetch `done` triggers. Any other failure still returns nothing streamed.
-    const kept = signal.aborted
+    // **A throw keeps what streamed before it**, stop or not. After a stop, a
+    // throw from the stream — a server dropping the connection after
+    // `tasks/cancel`, say — is how the stop ended, and `streamToAgent` saves
+    // the parts as a stop's. Otherwise it is a failure, and the wrapper saves
+    // the parts above the error row: a connection that dropped minutes into a
+    // turn used to leave only the error, and the text the user watched arrive
+    // vanished on the refetch. The session checkpoint is still skipped.
     return {
-      text: kept ? accumulator.answerText() : '',
-      parts: kept ? accumulator.snapshotParts() : [],
-      notices: kept ? accumulator.snapshotNotices() : [],
+      text: accumulator.answerText(),
+      parts: accumulator.snapshotParts(),
+      notices: accumulator.snapshotNotices(),
       error: { message: humanized, raw: rawError, code }
     }
   }

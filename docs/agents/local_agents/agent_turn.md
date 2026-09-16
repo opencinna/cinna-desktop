@@ -215,7 +215,7 @@ A notice, not a status line, because it belongs beside the turn it describes: a 
 
 ### An error after a partial answer does not blank the answer
 
-Parts already streamed are kept and returned alongside the error, on every exit — including the ceiling and a cancel whose grace expired — and the direct-chat wrapper saves them above the error row. The A2A path keeps them the same way for a failed task state and for a stop, but a transport error that was not a stop still returns nothing streamed.
+Parts already streamed are kept and returned alongside the error, on every exit — including the ceiling and a cancel whose grace expired — and the direct-chat wrapper saves them above the error row. The A2A path keeps them the same way — for a failed task state, a stop, and a transport error mid-stream — so the transcript reads the same for both kinds of agent.
 
 A turn the app is quit under never reaches an exit at all. The driver registers a snapshot of what it has streamed (`RunInput.registerSnapshot`) early in the turn, and the quit handler saves it before the process is killed. A part that is still being written to at that moment keeps the text it had then. See [What a direct turn keeps when it never returns](../agents/streaming_pipeline.md#what-a-direct-turn-keeps-when-it-never-returns).
 
