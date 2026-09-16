@@ -2,7 +2,7 @@
 import { client } from '@agentclientprotocol/sdk'
 import type { AnyMessage, CreateElicitationResponse, RequestPermissionResponse, SessionNotification, Stream } from '@agentclientprotocol/sdk'
 import { createLogger } from '../../../logger/logger'
-import type { AcpSessionHandlers } from './types'
+import type { AcpSessionHandlers, AcpSessionObserver } from './types'
 const logger = createLogger('acp-client')
 
 /** One buffered piece of session traffic, ready to be replayed into handlers. */
@@ -67,6 +67,18 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
   // ---- session routing -----------------------------------------------------
 
   const bound = new Map<string, AcpSessionHandlers>()
+  /**
+   * Who hears a session while no turn is bound to it — the listener that
+   * outlives the turn. Consulted only after `bound` and before the pen: a
+   * bound turn always wins, and the pen keeps its job for sessions nobody
+   * observes (a `session/new` answer racing its own updates).
+   *
+   * **The caller owns the hazard the pen exists for.** An observed session
+   * takes its traffic here, so a turn about to load or prompt an observed
+   * session must drop the observer and bind *before* it sends anything that
+   * produces traffic — which `acpDriver` does (see `suspendObserver` there).
+   */
+  const observers = new Map<string, AcpSessionObserver>()
   const preBind = new Map<string, PreBind>()
 
   const closeWindow = (sessionId: string): void => {
@@ -100,7 +112,7 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
   }
 
   const deliver = (sessionId: string, delivery: BufferedDelivery): void => {
-    const handlers = bound.get(sessionId)
+    const handlers = bound.get(sessionId) ?? observers.get(sessionId)
     if (handlers) {
       try {
         delivery(handlers)
@@ -125,38 +137,52 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
    * on a turn that never existed.
    */
   const handlersFor = (sessionId: string): Promise<AcpSessionHandlers | null> => {
-    const now = bound.get(sessionId)
+    const now = bound.get(sessionId) ?? observers.get(sessionId)
     if (now) return Promise.resolve(now)
     return new Promise((resolve) => holdingPen(sessionId).waiters.push(resolve))
   }
 
+  /** Hand whatever the pen holds for a session to whoever just claimed it. */
+  const drainPen = (sessionId: string, handlers: AcpSessionHandlers): void => {
+    const held = preBind.get(sessionId)
+    if (!held) return
+    preBind.delete(sessionId)
+    clearTimeout(held.timer)
+    if (held.dropped > 0) {
+      logger.warn('pre-bind buffer overflowed before the bind', {
+        sessionId,
+        kept: held.deliveries.length,
+        dropped: held.dropped
+      })
+    }
+    // In order, and before the parked requests resume: the waiters below can
+    // only continue on a microtask, so a permission ask never overtakes the
+    // updates that led to it.
+    for (const delivery of held.deliveries) {
+      try {
+        delivery(handlers)
+      } catch (err) {
+        logger.warn('session handler threw on buffered traffic', { sessionId, error: String(err) })
+      }
+    }
+    for (const waiter of held.waiters) waiter(handlers)
+  }
+
   const bindSession = (sessionId: string, handlers: AcpSessionHandlers): (() => void) => {
     bound.set(sessionId, handlers)
-    const held = preBind.get(sessionId)
-    if (held) {
-      preBind.delete(sessionId)
-      clearTimeout(held.timer)
-      if (held.dropped > 0) {
-        logger.warn('pre-bind buffer overflowed before the bind', {
-          sessionId,
-          kept: held.deliveries.length,
-          dropped: held.dropped
-        })
-      }
-      // In order, and before the parked requests resume: the waiters below can
-      // only continue on a microtask, so a permission ask never overtakes the
-      // updates that led to it.
-      for (const delivery of held.deliveries) {
-        try {
-          delivery(handlers)
-        } catch (err) {
-          logger.warn('session handler threw on buffered traffic', { sessionId, error: String(err) })
-        }
-      }
-      for (const waiter of held.waiters) waiter(handlers)
-    }
+    drainPen(sessionId, handlers)
     return () => {
       if (bound.get(sessionId) === handlers) bound.delete(sessionId)
+    }
+  }
+
+  const observeSession = (sessionId: string, observer: AcpSessionObserver): (() => void) => {
+    observers.set(sessionId, observer)
+    // Only when no turn holds the session: a bound turn owns anything the pen
+    // could hold, and it has already drained it.
+    if (!bound.has(sessionId)) drainPen(sessionId, observer)
+    return () => {
+      if (observers.get(sessionId) === observer) observers.delete(sessionId)
     }
   }
 
@@ -226,8 +252,9 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
   )
 
   const connection = app.connect(transport)
-  return { connection, bindSession, clearRouting: () => {
+  return { connection, bindSession, observeSession, clearRouting: () => {
     for (const sessionId of [...preBind.keys()]) closeWindow(sessionId)
     bound.clear()
+    observers.clear()
   } }
 }

@@ -26,12 +26,13 @@ import {
   type DriverContractSubject
 } from '../__golden__/driverContract'
 import { goldenRow } from '../__golden__/driverWorld'
-import { createAcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
+import { createAcpDriver, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
 import { createAcpProcessPool } from './acpProcessPool'
 import { startAcpConnection } from './acpConnection'
 import type { AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
 import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpScript, type FakeAcpStep } from './testSupport/fakeAcp'
-import { ACP_PROTOCOL_VERSION, type AcpLauncherId, type AcpProcessPool } from './types'
+import { ACP_PROTOCOL_VERSION, type AcpConnection, type AcpLauncherId, type AcpProcessPool } from './types'
+import type { SessionTrafficScope, SessionTrafficSink } from './acpSessionObserver'
 
 /** The one `needs_input` a turn posted, waited for. */
 function askedFor(w: World): Promise<Extract<RunEvent, { type: 'needs_input' }>> {
@@ -798,6 +799,213 @@ describe('a remembered session', () => {
     expect(w.fake.received('session/new')).toHaveLength(1)
     // The user asked a question, not to be told about our bookkeeping.
     expect(result.notices).toEqual([])
+  })
+})
+
+/**
+ * A world whose sessions are watched between turns: the sink records what it
+ * was handed, and every connection the pool hands out reports which sessions
+ * are observed right now.
+ */
+function observedWorld(options: WorldOptions = {}): World & {
+  scopes: SessionTrafficScope[]
+  updates: { sessionId: string; kind: string; text?: string }[]
+  asks: string[]
+  observed: Set<string>
+  connections: AcpConnection[]
+} {
+  const connections: AcpConnection[] = []
+  const scopes: SessionTrafficScope[] = []
+  const updates: { sessionId: string; kind: string; text?: string }[] = []
+  const asks: string[] = []
+  const observed = new Set<string>()
+  const pool = createAcpProcessPool({ start: startAcpConnection })
+  const patched = new WeakSet<AcpConnection>()
+  const watched: AcpProcessPool = {
+    ...pool,
+    acquire: async (...args) => {
+      const connection = await pool.acquire(...args)
+      if (!patched.has(connection)) {
+        patched.add(connection)
+        connections.push(connection)
+        const observe = connection.observeSession
+        connection.observeSession = (sessionId, observer) => {
+          observed.add(sessionId)
+          const unobserve = observe(sessionId, observer)
+          return () => { observed.delete(sessionId); unobserve() }
+        }
+      }
+      return connection
+    }
+  }
+  const sessionTraffic = (scope: SessionTrafficScope): SessionTrafficSink => {
+    scopes.push(scope)
+    return {
+      update: (n) => {
+        const update = n.update as { sessionUpdate: string; content?: { text?: string } }
+        updates.push({ sessionId: n.sessionId, kind: update.sessionUpdate, text: update.content?.text })
+      },
+      permission: async () => { asks.push('permission'); return { outcome: { outcome: 'cancelled' } } },
+      elicitation: async () => { asks.push('elicitation'); return { action: 'cancel' } }
+    }
+  }
+  const w = world({ ...options, deps: { pool: watched, sessionTraffic, ...options.deps } })
+  return Object.assign(w, { scopes, updates, asks, observed, connections })
+}
+
+describe('a session between turns', () => {
+  it('is listened to once the turn ends, under the chat and agent that own it', async () => {
+    const w = observedWorld({ script: SAYS_HELLO })
+    await w.run()
+
+    expect([...w.observed]).toEqual(['ses_fake'])
+    expect(w.scopes).toEqual([
+      { agentId: AGENT_ID, chatId: CHAT_ID, sessionId: 'ses_fake', launcherId: 'opencode' }
+    ])
+  })
+
+  it('hands what the agent says between turns to the sink, and a turn elsewhere is not disturbed', async () => {
+    // Chat 1's session is idle; chat 2's turn, on the same process, is the
+    // moment the fake talks to it — the shape of a background job finishing
+    // after chat 1's prompt returned.
+    const w = observedWorld({
+      script: {
+        ...SAYS_HELLO,
+        loadSession: {
+          emit: [
+            {
+              kind: 'update',
+              sessionId: 'ses_fake',
+              update: { sessionUpdate: 'agent_message_chunk', messageId: 'm1', content: { type: 'text', text: 'Merged.' } }
+            },
+            { kind: 'permission', sessionId: 'ses_fake' }
+          ]
+        }
+      }
+    })
+    await w.run()
+    w.sessions.set('chat-2', 'ses_two')
+    const started = Date.now()
+    const second = await w.run({ chatId: 'chat-2' })
+
+    expect(second.error).toBeUndefined()
+    expect(second.text).not.toContain('Merged.')
+    expect(w.updates).toEqual([{ sessionId: 'ses_fake', kind: 'agent_message_chunk', text: 'Merged.' }])
+    // Answered by the sink, not after the ten-second pre-bind window.
+    expect(w.asks).toEqual(['permission'])
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'cancelled' } })
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect([...w.observed].sort()).toEqual(['ses_fake', 'ses_two'])
+  })
+
+  it('does not take the load replay away from the next turn on the same session', async () => {
+    // The hazard: the observer armed after turn 1 must not swallow what
+    // `session/load` replays for turn 2 — that traffic is turn 2's, and turn 2
+    // drops it itself.
+    const w = observedWorld({
+      script: {
+        ...SAYS_HELLO,
+        loadSession: {
+          emit: [
+            {
+              kind: 'update',
+              sessionId: 'ses_fake',
+              update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'the previous question' } }
+            }
+          ]
+        }
+      }
+    })
+    await w.run()
+    const second = await w.run()
+
+    expect(w.fake.received('session/load')).toHaveLength(1)
+    expect(second.text).not.toContain('the previous question')
+    expect(w.updates).toEqual([])
+    // And listened to again once turn 2 is over.
+    expect([...w.observed]).toEqual(['ses_fake'])
+    expect(w.scopes).toHaveLength(2)
+  })
+
+  it('refuses a permission asked between turns at once when nothing is wired to the listener', async () => {
+    const w = world({
+      script: {
+        ...SAYS_HELLO,
+        loadSession: { emit: [{ kind: 'permission', sessionId: 'ses_fake' }] }
+      }
+    })
+    await w.run()
+    w.sessions.set('chat-2', 'ses_two')
+    const started = Date.now()
+    const second = await w.run({ chatId: 'chat-2' })
+
+    expect(second.error).toBeUndefined()
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'cancelled' } })
+    // Not the pre-bind pen's ten seconds.
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  it('stops listening to a session a turn replaced', async () => {
+    const w = observedWorld({ script: { ...SAYS_HELLO, newSession: { sessionId: 'ses_fresh' } }, remembered: 'ses_old' })
+    await w.run()
+    expect([...w.observed]).toEqual(['ses_old'])
+
+    // The engine has forgotten it by the next turn, which starts a fresh one.
+    w.connections[0].loadSession = async () => { throw new Error('no conversation found for ses_old') }
+    const second = await w.run()
+
+    expect(second.contextId).toBe('ses_fresh')
+    expect([...w.observed]).toEqual(['ses_fresh'])
+  })
+
+  it('keeps listening to a session a turn replaced while its process lives, until the chat is forgotten', async () => {
+    // An engine that cannot load sessions starts a fresh one each turn; the
+    // one it replaced is still in the process and may still be running work.
+    const w = observedWorld({
+      script: { ...SAYS_HELLO, initialize: { response: { agentCapabilities: {} } }, newSession: { sessionId: 'ses_first' } }
+    })
+    await w.run()
+    expect([...w.observed]).toEqual(['ses_first'])
+
+    w.connections[0].newSession = async () => ({ sessionId: 'ses_second' })
+    const second = await w.run()
+
+    expect(w.fake.received('session/load')).toHaveLength(0)
+    expect(second.contextId).toBe('ses_second')
+    expect([...w.observed].sort()).toEqual(['ses_first', 'ses_second'])
+    expect(w.scopes.map((scope) => [scope.sessionId, scope.chatId])).toContainEqual(['ses_first', CHAT_ID])
+
+    ;(w.driver as AcpDriver).forgetChatSessions(CHAT_ID)
+    expect([...w.observed]).toEqual([])
+  })
+
+  it('stops listening to a chat’s sessions when the chat is forgotten, and only that agent’s when one is named', async () => {
+    const w = observedWorld({ script: SAYS_HELLO })
+    await w.run()
+    w.sessions.set('chat-2', 'ses_two')
+    await w.run({ chatId: 'chat-2' })
+    expect([...w.observed].sort()).toEqual(['ses_fake', 'ses_two'])
+    const driver = w.driver as AcpDriver
+
+    driver.forgetChatSessions(CHAT_ID, 'another-agent')
+    expect([...w.observed].sort()).toEqual(['ses_fake', 'ses_two'])
+
+    driver.forgetChatSessions(CHAT_ID, AGENT_ID)
+    expect([...w.observed]).toEqual(['ses_two'])
+
+    driver.forgetChatSessions('chat-2')
+    expect([...w.observed]).toEqual([])
+    // Nothing left to forget is not an error.
+    expect(() => driver.forgetChatSessions('chat-2')).not.toThrow()
+  })
+
+  it('stops listening when the process goes away', async () => {
+    const w = observedWorld({ script: SAYS_HELLO })
+    await w.run()
+    expect(w.observed.size).toBe(1)
+
+    w.pool.retire(AGENT_ID)
+    await waitFor(() => w.observed.size === 0, 'the observer to be dropped')
   })
 })
 

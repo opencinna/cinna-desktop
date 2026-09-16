@@ -105,6 +105,21 @@ it('exposes main-run activity only on an owned chat and clears it when the turn 
   } finally { activeRunsByChat.delete(chat.id) }
 })
 
+it('forgets a chat\'s session activity when the chat is trashed or deleted', async () => {
+  const { sessionActivityHub } = await import('./sessionActivityHub')
+  const start = { type: 'upsert' as const, id: 'bg', kind: 'background' as const, title: 'watch' }
+  const trashed = chatService.create(USER)
+  sessionActivityHub.report(trashed.id, 'agent', start)
+  chatService.delete(USER, trashed.id)
+  expect(sessionActivityHub.snapshot(trashed.id).items).toEqual([])
+
+  const removed = chatService.create(USER)
+  sessionActivityHub.report(removed.id, 'agent', start)
+  chatService.permanentDelete(USER, removed.id)
+  expect(sessionActivityHub.snapshot(removed.id).items).toEqual([])
+  expect(sessionActivityHub.hasRunning({ agentId: 'agent' })).toBe(false)
+})
+
 it('keeps a working autonomous session interruptible between turns', () => {
   const chat = chatService.create(USER)
   const runner = { userId: USER, taskId: 'task-1', id: 'attempt-1', working: true, cancel: vi.fn() }
@@ -242,6 +257,68 @@ describe('chatService.setRouter', () => {
   it('refuses a chat the caller does not own', () => {
     const chatId = directChat()
     expect(() => chatService.setRouter('somebody-else', chatId, 'human')).toThrow(ChatError)
+  })
+})
+
+describe('a chat that stops answering to an agent', () => {
+  const start = { type: 'upsert' as const, id: 'bg', kind: 'background' as const, title: 'watch' }
+  const forgotten: [string, string | undefined][] = []
+  let uninstall: () => void = () => {}
+
+  beforeEach(async () => {
+    forgotten.length = 0
+    const { installChatSessionForgetter } = await import('./chatSessionRelease')
+    uninstall = installChatSessionForgetter((chatId, agentId) => { forgotten.push([chatId, agentId]) })
+  })
+  afterEach(() => uninstall())
+
+  it('stops hearing its old sessions and writes their activity off when the router changes', async () => {
+    const { sessionActivityHub } = await import('./sessionActivityHub')
+    const chatId = directChat()
+    sessionActivityHub.report(chatId, 'a-1', start)
+
+    chatService.setRouter(USER, chatId, 'human')
+
+    expect(forgotten).toEqual([[chatId, undefined]])
+    expect(sessionActivityHub.snapshot(chatId).items.map((item) => item.state)).toEqual(['lost'])
+  })
+
+  it('does the same, for the old agent only, when the chat is rebound to another agent', async () => {
+    const { sessionActivityHub } = await import('./sessionActivityHub')
+    const chatId = directChat()
+    sessionActivityHub.report(chatId, 'a-1', start)
+    sessionActivityHub.report(chatId, 'a-2', { ...start, id: 'bg-2' })
+
+    chatService.update(USER, chatId, { title: 'renamed' })
+    expect(forgotten).toEqual([])
+
+    chatService.update(USER, chatId, { agentId: 'a-2' })
+    expect(forgotten).toEqual([[chatId, 'a-1']])
+    const states = Object.fromEntries(sessionActivityHub.snapshot(chatId).items.map((item) => [item.agentId, item.state]))
+    expect(states).toEqual({ 'a-1': 'lost', 'a-2': 'running' })
+  })
+
+  it('does the same for an attached agent that is removed', async () => {
+    const { sessionActivityHub } = await import('./sessionActivityHub')
+    const chatId = directChat()
+    chatService.setRouter(USER, chatId, 'human')
+    forgotten.length = 0
+    chatOnDemandAgentRepo.add(chatId, 'a-2')
+    sessionActivityHub.report(chatId, 'a-2', { ...start, id: 'bg-3' })
+
+    chatService.removeOnDemandAgent(USER, chatId, 'a-2')
+
+    expect(forgotten).toEqual([[chatId, 'a-2']])
+    expect(sessionActivityHub.hasRunning({ chatId })).toBe(false)
+  })
+
+  it('stops hearing a trashed or deleted chat’s sessions', () => {
+    const trashed = chatService.create(USER)
+    chatService.delete(USER, trashed.id)
+    const removed = chatService.create(USER)
+    chatService.permanentDelete(USER, removed.id)
+
+    expect(forgotten).toEqual([[trashed.id, undefined], [removed.id, undefined]])
   })
 })
 

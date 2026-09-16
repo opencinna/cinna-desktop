@@ -77,6 +77,13 @@ import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } fro
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
 import { toElicitationContent, toInputQuestions } from './acpQuestions'
 import type { AcpConnection, AcpLauncherId, AcpProcessPool } from './types'
+import {
+  createSessionObservation,
+  refusingSessionTrafficSink,
+  type SessionObservation,
+  type SessionTrafficScope,
+  type SessionTrafficSinkFactory
+} from './acpSessionObserver'
 
 import type { AcpFolderView, AcpRuntimeView } from './acpRuntime'
 export type { AcpFolderView, AcpRuntimeView } from './acpRuntime'
@@ -144,6 +151,12 @@ export interface AcpDriverDeps {
   defaultEngine?(): AgentEngine
   /** Take the per-agent lock for the streaming part of the turn. */
   withLock<T>(agentId: string, owner: string, fn: () => Promise<T>, queuedSignal?: AbortSignal): Promise<T>
+  /**
+   * Where a session's traffic goes between turns (see `acpSessionObserver.ts`).
+   * One sink per observed session, built with the chat and agent it belongs
+   * to. Default: count, log, and refuse asks at once.
+   */
+  sessionTraffic?: SessionTrafficSinkFactory
   /** Override the turn ceiling. Tests only. */
   turnCeilingMs?: number
   /** Override the wait for a `session/cancel` acknowledgement. Tests only. */
@@ -182,9 +195,95 @@ async function beforeStart<T>(signal: AbortSignal, operation: () => T | Promise<
   }
 }
 
-export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
+/**
+ * The sessions a driver listens to between turns, per connection.
+ *
+ * One observer per session a turn created or loaded, armed after the turn
+ * unbinds. It is dropped when the process exits (a retire or a reap ends in an
+ * exit too), when a turn is about to start on the session — the load replay
+ * and anything before the bind belong to that turn, and the connection's
+ * pre-bind pen only keeps them for a session nobody observes — and when the
+ * chat stops being that agent's ({@link SessionObservers.forgetChat}: the chat
+ * was trashed or another agent answers there now), so a follow-up turn from
+ * the old agent never lands in it.
+ */
+export interface SessionObservers {
+  suspend(connection: AcpConnection, sessionId: string): boolean
+  arm(connection: AcpConnection, scope: SessionTrafficScope): void
+  /** Stop observing every session of the chat, or only the agent's in it. */
+  forgetChat(chatId: string, agentId?: string): void
+}
+
+interface ObservedSession {
+  scope: SessionTrafficScope
+  observation: SessionObservation
+  unobserve: () => void
+}
+
+function createSessionObservers(sinkFor: SessionTrafficSinkFactory): SessionObservers {
+  const byConnection = new WeakMap<AcpConnection, Map<string, ObservedSession>>()
+  /** The same entries by chat, so a chat can be forgotten without knowing its connections. */
+  const byChat = new Map<string, Map<ObservedSession, Map<string, ObservedSession>>>()
+  const drop = (sessions: Map<string, ObservedSession>, sessionId: string): boolean => {
+    const entry = sessions.get(sessionId)
+    if (!entry) return false
+    sessions.delete(sessionId)
+    const chat = byChat.get(entry.scope.chatId)
+    chat?.delete(entry)
+    if (chat?.size === 0) byChat.delete(entry.scope.chatId)
+    entry.unobserve()
+    entry.observation.close()
+    return true
+  }
+  return {
+    suspend: (connection, sessionId) => {
+      const sessions = byConnection.get(connection)
+      return sessions ? drop(sessions, sessionId) : false
+    },
+    arm: (connection, scope) => {
+      if (!connection.alive) return
+      let sessions = byConnection.get(connection)
+      if (!sessions) {
+        const created = new Map<string, ObservedSession>()
+        sessions = created
+        byConnection.set(connection, created)
+        void connection.exited.then(() => {
+          for (const sessionId of [...created.keys()]) drop(created, sessionId)
+        })
+      }
+      drop(sessions, scope.sessionId)
+      const observation = createSessionObservation(scope, sinkFor(scope))
+      const unobserve = connection.observeSession(scope.sessionId, observation.observer)
+      const entry: ObservedSession = { scope, observation, unobserve }
+      sessions.set(scope.sessionId, entry)
+      let chat = byChat.get(scope.chatId)
+      if (!chat) { chat = new Map(); byChat.set(scope.chatId, chat) }
+      chat.set(entry, sessions)
+    },
+    forgetChat: (chatId, agentId) => {
+      const chat = byChat.get(chatId)
+      if (!chat) return
+      for (const [entry, sessions] of [...chat]) {
+        if (agentId !== undefined && entry.scope.agentId !== agentId) continue
+        if (sessions.get(entry.scope.sessionId) === entry) drop(sessions, entry.scope.sessionId)
+      }
+    }
+  }
+}
+
+/** The ACP driver, plus the one thing the app asks of it outside a turn. */
+export interface AcpDriver extends AgentDriver {
+  /**
+   * Stop listening between turns to the chat's sessions (only the agent's, if
+   * named): the chat was trashed, or it no longer answers to that agent.
+   */
+  forgetChatSessions(chatId: string, agentId?: string): void
+}
+
+export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
   const parkedRuntimes = new Map<string, AcpRuntimeView>()
-  const driver: AgentDriver = {
+  const observers = createSessionObservers(deps.sessionTraffic ?? refusingSessionTrafficSink)
+  const driver: AcpDriver = {
     id: 'acp',
 
     capabilities(agent: AgentRow): AgentCapabilities {
@@ -271,9 +370,9 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
 
       try {
         if (input.queueWhenBusy) return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, steers: [], savedSession: null }), input.signal)
+          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, observers, steers: [], savedSession: null }), input.signal)
         return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, steers: [], savedSession: null })
+          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, observers, steers: [], savedSession: null })
         )
       } catch (err) {
         // `turnLock.acquire` throws rather than queueing, and its message is
@@ -298,6 +397,10 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
       return respondToAcpAsk({ resolveRequest: deps.resolveRequest, rememberGrant: (_agentId, request) => {
         try { return runtime.rememberGrant(request) } catch { return false }
       } }, ask, resolution)
+    },
+
+    forgetChatSessions(chatId, agentId) {
+      observers.forgetChat(chatId, agentId)
     }
   }
   return driver
@@ -310,6 +413,7 @@ interface TurnContext {
   agent: AgentRow
   runtime: AcpRuntimeView
   parkedRuntimes: Map<string, AcpRuntimeView>
+  observers: SessionObservers
   launcherId: AcpLauncherId
   plan: AcpLaunchPlan
   input: RunInput
@@ -648,6 +752,36 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   const release = deps.pool.hold(agent.id)
   const onAbort = (): void => askAgentToStop()
   input.signal.addEventListener('abort', onAbort, { once: true })
+  let unbind: (() => void) | undefined
+  /**
+   * Arm the between-turn listener for the session this turn ends on (the one
+   * it created or loaded) and for the remembered one it took the observer
+   * from, unless that one turned out to be gone. A remembered session this
+   * turn replaced — an engine that cannot load sessions starts a fresh one —
+   * still lives in the process and may still be running background work, so
+   * it is listened to until the process goes, under the same chat, which is
+   * what lets forgetting the chat drop it too.
+   */
+  const listenBetweenTurns = (): void => {
+    if (!connection) return
+    const keep = new Set<string>()
+    if (sessionId) keep.add(sessionId)
+    if (suspended && !rememberedGone) keep.add(suspended)
+    for (const id of keep) {
+      try {
+        ctx.observers.arm(connection, { agentId: agent.id, chatId, sessionId: id, launcherId: ctx.launcherId })
+      } catch (err) {
+        logger.warn('could not listen to an ACP session between turns', {
+          agentId: agent.id,
+          error: err instanceof Error ? err.message : String(err)
+        })
+      }
+    }
+  }
+  /** The remembered session whose between-turn observer this turn took down. */
+  let suspended: string | null = null
+  /** The remembered session turned out to be gone; nothing to listen to. */
+  let rememberedGone = false
 
   try {
     /**
@@ -702,7 +836,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
 
     const remembered = runtime.readSession(chatId)
     const canLoad = connection.initialized.agentCapabilities?.loadSession === true
-    let unbind: (() => void) | undefined
+    // Before anything that can produce traffic for it: from here the session's
+    // traffic is this turn's (the load replay included), and the pen only
+    // keeps it for the bind while nobody observes the session.
+    if (remembered && ctx.observers.suspend(connection, remembered)) suspended = remembered
 
     if (plan.spec.remote && remembered && remoteSessions.get(connection)?.has(remembered)) {
       sessionId = remembered
@@ -734,12 +871,14 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         // without explaining: the user asked a question, not to be told about
         // our bookkeeping. Nothing has streamed yet, because the replay gate
         // was closed for exactly this window.
-        if (plan.spec.remote) { unbind(); throw err }
+        if (plan.spec.remote) { rememberedGone = true; unbind(); throw err }
         logger.info('the remembered ACP session was gone; starting a fresh one', {
           agentId: agent.id,
           chatId,
           error: err instanceof Error ? err.message : String(err)
         })
+        // A Stop during the load lands here too; that session is not gone.
+        if (!startupController.signal.aborted) rememberedGone = true
         unbind()
         unbind = undefined
       } finally {
@@ -904,6 +1043,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     startupController.abort()
     input.signal.removeEventListener('abort', onAbort)
     try { runtime.validate(chatId) } catch { deps.pool.retire(agent.id) }
+    // Every path that bound, including a throw between the bind and the
+    // prompt. Before the observer is armed: a bound turn outranks it.
+    unbind?.()
+    listenBetweenTurns()
     release()
     // Every exit releases what this turn parked on. A request left registered
     // keeps `isPending` true, so a persisted block goes on rendering as

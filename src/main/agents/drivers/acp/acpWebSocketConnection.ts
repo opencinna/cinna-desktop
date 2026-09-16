@@ -65,7 +65,7 @@ export async function startAcpWebSocketConnection(
   })
   const stream: Stream = { readable, writable }
   // Bind the reader before open so opening notifications cannot be lost.
-  const { connection, bindSession, clearRouting } = connectAcpClient(stream, options.preBindWindowMs, options.preBindLimit)
+  const { connection, bindSession, observeSession, clearRouting } = connectAcpClient(stream, options.preBindWindowMs, options.preBindLimit)
   const dispose = async (): Promise<void> => { close(); clearRouting(); connection.close() }
   void connection.closed.then(() => { close(); clearRouting() })
   const abort = (): void => close(new Error('The ACP connection was canceled.'))
@@ -85,7 +85,7 @@ export async function startAcpWebSocketConnection(
     if (!alive) throw failure ?? new Error('The ACP connection is closed.')
     const call = connection.agent
     return {
-      pid: undefined, initialized, get alive() { return alive }, exited, bindSession,
+      pid: undefined, initialized, get alive() { return alive }, exited, bindSession, observeSession,
       newSession: (params) => call.request('session/new', params),
       loadSession: (params) => call.request('session/load', params),
       setSessionMode: (params) => call.request('session/set_mode', params),

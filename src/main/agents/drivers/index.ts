@@ -57,6 +57,7 @@ import { createA2aDriver } from './a2aDriver'
 import { createA2aTurnRecoverer } from './a2aTurnRecoverer'
 import { createAcpDriver, respondToAcpAsk, type AcpFolderView } from './acp/acpDriver'
 import { acpProcessPool } from './acp/acpPool'
+import { installChatSessionForgetter } from '../../services/chatSessionRelease'
 export { acpProcessPool } from './acp/acpPool'
 import { developmentAgentContext, contextForDevelopmentAgent, restoreDevelopmentContext, isDevelopmentAgent, developmentPlanKey } from '../../localdev/developmentSessionService'
 import { localDevService } from '../../localdev/localDevService'
@@ -440,6 +441,8 @@ export const acpDriver = createAcpDriver({
   withLock: (agentId, owner, fn, queuedSignal) => queuedSignal
     ? turnLock.withQueuedLock(agentId, owner, queuedSignal, fn) : turnLock.withLock(agentId, owner, fn)
 })
+// A trashed chat, or one that answers to another agent now, stops hearing its old sessions.
+installChatSessionForgetter((chatId, agentId) => acpDriver.forgetChatSessions(chatId, agentId))
 
 /** Relaunch recovery of `a2a` turns, with the driver's own credential resolution. */
 export const a2aTurnRecoverer = createA2aTurnRecoverer({

@@ -290,7 +290,7 @@ export async function startAcpConnection(
     killTree(child, 'SIGKILL')
     throw new Error(`${spec.command} was started without stdio pipes`)
   }
-  const { connection, bindSession, clearRouting } = connectAcpClient(ndJsonStream(
+  const { connection, bindSession, observeSession, clearRouting } = connectAcpClient(ndJsonStream(
     Writable.toWeb(stdin) as WritableStream<Uint8Array>,
     Readable.toWeb(stdout) as ReadableStream<Uint8Array>
   ), preBindWindowMs, preBindLimit)
@@ -424,6 +424,7 @@ export async function startAcpConnection(
     steer: (params: AcpSteerRequest): Promise<AcpSteerResponse> =>
       call.request<AcpSteerResponse, AcpSteerRequest>(ACP_STEER_METHOD, params),
     bindSession,
+    observeSession,
     stderrTail,
     dispose
   }

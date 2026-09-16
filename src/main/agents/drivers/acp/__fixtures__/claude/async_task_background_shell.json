@@ -1,0 +1,248 @@
+{
+  "recording": "session_activity/claude-q1-bg-shell.ndjson",
+  "note": "promptReturnedAtIndex: notifications at or after this index arrived after the session/prompt response. Bash with run_in_background under asyncTasks, verbatim from the Bash tool_call to the task end. The spawn carries no toolCallId; the two async_task_progress frames carry it. The end arrives ~24 s AFTER the prompt returned, as state \"stopped\" (a list-level liveness edge) immediately corrected to \"completed\" by the authoritative event: a consumer must let a later terminal state replace \"stopped\". Usage_update without cost is mid-turn context accounting, not an end marker.",
+  "promptReturnedAtIndex": 14,
+  "notifications": [
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_01Hru8BGVA8YhLTCnqJMopoR",
+        "sessionUpdate": "tool_call",
+        "rawInput": {},
+        "status": "pending",
+        "title": "Terminal",
+        "kind": "execute",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_01Hru8BGVA8YhLTCnqJMopoR",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "command": "sleep 25 && echo probe-done"
+        },
+        "title": "sleep 25 && echo probe-done",
+        "kind": "execute"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_01Hru8BGVA8YhLTCnqJMopoR",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "command": "sleep 25 && echo probe-done",
+          "run_in_background": true
+        },
+        "title": "sleep 25 && echo probe-done",
+        "kind": "execute"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "title": "Background sleep and echo command"
+          }
+        },
+        "toolCallId": "toolu_01Hru8BGVA8YhLTCnqJMopoR",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "command": "sleep 25 && echo probe-done",
+          "description": "Background sleep and echo command",
+          "run_in_background": true
+        },
+        "title": "sleep 25 && echo probe-done",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Background sleep and echo command"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 15735,
+        "size": 1000000
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "async_task_spawned",
+        "asyncTaskId": "b4kbpenhz",
+        "name": "Background sleep and echo command",
+        "taskType": "shell",
+        "description": "Background sleep and echo command",
+        "showInTranscript": false,
+        "canStop": true
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "async_task_progress",
+        "asyncTaskId": "b4kbpenhz",
+        "toolCallId": "toolu_01Hru8BGVA8YhLTCnqJMopoR"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "stdout": "",
+              "stderr": "",
+              "interrupted": false,
+              "isImage": false,
+              "noOutputExpected": false,
+              "backgroundTaskId": "b4kbpenhz"
+            },
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_01Hru8BGVA8YhLTCnqJMopoR",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "async_task_progress",
+        "asyncTaskId": "b4kbpenhz",
+        "outputFilePath": "/private/tmp/claude-501/-private-tmp-cinna-probe-c1/d954caa0-8df8-411f-a419-11040dfac5e1/tasks/b4kbpenhz.output",
+        "toolCallId": "toolu_01Hru8BGVA8YhLTCnqJMopoR"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          },
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "asyncTasks": {
+                "backgrounded": true
+              }
+            }
+          }
+        },
+        "toolCallId": "toolu_01Hru8BGVA8YhLTCnqJMopoR",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "Command running in background with ID: b4kbpenhz. Output is being written to: /private/tmp/claude-501/-private-tmp-cinna-probe-c1/d954caa0-8df8-411f-a419-11040dfac5e1/tasks/b4kbpenhz.output. You will be notified when it completes. To check interim output, use Read on that file path.",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```console\nCommand running in background with ID: b4kbpenhz. Output is being written to: /private/tmp/claude-501/-private-tmp-cinna-probe-c1/d954caa0-8df8-411f-a419-11040dfac5e1/tasks/b4kbpenhz.output. You will be notified when it completes. To check interim output, use Read on that file path.\n```"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 15883,
+        "size": 1000000
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "started"
+        },
+        "messageId": "msg_011Cf7qSb6HLQmEFw8PXzpgv"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 15939,
+        "size": 1000000
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 15939,
+        "size": 200000,
+        "cost": {
+          "amount": 0.0355653,
+          "currency": "USD"
+        },
+        "_meta": {
+          "_claude/origin": {
+            "kind": "human"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Background sleep probe",
+        "updatedAt": "2026-09-16T21:34:13.555Z"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "async_task_state_update",
+        "asyncTaskId": "b4kbpenhz",
+        "state": "stopped",
+        "outputFilePath": "/private/tmp/claude-501/-private-tmp-cinna-probe-c1/d954caa0-8df8-411f-a419-11040dfac5e1/tasks/b4kbpenhz.output",
+        "toolCallId": "toolu_01Hru8BGVA8YhLTCnqJMopoR"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "async_task_state_update",
+        "asyncTaskId": "b4kbpenhz",
+        "state": "completed",
+        "outputFilePath": "/private/tmp/claude-501/-private-tmp-cinna-probe-c1/d954caa0-8df8-411f-a419-11040dfac5e1/tasks/b4kbpenhz.output",
+        "toolCallId": "toolu_01Hru8BGVA8YhLTCnqJMopoR"
+      }
+    }
+  ]
+}

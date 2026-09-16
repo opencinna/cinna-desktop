@@ -141,6 +141,25 @@ it('reads saved children with refresh metadata in the captured profile', async (
 })
 
 
+describe('task:list chat filter', () => {
+  it('passes a chat id through with the other filters', async () => {
+    await invoke('task:list', { chatId: 'c1', rootOnly: true })
+    expect(service.list).toHaveBeenCalledWith('profile-1', expect.objectContaining({ chatId: 'c1', rootOnly: true }))
+  })
+
+  it('leaves the filter out when none was asked for', async () => {
+    await invoke('task:list', { rootOnly: true })
+    expect(service.list).toHaveBeenCalledWith('profile-1', expect.objectContaining({ chatId: undefined }))
+  })
+
+  // Dropped instead of refused, a malformed filter would widen one chat's list
+  // into every task the profile has.
+  it.each([[42], [''], [null], [{ id: 'c1' }]])('refuses a chat id of %j', async (chatId) => {
+    await expect(invoke('task:list', { chatId })).rejects.toThrow()
+    expect(service.list).not.toHaveBeenCalled()
+  })
+})
+
 describe('remote handoff outcomes', () => {
   it('returns accepted data and nudges sync after the service accepts', async () => {
     const result = await handlers.get('task:hand-off')!({}, 't1', { adapterId: 'service', ref: 'agent' }, 'Continue here')

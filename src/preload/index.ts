@@ -73,6 +73,11 @@ import {
   type RunSendPayload,
   type RunStartResult
 } from '../shared/ipcPayloads'
+import {
+  SESSION_ACTIVITY_CHANGED_CHANNEL,
+  type SessionActivityChangedPayload,
+  type SessionActivityGetResult
+} from '../shared/sessionActivity'
 import type { ChatRouter } from '../shared/chatRouting'
 import { isRunEvent, type RunEvent } from '../shared/runEvents'
 import type { MessageAttachment, PendingAttachment } from '../shared/attachments'
@@ -859,6 +864,18 @@ const api = {
     cancel: (requestId: string): void => {
       void ipcRenderer.invoke('llm:cancel', requestId)
       void ipcRenderer.invoke('agent:cancel-message', requestId)
+    }
+  },
+
+  /** The subagents and background processes a chat's agent session is running. */
+  sessionActivity: {
+    /** The chat's activity as it stands; `ok: false` for a chat this profile does not own. */
+    get: (chatId: string): Promise<SessionActivityGetResult> => ipcRenderer.invoke('sessionActivity:get', chatId),
+    /** Fires whenever a chat's activity changes, with its new snapshot. Returns an unsubscribe function. */
+    onChanged: (handler: (payload: SessionActivityChangedPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: SessionActivityChangedPayload): void => handler(payload)
+      ipcRenderer.on(SESSION_ACTIVITY_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(SESSION_ACTIVITY_CHANGED_CHANNEL, listener)
     }
   },
 

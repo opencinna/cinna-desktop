@@ -297,6 +297,140 @@ describe('session routing', () => {
   })
 })
 
+describe('observing a session between turns', () => {
+  const texts = (updates: SessionNotification[]): string[] =>
+    updates.map((u) => (u.update as { content: { text: string } }).content.text)
+
+  it('gives a bound turn the traffic even while an observer is registered', async () => {
+    const fake = fakeAgent({ setMode: { emit: [textUpdate('ses_1', 'turn')] } })
+    const connection = await start(fake)
+    const observer = recorder()
+    const turn = recorder()
+    connection.observeSession('ses_1', observer)
+    connection.bindSession('ses_1', turn)
+
+    await connection.setSessionMode({ sessionId: 'ses_1', modeId: 'default' })
+    await settle(50)
+
+    expect(texts(turn.updates)).toEqual(['turn'])
+    expect(observer.updates).toHaveLength(0)
+  })
+
+  it('hands the observer what arrives between an unbind and the next bind', async () => {
+    // The incident: the CLI finished a background job after the prompt had
+    // returned, and everything it said went to the pen and was dropped.
+    const fake = fakeAgent({
+      setMode: { emit: [textUpdate('ses_1', 'between')] },
+      setConfigOption: { emit: [textUpdate('ses_1', 'next turn')] }
+    })
+    const connection = await start(fake, { preBindWindowMs: 5_000 })
+    const observer = recorder()
+    const first = recorder()
+    connection.bindSession('ses_1', first)()
+    connection.observeSession('ses_1', observer)
+
+    await connection.setSessionMode({ sessionId: 'ses_1', modeId: 'default' })
+    await settle(50)
+    const next = recorder()
+    connection.bindSession('ses_1', next)
+    await connection.setSessionConfigOption({ sessionId: 'ses_1', configId: 'x', value: 'y' })
+    await settle(50)
+
+    expect(texts(observer.updates)).toEqual(['between'])
+    expect(first.updates).toHaveLength(0)
+    // Nothing the observer took is replayed into the next turn.
+    expect(texts(next.updates)).toEqual(['next turn'])
+  })
+
+  it('leaves pre-bind traffic to the pen once the observer is dropped, so a load replay reaches the turn', async () => {
+    // The hazard the pen exists for: traffic that precedes the bind belongs to
+    // the turn about to bind. The driver drops the observer before it starts a
+    // turn on the session; from then on the pen holds it for the bind, exactly
+    // as before observers existed.
+    const fake = fakeAgent({ setMode: { emit: [textUpdate('ses_1', 'replay')] } })
+    const connection = await start(fake, { preBindWindowMs: 5_000 })
+    const observer = recorder()
+    const unobserve = connection.observeSession('ses_1', observer)
+    unobserve()
+
+    await connection.setSessionMode({ sessionId: 'ses_1', modeId: 'default' })
+    await settle()
+    const turn = recorder()
+    connection.bindSession('ses_1', turn)
+
+    expect(texts(turn.updates)).toEqual(['replay'])
+    expect(observer.updates).toHaveLength(0)
+  })
+
+  it('keeps the pen for an unobserved session while another session is observed', async () => {
+    // `session/new`: a fresh id nobody observes, racing its own updates.
+    const fake = fakeAgent({ setMode: { emit: [textUpdate('ses_new', 'opening'), textUpdate('ses_1', 'old')] } })
+    const connection = await start(fake, { preBindWindowMs: 5_000 })
+    const observer = recorder()
+    connection.observeSession('ses_1', observer)
+
+    await connection.setSessionMode({ sessionId: 'ses_other', modeId: 'default' })
+    await settle()
+    const turn = recorder()
+    connection.bindSession('ses_new', turn)
+
+    expect(texts(turn.updates)).toEqual(['opening'])
+    expect(texts(observer.updates)).toEqual(['old'])
+  })
+
+  it('hands an observer what the pen already held for its session', async () => {
+    const fake = fakeAgent({ setMode: { emit: [textUpdate('ses_1', 'early')] } })
+    const connection = await start(fake, { preBindWindowMs: 5_000 })
+    await connection.setSessionMode({ sessionId: 'ses_other', modeId: 'default' })
+    await settle()
+
+    const observer = recorder()
+    connection.observeSession('ses_1', observer)
+
+    expect(texts(observer.updates)).toEqual(['early'])
+  })
+
+  it('stops delivering to an observer once it is removed', async () => {
+    const fake = fakeAgent({ setMode: { emit: [textUpdate('ses_1', 'late')] } })
+    const connection = await start(fake, { preBindWindowMs: 60 })
+    const observer = recorder()
+    connection.observeSession('ses_1', observer)()
+
+    await connection.setSessionMode({ sessionId: 'ses_other', modeId: 'default' })
+    await settle(200)
+
+    expect(observer.updates).toHaveLength(0)
+  })
+
+  it('lets the observer answer permission and elicitation requests, without the pre-bind wait', async () => {
+    const fake = fakeAgent({
+      setMode: {
+        emit: [
+          { kind: 'permission', sessionId: 'ses_1' },
+          { kind: 'elicitation', sessionId: 'ses_1' },
+          { kind: 'notify', method: '_session/goal', params: { sessionId: 'ses_1', goal: 'x' } }
+        ]
+      }
+    })
+    // A window far longer than the wait below: an answer inside it came from
+    // the observer, not from the window closing.
+    const connection = await start(fake, { preBindWindowMs: 60_000 })
+    const observer = recorder()
+    connection.observeSession('ses_1', observer)
+
+    await connection.setSessionMode({ sessionId: 'ses_1', modeId: 'default' })
+    await settle(50)
+
+    expect(observer.permissions).toHaveLength(1)
+    expect(observer.elicitations).toHaveLength(1)
+    expect(observer.ext.map((e) => e.method)).toEqual(['_session/goal'])
+    expect(fake.answers('session/request_permission')[0].result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'once' }
+    })
+    expect(fake.answers('elicitation/create')[0].result).toEqual({ action: 'decline' })
+  })
+})
+
 describe('requests from the agent', () => {
   it('hands a permission to the session that owns it and returns the answer', async () => {
     const fake = fakeAgent({ setMode: { emit: [{ kind: 'permission', sessionId: 'ses_1' }] } })

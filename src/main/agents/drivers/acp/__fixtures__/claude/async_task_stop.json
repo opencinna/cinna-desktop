@@ -1,0 +1,176 @@
+{
+  "recording": "session_activity/claude-q4-stop.ndjson",
+  "note": "promptReturnedAtIndex: notifications at or after this index arrived after the session/prompt response. sleep 120 in the background, then _session/async_task/stop {sessionId, asyncTaskId} ~4 s after the prompt returned. Answer {stopped: true}. Before the answer: async_task_state_update \"stopped\" twice, then a root agent_message_chunk \"**Task stopped by user:** ...\" with NO messageId and no usage_update after it (synthetic transcript text, not a model turn). stopRequest/stopResult hold the RPC.",
+  "promptReturnedAtIndex": 9,
+  "notifications": [
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "sessionUpdate": "async_task_spawned",
+        "asyncTaskId": "bbr0f5bki",
+        "name": "Sleep for 120 seconds in background",
+        "taskType": "shell",
+        "description": "Sleep for 120 seconds in background",
+        "showInTranscript": false,
+        "canStop": true
+      }
+    },
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "sessionUpdate": "async_task_progress",
+        "asyncTaskId": "bbr0f5bki",
+        "toolCallId": "toolu_015CXYvXsAjGEYpscD5hGnGy"
+      }
+    },
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "stdout": "",
+              "stderr": "",
+              "interrupted": false,
+              "isImage": false,
+              "noOutputExpected": false,
+              "backgroundTaskId": "bbr0f5bki"
+            },
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_015CXYvXsAjGEYpscD5hGnGy",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "sessionUpdate": "async_task_progress",
+        "asyncTaskId": "bbr0f5bki",
+        "outputFilePath": "/private/tmp/claude-501/-private-tmp-cinna-probe-c4/6a8606b6-24ba-432a-8384-9909bdcacb81/tasks/bbr0f5bki.output",
+        "toolCallId": "toolu_015CXYvXsAjGEYpscD5hGnGy"
+      }
+    },
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          },
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "asyncTasks": {
+                "backgrounded": true
+              }
+            }
+          }
+        },
+        "toolCallId": "toolu_015CXYvXsAjGEYpscD5hGnGy",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "Command running in background with ID: bbr0f5bki. Output is being written to: /private/tmp/claude-501/-private-tmp-cinna-probe-c4/6a8606b6-24ba-432a-8384-9909bdcacb81/tasks/bbr0f5bki.output. You will be notified when it completes. To check interim output, use Read on that file path.",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```console\nCommand running in background with ID: bbr0f5bki. Output is being written to: /private/tmp/claude-501/-private-tmp-cinna-probe-c4/6a8606b6-24ba-432a-8384-9909bdcacb81/tasks/bbr0f5bki.output. You will be notified when it completes. To check interim output, use Read on that file path.\n```"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 15880,
+        "size": 1000000
+      }
+    },
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "started"
+        },
+        "messageId": "msg_011Cf7qbFHuzA1KKtBdHUTkQ"
+      }
+    },
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 15911,
+        "size": 1000000
+      }
+    },
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 15911,
+        "size": 200000,
+        "cost": {
+          "amount": 0.0120409,
+          "currency": "USD"
+        },
+        "_meta": {
+          "_claude/origin": {
+            "kind": "human"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Background sleep command",
+        "updatedAt": "2026-09-16T21:36:11.069Z"
+      }
+    },
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "sessionUpdate": "async_task_state_update",
+        "asyncTaskId": "bbr0f5bki",
+        "state": "stopped",
+        "outputFilePath": "/private/tmp/claude-501/-private-tmp-cinna-probe-c4/6a8606b6-24ba-432a-8384-9909bdcacb81/tasks/bbr0f5bki.output",
+        "toolCallId": "toolu_015CXYvXsAjGEYpscD5hGnGy"
+      }
+    },
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "sessionUpdate": "async_task_state_update",
+        "asyncTaskId": "bbr0f5bki",
+        "state": "stopped",
+        "outputFilePath": "/private/tmp/claude-501/-private-tmp-cinna-probe-c4/6a8606b6-24ba-432a-8384-9909bdcacb81/tasks/bbr0f5bki.output",
+        "toolCallId": "toolu_015CXYvXsAjGEYpscD5hGnGy"
+      }
+    },
+    {
+      "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "**Task stopped by user:** sleep 120."
+        }
+      }
+    }
+  ],
+  "stopRequest": {
+    "sessionId": "6a8606b6-24ba-432a-8384-9909bdcacb81",
+    "asyncTaskId": "bbr0f5bki"
+  },
+  "stopResult": {
+    "stopped": true
+  }
+}

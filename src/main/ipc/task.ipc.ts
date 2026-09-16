@@ -71,6 +71,12 @@ export function registerTaskHandlers(): void {
   ipcHandle('task:list', async (_event, query?: TaskListQuery): Promise<TaskDto[]> => {
     userActivation.requireActivated()
     const userId = getProfileScopeUserId()
+    // A malformed chat filter is refused rather than dropped: dropped, it would
+    // widen one chat's list into every task the profile has.
+    const chatId = query?.chatId
+    if (chatId !== undefined && (typeof chatId !== 'string' || chatId === '')) {
+      throw new Error('A task list filter needs a chat id.')
+    }
     // Rebuilt field by field rather than forwarded: the repo's filter has an
     // arm (`remoteAdapter`) that belongs to the adapters and to
     // `taskSyncService`, and a renderer must not be able to reach it.
@@ -79,6 +85,7 @@ export function registerTaskHandlers(): void {
       executor: query?.executor,
       parentTaskId: query?.parentTaskId,
       rootOnly: query?.rootOnly,
+      chatId,
       includeArchived: query?.includeArchived
     })
   })

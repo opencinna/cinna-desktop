@@ -48,6 +48,7 @@
 import type { InitializeRequest } from '@agentclientprotocol/sdk'
 import { createLogger } from '../../../logger/logger'
 import {
+  ACP_BUSY_REAP_CEILING_MS,
   ACP_IDLE_REAP_MS,
   type AcpConnection,
   type AcpLaunchSpec,
@@ -71,6 +72,19 @@ export interface AcpProcessPoolDeps {
   clearTimer?: (handle: TimerHandle) => void
   /** Overrides {@link ACP_IDLE_REAP_MS}. Tests only; production reads the constant. */
   idleReapMs?: number
+  /**
+   * The agent's process still has work running that no turn holds —
+   * background shells, subagents — so an idle reap now would kill it. The reap
+   * is rescheduled instead, up to {@link ACP_BUSY_REAP_CEILING_MS}. Default:
+   * never busy, which is the reaper as it was.
+   */
+  isBusy?: (agentId: string) => boolean
+  /**
+   * When the agent's running work last changed, for the busy ceiling. The
+   * ceiling counts from this or from when the process last went idle,
+   * whichever is later; absent (or `undefined`) means the latter alone.
+   */
+  lastActivityAt?: (agentId: string) => number | undefined
 }
 
 interface Entry {
@@ -85,6 +99,8 @@ interface Entry {
   startKey?: string
   holds: number
   reap?: TimerHandle
+  /** When the last hold was released (or the start finished), for the busy ceiling's fallback. */
+  idleSince?: number
   /** A retire arrived while a turn held the process; stop on the last release. */
   retireOnRelease: boolean
 }
@@ -95,6 +111,8 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
   const clearTimer =
     deps.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>))
   const idleReapMs = deps.idleReapMs ?? ACP_IDLE_REAP_MS
+  const isBusy = deps.isBusy ?? (() => false)
+  const lastActivityAt = deps.lastActivityAt ?? (() => undefined)
 
   const entries = new Map<string, Entry>()
   const listeners = new Set<(agentId: string, state: AcpProcessState) => void>()
@@ -107,6 +125,15 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
     return fresh
   }
 
+  /**
+   * Every state change reaches the listeners, and a process leaving `running`
+   * always goes through here: a crash or a closed stream as `exited` (`watch`),
+   * and an idle or busy-ceiling reap, a retire and a shutdown as `stopped`
+   * (`stopNow`). A listener that has to write off what that process was doing
+   * — the session activity it can no longer report — keys on "left running",
+   * and hears each exit once: `watch` stays silent for a process `stopNow`
+   * already let go.
+   */
   const setState = (agentId: string, entry: Entry, state: AcpProcessState): void => {
     entry.state = state
     for (const listener of listeners) {
@@ -140,7 +167,7 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
     }
   }
 
-  const scheduleReap = (agentId: string, entry: Entry): void => {
+  const armReap = (agentId: string, entry: Entry): void => {
     cancelReap(entry)
     if (!entry.conn || entry.holds > 0) return
     entry.reap = setTimer(() => {
@@ -148,8 +175,33 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
       // A hold taken between the timer firing and this line is rare but real;
       // it wins, and the reap is rescheduled by its release.
       if (entry.holds > 0 || !entry.conn) return
+      if (isBusy(agentId)) {
+        // No turn holds it, but the process is still doing something the user
+        // is waiting for (the background shell that merges the PR). Look again
+        // in another window — unless it has been quiet past the ceiling.
+        // Quiet means neither its work nor a turn: a user who kept chatting
+        // while an old background process ran is measured from their last turn.
+        const idleSince = entry.idleSince ?? now()
+        const since = Math.max(lastActivityAt(agentId) ?? idleSince, idleSince)
+        if (now() - since < ACP_BUSY_REAP_CEILING_MS) {
+          logger.debug('an idle ACP process still has work running; reap deferred', { agentId })
+          armReap(agentId, entry)
+          return
+        }
+        logger.warn('an ACP process with work running went quiet past the ceiling; stopping it', {
+          agentId,
+          quietMs: now() - since
+        })
+        void stopNow(agentId, entry, 'busy past ceiling')
+        return
+      }
       void stopNow(agentId, entry, 'idle')
     }, idleReapMs)
+  }
+
+  const scheduleReap = (agentId: string, entry: Entry): void => {
+    entry.idleSince = now()
+    armReap(agentId, entry)
   }
 
   /**

@@ -1,0 +1,155 @@
+{
+  "recording": "session_activity/codex-q4-stop.ndjson",
+  "note": "promptReturnedAtIndex: notifications at or after this index arrived after the session/prompt response. sleep 120 via exec_command left running, then _session/async_task/stop {sessionId, asyncTaskId}. Answer {stopped: true}, preceded by async_task_state_update \"stopped\" and followed by the tool call failing with exit_code -1. stopRequest/stopResult hold the RPC.",
+  "promptReturnedAtIndex": 8,
+  "notifications": [
+    {
+      "sessionId": "01a0ac29-e44b-7bd3-aa4f-3a29ec933623",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-c7cff377-8e2f-48a6-ad54-1413fc1848a7",
+        "status": "in_progress",
+        "kind": "execute",
+        "title": "sleep 120",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "exec-c7cff377-8e2f-48a6-ad54-1413fc1848a7"
+          }
+        ],
+        "rawInput": {
+          "command": "sleep 120",
+          "cwd": "/tmp/cinna-probe-x4"
+        },
+        "_meta": {
+          "terminal_info": {
+            "cwd": "/tmp/cinna-probe-x4",
+            "terminal_id": "exec-c7cff377-8e2f-48a6-ad54-1413fc1848a7"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-7bd3-aa4f-3a29ec933623",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17199,
+        "size": 258400
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-7bd3-aa4f-3a29ec933623",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-c7cff377-8e2f-48a6-ad54-1413fc1848a7",
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "asyncTasks": {
+                "backgrounded": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-7bd3-aa4f-3a29ec933623",
+      "update": {
+        "sessionUpdate": "async_task_spawned",
+        "asyncTaskId": "exec-c7cff377-8e2f-48a6-ad54-1413fc1848a7",
+        "name": "sleep 120",
+        "taskType": "shell",
+        "showInTranscript": false,
+        "canStop": true,
+        "toolCallId": "exec-c7cff377-8e2f-48a6-ad54-1413fc1848a7"
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-7bd3-aa4f-3a29ec933623",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_0c681b9b104f76db016aab0cce141c87d2bebc9ffc27960235",
+        "content": {
+          "type": "text",
+          "text": "started"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "final_answer"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-7bd3-aa4f-3a29ec933623",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17263,
+        "size": 258400
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-7bd3-aa4f-3a29ec933623",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "codex": {
+            "threadStatus": {
+              "type": "idle"
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-7bd3-aa4f-3a29ec933623",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Call your exec_command tool exactly once with cmd `sleep 120` and yield_time_ms 1000 (no nohup, no &, no tty). It will still be running when the call returns — do NOT poll it or wait for it. Immediately reply only 'started' and end your turn."
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-7bd3-aa4f-3a29ec933623",
+      "update": {
+        "sessionUpdate": "async_task_state_update",
+        "asyncTaskId": "exec-c7cff377-8e2f-48a6-ad54-1413fc1848a7",
+        "state": "stopped",
+        "toolCallId": "exec-c7cff377-8e2f-48a6-ad54-1413fc1848a7"
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-7bd3-aa4f-3a29ec933623",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-c7cff377-8e2f-48a6-ad54-1413fc1848a7",
+        "status": "failed",
+        "rawOutput": {
+          "formatted_output": "",
+          "exit_code": -1
+        },
+        "_meta": {
+          "terminal_exit": {
+            "exit_code": -1,
+            "signal": null,
+            "terminal_id": "exec-c7cff377-8e2f-48a6-ad54-1413fc1848a7"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-7bd3-aa4f-3a29ec933623",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Run a delayed shell command"
+      }
+    }
+  ],
+  "stopRequest": {
+    "sessionId": "01a0ac29-e44b-7bd3-aa4f-3a29ec933623",
+    "asyncTaskId": "exec-c7cff377-8e2f-48a6-ad54-1413fc1848a7"
+  },
+  "stopResult": {
+    "stopped": true
+  }
+}

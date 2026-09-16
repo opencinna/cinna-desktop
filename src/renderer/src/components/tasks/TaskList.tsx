@@ -5,7 +5,7 @@ import { useUIStore } from '../../stores/ui.store'
 import { TaskStatusPill } from './TaskStatusPill'
 
 export function TaskList({ parentTaskId }: { parentTaskId?: string }): React.JSX.Element {
-  const tasks = useTaskList(parentTaskId)
+  const tasks = useTaskList(parentTaskId ? { parentTaskId } : undefined)
   const openTask = useOpenTask()
   const activeTaskId = useUIStore((state) => state.activeTaskId)
   const [visible, setVisible] = useState(20)

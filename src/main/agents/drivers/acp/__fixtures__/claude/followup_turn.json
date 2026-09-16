@@ -1,0 +1,196 @@
+{
+  "recording": "session_activity/claude-q1-bg-shell.ndjson",
+  "note": "promptReturnedAtIndex: notifications at or after this index arrived after the session/prompt response. The turn Claude Code starts on its own after the background shell ends (no session/prompt in flight): a Read tool call and text, ended by the usage_update carrying cost and _meta[\"_claude/origin\"] = {kind: \"task-notification\"}. Plain usage_update frames (no cost) arrive mid-turn and are NOT the end. Starts with the task state updates that trigger it.",
+  "promptReturnedAtIndex": 0,
+  "notifications": [
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "async_task_state_update",
+        "asyncTaskId": "b4kbpenhz",
+        "state": "stopped",
+        "outputFilePath": "/private/tmp/claude-501/-private-tmp-cinna-probe-c1/d954caa0-8df8-411f-a419-11040dfac5e1/tasks/b4kbpenhz.output",
+        "toolCallId": "toolu_01Hru8BGVA8YhLTCnqJMopoR"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "async_task_state_update",
+        "asyncTaskId": "b4kbpenhz",
+        "state": "completed",
+        "outputFilePath": "/private/tmp/claude-501/-private-tmp-cinna-probe-c1/d954caa0-8df8-411f-a419-11040dfac5e1/tasks/b4kbpenhz.output",
+        "toolCallId": "toolu_01Hru8BGVA8YhLTCnqJMopoR"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 16227,
+        "size": 200000
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_01HzDrsX2qPbq1h23XLVMsYX",
+        "sessionUpdate": "tool_call",
+        "rawInput": {},
+        "status": "pending",
+        "title": "Read File",
+        "kind": "read",
+        "locations": [],
+        "content": []
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_01HzDrsX2qPbq1h23XLVMsYX",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "file_path": "/private/tmp/claude-501/-private-tmp-cinna-probe-c1/d954caa0-8df8-411f-a419-11040dfac5e1/tasks/b4kbpenhz.output"
+        },
+        "title": "Read /private/tmp/claude-501/-private-tmp-cinna-probe-c1/d954caa0-8df8-411f-a419-11040dfac5e1/tasks/b4kbpenhz.output",
+        "kind": "read",
+        "locations": [
+          {
+            "path": "/private/tmp/claude-501/-private-tmp-cinna-probe-c1/d954caa0-8df8-411f-a419-11040dfac5e1/tasks/b4kbpenhz.output",
+            "line": 1
+          }
+        ],
+        "content": []
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 16363,
+        "size": 200000
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "type": "text",
+              "file": {
+                "filePath": "/private/tmp/claude-501/-private-tmp-cinna-probe-c1/d954caa0-8df8-411f-a419-11040dfac5e1/tasks/b4kbpenhz.output",
+                "content": "probe-done\n\n[exited with code 0]\n",
+                "numLines": 4,
+                "startLine": 1,
+                "totalLines": 4
+              }
+            },
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_01HzDrsX2qPbq1h23XLVMsYX",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_01HzDrsX2qPbq1h23XLVMsYX",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "1\tprobe-done\n2\t\n3\t[exited with code 0]\n4\t",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```\n1\tprobe-done\n2\t\n3\t[exited with code 0]\n```"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 16432,
+        "size": 200000
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Output"
+        },
+        "messageId": "msg_011Cf7qUXP6hyMbaor1zCNgp"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ": `"
+        },
+        "messageId": "msg_011Cf7qUXP6hyMbaor1zCNgp"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "probe-done`"
+        },
+        "messageId": "msg_011Cf7qUXP6hyMbaor1zCNgp"
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 16470,
+        "size": 200000
+      }
+    },
+    {
+      "sessionId": "d954caa0-8df8-411f-a419-11040dfac5e1",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 16470,
+        "size": 200000,
+        "cost": {
+          "amount": 0.0407752,
+          "currency": "USD"
+        },
+        "_meta": {
+          "_claude/origin": {
+            "kind": "task-notification"
+          }
+        }
+      }
+    }
+  ]
+}

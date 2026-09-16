@@ -14,6 +14,8 @@ import { routerOf, type ChatRouter } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
 import { taskRunnersByChat } from './taskRunnerState'
 import { activeRunsByChat } from './runExecutionState'
+import { sessionActivityHub } from './sessionActivityHub'
+import { forgetChatSessions, releaseChatSessions } from './chatSessionRelease'
 import { chatRunResultRepo } from '../db/chatRunResults'
 import type { ChatRunResult } from '../../shared/chatRunResult'
 
@@ -68,6 +70,10 @@ export const chatService = {
     const ok = chatRepo.softDelete(userId, chatId)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
     taskRunnerBridge.chatRemoved(userId, chatId)
+    // Activity is held per chat in memory; a trashed chat shows none, and
+    // nothing its agents say between turns lands in it.
+    forgetChatSessions(chatId)
+    sessionActivityHub.clear(chatId)
     logger.info('chat moved to trash', { chatId })
   },
 
@@ -85,6 +91,8 @@ export const chatService = {
     const ok = chatRepo.permanentDelete(userId, chatId)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
     taskRunnerBridge.chatRemoved(userId, chatId)
+    forgetChatSessions(chatId)
+    sessionActivityHub.clear(chatId)
     logger.info('chat permanently deleted', { chatId })
   },
 
@@ -94,12 +102,15 @@ export const chatService = {
   },
 
   update(userId: string, chatId: string, updates: ChatMetaUpdate): void {
-    requireOwnedChat(userId, chatId)
+    const chat = requireOwnedChat(userId, chatId)
     if (taskRunnersByChat.has(chatId) && Object.keys(updates).some((key) => key !== 'title')) {
       throw new ChatError('not_configured', 'Stop the autonomous task before changing its model or routing.')
     }
     const ok = chatRepo.updateMeta(userId, chatId, updates)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
+    // Who answers here changed: the old sessions are no longer this chat's.
+    if (updates.router !== undefined && updates.router !== routerOf(chat)) releaseChatSessions(chatId)
+    else if (updates.agentId !== undefined && chat.agentId && updates.agentId !== chat.agentId) releaseChatSessions(chatId, chat.agentId)
   },
 
   /**
@@ -251,6 +262,10 @@ export const chatService = {
       providerId,
       modelId
     })
+    // Who answers here changed. The old sessions keep their context in the
+    // database, but what they say between turns and what they were running
+    // are no longer shown in this chat.
+    releaseChatSessions(chatId)
     logger.info('chat router changed', {
       chatId,
       from: current,
@@ -264,6 +279,7 @@ export const chatService = {
   removeOnDemandAgent(userId: string, chatId: string, agentId: string): void {
     requireOwnedChat(userId, chatId)
     chatOnDemandAgentRepo.remove(chatId, agentId)
+    releaseChatSessions(chatId, agentId)
     logger.info('on-demand agent removed', { chatId, agentId })
   },
 

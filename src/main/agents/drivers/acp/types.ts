@@ -64,6 +64,16 @@ export const ACP_START_TIMEOUT_MS = 30_000
  */
 export const ACP_IDLE_REAP_MS = 2 * 60 * 1000
 
+/**
+ * How long a process that says it is still busy (background work running) may
+ * go without an activity change before the idle reaper stops it anyway.
+ *
+ * Busy defers the reap because a background shell or subagent finishing after
+ * the turn ended is real work the user is waiting for. The ceiling exists
+ * because `tail -f` in the background is also "running", forever.
+ */
+export const ACP_BUSY_REAP_CEILING_MS = 30 * 60 * 1000
+
 /** How many stderr lines a connection keeps for an error message. */
 export const ACP_STDERR_TAIL_LINES = 40
 
@@ -109,6 +119,15 @@ export interface AcpSessionHandlers {
   /** An extension notification naming this session (`_auth/status_update`, …). */
   onExtNotification?(method: string, params: Record<string, unknown>): void
 }
+
+/**
+ * Who hears a session while no turn is bound to it.
+ *
+ * The same shape as {@link AcpSessionHandlers} on purpose: the requests return
+ * promises, so an ask that arrives between turns can later be handed to a turn
+ * started for it instead of being refused on the spot.
+ */
+export type AcpSessionObserver = AcpSessionHandlers
 
 /** The steering extension's request method (Claude Code and Codex adapters). */
 export const ACP_STEER_METHOD = '_session/steering'
@@ -164,6 +183,18 @@ export interface AcpConnection {
    * (and that is not bound within that window) is answered `cancelled`.
    */
   bindSession(sessionId: string, handlers: AcpSessionHandlers): () => void
+
+  /**
+   * Hear one session's traffic while no turn is bound to it, until the returned
+   * function runs. Routing is: the bound turn, else this observer, else the
+   * pre-bind pen. Whatever the pen holds for the session when the observer
+   * arrives is handed to it.
+   *
+   * **The pen does not outrank an observer**, so a caller about to send a
+   * request whose traffic belongs to a turn (`session/load`'s replay, a
+   * prompt) must unobserve and bind first.
+   */
+  observeSession(sessionId: string, observer: AcpSessionObserver): () => void
 
   /** The last stderr lines, for an error message. */
   stderrTail(): string

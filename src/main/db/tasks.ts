@@ -128,6 +128,8 @@ export interface TaskListFilter {
   parentTaskId?: string
   /** Only tasks with no parent. */
   rootOnly?: boolean
+  /** Only tasks whose `chatId` is this chat. */
+  chatId?: string
   /** Bound to this adapter. Only the adapters and `taskSyncService` pass it. */
   remoteAdapter?: string
   /**
@@ -197,6 +199,7 @@ export const taskRepo = {
     if (filter.executor) where.push(eq(tasks.executor, filter.executor))
     if (filter.parentTaskId) where.push(eq(tasks.parentTaskId, filter.parentTaskId))
     if (filter.rootOnly) where.push(isNull(tasks.parentTaskId))
+    if (filter.chatId !== undefined) where.push(eq(tasks.chatId, filter.chatId))
     if (filter.remoteAdapter) where.push(eq(tasks.remoteAdapter, filter.remoteAdapter))
 
     return getDb()

@@ -1,0 +1,292 @@
+{
+  "recording": "session_activity/claude-q3-sync-subagent.ndjson",
+  "note": "promptReturnedAtIndex: notifications at or after this index arrived after the session/prompt response. Foreground Agent under nativeSubagentSessions. Same shape as the background case: no parent tool_call for Agent, child frames under the child sessionId with parentToolUseId, and the parent tool_call_update (toolResponse.agentId = subagentSessionId, status completed) only after subagent_state_update. subagent_spawned carries no toolCallId.",
+  "promptReturnedAtIndex": 16,
+  "notifications": [
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "af5006f04d7f96cc4",
+        "name": "Run echo command and report output",
+        "task": "Run the shell command `echo sub-sync-ok` and report its exact output back to me.",
+        "capabilities": {}
+      }
+    },
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 15860,
+        "size": 1000000
+      }
+    },
+    {
+      "sessionId": "af5006f04d7f96cc4",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "title": "Run echo command to output sub-sync-ok",
+            "parentToolUseId": "toolu_01RRGBmgwcNPmr51QLspi7QS"
+          }
+        },
+        "toolCallId": "toolu_01K16sjQVEFr54u5UiQVxN2x",
+        "sessionUpdate": "tool_call",
+        "rawInput": {
+          "command": "echo sub-sync-ok",
+          "description": "Run echo command to output sub-sync-ok"
+        },
+        "status": "pending",
+        "title": "echo sub-sync-ok",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Run echo command to output sub-sync-ok"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "af5006f04d7f96cc4",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "stdout": "sub-sync-ok",
+              "stderr": "",
+              "interrupted": false,
+              "isImage": false,
+              "noOutputExpected": false
+            },
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_01RRGBmgwcNPmr51QLspi7QS"
+          }
+        },
+        "toolCallId": "toolu_01K16sjQVEFr54u5UiQVxN2x",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "af5006f04d7f96cc4",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_01RRGBmgwcNPmr51QLspi7QS"
+          }
+        },
+        "toolCallId": "toolu_01K16sjQVEFr54u5UiQVxN2x",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "sub-sync-ok",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```console\nsub-sync-ok\n```"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "af5006f04d7f96cc4",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "The exact output of the command is:\n\n```\nsub-sync-ok\n```"
+        },
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_01RRGBmgwcNPmr51QLspi7QS"
+          }
+        },
+        "messageId": "msg_011Cf7qbQR6JS8rffpCPvrDo"
+      }
+    },
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "af5006f04d7f96cc4",
+        "state": "completed"
+      }
+    },
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "status": "completed",
+              "prompt": "Run the shell command `echo sub-sync-ok` and report its exact output back to me.",
+              "agentId": "af5006f04d7f96cc4",
+              "agentType": "general-purpose",
+              "harnessNoteCount": 0,
+              "harnessTailCount": 0,
+              "harnessSectionHash": "645d434cb79d377d",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "The exact output of the command is:\n\n```\nsub-sync-ok\n```"
+                }
+              ],
+              "resolvedModel": "claude-haiku-4-5-20251001",
+              "totalDurationMs": 3751,
+              "totalTokens": 12560,
+              "totalToolUseCount": 1,
+              "usage": {
+                "output_tokens_details": {
+                  "thinking_tokens": 36
+                },
+                "input_tokens": 8,
+                "cache_creation_input_tokens": 653,
+                "cache_read_input_tokens": 11839,
+                "output_tokens": 60,
+                "server_tool_use": {
+                  "web_search_requests": 0,
+                  "web_fetch_requests": 0
+                },
+                "service_tier": "standard",
+                "cache_creation": {
+                  "ephemeral_1h_input_tokens": 0,
+                  "ephemeral_5m_input_tokens": 653
+                },
+                "inference_geo": "not_available",
+                "iterations": [
+                  {
+                    "input_tokens": 8,
+                    "output_tokens": 60,
+                    "cache_read_input_tokens": 11839,
+                    "cache_creation_input_tokens": 653,
+                    "cache_creation": {
+                      "ephemeral_5m_input_tokens": 653,
+                      "ephemeral_1h_input_tokens": 0
+                    },
+                    "type": "message"
+                  }
+                ],
+                "speed": "standard"
+              },
+              "toolStats": {
+                "readCount": 0,
+                "searchCount": 0,
+                "bashCount": 1,
+                "editFileCount": 0,
+                "linesAdded": 0,
+                "linesRemoved": 0,
+                "otherToolCount": 0
+              }
+            },
+            "toolName": "Agent"
+          }
+        },
+        "toolCallId": "toolu_01RRGBmgwcNPmr51QLspi7QS",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 16012,
+        "size": 1000000
+      }
+    },
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "The"
+        },
+        "messageId": "msg_011Cf7qbUnGvs5BLpshpFRxp"
+      }
+    },
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " command"
+        },
+        "messageId": "msg_011Cf7qbUnGvs5BLpshpFRxp"
+      }
+    },
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " output"
+        },
+        "messageId": "msg_011Cf7qbUnGvs5BLpshpFRxp"
+      }
+    },
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " is: `sub-sync-ok"
+        },
+        "messageId": "msg_011Cf7qbUnGvs5BLpshpFRxp"
+      }
+    },
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`"
+        },
+        "messageId": "msg_011Cf7qbUnGvs5BLpshpFRxp"
+      }
+    },
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 16065,
+        "size": 1000000
+      }
+    },
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 16065,
+        "size": 200000,
+        "cost": {
+          "amount": 0.030896700000000003,
+          "currency": "USD"
+        },
+        "_meta": {
+          "_claude/origin": {
+            "kind": "human"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "f0fa51e8-ea31-4c81-b6dd-0b9a3b3a8843",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Sub-sync-ok shell output",
+        "updatedAt": "2026-09-16T21:36:14.068Z"
+      }
+    }
+  ]
+}

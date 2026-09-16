@@ -485,6 +485,51 @@ describe('one level of hierarchy', () => {
   })
 })
 
+describe('listing one chat’s tasks', () => {
+  /** The composer's Tasks badge asks `{ chatId, rootOnly: true }`. */
+  function addChat(id: string): void {
+    holder.current!.raw.exec(`INSERT INTO chats (id, user_id, title, created_at, updated_at) VALUES ('${id}', '__default__', '${id}', 0, 0)`)
+  }
+
+  it('returns only the tasks bound to that chat', () => {
+    addChat('chat-a')
+    addChat('chat-b')
+    const a = makeTask({ title: 'A', chatId: 'chat-a' })
+    makeTask({ title: 'B', chatId: 'chat-b' })
+    makeTask({ title: 'Unbound' })
+    expect(taskService.list(USER, { chatId: 'chat-a' }).map((t) => t.id)).toEqual([a.id])
+  })
+
+  it('returns nothing for a chat no task is bound to', () => {
+    addChat('chat-a')
+    makeTask({ title: 'Unbound' })
+    expect(taskService.list(USER, { chatId: 'chat-a' })).toEqual([])
+  })
+
+  it('combines with rootOnly, leaving out a subtask in the same chat', () => {
+    addChat('chat-a')
+    const root = makeTask({ title: 'Root', chatId: 'chat-a' })
+    makeTask({ title: 'Sub', parentTaskId: root.id, chatId: 'chat-a' })
+    expect(taskService.list(USER, { chatId: 'chat-a' })).toHaveLength(2)
+    expect(taskService.list(USER, { chatId: 'chat-a', rootOnly: true }).map((t) => t.id)).toEqual([root.id])
+  })
+
+  it('leaves out an archived task unless asked', () => {
+    addChat('chat-a')
+    const live = makeTask({ title: 'Live', chatId: 'chat-a' })
+    const filed = makeTask({ title: 'Filed', chatId: 'chat-a' })
+    taskService.setStatus(USER, filed.id, 'archived')
+    expect(taskService.list(USER, { chatId: 'chat-a', rootOnly: true }).map((t) => t.id)).toEqual([live.id])
+    expect(taskService.list(USER, { chatId: 'chat-a', includeArchived: true })).toHaveLength(2)
+  })
+
+  it('does not reach another user’s task in a chat with the same id', () => {
+    addChat('chat-a')
+    taskService.create(OTHER_USER, { title: 'Theirs', goal: 'Theirs', chatId: 'chat-a' })
+    expect(taskService.list(USER, { chatId: 'chat-a' })).toEqual([])
+  })
+})
+
 describe('setStatus — validated, because the desktop initiated it', () => {
   it('walks the ladder', () => {
     const task = makeTask()

@@ -1,0 +1,287 @@
+{
+  "recording": "session_activity/codex-q2-subagent.ndjson",
+  "note": "promptReturnedAtIndex: notifications at or after this index arrived after the session/prompt response. spawn_agent under nativeSubagentSessions. The spawnAgent tool call is NOT sent to the parent (suppressed as represented); the parent shows only the \"wait\" collaboration tool call, whose receiverThreadIds is empty. Child frames arrive under sessionId = subagentSessionId (the child thread id) with no parent link in _meta. No child->parent toolCallId mapping exists on the wire. task is the placeholder \"Delegated task for <name>\".",
+  "promptReturnedAtIndex": 19,
+  "notifications": [
+    {
+      "sessionId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "01a0ac28-18ec-7881-958a-43c22d261d13",
+        "name": "Echo probe",
+        "task": "Delegated task for Echo probe",
+        "capabilities": {}
+      }
+    },
+    {
+      "sessionId": "01a0ac28-18ec-7881-958a-43c22d261d13",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "codex": {
+            "threadStatus": {
+              "type": "active",
+              "activeFlags": []
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17315,
+        "size": 258400
+      }
+    },
+    {
+      "sessionId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_dGCMTOWq2VISc5nllKUWYBgX",
+        "kind": "other",
+        "title": "wait",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+          "receiverThreadIds": [],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null,
+          "status": "inProgress"
+        },
+        "_meta": {
+          "codex": {
+            "collaboration": {
+              "tool": "wait",
+              "senderThreadId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+              "receiverThreadIds": []
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac28-18ec-7881-958a-43c22d261d13",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-ecb87462-e980-415e-b7ea-cafe092eab03",
+        "status": "in_progress",
+        "kind": "execute",
+        "title": "echo sub-ok",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "exec-ecb87462-e980-415e-b7ea-cafe092eab03"
+          }
+        ],
+        "rawInput": {
+          "command": "echo sub-ok",
+          "cwd": "/tmp/cinna-probe-x2"
+        },
+        "_meta": {
+          "terminal_info": {
+            "cwd": "/tmp/cinna-probe-x2",
+            "terminal_id": "exec-ecb87462-e980-415e-b7ea-cafe092eab03"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac28-18ec-7881-958a-43c22d261d13",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-ecb87462-e980-415e-b7ea-cafe092eab03",
+        "status": "completed",
+        "rawOutput": {
+          "formatted_output": "sub-ok\n",
+          "exit_code": 0
+        },
+        "_meta": {
+          "terminal_output_delta": {
+            "data": "sub-ok\n",
+            "terminal_id": "exec-ecb87462-e980-415e-b7ea-cafe092eab03"
+          },
+          "terminal_exit": {
+            "exit_code": 0,
+            "signal": null,
+            "terminal_id": "exec-ecb87462-e980-415e-b7ea-cafe092eab03"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac28-18ec-7881-958a-43c22d261d13",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17105,
+        "size": 258400
+      }
+    },
+    {
+      "sessionId": "01a0ac28-18ec-7881-958a-43c22d261d13",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_0c78fcaa6783f057016aab0c5545e087d2b85be186051f61d9",
+        "content": {
+          "type": "text",
+          "text": "sub"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "final_answer"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac28-18ec-7881-958a-43c22d261d13",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_0c78fcaa6783f057016aab0c5545e087d2b85be186051f61d9",
+        "content": {
+          "type": "text",
+          "text": "-ok"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "final_answer"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac28-18ec-7881-958a-43c22d261d13",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17170,
+        "size": 258400
+      }
+    },
+    {
+      "sessionId": "01a0ac28-18ec-7881-958a-43c22d261d13",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "codex": {
+            "threadStatus": {
+              "type": "idle"
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "01a0ac28-18ec-7881-958a-43c22d261d13",
+        "state": "completed"
+      }
+    },
+    {
+      "sessionId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_dGCMTOWq2VISc5nllKUWYBgX",
+        "title": "wait",
+        "status": "completed",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+          "receiverThreadIds": [],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null,
+          "status": "completed"
+        },
+        "_meta": {
+          "codex": {
+            "collaboration": {
+              "tool": "wait",
+              "senderThreadId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+              "receiverThreadIds": []
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17358,
+        "size": 258400
+      }
+    },
+    {
+      "sessionId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_09d8f2b2f914642a016aab0c56f08487d2bcbddf826e756c51",
+        "content": {
+          "type": "text",
+          "text": "sub"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "final_answer"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_09d8f2b2f914642a016aab0c56f08487d2bcbddf826e756c51",
+        "content": {
+          "type": "text",
+          "text": "-ok"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "final_answer"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17427,
+        "size": 258400
+      }
+    },
+    {
+      "sessionId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "codex": {
+            "threadStatus": {
+              "type": "idle"
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Spawn a sub-agent (spawn_agent tool) whose task is: run the shell command `echo sub-ok` and report its output. Wait for it, then tell me its result in one short line. If you have no sub-agent tool, say 'no-subagent-tool'."
+      }
+    },
+    {
+      "sessionId": "01a0ac27-fcd9-7212-be12-c1ca36e356db",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Run sub-agent echo command"
+      }
+    }
+  ]
+}

@@ -292,6 +292,8 @@ export interface TaskListQuery {
   parentTaskId?: string
   /** Only tasks with no parent. */
   rootOnly?: boolean
+  /** Only tasks whose `chatId` is this chat (the composer's Tasks badge). */
+  chatId?: string
   /** Archived tasks are excluded unless asked for — they are the filed-away pile. */
   includeArchived?: boolean
 }

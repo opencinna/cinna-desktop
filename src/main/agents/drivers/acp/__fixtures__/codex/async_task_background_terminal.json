@@ -1,0 +1,161 @@
+{
+  "recording": "session_activity/codex-q1b-bg-terminal.ndjson",
+  "note": "promptReturnedAtIndex: notifications at or after this index arrived after the session/prompt response. exec_command left running (yield_time_ms 1000) under asyncTasks. asyncTaskId === toolCallId (exec-...). async_task_spawned arrives when the command item is backgrounded, before the prompt returns; it has no description or outputFilePath. The end arrives ~22 s AFTER the prompt returned: tool_call_update with terminal output, async_task_state_update completed, tool_call_update completed, all for the previous turn's tool call. Codex starts no model turn afterwards and sends no usage_update.",
+  "promptReturnedAtIndex": 8,
+  "notifications": [
+    {
+      "sessionId": "01a0ac29-e44b-71f0-9951-a273398f81ff",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68",
+        "status": "in_progress",
+        "kind": "execute",
+        "title": "sleep 25 && echo probe-done",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68"
+          }
+        ],
+        "rawInput": {
+          "command": "sleep 25 && echo probe-done",
+          "cwd": "/tmp/cinna-probe-x3"
+        },
+        "_meta": {
+          "terminal_info": {
+            "cwd": "/tmp/cinna-probe-x3",
+            "terminal_id": "exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-71f0-9951-a273398f81ff",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17214,
+        "size": 258400
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-71f0-9951-a273398f81ff",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68",
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "asyncTasks": {
+                "backgrounded": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-71f0-9951-a273398f81ff",
+      "update": {
+        "sessionUpdate": "async_task_spawned",
+        "asyncTaskId": "exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68",
+        "name": "sleep 25 && echo probe-done",
+        "taskType": "shell",
+        "showInTranscript": false,
+        "canStop": true,
+        "toolCallId": "exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68"
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-71f0-9951-a273398f81ff",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_061cd4e1eeef2dc9016aab0ccd22a887d285319adbb86be516",
+        "content": {
+          "type": "text",
+          "text": "started"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "final_answer"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-71f0-9951-a273398f81ff",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17276,
+        "size": 258400
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-71f0-9951-a273398f81ff",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "codex": {
+            "threadStatus": {
+              "type": "idle"
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-71f0-9951-a273398f81ff",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Call your exec_command tool exactly once with cmd `sleep 25 && echo probe-done` and yield_time_ms 1000 (no nohup, no &, no tty). It will still be running when the call returns — do NOT poll it or wait for it. Immediately reply only 'started' and end your turn."
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-71f0-9951-a273398f81ff",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Exec command probe request"
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-71f0-9951-a273398f81ff",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68",
+        "_meta": {
+          "terminal_output_delta": {
+            "data": "probe-done\n",
+            "terminal_id": "exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-71f0-9951-a273398f81ff",
+      "update": {
+        "sessionUpdate": "async_task_state_update",
+        "asyncTaskId": "exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68",
+        "state": "completed",
+        "toolCallId": "exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68"
+      }
+    },
+    {
+      "sessionId": "01a0ac29-e44b-71f0-9951-a273398f81ff",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68",
+        "status": "completed",
+        "rawOutput": {
+          "formatted_output": "probe-done\n",
+          "exit_code": 0
+        },
+        "_meta": {
+          "terminal_exit": {
+            "exit_code": 0,
+            "signal": null,
+            "terminal_id": "exec-d55ff8ab-5aaa-4c32-8823-f7f5de0dbd68"
+          }
+        }
+      }
+    }
+  ]
+}

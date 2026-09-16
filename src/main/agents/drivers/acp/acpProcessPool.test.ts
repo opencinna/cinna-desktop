@@ -10,8 +10,9 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { InitializeRequest, InitializeResponse } from '@agentclientprotocol/sdk'
-import { createAcpProcessPool, type TimerHandle } from './acpProcessPool'
+import { createAcpProcessPool, type AcpProcessPoolDeps, type TimerHandle } from './acpProcessPool'
 import {
+  ACP_BUSY_REAP_CEILING_MS,
   ACP_IDLE_REAP_MS,
   ACP_PROTOCOL_VERSION,
   type AcpConnection,
@@ -52,6 +53,7 @@ function stubConnection(pid: number): StubConnection {
     cancel: async () => undefined,
     steer: async () => ({ outcome: 'promptRequired' }),
     bindSession: () => () => undefined,
+    observeSession: () => () => undefined,
     stderrTail: () => '',
     dispose: async () => {
       stub.disposals += 1
@@ -96,7 +98,7 @@ function fakeTimers(): {
 
 function poolWith(
   connections: StubConnection[],
-  extra: { start?: StartAcpConnection } = {}
+  extra: { start?: StartAcpConnection } & Pick<AcpProcessPoolDeps, 'now' | 'isBusy' | 'lastActivityAt'> = {}
 ): {
   pool: ReturnType<typeof createAcpProcessPool>
   timers: ReturnType<typeof fakeTimers>
@@ -107,9 +109,11 @@ function poolWith(
   const start = vi.fn(async () => connections[next++] ?? stubConnection(900 + next))
   const pool = createAcpProcessPool({
     start: (extra.start ?? start) as StartAcpConnection,
-    now: () => 1_000,
+    now: extra.now ?? (() => 1_000),
     setTimer: timers.setTimer,
-    clearTimer: timers.clearTimer
+    clearTimer: timers.clearTimer,
+    isBusy: extra.isBusy,
+    lastActivityAt: extra.lastActivityAt
   })
   return { pool, timers, start }
 }
@@ -465,5 +469,171 @@ describe('createAcpProcessPool', () => {
     expect(pool.status('a')).toEqual({ state: 'stopped' })
 
     expect(await pool.acquire('a', spec('k1'), INIT)).toBe(conn)
+  })
+
+  describe('the reaper and running background work', () => {
+    it('defers the reap while the agent is busy, and reaps once it is not', async () => {
+      const conn = stubConnection(1)
+      let busy = true
+      let clock = 0
+      const { pool, timers } = poolWith([conn], {
+        now: () => clock,
+        isBusy: () => busy,
+        lastActivityAt: () => clock
+      })
+
+      await pool.acquire('a', spec('k1'), INIT)
+      clock += ACP_IDLE_REAP_MS
+      timers.fire()
+
+      expect(conn.disposals).toBe(0)
+      expect(pool.status('a').state).toBe('running')
+      // Rescheduled, not stopped: the next check is one idle window away.
+      expect(timers.pending.filter((entry) => !entry.cleared).map((entry) => entry.ms)).toEqual([ACP_IDLE_REAP_MS])
+
+      busy = false
+      clock += ACP_IDLE_REAP_MS
+      timers.fire()
+
+      expect(conn.disposals).toBe(1)
+      expect(pool.status('a')).toEqual({ state: 'stopped' })
+    })
+
+    it('reaps a busy agent anyway once its last activity is older than the ceiling', async () => {
+      const conn = stubConnection(1)
+      let clock = 0
+      const lastActivity = 0
+      const { pool, timers } = poolWith([conn], {
+        now: () => clock,
+        isBusy: () => true,
+        lastActivityAt: () => lastActivity
+      })
+
+      await pool.acquire('a', spec('k1'), INIT)
+      clock = ACP_BUSY_REAP_CEILING_MS - 1
+      timers.fire()
+      expect(conn.disposals).toBe(0)
+
+      clock = ACP_BUSY_REAP_CEILING_MS
+      timers.fire()
+      expect(conn.disposals).toBe(1)
+      expect(pool.status('a')).toEqual({ state: 'stopped' })
+    })
+
+    it('measures the ceiling from the release when nobody reports activity', async () => {
+      const conn = stubConnection(1)
+      let clock = 5_000
+      const { pool, timers } = poolWith([conn], { now: () => clock, isBusy: () => true })
+
+      await pool.acquire('a', spec('k1'), INIT)
+      pool.hold('a')()
+      clock = 5_000 + ACP_BUSY_REAP_CEILING_MS - 1
+      timers.fire()
+      expect(conn.disposals).toBe(0)
+
+      clock = 5_000 + ACP_BUSY_REAP_CEILING_MS
+      timers.fire()
+      expect(conn.disposals).toBe(1)
+    })
+
+    it('measures the ceiling from the last turn when that is later than the last activity', async () => {
+      // A background process started long ago and has been quiet since; the
+      // user kept chatting. Pausing now must not be reaped at once.
+      const conn = stubConnection(1)
+      let clock = 0
+      const { pool, timers } = poolWith([conn], {
+        now: () => clock,
+        isBusy: () => true,
+        lastActivityAt: () => 0
+      })
+
+      await pool.acquire('a', spec('k1'), INIT)
+      const release = pool.hold('a')
+      clock = ACP_BUSY_REAP_CEILING_MS + 60_000
+      release()
+      clock += ACP_IDLE_REAP_MS
+      timers.fire()
+      expect(conn.disposals).toBe(0)
+
+      clock = ACP_BUSY_REAP_CEILING_MS + 60_000 + ACP_BUSY_REAP_CEILING_MS
+      timers.fire()
+      expect(conn.disposals).toBe(1)
+    })
+
+    it('still reaps a not-busy agent after exactly the idle window', async () => {
+      const conn = stubConnection(1)
+      const isBusy = vi.fn(() => false)
+      const { pool, timers } = poolWith([conn], { isBusy })
+
+      await pool.acquire('a', spec('k1'), INIT)
+      expect(timers.pending.find((entry) => !entry.cleared)?.ms).toBe(ACP_IDLE_REAP_MS)
+      timers.fire()
+
+      expect(isBusy).toHaveBeenCalledWith('a')
+      expect(conn.disposals).toBe(1)
+    })
+
+    it('does not ask whether a held agent is busy: a turn outranks the question', async () => {
+      const conn = stubConnection(1)
+      const isBusy = vi.fn(() => true)
+      const { pool, timers } = poolWith([conn], { isBusy })
+
+      await pool.acquire('a', spec('k1'), INIT)
+      pool.hold('a')
+      timers.fire()
+
+      expect(isBusy).not.toHaveBeenCalled()
+      expect(conn.disposals).toBe(0)
+    })
+  })
+
+  describe('a process leaving running reaches the listeners once', () => {
+    // The wiring marks what a process was doing as lost on these; each exit
+    // path has to be heard, and heard once.
+    const leftRunning = (seen: string[]): string[] => seen.filter((s) => s !== 'a:starting' && s !== 'a:running')
+
+    it('on an exit', async () => {
+      const conn = stubConnection(1)
+      const { pool } = poolWith([conn])
+      const seen: string[] = []
+      pool.onStatus((agentId, state) => seen.push(`${agentId}:${state.state}`))
+
+      await pool.acquire('a', spec('k1'), INIT)
+      conn.die()
+      await conn.exited
+      await Promise.resolve()
+
+      expect(leftRunning(seen)).toEqual(['a:exited'])
+    })
+
+    it('on a retire', async () => {
+      const conn = stubConnection(1)
+      const { pool } = poolWith([conn])
+      const seen: string[] = []
+      pool.onStatus((agentId, state) => seen.push(`${agentId}:${state.state}`))
+
+      await pool.acquire('a', spec('k1'), INIT)
+      pool.retire('a')
+      await conn.exited
+      await Promise.resolve()
+
+      expect(leftRunning(seen)).toEqual(['a:stopped'])
+    })
+
+    it('on a reap, including one past the busy ceiling', async () => {
+      const conn = stubConnection(1)
+      let clock = 0
+      const { pool, timers } = poolWith([conn], { now: () => clock, isBusy: () => true })
+      const seen: string[] = []
+      pool.onStatus((agentId, state) => seen.push(`${agentId}:${state.state}`))
+
+      await pool.acquire('a', spec('k1'), INIT)
+      clock = ACP_BUSY_REAP_CEILING_MS
+      timers.fire()
+      await conn.exited
+      await Promise.resolve()
+
+      expect(leftRunning(seen)).toEqual(['a:stopped'])
+    })
   })
 })

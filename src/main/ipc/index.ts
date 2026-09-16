@@ -4,6 +4,7 @@ import { registerProviderHandlers } from './provider.ipc'
 import { registerMcpHandlers } from './mcp.ipc'
 import { registerLlmHandlers } from './llm.ipc'
 import { registerRunHandlers } from './run.ipc'
+import { registerSessionActivityHandlers } from './session_activity.ipc'
 import { registerChatModeHandlers } from './chatmode.ipc'
 import { registerAgentHandlers } from './agent.ipc'
 import { registerAgentStatusHandlers } from './agent_status.ipc'
@@ -37,6 +38,8 @@ export function registerAllIpcHandlers(): void {
   registerLlmHandlers()
   // The one send channel, plus the two it replaced (kept as forwards for one phase).
   registerRunHandlers()
+  // What a chat's agent session runs beside its turns: subagents, background work.
+  registerSessionActivityHandlers()
   registerChatModeHandlers()
   registerAgentHandlers()
   registerAgentStatusHandlers()
