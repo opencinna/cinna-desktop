@@ -1,12 +1,13 @@
 # Cinna Desktop — task runner. `make help` lists targets.
 #
 # The E2E suite drives the *built* Electron app with Playwright. Every test
-# runs in a throwaway HOME + userData; nothing here touches your real profile.
+# runs in a throwaway HOME + userData; nothing here touches your real profile
+# except live-ctl, which exists to (docs/development/live_backend/live_backend.md).
 # Details: docs/development/e2e/e2e.md — writing tests: docs/development/e2e/e2e_llm.md
 
 PW := npx playwright test -c e2e/playwright.config.ts
 
-.PHONY: help test typecheck build demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine
+.PHONY: help test typecheck build demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine live-ctl live-help
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -67,3 +68,11 @@ e2e-clean: ## Remove E2E artifacts (screenshots, traces, contexts)
 
 e2e-clean-engine: ## Drop the per-machine engine cache (next run downloads again)
 	rm -rf "$${CINNA_E2E_ENGINE_CACHE:-$$HOME/.cache/cinna-e2e/engine}"
+
+live-ctl: ## Build, then hold the app for live-backend testing on your REAL profile (quit other Cinna apps; back up first)
+	npx electron-vite build
+	node scripts/live-backend/ctl.mjs
+
+live-help: ## How to drive live-backend tests from a shell
+	@echo "source scripts/live-backend/live.sh && live_preflight && live_help"
+	@echo "docs: docs/development/live_backend/live_backend.md"

@@ -15,6 +15,7 @@ npm run build    # Production build
 - `npx electron-vite build` — full build validation (main + preload + renderer)
 - `npm run typecheck` — type-check main, renderer and e2e; `npm run typecheck:web` for the renderer alone
 - `make e2e` — build, then drive the real Electron app with Playwright (`e2e/`); `make help` lists the other E2E targets. A manual step, not part of `npm test`. Each test gets a throwaway `HOME` and `userData`; never launch the built app in a test without that sandbox. To add a scenario: `/cinna-desktop.e2e.write <scenario>` (the `e2e-test-writer` agent); writing rules in `docs/development/e2e/e2e_llm.md`
+- Live-backend sessions — `make live-ctl` + `source scripts/live-backend/live.sh`: drive the built app on the real profile against a running cinna-core (`CINNA_CORE_PATH`) and stop/kill/rewind the server mid-turn. Manual and user-approved only (real profile: back up first, no other Cinna instance); runbook in `docs/development/live_backend/live_backend_llm.md`
 
 Do NOT use bare `npx tsc --noEmit` — it hangs silently in this project. `npx tsc --noEmit --project tsconfig.web.json` does not work either: it fails with `TS6307` on the preload types the renderer imports. The npm scripts pass `--composite false`, which is what makes them work — so run the script, not the raw command it wraps.
 
