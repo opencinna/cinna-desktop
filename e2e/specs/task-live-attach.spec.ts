@@ -132,11 +132,25 @@ async function linkSandboxAccount(cinna: CinnaApp, host: string): Promise<void> 
   }, { host, token: TOKEN, userId: user!.id })
 }
 
+/**
+ * The composer by role, not placeholder: for ~260ms after every chat switch
+ * the chat curtain (`ChatTransition`) keeps an inert, aria-hidden clone of the
+ * outgoing view, composer and placeholder included, and every step here that
+ * types into the composer lands inside that window — right after a sidebar
+ * click. `getByPlaceholder` counts the clone and fails strict mode on two
+ * textareas; the role query skips it. This spec was written the day before the
+ * curtain arrived and failed from then on. See `e2e_llm.md`, "The chat curtain
+ * clones the composer".
+ */
+function composer(cinna: CinnaApp) {
+  return cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })
+}
+
 async function visitB(cinna: CinnaApp): Promise<void> {
   await cinna.page.getByRole('button', { name: 'Chats', exact: true }).click()
   await cinna.page.getByText(CHAT_B, { exact: true }).click()
   await expect(cinna.page.getByText(B_TEXT, { exact: true })).toBeVisible()
-  await cinna.page.getByPlaceholder('Type a message...').fill(DRAFT)
+  await composer(cinna).fill(DRAFT)
 }
 
 async function stopAndCheck(cinna: CinnaApp, fake: Awaited<ReturnType<typeof serve>>, chatId: string, prompt: string): Promise<void> {
@@ -158,8 +172,8 @@ test('returning to an active chat replays its accumulated reply once and keeps a
   try {
     const setup = await arrange(cinna, fake.host, true)
     await cinna.page.getByText(CHAT_A, { exact: true }).click()
-    await cinna.page.getByPlaceholder('Type a message...').fill(PROMPT)
-    await cinna.page.getByPlaceholder('Type a message...').press('Enter')
+    await composer(cinna).fill(PROMPT)
+    await composer(cinna).press('Enter')
     await expect(cinna.page.getByText(FIRST, { exact: true })).toBeVisible()
     await visitB(cinna)
     fake.emit(FIRST + SECOND)
@@ -168,7 +182,7 @@ test('returning to an active chat replays its accumulated reply once and keeps a
     await expect(cinna.page.getByText(FIRST + SECOND, { exact: true })).toHaveCount(0)
     await expect(cinna.page.getByText(SECOND.trim(), { exact: true })).toHaveCount(0)
     await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
-    await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveValue(DRAFT)
+    await expect(composer(cinna)).toHaveValue(DRAFT)
     await cinna.page.getByText(CHAT_A, { exact: true }).click()
     await expect(cinna.page.getByText(FIRST + SECOND, { exact: true })).toHaveCount(1)
     await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible()
@@ -313,8 +327,8 @@ test('reattaching during a model tool loop shows saved rounds and live replay on
     await cinna.page.getByRole('button', { name: 'Switch to verbose mode', exact: true }).click()
     await cinna.page.getByRole('button', { name: 'Interface', exact: true }).click()
     await cinna.page.getByText(MODEL_CHAT, { exact: true }).click()
-    await cinna.page.getByPlaceholder('Type a message...').fill(MODEL_PROMPT)
-    await cinna.page.getByPlaceholder('Type a message...').press('Enter')
+    await composer(cinna).fill(MODEL_PROMPT)
+    await composer(cinna).press('Enter')
     await expect.poll(() => fake.rounds.length).toBe(2)
     await expect(cinna.page.getByText(ROUND_TWO, { exact: true })).toHaveCount(1)
     const saved = () => cinna.page.evaluate(async (id) => (await window.api.chat.get(id))?.messages
