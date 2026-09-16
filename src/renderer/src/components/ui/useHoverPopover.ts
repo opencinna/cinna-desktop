@@ -72,7 +72,9 @@ export function useHoverPopover<
   T extends HTMLElement = HTMLButtonElement,
   P extends HTMLElement = HTMLDivElement
 >(placement: PopoverPlacement): HoverPopoverApi<T, P> {
-  const popover = usePopover<T, P>(placement)
+  // Rows inside may grow (a refusal line under a Stop): they grow downward, so
+  // nothing moves out from under the pointer (`ux_rules.md` §1).
+  const popover = usePopover<T, P>(placement, { keepTopWhileOpen: true })
   const { open, setOpen, triggerRef, popoverRef } = popover
   const id = useId()
   const reasons = useRef<Reasons>({ ...IDLE })
@@ -141,6 +143,18 @@ export function useHoverPopover<
 
   useEffect(() => clearTimer, [])
 
+  /**
+   * The pointer left: a focused element that has since left the DOM (the Stop
+   * button of a row that just ended) fired no blur, so the focus reason is
+   * checked against where focus really is before it keeps the popover open.
+   */
+  const leave = (patch: Partial<Reasons>): void => {
+    const active = document.activeElement
+    const held = !!active && active !== document.body &&
+      (!!triggerRef.current?.contains(active) || !!popoverRef.current?.contains(active))
+    set(held ? patch : { ...patch, focus: false })
+  }
+
   const set = (patch: Partial<Reasons>): void => {
     reasons.current = { ...reasons.current, ...patch }
     sync()
@@ -154,7 +168,7 @@ export function useHoverPopover<
       'aria-controls': open ? id : undefined,
       'aria-haspopup': 'dialog',
       onMouseEnter: () => set({ hover: true, dismissed: false }),
-      onMouseLeave: () => set({ hover: false }),
+      onMouseLeave: () => leave({ hover: false }),
       onFocus: () => {
         // Focus handed back on close is not a request to reopen it; focus
         // arriving any other way (Tab) is.
@@ -189,7 +203,7 @@ export function useHoverPopover<
       onPointerMove: () => {
         if (!reasons.current.inside) set({ inside: true })
       },
-      onMouseLeave: () => set({ inside: false }),
+      onMouseLeave: () => leave({ inside: false }),
       onFocus: () => set({ focus: true }),
       onBlur: () => set({ focus: false }),
       onKeyDown: (event) => {

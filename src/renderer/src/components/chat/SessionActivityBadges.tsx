@@ -1,4 +1,3 @@
-import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Activity, Cog, Network } from 'lucide-react'
 import type {
@@ -57,7 +56,10 @@ function countOf(kind: SessionActivityKind, n: number): string {
 export function activityLabel(items: readonly SessionActivityItem[], kind: ActivityBadgeKind): string {
   const running = (k: SessionActivityKind): number =>
     items.filter((item) => item.kind === k && item.state === 'running').length
-  const parts = (kind === 'all' ? KINDS : [kind]).filter((k) => running(k) > 0).map((k) => countOf(k, running(k)))
+  const kinds = kind === 'all' ? KINDS : [kind]
+  const parts = kinds.filter((k) => running(k) > 0).map((k) => countOf(k, running(k)))
+  // Nothing left, while the popover that keeps the badge up is open.
+  if (parts.length === 0) return `No ${kinds.map((k) => FACE[k].many).join(' or ')} running`
   return `${parts.join(' and ')} running`
 }
 
@@ -105,13 +107,10 @@ export function SessionActivityBadge({
   const popover = useHoverPopover<HTMLButtonElement, HTMLDivElement>('above-right')
   const mine = kind === 'all' ? items : items.filter((item) => item.kind === kind)
   const running = mine.filter((item) => item.state === 'running').length
-  // The badge leaves with its last running item; so does an open popover, and
-  // it must not come back already open with the next one.
-  const { open, setOpen } = popover
-  useEffect(() => {
-    if (running === 0 && open) setOpen(false)
-  }, [running, open, setOpen])
-  if (running === 0) return null
+  // The badge leaves with its last running item — but not while its popover
+  // is open: the user may be watching the row they just stopped. It leaves
+  // once the popover closes.
+  if (running === 0 && !popover.open) return null
   const Icon = kind === 'all' ? Activity : FACE[kind].icon
   const heading = kind === 'all' ? 'Session activity' : FACE[kind].heading
   const label = activityLabel(items, kind)
@@ -137,10 +136,12 @@ export function SessionActivityBadge({
           Reads as live without moving anything: a dot on the pill's corner,
           out of the flow so it costs the row no width, that only fades.
         */}
-        <span
-          aria-hidden
-          className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-pulse"
-        />
+        {running > 0 && (
+          <span
+            aria-hidden
+            className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-pulse"
+          />
+        )}
       </button>
       {popover.open &&
         createPortal(

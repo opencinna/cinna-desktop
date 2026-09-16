@@ -1,11 +1,29 @@
-import { chmodSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { createServer, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { repoRoot } from '../playwright.config'
+import type { CustomAgentConfig } from '../../src/shared/customAgents'
 import type { CinnaApp } from './app'
 
 export const SCRIPT_MODEL = 'qwen3:8b'
+/**
+ * What a released prompt sends: `updates` are bare `session/update` payloads
+ * sent in order before `text`; `after` makes the agent ask for more once the
+ * prompt has returned (see {@link ScriptAcpHeld}).
+ */
+export interface ScriptAcpReply {
+  text?: string
+  updates?: Record<string, unknown>[]
+  after?: boolean
+}
+/** A held request other than a prompt: `/after` (traffic between turns) or `/stop` (`_session/async_task/stop`). */
+export interface ScriptAcpHeld {
+  params: Record<string, unknown>
+  closed: boolean
+  released: boolean
+  release(body: Record<string, unknown>): void
+}
 export interface ScriptAcpCall {
   cwd: string
   pid: number
@@ -13,28 +31,42 @@ export interface ScriptAcpCall {
   text: string
   closed: boolean
   released: boolean
-  release(text: string): void
+  release(reply: string | ScriptAcpReply): void
 }
 /** Real launcher/ACP IPC; only the remote agent's deterministic behavior is scripted. */
 export async function scriptAcpEngine() {
   const calls: ScriptAcpCall[] = []
   const unexpected: string[] = []
+  /** `initialize` params, one per process start (the client's advertised capabilities). */
+  const inits: Record<string, unknown>[] = []
+  const afters: ScriptAcpHeld[] = []
+  const stops: ScriptAcpHeld[] = []
   const pending = new Set<ServerResponse>()
   const server = createServer((req, res) => {
     const send = (body: unknown): void => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(body)) }
     if (req.url === '/api/tags') { send({ models: [{ name: SCRIPT_MODEL, model: SCRIPT_MODEL, details: { family: 'qwen3', parameter_size: '8.2B' } }] }); return }
     if (req.url === '/api/version') { send({ version: '0.6.2' }); return }
-    if (req.method !== 'POST' || req.url !== '/prompt') {
+    const routes = ['/prompt', '/initialize', '/after', '/stop']
+    if (req.method !== 'POST' || !routes.includes(req.url ?? '')) {
       unexpected.push(`${req.method} ${req.url}`); res.statusCode = 404; send({}); return
     }
     let raw = ''
     req.on('data', (chunk) => { raw += chunk })
     req.on('end', () => {
+      if (req.url === '/initialize') { inits.push(JSON.parse(raw)); send({}); return }
+      if (req.url === '/after' || req.url === '/stop') {
+        const held: ScriptAcpHeld = { params: JSON.parse(raw), closed: false, released: false,
+          release(reply) { if (held.closed || held.released) throw new Error(`${req.url} is no longer held`); held.released = true; send(reply) } }
+        pending.add(res)
+        res.on('close', () => { held.closed = true; pending.delete(res) })
+        ;(req.url === '/after' ? afters : stops).push(held)
+        return
+      }
       const body = JSON.parse(raw) as { cwd: string; pid: number; sessionId: string; prompt: { type: string; text?: string }[] }
       const call: ScriptAcpCall = { cwd: body.cwd, pid: body.pid, sessionId: body.sessionId,
         text: body.prompt.filter((part) => part.type === 'text').map((part) => part.text ?? '').join(''),
         closed: false, released: false,
-        release(text) { if (call.closed || call.released) throw new Error('ACP prompt is no longer held'); call.released = true; send({ text }) } }
+        release(text) { if (call.closed || call.released) throw new Error('ACP prompt is no longer held'); call.released = true; send(typeof text === 'string' ? { text } : text) } }
       pending.add(res)
       res.on('close', () => { call.closed = true; pending.delete(res) })
       calls.push(call)
@@ -43,7 +75,21 @@ export async function scriptAcpEngine() {
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   const host = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   return {
-    host, calls, unexpected,
+    host, calls, unexpected, inits, afters, stops,
+    /**
+     * The same agent as a command-line ACP agent (`customAgents.save`): no
+     * engine setting and no credential, and the custom launcher's own
+     * `clientCapabilities`. Runs in `<sandbox>/script-acp-cwd`.
+     */
+    customConfig(cinna: CinnaApp): CustomAgentConfig {
+      const dir = join(cinna.sandbox.root, 'script-acp-cwd')
+      mkdirSync(dir, { recursive: true })
+      const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`
+      const cwd = realpathSync(dir)
+      return { launcher: 'custom', cwd, localCwd: cwd,
+        command: ['/bin/sh', '-c', `export SCRIPT_ACP_CONTROLLER=${quote(host)}; exec "$@"`, 'script-acp',
+          process.execPath, join(repoRoot, 'e2e/fixtures/scriptAcpAgent.mjs')] }
+    },
     async install(cinna: CinnaApp): Promise<void> {
       const shim = join(cinna.sandbox.root, 'script-fake-opencode')
       const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`

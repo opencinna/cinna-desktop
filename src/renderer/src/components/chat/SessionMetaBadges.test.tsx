@@ -39,6 +39,7 @@ const spies = vi.hoisted(() => ({
 
 const { SessionMetaBadges } = await import('./SessionMetaBadges')
 const { HOVER_CLOSE_DELAY_MS } = await import('../ui/useHoverPopover')
+const { STOP_SETTLE_FALLBACK_MS } = await import('../../hooks/useSessionActivityStop')
 const { useUIStore } = await import('../../stores/ui.store')
 
 const T0 = new Date('2026-09-17T10:00:00Z')
@@ -250,7 +251,10 @@ describe('the popover', () => {
     const trigger = await openable()
     act(() => trigger.focus())
     expect(dialog()).not.toBeNull()
-    // The last running item ends: the badge (and its focus) leaves with no blur.
+    // An outside click closes it with focus still on the badge…
+    fireEvent.mouseDown(document.body)
+    expect(dialog()).toBeNull()
+    // …then the last running item ends: the badge (and its focus) leaves with no blur.
     await send([item('b1', { state: 'completed', endedAt: T0 })])
     expect(background()).toBeNull()
     await send([item('b2')])
@@ -417,9 +421,128 @@ describe('stopping a background process', () => {
     expect(within(dialog()).getAllByRole('alert')).toHaveLength(1)
     const again = within(dialog()).getByRole('button', { name: 'Stop npm run dev' })
 
-    spies.stopActivity.mockReturnValue(new Promise(() => {}))
+    // A retry keeps the line until its own answer lands: the row does not shrink under the pointer.
+    const retry = deferred<unknown>()
+    spies.stopActivity.mockReturnValue(retry.promise)
     fireEvent.click(again)
+    await within(dialog()).findByRole('button', { name: 'Stopping npm run dev' })
+    expect(within(dialog()).getByRole('alert').textContent).toBe('The agent did not answer. Try again in a moment.')
+    await act(async () => { retry.resolve({ ok: false, code: 'not_stoppable', reason: 'This process can no longer be stopped from here.' }) })
+    expect(within(dialog()).getByRole('alert').textContent).toBe('This process can no longer be stopped from here.')
+
+    // An accepted retry clears it.
+    spies.stopActivity.mockResolvedValue({ ok: true })
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Stop npm run dev' }))
     await waitFor(() => expect(within(dialog()).queryByRole('alert')).toBeNull())
+  })
+
+  it('forgets a refusal once its item is no longer running', async () => {
+    spies.stopActivity.mockResolvedValue({ ok: false, code: 'unavailable', reason: 'The agent did not answer. Try again in a moment.' })
+    const other = item('b2', { title: 'sleep 9' })
+    await opened([item('b1', { title: 'npm run dev', canStop: true }), other])
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Stop npm run dev' }))
+    await within(dialog()).findByRole('alert')
+
+    await send([other, item('b1', { title: 'npm run dev', state: 'completed', endedAt: T0 })])
+    expect(within(dialog()).queryByRole('alert')).toBeNull()
+
+    // Closed and reopened, even with the same id running again, it says nothing.
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByRole('dialog', { name: 'Background processes' })).toBeNull()
+    await send([item('b1', { title: 'npm run dev', canStop: true }), other])
+    fireEvent.mouseEnter(background()!)
+    expect(within(dialog()).queryByRole('alert')).toBeNull()
+    expect(within(dialog()).getByRole('button', { name: 'Stop npm run dev' })).toBeTruthy()
+  })
+
+  it('keeps saying Stopping… after an accepted stop until the push ends the item', async () => {
+    const other = item('b2', { title: 'sleep 9' })
+    await opened([item('b1', { title: 'npm run dev', canStop: true }), other])
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Stop npm run dev' }))
+    await waitFor(() => expect(spies.stopActivity).toHaveBeenCalled())
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
+    // Answered ok, the push not here yet.
+    expect(within(dialog()).getByRole('button', { name: 'Stopping npm run dev' })).toBeTruthy()
+
+    await send([other, item('b1', { title: 'npm run dev', state: 'stopped', endedAt: T0 })])
+    expect(stopButtons()).toEqual([])
+    // Running again under the same id (the hub never does this, the state must not linger).
+    await send([item('b1', { title: 'npm run dev', canStop: true }), other])
+    expect(within(dialog()).getByRole('button', { name: 'Stop npm run dev' })).toBeTruthy()
+  })
+
+  it('gives up on Stopping… when no push comes within the fallback', async () => {
+    // Opened on real timers: `waitFor` cannot see vitest's fake ones.
+    await opened([item('b1', { title: 'npm run dev', canStop: true })])
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      fireEvent.click(within(dialog()).getByRole('button', { name: 'Stop npm run dev' }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+      expect(spies.stopActivity).toHaveBeenCalledTimes(1)
+      await act(async () => { await vi.advanceTimersByTimeAsync(STOP_SETTLE_FALLBACK_MS - 500) })
+      expect(within(dialog()).getByRole('button', { name: 'Stopping npm run dev' })).toBeTruthy()
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+      expect(within(dialog()).getByRole('button', { name: 'Stop npm run dev' })).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the badge and its open popover after the last running item ends, until the popover closes', async () => {
+    await opened([item('b1', { title: 'npm run dev', canStop: true })])
+    await send([item('b1', { title: 'npm run dev', state: 'stopped', endedAt: T0 })])
+
+    expect(background()?.getAttribute('aria-label')).toBe('No background processes running')
+    expect(background()?.textContent).toBe('0')
+    expect(dialog().querySelector('[data-state="stopped"]')?.textContent).toContain('npm run dev')
+    expect(dialog().textContent).toContain('0 running · 1 ended')
+    // The collapsed badge was never opened: it leaves.
+    expect(collapsed()).toBeNull()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.mouseLeave(background()!)
+      fireEvent.mouseLeave(dialog())
+      act(() => vi.advanceTimersByTime(HOVER_CLOSE_DELAY_MS))
+      expect(screen.queryByRole('dialog', { name: 'Background processes' })).toBeNull()
+      expect(background()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('closes on leave after a clicked Stop button left with the row it stopped', async () => {
+    spies.stopActivity.mockResolvedValue({ ok: true })
+    await opened([item('b1', { title: 'npm run dev', canStop: true })])
+    const button = within(dialog()).getByRole('button', { name: 'Stop npm run dev' })
+    // A real click focuses the button, and focus inside keeps the popover open.
+    button.focus()
+    fireEvent.focus(dialog())
+    fireEvent.click(button)
+    await waitFor(() => expect(spies.stopActivity).toHaveBeenCalled())
+    // The row ends: its Stop button leaves the DOM with focus on it, and no blur fires.
+    await send([item('b1', { title: 'npm run dev', state: 'stopped', endedAt: T0 })])
+    expect(stopButtons()).toEqual([])
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.mouseLeave(background()!)
+      fireEvent.mouseLeave(dialog())
+      act(() => vi.advanceTimersByTime(HOVER_CLOSE_DELAY_MS))
+      expect(screen.queryByRole('dialog', { name: 'Background processes' })).toBeNull()
+      expect(background()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('names an emptied collapsed badge after both kinds', async () => {
+    await mount()
+    await send([item('b1', { canStop: true })])
+    fireEvent.mouseEnter(collapsed()!)
+    await send([item('b1', { state: 'completed', endedAt: T0 })])
+    expect(collapsed()?.getAttribute('aria-label')).toBe('No subagents or background processes running')
+    expect(screen.getByRole('dialog', { name: 'Session activity' })).toBeTruthy()
   })
 
   it('shows a thrown error in the user\'s words', async () => {

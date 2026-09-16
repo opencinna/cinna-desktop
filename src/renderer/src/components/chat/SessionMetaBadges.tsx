@@ -1,3 +1,4 @@
+import type { SessionActivityItem } from '../../../../shared/sessionActivity'
 import { useSessionActivity } from '../../hooks/useSessionActivity'
 import { useSessionActivityStop } from '../../hooks/useSessionActivityStop'
 import { ChatTasksBadge } from './ChatTasksBadge'
@@ -20,14 +21,16 @@ import { SessionActivityBadge } from './SessionActivityBadges'
  * Activity badge. Measured at the 800 px minimum window with the sidebar open,
  * the row is 473 px; with it collapsed, or at 1280 px, 780 px and more.
  */
+const NO_ITEMS: readonly SessionActivityItem[] = []
+
 const SPLIT = '@max-[40rem]/composer:hidden'
 const COLLAPSED = '@min-[40rem]/composer:hidden'
 
 export function SessionMetaBadges({ chatId }: { chatId: string }): React.JSX.Element {
   const activity = useSessionActivity(chatId)
-  const items = activity.data?.items ?? []
+  const items = activity.data?.items ?? NO_ITEMS
   // Here, not in a popover row: the rows unmount while a stop is in flight.
-  const stop = useSessionActivityStop(chatId)
+  const stop = useSessionActivityStop(chatId, items)
   return (
     <div className="flex items-center gap-1.5" data-testid="session-meta-badges">
       {/*

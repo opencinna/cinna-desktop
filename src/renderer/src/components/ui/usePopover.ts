@@ -2,10 +2,30 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 export type PopoverPlacement = 'above-left' | 'above-right' | 'below-right'
 
-type FixedPos =
+export type FixedPos =
   | { left: number; bottom: number; right?: undefined; top?: undefined }
   | { right: number; bottom: number; left?: undefined; top?: undefined }
   | { right: number; top: number; left?: undefined; bottom?: undefined }
+  | { left: number; top: number; right?: undefined; bottom?: undefined }
+
+export interface PopoverOptions {
+  /**
+   * Once an `above-*` popover has been laid out, pin its top edge where it
+   * opened, so content that grows while it is open extends it downward
+   * instead of pushing the rows under the pointer up. It may then cover its
+   * trigger. Re-anchored above the trigger on the next open or a resize.
+   */
+  keepTopWhileOpen?: boolean
+}
+
+/**
+ * An `above-*` position (bottom-anchored) turned into the same box anchored by
+ * its top edge, at `top`. Any other position is returned as is.
+ */
+export function pinTopEdge(pos: FixedPos, top: number): FixedPos {
+  if (pos.bottom === undefined) return pos
+  return pos.left !== undefined ? { left: pos.left, top } : { right: pos.right!, top }
+}
 
 export interface PopoverApi<T extends HTMLElement, P extends HTMLElement> {
   open: boolean
@@ -41,7 +61,8 @@ const EDGE = 8
 export function usePopover<
   T extends HTMLElement = HTMLButtonElement,
   P extends HTMLElement = HTMLDivElement
->(placement: PopoverPlacement): PopoverApi<T, P> {
+>(placement: PopoverPlacement, options: PopoverOptions = {}): PopoverApi<T, P> {
+  const keepTop = options.keepTopWhileOpen === true
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<T>(null)
   const popoverRef = useRef<P>(null)
@@ -124,6 +145,15 @@ export function usePopover<
     next = Math.round(next)
     if (next !== shift) setShift(next)
   }, [open, pos, shift])
+
+  // Pinned in the same frame it is first laid out, so the switch never shows.
+  useLayoutEffect(() => {
+    const el = popoverRef.current
+    if (!keepTop || !open || !pos || pos.bottom === undefined || !el) return
+    const r = el.getBoundingClientRect()
+    if (r.height === 0) return
+    setPos(pinTopEdge(pos, Math.round(r.top)))
+  }, [keepTop, open, pos])
 
   return {
     open,
