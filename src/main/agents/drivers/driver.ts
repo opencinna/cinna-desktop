@@ -62,8 +62,8 @@ export interface RunInput {
    * caller reads on demand. Called once, early in the turn. The direct-chat
    * wrapper reads it when the app quits mid-turn — Electron does not wait for
    * a turn to end — and when a driver breaks its never-throws contract, so
-   * what the user watched arrive is persisted either way. A driver that never
-   * calls it loses an unfinished turn's output, as every driver did before.
+   * what the user watched arrive is persisted either way. Every driver calls it;
+   * one that does not loses an unfinished turn's output at quit.
    */
   registerSnapshot?: (snapshot: () => TurnSnapshot) => void
 }

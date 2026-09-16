@@ -356,7 +356,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   // What the turn has streamed so far, for a caller that has to persist it
   // before the turn ends — the app quitting mid-turn. Copies, read on demand.
   input.registerSnapshot?.(() => ({
-    parts: accumulator.snapshotParts(),
+    parts: accumulator.snapshotParts({ streaming: true }),
     notices: accumulator.snapshotNotices(),
     steers: ctx.steers.slice()
   }))

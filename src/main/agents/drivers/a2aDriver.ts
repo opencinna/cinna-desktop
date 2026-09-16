@@ -180,6 +180,7 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
           isCinnaTokenAuth: capabilitiesFor(agent).auth === 'cinna',
           signal,
           onEvent,
+          ...(input.registerSnapshot ? { registerSnapshot: input.registerSnapshot } : {}),
           onClient: (c) => {
             client = c
             onAbort()

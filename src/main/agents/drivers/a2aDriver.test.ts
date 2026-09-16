@@ -76,6 +76,14 @@ describe('a2a driver — run', () => {
     })
   })
 
+  it('passes the snapshot registration on to runAgentTurn', async () => {
+    // Mutation: drop the spread in the driver → the quit flush has nothing to read.
+    const d = deps()
+    const registerSnapshot = vi.fn()
+    await createA2aDriver(d).run('owner-1', REMOTE, { ...input(), registerSnapshot })
+    expect(d.runTurn.mock.calls[0][0]).toMatchObject({ registerSnapshot })
+  })
+
   it('treats a stream 401 as a re-auth only for a Cinna-synced agent', async () => {
     const d = deps()
     await createA2aDriver(d).run('owner-1', LOCAL, input())

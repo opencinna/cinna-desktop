@@ -20,3 +20,13 @@ it('updates a tool by identity after its permission and decision have arrived', 
   expect(accumulator.snapshotParts()[0]).toMatchObject({ toolId: 'call-1', text: 'Run command: pwd' })
   expect(events).toHaveLength(4)
 })
+
+it('hides a half-written attach tag only in a mid-stream snapshot', () => {
+  // The quit flush saves a part once and never revisits it, so the tag's first
+  // half must not reach the row. Mutation: drop `opts` in `snapshotParts` → fails.
+  const accumulator = new StreamPartsAccumulator()
+  const port = { postMessage: () => {} }
+  accumulator.ingestMessage({ messageId: 'm', parts: [{ kind: 'text', text: 'See <cinna_attach>/reports/q3' }] }, port)
+  expect(accumulator.snapshotParts({ streaming: true })).toEqual([{ kind: 'text', text: 'See ' }])
+  expect(accumulator.snapshotParts()[0]).toMatchObject({ text: 'See <cinna_attach>/reports/q3' })
+})

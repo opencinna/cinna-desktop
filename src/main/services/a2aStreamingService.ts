@@ -190,6 +190,8 @@ export interface RunAgentTurnInput {
   onClient?: (client: A2AClient) => void
   /** Surfaces the live task id as it's discovered (for `cancelTask`). */
   onTaskId?: (taskId: string) => void
+  /** See `RunInput.registerSnapshot`: what has streamed, for the quit flush. */
+  registerSnapshot?: (snapshot: () => TurnSnapshot) => void
 }
 
 /**
@@ -381,7 +383,8 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
     signal,
     onEvent: sink,
     onClient,
-    onTaskId
+    onTaskId,
+    registerSnapshot
   } = input
   const metadata =
     fileIds && fileIds.length > 0 ? { cinna_file_ids: fileIds } : undefined
@@ -413,6 +416,13 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
       }
     }
   })
+  // What the turn has streamed so far, for the quit flush: a remote task keeps
+  // running after the app closes, but the text the user watched arrive would
+  // otherwise leave with the process.
+  registerSnapshot?.(() => ({
+    parts: accumulator.snapshotParts({ streaming: true }),
+    notices: accumulator.snapshotNotices()
+  }))
 
   try {
     signal.throwIfAborted()

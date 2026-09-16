@@ -381,12 +381,18 @@ export class StreamPartsAccumulator {
     this.boundary = this.parts.length
   }
 
-  snapshotParts(): MessagePart[] {
+  /**
+   * `streaming` is for a read taken while the stream is still open — the quit
+   * flush. It also hides an attach tag that has opened but not closed, as the
+   * live view does; a part saved then is never revisited, so a tag's first
+   * half would otherwise stay in the transcript for good.
+   */
+  snapshotParts(opts?: { streaming?: boolean }): MessagePart[] {
     // Strip `<cinna_attach>` tags from text the agent streamed raw — the file
     // itself rides a separate `file` part / FilePart, so the literal tag must
     // not persist in the visible text. Only `text`-kind parts can carry it.
     return this.parts.map((p) =>
-      p.kind === 'text' ? { ...p, text: stripCinnaAttachTags(p.text) } : p
+      p.kind === 'text' ? { ...p, text: stripCinnaAttachTags(p.text, opts) } : p
     )
   }
 

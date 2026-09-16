@@ -12,7 +12,8 @@ vi.mock('../../../logger/logger', () => ({ createLogger: () => ({ debug: vi.fn()
 const peers: ManagedPeer[] = []
 const runs: { controller: AbortController; result: Promise<ManagedRunResult> }[] = []
 async function peer(options: PeerOptions = {}) { const p = await managedPeer(options); peers.push(p); return p }
-function start(p: ManagedPeer, patch: Partial<ManagedRunBinding> = {}, preaborted = false) {
+function start(p: ManagedPeer, patch: Partial<ManagedRunBinding> = {}, preaborted = false,
+  registerSnapshot?: Parameters<typeof runManagedSession>[2]['registerSnapshot']) {
   const controller = new AbortController()
   if (preaborted) controller.abort()
   const events: RunEvent[] = []
@@ -23,7 +24,8 @@ function start(p: ManagedPeer, patch: Partial<ManagedRunBinding> = {}, preaborte
   }
   const result = runManagedSession(binding, 'local-agent-peer', {
     chatId: 'chat-peer', wireContent: 'Complete the fixture goal.', signal: controller.signal,
-    onEvent: event => events.push(event)
+    onEvent: event => events.push(event),
+    ...(registerSnapshot ? { registerSnapshot } : {})
   }, { registerRequest: pendingRequests.register, requestTimeoutMs: 500, stopTimeoutMs: 80 })
   const finished = vi.fn()
   void result.then(finished)
@@ -101,6 +103,21 @@ describe('Managed run through the official SDK and actual HTTP/SSE', () => {
     await vi.waitFor(() => expect(run.finished).toHaveBeenCalled(), { timeout: 1_000 })
     await expect(run.result).resolves.toMatchObject({ text: 'The acknowledged turn finished.', stopReason: 'end_turn' })
     expect(p.sends('user.message')).toHaveLength(1)
+  })
+
+  it('offers what it streamed to the quit flush, the same parts the result returns', async () => {
+    // Mutation: drop `registerSnapshot` in `runManagedSession` → no snapshot.
+    const p = await peer({ onSend(event, remote) { if (event.type === 'user.message') {
+      remote.persist(user())
+      remote.send(message('final', 'Streamed before the quit.'), idle('end'))
+      return { data: [user()] }
+    } return undefined } })
+    let read: (() => { parts: unknown[] }) | undefined
+    const run = start(p, {}, false, (snapshot) => { read = snapshot })
+    expect(read).toBeDefined()
+    const result = await run.result
+    expect(read!().parts).toEqual(result.parts)
+    expect(result.parts).toEqual([expect.objectContaining({ kind: 'text', text: 'Streamed before the quit.' })])
   })
 
   it('does not kick off when page two of baseline history fails', async () => {

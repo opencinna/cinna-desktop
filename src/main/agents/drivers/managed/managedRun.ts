@@ -56,6 +56,10 @@ export async function runManagedSession(
     binding.validate()
     if (sessionId) binding.save({ sessionId, state })
   }
+  // What the turn has streamed so far, for the quit flush. `parts` only grows,
+  // which the flush's cursor relies on. The session itself is already saved
+  // `inflight` before the message goes out.
+  input.registerSnapshot?.(() => ({ parts: parts.slice(), notices: [] }))
   const emitPart = (part: MessagePart): void => {
     if (closed || stopping) return
     parts.push(part)

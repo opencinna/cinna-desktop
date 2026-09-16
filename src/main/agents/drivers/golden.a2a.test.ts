@@ -472,3 +472,37 @@ function heldTurn({
 }
 
 describeDriverContract('a2a', makeSubject)
+
+describe('the quit flush snapshot', () => {
+  it('reads what the pump has streamed while the stream is still open, through the driver', async () => {
+    // Mutation: drop `registerSnapshot` in `runAgentTurn`, or its forwarding in
+    // the driver → nothing is registered, and a quit loses the streamed text.
+    // `plain_text` held open after its first text frame.
+    const base = fixtureOf('plain_text')
+    const rpc = base.http.rpc
+    if (!rpc || !('sse' in rpc)) throw new Error('plain_text must be a streaming fixture')
+    const fixture: A2aFixture = { ...base, http: { ...base.http, rpc: { sse: rpc.sse.slice(0, 3), hold: true } } }
+    const agent = fakeA2aAgent(fixture)
+    const controller = new AbortController()
+    let read: (() => { parts: { kind: string; text: string }[] }) | undefined
+    let streamed: () => void = () => {}
+    const delta = new Promise<void>((resolve) => { streamed = resolve })
+    sessions.current = fakeSessionRepo()
+    vi.stubGlobal('fetch', agent.fetch)
+    agent.closeOnAbort(controller.signal)
+    const turn = a2aDriverFor(fixture).run(OWNER, rowOf(fixture), {
+      chatId: fixture.input.chatId,
+      wireContent: fixture.input.wireContent,
+      signal: controller.signal,
+      onEvent: (event) => { if (event.type === 'delta') streamed() },
+      registerSnapshot: (snapshot) => { read = snapshot }
+    })
+    await delta
+    expect(read).toBeDefined()
+    const held = read!().parts
+    expect(held.length).toBeGreaterThan(0)
+    controller.abort()
+    const result = await turn
+    expect(result.parts.slice(0, held.length)).toEqual(held)
+  })
+})
