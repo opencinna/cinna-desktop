@@ -142,7 +142,10 @@ describe('custom launcher through a real shell and ACP peer', () => {
     expect(start.env?.OPENAI_API_KEY).toBeUndefined()
     expect(start.env?.HOME).toBeUndefined()
     const initial = w.fake.received('initialize')[0].params!
+    // Background tasks only: a custom agent with native subagent sessions
+    // would move its spawn calls where the driver does not route them.
     expect(initial.clientCapabilities).toEqual({ elicitation: { form: {} },
+      _meta: { jetbrains: { air: { version: 1, capabilities: ['asyncTasks'] } } },
       fs: { readTextFile: false, writeTextFile: false }, terminal: false, auth: { terminal: false } })
     expect(w.fake.received('session/new')[0].params).toEqual({ cwd: REMOTE_CWD, mcpServers: [] })
     expect(w.fake.received('session/set_mode')).toEqual([])

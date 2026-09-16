@@ -2,13 +2,16 @@ import { chatRepo } from '../db/chats'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { sessionActivityHub } from '../services/sessionActivityHub'
+import { stopSessionActivity } from '../services/sessionActivityStop'
 import { getMainWindow } from '../index'
 import { ipcHandle } from './_wrap'
 import { createLogger } from '../logger/logger'
 import {
   SESSION_ACTIVITY_CHANGED_CHANNEL,
   type SessionActivityChangedPayload,
-  type SessionActivityGetResult
+  type SessionActivityGetResult,
+  type SessionActivityStopResult,
+  sessionActivityStopRefusal
 } from '../../shared/sessionActivity'
 
 const logger = createLogger('session-activity-ipc')
@@ -44,5 +47,15 @@ export function registerSessionActivityHandlers(): void {
       return { ok: false, code: 'chat_not_found' }
     }
     return { ok: true, snapshot: sessionActivityHub.snapshot(chatId) }
+  })
+
+  ipcHandle('sessionActivity:stop', async (_event, chatId: unknown, itemId: unknown): Promise<SessionActivityStopResult> => {
+    userActivation.requireActivated()
+    if (typeof chatId !== 'string') return sessionActivityStopRefusal('chat_not_found')
+    const chat = chatRepo.getOwned(getProfileScopeUserId(), chatId)
+    // A trashed chat's processes are not the user's to steer from here.
+    if (!chat || chat.deletedAt) return sessionActivityStopRefusal('chat_not_found')
+    if (typeof itemId !== 'string' || itemId === '') return sessionActivityStopRefusal('not_stoppable')
+    return stopSessionActivity(chatId, itemId)
   })
 }

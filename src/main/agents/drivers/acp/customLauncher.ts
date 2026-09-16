@@ -4,6 +4,15 @@ import { statSync } from 'node:fs'
 import { parseCustomAgentConfig } from '../../../../shared/customAgents'
 import type { AcpLauncher } from './acpLaunchers'
 import { ACP_PROTOCOL_VERSION } from './types'
+import { airClientMeta } from './acpActivity'
+
+/**
+ * Background work is reported to any custom agent that knows how. Native
+ * subagent sessions are not offered: an agent that implements them would move
+ * its spawn calls out of the parent's stream, and only the Claude adapter's
+ * shape is routed back.
+ */
+const CUSTOM_CLIENT_CAPABILITIES = { elicitation: { form: {} }, _meta: airClientMeta(['asyncTasks']) }
 
 export function createCustomLauncher(deps: {
   childEnv(): Promise<Record<string, string>>
@@ -18,7 +27,7 @@ export function createCustomLauncher(deps: {
           const key = createHash('sha256').update(JSON.stringify([ctx.userId, ctx.agentId, ctx.binding, config, ctx.accessToken])).digest('hex')
           return {
             spec: { command: 'ACP WebSocket', args: [], env: {}, cwd: config.cwd, key, remote: { ...config, accessToken: ctx.accessToken } },
-            init: { protocolVersion: ACP_PROTOCOL_VERSION, clientInfo: { name: 'cinna-desktop', version: '1' }, clientCapabilities: { elicitation: { form: {} } } },
+            init: { protocolVersion: ACP_PROTOCOL_VERSION, clientInfo: { name: 'cinna-desktop', version: '1' }, clientCapabilities: CUSTOM_CLIENT_CAPABILITIES },
             session: { mcpServers: [] }, setup: {}
           }
         }
@@ -32,7 +41,7 @@ export function createCustomLauncher(deps: {
         ])).digest('hex')
         return {
           spec: { command, args, env, cwd, key },
-          init: { protocolVersion: ACP_PROTOCOL_VERSION, clientInfo: { name: 'cinna-desktop', version: '1' }, clientCapabilities: { elicitation: { form: {} } } },
+          init: { protocolVersion: ACP_PROTOCOL_VERSION, clientInfo: { name: 'cinna-desktop', version: '1' }, clientCapabilities: CUSTOM_CLIENT_CAPABILITIES },
           session: { mcpServers: [] },
           setup: {}
         }

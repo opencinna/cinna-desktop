@@ -1,7 +1,7 @@
 import { WebSocket } from 'undici'
 import type { AnyMessage, InitializeRequest, InitializeResponse, Stream } from '@agentclientprotocol/sdk'
 import { connectAcpClient } from './acpClient'
-import { ACP_START_TIMEOUT_MS, ACP_STEER_METHOD, type AcpConnection, type AcpExit, type AcpSteerRequest, type AcpSteerResponse } from './types'
+import { ACP_ASYNC_TASK_STOP_METHOD, ACP_START_TIMEOUT_MS, ACP_STEER_METHOD, type AcpAsyncTaskStopRequest, type AcpAsyncTaskStopResponse, type AcpConnection, type AcpExit, type AcpSteerRequest, type AcpSteerResponse } from './types'
 import { parseRemoteAcpConfig, parseAcpAccessToken, type RemoteAcpConfig } from '../../../../shared/customAgents'
 
 /** Cinna-core/Python SDK profile: one UTF-8 JSON-RPC object per text frame. */
@@ -65,7 +65,7 @@ export async function startAcpWebSocketConnection(
   })
   const stream: Stream = { readable, writable }
   // Bind the reader before open so opening notifications cannot be lost.
-  const { connection, bindSession, observeSession, clearRouting } = connectAcpClient(stream, options.preBindWindowMs, options.preBindLimit)
+  const { connection, bindSession, observeSession, aliasSession, clearRouting } = connectAcpClient(stream, options.preBindWindowMs, options.preBindLimit)
   const dispose = async (): Promise<void> => { close(); clearRouting(); connection.close() }
   void connection.closed.then(() => { close(); clearRouting() })
   const abort = (): void => close(new Error('The ACP connection was canceled.'))
@@ -85,7 +85,7 @@ export async function startAcpWebSocketConnection(
     if (!alive) throw failure ?? new Error('The ACP connection is closed.')
     const call = connection.agent
     return {
-      pid: undefined, initialized, get alive() { return alive }, exited, bindSession, observeSession,
+      pid: undefined, initialized, get alive() { return alive }, exited, bindSession, observeSession, aliasSession,
       newSession: (params) => call.request('session/new', params),
       loadSession: (params) => call.request('session/load', params),
       setSessionMode: (params) => call.request('session/set_mode', params),
@@ -93,6 +93,7 @@ export async function startAcpWebSocketConnection(
       prompt: (params) => call.request('session/prompt', params),
       cancel: (sessionId) => call.notify('session/cancel', { sessionId }),
       steer: (params) => call.request<AcpSteerResponse, AcpSteerRequest>(ACP_STEER_METHOD, params),
+      stopAsyncTask: (params) => call.request<AcpAsyncTaskStopResponse, AcpAsyncTaskStopRequest>(ACP_ASYNC_TASK_STOP_METHOD, params),
       stderrTail: () => failure?.message ?? '', dispose
     }
   } catch (error) {

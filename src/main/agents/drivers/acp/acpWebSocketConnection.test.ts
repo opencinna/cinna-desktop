@@ -25,6 +25,11 @@ describe('remote ACP over a real WebSocket', () => {
     const connection = await pending
     expect(peer.headers).toEqual([{ authorization: 'Bearer acp_fixture_secret', url: '/acp/fixture-connector', origin: undefined }])
     expect(peer.frames.map((frame) => frame.method)).toEqual(['initialize'])
+    // The AIR extension reaches the remote peer as the launcher wrote it.
+    expect((peer.frames[0].params as { clientCapabilities?: unknown }).clientCapabilities).toMatchObject({
+      elicitation: { form: {} },
+      _meta: { jetbrains: { air: { version: 1, capabilities: ['asyncTasks'] } } }
+    })
     expect(connection.initialized.agentInfo?.name).toBe('cinna-core')
     expect(connection.pid).toBeUndefined()
     const session = await connection.newSession({ cwd: '/app/workspace', mcpServers: [] })

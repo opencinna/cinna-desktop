@@ -77,6 +77,10 @@ import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } fro
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
 import { toElicitationContent, toInputQuestions } from './acpQuestions'
 import type { AcpConnection, AcpLauncherId, AcpProcessPool, AcpSessionHandlers } from './types'
+import { createSessionActivityRegistry, SubagentFrames, type SessionActivityRegistry } from './acpActivity'
+import type { SessionActivityReporter } from '../../../../shared/sessionActivity'
+import type { SessionActivityStopper } from '../../../services/sessionActivityStop'
+import { createAcpActivityStopper } from './acpActivityStop'
 import { createFollowUpGate, deliverHeld, type FollowUpGate, type HeldHandover, type HeldTraffic } from './acpFollowUp'
 import {
   createSessionObservation,
@@ -166,6 +170,12 @@ export interface AcpDriverDeps {
    * {@link sessionTraffic}, as before follow-up turns existed.
    */
   openFollowUp?: FollowUpOpener
+  /**
+   * Where the subagents and background processes a session reports go (the
+   * session activity hub). Fed from turns and from between them alike.
+   * Absent: nothing is reported, and subagent frames are still routed.
+   */
+  activity?: SessionActivityReporter
   /** Override how long a follow-up turn may stay silent before it is over. Tests only. */
   followUpQuietMs?: number
   /** Override the turn ceiling. Tests only. */
@@ -275,7 +285,12 @@ interface ObservedSession {
 
 const NOTHING_HELD: HeldHandover = { replay: () => {}, refuse: () => {}, giveBack: () => {} }
 
-function createSessionObservers(sinkFor: SessionTrafficSinkFactory, gateFor?: FollowUpGateFactory): SessionObservers {
+function createSessionObservers(
+  sinkFor: SessionTrafficSinkFactory,
+  activity: SessionActivityRegistry,
+  gateFor?: FollowUpGateFactory
+): SessionObservers {
+  const activitySessions = activity
   const byConnection = new WeakMap<AcpConnection, Map<string, ObservedSession>>()
   /**
    * Tool call ids each session's turns used, per connection: a `tool_call`
@@ -331,7 +346,19 @@ function createSessionObservers(sinkFor: SessionTrafficSinkFactory, gateFor?: Fo
         } })
       }
       const sink = gate?.sink ?? activity
-      const observation = createSessionObservation(scope, sink)
+      // Activity is read as it arrives, before the gate: what the gate holds
+      // for a follow-up may yet be dropped, and a task's end must not be.
+      // The turn that replays it skips what was already read.
+      const feed = activitySessions.session(connection, scope.sessionId, { chatId: scope.chatId, agentId: scope.agentId })
+      const heard: SessionTrafficSink = {
+        update: (notification) => {
+          feed.observe(notification)
+          sink.update(notification)
+        },
+        permission: (params) => sink.permission(params),
+        elicitation: (params) => sink.elicitation(params)
+      }
+      const observation = createSessionObservation(scope, heard)
       const unobserve = connection.observeSession(scope.sessionId, observation.observer)
       const entry: ObservedSession = { scope, observation, unobserve, sink, ...(gate ? { gate } : {}) }
       sessions.set(scope.sessionId, entry)
@@ -346,6 +373,7 @@ function createSessionObservers(sinkFor: SessionTrafficSinkFactory, gateFor?: Fo
       return true
     },
     forgetChat: (chatId, agentId) => {
+      activitySessions.forgetChat(chatId, agentId)
       const chat = byChat.get(chatId)
       if (!chat) return
       for (const [entry, sessions] of [...chat]) {
@@ -363,13 +391,17 @@ export interface AcpDriver extends AgentDriver {
    * named): the chat was trashed, or it no longer answers to that agent.
    */
   forgetChatSessions(chatId: string, agentId?: string): void
+  /** Stop for the background tasks its sessions report (installed by the app). */
+  readonly activityStopper: SessionActivityStopper
 }
 
 export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
   const parkedRuntimes = new Map<string, AcpRuntimeView>()
   const openFollowUp = deps.openFollowUp
+  const sessionActivity = createSessionActivityRegistry(deps.activity)
   const observers = createSessionObservers(
     deps.sessionTraffic ?? refusingSessionTrafficSink,
+    sessionActivity,
     openFollowUp && (({ connection, scope, armed, activity, knownToolCalls, forget }) => {
       // A turn with no chat scope of its own (an orchestrated call) has no
       // chat to show a follow-up in.
@@ -387,7 +419,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
           driverId: 'acp',
           scope: runScope,
           run: (io) => runFollowUp(deps, {
-            ...armed, chatId: scope.chatId, connection, sessionId: scope.sessionId, gate, knownToolCalls, parkedRuntimes
+            ...armed, chatId: scope.chatId, connection, sessionId: scope.sessionId, gate, knownToolCalls, parkedRuntimes, activity: sessionActivity
           }, io),
           wanted: () => gate.pending,
           abandon: (reason, options) => {
@@ -491,9 +523,9 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
 
       try {
         if (input.queueWhenBusy) return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, observers, steers: [], savedSession: null }), input.signal)
+          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, observers, activity: sessionActivity, steers: [], savedSession: null }), input.signal)
         return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, observers, steers: [], savedSession: null })
+          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, observers, activity: sessionActivity, steers: [], savedSession: null })
         )
       } catch (err) {
         // `turnLock.acquire` throws rather than queueing, and its message is
@@ -522,7 +554,9 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
 
     forgetChatSessions(chatId, agentId) {
       observers.forgetChat(chatId, agentId)
-    }
+    },
+
+    activityStopper: createAcpActivityStopper(sessionActivity)
   }
   return driver
 }
@@ -535,6 +569,8 @@ interface TurnContext {
   runtime: AcpRuntimeView
   parkedRuntimes: Map<string, AcpRuntimeView>
   observers: SessionObservers
+  /** The sessions' activity feeds, shared with the between-turn listener. */
+  activity: SessionActivityRegistry
   launcherId: AcpLauncherId
   plan: AcpLaunchPlan
   input: RunInput
@@ -950,6 +986,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       return input.signal.aborted ? finish(ctx, accumulator, sessionId, undefined) : fail(plan.spec.remote ? `Could not connect to the remote ACP agent: ${message}` : startFailureMessage(ctx.launcherId, message), message)
     }
 
+    const live = connection
+    const frames = new SubagentFrames((id) => ctx.activity.lookup(live, id))
     const handlers = {
       onUpdate: (notification: SessionNotification): void => {
         // The load replay, dropped whole: see the header. Not even the mode
@@ -959,16 +997,20 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         // reading it here would only give the fallback notice a stale value to
         // compare against.
         if (turn.replaying) return
-        if (notification.update.sessionUpdate === 'tool_call' || notification.update.sessionUpdate === 'tool_call_update') {
-          toolCallsSeen.add(notification.update.toolCallId)
+        observeActivity(ctx.activity, live, notification, { chatId, agentId: agent.id })
+        // A subagent's call the agent no longer announces is written in first.
+        for (const frame of frames.expand(notification)) {
+          if (frame.update.sessionUpdate === 'tool_call' || frame.update.sessionUpdate === 'tool_call_update') {
+            toolCallsSeen.add(frame.update.toolCallId)
+          }
+          trackToolCall(frame)
+          const update = stream.apply(frame)
+          if (update.modeId) reportedMode = update.modeId
+          emit(update.message)
+          // After the call is tracked, so a turn that starts with a tool call
+          // opens its window withdrawn rather than offering and withdrawing.
+          if (TURN_CONTENT.has(frame.update.sessionUpdate)) openSteering()
         }
-        trackToolCall(notification)
-        const update = stream.apply(notification)
-        if (update.modeId) reportedMode = update.modeId
-        emit(update.message)
-        // After the call is tracked, so a turn that starts with a tool call
-        // opens its window withdrawn rather than offering and withdrawing.
-        if (TURN_CONTENT.has(notification.update.sessionUpdate)) openSteering()
       },
       onPermission: (params: RequestPermissionRequest): Promise<RequestPermissionResponse> =>
         answerPermission(deps, ctx, { stream, emit, turn }, params),
@@ -1270,6 +1312,22 @@ export function exitListenerCount(connection: AcpConnection): number {
 /** The observers a follow-up turn's context carries: it arms and suspends nothing. */
 const NO_OBSERVERS: SessionObservers = { suspend: () => null, arm: () => {}, giveBack: () => false, forgetChat: () => {} }
 
+/** Hand one update to the activity feed of the session it belongs to (a child's goes to its parent's). */
+function observeActivity(
+  registry: SessionActivityRegistry,
+  connection: AcpConnection,
+  notification: SessionNotification,
+  scope: { chatId: string; agentId: string }
+): void {
+  try {
+    const feed = registry.lookup(connection, notification.sessionId) ??
+      registry.session(connection, notification.sessionId, scope)
+    feed.observe(notification)
+  } catch (err) {
+    logger.warn('an activity update could not be handed on', { error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
 interface FollowUpWorld extends ArmedTurn {
   chatId: string
   connection: AcpConnection
@@ -1277,6 +1335,7 @@ interface FollowUpWorld extends ArmedTurn {
   gate: FollowUpGate
   knownToolCalls: Set<string>
   parkedRuntimes: Map<string, AcpRuntimeView>
+  activity: SessionActivityRegistry
 }
 
 /**
@@ -1330,6 +1389,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     runtime: world.runtime,
     parkedRuntimes: world.parkedRuntimes,
     observers: NO_OBSERVERS,
+    activity: world.activity,
     launcherId: world.launcherId,
     plan: world.plan,
     input,
@@ -1417,23 +1477,27 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     grace.unref?.()
   }
 
+  const frames = new SubagentFrames((id) => world.activity.lookup(connection, id))
   const handlers: AcpSessionHandlers = {
     onUpdate: (notification) => {
       if (ended) return
       armQuiet()
-      const update = notification.update
-      if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
-        const id = update.toolCallId
-        world.knownToolCalls.add(id)
-        if (update.status === 'completed' || update.status === 'failed') {
-          toolsOpen.delete(id)
-          toolsDone.add(id)
-        } else if (!toolsDone.has(id) &&
-          (update.sessionUpdate === 'tool_call' || update.status === 'pending' || update.status === 'in_progress')) {
-          toolsOpen.add(id)
+      observeActivity(world.activity, connection, notification, { chatId, agentId: agent.id })
+      for (const frame of frames.expand(notification)) {
+        const update = frame.update
+        if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
+          const id = update.toolCallId
+          world.knownToolCalls.add(id)
+          if (update.status === 'completed' || update.status === 'failed') {
+            toolsOpen.delete(id)
+            toolsDone.add(id)
+          } else if (!toolsDone.has(id) &&
+            (update.sessionUpdate === 'tool_call' || update.status === 'pending' || update.status === 'in_progress')) {
+            toolsOpen.add(id)
+          }
         }
+        emit(stream.apply(frame).message)
       }
-      emit(stream.apply(notification).message)
       if (endsFollowUp(notification)) end('marker')
     },
     onPermission: (params) => {

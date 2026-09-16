@@ -76,7 +76,8 @@ import {
 import {
   SESSION_ACTIVITY_CHANGED_CHANNEL,
   type SessionActivityChangedPayload,
-  type SessionActivityGetResult
+  type SessionActivityGetResult,
+  type SessionActivityStopResult
 } from '../shared/sessionActivity'
 import type { ChatRouter } from '../shared/chatRouting'
 import { isRunEvent, type RunEvent } from '../shared/runEvents'
@@ -871,6 +872,9 @@ const api = {
   sessionActivity: {
     /** The chat's activity as it stands; `ok: false` for a chat this profile does not own. */
     get: (chatId: string): Promise<SessionActivityGetResult> => ipcRenderer.invoke('sessionActivity:get', chatId),
+    /** Stop one running item. Every refusal is `ok: false` with a sentence to show. */
+    stop: (chatId: string, itemId: string): Promise<SessionActivityStopResult> =>
+      ipcRenderer.invoke('sessionActivity:stop', chatId, itemId),
     /** Fires whenever a chat's activity changes, with its new snapshot. Returns an unsubscribe function. */
     onChanged: (handler: (payload: SessionActivityChangedPayload) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, payload: SessionActivityChangedPayload): void => handler(payload)

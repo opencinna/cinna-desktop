@@ -280,6 +280,14 @@ describe('the Claude launcher', () => {
     expect(p.init.clientCapabilities?.elicitation).toEqual({ form: {} })
   })
 
+  it('asks for background tasks and native subagent sessions beside elicitation', async () => {
+    const p = plan(await createClaudeLauncher(deps).plan(CTX))
+    expect(p.init.clientCapabilities).toEqual({
+      elicitation: { form: {} },
+      _meta: { jetbrains: { air: { version: 1, capabilities: ['asyncTasks', 'nativeSubagentSessions'] } } }
+    })
+  })
+
   it('carries the folder’s prompt and the isolation pair as SDK options', async () => {
     const p = plan(await createClaudeLauncher(deps).plan(CTX))
     const options = (p.session.meta?.claudeCode as { options: Record<string, unknown> }).options

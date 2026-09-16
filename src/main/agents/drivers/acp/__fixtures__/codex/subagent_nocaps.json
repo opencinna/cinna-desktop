@@ -1,0 +1,491 @@
+{
+  "recording": "session_activity/codex-q6-nocaps-subagent.ndjson",
+  "note": "promptReturnedAtIndex: notifications at or after this index arrived after the session/prompt response. Codex subagent WITHOUT any AIR capability (codex-acp 1.11.0, codex-cli 0.154.0-alpha.6.2): no subagent_spawned, no child-session frames. The root session gets tool calls for subAgentActivity items instead: \"Start subagent <name>\" and \"Complete subagent <name>\", each with _meta.codex.subagent {threadId, path, activity}. The model waited with the wait collaboration call, whose receiverThreadIds and agentsStates were empty. available_commands_update dropped.",
+  "promptReturnedAtIndex": 29,
+  "notifications": [
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "codex": {
+            "threadStatus": {
+              "type": "active",
+              "activeFlags": []
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": "I"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": "’ll"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": " run"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": " the"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": " command"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": " in"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": " a"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": " sub"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": "-agent"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": " and"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": " wait"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": " for"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": " its"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": " result"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1d9e532887d28a13308dd8369c36",
+        "content": {
+          "type": "text",
+          "text": ".\n"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "commentary"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "title": "Start subagent shell_probe",
+        "kind": "other",
+        "toolCallId": "call_PByelmehd63j0DIzDuhMqBqy",
+        "status": "in_progress",
+        "rawInput": {
+          "agentThreadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
+          "agentPath": "/root/shell_probe",
+          "activityKind": "started"
+        },
+        "_meta": {
+          "codex": {
+            "subagent": {
+              "threadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
+              "path": "/root/shell_probe",
+              "activity": "started"
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_PByelmehd63j0DIzDuhMqBqy",
+        "status": "completed",
+        "rawInput": {
+          "agentThreadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
+          "agentPath": "/root/shell_probe",
+          "activityKind": "started"
+        },
+        "_meta": {
+          "codex": {
+            "subagent": {
+              "threadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
+              "path": "/root/shell_probe",
+              "activity": "started"
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17324,
+        "size": 258400
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_I2oAbH9d6nB9OaaOBAoQ1GQt",
+        "kind": "other",
+        "title": "wait",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+          "receiverThreadIds": [],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null,
+          "status": "inProgress"
+        },
+        "_meta": {
+          "codex": {
+            "collaboration": {
+              "tool": "wait",
+              "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+              "receiverThreadIds": []
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "title": "Complete subagent shell_probe",
+        "kind": "other",
+        "toolCallId": "subagent-completed-01a0ac6b-b960-7743-b02b-559a81de1171",
+        "status": "in_progress",
+        "rawInput": {
+          "agentThreadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
+          "agentPath": "/root/shell_probe",
+          "activityKind": "completed"
+        },
+        "_meta": {
+          "codex": {
+            "subagent": {
+              "threadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
+              "path": "/root/shell_probe",
+              "activity": "completed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "subagent-completed-01a0ac6b-b960-7743-b02b-559a81de1171",
+        "status": "completed",
+        "rawInput": {
+          "agentThreadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
+          "agentPath": "/root/shell_probe",
+          "activityKind": "completed"
+        },
+        "_meta": {
+          "codex": {
+            "subagent": {
+              "threadId": "01a0ac6b-b956-75f2-a9aa-990c4307d02a",
+              "path": "/root/shell_probe",
+              "activity": "completed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_I2oAbH9d6nB9OaaOBAoQ1GQt",
+        "title": "wait",
+        "status": "completed",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+          "receiverThreadIds": [],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null,
+          "status": "completed"
+        },
+        "_meta": {
+          "codex": {
+            "collaboration": {
+              "tool": "wait",
+              "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+              "receiverThreadIds": []
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17367,
+        "size": 258400
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1dabc26887d291c905674a6324c5",
+        "content": {
+          "type": "text",
+          "text": "sub"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "final_answer"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_05d6835be5d49a17016aab1dabc26887d291c905674a6324c5",
+        "content": {
+          "type": "text",
+          "text": "-ok"
+        },
+        "_meta": {
+          "codex": {
+            "phase": "final_answer"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17436,
+        "size": 258400
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "codex": {
+            "threadStatus": {
+              "type": "idle"
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Spawn a sub-agent (spawn_agent tool) whose task is: run the shell command `sleep 3 && echo sub-ok` and report its output. Wait for it, then tell me its result in one short line. If you have no sub-agent tool, say 'no-subagent-tool'."
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Run shell command via sub-agent"
+      }
+    }
+  ]
+}

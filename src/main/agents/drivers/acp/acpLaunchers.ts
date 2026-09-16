@@ -66,6 +66,7 @@ import { buildEngineConfig, digestEngineConfig } from '../../../engine/configGen
 import { createLogger } from '../../../logger/logger'
 import type { ReadinessOptions } from '../driver'
 import { ACP_PROTOCOL_VERSION, type AcpLaunchSpec, type AcpLauncherId } from './types'
+import { airClientMeta } from './acpActivity'
 
 const logger = createLogger('acp-launcher')
 
@@ -449,7 +450,11 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
           // Without it the adapter puts that tool in `disallowedTools`, and the
           // agent silently loses the ability to ask — the one capability the
           // in-process runner never had and this one gains.
-          clientCapabilities: { elicitation: { form: {} } },
+          // `_meta.jetbrains.air`: report background work and subagents
+          // (`acpActivity.ts`). With native subagent sessions a subagent's
+          // frames arrive under its own session id; the driver routes them
+          // back to the parent's turn.
+          clientCapabilities: { elicitation: { form: {} }, _meta: airClientMeta(['asyncTasks', 'nativeSubagentSessions']) },
           clientInfo: CLIENT_INFO
         },
         session: {

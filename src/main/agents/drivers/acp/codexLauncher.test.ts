@@ -32,6 +32,15 @@ describe('Codex ACP launcher', () => {
     expect(plan.init.clientCapabilities?.elicitation).toEqual({ form: {} })
   })
 
+  it('asks for background tasks only: native subagent sessions would hide the spawn call', async () => {
+    const plan = await createCodexLauncher(deps()).plan(context)
+    if (isRefusal(plan)) throw new Error(plan.error)
+    expect(plan.init.clientCapabilities).toEqual({
+      elicitation: { form: {} },
+      _meta: { jetbrains: { air: { version: 1, capabilities: ['asyncTasks'] } } }
+    })
+  })
+
   it('replaces pooled processes when prompt, model, effort, approval or CLI changes', async () => {
     const baseline = await createCodexLauncher(deps()).plan(context)
     if (isRefusal(baseline)) throw new Error(baseline.error)

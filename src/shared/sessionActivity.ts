@@ -99,3 +99,29 @@ export interface SessionActivityChangedPayload {
 export type SessionActivityGetResult =
   | { ok: true; snapshot: SessionActivitySnapshot }
   | { ok: false; code: 'chat_not_found' }
+
+/**
+ * `sessionActivity:stop(chatId, itemId)` stops one running item. Why a stop did not happen. Answered as data, never thrown.
+ *
+ * - `already_ended` — the item had ended (or ended while the request ran).
+ * - `not_stoppable` — nothing here can stop it (any more).
+ * - `unavailable` — the agent's process did not answer in time, or is gone.
+ * - `chat_not_found` — not a chat of the active profile, or it is trashed.
+ */
+export type SessionActivityStopFailure = 'already_ended' | 'not_stoppable' | 'unavailable' | 'chat_not_found'
+
+export type SessionActivityStopResult =
+  | { ok: true }
+  | { ok: false; code: SessionActivityStopFailure; reason: string }
+
+/** The sentence the renderer shows for each refusal. */
+export const SESSION_ACTIVITY_STOP_REASONS: Record<SessionActivityStopFailure, string> = {
+  already_ended: 'This process had already ended.',
+  not_stoppable: 'This process can no longer be stopped from here.',
+  unavailable: 'The agent did not answer. Try again in a moment.',
+  chat_not_found: 'This chat is no longer available.'
+}
+
+export function sessionActivityStopRefusal(code: SessionActivityStopFailure): SessionActivityStopResult {
+  return { ok: false, code, reason: SESSION_ACTIVITY_STOP_REASONS[code] }
+}

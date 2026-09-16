@@ -149,6 +149,24 @@ export interface AcpSteerResponse {
   [key: string]: unknown
 }
 
+/**
+ * The AIR extension's request to stop one background task
+ * (`drafts/session_activity/phase0_findings.md` Q4). Both adapters send the
+ * task's `stopped` state update before they answer; an unknown session or task
+ * answers `stopped: false`.
+ */
+export const ACP_ASYNC_TASK_STOP_METHOD = '_session/async_task/stop'
+
+export interface AcpAsyncTaskStopRequest {
+  sessionId: string
+  asyncTaskId: string
+}
+
+export interface AcpAsyncTaskStopResponse {
+  stopped?: boolean
+  [key: string]: unknown
+}
+
 export interface AcpConnection {
   readonly pid: number | undefined
   /** The agent's `initialize` answer. */
@@ -171,6 +189,8 @@ export interface AcpConnection {
    * agent does not implement it.
    */
   steer(params: AcpSteerRequest): Promise<AcpSteerResponse>
+  /** `_session/async_task/stop` ({@link ACP_ASYNC_TASK_STOP_METHOD}). Rejects like any request. */
+  stopAsyncTask(params: AcpAsyncTaskStopRequest): Promise<AcpAsyncTaskStopResponse>
 
   /**
    * Route one session's traffic to `handlers` until the returned function runs.
@@ -195,6 +215,14 @@ export interface AcpConnection {
    * prompt) must unobserve and bind first.
    */
   observeSession(sessionId: string, observer: AcpSessionObserver): () => void
+
+  /**
+   * Route a child session's traffic (a subagent's own session) to whoever
+   * hears `parentSessionId`, until the returned function runs or the
+   * connection closes. The frames are delivered unchanged — they still name
+   * the child. A child that is itself bound or observed keeps its own traffic.
+   */
+  aliasSession(childSessionId: string, parentSessionId: string): () => void
 
   /** The last stderr lines, for an error message. */
   stderrTail(): string

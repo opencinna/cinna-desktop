@@ -37,6 +37,7 @@ vi.mock('../index', () => ({ getMainWindow: () => ({ isDestroyed: () => false, w
 
 const { registerSessionActivityHandlers } = await import('./session_activity.ipc')
 const { sessionActivityHub } = await import('../services/sessionActivityHub')
+const { installSessionActivityStopper } = await import('../services/sessionActivityStop')
 
 const event = {} as IpcMainInvokeEvent
 const invoke = (channel: string, ...args: unknown[]): unknown => handlers.get(channel)!(event, ...args)
@@ -118,5 +119,57 @@ describe('the session activity push', () => {
     owned.activated = false
     sessionActivityHub.report('mine', 'agent', start('y'))
     expect(send).not.toHaveBeenCalled()
+  })
+})
+
+describe('sessionActivity:stop', () => {
+  const stops: [string, string][] = []
+  const stoppable = (id: string) => ({ ...start(id), canStop: true })
+  installSessionActivityStopper('test', {
+    stop: async (chatId, item) => { stops.push([chatId, item.id]); return 'stopped' }
+  })
+  beforeEach(() => { stops.length = 0 })
+
+  it('stops an owned chat\'s running item through its provider', async () => {
+    sessionActivityHub.report('mine', 'agent', stoppable('bg'))
+    expect(await invoke('sessionActivity:stop', 'mine', 'bg')).toEqual({ ok: true })
+    expect(stops).toEqual([['mine', 'bg']])
+  })
+
+  it.each([
+    ['another profile\'s chat', 'theirs'],
+    ['a non-string chat id', 42]
+  ])('refuses %s as data, stopping nothing', async (_label, chatId) => {
+    sessionActivityHub.report('theirs', 'agent', stoppable('bg'))
+    expect(await invoke('sessionActivity:stop', chatId, 'bg')).toEqual({
+      ok: false, code: 'chat_not_found', reason: 'This chat is no longer available.'
+    })
+    expect(stops).toEqual([])
+  })
+
+  it('refuses a trashed chat as chat_not_found', async () => {
+    sessionActivityHub.report('mine', 'agent', stoppable('bg'))
+    owned.trashed.add('mine')
+    expect(await invoke('sessionActivity:stop', 'mine', 'bg')).toMatchObject({ ok: false, code: 'chat_not_found' })
+    expect(stops).toEqual([])
+  })
+
+  it.each([['an unknown item', 'nope'], ['a non-string item id', 7]])('refuses %s as not_stoppable', async (_label, itemId) => {
+    sessionActivityHub.report('mine', 'agent', stoppable('bg'))
+    expect(await invoke('sessionActivity:stop', 'mine', itemId)).toMatchObject({
+      ok: false, code: 'not_stoppable', reason: 'This process can no longer be stopped from here.'
+    })
+    expect(stops).toEqual([])
+  })
+
+  it('answers already_ended for an item that has ended', async () => {
+    sessionActivityHub.report('mine', 'agent', stoppable('bg'))
+    sessionActivityHub.report('mine', 'agent', { type: 'end', id: 'bg', state: 'completed' })
+    expect(await invoke('sessionActivity:stop', 'mine', 'bg')).toMatchObject({ ok: false, code: 'already_ended' })
+  })
+
+  it('requires an activated session', async () => {
+    owned.activated = false
+    await expect(async () => invoke('sessionActivity:stop', 'mine', 'bg')).rejects.toThrow('Session not activated')
   })
 })

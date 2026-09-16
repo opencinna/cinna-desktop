@@ -1,0 +1,143 @@
+{
+  "recording": null,
+  "note": "SYNTHESIZED — derived from adapter code, not recorded. codex-acp 1.11.0 createCollabAgentToolCallUpdate / createCollabAgentToolCallCompleteUpdate (dist/index.js ~23115-23157) for collabAgentToolCall items on a session without nativeSubagentSessions: a spawnAgent call naming its receiver thread, then a wait call whose agentsStates report the child completed. The installed codex-cli emitted subAgentActivity items instead (see subagent_nocaps.json).",
+  "notifications": [
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_spawn",
+        "title": "spawnAgent",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": "Run the tests",
+          "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+          "receiverThreadIds": [],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null,
+          "status": "inProgress"
+        },
+        "_meta": {
+          "codex": {
+            "collaboration": {
+              "tool": "spawnAgent",
+              "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+              "receiverThreadIds": []
+            }
+          }
+        },
+        "kind": "other"
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_spawn",
+        "title": "spawnAgent",
+        "status": "completed",
+        "rawInput": {
+          "prompt": "Run the tests",
+          "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+          "receiverThreadIds": [
+            "01a0ac6b-c0de-7000-8000-000000000001"
+          ],
+          "agentsStates": {
+            "01a0ac6b-c0de-7000-8000-000000000001": {
+              "status": "pendingInit",
+              "message": null
+            }
+          },
+          "model": null,
+          "reasoningEffort": null,
+          "status": "completed"
+        },
+        "_meta": {
+          "codex": {
+            "collaboration": {
+              "tool": "spawnAgent",
+              "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+              "receiverThreadIds": [
+                "01a0ac6b-c0de-7000-8000-000000000001"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_wait",
+        "title": "wait",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+          "receiverThreadIds": [
+            "01a0ac6b-c0de-7000-8000-000000000001"
+          ],
+          "agentsStates": {
+            "01a0ac6b-c0de-7000-8000-000000000001": {
+              "status": "running",
+              "message": null
+            }
+          },
+          "model": null,
+          "reasoningEffort": null,
+          "status": "inProgress"
+        },
+        "_meta": {
+          "codex": {
+            "collaboration": {
+              "tool": "wait",
+              "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+              "receiverThreadIds": [
+                "01a0ac6b-c0de-7000-8000-000000000001"
+              ]
+            }
+          }
+        },
+        "kind": "other"
+      }
+    },
+    {
+      "sessionId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_wait",
+        "title": "wait",
+        "status": "completed",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+          "receiverThreadIds": [
+            "01a0ac6b-c0de-7000-8000-000000000001"
+          ],
+          "agentsStates": {
+            "01a0ac6b-c0de-7000-8000-000000000001": {
+              "status": "completed",
+              "message": "done"
+            }
+          },
+          "model": null,
+          "reasoningEffort": null,
+          "status": "completed"
+        },
+        "_meta": {
+          "codex": {
+            "collaboration": {
+              "tool": "wait",
+              "senderThreadId": "01a0ac6b-a1e6-7352-8c49-0515ef1748d5",
+              "receiverThreadIds": [
+                "01a0ac6b-c0de-7000-8000-000000000001"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

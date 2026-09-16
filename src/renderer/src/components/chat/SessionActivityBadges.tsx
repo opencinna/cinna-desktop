@@ -7,6 +7,7 @@ import type {
   SessionActivityState
 } from '../../../../shared/sessionActivity'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
+import type { SessionActivityStopControl } from '../../hooks/useSessionActivityStop'
 import { useHoverPopover } from '../ui/useHoverPopover'
 
 /**
@@ -90,11 +91,14 @@ export const metaPopoverClass = `z-50 w-80 max-w-[calc(100vw-16px)] rounded-lg b
 export function SessionActivityBadge({
   kind,
   items,
+  stop,
   className = ''
 }: {
   kind: ActivityBadgeKind
   /** The chat's whole snapshot, in the hub's order; this badge takes its kind. */
   items: readonly SessionActivityItem[]
+  /** Stop per item, owned by the strip so it outlives the popover. None: no Stop. */
+  stop?: SessionActivityStopControl
   /** Layout only (the container-query visibility the strip decides). */
   className?: string
 }): React.JSX.Element | null {
@@ -172,7 +176,7 @@ export function SessionActivityBadge({
                   <ul className="list-none m-0 p-0">
                     {group.rows.map((item) => (
                       <li key={item.id}>
-                        <ActivityRow item={item} />
+                        <ActivityRow item={item} stop={stop} />
                       </li>
                     ))}
                   </ul>
@@ -186,9 +190,35 @@ export function SessionActivityBadge({
   )
 }
 
-function ActivityRow({ item }: { item: SessionActivityItem }): React.JSX.Element {
+/** Bordered, in the danger tone: an action, not one more word of the row (§11). */
+const stopButtonClass = `shrink-0 grid px-1.5 rounded border leading-4 font-medium
+  border-[var(--color-danger)]/50 text-[var(--color-danger)]
+  hover:bg-[var(--color-danger)]/10 aria-disabled:cursor-default aria-disabled:hover:bg-transparent
+  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]`
+
+function StopButton({ item, stop }: { item: SessionActivityItem; stop: SessionActivityStopControl }): React.JSX.Element {
+  const pending = stop.pending(item.id)
+  // Both labels share one grid cell, so "Stop" → "Stopping…" keeps the width (§1).
+  // Not `disabled` while pending: that would drop focus out of the popover.
+  return (
+    <button
+      type="button"
+      aria-label={`${pending ? 'Stopping' : 'Stop'} ${item.title}`}
+      aria-disabled={pending || undefined}
+      onClick={() => { if (!pending) stop.stop(item.id) }}
+      className={stopButtonClass}
+    >
+      <span aria-hidden className={`[grid-area:1/1] text-center ${pending ? 'invisible' : ''}`}>Stop</span>
+      <span aria-hidden className={`[grid-area:1/1] text-center ${pending ? '' : 'invisible'}`}>Stopping…</span>
+    </button>
+  )
+}
+
+function ActivityRow({ item, stop }: { item: SessionActivityItem; stop?: SessionActivityStopControl }): React.JSX.Element {
   const now = useRelativeNow()
   const ended = item.state !== 'running'
+  const stoppable = !!stop && item.kind === 'background' && item.state === 'running' && item.canStop
+  const refusal = stop?.refusal(item.id) ?? null
   const ranFor = (item.endedAt ?? now).getTime() - item.startedAt.getTime()
   return (
     <div
@@ -199,10 +229,8 @@ function ActivityRow({ item }: { item: SessionActivityItem }): React.JSX.Element
         <span className="min-w-0 flex-1 truncate font-medium text-[var(--color-text)]" title={item.title}>
           {item.title}
         </span>
-        {/*
-          Phase 6 puts the per-item Stop here (when `item.canStop`), before the
-          state and time, so the elastic time stays last.
-        */}
+        {/* Before the state and time, so the elastic time stays last. */}
+        {stoppable && <StopButton item={item} stop={stop} />}
         {/* Last: the only part that rewrites itself while the popover is open. */}
         <span className="shrink-0 tabular-nums">
           <span className={STATE_TONE[item.state]}>{STATE_LABEL[item.state]}</span>
@@ -221,6 +249,10 @@ function ActivityRow({ item }: { item: SessionActivityItem }): React.JSX.Element
       )}
       {item.state === 'lost' && (
         <p className="text-[var(--color-text-muted)]">The agent&apos;s process ended before this finished.</p>
+      )}
+      {/* Only when a stop was refused, last in the row: it moves nothing above it (§1, §6). */}
+      {refusal && (
+        <p role="alert" className="text-[var(--color-danger)]">{refusal}</p>
       )}
     </div>
   )

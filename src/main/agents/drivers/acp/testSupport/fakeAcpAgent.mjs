@@ -278,6 +278,13 @@ const app = agent({ name: 'fake-acp' })
       return { outcome: 'injected' }
     })
   )
+  // The AIR extension's stop. Answers `stopped: false` (an unknown task) unless
+  // the script says otherwise; `emit` carries the state update that precedes it.
+  .onRequest(
+    '_session/async_task/stop',
+    (params) => params,
+    handler('asyncTaskStop', '_session/async_task/stop', () => ({ stopped: false }))
+  )
   .onNotification('session/cancel', (ctx) => {
     log({ dir: 'in', kind: 'notification', method: 'session/cancel', params: ctx.params })
     noteCancel(ctx.params?.sessionId)

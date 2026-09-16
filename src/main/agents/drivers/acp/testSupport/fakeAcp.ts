@@ -32,6 +32,7 @@
  *   // `after` is sent ~20 ms after the response, without blocking it:
  *   // "prompt":       { "after": [ …a turn the agent starts on its own… ] }
  *   "steer":           { "response": { "outcome": "injected" } }   // _session/steering
+ *   "asyncTaskStop":   { "response": { "stopped": true } }         // _session/async_task/stop
  *
  *   // `error` replaces the response, after whatever `emit` streamed:
  *   // "prompt":       { "error": { "code": -32603, "message": "model not found" } }
@@ -84,6 +85,8 @@ export interface FakeAcpScript {
   prompt?: FakeAcpHandlerScript
   /** `_session/steering`; answers `{ outcome: 'injected' }` unless `response` overrides it. */
   steer?: FakeAcpHandlerScript
+  /** `_session/async_task/stop`; answers `{ stopped: false }` unless `response` overrides it. */
+  asyncTaskStop?: FakeAcpHandlerScript
 }
 
 export interface FakeAcpHandlerScript {

@@ -1,4 +1,5 @@
 import { useSessionActivity } from '../../hooks/useSessionActivity'
+import { useSessionActivityStop } from '../../hooks/useSessionActivityStop'
 import { ChatTasksBadge } from './ChatTasksBadge'
 import { SessionActivityBadge } from './SessionActivityBadges'
 
@@ -25,6 +26,8 @@ const COLLAPSED = '@min-[40rem]/composer:hidden'
 export function SessionMetaBadges({ chatId }: { chatId: string }): React.JSX.Element {
   const activity = useSessionActivity(chatId)
   const items = activity.data?.items ?? []
+  // Here, not in a popover row: the rows unmount while a stop is in flight.
+  const stop = useSessionActivityStop(chatId)
   return (
     <div className="flex items-center gap-1.5" data-testid="session-meta-badges">
       {/*
@@ -33,9 +36,9 @@ export function SessionMetaBadges({ chatId }: { chatId: string }): React.JSX.Ele
         a measurement: pure CSS cannot flip back and forth as the badge it
         swaps changes the width it was measured against.
       */}
-      <SessionActivityBadge kind="subagent" items={items} className={SPLIT} />
-      <SessionActivityBadge kind="background" items={items} className={SPLIT} />
-      <SessionActivityBadge kind="all" items={items} className={COLLAPSED} />
+      <SessionActivityBadge kind="subagent" items={items} stop={stop} className={SPLIT} />
+      <SessionActivityBadge kind="background" items={items} stop={stop} className={SPLIT} />
+      <SessionActivityBadge kind="all" items={items} stop={stop} className={COLLAPSED} />
       <ChatTasksBadge chatId={chatId} />
     </div>
   )

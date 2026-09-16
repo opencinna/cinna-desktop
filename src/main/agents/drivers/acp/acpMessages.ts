@@ -323,6 +323,14 @@ export class AcpMessageStream {
       }
       case 'config_option_update':
         return this.configOptions(update)
+      case 'async_task_spawned':
+      case 'async_task_progress':
+      case 'async_task_state_update':
+      case 'subagent_spawned':
+      case 'subagent_state_update':
+        // Session activity, not transcript content: background processes and
+        // subagents are read by `acpActivity.ts` and shown beside the composer.
+        return {}
       default:
         // `usage_update`, `compaction_*`, `plan_update`, `plan_removed` and
         // whatever comes next. Silence is the contract, not an oversight.

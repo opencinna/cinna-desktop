@@ -57,7 +57,9 @@ import { createA2aDriver } from './a2aDriver'
 import { createA2aTurnRecoverer } from './a2aTurnRecoverer'
 import { createAcpDriver, respondToAcpAsk, type AcpFolderView } from './acp/acpDriver'
 import { acpProcessPool } from './acp/acpPool'
+import { sessionActivityHub } from '../../services/sessionActivityHub'
 import { installChatSessionForgetter } from '../../services/chatSessionRelease'
+import { installSessionActivityStopper } from '../../services/sessionActivityStop'
 export { acpProcessPool } from './acp/acpPool'
 import { developmentAgentContext, contextForDevelopmentAgent, restoreDevelopmentContext, isDevelopmentAgent, developmentPlanKey } from '../../localdev/developmentSessionService'
 import { localDevService } from '../../localdev/localDevService'
@@ -440,6 +442,8 @@ export const acpDriver = createAcpDriver({
   resolveRequest,
   withLock: (agentId, owner, fn, queuedSignal) => queuedSignal
     ? turnLock.withQueuedLock(agentId, owner, queuedSignal, fn) : turnLock.withLock(agentId, owner, fn),
+  // Subagents and background processes a session reports, for the composer's badges.
+  activity: sessionActivityHub,
   // A turn the agent starts between the user's turns becomes a run of the
   // chat. Imported when first needed: the service reaches this module back
   // through the run service.
@@ -454,6 +458,8 @@ export const acpDriver = createAcpDriver({
 })
 // A trashed chat, or one that answers to another agent now, stops hearing its old sessions.
 installChatSessionForgetter((chatId, agentId) => acpDriver.forgetChatSessions(chatId, agentId))
+// Stop on a background process the composer's popover lists.
+installSessionActivityStopper('acp', acpDriver.activityStopper)
 
 /** Relaunch recovery of `a2a` turns, with the driver's own credential resolution. */
 export const a2aTurnRecoverer = createA2aTurnRecoverer({

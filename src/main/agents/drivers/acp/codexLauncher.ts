@@ -4,6 +4,7 @@ import type { ClaudeApproval, CodexAuthStatus } from '../../../../shared/engine'
 import type { ReadinessOptions } from '../driver'
 import type { AcpLauncher } from './acpLaunchers'
 import { ACP_PROTOCOL_VERSION } from './types'
+import { airClientMeta } from './acpActivity'
 import { createLogger } from '../../../logger/logger'
 
 const logger = createLogger('codex-launcher')
@@ -80,7 +81,10 @@ export function createCodexLauncher(deps: CodexLauncherDeps): AcpLauncher {
         return {
           spec: { command: runtime.command, args: [...runtime.args, adapter], env, cwd: ctx.folder.path, key },
           init: { protocolVersion: ACP_PROTOCOL_VERSION,
-            clientCapabilities: { elicitation: { form: {} } },
+            // Background terminals only. Native subagent sessions would make
+            // codex-acp swallow the spawn call, and nothing would link the
+            // child to the chat; its subagents are read off the root session.
+            clientCapabilities: { elicitation: { form: {} }, _meta: airClientMeta(['asyncTasks']) },
             clientInfo: { name: 'cinna-desktop', version: '1' } },
           session: { mcpServers: [] },
           // Enforce on both new and loaded sessions, before any prompt.

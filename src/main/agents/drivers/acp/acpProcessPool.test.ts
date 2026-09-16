@@ -52,8 +52,10 @@ function stubConnection(pid: number): StubConnection {
     prompt: async () => ({ stopReason: 'end_turn' }),
     cancel: async () => undefined,
     steer: async () => ({ outcome: 'promptRequired' }),
+    stopAsyncTask: async () => ({ stopped: false }),
     bindSession: () => () => undefined,
     observeSession: () => () => undefined,
+    aliasSession: () => () => undefined,
     stderrTail: () => '',
     dispose: async () => {
       stub.disposals += 1

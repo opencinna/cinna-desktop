@@ -80,6 +80,17 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
    */
   const observers = new Map<string, AcpSessionObserver>()
   const preBind = new Map<string, PreBind>()
+  /**
+   * Sessions whose traffic belongs to another session's owner: a child the
+   * agent opened for a subagent (`subagent_spawned` names it on the parent)
+   * → the parent. A session that is itself bound or observed keeps its own
+   * traffic; otherwise its traffic, requests included, is routed as if it
+   * named the parent. Always stored resolved (a grandchild maps to the root),
+   * and cleared with the rest of the routing.
+   */
+  const aliases = new Map<string, string>()
+  const ownerOf = (sessionId: string): string =>
+    bound.has(sessionId) || observers.has(sessionId) ? sessionId : aliases.get(sessionId) ?? sessionId
 
   const closeWindow = (sessionId: string): void => {
     const held = preBind.get(sessionId)
@@ -111,7 +122,8 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
     return held
   }
 
-  const deliver = (sessionId: string, delivery: BufferedDelivery): void => {
+  const deliver = (addressed: string, delivery: BufferedDelivery): void => {
+    const sessionId = ownerOf(addressed)
     const handlers = bound.get(sessionId) ?? observers.get(sessionId)
     if (handlers) {
       try {
@@ -136,7 +148,8 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
    * agent's blocking request with a cancellation rather than leaving it hanging
    * on a turn that never existed.
    */
-  const handlersFor = (sessionId: string): Promise<AcpSessionHandlers | null> => {
+  const handlersFor = (addressed: string): Promise<AcpSessionHandlers | null> => {
+    const sessionId = ownerOf(addressed)
     const now = bound.get(sessionId) ?? observers.get(sessionId)
     if (now) return Promise.resolve(now)
     return new Promise((resolve) => holdingPen(sessionId).waiters.push(resolve))
@@ -183,6 +196,34 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
     if (!bound.has(sessionId)) drainPen(sessionId, observer)
     return () => {
       if (observers.get(sessionId) === observer) observers.delete(sessionId)
+    }
+  }
+
+  const aliasSession = (childId: string, parentId: string): (() => void) => {
+    const target = aliases.get(parentId) ?? parentId
+    if (childId === target) return () => {}
+    aliases.set(childId, target)
+    // What the child sent before anyone knew whose it was joins the parent's
+    // traffic: handed over now if the parent is heard, else moved into the
+    // parent's pen, in order, for its next bind.
+    const held = preBind.get(childId)
+    if (held && !bound.has(childId) && !observers.has(childId)) {
+      const handlers = bound.get(target) ?? observers.get(target)
+      if (handlers) drainPen(childId, handlers)
+      else {
+        preBind.delete(childId)
+        clearTimeout(held.timer)
+        const into = holdingPen(target)
+        for (const delivery of held.deliveries) {
+          if (into.deliveries.length >= preBindLimit) into.dropped += 1
+          else into.deliveries.push(delivery)
+        }
+        into.dropped += held.dropped
+        into.waiters.push(...held.waiters)
+      }
+    }
+    return () => {
+      if (aliases.get(childId) === target) aliases.delete(childId)
     }
   }
 
@@ -252,9 +293,10 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
   )
 
   const connection = app.connect(transport)
-  return { connection, bindSession, observeSession, clearRouting: () => {
+  return { connection, bindSession, observeSession, aliasSession, clearRouting: () => {
     for (const sessionId of [...preBind.keys()]) closeWindow(sessionId)
     bound.clear()
     observers.clear()
+    aliases.clear()
   } }
 }

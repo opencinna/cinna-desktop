@@ -95,6 +95,9 @@ import {
   ACP_START_TIMEOUT_MS,
   ACP_STDERR_TAIL_LINES,
   ACP_STEER_METHOD,
+  ACP_ASYNC_TASK_STOP_METHOD,
+  type AcpAsyncTaskStopRequest,
+  type AcpAsyncTaskStopResponse,
   type AcpSteerRequest,
   type AcpSteerResponse,
   type AcpConnection,
@@ -290,7 +293,7 @@ export async function startAcpConnection(
     killTree(child, 'SIGKILL')
     throw new Error(`${spec.command} was started without stdio pipes`)
   }
-  const { connection, bindSession, observeSession, clearRouting } = connectAcpClient(ndJsonStream(
+  const { connection, bindSession, observeSession, aliasSession, clearRouting } = connectAcpClient(ndJsonStream(
     Writable.toWeb(stdin) as WritableStream<Uint8Array>,
     Readable.toWeb(stdout) as ReadableStream<Uint8Array>
   ), preBindWindowMs, preBindLimit)
@@ -423,8 +426,11 @@ export async function startAcpConnection(
     cancel: (sessionId: string): Promise<void> => call.notify('session/cancel', { sessionId }),
     steer: (params: AcpSteerRequest): Promise<AcpSteerResponse> =>
       call.request<AcpSteerResponse, AcpSteerRequest>(ACP_STEER_METHOD, params),
+    stopAsyncTask: (params: AcpAsyncTaskStopRequest): Promise<AcpAsyncTaskStopResponse> =>
+      call.request<AcpAsyncTaskStopResponse, AcpAsyncTaskStopRequest>(ACP_ASYNC_TASK_STOP_METHOD, params),
     bindSession,
     observeSession,
+    aliasSession,
     stderrTail,
     dispose
   }

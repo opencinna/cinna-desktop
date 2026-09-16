@@ -431,6 +431,87 @@ describe('observing a session between turns', () => {
   })
 })
 
+describe('a child session routed to its parent', () => {
+  const texts = (updates: SessionNotification[]): string[] =>
+    updates.map((u) => (u.update as { content: { text: string } }).content.text)
+
+  it('delivers the child’s frames, unchanged, to whoever hears the parent — the turn, then the observer', async () => {
+    const fake = fakeAgent({
+      setMode: { emit: [textUpdate('ses_child', 'in the turn'), { kind: 'permission', sessionId: 'ses_child' }] },
+      setConfigOption: { emit: [textUpdate('ses_grandchild', 'between turns')] }
+    })
+    const connection = await start(fake, { preBindWindowMs: 60_000 })
+    connection.aliasSession('ses_child', 'ses_1')
+    connection.aliasSession('ses_grandchild', 'ses_child')
+    const turn = recorder()
+    const unbind = connection.bindSession('ses_1', turn)
+
+    await connection.setSessionMode({ sessionId: 'ses_1', modeId: 'default' })
+    await settle(50)
+    unbind()
+    const observer = recorder()
+    connection.observeSession('ses_1', observer)
+    await connection.setSessionConfigOption({ sessionId: 'ses_1', configId: 'x', value: 'y' })
+    await settle(50)
+
+    expect(texts(turn.updates)).toEqual(['in the turn'])
+    expect(turn.updates[0].sessionId).toBe('ses_child')
+    expect(turn.permissions.map((p) => p.sessionId)).toEqual(['ses_child'])
+    expect(fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'once' } })
+    // A grandchild resolves to the root.
+    expect(texts(observer.updates)).toEqual(['between turns'])
+    expect(observer.updates[0].sessionId).toBe('ses_grandchild')
+  })
+
+  it('hands the parent what the child sent before the alias existed', async () => {
+    const fake = fakeAgent({ setMode: { emit: [textUpdate('ses_child', 'early')] } })
+    const connection = await start(fake, { preBindWindowMs: 60_000 })
+    const turn = recorder()
+    connection.bindSession('ses_1', turn)
+    await connection.setSessionMode({ sessionId: 'ses_1', modeId: 'default' })
+    await settle(50)
+    expect(turn.updates).toHaveLength(0)
+
+    connection.aliasSession('ses_child', 'ses_1')
+
+    expect(texts(turn.updates)).toEqual(['early'])
+  })
+
+  it('moves the child’s pen into the parent’s when nobody hears the parent yet', async () => {
+    const fake = fakeAgent({ setMode: { emit: [textUpdate('ses_child', 'held')] } })
+    const connection = await start(fake, { preBindWindowMs: 60_000 })
+    await connection.setSessionMode({ sessionId: 'ses_1', modeId: 'default' })
+    await settle(50)
+    connection.aliasSession('ses_child', 'ses_1')
+    const turn = recorder()
+    connection.bindSession('ses_1', turn)
+
+    expect(texts(turn.updates)).toEqual(['held'])
+  })
+
+  it('stops routing once the alias is dropped, and a child that is bound itself keeps its traffic', async () => {
+    const fake = fakeAgent({
+      setMode: { emit: [textUpdate('ses_child', 'own')] },
+      setConfigOption: { emit: [textUpdate('ses_child', 'after')] }
+    })
+    const connection = await start(fake, { preBindWindowMs: 60 })
+    const drop = connection.aliasSession('ses_child', 'ses_1')
+    const parent = recorder()
+    const child = recorder()
+    connection.bindSession('ses_1', parent)
+    const unbindChild = connection.bindSession('ses_child', child)
+    await connection.setSessionMode({ sessionId: 'ses_1', modeId: 'default' })
+    await settle(50)
+    unbindChild()
+    drop()
+    await connection.setSessionConfigOption({ sessionId: 'ses_1', configId: 'x', value: 'y' })
+    await settle(200)
+
+    expect(texts(child.updates)).toEqual(['own'])
+    expect(parent.updates).toHaveLength(0)
+  })
+})
+
 describe('requests from the agent', () => {
   it('hands a permission to the session that owns it and returns the answer', async () => {
     const fake = fakeAgent({ setMode: { emit: [{ kind: 'permission', sessionId: 'ses_1' }] } })

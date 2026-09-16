@@ -18,6 +18,7 @@ import type {
 const push = vi.hoisted(() => ({ listener: null as null | ((p: SessionActivityChangedPayload) => void) }))
 const spies = vi.hoisted(() => ({
   getActivity: vi.fn(),
+  stopActivity: vi.fn(),
   listTasks: vi.fn()
 }))
 
@@ -25,6 +26,7 @@ const spies = vi.hoisted(() => ({
   app: { setTheme: async () => undefined },
   sessionActivity: {
     get: (chatId: string) => spies.getActivity(chatId),
+    stop: (chatId: string, itemId: string) => spies.stopActivity(chatId, itemId),
     onChanged: (listener: (p: SessionActivityChangedPayload) => void) => {
       push.listener = listener
       return () => {
@@ -103,6 +105,7 @@ const collapsed = byKind('all')
 
 beforeEach(() => {
   spies.getActivity.mockReset().mockResolvedValue({ ok: true, snapshot: { chatId: 'chat-1', items: [] } })
+  spies.stopActivity.mockReset().mockResolvedValue({ ok: true })
   spies.listTasks.mockReset().mockResolvedValue([])
   push.listener = null
 })
@@ -335,6 +338,116 @@ describe('the popover', () => {
     fireEvent.keyDown(trigger, { key: 'Escape' })
     expect(dialog()).toBeNull()
     expect(document.activeElement).toBe(trigger)
+  })
+})
+
+describe('stopping a background process', () => {
+  const dialog = (): HTMLElement => screen.getByRole('dialog', { name: 'Background processes' })
+  const stopButtons = (): HTMLElement[] => within(dialog()).queryAllByRole('button', { name: /^Stop(ping)? / })
+
+  /** A promise the test settles, for a stop still in flight. */
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((r) => { resolve = r })
+    return { promise, resolve }
+  }
+
+  async function opened(items: SessionActivityItem[]): Promise<void> {
+    await mount()
+    await send(items)
+    fireEvent.mouseEnter(background()!)
+    fireEvent.pointerMove(dialog())
+  }
+
+  it('is offered only on running background items that can be stopped, named after the item', async () => {
+    await opened([
+      item('yes', { title: 'npm run dev', canStop: true }),
+      item('no', { title: 'tail -f log' }),
+      item('sub', { kind: 'subagent', title: 'Explore', canStop: true }),
+      item('done', { title: 'build', canStop: true, state: 'completed', endedAt: T0 })
+    ])
+    expect(stopButtons().map((b) => b.getAttribute('aria-label'))).toEqual(['Stop npm run dev'])
+    // The collapsed badge's popover lists subagents too, and offers no Stop for them either.
+    fireEvent.mouseLeave(dialog())
+    fireEvent.mouseEnter(collapsed()!)
+    const all = screen.getByRole('dialog', { name: 'Session activity' })
+    expect(within(all).queryAllByRole('button', { name: /^Stop / }).map((b) => b.getAttribute('aria-label')))
+      .toEqual(['Stop npm run dev'])
+  })
+
+  it('asks main to stop the item, says Stopping… in the same width meanwhile, and lets the push end the row', async () => {
+    const answer = deferred<{ ok: true }>()
+    spies.stopActivity.mockReturnValue(answer.promise)
+    await opened([item('b1', { title: 'npm run dev', canStop: true }), item('b2', { title: 'sleep 9' })])
+    const button = within(dialog()).getByRole('button', { name: 'Stop npm run dev' })
+    fireEvent.click(button)
+
+    await waitFor(() => expect(spies.stopActivity).toHaveBeenCalledWith('chat-1', 'b1'))
+    const pending = await within(dialog()).findByRole('button', { name: 'Stopping npm run dev' })
+    expect(pending).toBe(button)
+    expect(pending.getAttribute('aria-disabled')).toBe('true')
+    // Both labels are always laid out; only which one shows changes.
+    const [idle, busy] = [...pending.querySelectorAll('span')]
+    expect(idle.textContent).toBe('Stop')
+    expect(idle.className).toContain('invisible')
+    expect(busy.textContent).toBe('Stopping…')
+    expect(busy.className).not.toContain('invisible')
+    // A second click while pending sends nothing.
+    fireEvent.click(pending)
+    expect(spies.stopActivity).toHaveBeenCalledTimes(1)
+
+    // Main pushes the stopped item before it answers.
+    await send([item('b2', { title: 'sleep 9' }), item('b1', { title: 'npm run dev', state: 'stopped', endedAt: T0 })])
+    await act(async () => { answer.resolve({ ok: true }) })
+    expect(stopButtons()).toEqual([])
+    expect(dialog().querySelector('[data-state="stopped"]')?.textContent).toContain('Stopped')
+    expect(within(dialog()).queryByRole('alert')).toBeNull()
+  })
+
+  it('shows a refusal under its row, last, with the popover still open, and clears it on the next try', async () => {
+    spies.stopActivity.mockResolvedValue({ ok: false, code: 'unavailable', reason: 'The agent did not answer. Try again in a moment.' })
+    await opened([item('b1', { title: 'npm run dev', canStop: true, detail: 'Serving on :5173' }), item('b2', { title: 'sleep 9', canStop: true })])
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Stop npm run dev' }))
+
+    const alert = await within(dialog()).findByRole('alert')
+    expect(alert.textContent).toBe('The agent did not answer. Try again in a moment.')
+    const row = dialog().querySelectorAll('[data-state]')[0]
+    expect(row.lastElementChild).toBe(alert)
+    // Only the row that was refused says so, and it can be tried again.
+    expect(within(dialog()).getAllByRole('alert')).toHaveLength(1)
+    const again = within(dialog()).getByRole('button', { name: 'Stop npm run dev' })
+
+    spies.stopActivity.mockReturnValue(new Promise(() => {}))
+    fireEvent.click(again)
+    await waitFor(() => expect(within(dialog()).queryByRole('alert')).toBeNull())
+  })
+
+  it('shows a thrown error in the user\'s words', async () => {
+    spies.stopActivity.mockRejectedValue(new Error("Error invoking remote method 'sessionActivity:stop': Error: Session not activated"))
+    await opened([item('b1', { title: 'npm run dev', canStop: true })])
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Stop npm run dev' }))
+    expect((await within(dialog()).findByRole('alert')).textContent).toBe('Session not activated')
+  })
+
+  it('keeps the refusal when the popover closes and opens again', async () => {
+    spies.stopActivity.mockResolvedValue({ ok: false, code: 'not_stoppable', reason: 'This process can no longer be stopped from here.' })
+    await opened([item('b1', { title: 'npm run dev', canStop: true })])
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Stop npm run dev' }))
+    await within(dialog()).findByRole('alert')
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Background processes' })).toBeNull()
+    fireEvent.mouseLeave(background()!)
+    fireEvent.mouseEnter(background()!)
+    expect(within(dialog()).getByRole('alert').textContent).toBe('This process can no longer be stopped from here.')
+  })
+
+  it('drops the Stop control when a pushed snapshot says the item cannot be stopped any more', async () => {
+    await opened([item('b1', { title: 'npm run dev', canStop: true }), item('b2', { title: 'sleep 9' })])
+    expect(stopButtons()).toHaveLength(1)
+    await send([item('b1', { title: 'npm run dev', canStop: false }), item('b2', { title: 'sleep 9' })])
+    expect(stopButtons()).toEqual([])
+    await send([item('b2', { title: 'sleep 9' }), item('b1', { title: 'npm run dev', canStop: true, state: 'completed', endedAt: T0 })])
+    expect(stopButtons()).toEqual([])
   })
 })
 
