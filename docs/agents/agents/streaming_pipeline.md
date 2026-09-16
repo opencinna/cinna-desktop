@@ -91,15 +91,17 @@ On stream completion (the runner):
   - parts   = accumulator.snapshotParts()
   - answer  = accumulator.answerText()    # concat of 'text'-kind parts
   - notices = accumulator.snapshotNotices()  # one entry per distinct notice part
-  - agentSessionRepo.upsert(...) only for a successful, non-aborted exchange
+  - agentSessionRepo.upsert(...) whenever the stream completes, a failed task state included; a throw skips it
   - return { text: answer, parts, notices, ... }
   ↓
-The direct-chat wrapper (streamToAgent), persistTurn past its cursor:
-  - For each notice not yet saved: messageRepo.saveTransition({ chatId, content, sourceAgentId })
-  - messageRepo.saveAssistant({ chatId, content: answer, parts })   # split around steers
-  - messageRepo.touchChat(chatId)
-  - on failure only: messageRepo.saveError(...) after the rows
-  - port.postMessage({ type: 'done', stopReason })   # 'canceled' if the request was aborted, else 'end_turn'
+The direct-chat wrapper (streamToAgent):
+  - persistTurn past its cursor:
+    - For each notice not yet saved: messageRepo.saveTransition({ chatId, content, sourceAgentId })
+    - messageRepo.saveAssistant({ chatId, content: answer, parts })   # split around steers
+    - messageRepo.touchChat(chatId)
+  - on failure only: messageRepo.saveError(...) after the rows,
+    then port.postMessage({ type: 'error', ... }) and return        # no 'done'
+  - otherwise: port.postMessage({ type: 'done', stopReason })   # 'canceled' if stopped, 'budget' on a budget ending, else 'end_turn'
 
 Notices are persisted *before* the assistant message so transcript ordering
 matches the on-the-wire order — startup pings sit above the answer they
@@ -111,7 +113,7 @@ preceded. Notices never appear in `messages.parts[]`; they live on their own
 
 `runAgentTurn` treats nonstream JSON-RPC error envelopes and failed/rejected/unfinished A2A task endings as failures. The direct wrapper never turns a failure into an empty success: it persists what the turn streamed, its steered user messages in place, and then the error row under the output it ended. A turn that ran for minutes and then failed would otherwise leave only the error.
 
-A task that ends `failed` carries its own answer as the error text. When that text equals the answer and the turn has parts, the error row says only "The agent reported that its task failed." — the answer is already a row above it, and repeating it would show the agent's words twice. The shortening is the row's alone: the error posted to the port uses the same generic sentence, but the job run's outcome keeps the agent's own reason. Input-required/auth-required report `needs_input`; canceled reports `canceled`. Its once-only `onFinished` callback runs after persistence and before close, with standalone job reporting as the default when no callback is supplied. The executor owns the final result and explicit runner completion policy; see [turn outcomes](../../chat/messaging/turn_completion.md).
+A task that ends `failed` (or `rejected`, or any other unfinished state) carries its own answer as the error text. When the error text equals the turn's `text` and the turn has parts, the wrapper replaces it with "The agent reported that its task failed." in two places: the error row and the `error` event posted to the port. The answer is already a row above the error, and repeating it would show the agent's words twice. The outcome passed to `finish()`, which the job run records, keeps the agent's own reason, because the run has no transcript row above it to carry that reason. Input-required/auth-required report `needs_input`; canceled reports `canceled`. Its once-only `onFinished` callback runs after persistence and before close, with standalone job reporting as the default when no callback is supplied. The executor owns the final result and explicit runner completion policy; see [turn outcomes](../../chat/messaging/turn_completion.md).
 
 ## Cancellation and session checkpoints
 
@@ -128,7 +130,7 @@ The wrapper writes a turn's rows when the runner returns, and at quit some never
 - **The flush reads a snapshot the driver offers.** `RunInput.registerSnapshot` hands the wrapper a function returning copies of the turn's parts, notices and steers. Only the ACP driver registers one; an A2A or Managed turn, and a `/run:` command, is still lost from the transcript if the app quits under it
 - **Only rows, not an outcome.** The flush records no turn result. A parked ask left open is expired by the boot cleanup (`taskInputRequestRepo.expireOpen`), which is acceptable because the question itself is now in the transcript
 - **Each turn has a persist cursor** — parts and steers saved so far by count, notices by `partKey`. Notices are tracked by key rather than position because `snapshotNotices` skips a notice whose text is still empty, so positions shift when it fills in. Every path that keeps output (the normal end, a failure, a throw, the quit flush) saves only what lies past the cursor, so a killed run that still returns does not write its turn twice. The cursor moves with each write, so a write that throws leaves it on what actually reached the transcript
-- **The cursor counts whole parts.** A part still growing when the flush runs keeps the text it had then; whatever the killed process adds to it afterwards is not saved. The cost is a clipped tail at quit, never a duplicate. A row saved past the cursor takes its `content` from its own slice, not from the turn's full `text`
+- **The cursor counts whole parts.** Any part the killed process adds to after the flush keeps the text it had then — usually the last one, but a tool part matched by its `toolId` can be an earlier one — and the addition is not saved. The cost is clipped text at quit, never a duplicate. A row saved past the cursor takes its `content` from its own slice, not from the turn's full `text`
 - **A runner that throws** has its snapshot flushed before the error row, so it keeps what it offered. A runner that registered no snapshot keeps nothing on a throw
 - **A flush that fails is logged, never thrown**, so one broken turn does not stop the rest of the quit handler
 

@@ -92,7 +92,7 @@ Returns `unavailable` unless the driver registered a `SteerFn` and the run is ne
 ### Persistence of a steered turn
 
 - `StreamPartsAccumulator.breakContinuation` sets a boundary: parts below it no longer absorb a same-kind fragment, except a `tool` part named by `toolId`, whose input can still fill in. Without it the text after the message merged into the text before it and persisted as one part.
-- `a2aStreamingService` — `saveTurnRows(chatId, agentId, turn, cursor)` saves, for each steer past the cursor, the parts from the cursor up to its `afterPart` as an assistant row (its `content` from `sliceText`: answer kinds, else everything), then the user row; then the remainder. An unsteered turn is one row. The cursor exists because a turn can be persisted twice — a flush at quit, then the result the killed run still returns — and a steer the flush passed is still saved ahead of every unsaved part it preceded. The failure branch saves the same rows, steers included, before `saveError`.
+- `a2aStreamingService` — `saveTurnRows(chatId, agentId, turn, cursor)` saves, for each steer past the cursor, the parts from the cursor up to its `afterPart` as an assistant row (its `content` from `sliceText`: answer kinds, else everything), then the user row; then the remainder. An unsteered turn is one row per pass. The cursor exists because a turn can be persisted twice — a flush at quit, then the result the killed run still returns — and a steer the flush passed is still saved ahead of every unsaved part it preceded. The failure branch saves the same rows, steers included, before `saveError`.
 
 ## Renderer Components
 

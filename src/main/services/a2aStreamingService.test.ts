@@ -20,6 +20,8 @@ const savedAssistant: Record<string, unknown>[] = []
 const runCompletions: { status: string; message?: string }[] = []
 /** Every row written, in insertion — and so `sortOrder` — order. */
 const rows: Record<string, unknown>[] = []
+/** Set to make the next assistant write throw, as a deleted chat's insert does. */
+const writes = { assistantFails: false }
 
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
@@ -28,6 +30,7 @@ vi.mock('../db/messages', () => ({
   messageRepo: {
     saveError: (i: { short: string }) => { saved.push(i); rows.push({ role: 'error', content: i.short }) },
     saveAssistant: (i: Record<string, unknown>) => {
+      if (writes.assistantFails) throw new Error('FOREIGN KEY constraint failed')
       savedAssistant.push(i)
       rows.push({ role: 'assistant', content: i.content, parts: i.parts })
     },
@@ -82,6 +85,7 @@ describe('a2aStreamingService.streamToAgent', () => {
     expect(savedAssistant.at(-1)).toMatchObject({ content: 'partial' })
   })
   beforeEach(() => {
+    writes.assistantFails = false
     saved.length = 0
     savedAssistant.length = 0
     runCompletions.length = 0
@@ -184,6 +188,22 @@ describe('a2aStreamingService.streamToAgent', () => {
     expect(p.posted.at(-1)).toEqual({ type: 'error', error: 'The agent reported that its task failed.', code: 'agent_task_failed' })
     // The job run still gets the agent's own reason.
     expect(runCompletions).toEqual([{ status: 'failed', message: 'Could not reach the ledger.' }])
+  })
+
+  it('posts one error when saving a failed turn’s rows throws', async () => {
+    // Mutation: post the error before `persistTurn` → the branch posts one and
+    // the `catch` a second.
+    writes.assistantFails = true
+    const p = fakePort()
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1', agentId: 'folder:abc', port: p.port,
+      run: async () => ({
+        text: 'half', parts: [{ kind: 'text', text: 'half' }], notices: [],
+        error: { message: 'The agent crashed.', raw: 'exit 1' }
+      })
+    })
+    expect(p.posted.filter((e) => e.type === 'error')).toHaveLength(1)
+    expect(saved).toHaveLength(1)
   })
 
   it('keeps what a runner offered before it threw', async () => {

@@ -268,10 +268,11 @@ function sliceText(parts: MessagePart[]): string {
  *
  * The cursor moves with each write, so a write that throws leaves it on what
  * actually reached the transcript and a later pass does not save it twice.
- * It counts whole parts: a part that keeps growing after a flush keeps the
- * text it had then. Only the quit flush is followed by more output — whatever
- * the killed process had already written — so the cost is a clipped tail at
- * quit, never a duplicate.
+ * It counts whole parts: a part saved by a flush keeps the text it had then,
+ * even if more is merged into it later — usually the last part, but a tool
+ * part matched by `toolId` can be an earlier one. Only the quit flush is
+ * followed by more output — whatever the killed process had already written —
+ * so the cost is clipped text at quit, never a duplicate.
  */
 function saveTurnRows(
   chatId: string,
@@ -691,15 +692,12 @@ export const a2aStreamingService = {
         const message = failure.message === result.text && result.parts.length > 0
           ? 'The agent reported that its task failed.'
           : failure.message
-        port.postMessage(
-          failure.code
-            ? { type: 'error', error: message, code: failure.code }
-            : { type: 'error', error: message }
-        )
         // **A failure keeps what it streamed**, and what the user said into
         // the turn is theirs whatever became of it: a turn that ran for
         // minutes and then failed would otherwise leave only the error row.
-        // The error goes last, under the output it ended.
+        // The error goes last, under the output it ended. Rows before the
+        // event: a write that throws reaches the `catch`, which posts the one
+        // error the renderer sees instead of a second one.
         persistTurn(chatId, agentId, result, cursor)
         messageRepo.saveError({
           chatId,
@@ -707,6 +705,11 @@ export const a2aStreamingService = {
           detail: failure.raw,
           code: failure.code
         })
+        port.postMessage(
+          failure.code
+            ? { type: 'error', error: message, code: failure.code }
+            : { type: 'error', error: message }
+        )
         // The job run keeps the agent's own reason; only the row was shortened.
         finish({ state: 'failed', text: result.text, error: { message: failure.message, code: failure.code } })
         return
