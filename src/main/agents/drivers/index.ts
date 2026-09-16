@@ -439,7 +439,18 @@ export const acpDriver = createAcpDriver({
   registerRequest: (input) => pendingRequests.register(input),
   resolveRequest,
   withLock: (agentId, owner, fn, queuedSignal) => queuedSignal
-    ? turnLock.withQueuedLock(agentId, owner, queuedSignal, fn) : turnLock.withLock(agentId, owner, fn)
+    ? turnLock.withQueuedLock(agentId, owner, queuedSignal, fn) : turnLock.withLock(agentId, owner, fn),
+  // A turn the agent starts between the user's turns becomes a run of the
+  // chat. Imported when first needed: the service reaches this module back
+  // through the run service.
+  openFollowUp: (request) => {
+    void import('../../services/followUpTurnService')
+      .then(({ followUpTurnService }) => followUpTurnService.open(request))
+      .catch((err: unknown) => {
+        logger.error('the follow-up turn service could not be loaded', { error: err instanceof Error ? err.message : String(err) })
+        request.abandon('the follow-up turn service could not be loaded')
+      })
+  }
 })
 // A trashed chat, or one that answers to another agent now, stops hearing its old sessions.
 installChatSessionForgetter((chatId, agentId) => acpDriver.forgetChatSessions(chatId, agentId))

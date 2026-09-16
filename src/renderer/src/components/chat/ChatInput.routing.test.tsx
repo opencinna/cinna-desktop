@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { ChatRouter } from '../../../../shared/chatRouting'
@@ -16,6 +16,7 @@ import type { ChatRouter } from '../../../../shared/chatRouting'
 
 const agentList = vi.hoisted(() => ({ current: [] as unknown[] }))
 const chatDetail = vi.hoisted(() => ({ current: null as unknown }))
+const activity = vi.hoisted(() => ({ current: [] as unknown }))
 const onDemandAgents = vi.hoisted(() => ({ current: [] as Array<{ agentId: string }> }))
 const spies = vi.hoisted(() => ({
   list: vi.fn(async () => agentList.current),
@@ -58,6 +59,7 @@ const api: Record<string, unknown> = new Proxy(
         })
       }
       if (ns === 'run') return namespace({ start: spies.runSend, cancel: () => undefined })
+      if (ns === 'sessionActivity') return namespace({ get: async () => activity.current })
       return namespace({})
     }
   }
@@ -166,6 +168,88 @@ describe('the composer badge — who answers', () => {
     await mount({ router: 'coordinator', attached: ['a-1', 'a-2'] })
     expect(badge()?.getAttribute('aria-label')).toBe('Coordinated by your local model')
     expect(badge()?.textContent).toContain('Model routes')
+  })
+})
+
+describe('the session meta badges', () => {
+  it('sit left of the router badge, in the cluster that never wraps', async () => {
+    activity.current = {
+      ok: true,
+      snapshot: {
+        chatId: 'chat-1',
+        items: [{
+          id: 'b1', kind: 'background', agentId: 'a-1', title: 'npm test', detail: null, state: 'running',
+          startedAt: new Date(), endedAt: null, outputPath: null, canStop: false
+        }]
+      }
+    }
+    try {
+      await mount({ router: 'direct', agentId: 'a-1' })
+      // The split badge and the collapsed one (jsdom applies no container query).
+      const running = await screen.findAllByRole('button', { name: '1 background process running' })
+      expect(running).toHaveLength(2)
+      const router = badge()!
+      for (const b of running) {
+        // Mutation: render the strip after RouterBadge and this is PRECEDING.
+        expect(b.compareDocumentPosition(router) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+        expect(router.closest('.shrink-0')?.contains(b)).toBe(true)
+      }
+      // The row is the container the badges collapse by.
+      expect(router.closest('.shrink-0')?.parentElement?.className).toContain('@container/composer')
+    } finally {
+      activity.current = []
+    }
+  })
+})
+
+describe('agent chip width', () => {
+  // The chip row never wraps (ux_rules §1): a session badge arriving on the
+  // right would otherwise fold it and move the textarea mid-typing.
+  it('keeps the chip row on one line, shrinking chips and scrolling the rest', async () => {
+    await mount({ router: 'human', attached: ['a-1', 'a-2'] })
+    const strip = screen.getByTestId('composer-chips')
+    const cluster = strip.parentElement!
+    // Mutation: put `flex-wrap` back on either and this fails.
+    for (const box of [cluster, strip]) {
+      expect(box.className).toContain('flex-nowrap')
+      expect(box.className).toContain('min-w-0')
+      expect(box.className).not.toMatch(/(^|\s)flex-wrap(\s|$)/)
+    }
+    expect(strip.className).toContain('overflow-x-auto')
+    expect(strip.className).toContain('[scrollbar-width:none]')
+    // The plus menu opens an absolutely positioned menu: outside the scroller.
+    const plus = screen.getByRole('button', { name: 'Add to chat' })
+    expect(strip.contains(plus)).toBe(false)
+    expect(cluster.contains(plus)).toBe(true)
+    for (const agentName of ['Research', 'Builder']) {
+      const box = chip(agentName).closest('div')!
+      expect(strip.contains(box)).toBe(true)
+      expect(box.className).toContain('min-w-[4.5rem]')
+      expect(box.className).toContain('shrink')
+    }
+  })
+
+  // A long name must not widen the left cluster past what leaves room for the
+  // session badges at 800 px; the name stays whole for the ear and the hover.
+  it('caps the bound agent chip and keeps its full name', async () => {
+    await mount({ router: 'direct', agentId: 'a-1' })
+    const name = await screen.findByText('Research')
+    const chip = name.closest('div')!
+    expect(chip.className).toContain('max-w-[12rem]')
+    expect(chip.getAttribute('title')).toBe('Research')
+    expect(name.className).toContain('truncate')
+  })
+
+  it('caps the attached agent chips and keeps their full names', async () => {
+    await mount({ router: 'human', attached: ['a-1', 'a-2'] })
+    for (const agentName of ['Research', 'Builder']) {
+      const button = chip(agentName)
+      const text = within(button).getByText(agentName)
+      expect(text.className).toContain('truncate')
+      expect(text.getAttribute('title')).toBe(agentName)
+      expect(button.closest('div')!.className).toContain('max-w-[12rem]')
+      expect(button.getAttribute('aria-label')).toContain(`“${agentName}”`)
+    }
   })
 })
 

@@ -23,7 +23,7 @@
  */
 
 import type { AgentRow } from '../../db/agents'
-import type { RunAgentTurnResult, TurnSnapshot } from '../../services/a2aStreamingService'
+import type { RunAgentTurnResult, TurnIO, TurnSnapshot } from '../../services/a2aStreamingService'
 import type { RunEvent } from '../../../shared/runEvents'
 import type {
   LocalPermissionRequest,
@@ -72,7 +72,56 @@ export interface RunInput {
    * one that does not loses an unfinished turn's output at quit.
    */
   registerSnapshot?: (snapshot: () => TurnSnapshot) => void
+  /**
+   * The profile and settings scope the chat's turn runs under. A driver that
+   * listens to a session between turns opens a follow-up turn in this scope
+   * ({@link FollowUpRequest}), not in whichever profile is active by then.
+   * Absent for a turn with no chat of its own to report into (an orchestrated
+   * call): nothing is opened for it.
+   */
+  runScope?: FollowUpScope
 }
+
+/** Whose profile and settings a follow-up turn runs under. */
+export interface FollowUpScope {
+  profileUserId: string
+  settingsUserId: string
+}
+
+/**
+ * A turn the agent started on its own, between the user's turns, that a
+ * driver asks the app to show as a run of the chat
+ * (`services/followUpTurnService.ts`). Driver-agnostic: the driver decides
+ * what starts one and drives it; the service decides whether and when it may
+ * open, and saves and records it as any turn.
+ */
+export interface FollowUpRequest {
+  chatId: string
+  agentId: string
+  /** The driver's id, for the in-flight marker. */
+  driverId: string
+  scope: FollowUpScope
+  /**
+   * Drive the turn to its end. Streams through `io` as `AgentDriver.run`
+   * does and, like it, never throws: the result is saved as an assistant
+   * turn with no user row.
+   */
+  run(io: TurnIO): Promise<RunAgentTurnResult>
+  /**
+   * False once the traffic that asked for the turn went elsewhere (a turn of
+   * the same session took it) or was dropped: open nothing.
+   */
+  wanted(): boolean
+  /**
+   * The turn will not be opened: refuse the asks that wait, drop what is
+   * held, and stop listening to the session. Idempotent. With
+   * `keepListening` (the chat stayed busy too long, but still answers to the
+   * agent) the session stays observed, and later traffic may ask again.
+   */
+  abandon(reason: string, options?: { keepListening?: boolean }): void
+}
+
+export type FollowUpOpener = (request: FollowUpRequest) => void
 
 /**
  * Deliver a user message into the running turn. `injected` means the engine

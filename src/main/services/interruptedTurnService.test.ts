@@ -34,7 +34,7 @@ vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-const { interruptedTurnService, finalizeInterrupted, INTERRUPTED_TURN_NOTICE, INTERRUPTED_RUN_MESSAGE } =
+const { interruptedTurnService, finalizeInterrupted, INTERRUPTED_TURN_NOTICE, INTERRUPTED_FOLLOW_UP_NOTICE, INTERRUPTED_RUN_MESSAGE } =
   await import('./interruptedTurnService')
 const { inflightTurnRepo, markLiveMarker } = await import('../db/inflightTurns')
 const { chatRepo } = await import('../db/chats')
@@ -127,6 +127,29 @@ describe('interruptedTurnService.finalizeLeftovers', () => {
     expect(chatRepo.getOwned(USER, chatId)!.updatedAt).toEqual(new Date(1000 * 1000))
     expect(taskService.getById(USER, taskId).status).toBe('error')
     expect(chatRunResultRepo.get(USER, chatId)).toMatchObject({ status: 'failed', unread: true })
+    expect(inflightTurnRepo.list()).toEqual([])
+  })
+
+  it('says the agent was working on its own, not to send a message again, for a turn the agent started', () => {
+    const { chatId } = handOpenedChat()
+    messageRepo.saveUser({ chatId, content: 'Watch CI and merge', addressedAgentId: AGENT })
+    const id = 'follow-up-1'
+    inflightTurnRepo.open({ id, profileId: USER, chatId, agentId: AGENT, driver: 'acp', userMessageId: null })
+    inflightTurnRepo.writeDraft({
+      markerId: id, draftId: null, chatId, agentId: AGENT, content: 'CI is green; merging', parts: [{ kind: 'text', text: 'CI is green; merging' }]
+    })
+
+    interruptedTurnService.finalizeLeftovers()
+
+    expect(transcript(chatId)).toEqual([
+      ['user', 'Watch CI and merge'],
+      ['assistant', 'CI is green; merging'],
+      ['error', INTERRUPTED_FOLLOW_UP_NOTICE]
+    ])
+    expect(JSON.parse(chatRepo.listMessages(chatId)[2].content)).toEqual({
+      short: 'The app closed while the agent was working on its own. What it wrote before that is above.',
+      code: 'turn_interrupted'
+    })
     expect(inflightTurnRepo.list()).toEqual([])
   })
 

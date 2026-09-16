@@ -127,6 +127,15 @@ export function isRefusal(result: AcpPlanResult): result is AcpLaunchRefusal {
 export interface AcpLauncher {
   readonly id: AcpLauncherId
   /**
+   * The engine ends every turn — the ones it starts on its own included —
+   * with a `usage_update` that carries `cost` (`claude-agent-acp` does, at
+   * each SDK result). A follow-up turn on such an engine ends only on that
+   * marker, a Stop, the process exiting or the ceiling: a model that thinks
+   * for a while is not a turn that ended. Absent: a follow-up also ends after
+   * a quiet spell (`ACP_FOLLOW_UP_QUIET_MS`).
+   */
+  readonly endsTurnsWithCostedUsage?: boolean
+  /**
    * Everything needed to start this agent, or the reason it cannot run.
    *
    * **Must not throw.** A launcher that cannot decide returns a sentence; the
@@ -387,6 +396,7 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
 
   return {
     id: 'claude',
+    endsTurnsWithCostedUsage: true,
     readiness,
 
     async plan(ctx) {

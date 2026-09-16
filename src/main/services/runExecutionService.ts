@@ -28,7 +28,7 @@ import { activeRunsByChat as activeChats } from './runExecutionState'
 import { handingOffChats } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import type { CoordinatorToolProvider } from './coordinatorToolProvider'
-import type { AgentDriver, SteerFn } from '../agents/drivers/driver'
+import type { AgentDriver, FollowUpScope, SteerFn } from '../agents/drivers/driver'
 import type { AgentRow } from '../db/agents'
 import type { TurnRun } from './a2aStreamingService'
 
@@ -100,6 +100,25 @@ export function answererOf(chat: RoutableChat, payload: Pick<RunSendPayload, 'ch
     lastAddressed: messageRepo.lastAddressedAgentId(payload.chatId),
     attached: chatOnDemandAgentRepo.listAgentIds(payload.chatId)
   })
+}
+
+/**
+ * The asks a closed run leaves behind: the ids a runner or the next message
+ * still answers, and whether any live reply address was left dead or the
+ * rows could not be read. Every run close reads it the same way.
+ */
+export function remainingRunRequests(chatId: string, runId: string): { inputRequestIds: string[]; inputRequestReadError?: string } {
+  try {
+    const requests = taskInputRequestRepo.listOpenForRun(chatId, runId)
+    const inputRequestIds = requests.filter((row) => row.resume === 'next_message' || row.deliveryOwner === 'runner').map((row) => row.id)
+    if (requests.some((row) => row.resume === 'reply' && row.deliveryOwner !== 'runner')) {
+      return { inputRequestIds, inputRequestReadError: 'The turn left input requests whose live reply addresses have closed.' }
+    }
+    return { inputRequestIds }
+  } catch (error) {
+    logger.warn('could not read remaining turn requests', { chatId, error: String(error) })
+    return { inputRequestIds: [], inputRequestReadError: 'The turn could not read its remaining input requests.' }
+  }
 }
 
 /** Main owns the turn. A renderer is an optional subscriber, never its lifetime. */
@@ -367,19 +386,7 @@ export const runExecutionService = {
         if (!accepted) refuse(new Error(failure ?? 'The turn could not be started.'))
         if (activeChats.get(payload.chatId) === handle) activeChats.delete(payload.chatId)
         try { options.port?.close() } catch { /* subscriber already disconnected */ }
-        let inputRequestIds: string[] = []
-        let inputRequestReadError: string | undefined
-        try {
-          const requests = taskInputRequestRepo.listOpenForRun(payload.chatId, handle.id)
-          inputRequestIds = requests.filter((row) => row.resume === 'next_message' || row.deliveryOwner === 'runner').map((row) => row.id)
-          if (requests.some((row) => row.resume === 'reply' && row.deliveryOwner !== 'runner')) {
-            inputRequestReadError = 'The turn left input requests whose live reply addresses have closed.'
-          }
-        }
-        catch (error) {
-          inputRequestReadError = 'The turn could not read its remaining input requests.'
-          logger.warn('could not read remaining turn requests', { chatId: payload.chatId, error: String(error) })
-        }
+        const { inputRequestIds, inputRequestReadError } = remainingRunRequests(payload.chatId, handle.id)
         const result = outcome!
         const final: RunOutcome = { ...result, state: result.state === 'completed' && inputRequestIds.length ? 'needs_input' : result.state,
           runId: handle.id, accepted, inputRequestIds, ...(inputRequestReadError ? { inputRequestReadError } : {}) }
@@ -623,7 +630,8 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
     messageId: input.inputOrigin !== 'runner' ? userMessageId : undefined,
     queueWhenBusy: input.queueWhenBusy,
     handbackEligible: input.handbackEligible,
-    registerSteer: input.registerSteer
+    registerSteer: input.registerSteer,
+    runScope: { profileUserId, settingsUserId }
   })
 
   await handOff(port, () =>
@@ -673,6 +681,8 @@ function bindTurn(input: {
   queueWhenBusy?: boolean
   handbackEligible?: boolean
   registerSteer?: (steer: SteerFn | null) => void
+  /** The chat's scope, for a follow-up turn the agent starts after this one. */
+  runScope?: FollowUpScope
 }): TurnRun {
   const { driver, agent, agentOwnerId, wireContent } = input
   return resolveCommandRunner(
@@ -691,6 +701,7 @@ function bindTurn(input: {
         ...(input.handbackEligible ? { handbackEligible: true } : {}),
         ...(input.registerSteer ? { registerSteer: input.registerSteer } : {}),
         ...(io.registerSnapshot ? { registerSnapshot: io.registerSnapshot } : {}),
+        ...(input.runScope ? { runScope: input.runScope } : {}),
         onEvent: io.onEvent
       })
   )
@@ -760,7 +771,8 @@ async function resendAgentTurn(port: StreamPort, input: {
       wireContent: row.content,
       packet,
       fileIds: row.attachments?.map((attachment) => attachment.id),
-      messageId: userMessageId
+      messageId: userMessageId,
+      runScope: { profileUserId, settingsUserId }
     })
   } catch (error) {
     return refuse(error instanceof Error ? error.message : String(error))

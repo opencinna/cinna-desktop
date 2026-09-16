@@ -60,6 +60,19 @@ describe('useSessionActivity', () => {
     expect(get).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps a push that arrived while the first read was in flight', async () => {
+    let answer: (result: SessionActivityGetResult) => void = () => undefined
+    get.mockImplementation(() => new Promise((resolve) => { answer = resolve }))
+    const { result } = render('c1')
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(1))
+    await act(async () => { for (const listener of [...listeners]) listener({ chatId: 'c1', snapshot: snapshot('c1', 'pushed') }) })
+    // The read main answered before the push, landing after it.
+    await act(async () => { answer({ ok: true, snapshot: snapshot('c1', 'stale') }) })
+    await waitFor(() => expect(result.current.isFetching).toBe(false))
+    // Mutation: return the read unconditionally and this is ['stale'].
+    expect(result.current.data?.items.map((i) => i.id)).toEqual(['pushed'])
+  })
+
   it('reads a chat main refuses as one with no activity', async () => {
     get.mockResolvedValue({ ok: false, code: 'chat_not_found' })
     const { result } = render('gone')

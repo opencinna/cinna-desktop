@@ -36,6 +36,13 @@ export interface SessionTrafficScope {
   chatId: string
   sessionId: string
   launcherId: AcpLauncherId
+  /**
+   * The profile and settings scope of the turn that armed the observer —
+   * what a follow-up turn of this session runs under. Absent for a turn with
+   * no chat scope of its own.
+   */
+  profileUserId?: string
+  settingsUserId?: string
 }
 
 /**

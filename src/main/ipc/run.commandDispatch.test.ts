@@ -189,6 +189,8 @@ describe('run:send — the /run: dispatch call site', () => {
       fileIds: [],
       signal: io.signal,
       registerSteer: expect.any(Function),
+      // The chat's scope, for a follow-up turn the agent starts after this one.
+      runScope: { profileUserId: 'profile-user', settingsUserId: 'settings-user' },
       onEvent: io.onEvent
     })
   })

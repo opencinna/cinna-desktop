@@ -15,6 +15,15 @@ export interface ChipAddressing {
   onAddress: (agentId: string) => void
 }
 
+/**
+ * The width range of a chip under the composer (agent and MCP chips alike).
+ * At most 12rem, a longer name truncated and whole in its `title`; when the
+ * row is short of room the chips shrink, down to 4.5rem — the icon, a few
+ * characters and the remove button — and past that the chip strip scrolls
+ * (`ChatInput`). The composer's chip row never wraps.
+ */
+export const agentChipClass = 'shrink min-w-[4.5rem] max-w-[12rem]'
+
 type OnDemandAgentChipsProps = (
   | { chatId: string; pendingIds?: never; onRemovePending?: never }
   | { chatId?: null; pendingIds: string[]; onRemovePending: (id: string) => void }
@@ -90,7 +99,7 @@ export function OnDemandAgentChips(
             // a ring in the chip's own colour then reads as nothing but a
             // slightly thicker border. The theme's text colour is the one colour
             // guaranteed to contrast with every chip.
-            className={`flex items-center gap-1 pl-1.5 pr-1 py-1 rounded-lg border transition-shadow${
+            className={`flex items-center gap-1 pl-1.5 pr-1 py-1 rounded-lg border ${agentChipClass} transition-shadow${
               addressed ? ' ring-2 ring-[var(--color-text)]' : ''
             }`}
             style={{
@@ -109,22 +118,22 @@ export function OnDemandAgentChips(
                 // `cursor-pointer` explicitly: preflight gives every `button` a
                 // default cursor, so a chip that is a control looked exactly as
                 // inert as one that is not.
-                className="flex items-center gap-1 rounded cursor-pointer
+                className="flex items-center gap-1 min-w-0 rounded cursor-pointer
                   hover:bg-black/10 [[data-theme=light]_&]:hover:bg-black/5 transition-colors"
               >
                 <Bot size={12} className="shrink-0" />
-                <span className="text-[11px] font-medium whitespace-nowrap">{a.name}</span>
+                <span className="min-w-0 truncate text-[11px] font-medium whitespace-nowrap" title={a.name}>{a.name}</span>
               </button>
             ) : (
               <>
                 <Bot size={12} className="shrink-0" />
-                <span className="text-[11px] font-medium whitespace-nowrap">{a.name}</span>
+                <span className="min-w-0 truncate text-[11px] font-medium whitespace-nowrap" title={a.name}>{a.name}</span>
               </>
             )}
             <button
               type="button"
               onClick={() => handleRemove(a.id)}
-              className="ml-0.5 p-0.5 rounded hover:bg-black/10 [[data-theme=light]_&]:hover:bg-black/5 transition-colors"
+              className="shrink-0 ml-0.5 p-0.5 rounded hover:bg-black/10 [[data-theme=light]_&]:hover:bg-black/5 transition-colors"
               aria-label={`Remove agent ${a.name}`}
             >
               <X size={11} />

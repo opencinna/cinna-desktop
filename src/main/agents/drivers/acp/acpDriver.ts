@@ -58,7 +58,7 @@ import type {
   SessionNotification
 } from '@agentclientprotocol/sdk'
 import type { AgentRow } from '../../../db/agents'
-import type { RunAgentTurnResult, TurnSteer } from '../../../services/a2aStreamingService'
+import type { RunAgentTurnResult, TurnIO, TurnSteer } from '../../../services/a2aStreamingService'
 import type { RunEvent } from '../../../../shared/runEvents'
 import { describeQuestionAnswers } from '../../../../shared/localAgentRequests'
 import type {
@@ -71,17 +71,19 @@ import { createLogger } from '../../../logger/logger'
 import { capabilitiesFor } from '../capabilities'
 import { launcherOfFolder } from '../driverOf'
 import type { AgentEngine } from '../../../../shared/engine'
-import type { AgentDriver, ParkedAsk, RespondOutcome, RunInput, ReadinessOptions, SteerFn } from '../driver'
+import type { AgentDriver, FollowUpOpener, FollowUpScope, ParkedAsk, RespondOutcome, RunInput, ReadinessOptions, SteerFn } from '../driver'
 import { AcpMessageStream } from './acpMessages'
 import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } from './acpLaunchers'
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
 import { toElicitationContent, toInputQuestions } from './acpQuestions'
-import type { AcpConnection, AcpLauncherId, AcpProcessPool } from './types'
+import type { AcpConnection, AcpLauncherId, AcpProcessPool, AcpSessionHandlers } from './types'
+import { createFollowUpGate, deliverHeld, type FollowUpGate, type HeldHandover, type HeldTraffic } from './acpFollowUp'
 import {
   createSessionObservation,
   refusingSessionTrafficSink,
   type SessionObservation,
   type SessionTrafficScope,
+  type SessionTrafficSink,
   type SessionTrafficSinkFactory
 } from './acpSessionObserver'
 
@@ -157,6 +159,15 @@ export interface AcpDriverDeps {
    * to. Default: count, log, and refuse asks at once.
    */
   sessionTraffic?: SessionTrafficSinkFactory
+  /**
+   * Where a turn the agent started on its own between turns is sent to be
+   * opened as a run of the chat (`services/followUpTurnService.ts`). Absent:
+   * nothing is opened, and between-turn traffic only reaches
+   * {@link sessionTraffic}, as before follow-up turns existed.
+   */
+  openFollowUp?: FollowUpOpener
+  /** Override how long a follow-up turn may stay silent before it is over. Tests only. */
+  followUpQuietMs?: number
   /** Override the turn ceiling. Tests only. */
   turnCeilingMs?: number
   /** Override the wait for a `session/cancel` acknowledgement. Tests only. */
@@ -208,20 +219,69 @@ async function beforeStart<T>(signal: AbortSignal, operation: () => T | Promise<
  * the old agent never lands in it.
  */
 export interface SessionObservers {
-  suspend(connection: AcpConnection, sessionId: string): boolean
-  arm(connection: AcpConnection, scope: SessionTrafficScope): void
+  /**
+   * Stop observing a session a turn is about to take. Null when nobody
+   * observed it; otherwise what the observer held for a follow-up turn that
+   * had not opened yet, which is the taking turn's now.
+   */
+  suspend(connection: AcpConnection, sessionId: string): HeldHandover | null
+  arm(connection: AcpConnection, scope: SessionTrafficScope, armed?: ArmedTurn): void
+  /**
+   * Traffic a turn took from {@link suspend} and ended without replaying:
+   * the updates go to the session's observer again (its gate may open a
+   * follow-up for them), the asks are refused. False, and nothing done, when
+   * the session is not observed.
+   */
+  giveBack(connection: AcpConnection, sessionId: string, held: HeldHandover): boolean
   /** Stop observing every session of the chat, or only the agent's in it. */
   forgetChat(chatId: string, agentId?: string): void
 }
+
+/**
+ * What the turn that armed a session's observer leaves for the follow-up turns
+ * of that session: the agent, runtime and plan it ran with, and the scope its
+ * chat runs under.
+ */
+export interface ArmedTurn {
+  userId: string
+  agent: AgentRow
+  runtime: AcpRuntimeView
+  plan: AcpLaunchPlan
+  launcherId: AcpLauncherId
+  runScope?: FollowUpScope
+  /** Tool call ids the arming turn saw. */
+  toolCalls: Iterable<string>
+}
+
+/** Builds the follow-up gate for one observed session, or nothing when follow-ups are off. */
+type FollowUpGateFactory = (input: {
+  connection: AcpConnection
+  scope: SessionTrafficScope
+  armed: ArmedTurn
+  activity: SessionTrafficSink
+  knownToolCalls: Set<string>
+  /** Stop observing this session. */
+  forget(): void
+}) => FollowUpGate | undefined
 
 interface ObservedSession {
   scope: SessionTrafficScope
   observation: SessionObservation
   unobserve: () => void
+  /** Where the observer hands traffic: the gate's sink, or the activity sink. */
+  sink: SessionTrafficSink
+  gate?: FollowUpGate
 }
 
-function createSessionObservers(sinkFor: SessionTrafficSinkFactory): SessionObservers {
+const NOTHING_HELD: HeldHandover = { replay: () => {}, refuse: () => {}, giveBack: () => {} }
+
+function createSessionObservers(sinkFor: SessionTrafficSinkFactory, gateFor?: FollowUpGateFactory): SessionObservers {
   const byConnection = new WeakMap<AcpConnection, Map<string, ObservedSession>>()
+  /**
+   * Tool call ids each session's turns used, per connection: a `tool_call`
+   * repeating one of them between turns is a late update, not a new turn.
+   */
+  const toolCallsOf = new WeakMap<AcpConnection, Map<string, Set<string>>>()
   /** The same entries by chat, so a chat can be forgotten without knowing its connections. */
   const byChat = new Map<string, Map<ObservedSession, Map<string, ObservedSession>>>()
   const drop = (sessions: Map<string, ObservedSession>, sessionId: string): boolean => {
@@ -233,14 +293,19 @@ function createSessionObservers(sinkFor: SessionTrafficSinkFactory): SessionObse
     if (chat?.size === 0) byChat.delete(entry.scope.chatId)
     entry.unobserve()
     entry.observation.close()
+    entry.gate?.close()
     return true
   }
   return {
     suspend: (connection, sessionId) => {
       const sessions = byConnection.get(connection)
-      return sessions ? drop(sessions, sessionId) : false
+      const entry = sessions?.get(sessionId)
+      if (!sessions || !entry) return null
+      const held = entry.gate?.handOver() ?? NOTHING_HELD
+      drop(sessions, sessionId)
+      return held
     },
-    arm: (connection, scope) => {
+    arm: (connection, scope, armed) => {
       if (!connection.alive) return
       let sessions = byConnection.get(connection)
       if (!sessions) {
@@ -252,13 +317,33 @@ function createSessionObservers(sinkFor: SessionTrafficSinkFactory): SessionObse
         })
       }
       drop(sessions, scope.sessionId)
-      const observation = createSessionObservation(scope, sinkFor(scope))
+      const activity = sinkFor(scope)
+      let gate: FollowUpGate | undefined
+      if (armed && gateFor) {
+        let known = toolCallsOf.get(connection)
+        if (!known) { known = new Map(); toolCallsOf.set(connection, known) }
+        let ids = known.get(scope.sessionId)
+        if (!ids) { ids = new Set(); known.set(scope.sessionId, ids) }
+        for (const id of armed.toolCalls) ids.add(id)
+        const owned = sessions
+        gate = gateFor({ connection, scope, armed, activity, knownToolCalls: ids, forget: () => {
+          if (owned.get(scope.sessionId) === entry) drop(owned, scope.sessionId)
+        } })
+      }
+      const sink = gate?.sink ?? activity
+      const observation = createSessionObservation(scope, sink)
       const unobserve = connection.observeSession(scope.sessionId, observation.observer)
-      const entry: ObservedSession = { scope, observation, unobserve }
+      const entry: ObservedSession = { scope, observation, unobserve, sink, ...(gate ? { gate } : {}) }
       sessions.set(scope.sessionId, entry)
       let chat = byChat.get(scope.chatId)
       if (!chat) { chat = new Map(); byChat.set(scope.chatId, chat) }
       chat.set(entry, sessions)
+    },
+    giveBack: (connection, sessionId, held) => {
+      const entry = byConnection.get(connection)?.get(sessionId)
+      if (!entry || !connection.alive) return false
+      held.giveBack(entry.sink)
+      return true
     },
     forgetChat: (chatId, agentId) => {
       const chat = byChat.get(chatId)
@@ -282,7 +367,43 @@ export interface AcpDriver extends AgentDriver {
 
 export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
   const parkedRuntimes = new Map<string, AcpRuntimeView>()
-  const observers = createSessionObservers(deps.sessionTraffic ?? refusingSessionTrafficSink)
+  const openFollowUp = deps.openFollowUp
+  const observers = createSessionObservers(
+    deps.sessionTraffic ?? refusingSessionTrafficSink,
+    openFollowUp && (({ connection, scope, armed, activity, knownToolCalls, forget }) => {
+      // A turn with no chat scope of its own (an orchestrated call) has no
+      // chat to show a follow-up in.
+      const runScope = armed.runScope
+      if (!runScope) return undefined
+      const gate: FollowUpGate = createFollowUpGate(scope, {
+        activity,
+        knownToolCalls,
+        // From the trigger until the follow-up turn takes over (or is dropped):
+        // the reaper must not stop the process the agent's turn runs in.
+        hold: () => deps.pool.hold(scope.agentId),
+        open: () => openFollowUp({
+          chatId: scope.chatId,
+          agentId: scope.agentId,
+          driverId: 'acp',
+          scope: runScope,
+          run: (io) => runFollowUp(deps, {
+            ...armed, chatId: scope.chatId, connection, sessionId: scope.sessionId, gate, knownToolCalls, parkedRuntimes
+          }, io),
+          wanted: () => gate.pending,
+          abandon: (reason, options) => {
+            if (options?.keepListening) {
+              // The chat still answers to the agent: only this traffic is lost.
+              gate.abandon(reason, 'warn')
+              return
+            }
+            gate.abandon(reason)
+            forget()
+          }
+        })
+      })
+      return gate
+    })
+  )
   const driver: AcpDriver = {
     id: 'acp',
 
@@ -552,6 +673,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
    * the rest of the turn.
    */
   const toolsDone = new Set<string>()
+  /** Every tool call id this turn saw, for the between-turn listener. */
+  const toolCallsSeen = new Set<string>()
   /** The function the window offers, while it exists; `offered` is whether the caller holds it now. */
   let steerOffer: SteerFn | null = null
   let offered = false
@@ -769,7 +892,21 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     if (suspended && !rememberedGone) keep.add(suspended)
     for (const id of keep) {
       try {
-        ctx.observers.arm(connection, { agentId: agent.id, chatId, sessionId: id, launcherId: ctx.launcherId })
+        ctx.observers.arm(connection, {
+          agentId: agent.id,
+          chatId,
+          sessionId: id,
+          launcherId: ctx.launcherId,
+          ...(input.runScope ? { profileUserId: input.runScope.profileUserId, settingsUserId: input.runScope.settingsUserId } : {})
+        }, {
+          userId: ctx.userId,
+          agent,
+          runtime,
+          plan,
+          launcherId: ctx.launcherId,
+          ...(input.runScope ? { runScope: input.runScope } : {}),
+          toolCalls: toolCallsSeen
+        })
       } catch (err) {
         logger.warn('could not listen to an ACP session between turns', {
           agentId: agent.id,
@@ -780,6 +917,13 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   }
   /** The remembered session whose between-turn observer this turn took down. */
   let suspended: string | null = null
+  /**
+   * What that observer held for a follow-up turn that had not opened yet.
+   * It is this turn's: replayed once the session is this turn's again (after
+   * the load, so the replay gate does not drop it), refused if the session
+   * turned out to be gone.
+   */
+  let held: HeldHandover | null = null
   /** The remembered session turned out to be gone; nothing to listen to. */
   let rememberedGone = false
 
@@ -815,6 +959,9 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         // reading it here would only give the fallback notice a stale value to
         // compare against.
         if (turn.replaying) return
+        if (notification.update.sessionUpdate === 'tool_call' || notification.update.sessionUpdate === 'tool_call_update') {
+          toolCallsSeen.add(notification.update.toolCallId)
+        }
         trackToolCall(notification)
         const update = stream.apply(notification)
         if (update.modeId) reportedMode = update.modeId
@@ -839,7 +986,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     // Before anything that can produce traffic for it: from here the session's
     // traffic is this turn's (the load replay included), and the pen only
     // keeps it for the bind while nobody observes the session.
-    if (remembered && ctx.observers.suspend(connection, remembered)) suspended = remembered
+    if (remembered) {
+      held = ctx.observers.suspend(connection, remembered)
+      if (held) suspended = remembered
+    }
 
     if (plan.spec.remote && remembered && remoteSessions.get(connection)?.has(remembered)) {
       sessionId = remembered
@@ -909,6 +1059,13 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       // minutes into its tool calls) never reaches `finish`. Without this the
       // next turn opened a fresh session and the agent remembered nothing.
       rememberSession(ctx, sessionId)
+    }
+
+    if (held) {
+      const taken = held
+      held = null
+      if (sessionId === suspended) taken.replay(handlers)
+      else taken.refuse()
     }
 
     if (plan.spec.remote) {
@@ -1047,6 +1204,17 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     // prompt. Before the observer is armed: a bound turn outranks it.
     unbind?.()
     listenBetweenTurns()
+    // A path that left before the session was this turn's again (a failed
+    // start, a Stop during it): what the observer held goes back to it, now
+    // re-armed, and may open a follow-up; the asks are refused. Refused whole
+    // when the session is not listened to any more.
+    if (held) {
+      const left = held
+      held = null
+      const back = suspended !== null && !rememberedGone && connection !== undefined &&
+        ctx.observers.giveBack(connection, suspended, left)
+      if (!back) left.refuse()
+    }
     release()
     // Every exit releases what this turn parked on. A request left registered
     // keeps `isPending` true, so a persisted block goes on rendering as
@@ -1055,6 +1223,303 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     for (const [, cancel] of turn.parked) cancel()
     turn.parked.clear()
   }
+}
+
+/* ---------------------------------------------------------------- follow-up */
+
+/**
+ * How long a follow-up turn may go without traffic, with no tool call open and
+ * no ask parked, before it is over — the end for an engine that sends no
+ * end marker (a launcher without `endsTurnsWithCostedUsage`).
+ */
+export const ACP_FOLLOW_UP_QUIET_MS = 10_000
+
+/** Shown when the agent's process ends under a follow-up turn. */
+export const ACP_FOLLOW_UP_EXITED = 'The agent’s process ended before it finished this work.'
+
+/**
+ * Exit listeners per connection, detachable: one `exited.then` per
+ * connection, however many follow-up turns ran on it. A listener attached
+ * straight to `exited` could not be removed, and would keep every finished
+ * follow-up's closure alive until the process exits.
+ */
+const exitListeners = new WeakMap<AcpConnection, Set<() => void>>()
+
+function onConnectionExit(connection: AcpConnection, listener: () => void): () => void {
+  let listeners = exitListeners.get(connection)
+  if (!listeners) {
+    const created = new Set<() => void>()
+    listeners = created
+    exitListeners.set(connection, created)
+    void connection.exited.then(() => {
+      exitListeners.delete(connection)
+      for (const each of [...created]) each()
+      created.clear()
+    })
+  }
+  const own = listeners
+  own.add(listener)
+  return () => { own.delete(listener) }
+}
+
+/** Tests only: how many exit listeners a connection still has. */
+export function exitListenerCount(connection: AcpConnection): number {
+  return exitListeners.get(connection)?.size ?? 0
+}
+
+/** The observers a follow-up turn's context carries: it arms and suspends nothing. */
+const NO_OBSERVERS: SessionObservers = { suspend: () => null, arm: () => {}, giveBack: () => false, forgetChat: () => {} }
+
+interface FollowUpWorld extends ArmedTurn {
+  chatId: string
+  connection: AcpConnection
+  sessionId: string
+  gate: FollowUpGate
+  knownToolCalls: Set<string>
+  parkedRuntimes: Map<string, AcpRuntimeView>
+}
+
+/**
+ * The end of a turn nobody prompted: a `usage_update` that carries `cost`.
+ * `claude-agent-acp` sends one at every SDK result, the unprompted ones
+ * included; the cost-less ones arrive two to four times inside every turn
+ * (`phase0_findings.md`, C3). No prompt is in flight during a follow-up by
+ * construction, so the marker cannot be a prompted turn's.
+ */
+function endsFollowUp(notification: SessionNotification): boolean {
+  const update = notification.update as { sessionUpdate?: string; cost?: unknown }
+  return update.sessionUpdate === 'usage_update' && update.cost !== undefined && update.cost !== null
+}
+
+/**
+ * A turn the agent started on its own, driven to its end: the ACP half of a
+ * follow-up turn (`services/followUpTurnService.ts` opens it).
+ *
+ * Binds handlers to the session, replays what the gate held since the
+ * trigger, and folds everything through the same stream, accumulator and
+ * parked-ask path as {@link runTurn} — so its rows, its asks (transcript and
+ * Inbox, answered through `respond`) and its quit-time snapshot are a normal
+ * turn's. There is no `session/prompt`, so the end is read off the traffic:
+ * {@link endsFollowUp}, the process exiting, or the ceiling — and, only for a
+ * launcher that sends no such marker, {@link ACP_FOLLOW_UP_QUIET_MS} of silence
+ * with no tool call open and no ask parked. A Stop releases the parks and sends
+ * `session/cancel`; an agent that does not end the turn within the cancel grace
+ * ends it canceled **without** retiring the process — the process runs every
+ * chat's background work, and nothing here is blocked on the agent. The
+ * ceiling that has to give up that way retires it, as in a prompted turn. Holds the process against the reaper, not the turn lock: the engine
+ * runs this turn whether or not we listen, and another chat's prompt on the
+ * same agent is not ours to refuse for it.
+ *
+ * Traffic the gate held past the end marker goes back to it, and may open the
+ * next follow-up. Never throws.
+ */
+async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO): Promise<RunAgentTurnResult> {
+  const { agent, connection, sessionId, gate, chatId } = world
+  // An engine with an end marker is not ended by silence: its model may think
+  // for minutes between two updates of one turn.
+  const endsOnQuiet = deps.launcher(world.launcherId)?.endsTurnsWithCostedUsage !== true
+  const input: RunInput = {
+    chatId,
+    wireContent: '',
+    signal: io.signal,
+    onEvent: io.onEvent
+  }
+  const ctx: TurnContext = {
+    userId: world.userId,
+    agent,
+    runtime: world.runtime,
+    parkedRuntimes: world.parkedRuntimes,
+    observers: NO_OBSERVERS,
+    launcherId: world.launcherId,
+    plan: world.plan,
+    input,
+    steers: [],
+    savedSession: sessionId
+  }
+  const stream = new AcpMessageStream({ launcher: world.launcherId })
+  const accumulator = new StreamPartsAccumulator({
+    onToolCall: ({ name, input: toolInput }) =>
+      logger.info(`tool call → ${name}`, { input: toolInput })
+  })
+  io.registerSnapshot?.(() => ({
+    parts: accumulator.snapshotParts({ streaming: true }),
+    notices: accumulator.snapshotNotices()
+  }))
+  const deltaPort = { postMessage: (event: RunEvent): void => io.onEvent(event) }
+  const emit: EmitMessage = (message) => {
+    if (message) accumulator.ingestMessage(message, deltaPort)
+  }
+  const turn: AcpTurn = { replaying: false, open: true, parked: new Map(), stopping: false }
+  const askWorld: AskWorld = { stream, emit, turn }
+  const toolsOpen = new Set<string>()
+  const toolsDone = new Set<string>()
+
+  let ended = false
+  type EndedBy = 'marker' | 'quiet' | 'grace' | 'closed' | 'exited'
+  // Set from the handlers; declared this way so the checks below are not narrowed away.
+  let endedBy = 'marker' as EndedBy
+  let hitCeiling = false as boolean
+  let unbind: (() => void) | undefined
+  let signalEnd!: () => void
+  const over = new Promise<void>((resolve) => { signalEnd = resolve })
+  const end = (why: EndedBy): void => {
+    if (ended) return
+    ended = true
+    endedBy = why
+    // Now, not in the `finally`: what the agent sends from here on is the
+    // observer's again, and may be the next follow-up.
+    unbind?.()
+    unbind = undefined
+    signalEnd()
+  }
+
+  let quiet: NodeJS.Timeout | undefined
+  const armQuiet = (): void => {
+    if (ended || !endsOnQuiet) return
+    if (quiet) clearTimeout(quiet)
+    quiet = setTimeout(() => {
+      quiet = undefined
+      // A tool still running or an ask still waiting is not silence; the next
+      // update (or the ask settling) starts the clock again.
+      if (toolsOpen.size === 0 && turn.parked.size === 0) end('quiet')
+    }, deps.followUpQuietMs ?? ACP_FOLLOW_UP_QUIET_MS)
+    quiet.unref?.()
+  }
+
+  let grace: NodeJS.Timeout | undefined
+  const askAgentToStop = (ceiling: boolean): void => {
+    if (ended) return
+    if (ceiling) hitCeiling = true
+    else turn.stopping = true
+    turn.open = false
+    for (const [, cancel] of turn.parked) cancel()
+    turn.parked.clear()
+    void connection.cancel(sessionId).catch(() => {})
+    if (grace) return
+    grace = setTimeout(() => {
+      if (ended) return
+      if (hitCeiling) {
+        logger.warn('an ACP agent did not end a follow-up turn at the ceiling; its process was retired', {
+          agentId: agent.id,
+          chatId
+        })
+        deps.pool.retire(agent.id)
+      } else {
+        // A Stop: the turn ends here, canceled. The process stays — other
+        // chats' background work runs in it.
+        logger.warn('an ACP agent did not end a follow-up turn after a Stop; the turn ended, the process was left running', {
+          agentId: agent.id,
+          chatId
+        })
+      }
+      end('grace')
+    }, deps.cancelGraceMs ?? ACP_CANCEL_GRACE_MS)
+    grace.unref?.()
+  }
+
+  const handlers: AcpSessionHandlers = {
+    onUpdate: (notification) => {
+      if (ended) return
+      armQuiet()
+      const update = notification.update
+      if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
+        const id = update.toolCallId
+        world.knownToolCalls.add(id)
+        if (update.status === 'completed' || update.status === 'failed') {
+          toolsOpen.delete(id)
+          toolsDone.add(id)
+        } else if (!toolsDone.has(id) &&
+          (update.sessionUpdate === 'tool_call' || update.status === 'pending' || update.status === 'in_progress')) {
+          toolsOpen.add(id)
+        }
+      }
+      emit(stream.apply(notification).message)
+      if (endsFollowUp(notification)) end('marker')
+    },
+    onPermission: (params) => {
+      if (ended) return Promise.resolve({ outcome: { outcome: 'cancelled' } })
+      armQuiet()
+      return answerPermission(deps, ctx, askWorld, params).finally(armQuiet)
+    },
+    onElicitation: (params) => {
+      if (ended) return Promise.resolve({ action: 'cancel' })
+      armQuiet()
+      return answerElicitation(deps, ctx, askWorld, params).finally(armQuiet)
+    },
+    onExtNotification: (method, params) => {
+      if (ended) return
+      emit(stream.applyExt(method, params).message)
+    }
+  }
+
+  const release = deps.pool.hold(agent.id)
+  const ceiling = setTimeout(() => askAgentToStop(!io.signal.aborted), deps.turnCeilingMs ?? ACP_TURN_CEILING_MS)
+  ceiling.unref?.()
+  const onAbort = (): void => askAgentToStop(false)
+  // The observers close the gate when the process exits, too, and they may
+  // hear the exit first.
+  const stopWatchingClose = gate.onClose(() => end(connection.alive ? 'closed' : 'exited'))
+  const stopWatchingExit = onConnectionExit(connection, () => end('exited'))
+  let leftover: HeldTraffic[] = []
+  try {
+    if (!connection.alive) {
+      end('exited')
+    } else if (!gate.pending) {
+      // The traffic went elsewhere (a user turn took it) or the session is no
+      // longer observed since the turn was asked for: nothing will arrive.
+      end('closed')
+    } else {
+      // Bound before the held traffic is taken, and both synchronously:
+      // nothing can arrive between them, so nothing is delivered out of order.
+      unbind = connection.bindSession(sessionId, handlers)
+      const items = gate.take()
+      for (let i = 0; i < items.length; i++) {
+        if (ended) {
+          leftover = items.slice(i)
+          break
+        }
+        try {
+          deliverHeld(items[i], handlers)
+        } catch (err) {
+          logger.warn('a follow-up turn threw on held traffic', { agentId: agent.id, chatId, error: String(err) })
+        }
+      }
+      if (!ended) {
+        armQuiet()
+        if (io.signal.aborted) askAgentToStop(false)
+        else io.signal.addEventListener('abort', onAbort, { once: true })
+      }
+    }
+    await over
+  } finally {
+    clearTimeout(ceiling)
+    if (quiet) clearTimeout(quiet)
+    if (grace) clearTimeout(grace)
+    io.signal.removeEventListener('abort', onAbort)
+    stopWatchingClose()
+    stopWatchingExit()
+    unbind?.()
+    // As every turn's exit: nothing this turn parked outlives it.
+    turn.open = false
+    for (const [, cancel] of turn.parked) cancel()
+    turn.parked.clear()
+    release()
+    gate.release(leftover)
+  }
+
+  const canceled = io.signal.aborted
+  logger.info('ACP follow-up turn complete', {
+    agentId: agent.id,
+    chatId,
+    launcher: world.launcherId,
+    sessionId,
+    endedBy,
+    canceled,
+    ceiling: hitCeiling
+  })
+  const error = hitCeiling ? ceilingMessage() : endedBy === 'exited' && !canceled ? ACP_FOLLOW_UP_EXITED : undefined
+  // No session to record: it is the one the chat already remembers.
+  return finish(ctx, accumulator, null, error, undefined, false, canceled)
 }
 
 /**

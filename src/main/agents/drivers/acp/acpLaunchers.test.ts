@@ -89,6 +89,10 @@ describe('the OpenCode launcher', () => {
       childEnv: async () => ({ PATH: '/usr/bin', HOME: '/Users/x' })
     })
 
+  it('does not claim a cost-bearing end marker, so its follow-ups end on a quiet spell', () => {
+    expect(launcher().endsTurnsWithCostedUsage).toBeFalsy()
+  })
+
   it('spawns `opencode acp` in the agent’s folder', async () => {
     const p = plan(await launcher().plan(CTX))
     expect(p.spec.command).toBe('/usr/local/bin/opencode')
@@ -255,6 +259,10 @@ describe('the Claude launcher', () => {
     approval: () => 'ask' as const,
     folderAgents: () => ({})
   }
+
+  it('ends every turn with a usage update that carries a cost, so its follow-ups need no quiet spell', () => {
+    expect(createClaudeLauncher(deps).endsTurnsWithCostedUsage).toBe(true)
+  })
 
   it('runs the adapter through this build’s own Node, with the user’s claude named', async () => {
     const p = plan(await createClaudeLauncher(deps).plan(CTX))

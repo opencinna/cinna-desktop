@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Plug, X } from 'lucide-react'
+import { agentChipClass } from './OnDemandAgentChips'
 import {
   useChatOnDemandMcps,
   useMcpProviders,
@@ -98,7 +100,7 @@ export function ActiveMcpChips(props: ActiveMcpChipsProps): React.JSX.Element | 
         return (
           <div
             key={m.id}
-            className={`flex items-center gap-1 pl-1.5 py-1 rounded-lg border
+            className={`flex items-center gap-1 pl-1.5 py-1 rounded-lg border ${agentChipClass}
               text-[var(--color-accent)] border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10
               ${m.locked ? 'pr-2' : 'pr-1'}`}
             title={
@@ -108,13 +110,13 @@ export function ActiveMcpChips(props: ActiveMcpChipsProps): React.JSX.Element | 
             }
           >
             <Plug size={12} className="shrink-0" />
-            <span className="text-[11px] font-medium whitespace-nowrap">{m.name}</span>
+            <span className="min-w-0 truncate text-[11px] font-medium whitespace-nowrap" title={m.name}>{m.name}</span>
             {!isConnected && <McpStatusDot detail={statusDetail} />}
             {!m.locked && (
               <button
                 type="button"
                 onClick={() => handleRemove(m.id)}
-                className="ml-0.5 p-0.5 rounded hover:bg-black/10 [[data-theme=light]_&]:hover:bg-black/5 transition-colors"
+                className="shrink-0 ml-0.5 p-0.5 rounded hover:bg-black/10 [[data-theme=light]_&]:hover:bg-black/5 transition-colors"
                 aria-label={`Remove MCP ${m.name} from this chat`}
               >
                 <X size={11} />
@@ -133,27 +135,38 @@ export function ActiveMcpChips(props: ActiveMcpChipsProps): React.JSX.Element | 
  * as `CommPatternBadge`, so the detail appears instantly (vs a native title).
  */
 function McpStatusDot({ detail }: { detail: string }): React.JSX.Element {
-  const [hovered, setHovered] = useState(false)
+  // Portaled and fixed: the chip sits in the composer's sideways-scrolling
+  // strip, which would clip a card positioned inside it.
+  const [anchor, setAnchor] = useState<DOMRect | null>(null)
+  const ref = useRef<HTMLSpanElement>(null)
   return (
     <span
-      className="relative ml-0.5 flex items-center"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      ref={ref}
+      className="relative ml-0.5 flex items-center shrink-0"
+      onMouseEnter={() => setAnchor(ref.current?.getBoundingClientRect() ?? null)}
+      onMouseLeave={() => setAnchor(null)}
     >
       <span
         className="w-1.5 h-1.5 rounded-full bg-[var(--color-danger)] shrink-0 cursor-help"
         aria-label={detail}
       />
-      {hovered && (
-        <span
-          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-50 w-56 rounded-lg
-            border border-[var(--color-border)] bg-[var(--color-overlay-panel)] backdrop-blur-xl
-            shadow-xl px-2.5 py-1.5 text-[11px] font-normal leading-relaxed text-left
-            whitespace-normal text-[var(--color-text-secondary)]"
-        >
-          {detail}
-        </span>
-      )}
+      {anchor &&
+        createPortal(
+          <span
+            style={{
+              position: 'fixed',
+              left: anchor.left + anchor.width / 2,
+              bottom: window.innerHeight - anchor.top + 6
+            }}
+            className="-translate-x-1/2 z-50 w-56 rounded-lg
+              border border-[var(--color-border)] bg-[var(--color-overlay-panel)] backdrop-blur-xl
+              shadow-xl px-2.5 py-1.5 text-[11px] font-normal leading-relaxed text-left
+              whitespace-normal text-[var(--color-text-secondary)]"
+          >
+            {detail}
+          </span>,
+          document.body
+        )}
     </span>
   )
 }

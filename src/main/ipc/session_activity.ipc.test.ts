@@ -13,10 +13,17 @@ vi.mock('./_wrap', () => ({
 }))
 const owned = vi.hoisted(() => ({ chats: new Set<string>(), trashed: new Set<string>(), activated: true, profile: 'profile-1' }))
 vi.mock('../db/chats', () => ({
-  chatRepo: { getOwned: vi.fn((userId: string, chatId: string) =>
-    userId === 'profile-1' && owned.chats.has(chatId)
-      ? { id: chatId, deletedAt: owned.trashed.has(chatId) ? new Date(1) : null }
-      : undefined) }
+  chatRepo: {
+    getOwned: vi.fn((userId: string, chatId: string) =>
+      userId === 'profile-1' && owned.chats.has(chatId)
+        ? { id: chatId, deletedAt: owned.trashed.has(chatId) ? new Date(1) : null }
+        : undefined),
+    // Any profile's chat.
+    isTrashed: vi.fn((chatId: string) => owned.trashed.has(chatId))
+  }
+}))
+vi.mock('../logger/logger', () => ({
+  createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
 vi.mock('../auth/activation', () => ({
   userActivation: {
@@ -92,6 +99,18 @@ describe('the session activity push', () => {
     expect(send).not.toHaveBeenCalled()
     expect(sessionActivityHub.snapshot('binned').items).toEqual([])
     expect(sessionActivityHub.hasRunning({ agentId: 'agent', chatId: 'binned' })).toBe(false)
+  })
+
+  it('drops a report for another profile\'s trashed chat, and while signed out, too', () => {
+    // `binned` is not the active profile's: `getOwned` does not find it.
+    owned.trashed.add('binned')
+    sessionActivityHub.report('binned', 'agent', start('late'))
+    expect(sessionActivityHub.hasRunning({ agentId: 'agent', chatId: 'binned' })).toBe(false)
+
+    owned.activated = false
+    sessionActivityHub.report('binned', 'agent', start('later'))
+    expect(sessionActivityHub.snapshot('binned').items).toEqual([])
+    expect(send).not.toHaveBeenCalled()
   })
 
   it('keeps another profile\'s chats, and everything while signed out, in main', () => {

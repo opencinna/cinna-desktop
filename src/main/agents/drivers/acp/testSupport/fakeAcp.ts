@@ -29,6 +29,8 @@
  *   "setMode":         { "emit": [] },
  *   "setConfigOption": { "emit": [] },
  *   "prompt":          { "emit": [], "response": { "stopReason": "end_turn" } }
+ *   // `after` is sent ~20 ms after the response, without blocking it:
+ *   // "prompt":       { "after": [ …a turn the agent starts on its own… ] }
  *   "steer":           { "response": { "outcome": "injected" } }   // _session/steering
  *
  *   // `error` replaces the response, after whatever `emit` streamed:
@@ -101,6 +103,11 @@ export interface FakeAcpHandlerScript {
    * gone, and `session/load` fails for a session it no longer has.
    */
   error?: { code?: number; message: string; data?: Record<string, unknown> }
+  /**
+   * Sent ~20 ms after the response, without blocking it: traffic the agent
+   * sends on its own between prompts (a turn it starts by itself).
+   */
+  after?: FakeAcpStep[]
 }
 
 export type FakeAcpStep =

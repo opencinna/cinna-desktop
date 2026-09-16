@@ -221,6 +221,13 @@ function handler(name, method, respond) {
       const { code = -32603, message, data } = plan.error
       throw new RequestError(code, message, data)
     }
+    // Traffic the agent sends on its own once it has answered: a turn it
+    // starts between prompts. Started after the response is on the wire.
+    if (plan.after) {
+      setTimeout(() => {
+        emit(ctx.client, plan.after, sessionId).catch((e) => err(`fake-acp: after failed: ${e}`))
+      }, 20)
+    }
     return { ...respond(ctx, plan), ...(plan.response ?? {}) }
   }
 }

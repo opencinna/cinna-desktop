@@ -24,6 +24,19 @@ export const TURN_INTERRUPTED_CODE = 'turn_interrupted'
 export const INTERRUPTED_TURN_REASON = 'The app closed before this turn finished.'
 /** The row itself, for {@link finalizeInterrupted}. */
 export const INTERRUPTED_NOTICE: TurnEndNotice = { short: INTERRUPTED_TURN_NOTICE, code: TURN_INTERRUPTED_CODE }
+/**
+ * The error row for a turn the agent started on its own (a follow-up turn:
+ * its marker names no user row) that the app was killed under. There is no
+ * message to send again.
+ */
+export const INTERRUPTED_FOLLOW_UP_NOTICE = 'The app closed while the agent was working on its own. What it wrote before that is above.'
+/** The row itself. */
+export const INTERRUPTED_FOLLOW_UP: TurnEndNotice = { short: INTERRUPTED_FOLLOW_UP_NOTICE, code: TURN_INTERRUPTED_CODE }
+
+/** The notice for a marker the boot pass settles: a follow-up turn's has no user row. */
+export function interruptedNoticeFor(marker: Pick<InflightTurnRow, 'userMessageId'>): TurnEndNotice {
+  return marker.userMessageId ? INTERRUPTED_NOTICE : INTERRUPTED_FOLLOW_UP
+}
 /** A job run left `running` by a kill from before turns had markers. */
 export const INTERRUPTED_RUN_MESSAGE = 'The app closed before this run finished.'
 
@@ -151,7 +164,7 @@ export const interruptedTurnService = {
     for (const marker of markers) {
       try {
         if (isLiveMarker(marker.id) || recoverable(marker)) continue
-        finalizeInterrupted(marker, INTERRUPTED_OUTCOME, { notice: INTERRUPTED_NOTICE })
+        finalizeInterrupted(marker, INTERRUPTED_OUTCOME, { notice: interruptedNoticeFor(marker) })
       } catch (err) {
         logger.error('could not finalize an interrupted turn', { markerId: marker.id, chatId: marker.chatId, error: errorText(err) })
       }

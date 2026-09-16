@@ -19,14 +19,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentKind } from '../../../../shared/localAgents'
 import type { LocalPermissionRequest } from '../../../../shared/localAgentRequests'
 import type { RunEvent } from '../../../../shared/runEvents'
-import type { AgentDriver, RunInput, SteerFn } from '../driver'
+import type { AgentDriver, FollowUpRequest, RunInput, SteerFn } from '../driver'
+import type { TurnSnapshot } from '../../../services/a2aStreamingService'
+import followUpFixture from './__fixtures__/claude/followup_turn.json'
 import { pendingRequests } from '../pendingRequests'
 import {
   describeDriverContract,
   type DriverContractSubject
 } from '../__golden__/driverContract'
 import { goldenRow } from '../__golden__/driverWorld'
-import { createAcpDriver, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
+import { ACP_FOLLOW_UP_EXITED, createAcpDriver, exitListenerCount, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
 import { createAcpProcessPool } from './acpProcessPool'
 import { startAcpConnection } from './acpConnection'
 import type { AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
@@ -97,6 +99,7 @@ interface World {
     onEvent?: (event: RunEvent) => void
     registerSteer?: (steer: SteerFn | null) => void
     registerSnapshot?: RunInput['registerSnapshot']
+    runScope?: RunInput['runScope']
   }): ReturnType<AgentDriver['run']>
   cleanup(): void
 }
@@ -121,6 +124,10 @@ interface WorldOptions {
   launcherReadiness?: AcpLauncher['readiness']
   deps?: Partial<AcpDriverDeps>
   spec?: { command?: string; args?: string[] }
+  /** The launcher ends every turn with a costed `usage_update`. Default: only `claude` does, as the real ones. */
+  costedEnd?: boolean
+  /** The idle reap of `observedWorld`'s pool. */
+  reapMs?: number
 }
 
 function makeWorld(options: WorldOptions = {}): World {
@@ -134,6 +141,7 @@ function makeWorld(options: WorldOptions = {}): World {
 
   const launcher: AcpLauncher = {
     id: options.launcher ?? 'opencode',
+    endsTurnsWithCostedUsage: options.costedEnd ?? options.launcher === 'claude',
     plan: async (): Promise<AcpPlanResult> =>
       options.refusal
         ? { error: options.refusal }
@@ -188,7 +196,8 @@ function makeWorld(options: WorldOptions = {}): World {
         signal: overrides.signal ?? new AbortController().signal,
         onEvent: overrides.onEvent ?? ((event) => void events.push(event)),
         ...(overrides.registerSteer ? { registerSteer: overrides.registerSteer } : {}),
-        ...(overrides.registerSnapshot ? { registerSnapshot: overrides.registerSnapshot } : {})
+        ...(overrides.registerSnapshot ? { registerSnapshot: overrides.registerSnapshot } : {}),
+        ...(overrides.runScope ? { runScope: overrides.runScope } : {})
       }),
     cleanup: () => {
       void deps.pool.shutdown()
@@ -819,7 +828,7 @@ function observedWorld(options: WorldOptions = {}): World & {
   const updates: { sessionId: string; kind: string; text?: string }[] = []
   const asks: string[] = []
   const observed = new Set<string>()
-  const pool = createAcpProcessPool({ start: startAcpConnection })
+  const pool = createAcpProcessPool({ start: startAcpConnection, ...(options.reapMs ? { idleReapMs: options.reapMs } : {}) })
   const patched = new WeakSet<AcpConnection>()
   const watched: AcpProcessPool = {
     ...pool,
@@ -1006,6 +1015,438 @@ describe('a session between turns', () => {
 
     w.pool.retire(AGENT_ID)
     await waitFor(() => w.observed.size === 0, 'the observer to be dropped')
+  })
+})
+
+
+const RUN_SCOPE = { profileUserId: 'profile-1', settingsUserId: 'settings-1' }
+
+/** The recorded unprompted Claude turn, as steps the fake sends for `ses_fake`. */
+const FOLLOW_UP_STEPS: FakeAcpStep[] = (followUpFixture.notifications as { update: Record<string, unknown> }[])
+  .map((frame) => ({ kind: 'update', sessionId: 'ses_fake', update: frame.update }))
+
+const say = (text: string, messageId?: string): FakeAcpStep => ({
+  kind: 'update',
+  sessionId: 'ses_fake',
+  update: { sessionUpdate: 'agent_message_chunk', ...(messageId ? { messageId } : {}), content: { type: 'text', text } }
+})
+const COSTED_USAGE: FakeAcpStep = {
+  kind: 'update',
+  sessionId: 'ses_fake',
+  update: { sessionUpdate: 'usage_update', used: 10, size: 100, cost: { amount: 0.01, currency: 'USD' } }
+}
+const PLAIN_USAGE: FakeAcpStep = { kind: 'update', sessionId: 'ses_fake', update: { sessionUpdate: 'usage_update', used: 10, size: 100 } }
+
+/** A prompt that says hello and ends; then, on its own, the agent sends `after`. */
+const thenOnItsOwn = (after: FakeAcpStep[]): FakeAcpScript => ({ prompt: { ...SAYS_HELLO.prompt, after } })
+
+/** What a follow-up turn streamed through its io. */
+interface FollowUpIo {
+  events: RunEvent[]
+  controller: AbortController
+  snapshot: () => TurnSnapshot | undefined
+  io: Parameters<FollowUpRequest['run']>[0]
+}
+
+function followUpIo(): FollowUpIo {
+  const events: RunEvent[] = []
+  const controller = new AbortController()
+  let read: (() => TurnSnapshot) | undefined
+  return {
+    events,
+    controller,
+    snapshot: () => read?.(),
+    io: { signal: controller.signal, onEvent: (event) => void events.push(event), registerSnapshot: (r) => { read = r } }
+  }
+}
+
+function followUpWorld(options: WorldOptions = {}): ReturnType<typeof observedWorld> & { requests: FollowUpRequest[] } {
+  const requests: FollowUpRequest[] = []
+  const w = observedWorld({
+    ...options,
+    deps: { openFollowUp: (request) => void requests.push(request), followUpQuietMs: 60_000, ...options.deps }
+  })
+  return Object.assign(w, { requests })
+}
+
+const textOf = (result: { parts: { kind: string; text: string }[] }): string =>
+  result.parts.filter((part) => part.kind === 'text').map((part) => part.text).join('')
+
+describe('a turn the agent starts on its own', () => {
+  it('is asked for in the chat’s scope and driven to the usage update that carries a cost', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn(FOLLOW_UP_STEPS), launcher: 'claude' })
+    const first = await w.run({ runScope: RUN_SCOPE })
+    expect(first.text).toBe('Hello.')
+
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    expect(request).toMatchObject({ chatId: CHAT_ID, agentId: AGENT_ID, driverId: 'acp', scope: RUN_SCOPE })
+    expect(w.scopes[0]).toMatchObject(RUN_SCOPE)
+
+    const f = followUpIo()
+    const started = Date.now()
+    const result = await request.run(f.io)
+
+    // The marker, not the sixty-second quiet spell.
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(result.error).toBeUndefined()
+    expect(result.taskState).toBeUndefined()
+    expect(textOf(result)).toBe('Output: `probe-done`')
+    expect(result.parts.some((part) => part.kind === 'tool' || part.toolName !== undefined)).toBe(true)
+    expect(f.events.some((event) => event.type === 'delta')).toBe(true)
+    // The task updates before the trigger went to the activity hook, not the turn.
+    expect(w.updates.map((u) => u.kind)).toEqual(['async_task_state_update', 'async_task_state_update', 'usage_update'])
+    // Listening again afterwards, and nothing else was asked for.
+    await settle(100)
+    expect(w.requests).toHaveLength(1)
+    expect([...w.observed]).toEqual(['ses_fake'])
+  })
+
+  it('is not ended by a usage update without a cost', async () => {
+    const w = followUpWorld({
+      script: thenOnItsOwn([say('one ', 'm1'), PLAIN_USAGE, { kind: 'delay', ms: 150 }, say('two', 'm1'), COSTED_USAGE])
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const result = await request.run(followUpIo().io)
+    expect(textOf(result)).toBe('one two')
+  })
+
+  it('ends after a quiet spell when the engine sends no end marker', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('Merged.', 'm1')]), deps: { followUpQuietMs: 250 } })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const started = Date.now()
+    const result = await request.run(followUpIo().io)
+    expect(Date.now() - started).toBeGreaterThanOrEqual(240)
+    expect(result.error).toBeUndefined()
+    expect(textOf(result)).toBe('Merged.')
+    expect(w.fake.received('session/cancel')).toHaveLength(0)
+  })
+
+  it('does not count a tool call still running as quiet, and gives up at the ceiling', async () => {
+    const w = followUpWorld({
+      script: thenOnItsOwn([
+        { kind: 'update', sessionId: 'ses_fake', update: { sessionUpdate: 'tool_call', toolCallId: 'call_bg', title: 'Bash', status: 'in_progress' } }
+      ]),
+      deps: { followUpQuietMs: 100, turnCeilingMs: 600 }
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const started = Date.now()
+    const result = await request.run(followUpIo().io)
+
+    expect(Date.now() - started).toBeGreaterThanOrEqual(590)
+    expect(result.error?.message).toBe('The agent stopped responding and the turn was ended.')
+    expect(w.fake.received('session/cancel')).toHaveLength(1)
+  })
+
+  it('sends session/cancel on Stop and ends canceled once the agent ends its turn', async () => {
+    const w = followUpWorld({
+      script: thenOnItsOwn([say('working', 'm1'), { kind: 'awaitCancel', sessionId: 'ses_fake' }, COSTED_USAGE])
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const f = followUpIo()
+    const running = request.run(f.io)
+    await waitFor(() => f.events.some((event) => event.type === 'delta'), 'the first delta')
+
+    f.controller.abort()
+    const result = await running
+    expect(w.fake.received('session/cancel')).toHaveLength(1)
+    expect(result.taskState).toBe('canceled')
+    expect(result.stopReason).toBe('canceled')
+    expect(result.error).toBeUndefined()
+    expect(textOf(result)).toBe('working')
+    // Acknowledged by the end marker: the process was not retired.
+    expect(w.pool.status(AGENT_ID).state).toBe('running')
+  })
+
+  it('parks a permission asked between turns, posts it for the Inbox, and takes the answer through respond', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([{ kind: 'permission', sessionId: 'ses_fake' }, say('Merged.', 'm1'), COSTED_USAGE]) })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const f = followUpIo()
+    const running = request.run(f.io)
+
+    const asked = await waitFor(
+      () => f.events.find((event): event is Extract<RunEvent, { type: 'needs_input' }> => event.type === 'needs_input'),
+      'the needs_input event'
+    )
+    // Not refused after ten seconds, nor at once.
+    await settle(100)
+    expect(w.fake.answers('session/request_permission')).toHaveLength(0)
+    expect(asked.resume).toBe('reply')
+
+    const outcome = w.driver.respond(
+      { requestId: asked.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission' },
+      { kind: 'permission', reply: 'once' }
+    )
+    expect(outcome).toEqual({ delivered: true })
+    const result = await running
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'once' } })
+    expect(f.events.some((event) => event.type === 'input_resolved')).toBe(true)
+    expect(result.text).toContain('Merged.')
+  })
+
+  it('drops a late update for the saved turn’s tool call and a text chunk with no message id, and opens nothing', async () => {
+    const w = followUpWorld({
+      script: {
+        prompt: {
+          emit: [
+            { kind: 'update', update: { sessionUpdate: 'tool_call', toolCallId: 'call_exec', title: 'exec', status: 'in_progress' } },
+            { kind: 'update', update: { sessionUpdate: 'agent_message_chunk', messageId: 'm0', content: { type: 'text', text: 'Started.' } } }
+          ],
+          after: [
+            { kind: 'update', sessionId: 'ses_fake', update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_exec', status: 'completed' } },
+            say('**Task stopped by user:** sleep 120.')
+          ]
+        }
+      }
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    await settle(300)
+    expect(w.requests).toEqual([])
+    expect(w.updates).toEqual([])
+  })
+
+  it('opens two follow-ups for two unprompted turns in a row', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('first', 'm1'), COSTED_USAGE, say('second', 'm2'), COSTED_USAGE]) })
+    await w.run({ runScope: RUN_SCOPE })
+    // Let both turns arrive before the first is opened: the second is what the
+    // first leaves behind.
+    await settle(200)
+    const one = await waitFor(() => w.requests[0], 'the first request')
+    const firstResult = await one.run(followUpIo().io)
+    const two = await waitFor(() => w.requests[1], 'the second request')
+    const secondResult = await two.run(followUpIo().io)
+
+    expect(textOf(firstResult)).toBe('first')
+    expect(textOf(secondResult)).toBe('second')
+    expect(w.requests).toHaveLength(2)
+  })
+
+  it('hands what was held to a turn the user starts on the same session, and opens nothing for it', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('Merged.', 'm1'), { kind: 'permission', sessionId: 'ses_fake' }]) })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    // Not opened (the chat is busy, say); the ask reaches the gate meanwhile.
+    await settle(200)
+    expect(w.fake.answers('session/request_permission')).toHaveLength(0)
+
+    const second = await w.run({ runScope: RUN_SCOPE })
+    expect(request.wanted()).toBe(false)
+    expect(second.text).toContain('Merged.')
+    expect(second.text).toContain('Hello.')
+    // The held ask was the second turn's: parked there, and released when it ended.
+    const answer = await waitFor(() => w.fake.answers('session/request_permission')[0], 'the ask to be answered')
+    expect(answer.result).toEqual({ outcome: { outcome: 'selected', optionId: 'reject' } })
+  })
+
+  it('refuses a held ask and stops listening when the follow-up is abandoned', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([{ kind: 'permission', sessionId: 'ses_fake' }]) })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+
+    request.abandon('the chat no longer answers to this agent')
+    await waitFor(() => w.fake.answers('session/request_permission')[0], 'the refusal')
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'cancelled' } })
+    expect([...w.observed]).toEqual([])
+    expect(request.wanted()).toBe(false)
+  })
+
+  it('opens nothing for a turn with no chat scope of its own, and the listener still hears it', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('Merged.', 'm1')]) })
+    await w.run()
+    await waitFor(() => w.updates.length > 0, 'the update to reach the listener')
+    expect(w.requests).toEqual([])
+    expect(w.updates).toEqual([{ sessionId: 'ses_fake', kind: 'agent_message_chunk', text: 'Merged.' }])
+  })
+
+  it('offers what it streamed so far, for the save at quit', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('half a reply', 'm1'), { kind: 'awaitCancel', sessionId: 'ses_fake' }]) })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const f = followUpIo()
+    const running = request.run(f.io)
+    await waitFor(() => f.snapshot()?.parts.length, 'a snapshot with parts')
+    expect(f.snapshot()!.parts.map((part) => part.text).join('')).toBe('half a reply')
+    f.controller.abort()
+    await running
+  })
+
+  it('ends with an error when the process goes away under it', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('working', 'm1'), { kind: 'delay', ms: 200 }, { kind: 'exit', code: 1 }]) })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const f = followUpIo()
+    const result = await request.run(f.io)
+    expect(result.error?.message).toBe(ACP_FOLLOW_UP_EXITED)
+    expect(textOf(result)).toBe('working')
+  })
+})
+
+describe('a turn the agent starts on its own, at the edges', () => {
+  it('keeps the process from the reaper while it waits to be opened, and lets go once it is dropped', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('Merged.', 'm1')]), reapMs: 150 })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    expect(w.pool.held(AGENT_ID)).toBe(true)
+    // Well past the reap: the chat is busy, say, and the follow-up waits.
+    await settle(500)
+    expect(w.pool.status(AGENT_ID).state).toBe('running')
+
+    request.abandon('the chat is in the trash')
+    expect(w.pool.held(AGENT_ID)).toBe(false)
+    await waitFor(() => w.pool.status(AGENT_ID).state === 'stopped', 'the idle reap')
+  })
+
+  it('lets go of the waiting hold once the follow-up runs, and the run’s own hold once it ends', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('Merged.', 'm1'), COSTED_USAGE]), launcher: 'claude' })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    await request.run(followUpIo().io)
+    expect(w.pool.held(AGENT_ID)).toBe(false)
+  })
+
+  it('lets go of the waiting hold when a user turn takes the traffic', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('Merged.', 'm1')]) })
+    await w.run({ runScope: RUN_SCOPE })
+    await waitFor(() => w.requests[0], 'the follow-up request')
+    await w.run({ runScope: RUN_SCOPE })
+    expect(w.pool.held(AGENT_ID)).toBe(false)
+  })
+
+  it('lets go of the waiting hold when the process exits', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('Merged.', 'm1'), { kind: 'delay', ms: 200 }, { kind: 'exit', code: 1 }]) })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    expect(w.pool.held(AGENT_ID)).toBe(true)
+    await waitFor(() => w.pool.status(AGENT_ID).state === 'exited', 'the exit')
+    await waitFor(() => !w.pool.held(AGENT_ID), 'the hold to be released')
+    expect(request.wanted()).toBe(false)
+  })
+
+  it('is not ended by a pause on an engine that marks its turns’ end', async () => {
+    const w = followUpWorld({
+      script: thenOnItsOwn([say('one ', 'm1'), { kind: 'delay', ms: 500 }, say('two', 'm1'), COSTED_USAGE]),
+      launcher: 'claude',
+      deps: { followUpQuietMs: 100 }
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const result = await request.run(followUpIo().io)
+    expect(textOf(result)).toBe('one two')
+    await settle(100)
+    expect(w.requests).toHaveLength(1)
+  })
+
+  it('on an engine that marks its turns’ end, waits for the marker rather than a quiet spell, up to the ceiling', async () => {
+    const w = followUpWorld({
+      script: thenOnItsOwn([say('thinking', 'm1')]),
+      costedEnd: true,
+      deps: { followUpQuietMs: 100, turnCeilingMs: 600 }
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const started = Date.now()
+    const result = await request.run(followUpIo().io)
+    expect(Date.now() - started).toBeGreaterThanOrEqual(590)
+    expect(result.error?.message).toBe('The agent stopped responding and the turn was ended.')
+  })
+
+  it('ends canceled on a Stop the agent never acknowledges, and leaves the process running', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('working', 'm1'), { kind: 'awaitCancel', sessionId: 'ses_fake' }]) })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const f = followUpIo()
+    const running = request.run(f.io)
+    await waitFor(() => f.events.some((event) => event.type === 'delta'), 'the first delta')
+
+    f.controller.abort()
+    const result = await running
+    expect(result.taskState).toBe('canceled')
+    expect(result.error).toBeUndefined()
+    expect(textOf(result)).toBe('working')
+    await settle(200)
+    expect(w.pool.status(AGENT_ID).state).toBe('running')
+    expect(w.connections[0].alive).toBe(true)
+  })
+
+  it('gives held updates back when the user turn that took them failed first, and opens a follow-up for them', async () => {
+    // An engine that cannot load sessions: the second turn asks for a fresh
+    // one, and that fails before the held traffic is replayed.
+    const w = followUpWorld({
+      script: {
+        ...thenOnItsOwn([say('Merged.', 'm1'), { kind: 'permission', sessionId: 'ses_fake' }, COSTED_USAGE]),
+        initialize: { response: { agentCapabilities: {} } }
+      }
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const first = await waitFor(() => w.requests[0], 'the follow-up request')
+    // The ask reaches the gate too.
+    await settle(300)
+
+    w.connections[0].newSession = async () => { throw new Error('quota exceeded') }
+    const failed = await w.run({ runScope: RUN_SCOPE })
+    expect(failed.error).toBeDefined()
+    expect(first.wanted()).toBe(false)
+    // The ask was refused; the update opened a new follow-up.
+    const answer = await waitFor(() => w.fake.answers('session/request_permission')[0], 'the refusal')
+    expect(answer.result).toEqual({ outcome: { outcome: 'cancelled' } })
+    const second = await waitFor(() => w.requests[1], 'the second follow-up request')
+    const result = await second.run(followUpIo().io)
+    expect(textOf(result)).toBe('Merged.')
+  })
+
+  it('keeps listening to the session when a follow-up is dropped because the chat stayed busy', async () => {
+    const w = followUpWorld({
+      script: thenOnItsOwn([{ kind: 'permission', sessionId: 'ses_fake' }, { kind: 'delay', ms: 300 }, say('again', 'm2'), COSTED_USAGE])
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const first = await waitFor(() => w.requests[0], 'the follow-up request')
+
+    first.abandon('the chat stayed busy', { keepListening: true })
+    const answer = await waitFor(() => w.fake.answers('session/request_permission')[0], 'the refusal')
+    expect(answer.result).toEqual({ outcome: { outcome: 'cancelled' } })
+    expect(first.wanted()).toBe(false)
+    expect([...w.observed]).toEqual(['ses_fake'])
+    expect(w.pool.held(AGENT_ID)).toBe(false)
+
+    const second = await waitFor(() => w.requests[1], 'the next follow-up request')
+    expect(textOf(await second.run(followUpIo().io))).toBe('again')
+  })
+
+  it('ends at once, with nothing, when a user turn took its traffic before it ran', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('Merged.', 'm1')]) })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    await w.run({ runScope: RUN_SCOPE })
+
+    const started = Date.now()
+    const result = await request.run(followUpIo().io)
+    expect(Date.now() - started).toBeLessThan(1_000)
+    expect(result.parts).toEqual([])
+    expect(w.pool.held(AGENT_ID)).toBe(false)
+  })
+
+  it('leaves no listener on the process for a follow-up that ended', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([say('first', 'm1'), COSTED_USAGE, say('second', 'm2'), COSTED_USAGE]), launcher: 'claude' })
+    await w.run({ runScope: RUN_SCOPE })
+    await settle(200)
+    const connection = w.connections[0]
+    const then = vi.spyOn(connection.exited, 'then')
+
+    const one = await waitFor(() => w.requests[0], 'the first request')
+    const f = followUpIo()
+    const running = one.run(f.io)
+    await waitFor(() => exitListenerCount(connection) === 1, 'the running follow-up’s listener')
+    await running
+    expect(exitListenerCount(connection)).toBe(0)
+    const two = await waitFor(() => w.requests[1], 'the second request')
+    await two.run(followUpIo().io)
+    expect(exitListenerCount(connection)).toBe(0)
+    // One `then` on the process's exit for the connection, not one per turn.
+    expect(then.mock.calls.length).toBeLessThanOrEqual(1)
   })
 })
 

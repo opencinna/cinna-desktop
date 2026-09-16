@@ -22,10 +22,21 @@ import { TaskStatusIcon } from './TaskStatusIcon'
  * could then shove sideways (`ux_rules.md` §1).
  */
 export function TaskRow({
-  task
+  task,
+  size = 'regular',
+  onOpened
 }: {
   task: Pick<TaskDto, 'id' | 'title' | 'status' | 'updatedAt'>
+  /**
+   * The type scale of the surface the row renders into (`ux_rules.md` §12):
+   * `regular` is the Inbox's 13/11, `compact` the composer chrome's 12/11
+   * (the Tasks popover under the input). A size, not a behaviour.
+   */
+  size?: 'regular' | 'compact'
+  /** After the task was opened — a popover around the row closes itself. */
+  onOpened?: () => void
 }): React.JSX.Element {
+  const compact = size === 'compact'
   const openTask = useOpenTask()
   const now = useRelativeNow()
   return (
@@ -46,7 +57,10 @@ export function TaskRow({
         reach by reading the row.
       */
       aria-label={`${task.title} — ${task.status.replace(/_/g, ' ')}`}
-      onClick={() => openTask(task.id)}
+      onClick={() => {
+        openTask(task.id)
+        onOpened?.()
+      }}
       /*
         One line per task, and the height says so: `leading-5` is the
         13 px scale's own leading, so the row is that plus `py-1` and
@@ -54,7 +68,9 @@ export function TaskRow({
         pixel count picked to look right, which is what keeps it in
         step if the scale ever moves (`ux_rules.md` §12).
       */
-      className="w-full flex items-center gap-2.5 px-2 py-1 rounded text-left leading-5 hover:bg-[var(--color-bg-hover)]"
+      className={`w-full flex items-center rounded text-left hover:bg-[var(--color-bg-hover)] ${
+        compact ? 'gap-2 px-1.5 py-1 leading-4' : 'gap-2.5 px-2 py-1 leading-5'
+      }`}
     >
       {/*
         The status leads the row rather than trailing it. In a list,
@@ -65,7 +81,7 @@ export function TaskRow({
       */}
       <TaskStatusIcon status={task.status} />
       <span
-        className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-text)]"
+        className={`min-w-0 flex-1 truncate ${compact ? 'text-[12px]' : 'text-[13px]'} text-[var(--color-text)]`}
         title={task.title}
       >
         {task.title}

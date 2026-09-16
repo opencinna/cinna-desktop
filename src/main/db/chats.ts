@@ -33,6 +33,20 @@ export const chatRepo = {
       .get()
   },
 
+  /**
+   * Whether the chat, whichever profile owns it, is in the trash. For
+   * main-process housekeeping that must not depend on the active profile;
+   * never an answer to the renderer.
+   */
+  isTrashed(chatId: string): boolean {
+    const row = getDb()
+      .select({ deletedAt: chats.deletedAt })
+      .from(chats)
+      .where(eq(chats.id, chatId))
+      .get()
+    return !!row?.deletedAt
+  },
+
   /** Load the full message history for an owned chat (caller must pre-verify ownership). */
   listMessageIds(chatId: string): string[] {
     return getDb().select({ id: messages.id }).from(messages).where(eq(messages.chatId, chatId)).all().map((row) => row.id)

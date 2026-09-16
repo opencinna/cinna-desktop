@@ -32,8 +32,9 @@ import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
 import { MentionPopup } from './MentionPopup'
 import { useChatComposer } from '../../hooks/useChatComposer'
 import { ActiveMcpChips } from './ActiveMcpChips'
-import { OnDemandAgentChips } from './OnDemandAgentChips'
+import { OnDemandAgentChips, agentChipClass } from './OnDemandAgentChips'
 import { RouterBadge, type RouterBadgeInfo } from './RouterBadge'
+import { SessionMetaBadges } from './SessionMetaBadges'
 import { routingOf } from '../../../../shared/chatRouting'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { AttachmentList } from './AttachmentBadge'
@@ -1743,60 +1744,89 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         emptyLabel="No agents or MCP servers available"
       />
 
-      <div className="flex items-center justify-between px-1 pt-2">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <ComposerPlusMenu
-            canAttachFiles={canShowAttachButton && !isStreaming}
-            uploading={isUploading}
-            onAttachFiles={() => {
-              observeHint('files-picked-via-menu')
-              // Return focus to the composer after the file dialog closes so the
-              // user can keep typing without re-clicking the input.
-              void pickAttachments().finally(focusComposer)
-            }}
-            hasCapabilities={hasCapabilities || catalogItems.length > 0}
-            onOpenCapabilityPicker={() => setCapabilityPickerOpen(true)}
-            modeMenu={hintedModeMenu}
-            coordinateToggle={coordinateToggle}
-            autonomousRun={chatId && chatRouting.router === 'coordinator'
-              ? { disabled: isStreaming, onStart: () => setAutonomousGoal(input) } : undefined}
-            activeModeColor={modeColor ? { border: modeColor.border } : null}
-          />
-          {chatId && boundAgent ? (
-            <div
-              className="flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border
-                text-[var(--color-accent)] border-[var(--color-accent)] bg-[var(--color-accent)]/10"
-            >
-              <Bot size={14} className="shrink-0" />
-              <span className="text-[11px] font-medium whitespace-nowrap">
-                {boundAgent.name}
-              </span>
-            </div>
-          ) : chatId && showsChatControls ? (
+      {/* `@container/composer`: the session badges collapse by this row's width.
+          `gap-2`: a chip scrolled half out of view must not touch the badges. */}
+      <div className="@container/composer flex items-center justify-between gap-2 px-1 pt-2">
+        {/*
+          One line at every width (ux_rules §1): a session badge arriving on the
+          right must never fold this cluster onto a second row and move the
+          textarea while the user types. The chips shrink to a floor
+          (`agentChipClass`) and what still does not fit scrolls sideways,
+          scrollbar hidden. The plus menu and ChatControls stay outside the
+          scroller, fixed width: their menus are positioned absolutely and a
+          scrolling box would clip them.
+        */}
+        <div className="flex items-center gap-1.5 flex-nowrap min-w-0">
+          <div className="shrink-0">
+            <ComposerPlusMenu
+              canAttachFiles={canShowAttachButton && !isStreaming}
+              uploading={isUploading}
+              onAttachFiles={() => {
+                observeHint('files-picked-via-menu')
+                // Return focus to the composer after the file dialog closes so the
+                // user can keep typing without re-clicking the input.
+                void pickAttachments().finally(focusComposer)
+              }}
+              hasCapabilities={hasCapabilities || catalogItems.length > 0}
+              onOpenCapabilityPicker={() => setCapabilityPickerOpen(true)}
+              modeMenu={hintedModeMenu}
+              coordinateToggle={coordinateToggle}
+              autonomousRun={chatId && chatRouting.router === 'coordinator'
+                ? { disabled: isStreaming, onStart: () => setAutonomousGoal(input) } : undefined}
+              activeModeColor={modeColor ? { border: modeColor.border } : null}
+            />
+          </div>
+          {chatId && !boundAgent && showsChatControls && (
             // Mode-less active LLM chats keep their manual model + baseline-MCP
             // controls; moded chats configure those through the chat mode.
-            <ChatControls chatId={chatId} inline />
-          ) : null}
-          {chatId ? (
-            <OnDemandAgentChips chatId={chatId} addressing={chipAddressing} />
-          ) : pendingAgentIds && onRemovePendingAgent ? (
-            <OnDemandAgentChips
-              pendingIds={pendingAgentIds}
-              onRemovePending={onRemovePendingAgent}
-            />
-          ) : null}
-          {chatId ? (
-            <ActiveMcpChips chatId={chatId} baselineIds={baselineIds} />
-          ) : pendingMcpIds && onRemovePendingMcp ? (
-            <ActiveMcpChips
-              pendingIds={pendingMcpIds}
-              onRemovePending={onRemovePendingMcp}
-              baselineIds={baselineIds}
-            />
-          ) : null}
+            <div className="shrink-0">
+              <ChatControls chatId={chatId} inline />
+            </div>
+          )}
+          <div
+            data-testid="composer-chips"
+            className="flex items-center gap-1.5 flex-nowrap min-w-0 overflow-x-auto p-0.5 -m-0.5 empty:hidden
+              [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            // A chip reached with Tab may sit past the visible edge.
+            onFocus={(event) => event.target.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })}
+          >
+            {chatId && boundAgent && (
+              // The text stays whole in the DOM, so its accessible name does too.
+              <div
+                className={`flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border ${agentChipClass}
+                  text-[var(--color-accent)] border-[var(--color-accent)] bg-[var(--color-accent)]/10`}
+                title={boundAgent.name}
+              >
+                <Bot size={14} className="shrink-0" />
+                <span className="min-w-0 truncate text-[11px] font-medium whitespace-nowrap">
+                  {boundAgent.name}
+                </span>
+              </div>
+            )}
+            {chatId ? (
+              <OnDemandAgentChips chatId={chatId} addressing={chipAddressing} />
+            ) : pendingAgentIds && onRemovePendingAgent ? (
+              <OnDemandAgentChips
+                pendingIds={pendingAgentIds}
+                onRemovePending={onRemovePendingAgent}
+              />
+            ) : null}
+            {chatId ? (
+              <ActiveMcpChips chatId={chatId} baselineIds={baselineIds} />
+            ) : pendingMcpIds && onRemovePendingMcp ? (
+              <ActiveMcpChips
+                pendingIds={pendingMcpIds}
+                onRemovePending={onRemovePendingMcp}
+                baselineIds={baselineIds}
+              />
+            ) : null}
+          </div>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        {/* `shrink-0`: the left cluster gives way (its chips shrink, then
+            scroll); this one never does, so Send never folds or moves. */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {chatId && <SessionMetaBadges chatId={chatId} />}
           {badgeInfo && (badgeInfo.router !== 'direct' || (chatId ? boundAgent : selectedAgent)) && (
             <RouterBadge
               router={badgeInfo.router}
