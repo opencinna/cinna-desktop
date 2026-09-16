@@ -15,7 +15,6 @@ import { JobFolderRow } from './JobFolderRow'
 import { JobFolderEditModal } from './JobFolderEditModal'
 import { JobTypePicker } from './JobTypePicker'
 import { JobsDragContext, type JobsDrag } from './dragContext'
-import { TaskList } from '../tasks/TaskList'
 
 export function JobsList(): React.JSX.Element {
   const { data: jobs, isLoading } = useJobList()
@@ -233,7 +232,12 @@ export function JobsList(): React.JSX.Element {
           )}
         </div>
 
-        <div className="max-h-[45%] overflow-y-auto border-t border-[var(--color-border)]"><TaskList /></div>
+        {/*
+          The tasks list used to sit here, under a rule, taking 45% of the
+          panel. It is on the Inbox screen now: tasks are what jobs and
+          conversations leave behind, not something started from this list, and
+          the sidebar's job is the jobs.
+        */}
         {pickingType && <JobTypePicker onClose={() => setPickingType(false)} />}
         {renamingFolder && (
           <JobFolderEditModal

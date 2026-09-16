@@ -33,7 +33,7 @@ beforeEach(() => {
   ;(window as unknown as { api: Record<string, unknown> }).api = {
     app: { setTheme: async () => undefined },
     agentStatus: { list },
-    inbox: { list: async () => [] }
+    inbox: { list: async () => ({ entries: [], unreadable: [] }) }
   }
 })
 

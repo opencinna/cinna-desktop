@@ -190,9 +190,13 @@ test('remote and local asks share the Inbox; remote failures stay retryable and 
   expect(acp.answers('session/request_permission')).toEqual([])
 
   await test.step('a failed remote refresh keeps both cards and exposes a retry', async () => {
+    // The read no longer fails whole: the local ask is still read, the remote
+    // card is retained by the renderer while its service is unreadable, and
+    // both stay answerable. The count is what is on screen, and the warning
+    // says the list may be short.
     state.failRead = true
-    await expect(inbox()).toHaveAccessibleName('Inbox — could not be read', { timeout: 20_000 })
-    await expect(cinna.page.getByText('Showing the last read — the inbox could not be refreshed.', { exact: true })).toBeVisible()
+    await expect(inbox()).toHaveAccessibleName('Inbox — 2 waiting, one service could not be read', { timeout: 20_000 })
+    await expect(cinna.page.getByText('One service could not be read — some requests may be missing.', { exact: true })).toBeVisible()
     await expect(cinna.page.getByRole('article')).toHaveCount(2)
     await expect(remote().getByRole('button', { name: 'Answer', exact: true })).toBeEnabled()
     state.failRead = false
@@ -246,9 +250,12 @@ test('an initial remote Inbox read failure is visible and Try again recovers the
   state.failRead = true
   await seedRemote(cinna)
   const inbox = () => cinna.page.getByRole('button', { name: /^Inbox/ })
-  await expect(inbox()).toHaveAccessibleName('Inbox — could not be read', { timeout: 20_000 })
+  // Nothing local is waiting and the one bound service cannot be read, so the
+  // read *succeeds* with a hole in it: the screen says which part is missing
+  // rather than that nothing wants the user.
+  await expect(inbox()).toHaveAccessibleName('Inbox — one service could not be read', { timeout: 20_000 })
   await inbox().click()
-  await expect(cinna.page.getByText('The inbox could not be read.', { exact: true })).toBeVisible()
+  await expect(cinna.page.getByText('Part of the inbox could not be read.', { exact: true })).toBeVisible()
   await expect(cinna.page.getByText('Anything waiting is still waiting — this is the list, not the requests.', { exact: true })).toBeVisible()
   await expect(cinna.page.getByText('Nothing is waiting on you.', { exact: true })).toHaveCount(0)
   state.failRead = false

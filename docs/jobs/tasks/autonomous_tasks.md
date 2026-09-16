@@ -17,7 +17,7 @@ Let a configured coordinator work toward a goal while the user leaves the conver
 2. Press **Start task**. Main validates the configured coordinator and records the task/checkpoint before queuing work. The dialog closes after admission; the current conversation stays open. A refusal preserves the goal and limit fields. A changed composer draft is not cleared by the earlier submission.
 3. The coordinator may delegate to attached agents, update task progress or hand the next turn to a specialist. Delegation returns into the current model loop. A completed handed-off turn returns to the coordinator; a question pauses work instead.
 4. Answer a coordinator or specialist question through the Inbox. Acceptance advances the saved checkpoint and queues its continuation without leaving the Inbox. The same task/chat and any linked job provenance remain; a new job attempt is not created.
-5. Open the task from Jobs → Tasks for **Stop task**, **Open the Inbox**, execution limits or, after interruption, **Resume task**. Resume reviews saved work through a new instruction; it does not mechanically resend the interrupted tool batch.
+5. Open the task from the Inbox's **Recent tasks** (or the job's run history) for **Stop task**, **Open the Inbox**, execution limits or, after interruption, **Resume task**. Resume reviews saved work through a new instruction; it does not mechanically resend the interrupted tool batch.
 6. Settings → Default → Agents → Tasks → **Autonomous task concurrency** changes the device-wide admission limit from one to eight, default two.
 
 ## Business Rules

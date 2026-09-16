@@ -200,12 +200,34 @@ function TaskPage({
    */
   const asks = useMemo(
     () => ({
-      count: (inbox.data ?? []).filter((entry) => entry.taskId === task.id).length,
-      known: inbox.isSuccess,
-      failed: inbox.isError,
+      count: (inbox.data?.entries ?? []).filter((entry) => entry.taskId === task.id).length,
+      /**
+       * A service the read could not reach makes the answer unknown only for a
+       * task that could have an ask *there*. A task with no remote binding can
+       * only have local asks, and those came out of this device's own database
+       * — complete the moment the query resolved, whatever any network did.
+       *
+       * The test is `task.remote` rather than "this task's adapter is the one
+       * that failed", for the reason the retention in `useInbox` carries the
+       * same limit: one ask-capable adapter ships, so the two questions have
+       * one answer. `TaskDto.remote.adapter` is right here when that stops
+       * being true, and comparing it to `unreadable[].adapter` is a comparison
+       * rather than a branch on a service name.
+       */
+      known: inbox.isSuccess && ((inbox.data?.unreadable.length ?? 0) === 0 || !task.remote),
+      /**
+       * **Both failures read the same to the user, so both say so.** A read
+       * that rejected and a read that came back with a hole where this task's
+       * own service should have been leave the page equally unable to say what
+       * the task is waiting on. Testing only `isError` left the second one
+       * rendering "This task is blocked." alone — the single state on this page
+       * with no explanation of itself and no way to ask again (`ux_rules.md`
+       * §6), reached by the commonest cause of the two.
+       */
+      failed: inbox.isError || ((inbox.data?.unreadable.length ?? 0) > 0 && !!task.remote),
       retry: () => void inbox.refetch()
     }),
-    [inbox.data, inbox.isError, inbox.isSuccess, inbox.refetch, task.id]
+    [inbox.data, inbox.isError, inbox.isSuccess, inbox.refetch, task.id, task.remote]
   )
 
   /**
@@ -268,16 +290,38 @@ function TaskPage({
                 it with it (`ux_rules.md` §1). The space is reserved for any
                 task that has a job; only the sentence in it arrives late.
 
-                A task with no job gets no slot, and it needs none: the header's
-                own **Open the conversation** is the way out for one that has a
-                chat, and a task with neither is a peer copy whose chat did not
-                travel — there is nowhere on this machine to go back to. See the
-                note on `back` above.
+                A task with no job gets no slot for *that* link, and the third
+                arm below covers what is left.
               */}
               {task.parentTaskId && (
                 <button type="button" onClick={() => openTask(task.parentTaskId!)}
                   className="inline-flex items-center gap-1 mb-1.5 text-[11px] font-medium text-[var(--color-accent)]">
                   <ArrowLeft size={11} />Parent task
+                </button>
+              )}
+              {/*
+                **The way back to a list of tasks, for the task that has no
+                other.** A subtask goes up to its parent and a job's task goes
+                back to its job; a task with neither — one a conversation minted
+                at its first ask, one that arrived over sync — had nothing here
+                at all. That was survivable while the sidebar carried a Tasks
+                section: the list was on screen beside the page. With the list
+                moved to the Inbox, the only route left was the top-bar icon,
+                which announces "Inbox" and says nothing about tasks, so the
+                escape existed and was not named after what is behind it.
+
+                Deliberately **not** added to a header that already has one of
+                the two above. Those two are independent of each other — a
+                child that also carries a job renders both, and each names a
+                different relationship — but a third arrow beside them is the
+                "two controls, one noun" the note further up rejected, and the
+                page then argues with itself about where back is. So this arm
+                only ever fills a header that would otherwise have none.
+              */}
+              {!task.parentTaskId && !task.jobId && (
+                <button type="button" onClick={() => setActiveView('inbox')}
+                  className="inline-flex items-center gap-1 mb-1.5 text-[11px] font-medium text-[var(--color-accent)]">
+                  <ArrowLeft size={11} />Back to the Inbox
                 </button>
               )}
               {task.jobId && (

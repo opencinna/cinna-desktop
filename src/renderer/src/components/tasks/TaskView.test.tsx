@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { InboxEntry } from '../../../../shared/inbox'
+import type { InboxEntry, InboxSnapshot, InboxUnreadableSource } from '../../../../shared/inbox'
 import type { TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
 
@@ -19,7 +19,12 @@ import type { TaskStatus } from '../../../../shared/taskStatus'
  */
 
 const getTask = vi.fn<() => Promise<TaskDto>>()
-const listInbox = vi.fn<() => Promise<InboxEntry[]>>()
+const listInbox = vi.fn<() => Promise<InboxSnapshot>>()
+
+/** One inbox read: what is waiting, and which services could not be asked. */
+function inbox(entries: InboxEntry[], unreadable: InboxUnreadableSource[] = []): InboxSnapshot {
+  return { entries, unreadable }
+}
 const getChat = vi.fn()
 const setStatus = vi.fn<(taskId: string, status: TaskStatus) => Promise<TaskDto>>()
 const takeOver = vi.fn<(taskId: string, force?: boolean) => Promise<TaskDto>>()
@@ -120,7 +125,7 @@ beforeEach(() => {
   client = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchInterval: false } }
   })
-  listInbox.mockResolvedValue([])
+  listInbox.mockResolvedValue(inbox([]))
   getChat.mockResolvedValue({
     id: 'c1',
     messages: [
@@ -201,9 +206,37 @@ describe('a blocked task with nothing waiting on it', () => {
   })
 })
 
+describe('the way back to a list of tasks', () => {
+  it('offers the Inbox to a task with neither a parent nor a job', async () => {
+    // Mutation: drop the arm and this fails — with the sidebar's Tasks section
+    // gone, a task a conversation minted at its first ask has no named route
+    // back to a list of tasks at all. The only escape left is the top-bar icon,
+    // which announces "Inbox" and nothing about tasks.
+    await renderTask({ jobId: null, jobRunId: null })
+    await act(async () => {
+      screen.getByRole('button', { name: 'Back to the Inbox' }).click()
+    })
+    expect(useUIStore.getState().activeView).toBe('inbox')
+  })
+
+  it('leaves it off when the header already has one', async () => {
+    // One arm each, most specific first. BASE carries a job, so the job link is
+    // the way back and a second arrow beside it would be two controls for one
+    // noun — the thing this header rejected once already.
+    await renderTask()
+    expect(screen.queryByRole('button', { name: 'Back to the Inbox' })).toBeNull()
+  })
+
+  it('leaves it off for a subtask, which goes up instead', async () => {
+    await renderTask({ jobId: null, jobRunId: null, parentTaskId: 'p1' })
+    expect(screen.getByRole('button', { name: 'Parent task' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back to the Inbox' })).toBeNull()
+  })
+})
+
 describe('a blocked task that is genuinely waiting', () => {
   it('points at the inbox instead of offering a re-run', async () => {
-    listInbox.mockResolvedValue([WAITING])
+    listInbox.mockResolvedValue(inbox([WAITING]))
     await renderTask()
     await screen.findByText(/waiting on an answer from you/)
     expect(screen.getByRole('button', { name: 'Open the Inbox' })).toBeTruthy()
@@ -211,7 +244,7 @@ describe('a blocked task that is genuinely waiting', () => {
   })
 
   it('counts only the asks that belong to this task', async () => {
-    listInbox.mockResolvedValue([WAITING, { ...WAITING, requestId: 'per_2', taskId: 'other' }])
+    listInbox.mockResolvedValue(inbox([WAITING, { ...WAITING, requestId: 'per_2', taskId: 'other' }]))
     await renderTask()
     await screen.findByText(/waiting on an answer from you\./)
   })
@@ -231,8 +264,40 @@ describe('a blocked task whose inbox cannot be read', () => {
     })
     expect(screen.queryByRole('button', { name: /Re-run from the last message/ })).toBeNull()
 
-    listInbox.mockResolvedValue([])
+    listInbox.mockResolvedValue(inbox([]))
     screen.getByRole('button', { name: 'Try again' }).click()
+    await screen.findByRole('button', { name: /Re-run from the last message/ })
+  })
+})
+
+describe('a blocked task while one service could not be read', () => {
+  it('offers no re-run for a bound task, whose ask may be on the service that went quiet', async () => {
+    // Mutation: leave `known` at `inbox.isSuccess` and this fails — the read
+    // succeeded, so the page would treat an inbox with a known hole in it as
+    // proof nothing is waiting and offer to send a second message into a task
+    // that may be parked on a question in the other system.
+    listInbox.mockResolvedValue(inbox([], [{ adapter: 'cinna', reason: 'offline' }]))
+    await renderTask({
+      remote: { adapter: 'cinna', id: 'task-there', key: null, url: null }
+    })
+    await screen.findByText(/This task is blocked\./)
+    expect(screen.queryByRole('button', { name: /Re-run from the last message/ })).toBeNull()
+    // Mutation: leave `failed` at `inbox.isError` and these two fail — the page
+    // knows the read had a hole in it, says nothing about it, and offers no way
+    // to ask again. It is the same sentence the rejected read earns, because it
+    // is the same thing from where the user is standing.
+    await screen.findByText(/What it is waiting on could not be read/)
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+  })
+
+  it('still offers the re-run for a task with no remote binding at all', async () => {
+    // The other half of the gate: a task bound to nothing can only have local
+    // asks, and those came out of this device's database — complete the moment
+    // the query resolved, whatever a service somewhere else did. Mutation: drop
+    // the `|| !task.remote` arm and this fails, and one unreachable service
+    // freezes the recovery action on every unrelated desktop task.
+    listInbox.mockResolvedValue(inbox([], [{ adapter: 'cinna', reason: 'offline' }]))
+    await renderTask()
     await screen.findByRole('button', { name: /Re-run from the last message/ })
   })
 })
@@ -244,7 +309,7 @@ describe('a blocked task whose inbox went stale under it', () => {
     // primed — so testing for `data === undefined` would have caught almost
     // nothing. Mutation: `known: inbox.data !== undefined` and this fails, and
     // the page offers to send a second message into a turn that may be parked.
-    listInbox.mockResolvedValueOnce([])
+    listInbox.mockResolvedValueOnce(inbox([]))
     await renderTask()
     await screen.findByRole('button', { name: /Re-run from the last message/ })
 
@@ -386,7 +451,7 @@ describe('the other states', () => {
 
     it('opens the inbox for a blocked remote task even while its agent is live', async () => {
       remoteLive.mockResolvedValue(true)
-      listInbox.mockResolvedValue([{ ...WAITING, source: 'remote', chatId: null }])
+      listInbox.mockResolvedValue(inbox([{ ...WAITING, source: 'remote', chatId: null }]))
       await renderTask({ ...REMOTE, status: 'blocked', chatId: null })
       const button = await screen.findByRole('button', { name: 'Open the Inbox' })
       await act(async () => button.click())
@@ -761,7 +826,7 @@ describe('a task running on another device', () => {
    * points at a list whose controls answer a driver on another machine.
    */
   it('does not point at the Inbox for a task it does not hold', async () => {
-    listInbox.mockResolvedValue([WAITING])
+    listInbox.mockResolvedValue(inbox([WAITING]))
     await renderTask({ ...ELSEWHERE, status: 'blocked' })
     await waitFor(() => expect(screen.getByRole('button', { name: 'Take over' })).toBeTruthy())
     expect(screen.queryByRole('button', { name: 'Open the Inbox' })).toBeNull()
@@ -822,7 +887,7 @@ describe('a task running on another device', () => {
 
 describe('autonomous task attention', () => {
   it('offers the Inbox for a live agent approval even though the owner turn has not ended', async () => {
-    listInbox.mockResolvedValue([WAITING])
+    listInbox.mockResolvedValue(inbox([WAITING]))
     await renderTask({ runtime: { state: 'running', reason: null, ownerTurns: 1, elapsedMs: 100,
       budget: { maxRounds: 20, maxMinutes: 60 } } })
     expect(screen.getByText('Waiting for your answer')).toBeTruthy()
@@ -833,7 +898,7 @@ describe('autonomous task attention', () => {
   })
 
   it('uses checkpoint recovery rather than replay when an interrupted task has no Inbox rows', async () => {
-    listInbox.mockResolvedValue([])
+    listInbox.mockResolvedValue(inbox([]))
     await renderTask({ runtime: { state: 'interrupted', reason: 'App closed', ownerTurns: 1, elapsedMs: 100,
       budget: { maxRounds: 20, maxMinutes: 60 } } })
     expect(screen.getByRole('button', { name: 'Resume task' })).toBeTruthy()

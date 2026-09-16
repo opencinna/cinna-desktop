@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Inbox as InboxIcon, Loader2 } from 'lucide-react'
 import { useAgents } from '../../hooks/useAgents'
-import { useAnswerAsk, useInboxList } from '../../hooks/useInbox'
+import { describeUnreadable, useAnswerAsk, useInboxList } from '../../hooks/useInbox'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
 import { useOpenTask } from '../../hooks/useTasks'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
@@ -9,6 +9,7 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { AnswerDeliveryError } from '../../utils/answerError'
 import { PermissionRequestBlock } from '../chat/PermissionRequestBlock'
 import { AskUserQuestionBlock } from '../chat/AskUserQuestionBlock'
+import { RecentTasks } from '../tasks/RecentTasks'
 import { ASK_NO_LONGER_WAITING } from '../../../../shared/inbox'
 import { describeQuestionAnswers } from '../../../../shared/localAgentRequests'
 import type { InboxAnswerCode, InboxEntry } from '../../../../shared/inbox'
@@ -89,7 +90,7 @@ export function InboxView(): React.JSX.Element {
   const entries = useMemo(() => {
     const byId = new Map<string, InboxEntry>()
     for (const entry of retained) byId.set(entry.requestId, entry)
-    for (const entry of data ?? []) byId.set(entry.requestId, entry)
+    for (const entry of data?.entries ?? []) byId.set(entry.requestId, entry)
     const known = new Set(order.current)
     const fresh = [...byId.values()]
       .filter((entry) => !known.has(entry.requestId))
@@ -116,7 +117,15 @@ export function InboxView(): React.JSX.Element {
   }
 
   /** What is still waiting — the number the sidebar badge shows. */
-  const waiting = data?.length ?? 0
+  const waiting = data?.entries.length ?? 0
+  /**
+   * What this read could not reach, in the one sentence both surfaces use.
+   *
+   * Null on a rejected query as well as on a complete one: `data` is then the
+   * *previous* read, and repeating an old service failure beside "could not be
+   * refreshed" would report two problems where there is one.
+   */
+  const unreadable = isError ? null : describeUnreadable(data?.unreadable ?? [])
 
   const retain = (entry: InboxEntry): void => {
     setRetained((prev) =>
@@ -125,84 +134,182 @@ export function InboxView(): React.JSX.Element {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto pt-[var(--topbar-h)]">
-      <div className="max-w-2xl mx-auto px-6 py-6 space-y-4">
-        <header className="flex items-center gap-2">
-          <h1 className="text-base font-semibold text-[var(--color-text)]">Inbox</h1>
-          {/*
-            Beside the title rather than under it: a count is not a description
-            of the word above it (`ux_rules.md` §7).
+    /*
+      One page, one scrollbar: the asks, then the work they belong to. The asks
+      are not a pane with its own scroll — a long list of them is meant to push
+      the tasks down and off the bottom, because what is waiting on the user
+      outranks what merely happened.
 
-            **`data`, not `entries`.** A retained row is still rendered and no
-            longer waiting, so counting what is on screen would read "2 waiting"
-            beside a sidebar badge reading 1 — with the wrong number attached to
-            the word that claims to explain it.
-          */}
-          {isSuccess && waiting > 0 && (
-            <span className="text-[11px] text-[var(--color-text-muted)]">{waiting} waiting</span>
-          )}
-        </header>
+      **The tasks are anchored to the bottom, and that is what keeps them
+      still.** `min-h-full` on the column plus `mt-auto` on the second block
+      means the spare space of a quiet screen collects *between* them rather
+      than under them: the asks stay at the top where they are read, the tasks
+      sit on the bottom edge and grow upward into that gap as rows arrive, and
+      the page scrolls only once the two together outgrow the window — at which
+      point the asks push the tasks down, which is the right direction, because
+      what is waiting on the user outranks what merely happened.
 
-        {isLoading && !data ? (
-          <div className="flex items-center justify-center py-12 text-xs text-[var(--color-text-muted)]">
-            <Loader2 size={14} className="animate-spin mr-2" />
-            Loading…
-          </div>
-        ) : isError && entries.length === 0 ? (
-          /*
-            **Not the empty state.** A read that failed and a profile with
-            nothing waiting are the same shape here — no rows — and telling
-            someone whose agent is parked that nothing is waiting on them is the
-            silent failure `ux_rules.md` §6 calls the worst outcome.
-          */
-          <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-            <AlertTriangle size={24} className="text-[var(--color-warning)] opacity-70" />
-            <div className="text-sm text-[var(--color-text-secondary)]">
-              The inbox could not be read.
-            </div>
-            <div className="text-xs text-[var(--color-text-muted)]">
-              Anything waiting is still waiting — this is the list, not the requests.
-            </div>
-            <RetryButton onRetry={() => void refetch()} />
-          </div>
-        ) : entries.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-            <InboxIcon size={24} className="text-[var(--color-text-muted)] opacity-50" />
-            <div className="text-sm text-[var(--color-text-muted)]">
-              Nothing is waiting on you.
-            </div>
-            <div className="text-xs text-[var(--color-text-muted)] opacity-80">
-              An agent that stops to ask something will show up here, whether or not its
-              chat is open.
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {entries.map((entry) => (
-              <InboxRow
-                key={entry.requestId}
-                entry={entry}
-                agentLabel={agentLabel(entry.agentId)}
-                now={now}
-                onActed={retain}
-              />
-            ))}
+      This replaced a reserve on the *asks* block — `min-h-[30vh]`, then
+      `min-h-[21rem]` — and the history is worth one paragraph, because the
+      reserve was solving a real problem the anchor solves better. That problem
+      is that the asks block has three quiet heights nobody chose between:
+      `Loading…` is one line, the settled empty state is a centred icon and two
+      sentences (309 px), the partial/failed read is that plus a `Try again`
+      (334 px). Anything positioned *under* that block therefore walked down the
+      page on every cold open and every time a bound service went quiet — 69 px
+      and 25 px, measured (`ux_rules.md` §1). A floor tall enough to hide all
+      three fixed it by reserving the worst case at every window size, including
+      the 600 px one where that was 60% of the screen.
+
+      Anchoring to the bottom makes the question go away instead of paying for
+      it: the tasks' position is a function of the *window*, not of whatever the
+      asks block happens to be doing, so all three quiet states move nothing at
+      all and no number has to be kept in step with the copy.
+    */
+    /*
+      `data-inbox-scroll` marks this as the element that scrolls, for the one
+      thing below that has to move it: **Show more tasks** compensating for the
+      rows it inserts. A `closest()` lookup rather than a prop or a context,
+      because the relationship is "whichever ancestor is the scrollport" and a
+      component that has to be *told* where it is scrolling silently does
+      nothing the day it is rendered somewhere else.
+    */
+    <div data-inbox-scroll className="flex-1 overflow-y-auto pt-[var(--topbar-h)]">
+      {/*
+        `min-h-full` rather than a height: the column is as tall as the window
+        when there is little in it — which is what gives `mt-auto` below a gap
+        to push the tasks to the bottom of — and as tall as its content once
+        there is more, which is what makes the page scroll instead of squashing
+        either block.
+      */}
+      <div className="min-h-full flex flex-col">
+        <div className="w-full max-w-2xl mx-auto px-6 py-6 space-y-4">
+          <header className="flex items-center gap-2">
+            <h1 className="text-base font-semibold text-[var(--color-text)]">Inbox</h1>
             {/*
-              Under the list, never over it: a refresh can fail at any moment,
-              including while the pointer is on a row's buttons, and a line that
-              appeared above them would move them (`ux_rules.md` §1). The rows
-              above are the last good read and are still answerable — the ask
-              lives in the main process, not in this list.
+              Beside the title rather than under it: a count is not a description
+              of the word above it (`ux_rules.md` §7).
+
+              **`data`, not `entries`.** A retained row is still rendered and no
+              longer waiting, so counting what is on screen would read "2 waiting"
+              beside a sidebar badge reading 1 — with the wrong number attached to
+              the word that claims to explain it.
             */}
-            {isError && (
-              <div className="flex items-center gap-2 pt-1 text-[11px] text-[var(--color-text-muted)]">
-                <AlertTriangle size={12} className="text-[var(--color-warning)] shrink-0" />
-                <span>Showing the last read — the inbox could not be refreshed.</span>
-                <RetryButton onRetry={() => void refetch()} />
-              </div>
+            {isSuccess && waiting > 0 && (
+              <span className="text-[11px] text-[var(--color-text-muted)]">{waiting} waiting</span>
             )}
-          </div>
-        )}
+          </header>
+
+          {isLoading && !data ? (
+            <div className="flex items-center justify-center py-12 text-xs text-[var(--color-text-muted)]">
+              <Loader2 size={14} className="animate-spin mr-2" />
+              Loading…
+            </div>
+          ) : (isError || unreadable) && entries.length === 0 ? (
+            /*
+              **Not the empty state.** A read that failed and a profile with
+              nothing waiting are the same shape here — no rows — and telling
+              someone whose agent is parked that nothing is waiting on them is the
+              silent failure `ux_rules.md` §6 calls the worst outcome.
+
+              A read that *succeeded* with nothing local while a service could
+              not be reached is the same trap one step smaller: the read worked,
+              so nothing above says anything is wrong, and "Nothing is waiting on
+              you." would be a claim about a system this app did not manage to
+              ask. Same block, one weaker sentence.
+            */
+            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+              <AlertTriangle size={24} className="text-[var(--color-warning)] opacity-70" />
+              <div className="text-sm text-[var(--color-text-secondary)]">
+                {isError ? 'The inbox could not be read.' : 'Part of the inbox could not be read.'}
+              </div>
+              <div className="text-xs text-[var(--color-text-muted)]">
+                Anything waiting is still waiting — this is the list, not the requests.
+              </div>
+              <RetryButton onRetry={() => void refetch()} />
+            </div>
+          ) : entries.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+              <InboxIcon size={24} className="text-[var(--color-text-muted)] opacity-50" />
+              <div className="text-sm text-[var(--color-text-muted)]">
+                Nothing is waiting on you.
+              </div>
+              <div className="text-xs text-[var(--color-text-muted)] opacity-80">
+                An agent that stops to ask something will show up here, whether or not its
+                chat is open.
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {entries.map((entry) => (
+                <InboxRow
+                  key={entry.requestId}
+                  entry={entry}
+                  agentLabel={agentLabel(entry.agentId)}
+                  now={now}
+                  onActed={retain}
+                />
+              ))}
+              {/*
+                Under the list, never over it: a refresh can fail at any moment,
+                including while the pointer is on a row's buttons, and a line that
+                appeared above them would move them (`ux_rules.md` §1). The rows
+                above are the last good read and are still answerable — the ask
+                lives in the main process, not in this list.
+
+                One line, never two: a rejected refresh and an unreadable service
+                are the same slot, because the second is what the first hides.
+
+                **It does push the Recent tasks block down when it appears, and
+                that was weighed rather than missed** (measured at 33 px, with two
+                asks). The two ways out are both worse: moving it under Recent
+                tasks puts a sentence about the asks — with a `Try again` that
+                refetches the *asks* — below a list of tasks, against rule 12's
+                "a fact lives in the section holding the control that resolves
+                it"; and reserving its line inside the block above is the empty
+                healthy-state slot §1 calls padding rather than reservation. The
+                floor absorbs it entirely at zero or one ask, where the line
+                renders inside the reserve and costs nothing.
+
+                The condition that would change this answer: **if the asks list
+                ever grows a control at its bottom** — a dismiss-all, a footer
+                action — this line would sit above something the user reaches
+                for, and §1 stops permitting it.
+              */}
+              {(isError || unreadable) && (
+                <div className="flex items-center gap-2 pt-1 text-[11px] text-[var(--color-text-muted)]">
+                  <AlertTriangle size={12} className="text-[var(--color-warning)] shrink-0" />
+                  <span>
+                    {isError
+                      ? 'Showing the last read — the inbox could not be refreshed.'
+                      : `${unreadable} — some requests may be missing.`}
+                  </span>
+                  <RetryButton onRetry={() => void refetch()} />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/*
+          **`mt-auto`: the tasks sit on the bottom edge, not under the asks.**
+          The two blocks are one screen read top to bottom, and the space
+          between them is where a quiet inbox's spare height goes — so the list
+          grows *upward* into that space as tasks arrive and only starts pushing
+          the page taller once it meets the asks coming down.
+
+          No rule between them. With the blocks apart by the height of an empty
+          inbox, a hairline across the middle of that gap divides nothing from
+          nothing; the heading and the distance do the separating.
+
+          Tasks are structure rather than an errand: nobody starts one by hand,
+          they arrive from jobs and conversations — so they live under the one
+          list the user opens on purpose, not in a sidebar section competing
+          with the jobs above it.
+        */}
+        <div className="mt-auto w-full max-w-2xl mx-auto px-6 py-6">
+          <RecentTasks />
+        </div>
       </div>
     </div>
   )

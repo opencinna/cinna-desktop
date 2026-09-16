@@ -355,6 +355,12 @@ const NOT_A_KIND_BRANCH: { file: string; category: Category; value: string; why:
     category: 'jobType',
     value: 'local',
     why: "`type` is the account being registered ('local' | 'cinna')"
+  },
+  {
+    file: 'src/renderer/src/hooks/useInbox.ts',
+    category: 'source',
+    value: 'remote',
+    why: "`entry.source` is an InboxSource ('local' | 'remote') — which side an ask is answered on, not who owns an agent row; the retention rule it selects is about a cache main deliberately does not keep"
   }
 ]
 

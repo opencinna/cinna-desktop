@@ -12,7 +12,7 @@ import { parseAnswerPayload } from '../services/askDelivery'
 import { TaskError } from '../errors'
 import type { TaskHandoffTarget, TaskHandoffOutcome } from '../../shared/taskHandoff'
 import { ipcHandle } from './_wrap'
-import type { AskAnswerPayload, InboxAnswerResult, InboxEntry } from '../../shared/inbox'
+import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot } from '../../shared/inbox'
 import type { DesktopTaskTarget, TaskDto, TaskListQuery } from '../../shared/tasks'
 import type { TaskStatus } from '../../shared/taskStatus'
 
@@ -214,8 +214,12 @@ export function registerTaskHandlers(): void {
     return { success: true }
   })
 
-  /** Everything waiting on the user, newest first. */
-  ipcHandle('inbox:list', async (): Promise<InboxEntry[]> => {
+  /**
+   * Everything waiting on the user, newest first, plus the services this read
+   * could not reach — an unreadable remote leaves a hole in the list rather
+   * than taking the local asks down with it.
+   */
+  ipcHandle('inbox:list', async (): Promise<InboxSnapshot> => {
     userActivation.requireActivated()
     return inboxService.list(getProfileScopeUserId())
   })

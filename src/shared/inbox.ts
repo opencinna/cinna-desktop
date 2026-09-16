@@ -48,6 +48,38 @@ export interface InboxEntry {
 }
 
 /**
+ * A source the list could not be read from, named by the adapter id.
+ *
+ * `RemoteTaskAdapter` has an id and no display name, so the id is what travels;
+ * nothing invents a friendlier one, and no user-facing copy names a service.
+ */
+export interface InboxUnreadableSource {
+  adapter: string
+  reason: string
+}
+
+/**
+ * The inbox as one read answered it: what is waiting, and what could not be
+ * asked.
+ *
+ * **One bound service going quiet must not delete the local asks.** Until this
+ * type existed, `list` rejected whole whenever any adapter read failed, so an
+ * agent parked on this machine disappeared from the one list it was in for as
+ * long as a remote outage lasted.
+ *
+ * `unreadable` empty means the list is the whole truth — which is why there is
+ * no `complete` boolean beside it. Two fields that both claim to answer the same
+ * question can disagree, and the derivable one is the one that would be wrong.
+ *
+ * Named for `TaskListSnapshot`, its sibling: a list plus what the read could not
+ * cover.
+ */
+export interface InboxSnapshot {
+  entries: InboxEntry[]
+  unreadable: InboxUnreadableSource[]
+}
+
+/**
  * What a surface sends to answer an ask.
  *
  * Deliberately the engine's own vocabulary rather than a `RequestResolution`:

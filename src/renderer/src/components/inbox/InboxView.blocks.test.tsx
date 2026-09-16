@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { InboxEntry } from '../../../../shared/inbox'
+import type { InboxEntry, InboxSnapshot } from '../../../../shared/inbox'
 
 /**
  * The inbox renders the **transcript's own** ask components — the assertion the
@@ -37,7 +37,12 @@ vi.mock('../chat/AskUserQuestionBlock', () => ({
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
-  inbox: { list: async (): Promise<InboxEntry[]> => entries, answer: async () => ({ ok: true }) },
+  inbox: {
+    list: async (): Promise<InboxSnapshot> => ({ entries, unreadable: [] }),
+    answer: async () => ({ ok: true })
+  },
+  // The screen's second half; covered in `RecentTasks.test.tsx`.
+  tasks: { list: async () => [] },
   agents: {
     list: async () => [{ id: 'a1', name: 'Invoice Checker' }],
     onRemoteSyncComplete: () => () => {},

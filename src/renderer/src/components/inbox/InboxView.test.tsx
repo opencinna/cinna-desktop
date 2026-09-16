@@ -2,7 +2,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AskAnswerPayload, InboxAnswerResult, InboxEntry } from '../../../../shared/inbox'
+import type {
+  AskAnswerPayload,
+  InboxAnswerResult,
+  InboxEntry,
+  InboxSnapshot,
+  InboxUnreadableSource
+} from '../../../../shared/inbox'
 
 /**
  * The inbox, driven — the real ask components, clicked.
@@ -14,12 +20,20 @@ import type { AskAnswerPayload, InboxAnswerResult, InboxEntry } from '../../../.
  * from under the person still reading it (`ux_rules.md` §1).
  */
 
-const listMock = vi.fn<() => Promise<InboxEntry[]>>()
+const listMock = vi.fn<() => Promise<InboxSnapshot>>()
 const answerMock = vi.fn<(data: AskAnswerPayload) => Promise<InboxAnswerResult>>()
+
+/** One read's answer: what is waiting, and what could not be asked. */
+function snapshot(entries: InboxEntry[], unreadable: InboxUnreadableSource[] = []): InboxSnapshot {
+  return { entries, unreadable }
+}
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
   inbox: { list: () => listMock(), answer: (data: AskAnswerPayload) => answerMock(data) },
+  // The second half of this screen is the recent tasks; it is covered in
+  // `RecentTasks.test.tsx` and only needs to be quiet here.
+  tasks: { list: async () => [] },
   agents: {
     list: async () => [{ id: 'a1', name: 'Invoice Checker' }],
     onRemoteSyncComplete: () => () => {},
@@ -95,7 +109,7 @@ beforeEach(() => {
 
 describe('InboxView', () => {
   it('names the task and the agent on the row', async () => {
-    listMock.mockResolvedValue([PERMISSION])
+    listMock.mockResolvedValue(snapshot([PERMISSION]))
     renderInbox()
     expect(await screen.findByText('Nightly check')).toBeTruthy()
     expect(await screen.findByText(/Invoice Checker/)).toBeTruthy()
@@ -105,7 +119,7 @@ describe('InboxView', () => {
     // Mutation: fall back to 'An agent' whenever the name does not resolve and
     // this fails — the phrase reserved for a *deleted* agent lands on every row
     // for the first moment of every load, and stops meaning "gone".
-    listMock.mockResolvedValue([PERMISSION])
+    listMock.mockResolvedValue(snapshot([PERMISSION]))
     let settleAgents: (rows: { id: string; name: string }[]) => void = () => {}
     const agents = new Promise<{ id: string; name: string }[]>((resolve) => {
       settleAgents = resolve
@@ -124,13 +138,13 @@ describe('InboxView', () => {
   })
 
   it('says "An agent" for an agent that is genuinely gone', async () => {
-    listMock.mockResolvedValue([{ ...PERMISSION, agentId: 'deleted-agent' }])
+    listMock.mockResolvedValue(snapshot([{ ...PERMISSION, agentId: 'deleted-agent' }]))
     renderInbox()
     expect(await screen.findByText(/An agent/)).toBeTruthy()
   })
 
   it('sends the reply the user pressed and settles the row', async () => {
-    listMock.mockResolvedValue([PERMISSION])
+    listMock.mockResolvedValue(snapshot([PERMISSION]))
     answerMock.mockResolvedValue({ ok: true, remembered: true })
     renderInbox()
     fireEvent.click(await screen.findByText('Always allow'))
@@ -146,7 +160,7 @@ describe('InboxView', () => {
     // Mutation: drop `onActed(entry)` from `deliver` and this fails — the
     // refetch that follows the answer empties the list and the card the user is
     // still reading is replaced by the empty state (`ux_rules.md` §1).
-    listMock.mockResolvedValueOnce([PERMISSION]).mockResolvedValue([])
+    listMock.mockResolvedValueOnce(snapshot([PERMISSION])).mockResolvedValue(snapshot([]))
     answerMock.mockResolvedValue({ ok: true })
     renderInbox()
     fireEvent.click(await screen.findByText('Allow once'))
@@ -157,7 +171,7 @@ describe('InboxView', () => {
   })
 
   it('preserves a remote answer draft through delivery failure and retries it', async () => {
-    listMock.mockResolvedValue([{ ...QUESTION, source: 'remote', chatId: null }])
+    listMock.mockResolvedValue(snapshot([{ ...QUESTION, source: 'remote', chatId: null }]))
     answerMock.mockResolvedValueOnce({ ok: false, code: 'unavailable', reason: 'The service is offline.' })
       .mockResolvedValueOnce({ ok: true })
     render(createElement(InboxView), { wrapper })
@@ -182,7 +196,7 @@ describe('InboxView', () => {
     // Mutation: restore `liveRequestId={entry.requestId}` unconditionally and
     // this fails on the last line — the row keeps an Answer button whose only
     // remaining outcome is "already answered".
-    listMock.mockResolvedValue([QUESTION])
+    listMock.mockResolvedValue(snapshot([QUESTION]))
     answerMock.mockResolvedValue({ ok: true })
     renderInbox()
     fireEvent.click(await screen.findByRole('button', { name: /^Answer$/ }))
@@ -216,7 +230,7 @@ describe('InboxView', () => {
     //
     // Mutation: drop `SETTLED_REFUSALS` and throw on every refusal, and the
     // last two lines fail — the block keeps its live look and its controls.
-    listMock.mockResolvedValueOnce([PERMISSION]).mockResolvedValue([])
+    listMock.mockResolvedValueOnce(snapshot([PERMISSION])).mockResolvedValue(snapshot([]))
     answerMock.mockResolvedValue({
       ok: false,
       reason: 'This request is no longer waiting for an answer.',
@@ -236,7 +250,7 @@ describe('InboxView', () => {
     // The other half of the branch: `malformed` is this row's own fault and
     // retrying is the right response, so the reason lands beside the control
     // that produced it and the control stays (`ux_rules.md` §6).
-    listMock.mockResolvedValue([PERMISSION])
+    listMock.mockResolvedValue(snapshot([PERMISSION]))
     answerMock.mockResolvedValue({
       ok: false,
       reason: 'Malformed answer',
@@ -249,7 +263,7 @@ describe('InboxView', () => {
   })
 
   it('builds the list newest first', async () => {
-    listMock.mockResolvedValue([QUESTION, PERMISSION])
+    listMock.mockResolvedValue(snapshot([QUESTION, PERMISSION]))
     const { container } = renderInbox()
     await screen.findByText('Nightly check')
     expect(rowTitles(container)).toEqual(['Nightly check', 'Weekly digest'])
@@ -266,7 +280,7 @@ describe('InboxView', () => {
       taskTitle: 'Just arrived',
       createdAt: new Date('2026-09-11T11:00:00Z')
     }
-    listMock.mockResolvedValueOnce([PERMISSION]).mockResolvedValue([ARRIVED, PERMISSION])
+    listMock.mockResolvedValueOnce(snapshot([PERMISSION])).mockResolvedValue(snapshot([ARRIVED, PERMISSION]))
     const { container } = renderInbox()
     await screen.findByText('Nightly check')
     await poll()
@@ -282,13 +296,13 @@ describe('InboxView', () => {
     renderInbox()
     expect(await screen.findByText('The inbox could not be read.')).toBeTruthy()
     expect(screen.queryByText('Nothing is waiting on you.')).toBeNull()
-    listMock.mockResolvedValue([PERMISSION])
+    listMock.mockResolvedValue(snapshot([PERMISSION]))
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     expect(await screen.findByText('Nightly check')).toBeTruthy()
   })
 
   it('keeps the rows it has when a refresh fails, and says so under them', async () => {
-    listMock.mockResolvedValueOnce([PERMISSION]).mockRejectedValue(new Error('nope'))
+    listMock.mockResolvedValueOnce(snapshot([PERMISSION])).mockRejectedValue(new Error('nope'))
     const { container } = renderInbox()
     await screen.findByText('Nightly check')
     await poll()
@@ -298,12 +312,89 @@ describe('InboxView', () => {
     expect(rowTitles(container)).toEqual(['Nightly check'])
   })
 
+  it('says what is missing under the rows when one service could not be read', async () => {
+    // Mutation: drop the `unreadable` arm of the line under the list and this
+    // fails — the read *succeeded*, so nothing on the screen would say that a
+    // whole service's asks are not in it. The count keeps counting what is
+    // actually there.
+    listMock.mockResolvedValue(snapshot([PERMISSION], [{ adapter: 'cinna', reason: 'offline' }]))
+    const { container } = renderInbox()
+    expect(
+      await screen.findByText('One service could not be read — some requests may be missing.')
+    ).toBeTruthy()
+    expect(screen.getByText('1 waiting')).toBeTruthy()
+    expect(rowTitles(container)).toEqual(['Nightly check'])
+  })
+
+  it('counts the services it could not read, in the one sentence both surfaces use', async () => {
+    listMock.mockResolvedValue(
+      snapshot([PERMISSION], [
+        { adapter: 'cinna', reason: 'offline' },
+        { adapter: 'linear', reason: 'Sign in again.' }
+      ])
+    )
+    renderInbox()
+    expect(
+      await screen.findByText('2 services could not be read — some requests may be missing.')
+    ).toBeTruthy()
+  })
+
+  it('does not claim nothing is waiting when part of the inbox could not be read', async () => {
+    // A succeeded read with no local rows and an unreachable service is the
+    // empty state's trap one step smaller: nothing above says anything failed,
+    // so "Nothing is waiting on you." would be a claim about a system this app
+    // never managed to ask (`ux_rules.md` §6).
+    listMock.mockResolvedValue(snapshot([], [{ adapter: 'cinna', reason: 'offline' }]))
+    renderInbox()
+    expect(await screen.findByText('Part of the inbox could not be read.')).toBeTruthy()
+    expect(screen.queryByText('Nothing is waiting on you.')).toBeNull()
+    expect(
+      screen.getByText('Anything waiting is still waiting — this is the list, not the requests.')
+    ).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+  })
+
+  it('keeps a remote ask on screen while the service it lives on cannot be read', async () => {
+    // Mutation: return the new snapshot unmerged from `useInboxList`'s queryFn
+    // and this fails — main keeps no cache of remote asks, so the card would be
+    // pulled out from under the user (`ux_rules.md` §1) and with it an ask that
+    // is still answerable, on the poll after the service went quiet.
+    const REMOTE: InboxEntry = { ...QUESTION, requestId: 'remote-ask:1', source: 'remote', chatId: null }
+    listMock
+      .mockResolvedValueOnce(snapshot([PERMISSION, REMOTE]))
+      .mockResolvedValue(snapshot([PERMISSION], [{ adapter: 'cinna', reason: 'offline' }]))
+    const { container } = renderInbox()
+    await screen.findByText('Weekly digest')
+    await poll()
+    await screen.findByText('One service could not be read — some requests may be missing.')
+    expect(rowTitles(container)).toEqual(['Nightly check', 'Weekly digest'])
+    // The retained row is genuinely part of the list, not a leftover render:
+    // the count beside the title is what the badge shows.
+    expect(screen.getByText('2 waiting')).toBeTruthy()
+  })
+
+  it('drops a remote ask again once the service answers without it', async () => {
+    // The other half: retention lasts exactly as long as the hole does. A
+    // complete read is the whole truth, so an ask answered elsewhere leaves.
+    const REMOTE: InboxEntry = { ...QUESTION, requestId: 'remote-ask:1', source: 'remote', chatId: null }
+    listMock
+      .mockResolvedValueOnce(snapshot([PERMISSION, REMOTE]))
+      .mockResolvedValueOnce(snapshot([PERMISSION], [{ adapter: 'cinna', reason: 'offline' }]))
+      .mockResolvedValue(snapshot([PERMISSION]))
+    const { container } = renderInbox()
+    await screen.findByText('Weekly digest')
+    await poll()
+    expect(rowTitles(container)).toEqual(['Nightly check', 'Weekly digest'])
+    await poll()
+    await waitFor(() => expect(rowTitles(container)).toEqual(['Nightly check']))
+  })
+
   it('opens the task an ask belongs to, which is the only way back to the work', async () => {
     // The step-5 UX review removed the link to the conversation: a parked ask
     // is a turn that has not resolved, so the transcript holds the prompt and
     // nothing else. The task page is what replaced it, and this row is where it
     // is reached from.
-    listMock.mockResolvedValue([PERMISSION])
+    listMock.mockResolvedValue(snapshot([PERMISSION]))
     renderInbox()
     fireEvent.click(await screen.findByRole('button', { name: 'Open the task' }))
     expect(useUIStore.getState().activeView).toBe('task')
@@ -311,7 +402,7 @@ describe('InboxView', () => {
   })
 
   it('says nothing is waiting when nothing is', async () => {
-    listMock.mockResolvedValue([])
+    listMock.mockResolvedValue(snapshot([]))
     renderInbox()
     expect(await screen.findByText('Nothing is waiting on you.')).toBeTruthy()
   })

@@ -138,7 +138,7 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
     const firstCivil = first.binding!.last!.civilKey
     const ask = cinna.page.getByRole('article').filter({ hasText: QUESTION })
     await expect(ask).toBeVisible()
-    const entries = await cinna.page.evaluate(() => window.api.inbox.list())
+    const entries = await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)
     expect(entries).toHaveLength(1)
     const child = await cinna.page.evaluate((id) => window.api.tasks.get(id), entries[0].taskId!)
     expect(child).toMatchObject({ parentTaskId: taskId, assignee: { kind: 'agent', agentId: agent.id }, status: 'blocked' })
@@ -162,7 +162,7 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
     await expect.poll(() => cinna.page.evaluate((id) => window.api.tasks.get(id), taskId)).toMatchObject({ status: 'completed' })
     await expect.poll(() => cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId))
       .toEqual([expect.objectContaining({ id: run.id, taskId, status: 'succeeded' })])
-    expect(await cinna.page.evaluate(() => window.api.inbox.list())).toEqual([])
+    expect(await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)).toEqual([])
     const childChat = await cinna.page.evaluate((id) => window.api.chat.get(id), child.chatId!)
     expect(childChat?.messages.filter((message) => message.role === 'assistant' && message.content === OUTPUT)).toHaveLength(1)
 

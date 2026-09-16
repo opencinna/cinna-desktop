@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { InboxEntry } from '../../../../shared/inbox'
+import type { InboxEntry, InboxSnapshot, InboxUnreadableSource } from '../../../../shared/inbox'
 
 /**
  * The top bar's Inbox button.
@@ -43,11 +43,14 @@ function wrapper({ children }: { children: ReactNode }): React.JSX.Element {
   return createElement(QueryClientProvider, { client }, children)
 }
 
-function mountWith(count: number): void {
-  mountListing(async () => Array.from({ length: count }, (_v, i) => entry(i)))
+function mountWith(count: number, unreadable: InboxUnreadableSource[] = []): void {
+  mountListing(async () => ({
+    entries: Array.from({ length: count }, (_v, i) => entry(i)),
+    unreadable
+  }))
 }
 
-function mountListing(list: () => Promise<InboxEntry[]>): void {
+function mountListing(list: () => Promise<InboxSnapshot>): void {
   ;(window as unknown as { api: Record<string, unknown> }).api = {
     app: { setTheme: async () => undefined },
     inbox: { list }
@@ -124,7 +127,7 @@ describe('InboxButton', () => {
 
   it('reports a failed warm refresh even when the last successful count was zero', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } })
-    const list = vi.fn<() => Promise<InboxEntry[]>>().mockResolvedValue([])
+    const list = vi.fn<() => Promise<InboxSnapshot>>().mockResolvedValue({ entries: [], unreadable: [] })
     ;(window as unknown as { api: Record<string, unknown> }).api = {
       app: { setTheme: async () => undefined }, inbox: { list }
     }
@@ -134,6 +137,46 @@ describe('InboxButton', () => {
     await client.invalidateQueries({ queryKey: ['inbox'] })
     const button = await screen.findByRole('button', { name: 'Inbox — could not be read' })
     expect(slotOf(button).textContent).toBe('!')
-    expect(client.getQueryData(['inbox'])).toEqual([])
+    expect(client.getQueryData(['inbox'])).toEqual({ entries: [], unreadable: [] })
+  })
+
+  it('keeps the count and warns beside it when a service could not be read', async () => {
+    // Mutation: fall back to the plain `Inbox — 3 waiting` when something is
+    // unreadable and this fails — the number is announced as the whole truth
+    // in the one place anybody checks, while a bound service's asks are not in
+    // it. The count itself stays: those three *are* waiting.
+    mountWith(3, [{ adapter: 'cinna', reason: 'offline' }])
+    const button = await screen.findByRole('button', {
+      name: 'Inbox — 3 waiting, one service could not be read'
+    })
+    await waitFor(() => expect(slotOf(button).textContent).toBe('3'))
+    // Warning, not accent: the badge is still a count, and still not a promise.
+    expect(slotOf(button).className).toContain('bg-[var(--color-warning)]')
+    expect(slotOf(button).className).toContain('w-5')
+  })
+
+  it('says only what failed when nothing local is waiting either', async () => {
+    mountWith(0, [{ adapter: 'cinna', reason: 'offline' }])
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Inbox — one service could not be read' })
+      ).toBeTruthy()
+    )
+  })
+
+  it('is still visibly marked when the hole is all there is to report', async () => {
+    // Mutation: gate the fill on `partial && count > 0` and drop the `!` at
+    // zero, and this fails — the badge goes back to being pixel-identical to a
+    // healthy empty inbox at the exact moment the user's only bound service has
+    // gone dark. The accessible name alone is not "visible" (`ux_rules.md` §6);
+    // this is the state `remote-inbox.spec.ts` opens by, and it used to reach
+    // the user as a warning because main rejected the whole read.
+    mountWith(0, [{ adapter: 'cinna', reason: 'offline' }])
+    const button = await screen.findByRole('button', {
+      name: 'Inbox — one service could not be read'
+    })
+    await waitFor(() => expect(slotOf(button).textContent).toBe('!'))
+    expect(slotOf(button).className).toContain('bg-[var(--color-warning)]')
+    expect(slotOf(button).className).toContain('w-5')
   })
 })

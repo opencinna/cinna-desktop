@@ -146,8 +146,8 @@ async function openInbox(cinna: CinnaApp): Promise<void> {
   await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
 }
 async function openTask(cinna: CinnaApp): Promise<void> {
-  await cinna.page.getByRole('button', { name: 'Jobs', exact: true }).click()
-  await cinna.page.getByRole('region', { name: 'Tasks', exact: true }).getByRole('button', { name: GOAL, exact: true }).click()
+  await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
+  await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true }).getByRole('button', { name: GOAL }).click()
 }
 async function finalTranscript(cinna: CinnaApp, chatId: string, summary: string, calls: number[]): Promise<void> {
   await openTask(cinna)
@@ -168,7 +168,7 @@ test('an autonomous coordinator delegates, survives a durable Inbox gate, hands 
     const taskId = await start(cinna, fake)
     await expect.poll(() => cinna.page.evaluate((id) => window.api.tasks.get(id), taskId))
       .toMatchObject({ status: 'blocked', runtime: { state: 'waiting', ownerTurns: 1 } })
-    const entries = await cinna.page.evaluate(() => window.api.inbox.list())
+    const entries = await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)
     expect(entries).toEqual([expect.objectContaining({ taskId, chatId, deliveryOwner: 'runner', agentId: null })])
     const gateId = entries[0].requestId
     expect(fake.model).toHaveLength(2)
@@ -176,7 +176,7 @@ test('an autonomous coordinator delegates, survives a durable Inbox gate, hands 
     await cinna.relaunch()
     await cinna.skipOnboarding()
     await openInbox(cinna)
-    await expect.poll(() => cinna.page.evaluate(() => window.api.inbox.list()))
+    await expect.poll(() => cinna.page.evaluate(async () => (await window.api.inbox.list()).entries))
       .toEqual([expect.objectContaining({ requestId: gateId, taskId, deliveryOwner: 'runner' })])
     const row = cinna.page.getByRole('article').filter({ hasText: QUESTION })
     await expect(row).toBeVisible()
@@ -195,7 +195,7 @@ test('an autonomous coordinator delegates, survives a durable Inbox gate, hands 
     fake.releaseFinish()
     await expect.poll(() => cinna.page.evaluate((id) => window.api.tasks.get(id), taskId))
       .toMatchObject({ status: 'completed', runtime: { state: 'completed', ownerTurns: 4 } })
-    expect(await cinna.page.evaluate(() => window.api.inbox.list())).toEqual([])
+    expect(await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)).toEqual([])
     await expect(cinna.page.getByPlaceholder('Type a message...')).toHaveCount(0)
     await finalTranscript(cinna, chatId, SUMMARY, [1, 2, 3, 4])
     const chat = await cinna.page.evaluate((id) => window.api.chat.get(id), chatId)

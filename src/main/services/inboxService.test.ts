@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
-import { ASK_NO_LONGER_WAITING, type InboxAnswerResult } from '../../shared/inbox'
+import { ASK_NO_LONGER_WAITING, type InboxAnswerResult, type InboxEntry } from '../../shared/inbox'
 import type { AgentDriver } from '../agents/drivers/driver'
 import type { AgentRow } from '../db/agents'
 import type { RequestResolution } from '../../shared/localAgentRequests'
@@ -83,6 +83,18 @@ const { jobsRepo, jobRunsRepo } = await import('../db/jobs')
 const USER = '__default__'
 const CHAT = 'chat-1'
 const AGENT = 'folder:alpha'
+
+/**
+ * What is waiting, without the completeness half.
+ *
+ * `list` answers an {@link InboxSnapshot} — the entries plus the services this
+ * read could not reach — and most of what is tested here is which rows exist,
+ * whose they are and when they settle. The tests that are *about* the second
+ * half call `inboxService.list` directly and assert `unreadable`.
+ */
+async function listEntries(userId: string): Promise<InboxEntry[]> {
+  return (await inboxService.list(userId)).entries
+}
 
 const permission: Extract<RunEvent, { type: 'needs_input' }> = {
   type: 'needs_input',
@@ -171,7 +183,7 @@ describe('recording an ask', () => {
     const task = makeTask()
     inboxService.recordRunEvent(ctx(), permission)
 
-    const entries = (await inboxService.list(USER))
+    const entries = (await listEntries(USER))
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({
       requestId: 'per_1',
@@ -190,7 +202,7 @@ describe('recording an ask', () => {
     const task = makeTask()
     inboxService.recordRunEvent(ctx({ turnId: 'turn-1' }), { ...permission, resume: 'next_message' })
     inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
-    const entries = await inboxService.list(USER)
+    const entries = await listEntries(USER)
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({ taskId: task.id, resume: 'next_message' })
     expect(entries[0].requestId).not.toBe(permission.requestId)
@@ -216,7 +228,7 @@ describe('recording an ask', () => {
 
       inboxService.recordRunEvent(ctx({ chatId: 'chat-2' }), permission)
 
-      const entries = (await inboxService.list(USER))
+      const entries = (await listEntries(USER))
       expect(entries).toHaveLength(1)
       expect(entries[0].requestId).toBe('per_1')
       const task = taskService.getById(USER, entries[0].taskId)
@@ -247,7 +259,7 @@ describe('recording an ask', () => {
         requestId: 'per_2'
       })
 
-      const taskIds = new Set((await inboxService.list(USER)).map((e) => e.taskId))
+      const taskIds = new Set((await listEntries(USER)).map((e) => e.taskId))
       expect(taskIds.size).toBe(1)
       expect(taskService.list(USER)).toHaveLength(1)
     })
@@ -264,7 +276,7 @@ describe('recording an ask', () => {
       makeChat('chat-2')
       inboxService.recordRunEvent(ctx({ chatId: 'chat-2' }), { ...permission, resume: 'next_message' })
       expect(taskService.list(USER)).toHaveLength(1)
-      expect(await inboxService.list(USER)).toHaveLength(1)
+      expect(await listEntries(USER)).toHaveLength(1)
       expect(taskService.list(USER)[0].status).toBe('blocked')
     })
 
@@ -283,7 +295,7 @@ describe('recording an ask', () => {
       expect(() =>
         inboxService.recordRunEvent(ctx({ chatId: 'chat-gone' }), permission)
       ).not.toThrow()
-      expect((await inboxService.list(USER))).toEqual([])
+      expect((await listEntries(USER))).toEqual([])
       expect(taskInputRequestRepo.getById('per_1')).toBeUndefined()
       expect(taskService.list(USER)).toEqual([])
     })
@@ -299,13 +311,13 @@ describe('recording an ask', () => {
       agentId: 'folder:beta',
       event: permission
     })
-    expect((await inboxService.list(USER))[0].agentId).toBe('folder:beta')
+    expect((await listEntries(USER))[0].agentId).toBe('folder:beta')
   })
 
   it('drops a parked ask nobody can be said to have raised', async () => {
     makeTask()
     inboxService.recordRunEvent(ctx({ agentId: null }), permission)
-    expect((await inboxService.list(USER))).toEqual([])
+    expect((await listEntries(USER))).toEqual([])
   })
 
   it('never throws into the stream it is observing', () => {
@@ -327,7 +339,7 @@ describe('recording an ask', () => {
     // A driver that re-asks under an id it has used before (a reconnect
     // replaying the ask) is describing the same ask again; the answered row
     // must not be what the user is left looking at.
-    expect((await inboxService.list(USER))).toHaveLength(1)
+    expect((await listEntries(USER))).toHaveLength(1)
     expect(taskService.getById(USER, task.id).status).toBe('blocked')
   })
 })
@@ -342,7 +354,7 @@ describe('settling an ask from the stream', () => {
       resolution: { kind: 'permission', reply: 'once' }
     })
 
-    expect((await inboxService.list(USER))).toEqual([])
+    expect((await listEntries(USER))).toEqual([])
     expect(taskInputRequestRepo.getById('per_1')?.status).toBe('answered')
     expect(taskService.getById(USER, task.id).status).toBe('in_progress')
   })
@@ -386,7 +398,7 @@ describe('a turn that ends while it is still parked', () => {
     inboxService.recordRunEvent(ctx(), done)
 
     expect(taskInputRequestRepo.getById('per_1')?.status).toBe('expired')
-    expect((await inboxService.list(USER))).toEqual([])
+    expect((await listEntries(USER))).toEqual([])
     // Back to in_progress, which is where `jobService.reportRunCompletion` has
     // to find it a beat later to write the outcome the run actually had.
     expect(taskService.getById(USER, task.id).status).toBe('in_progress')
@@ -413,7 +425,7 @@ describe('a turn that ends while it is still parked', () => {
       event: done
     })
 
-    expect((await inboxService.list(USER))).toHaveLength(1)
+    expect((await listEntries(USER))).toHaveLength(1)
   })
 
   it('leaves a task blocked by an ask the next message answers', () => {
@@ -513,7 +525,7 @@ describe('the list', () => {
       `UPDATE task_input_requests SET created_at = created_at - 1000 WHERE id = 'per_1'`
     )
 
-    expect((await inboxService.list(USER)).map((e) => e.requestId)).toEqual(['per_2', 'per_1'])
+    expect((await listEntries(USER)).map((e) => e.requestId)).toEqual(['per_2', 'per_1'])
   })
 
   it('drops the asks of a task the user deleted', async () => {
@@ -523,13 +535,13 @@ describe('the list', () => {
     const task = makeTask()
     inboxService.recordRunEvent(ctx(), permission)
     taskService.remove(USER, task.id)
-    expect((await inboxService.list(USER))).toEqual([])
+    expect((await listEntries(USER))).toEqual([])
   })
 
   it('shows nothing to another profile', async () => {
     makeTask()
     inboxService.recordRunEvent(ctx(), permission)
-    expect((await inboxService.list('someone-else'))).toEqual([])
+    expect((await listEntries('someone-else'))).toEqual([])
   })
 })
 
@@ -543,7 +555,7 @@ describe('answering from the inbox', () => {
     expect(result.ok).toBe(true)
     expect(deliverAnswer).toHaveBeenCalledWith(USER, 'per_1')
     expect(taskInputRequestRepo.getById('per_1')?.status).toBe('answered')
-    expect((await inboxService.list(USER))).toEqual([])
+    expect((await listEntries(USER))).toEqual([])
     expect(taskService.getById(USER, task.id).status).toBe('in_progress')
   })
 
@@ -576,7 +588,7 @@ describe('answering from the inbox', () => {
     })
     // The entry stops offering a button whose only outcome is that message.
     expect(taskInputRequestRepo.getById('per_1')?.status).toBe('expired')
-    expect((await inboxService.list(USER))).toEqual([])
+    expect((await listEntries(USER))).toEqual([])
     // No answerable request remains; the completion owner decides the final outcome.
     expect(taskService.getById(USER, task.id).status).toBe('in_progress')
   })
@@ -648,7 +660,7 @@ describe('the boot sweep', () => {
 
     expect(taskInputRequestRepo.expireOpen()).toBe(1)
     expect(taskInputRequestRepo.getById('per_1')?.status).toBe('expired')
-    expect((await inboxService.list(USER))).toEqual([])
+    expect((await listEntries(USER))).toEqual([])
     // Idempotent: a second boot finds nothing left to expire.
     expect(taskInputRequestRepo.expireOpen()).toBe(0)
   })
@@ -678,7 +690,7 @@ describe('remote inbox', () => {
     inboxService.recordRunEvent(ctx(), { ...permission, requestId: 'same-ask' })
     const first = remote()
     const second = remote('another')
-    const entries = await inboxService.list(USER)
+    const entries = await listEntries(USER)
     expect(entries).toHaveLength(3)
     expect(new Set(entries.map((e) => e.requestId)).size).toBe(3)
     const entry = entries.find((e) => e.taskId === second.task.id)!
@@ -692,7 +704,7 @@ describe('remote inbox', () => {
 
   it('never sends a stale address after deletion, re-binding, or from a different profile', async () => {
     const { task, adapter } = remote()
-    const [entry] = await inboxService.list(USER)
+    const [entry] = await listEntries(USER)
     expect((await inboxService.answer('other-user', entry.requestId, { kind: 'question', answers: [[]] })).ok).toBe(false)
     taskService.bindRemote(USER, task.id, { adapter: adapter.id, id: 'new-task', key: null, url: null, state: {} })
     expect((await inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [[]] })).ok).toBe(false)
@@ -701,27 +713,60 @@ describe('remote inbox', () => {
     expect(adapter.answerAsk).not.toHaveBeenCalled()
   })
 
-  it('rejects a failed or unavailable read instead of reporting an empty inbox', async () => {
+  it('names a failed or unavailable service instead of losing the list to it', async () => {
+    // This used to reject, which is the bug the snapshot exists to fix: one
+    // service being unreachable is not the list failing, and the reason is
+    // carried per service so a caller can say how much of it is missing.
     const { adapter } = remote()
     vi.mocked(adapter.listOpenAsks).mockRejectedValue(new Error('offline'))
-    await expect(inboxService.list(USER)).rejects.toThrow('offline')
+    expect(await inboxService.list(USER)).toEqual({
+      entries: [], unreadable: [{ adapter: 'service', reason: 'offline' }]
+    })
     adapter.availability = async () => ({ ready: false, reason: 'Sign in again.' })
-    await expect(inboxService.list(USER)).rejects.toThrow('Sign in again.')
+    expect(await inboxService.list(USER)).toEqual({
+      entries: [], unreadable: [{ adapter: 'service', reason: 'Sign in again.' }]
+    })
+  })
+
+  it('still answers with the local asks while a remote service cannot be read', async () => {
+    // **The whole point.** Mutation: rethrow the first rejection from
+    // `remoteInboxService.read` and this fails on the first assertion — an ask
+    // parked on *this* machine, which needed no network to find, disappears
+    // from the only list it is in for the length of somebody else's outage.
+    makeTask()
+    inboxService.recordRunEvent(ctx(), permission)
+    const { adapter } = remote()
+    vi.mocked(adapter.listOpenAsks).mockRejectedValue(new Error('offline'))
+    const snapshot = await inboxService.list(USER)
+    expect(snapshot.entries.map((entry) => entry.requestId)).toEqual(['per_1'])
+    expect(snapshot.unreadable).toEqual([{ adapter: 'service', reason: 'offline' }])
+  })
+
+  it('reports one unreadable entry per service, however many of its tasks are blocked', async () => {
+    const { adapter } = remote()
+    const second = taskService.create(USER, { title: 'Also there', goal: 'More remote work', executor: 'remote' })
+    taskService.bindRemote(USER, second.id, { adapter: adapter.id, id: 'task-two', key: null, url: null, state: {} })
+    taskService.acceptRemoteStatus(USER, second.id, 'blocked')
+    vi.mocked(adapter.listOpenAsks)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('offline again'))
+    const { unreadable } = await inboxService.list(USER)
+    expect(unreadable).toEqual([{ adapter: 'service', reason: 'offline' }])
   })
 
   it('skips unsupported services and non-blocked tasks', async () => {
     const { task, adapter } = remote()
     taskService.acceptRemoteStatus(USER, task.id, 'in_progress')
-    expect(await inboxService.list(USER)).toEqual([])
+    expect(await listEntries(USER)).toEqual([])
     taskService.acceptRemoteStatus(USER, task.id, 'blocked')
     adapter.capabilities = () => createNullAdapter(adapter.id).capabilities()
-    expect(await inboxService.list(USER)).toEqual([])
+    expect(await listEntries(USER)).toEqual([])
     expect(adapter.listOpenAsks).not.toHaveBeenCalled()
   })
 
   it('keeps a network refusal retryable and distinguishes an already settled ask', async () => {
     const { adapter } = remote()
-    const [entry] = await inboxService.list(USER)
+    const [entry] = await listEntries(USER)
     vi.mocked(adapter.answerAsk).mockRejectedValueOnce(new RemoteTaskError('unavailable', 'Sign in again.'))
     expect(await inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [[]] })).toMatchObject({ ok: false, code: 'unavailable', reason: 'Sign in again.' })
     vi.mocked(adapter.answerAsk).mockResolvedValueOnce({ delivered: false })
@@ -732,8 +777,8 @@ describe('remote inbox', () => {
     const { adapter, task } = remote()
     let release!: (value: []) => void
     vi.mocked(adapter.listOpenAsks).mockImplementation(() => new Promise((resolve) => { release = resolve }))
-    const first = inboxService.list(USER)
-    const second = inboxService.list(USER)
+    const first = listEntries(USER)
+    const second = listEntries(USER)
     await vi.waitFor(() => expect(adapter.listOpenAsks).toHaveBeenCalledTimes(1))
     taskService.remove(USER, task.id)
     release([])
@@ -743,7 +788,7 @@ describe('remote inbox', () => {
 
   it('coalesces concurrent answers so two windows cannot send twice', async () => {
     const { adapter } = remote()
-    const [entry] = await inboxService.list(USER)
+    const [entry] = await listEntries(USER)
     let release!: (value: { delivered: boolean }) => void
     vi.mocked(adapter.answerAsk).mockImplementation(() => new Promise((resolve) => { release = resolve }))
     const first = inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [['Yes']] })
@@ -763,17 +808,53 @@ describe('remote inbox', () => {
     let release!: (value: []) => void
     vi.mocked(fast.listOpenAsks).mockReturnValue(new Promise((_resolve, reject) => { fail = reject }))
     vi.mocked(slow.listOpenAsks).mockReturnValue(new Promise((resolve) => { release = resolve }))
-    const first = inboxService.list(USER).catch((error: Error) => error.message)
+    const first = inboxService.list(USER)
     await vi.waitFor(() => expect(slow.listOpenAsks).toHaveBeenCalledTimes(1))
     fail(new Error('offline'))
     await new Promise<void>((resolve) => setImmediate(resolve))
-    const retry = inboxService.list(USER).catch((error: Error) => error.message)
+    const retry = inboxService.list(USER)
     await new Promise<void>((resolve) => setImmediate(resolve))
     const readCount = vi.mocked(slow.listOpenAsks).mock.calls.length
     release([])
-    expect(await first).toBe('offline')
-    expect(await retry).toBe('offline')
+    // The failure no longer ends the read, and it still must not end the
+    // *lock*: the retry joins the same operation and waits for the slow
+    // sibling, rather than starting a second round of its network work.
+    expect((await first).unreadable).toEqual([{ adapter: 'fast', reason: 'offline' }])
+    expect((await retry).unreadable).toEqual([{ adapter: 'fast', reason: 'offline' }])
     expect(readCount).toBe(1)
+  })
+
+  it('answers a service that never replies as a hole, without ending the read it is waiting on', async () => {
+    // The deadline is the one place `unreadable` is *synthesised* rather than
+    // observed, and it used to reject — which is what took the local rows down
+    // with it. Nothing pinned it: there are no fake timers anywhere else in
+    // this file, so the ten-second path ran in no test at all.
+    vi.useFakeTimers()
+    try {
+      const { adapter } = remote('sluggish')
+      let release!: (value: []) => void
+      vi.mocked(adapter.listOpenAsks).mockReturnValue(new Promise((resolve) => { release = resolve }))
+      const pending = inboxService.list(USER)
+      await vi.advanceTimersByTimeAsync(10_000)
+      const snapshot = await pending
+      expect(snapshot.unreadable).toEqual([
+        { adapter: 'sluggish', reason: 'The service did not answer in time.' }
+      ])
+      // Nothing from that service is in the list — which is exactly why naming
+      // it is honest rather than an over-claim. Whatever is local still is.
+      expect(snapshot.entries.every((entry) => entry.source === 'local')).toBe(true)
+      // And the read it gave up waiting on is still the one in flight: a caller
+      // that tries again joins it instead of paying for its network work twice.
+      void inboxService.list(USER)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(adapter.listOpenAsks).toHaveBeenCalledTimes(1)
+      // Settle it, or the coalesced read outlives this test and the next call
+      // to `list` in this file joins a promise that never resolves.
+      release([])
+      await vi.advanceTimersByTimeAsync(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -787,7 +868,7 @@ describe('next-message continuation', () => {
     inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
     inboxService.recordRunEvent(ctx(), permission)
     expect(taskInputRequestRepo.expireOpen()).toBe(1)
-    const entries = await inboxService.list(USER)
+    const entries = await listEntries(USER)
     expect(entries).toHaveLength(1)
     expect(entries[0].resume).toBe('next_message')
   })
@@ -796,11 +877,11 @@ describe('next-message continuation', () => {
     makeTask()
     inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
     inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
-    const [first] = await inboxService.list(USER)
-    expect(await inboxService.list(USER)).toHaveLength(1)
+    const [first] = await listEntries(USER)
+    expect(await listEntries(USER)).toHaveLength(1)
     inboxService.resumeChat(ctx(), 'main')
     inboxService.recordRunEvent(ctx({ turnId: 'two' }), ask)
-    const [second] = await inboxService.list(USER)
+    const [second] = await listEntries(USER)
     expect(second.requestId).not.toBe(first.requestId)
     expect(await inboxService.answer(USER, first.requestId, { kind: 'question', answers: [['old answer']] }))
       .toMatchObject({ ok: false, code: 'already_answered' })
@@ -810,21 +891,21 @@ describe('next-message continuation', () => {
     const task = makeTask()
     inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
     inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
-    const [entry] = await inboxService.list(USER)
+    const [entry] = await listEntries(USER)
     expect(await inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [['main']] })).toEqual({ ok: true })
     expect(runStart).toHaveBeenCalledWith(
       { profileUserId: USER, settingsUserId: USER },
       { chatId: CHAT, content: 'main', addressedAgentId: AGENT },
       expect.objectContaining({ preserveOnRefusal: true })
     )
-    expect(await inboxService.list(USER)).toHaveLength(0)
+    expect(await listEntries(USER)).toHaveLength(0)
     expect(taskService.getById(USER, task.id).status).toBe('in_progress')
   })
 
   it('retains the waiting ask and answer when dispatch is busy or refuses before acceptance', async () => {
     makeTask()
     inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
-    const [entry] = await inboxService.list(USER)
+    const [entry] = await listEntries(USER)
     runBusy.mockReturnValue(true)
     expect(await inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [['main']] }))
       .toMatchObject({ ok: false, code: 'unavailable' })
@@ -841,7 +922,7 @@ describe('next-message continuation', () => {
     inboxService.recordRunEvent(ctx({ turnId: 'two', agentId: 'folder:beta' }), ask)
     inboxService.resumeChat(ctx(), 'main')
     inboxService.recordRunEvent(ctx(), { type: 'done', stopReason })
-    const remaining = await inboxService.list(USER)
+    const remaining = await listEntries(USER)
     expect(remaining).toHaveLength(1)
     expect(remaining[0].agentId).toBe('folder:beta')
     expect(taskService.getById(USER, task.id).status).toBe('blocked')
@@ -850,9 +931,9 @@ describe('next-message continuation', () => {
   it.each(['cancelled', 'archived'] as const)('does not restart a %s task from a retained Inbox card', async (status) => {
     const task = makeTask()
     inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
-    const [entry] = await inboxService.list(USER)
+    const [entry] = await listEntries(USER)
     taskService.setStatus(USER, task.id, status)
-    expect(await inboxService.list(USER)).toHaveLength(0)
+    expect(await listEntries(USER)).toHaveLength(0)
     expect(await inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [['main']] }))
       .toMatchObject({ ok: false, code: 'no_longer_waiting' })
     expect(runStart).not.toHaveBeenCalled()
@@ -884,10 +965,10 @@ describe('next-message continuation', () => {
     makeTask()
     const parent = ctx({ turnId: 'parent', agentId: null })
     inboxService.recordRunEvent(parent, { type: 'child', toolCallId: 'tool-one', agentId: AGENT, event: ask })
-    const [first] = await inboxService.list(USER)
+    const [first] = await listEntries(USER)
     inboxService.resumeChat(ctx(), 'main')
     inboxService.recordRunEvent(parent, { type: 'child', toolCallId: 'tool-two', agentId: AGENT, event: ask })
-    const [second] = await inboxService.list(USER)
+    const [second] = await listEntries(USER)
     expect(second.requestId).not.toBe(first.requestId)
   })
 
@@ -895,7 +976,7 @@ describe('next-message continuation', () => {
     const { messageRepo } = await import('../db/messages')
     makeTask()
     inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
-    const [entry] = await inboxService.list(USER)
+    const [entry] = await listEntries(USER)
     expect(() => messageRepo.saveUser({ chatId: CHAT, content: 'Answer that was not accepted' }, () => {
       taskInputRequestRepo.settle(entry.requestId, 'answered', { kind: 'question', answers: [['main']] })
       throw new Error('acceptance failed')

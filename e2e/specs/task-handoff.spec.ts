@@ -202,9 +202,16 @@ async function arrangeTask(cinna: CinnaApp, fake: Awaited<ReturnType<typeof serv
   expect(original.chatId).toBeTruthy()
   expect(fake.state.localSends).toBe(0)
   await linkSandboxAccount(cinna, fake.host)
+  // The Jobs *tab* first, and not because the task is reached through it — it
+  // is on the Inbox screen now. This test later asserts the running spinner on
+  // the job's sidebar row (`getByLabel('Running')`), which only renders while
+  // that tab is the selected one, and reaching the task used to select it as a
+  // side effect. The Inbox is a tabless view, so opening it leaves the tab
+  // where this put it.
   await cinna.page.getByRole('button', { name: 'Jobs', exact: true }).click()
-  await cinna.page.getByRole('region', { name: 'Tasks', exact: true })
-    .getByRole('button', { name: TITLE, exact: true }).click()
+  await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
+  await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true })
+    .getByRole('button', { name: TITLE }).click()
   await expect(cinna.page.getByRole('heading', { name: TITLE, level: 1, exact: true })).toBeVisible()
   return { original, jobId: job.id }
 }
@@ -265,8 +272,14 @@ test('an existing desktop task hands off once and preserves its recipient and no
     fake.state.remoteRunning = false
     await expect(cinna.page.getByText('Succeeded', { exact: true })).toBeVisible({ timeout: 20_000 })
     await expect(cinna.page.getByLabel('Running', { exact: true })).toHaveCount(0)
-    await expect(cinna.page.getByRole('region', { name: 'Tasks', exact: true })
-      .getByRole('button', { name: TITLE, exact: true })).toContainText('completed')
+    // The attempt is over, so leaving the job page can no longer assist it.
+    // The task list lives on the Inbox screen now.
+    await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
+    // The row's status is an icon, so the word is in its accessible name and
+    // nowhere in its text — the name is the one place both the reader and this
+    // assertion can find it.
+    await expect(cinna.page.getByRole('region', { name: 'Recent tasks', exact: true })
+      .getByRole('button', { name: TITLE })).toHaveAccessibleName(`${TITLE} — completed`)
     expect((await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId))[0])
       .toMatchObject({ status: 'succeeded', taskId: original.id, localChatId: original.chatId })
     expect((await cinna.page.evaluate(() => window.api.jobs.list())).find((job) => job.id === jobId)?.inProgressRunsCount).toBe(0)

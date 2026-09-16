@@ -19,7 +19,7 @@ import { createLogger } from '../logger/logger'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { RunEvent, RunState } from '../../shared/runEvents'
 import { ASK_NO_LONGER_WAITING } from '../../shared/inbox'
-import type { InboxAnswerResult, InboxEntry } from '../../shared/inbox'
+import type { InboxAnswerResult, InboxEntry, InboxSnapshot } from '../../shared/inbox'
 import type { TaskInputRequestStatus } from '../../shared/tasks'
 
 const logger = createLogger('inbox')
@@ -396,9 +396,29 @@ export const inboxService = {
     }
   },
 
-  /** Everything waiting on this profile, newest first. */
-  async list(userId: string): Promise<InboxEntry[]> {
-    const remote = await remoteInboxService.list(userId)
+  /**
+   * Everything waiting on this profile, newest first, with whatever could not
+   * be read named beside it.
+   *
+   * **The local rows are returned whatever the remote answered.** A bound
+   * service being unreachable used to reject the whole list, so an ask parked
+   * on this machine — which no network was needed to find — vanished from the
+   * one list it is in for the length of somebody else's outage. A SQLite
+   * failure still throws: that is this device being broken, not a source it
+   * could not reach, and there is no partial list to hand back.
+   */
+  async list(userId: string): Promise<InboxSnapshot> {
+    /*
+      Started here and awaited at the bottom, so the sentence above is true of
+      the *code* and not only of the error handling. Awaiting the remote first
+      made the local rows wait out the remote's latency as surely as they used
+      to wait out its failures: a black-holed service has no abort of its own
+      short of the transport's thirty seconds, so every poll took the full
+      ten-second deadline and a cold Inbox sat on `Loading…` for all of it,
+      with a permission ask parked on this machine the whole time. The local
+      read is synchronous SQLite, so overlapping them costs nothing.
+    */
+    const pending = remoteInboxService.list(userId)
     const local = taskInputRequestRepo
       .listOpen(userId)
       .filter(({ row }) => {
@@ -407,7 +427,11 @@ export const inboxService = {
         return task.executor === 'desktop' && task.runsHere && ['blocked', 'in_progress'].includes(task.status)
       })
       .map(({ row, taskTitle }) => toEntry(row, taskTitle))
-    return [...local, ...remote].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    const remote = await pending
+    return {
+      entries: [...local, ...remote.entries].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+      unreadable: remote.unreadable
+    }
   },
 
   /**

@@ -62,7 +62,8 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 ### Opening Inbox
 
 1. User clicks the top-bar Inbox icon, including with the sidebar collapsed or settings open.
-2. The main area shows all waiting asks; the selected sidebar tab is retained. The count overlays the fixed-size control so arriving asks do not move the surrounding controls. A failed read shows **!**, not an empty Inbox.
+2. The main area shows all waiting asks; the selected sidebar tab is retained. The count overlays the fixed-size control so arriving asks do not move the surrounding controls. A failed read shows **!**, not an empty Inbox. When a remote service could not be read, the count stays in a warning tint and the accessible name adds that a service could not be read. With nothing local to count, that state shows **!** too, because an empty badge would look like a healthy, empty inbox. See [the Inbox](../../jobs/tasks/inbox.md#polling-failures-and-concurrency).
+3. Below the asks, the same screen lists **Recent tasks**; a task opened from there with no parent and no job offers **Back to the Inbox**.
 
 ## Business Rules
 

@@ -91,11 +91,18 @@ const SYNCED_TABS = new Set(['jobs', 'notes'])
  * there is the thing the page most needs to be right about: whether another
  * device has taken the task over.
  *
- * The Inbox is deliberately absent. `task_input_requests` never syncs — a
- * `reply` ask is an address on the machine that raised it — so a pull cannot
- * change what is in that list.
+ * **The Inbox joined it when the task list moved onto that screen.** It was
+ * deliberately absent while it held asks alone: `task_input_requests` never
+ * syncs — a `reply` ask is an address on the machine that raised it — so a
+ * pull could not change a row of it. Its lower half is now the `task`
+ * collection, which is precisely what a pull *does* change, and the argument
+ * for the task page above applies to it word for word: the rows re-read every
+ * five seconds from local SQLite, so without this they show whatever the last
+ * cycle left, and a task another device finished reads `in_progress` for up to
+ * a minute. The Jobs tab keeps its own arm above — it no longer shows tasks,
+ * but jobs are a synced collection in their own right.
  */
-const SYNCED_VIEWS = new Set(['task'])
+const SYNCED_VIEWS = new Set(['task', 'inbox'])
 
 /**
  * Coalesce rapid tab toggles into at most one server ping per window — the

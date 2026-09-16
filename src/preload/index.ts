@@ -100,7 +100,7 @@ import type {
 import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
 import type { TaskDto, TaskListQuery } from '../shared/tasks'
 import type { TaskStatus } from '../shared/taskStatus'
-import type { AskAnswerPayload, InboxAnswerResult, InboxEntry } from '../shared/inbox'
+import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot } from '../shared/inbox'
 import type {
   CatalogEntryDto,
   CatalogInstallResultDto,
@@ -1173,7 +1173,7 @@ const api = {
    * that this one does not need the turn's chat to be on screen.
    */
   inbox: {
-    list: (): Promise<InboxEntry[]> => ipcRenderer.invoke('inbox:list'),
+    list: (): Promise<InboxSnapshot> => ipcRenderer.invoke('inbox:list'),
     answer: (data: AskAnswerPayload): Promise<InboxAnswerResult> =>
       ipcRenderer.invoke('inbox:answer', data)
   },
