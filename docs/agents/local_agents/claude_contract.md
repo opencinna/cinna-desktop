@@ -585,6 +585,16 @@ Set alongside the env, not in it: `strictMcpConfig: true`, `mcpServers: {}` (§2
    `in_process_teammate`, `dream`) is read from the 2.1.267 binary and is the kind of thing a CLI
    minor bump can change silently.
 
+   **Partly answered over ACP** (`claude` 2.1.273, 16 September 2026, [the ACP contract](acp_contract.md#between-turn-traffic)).
+   - **A background *shell* does get a follow-up turn.** It ended 24 s after the prompt returned, and
+     the CLI ran a whole unprompted turn that ended in a `usage_update` with `cost` and origin
+     `task-notification`. This happened with or without the AIR capabilities
+   - **A *stopped* task got none** in the 40 s watched, only a synthetic "Task stopped by user" text
+     chunk
+   - **A *failed* task was not observed**
+   - **The runner's grace is gone.** The desktop no longer decides when such a turn is over. It opens
+     a follow-up turn for the traffic and ends it on the costed `usage_update`
+
 ## 9. Runbook — how to re-verify
 
 > **PARTLY RETIRED.** Items driving `query()` directly still work — the SDK is a dependency — but they no longer describe how the app runs a turn. The ACP runbook is [the ACP contract](acp_contract.md) §7. Item 1 (the environment bisect) and item 8 (auto mode) are unaffected and remain the two most valuable probes here.

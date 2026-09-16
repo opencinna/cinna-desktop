@@ -23,6 +23,7 @@ A direct-chat agent turn that the app was quit, force-quit or crashed under is n
 2. What streamed is kept: the quit flush saves it on a normal quit, and the draft row holds it after a kill
 3. On the next launch the turn ends with the error row *"The app closed before this turn finished. Send your message again to retry."*. The sidebar shows a failed result, and a job run the chat belongs to is failed with the same reason
 4. The next message resumes the agent's session (see [the agent turn](../local_agents/agent_turn.md#quitting-the-app-mid-turn))
+5. If the turn was one the agent started on its own ([a follow-up turn](../local_agents/agent_turn.md#a-turn-the-agent-starts-on-its-own-is-a-follow-up-turn)), there is no message to send again. The row reads *"The app closed while the agent was working on its own. What it wrote before that is above."*
 
 ### A Cinna agent kept working while the app was closed
 1. The app is killed while a Cinna A2A agent is streaming

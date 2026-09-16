@@ -42,7 +42,7 @@ Both were live hazards and the second is the one that actually bit. The child en
 - **Engine credential** — for `engine: 'claude'` there is not one. The runtime carries an engine and a tier, and no credential row and no API key at all
 - **Model alias** — `haiku` / `sonnet` / `opus`, which is how a plan is addressed. Not a catalogue id, because on this path there is no credential and therefore no catalogue to hold one
 - **Translator** — the fold from the agent's `session/update` stream into the A2A-shaped message every consumer downstream already reads. Shared with OpenCode since phase 3 (`acpMessages.ts`); what remains Claude-specific is where a tool's real name is read from
-- **Background task** — work the CLI runs after the model has ended its own turn: a subagent launched with `run_in_background`, a long shell command. The CLI reports the **live set** as a level signal; the model's `result` does not wait for it
+- **Background task** — work the CLI runs after the model has ended its own turn: a subagent launched with `run_in_background`, a long shell command. The model's `result` does not wait for it. Over ACP the adapter reports each one, and each subagent, when the client advertises the AIR capabilities, and the desktop shows them under the composer ([Session Activity](../session_activity/session_activity.md))
 - **Holding task** — a background task whose completion a turn waits for. A subagent holds; a background shell does not. **The desktop no longer decides this**: the adapter runs the CLI in its own process and `session/prompt` returns when the CLI's own idle rule says the turn is over. Kept as a concept because the distinction still explains why an answer can be followed by more work in the same turn
 - **Folder subagent** — a `.claude/agents/*.md` definition inside the agent's folder, which a terminal `claude` would offer to the model as a `subagent_type`. The desktop reads the file and hands the SDK the fields that *describe* a subagent, never the ones that would move a permission decision
 - **Approvals** — who answers this agent's permission asks *before* the desktop does. Two settings and no third: **Automatic** (the default) puts Claude Code's own reviewer in front — the same classifier a terminal `claude` runs with auto mode on — and **Ask every time** brings every command, edit, write and fetch to the desktop's permission block. A per-agent choice made on the Permissions tab, kept in the agent's desktop state beside its grants and never in a manifest. The SDK's `bypassPermissions` and `dontAsk` are not settings here and cannot be reached
@@ -65,7 +65,8 @@ Both were live hazards and the second is the one that actually bit. The child en
 4. The per-agent turn lock is taken, so "this agent is busy in another chat" behaves exactly as it does on the other engine
 5. The adapter is spawned in the agent's folder, a session is created or loaded with the folder's assembled system prompt, the **Approvals** setting is applied with `session/set_mode`, and the answer streams into the transcript token by token — text, thinking, tool calls and their results, as the same part kinds every other agent produces
 6. The session id the CLI reports is remembered for this (chat, agent), so tomorrow's message continues the same conversation
-7. When the agent hands work to a subagent in the background and answers "I'll report back", the turn does not end there: the adapter keeps the CLI running in its own process, the subagent's tool calls and permission asks keep arriving in the same turn, and the agent's follow-up report streams in before `session/prompt` returns. **The desktop no longer says anything about the wait.** The in-process runner had to track the CLI's background-task set itself, and it announced what it was waiting for in a notice; the adapter owns that bookkeeping now and **nothing in the protocol reports the CLI's live task set**, so there is no signal left to write that notice from — a gap worth knowing about, because a long silence with the streaming indicator on is what that notice existed to explain
+7. When the agent hands work to a subagent in the background and answers "I'll report back", the turn does not end there. The adapter keeps the CLI running in its own process, the subagent's tool calls and permission asks keep arriving in the same turn, and the agent's follow-up report streams in before `session/prompt` returns. The subagent's work stays **inline**, under the agent's `Agent` call, and a **Subagents** badge under the composer names what is running. That badge is what explains a long silence with the streaming indicator on, which the in-process runner used to explain with a notice
+8. When the agent leaves a **shell** running in the background, the turn *does* end: `session/prompt` returns while the shell runs, and a **Background** badge shows it, with a Stop control. When the shell finishes, Claude starts a turn of its own to read the output and act on it. That turn streams into the chat as a new assistant message and is saved like any other ([follow-up turns](agent_turn.md#a-turn-the-agent-starts-on-its-own-is-a-follow-up-turn)). Until the desktop listened between turns, that whole turn was dropped. An agent that said "I'll merge once CI passes" merged, and the chat never showed it
 
 ### Being asked for permission
 1. Mid-turn the agent wants to write a file, run a command, fetch a URL or start a subagent. Who is asked first is the agent's **Approvals** setting on its Permissions tab
@@ -208,9 +209,33 @@ ask arrived **after** the parent's reply, was allowed, and the subagent complete
 closed" anywhere. What the desktop keeps from that episode is a named regression case in the driver's
 suite, so the sequence cannot come back unnoticed.
 
-The distinction between a background *subagent* and a background *shell* is therefore the CLI's own
-business now, not the desktop's, and the twenty-minute ceiling is what covers a turn that never ends
-at all — see [The Agent Turn](agent_turn.md#a-turn-always-settles).
+Which background work holds the prompt is the CLI's decision now, not the desktop's. Watched with
+`claude` 2.1.273: a background subagent holds it, and so does the turn the subagent's completion
+triggers; a background shell does not. What the desktop owns is everything around that:
+
+- **It reports both kinds** ([Session Activity](../session_activity/session_activity.md))
+- **It keeps the process alive while a shell runs.** The reaper waits, for up to 30 quiet minutes
+- **It shows the turn Claude starts when the shell finishes.** That turn ends on the `usage_update`
+  that carries `cost`, because Claude ends every turn with one, including the ones it starts itself
+
+The twenty-minute ceiling is what covers a turn that never ends at all — see [The Agent
+Turn](agent_turn.md#a-turn-always-settles).
+
+### A subagent's work stays inline, though the adapter no longer announces it
+
+The launcher advertises `nativeSubagentSessions`, so the adapter reports each subagent's start and
+end. That comes at a price: the parent session **no longer receives the `Agent` tool call**, and the
+subagent's own frames arrive under a session id of its own ([the contract](acp_contract.md#subagents-nativesubagentsessions)).
+The desktop puts both back:
+
+- the child session is routed to whoever hears the parent
+- the missing `Agent` call is written into the stream from what `subagent_spawned` said, ahead of the
+  first frame that needs it, and closed from the subagent's own end
+
+A transcript therefore reads as it did before the capability, with one exception. **A background
+subagent's launch text is missing**, because the CLI writes it and it is not on the wire. A subagent
+that ends with its call still open is closed with a line saying how it ended ("Subagent failed.",
+"Subagent stopped.", "Subagent disconnected.").
 
 ### A message sent mid-turn goes into the running turn, between tool calls
 
@@ -337,7 +362,8 @@ These are open:
 - **The installer exclusion is verified on `darwin-arm64` only.** The other seven platform packages are not built here
 - **The Anthropic API SDK moved 0.89 → 0.93** to satisfy the Agent SDK's peer requirement, and the bump lands on the ordinary Anthropic chat adapter, `src/main/llm/anthropic.ts`, not on anything here. That adapter is covered — `src/main/llm/anthropic.test.ts` runs the SDK's real client against a stubbed wire — but nothing in this feature exercises it, so a further bump forced from here is verified there, not here; see [LLM Adapters — Technical Details](../../llm/adapters/adapters_tech.md#sdk-versions-and-one-that-moved-for-a-reason-outside-this-domain)
 - **Out-of-plan usage has no good surface.** It arrives mid-turn as an error from the CLI and its message is passed through, which is honest but not helpful. We do not know the user's limits and inventing a sentence about them would be worse than the CLI's own
-- **The desktop's background-task bookkeeping is gone, and what replaced it has not been watched for long.** The in-process runner tracked the CLI's live task set, applied a grace after it emptied and named what it was waiting for in a notice. Over ACP the adapter decides when the prompt returns; one background-subagent turn has been watched end to end that way, and nothing has been measured about a *shell* left running when the model answers
+- **Background work has been watched in single probes, not over time.** One run each, on `haiku`: a background subagent, a synchronous one, a background shell, and a stopped task ([the contract](acp_contract.md#between-turn-traffic)). A shell left running when the model answers was measured there: the prompt returned 24 s before the shell ended, and the turn Claude started afterwards ended on a costed `usage_update`. A failed task, a subagent that fails or disconnects, and an ask raised between turns have not been watched
+- **Automatic mode may refuse a `haiku` turn under `claude` 2.1.273.** On that CLI, `session/set_mode auto` itself fails on `haiku`, and the driver refuses a turn whose setup failed. This is read from the code and was not run in the app ([the contract](acp_contract.md#on-automatic-the-clis-own-reviewer-answers-first--and-it-declined-nothing))
 - **The reviewer handing an ask on to the desktop was never observed.** The SDK's own documentation implies it can; seven probes, chosen to be declined, were all approved. Everything the block does on *Automatic* is therefore verified only on *Ask every time*, and the description of *Automatic* is written from what was watched rather than from what the SDK says. Which models carry a reviewer is not the desktop's to know either — `haiku` is the one observed to fall back, and the notice is driven by what the CLI reports, not by a list
 - **No automated test ever runs a turn on it.** The E2E scenarios drive the *choice* — the option, the manifest rewritten in both directions, the panel's geometry — and the readiness ladder, which is reachable there because the probe is free and the sandbox `HOME` makes a real install read as logged out. They stop there, because spawning a `claude` **turn** bills a real person's subscription on every developer's machine and in CI. Everything past the picker is covered by unit tests against an injected SDK
 
@@ -377,8 +403,10 @@ spawn: <this app, ELECTRON_RUN_AS_NODE=1> <claude-agent-acp>/dist/index.js
    env  = buildClaudeEnv (constructed, stripped, audited)
           + CLAUDE_CODE_EXECUTABLE = the user's own `claude`
    │
-   ├─ initialize   clientCapabilities = { elicitation: { form: {} } }
-   │                 └ what enables the adapter's AskUserQuestion tool
+   ├─ initialize   clientCapabilities = { elicitation: { form: {} },
+   │                   _meta.jetbrains.air: [asyncTasks, nativeSubagentSessions] }
+   │                 └ elicitation enables the adapter's AskUserQuestion tool;
+   │                   AIR makes it report background work and subagents
    ├─ session/new | session/load
    │    _meta.claudeCode.options = { systemPrompt (the folder's own),
    │                                 model (a plan alias), settingSources: [],
@@ -396,7 +424,9 @@ spawn: <this app, ELECTRON_RUN_AS_NODE=1> <claude-agent-acp>/dist/index.js
         │                            └ filed beside its AskUserQuestion call,
         │                              whose restating result is folded into it
         current_mode_update ≠ asked ──► notice in the transcript
+        async_task_* / subagent_* ──► session activity (badges); child session aliased to the parent
         → stopReason
+   after it: the session stays observed; an unprompted turn → follow-up turn → ends on costed usage_update
    │
    ▼
 RunAgentTurnResult { text, parts, notices, contextId }
@@ -410,6 +440,7 @@ parts accumulator → message repository → renderer   (all unchanged)
 - [The Claude Engine Contract](claude_contract.md) — what was watched against the real binary and the SDK, and the authority for every "why does the code do this" question here
 - [The Agent Turn Runner](agent_turn.md) — the seam this is the third implementation of, and every rule about never throwing, the lock and the ceiling
 - [The Local Engine, Runtimes & Prompt Assembly](engine.md) — the runtime resolution this extends, the prompt assembly it reuses verbatim, and the environment narrowing rule it widens by exactly one variable
+- [Session Activity](../session_activity/session_activity.md) — the background shells and subagents this engine reports, and the Stop control
 - [Local Agent Permissions](permissions.md) — the standing grants the permission callback consults, the Approvals setting that decides whether the CLI's reviewer stands in front of them, and why *Always* is never written into a tool's own store
 - [Kit Contract & Manifest Layer](kit_contract.md) — `runtime.engine` as an additive 1.2.0 field, and the tolerant-read rule that keeps a newer folder running
 - [Agents Tab & Agent Page](agents_tab.md) — the "Runs with" panel and its one reserved status line

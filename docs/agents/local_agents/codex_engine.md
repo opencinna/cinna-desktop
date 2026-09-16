@@ -22,6 +22,7 @@ Run kit and bare folder agents inside Cinna's chat UI using the user's installed
 4. Send a message. Cinna checks the folder and CLI readiness, assembles the instructions, opens or resumes the chat's Codex session and applies the approval mode before prompting.
 5. Read text, tool results and plans in the normal chat. Answer any approval or question inline or through the shared Inbox request surface. A question's Other answer returns to the original Codex question, without a second companion-field widget.
 6. Use **Stop** to cancel. Cinna settles pending asks and bounds the cancellation wait; a process that will not stop is retired by the shared driver.
+7. A command Codex leaves running after its reply appears as a **Background** badge under the composer, with a Stop control. A subagent Codex starts appears as a **Subagents** badge. See [Session Activity](../session_activity/session_activity.md).
 
 ### Recover installation or login readiness
 
@@ -47,6 +48,10 @@ Run kit and bare folder agents inside Cinna's chat UI using the user's installed
 - **Authentication stays with the CLI.** The narrowed child environment preserves the selected profile and tool PATH but excludes shell billing keys and adapter overrides. This is environment narrowing, not isolation from Codex's own readable configuration or saved login.
 - **A mid-turn message can start a turn nobody reads, so that turn is cancelled.** The adapter advertises the steering extension, so a message sent to a running Codex agent is offered to its turn. When that turn has already ended underneath, the adapter ignores the request to start nothing and starts a turn of its own. The desktop cancels it, retires the process unless another turn already holds it, and queues the message for the next turn. A steer sent before Codex has registered the turn it was just prompted with gets the same answer, only after that whole turn is over, so the desktop offers a message only once the turn has streamed its first content. Like every engine that steers, Codex is offered a message only while no tool call is running; a message sent during a command is queued and handed in when the command ends. The rule came from Claude, whose CLI aborts a running command for a steer; whether Codex would is not known, and waiting costs it only the wait. See [Pending Messages](../../chat/pending_messages/pending_messages.md) and [the ACP contract](acp_contract.md#the-steering-extension).
 
+- **Background terminals are reported; subagents are read from the root session.** Codex is sent the AIR `asyncTasks` capability only. Sent `nativeSubagentSessions`, the adapter would drop the spawn call from the parent, and nothing on the wire would link the subagent to the chat. So Codex subagents are read from the "Start subagent" / "Complete subagent" tool calls on the root session (`_meta.codex.subagent`). A second collaboration shape (`spawnAgent` receivers, `agentsStates`) is also read. It was derived from the adapter's code and has not been watched ([the contract](acp_contract.md#subagents-nativesubagentsessions)).
+- **Codex was not seen to start a turn of its own.** After its prompt returns it sends late updates for that turn's commands and the task's final state. Those update the activity badges, and they never open a turn, since saved rows are not rewritten. Should Codex ever start a turn of its own, it would be saved as a [follow-up turn](agent_turn.md#a-turn-the-agent-starts-on-its-own-is-a-follow-up-turn). Codex sends no end marker, so that turn would end after ten seconds with no traffic, no command running and no ask waiting.
+- **A background terminal exists only when the model leaves a command running.** A prompt to "run it in the background" was watched turning into `nohup … &`: an ordinary command that ends at once, with nothing to show or stop.
+
 ## Architecture Overview
 
 Agent settings / chat → typed preload and IPC → runtime resolution / shared ACP driver → Codex launcher → Electron Node running the pinned ACP adapter → user's Codex app server → CLI-owned model and tools.
@@ -58,6 +63,7 @@ Approval / question → ACP request → shared pending request and Inbox → use
 - [Technical Details](codex_engine_tech.md) — files, storage, IPC, packaging, configuration and evidence boundaries.
 - [The Local Engine](engine.md) — machine default, runtime precedence and folder prompt assembly.
 - [The Agent Turn](agent_turn.md) — process pooling, sessions, replay suppression, cancellation and request lifetime.
+- [Session Activity](../session_activity/session_activity.md) — the background terminals and subagents shown under the composer.
 - [The ACP Engine Contract](acp_contract.md) — measured adapter behavior and what still needs a real CLI/model validation.
 - [Local Agent Permissions](permissions.md) — standing grants, answer persistence and revocation.
 - [Agent Drivers & Readiness](../drivers/drivers.md) — capabilities and pre-send readiness.

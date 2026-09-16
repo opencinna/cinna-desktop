@@ -30,12 +30,14 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 
 - **Driver** — one agent turn, whatever kind of agent it is: the shared input in, the shared result out, and it **never throws**. Three transports, a2a/acp/managed, and `driverFor(agent)` is the one dispatch point ([Agent Drivers & Readiness](../drivers/drivers.md))
 - **Launcher** — the engine-specific half of an ACP turn: what to spawn, what to declare, what `session/new` carries, and what must be set on the session before the first prompt. It also answers with a **refusal** in place of a plan
-- **Process pool** — one child per agent, started by the turn that needs it, held for that turn's length, reaped after two minutes idle ([The Local Engine](engine.md))
+- **Process pool** — one child per agent, started by the turn that needs it, held for that turn's length, reaped after two minutes idle. The reap waits while the agent's background work runs, for up to 30 minutes ([The Local Engine](engine.md), [Session Activity](../session_activity/session_activity.md))
 - **Session** — an ACP session id created against the agent's folder. One per (chat, agent), remembered the moment it is created, so a conversation survives a restart — including one that ended a turn midway
 - **Replay** — the `session/update` notifications `session/load` emits for the *whole* prior conversation before it answers. Dropped, never ingested
 - **Parked request** — a permission ask or a question the agent is blocked on, mid-turn, waiting for a human. Over ACP the agent is blocked on a JSON-RPC request, so the park **is** the unresolved response
 - **Cancel grace** — the bounded wait for an agent to acknowledge a `session/cancel`. Three seconds, after which its process is retired
 - **Turn ceiling** — the backstop that ends a turn which never settles for any reason, found or unfound. Twenty minutes
+- **Between-turn listening** — after a turn unbinds, the driver keeps an observer on the session it ended on, until the process goes, the session is replaced, or the chat stops answering to the agent
+- **Follow-up turn** — a turn the agent starts on its own after `session/prompt` has returned, with no user message. It is opened as a run of the chat and saved as an assistant turn
 
 ## User Stories / Flows
 
@@ -79,6 +81,13 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 3. The process is killed and the turn never returns. On the next launch its parked ask is expired, because nothing can take the answer any more, and the question stays readable in the transcript. The turn ends with the error row *"The app closed before this turn finished. Send your message again to retry."* and is recorded as failed in the sidebar and in a job run that owns the chat. Nothing is resent: the process that held the turn is gone. See [Interrupted Turn Recovery](../turn_recovery/turn_recovery.md)
 4. The next message in the chat resumes the same session through `session/load`, because its id was saved when the session was created
 
+### The agent carries on after its reply
+1. The agent answers "I'll merge once CI is green", and its prompt returns. A background shell keeps running in its process
+2. Minutes later the shell ends, and the agent starts a turn of its own: it reads the output, merges, and says "Merged."
+3. The chat shows that turn live, with the spinner and the Stop button, as an assistant message with no user message above it. It is saved like any turn. In a chat that is not on screen, the sidebar shows the normal unread result
+4. A permission ask or question in that turn appears in the transcript and in the Inbox, and is answered the same way as in a prompted turn
+5. If the app is killed during that turn, the next launch closes it with *"The app closed while the agent was working on its own. What it wrote before that is above."* There is no message to send again
+
 ### The agent's process dies
 1. The connection closes. The turn ends with the failure the stream reports, and the parts already streamed are kept
 2. Nothing restarts it. The agent page shows `exited`, and the **next** turn starts a fresh process
@@ -121,7 +130,9 @@ The mode a loaded session reports is deliberately not read either. It is the mod
 
 Messages are *read* in order and *processed* concurrently: the SDK dispatches each incoming message without awaiting the previous one, so a `session/new` response and the notifications written right behind it race each other through the client. Recorded, not hypothesised — an `available_commands_update` follows its `session/new` response with nothing in between.
 
-A turn that bound its handlers on `session/new`'s answer would therefore drop the opening of its own turn some fraction of the time. So the connection keeps an unbound session's traffic in a short, bounded holding pen (500 notifications, 10 s) and a bind drains it in order. A permission or elicitation request for a session nobody binds within that window is answered `cancelled`.
+A turn that bound its handlers on `session/new`'s answer would therefore drop the opening of its own turn some fraction of the time. So the connection keeps an unbound session's traffic in a short, bounded holding pen (500 notifications, 10 s) and a bind drains it in order. A permission or elicitation request for a session nobody binds or observes within that window is answered `cancelled`.
+
+**The pen is for a session nobody listens to.** A session a turn has ended on is observed (see below), so its traffic goes to the observer at once instead. A turn about to use a session takes the observer down first, before anything that can produce traffic for it, so the load replay and the opening frames are penned for the turn's own bind.
 
 ### `session/update` is taken off the wire before the SDK validates it
 
@@ -260,6 +271,55 @@ A folder agent's session id is stored in the A2A session table's `context_id` co
 
 There are **two stores**, answering different questions. The SQLite row carries continuity on this machine; the copy in the agent's desktop state is the durable one — `app-data/desktop.json` for a kit agent, a file under `<userData>` keyed on the folder's path for a [bare](bare_agents.md) one, whose folder is never written into. The driver passes the agent's kind with the path rather than probing the folder, so the two callers cannot disagree about which store an agent has. Invariant 1 says the row is a cache, so the folder copy failing to write must not fail the turn.
 
+### A session is listened to between turns
+
+Engines talk between turns, and that traffic used to be dropped. Watched on the wire: `claude-agent-acp` runs a whole turn of its own when a background shell finishes, and `codex-acp` sends late `tool_call_update`s and task state for the turn that just ended ([the contract](acp_contract.md#between-turn-traffic)). The pen dropped all of it after ten seconds, and a permission ask in it waited those ten seconds to be refused.
+
+- **Every turn arms an observer when it unbinds**, on the session it ended on. It also arms one on the remembered session it replaced, unless that session turned out to be gone: an engine that cannot load sessions starts a fresh one, and the old one may still be running background work in the same process
+- **The observer is dropped** when the process exits (a retire or a reap ends in an exit too), when a turn is about to take the session, and when the chat stops answering to that agent: it was trashed or deleted, its router or bound agent changed, or the on-demand agent was removed. Otherwise a follow-up from the old agent could land in a chat that no longer answers to it
+- **What the observer hears goes first to [session activity](../session_activity/session_activity.md)**, then to the follow-up gate. A task's end is recorded even when the gate drops the traffic around it
+- **It logs only kinds and counts**, never content, in bursts of two seconds. A body can carry anything the agent read
+
+### A turn the agent starts on its own is a follow-up turn
+
+**What opens one.** Only traffic that proves the agent is producing a new turn:
+
+- a `tool_call` for an id no saved turn of the session used
+- an `agent_message_chunk` or `agent_thought_chunk` that carries a `messageId`
+- a `plan`
+- a permission ask or a question
+
+**What is dropped instead:**
+
+- A `tool_call_update`, or a repeated `tool_call`, for a call of a turn already saved. Codex sends these after its prompt returned, and saved rows are not rewritten
+- A text chunk with no `messageId`. Claude's synthetic *"**Task stopped by user:** …"* after a background-task stop is one. It is not a model turn and has no end marker, so opening a turn for it would leave the turn waiting
+
+**Everything else opens nothing:** usage, session info, commands, modes and activity. It goes to the activity feed.
+
+**From the trigger on, everything for the session is held in arrival order**, updates and asks alike, until the follow-up turn takes it. Updates past 2,000 are counted and logged. Asks are never dropped, because the agent waits on each. The agent's process is held against the reaper from the trigger until the turn takes over.
+
+**Whether and when it opens is the app's decision, not the driver's:**
+
+- **The chat must still be the profile's, not in the trash, and still answer to the agent**, as its root agent or as an agent attached to a chat the user routes. Otherwise the held asks are refused, the traffic is dropped, and the session is no longer listened to
+- **A busy chat is waited for.** The follow-up waits behind the chat's run, then is re-checked every second while a task runner or a handoff holds the chat, for up to twenty minutes. Past that the held traffic is dropped with a warning, but the session stays listened to
+- **A turn the user starts on the same session meanwhile takes the held traffic**, replaying it after the load, and no follow-up opens. If that turn ends before it replayed the traffic, the updates go back to the observer, which may open a follow-up for them. The asks are refused
+- **Follow-ups of one chat run one after another.** Two in a row are two runs
+- **A turn with no chat of its own** (an orchestrated call) opens nothing
+
+**It runs as any turn does.** It gets the spinner, the live view, Stop and the queue for messages sent meanwhile. It has an in-flight marker, a draft row and the quit-time save. It shares the permission and question path, the Inbox and the synthesized subagent calls. Its rows are one assistant turn with no user row. Its result is recorded like a finished turn's, so an inactive chat reads "Completed — unread results". The agent wrote these rows itself, so the chat's cursor for the agent advances past them.
+
+**Its end is read off the traffic, because there is no `session/prompt` to return:**
+
+- **The end marker:** a `usage_update` that carries `cost`. `claude-agent-acp` sends one at the end of every turn, including the ones it starts itself. Cost-less `usage_update`s arrive two to four times inside every turn and are not an end. No prompt is in flight during a follow-up, so the marker cannot belong to a prompted turn
+- **The process exiting.** The error row reads *"The agent's process ended before it finished this work."*
+- **The twenty-minute ceiling.** It sends `session/cancel`, and an agent that does not end the turn within the grace has its process retired, as in a prompted turn
+- **Stop.** It releases the parks and sends `session/cancel`. If the agent does not end the turn within the grace, the turn ends canceled and **the process is left running**. Other chats' background work runs in it, and nothing here is blocked on the agent
+- **Ten seconds of quiet**, with no tool call open and no ask parked, but only for a launcher that sends no end marker (Codex, OpenCode, command-line agents). An engine with a marker is never ended by silence, because its model may think for minutes between two updates
+
+**It holds the process, not the turn lock.** The engine runs this turn whether the app listens or not, and another chat's prompt on the same agent must not be refused because of it. Traffic that arrived after the end marker goes back to the gate and may open the next follow-up.
+
+**What was watched.** Claude runs an unprompted turn after a background shell ends, with or without the AIR capabilities advertised. After a background task was stopped, Claude was not seen to run one in the 40 seconds watched. Codex was never seen to start a turn of its own; its between-turn traffic is all "dropped" or "not turn content" above.
+
 ### A turn always settles
 
 Only four things can end a turn: a stop reason, an abort, the connection dying, and the ceiling.
@@ -274,6 +334,8 @@ ACP notifications pass through AcpMessageStream and StreamPartsAccumulator into 
 
 Permission/question → captured pending registration → tool part + needs_input → transcript/Inbox answer → owned runtime validation → grant/resolve/commit → input_resolved while the turn remains open. Stop and the turn ceiling cover setup as well as a pending prompt; leaving the view only detaches its watch.
 
+Turn unbinds → observer armed on its session → activity feed → follow-up gate → (turn-shaped traffic) followUpTurnService → runExecutionService.adopt → runFollowUp binds the session and replays what the gate held → the same stream, accumulator and asks → ends on a cost-bearing usage_update, exit, Stop or ceiling.
+
 Message sent mid-turn → run:start → runQueueService → RunHandle.steer → registered SteerFn (none while a tool call runs, so the message queues) → _session/steering → user_message → rows split around it at turn end. The turn's first content, or the last running tool call ending → registerSteer → RunHandle.onSteerable → runQueueService hands the queued messages in by the same path.
 
 ## Integration Points
@@ -287,6 +349,8 @@ Message sent mid-turn → run:start → runQueueService → RunHandle.steer → 
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the `enabled` flag this driver gates on, the readiness values it refuses, and the per-agent turn lock
 - [Ask User Question](../../chat/ask_user_question/ask_user_question.md) — the tool-part convention permission and question blocks follow
 - [Pending Messages](../../chat/pending_messages/pending_messages.md) — when a message sent mid-turn is steered into this turn and when it is queued
+- [Session Activity](../session_activity/session_activity.md) — the subagents and background processes a session reports, and the reaper that waits for them
+- [Interrupted Turn Recovery](../turn_recovery/turn_recovery.md) — the notice a killed follow-up turn gets
 - [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — an orchestrated tool goes through `driverFor` just as a direct chat does
 - [Agents (A2A streaming)](../agents/agents.md) — the direct-chat wrapper, the parts accumulator and the session table this turn reuses whole
 

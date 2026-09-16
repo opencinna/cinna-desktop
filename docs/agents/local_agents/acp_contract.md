@@ -25,7 +25,7 @@ These are the original OpenCode/Claude probe conditions. Their live-model measur
 | Claude | `@agentclientprotocol/claude-agent-acp` **0.76.0**, running on this build's Node (`ELECTRON_RUN_AS_NODE=1`), driving the user's own `claude` **2.1.267** through `CLAUDE_CODE_EXECUTABLE` |
 | Platform | `darwin-arm64` |
 | Credential | OpenCode: a real key, reaching the process only as the `CINNA_ENGINE_KEY_…` variable its config names. Claude: the user's own claude.ai login, held in the login Keychain, with **no API key anywhere in the environment** |
-| Recordings | ndjson transcripts of every probe, taken in a throwaway spike repository that is **not part of this one**. What survives in-tree is `src/main/agents/drivers/acp/__fixtures__/{opencode,claude}/*.json`, distilled from them and used by the translator's tests |
+| Recordings | ndjson transcripts of every probe, taken in a throwaway spike repository that is **not part of this one**. What survives in-tree is `src/main/agents/drivers/acp/__fixtures__/{opencode,claude,codex}/*.json`, distilled from them and used by the translator's tests. The between-turn and activity probes have [their own conditions](#between-turn-traffic) |
 
 The spike answered seven questions and went **go** on all of the ones that gated the phase. Two came
 back partly negative and both are recorded below in full: OpenCode has no question path over ACP, and
@@ -181,7 +181,8 @@ that asks in prose is a degradation; a tool that hangs the turn is a defect.
 | → `session/new` | ~300 ms further | ~300 ms further |
 
 These two numbers are the whole argument for the process model: nothing starts at boot, and an idle
-process is reaped after two minutes.
+process is reaped after two minutes — unless the agent still has background work running, in which
+case the reap waits, for up to 30 quiet minutes ([Session Activity](../session_activity/session_activity.md#the-process-is-not-reaped-while-its-work-runs)).
 
 ## 4. Claude Code over `@agentclientprotocol/claude-agent-acp`
 
@@ -277,6 +278,14 @@ backstop rather than a gate, and every surface says so. A model with no classifi
 `default` regardless, and the transcript carries a notice saying so. The full probe table, including
 what each one actually did to the machine, is [§10](claude_contract.md#10-auto-mode--the-classifier-in-front-of-canusetool-and-what-it-approved).
 
+**With `claude` 2.1.273 the set call itself fails on `haiku`.** Watched on 16 September 2026:
+`session/set_mode {modeId: 'auto'}` answered `-32603` *"Cannot set permission mode to auto: auto mode
+unavailable for this model"*. So the probes in [Between-turn traffic](#between-turn-traffic) all ran in
+`default`. The driver treats a failed setup call as a refusal ([The Agent
+Turn](agent_turn.md#the-setup-is-a-refusal-not-a-warning)). From the code, not from a run in the app: a
+`haiku` agent on Automatic under that CLI should therefore fail its turn with *"This agent could not be
+set up for the turn."* instead of falling back with a notice.
+
 `bypassPermissions` and `dontAsk` are deliberately unreachable: both remove the desktop's request
 from the decision, and with it the grants and the transcript's record.
 
@@ -290,7 +299,7 @@ The pinned adapter is **1.11.0**, with an upstream Codex dependency range **^0.1
 
 **Permission scope differs again:** actions are namespaced `codex:<kind>`. Execute scope is the complete `rawInput`, `title`, `content` and `locations` as one exact resource. SOCKS host/protocol lives outside raw input in the adapter, so raw-input-only grants could authorize a different network destination; regression tests pin that boundary. Edit scope includes all locations. A scope-less request is unique to its request ID. The shared one-time answer rule still applies to remembered grants.
 
-**Questions:** the declared `elicitation.form` capability bridges native `requestUserInput`. Companion fields marked `_meta.codex.isOtherAnswer` are excluded from the visible questions; the original field ID receives either a chosen label or custom text. URL elicitation and native child-session UI are not advertised. Shared tool-call translation is the fallback for child-agent activity; native child-session presentation is not tested.
+**Questions:** the declared `elicitation.form` capability bridges native `requestUserInput`. Companion fields marked `_meta.codex.isOtherAnswer` are excluded from the visible questions; the original field ID receives either a chosen label or custom text. URL elicitation is not advertised. Of the AIR capabilities, Codex is sent `asyncTasks` only, never `nativeSubagentSessions`, and its subagents are read off the root session's tool calls ([why](#session-activity-over-the-air-extension)).
 
 The [Codex technical reference](codex_engine_tech.md) owns the exact configuration, diagnostics and test inventory. Native CLI sandbox behavior, real reviewer decisions, login/provider variants and version compatibility remain separate live validation work; the original OpenCode/Claude measurements above are not claims about Codex.
 
@@ -305,6 +314,99 @@ The [Codex technical reference](codex_engine_tech.md) owns the exact configurati
 - **OpenCode** has not been checked for the extension. The driver steers only an agent that advertises it, so an engine that does not is queued, never guessed at.
 
 The driver's side — the window, its opening at the first turn content, its withdrawal while a tool call runs, `late`, the orphan-turn cancel and retire — runs only against the fake agent's `steer` handler and `awaitSteer` step.
+
+## Between-turn traffic
+
+**Watched, 16 September 2026.** Every frame was logged with millisecond timestamps. The raw recordings contain the account's email (`_auth/status_update`) and are not in this repository. The fixtures distilled from them are: `claude/{async_task_background_shell,followup_turn,subagent_background,subagent_sync,async_task_stop}.json` and `codex/{async_task_background_terminal,subagent,subagent_nocaps,async_task_stop}.json`. Each fixture's `promptReturnedAtIndex` marks the first notification that arrived after `session/prompt` answered.
+
+| | |
+|---|---|
+| Claude | `claude-agent-acp` **0.76.0** on Node 22.23.2, driving `claude` **2.1.273**, model `haiku`, `settingSources: []`, `strictMcpConfig` |
+| Codex | `codex-acp` **1.11.0**, with `CODEX_PATH` set to the ChatGPT app's bundled `codex-cli` **0.154.0-alpha.6.2**, on a ChatGPT login, with the default model, effort `low` and `INITIAL_AGENT_MODE=agent`. No `codex` was on `PATH`, so the app's own detection would have called Codex not installed on that machine |
+| Init | `elicitation.form` plus both AIR capabilities, except in the control runs |
+
+**The session keeps talking after `session/prompt` returns, on both engines.** This traffic has no bound turn. Before the desktop listened between turns, it was penned for ten seconds and dropped.
+
+- **Claude runs whole turns of its own.** A background shell ended 24 s after the prompt returned. Within a second the agent started a turn nobody prompted: a cost-less `usage_update`, a `Read` tool call, the text *"Output: `probe-done`"*, then a `usage_update` carrying `cost` and `_meta["_claude/origin"] = {kind: "task-notification"}`. Nothing followed for the next 65 s
+- **It happens with or without the AIR capabilities.** In the control run, which advertised neither, the same unprompted turn arrived 30–32 s in and ended the same way. Advertising the capabilities adds activity frames and nothing else
+- **Codex was never seen to start a turn of its own.** After its prompt returned it sent only transcript-shaped frames for the turn already over, and bookkeeping:
+  - `tool_call_update`s for that turn's exec: a `terminal_output_delta`, then `status: completed` with `rawOutput`
+  - `async_task_state_update`
+  - `session_info_update`: the generated title after the prompt, and `_meta.codex.threadStatus: {type: "idle"}`
+
+  No `usage_update` came between turns
+- **The background task ends after the prompt returns** (Claude +24 s, Codex +22 s). The exception is a Claude background **subagent**: `session/prompt` waited for it, *and* for the turn its completion triggered. A prompted turn can therefore carry two cost-bearing `usage_update`s: origin `human`, then `task-notification`
+- **The end of a turn is the `usage_update` that carries `cost`.** Cost-less `usage_update`s (`used`/`size`, sometimes `_claude/rateLimit`) arrive two to four times inside every turn, including at the start of the unprompted one. So "a `usage_update`" is not an end marker. A costed one ends an *unprompted* turn only when no prompt is in flight
+- **Codex's background terminal depends on the model.** A plainly worded "run it in the background" became `nohup … &`: an ordinary exec that ends at once, with no async task and nothing after the turn. A background terminal appeared only when the model left an `exec_command` running (`yield_time_ms` 1000)
+- **No `session/request_permission` arrived in any of these runs**, on either engine. A permission ask between turns has not been watched
+
+What the desktop does with this — the observer, which traffic opens a follow-up turn, and how that turn ends — is [The Agent Turn](agent_turn.md#a-session-is-listened-to-between-turns).
+
+## Session activity over the AIR extension
+
+**The client opts in at `initialize`:** `clientCapabilities._meta.jetbrains.air = {version: 1, capabilities: [...]}`, with `asyncTasks` and `nativeSubagentSessions` as the two names this client knows. *From the adapters' code:* each checks `version >= 1` and looks for each capability by name. Watched under the conditions above unless marked.
+
+### Background tasks (`asyncTasks`)
+
+| Update | What was watched |
+|---|---|
+| `async_task_spawned` | `{asyncTaskId, name, taskType: "shell", description?, showInTranscript: false, canStop: true, toolCallId?, outputFilePath?}`. **Claude** sends no `toolCallId` and no `outputFilePath`, and repeats the name as the description. **Codex** has `asyncTaskId === toolCallId` and no description or output path, and sends it *before* the prompt returns, when the exec is backgrounded |
+| `async_task_progress` | Claude: `{asyncTaskId, toolCallId}`, then `{asyncTaskId, outputFilePath, toolCallId}`, within 10 ms of the spawn |
+| `async_task_state_update` | `{asyncTaskId, state, outputFilePath?, toolCallId?}`. **Claude sent `stopped` and, 1 ms later, `completed` for the same task.** *From the adapter's code:* the `stopped` comes from a list-level liveness check, and a later authoritative event may override it once. So a later terminal state must be allowed to replace an earlier one |
+| `tool_call_update` of the backgrounded call | `_meta.jetbrains.air.asyncTasks.backgrounded: true`. Claude's also carries `toolResponse.backgroundTaskId` equal to the task id, with or without the capability |
+
+**Stop is `_session/async_task/stop {sessionId, asyncTaskId}`**, with both params validated as non-empty strings. Both engines answer `{stopped: true}`, and both send the task's `stopped` state update *before* the answer.
+
+- **Claude**, in the same millisecond: two `stopped` updates, then a root `agent_message_chunk` *"**Task stopped by user:** sleep 120."* with **no `messageId`** and no `usage_update` after it. It is synthetic transcript text, not a model turn. No model turn followed in the 40 s watched
+- **Codex**, after the answer: the exec's `tool_call_update` with `status: failed` and exit code −1
+- *From the adapters' code, not watched:* an unknown session or task answers `{stopped: false}`
+
+### Subagents (`nativeSubagentSessions`)
+
+`subagent_spawned {subagentSessionId, name, task, capabilities: {}}` and `subagent_state_update {subagentSessionId, state}` arrive on the parent session.
+
+- **Subagent states.** Claude's, *from its code*: `completed | failed | disconnected | cancelled`. Codex was watched sending `completed`
+- **Codex's `task` is a placeholder** (*"Delegated task for Echo probe"*), not the prompt
+
+**Claude: the child can be linked to its call.** The child's own frames arrive under `sessionId = subagentSessionId`. The two sides are linked in two independent ways:
+
+- Every child frame watched (`tool_call`, `tool_call_update`, `agent_message_chunk`) carries `_meta.claudeCode.parentToolUseId`, the parent's call id
+- The parent's `tool_call_update` for that call carries `_meta.claudeCode.toolResponse.agentId`, which equals `subagentSessionId`
+
+**But with the capability on, the parent never receives the `Agent` `tool_call`.** *From the adapter's code:* its native-subagent router swallows the Agent/Task control frames. What the parent does get is a `tool_call_update` for a call id it was never told about, with `toolName: "Agent"`, no title, input or status, and a `toolResponse`:
+
+- **Background subagent:** the update comes right after `subagent_spawned`, with `{status: "async_launched", agentId, outputFile, isAsync: true}`
+- **Synchronous subagent:** it comes after the child's frames and the `subagent_state_update`, with `status: "completed"` and the report
+
+The launch text a terminal shows for a background subagent is the CLI's own and is not on the wire. Left alone, all of this would change the saved transcript of every subagent turn. So the desktop:
+
+- routes the child session to whoever hears the parent (`aliasSession`)
+- writes the missing `Agent` call back into the stream ([Session Activity (tech)](../session_activity/session_activity_tech.md#the-synthesized-agent-call-subagentframes))
+
+**Codex: nothing links the child to the call, so it is not sent the capability.**
+
+- With the capability, the spawn call is never sent to the parent. *From the adapter's code,* it is a "represented spawn"
+- The child's frames carry only terminal metadata, with no parent link
+- The parent's `wait` collaboration call listed no receivers
+
+**Codex without any capability** (control recording, `codex/subagent_nocaps.json`):
+
+- no `subagent_spawned`, and no child-session frames
+- instead, the root session gets tool calls titled *"Start subagent <name>"* and *"Complete subagent <name>"*, each with `_meta.codex.subagent {threadId, path, activity}`
+- a `wait` call whose `receiverThreadIds` and `agentsStates` were empty
+
+That is what the desktop reads. The `_meta.codex.collaboration` shape — a `spawnAgent` call naming its receivers, and `rawInput.agentsStates` with per-thread status — is **derived from `codex-acp` 1.11.0's code** (`createCollabAgentToolCallUpdate`), not watched. Its fixture, `codex/subagent_collab.json`, says so.
+
+**Does the prompt wait for a subagent?** On Claude, yes, for background and synchronous subagents alike. On Codex it did in the one run, because the model called `wait`. Codex has no background-spawn flag, so a non-waiting spawn was not tested.
+
+### What each launcher advertises
+
+| Launcher | Capabilities | Why |
+|---|---|---|
+| Claude | `asyncTasks`, `nativeSubagentSessions` | Both can be routed back to the chat |
+| Codex | `asyncTasks` | Native subagent sessions would lose the spawn call with nothing to link the child |
+| Command-line (custom) | `asyncTasks` | Only the Claude adapter's shape of native subagent sessions is routed back |
+| OpenCode | none | `clientCapabilities: {}`, unchanged |
 
 ## 5. Corrections, and what a fake could not have caught
 
@@ -352,6 +454,11 @@ Three corrections from this phase, all found by the real binaries after the fake
   nothing here has exercised Cinna per-session MCP injection. Codex may still load MCP servers from its own configuration
 - **The Claude adapter's own `session/load`** is covered by a fixture rather than by a live run
 - **How each engine behaves on a session id it has forgotten** has been watched on OpenCode only
+- **An ask between turns.** No probe produced a `session/request_permission` or an elicitation after the prompt returned, on either engine. A follow-up turn's asks run only against the fake agent
+- **A Codex turn started on its own.** Never seen. The ten-second quiet rule that ends a follow-up on an engine with no end marker has not met a real one
+- **The Codex collaboration shape** (`spawnAgent` receivers, `agentsStates`) is read from the adapter's code. The installed CLI sent `subAgentActivity` tool calls instead
+- **Subagent states other than `completed`**, and a Claude background task of a type other than `shell`, are read from code
+- **Background work that runs past 30 minutes** without a state change: the reaper's ceiling is not exercised against a real process
 - **Steering against a real CLI.** Both adapters' support, and the Claude adapter's `now` priority, are read from source. The aborted command was a real turn in the app, not a recorded probe. No wire log of a live steer exists. Still unwatched: where a real engine places an injected message relative to the output the desktop recorded before it; how either engine behaves when a steer races the end of a turn; and whether a steer that arrives after the model has begun a tool call, but before the adapter reports that call, still aborts it
 
 ## 7. Runbook — how to re-verify
@@ -377,6 +484,17 @@ spawn the adapter with `CLAUDE_CODE_EXECUTABLE` set to your own `claude`, declar
 `{"defaultMode": "bypassPermissions"}` in `~/.claude/settings.json`, pass
 `_meta.claudeCode.options.permissionMode = 'default'`, and read the mode the session reports — it
 will be the file's. Then send `session/set_mode` and read it again.
+
+**Between-turn traffic and activity.** Declare `clientCapabilities: {elicitation: {form: {}}, _meta:
+{jetbrains: {air: {version: 1, capabilities: ['asyncTasks', 'nativeSubagentSessions']}}}}` (only
+`asyncTasks` for Codex), keep reading after `session/prompt` answers, and log every frame with a
+millisecond timestamp. Prompt a shell that sleeps ~25 s in the background. Assert that `async_task_spawned`
+arrives, that the prompt returns before `async_task_state_update`, and — on Claude — that an unprompted
+turn follows and ends with a `usage_update` carrying `cost` and `_claude/origin`. For Codex, ask for an
+`exec_command` left running, since "in the background" alone may become `nohup`. Then send
+`_session/async_task/stop` for a fresh task and assert that the `stopped` update comes before
+`{stopped: true}`. Repeat once with no AIR capabilities: the unprompted turn must still arrive, with no
+`async_task_*` frames.
 
 Two billed turns per Claude probe. Budget ~0.1–0.25 USD reported per probe, and read §4 on why that
 number is not a cost.

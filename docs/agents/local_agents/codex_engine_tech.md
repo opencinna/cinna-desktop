@@ -55,8 +55,14 @@ These reads/mutations require activation. `localAgentService.setCodexApproval` l
 - `defaultEngineService.lockIfUnset` persists a first-launch result and preserves a selection made while detection was in flight. Existing folder agents retain OpenCode when no prior machine choice exists. `current` uses the cached detection snapshot; `resolved` awaits detection. `effectiveEngine` preserves a declared credential/model on OpenCode when no supported engine is explicit.
 - `createCodexLauncher` requires a local folder. Production wiring reads the assembled kit/bare prompt and current runtime model/complexity plus `codexApproval` before each turn.
 - `plan.spec` runs `electronNodeRuntime()` with the adapter entry, cwd equal to the agent folder, and a fully constructed environment. A SHA-256 digest over command, arguments, adapter path, cwd and sorted environment provides the pool key; prompt, model, effort, approvals, CLI path and environment changes replace the process on the next turn. The key contains no plaintext configuration.
-- The plan advertises ACP v1 and `elicitation.form`, sends `mcpServers: []`, and requires `session/set_mode` after both new and loaded sessions. A rejected setup cannot reach `session/prompt`.
-- Shared ACP startup, replay gating, saved-session fallback, two-minute idle reaping, process-tree shutdown, twenty-minute turn ceiling and bounded cancellation remain in the [Agent Turn](agent_turn_tech.md). Cinna's transcript does not restore missing CLI history.
+- The plan advertises ACP v1, `elicitation.form` and `_meta: airClientMeta(['asyncTasks'])`, sends `mcpServers: []`, and requires `session/set_mode` after both new and loaded sessions. A rejected setup cannot reach `session/prompt`.
+- **No `nativeSubagentSessions`.** With it, `codex-acp` 1.11.0 suppresses the spawn call on the parent, and child frames carry no parent link. Subagents are derived in `acpActivity.ts:translateActivity` from root-session tool calls instead:
+  - `_meta.codex.subagent {threadId, path, activity}` — recorded in `__fixtures__/codex/subagent_nocaps.json`
+  - `_meta.codex.collaboration` (`spawnAgent` receivers, `rawInput.agentsStates`) — synthesized from the adapter's code in `subagent_collab.json`
+
+  A subagent that runs again after ending becomes a new item, `<thread>#2`.
+- The launcher does not set `endsTurnsWithCostedUsage`. A follow-up turn on Codex would also end on `ACP_FOLLOW_UP_QUIET_MS` of quiet. No Codex follow-up has been observed: its between-turn `tool_call_update`s are for calls of the saved turn, and the gate drops them.
+- Shared ACP startup, replay gating, saved-session fallback, two-minute idle reaping (deferred while background work runs), process-tree shutdown, twenty-minute turn ceiling and bounded cancellation remain in the [Agent Turn](agent_turn_tech.md). Cinna's transcript does not restore missing CLI history.
 
 ### Authentication and diagnostics
 
@@ -109,6 +115,7 @@ These reads/mutations require activation. `localAgentService.setCodexApproval` l
 
 - `src/main/agents/drivers/acp/codexLauncher.test.ts` covers launch/env/config, auth cache/parsing/time bounds, readiness refusal, spec invalidation and redacted diagnostics.
 - `src/main/agents/drivers/acp/codexPermissions.test.ts` covers cross-engine grant separation, all-path patches, indivisible command rights, SOCKS host/protocol separation, scope-less requests and choice/custom-answer conversion.
+- `codexLauncher.test.ts` also pins the advertised capabilities (`asyncTasks` only). `acpActivity.test.ts` reads the recorded Codex background-terminal, stop and no-capability subagent fixtures, and the synthesized collaboration fixture.
 - `src/main/agents/drivers/acp/codexAdapter.test.ts` copies the actual pinned adapter outside `node_modules` and drives real stdio against `src/main/agents/drivers/acp/testSupport/fakeCodexAppServer.mjs`. It verifies selected executable use without a bundled CLI, streaming, new/resumed configuration, sandbox/mode arguments, native permission/question round trips and cancellation.
 - `src/shared/engine.test.ts`, `src/main/services/localAgents/runtimeService.test.ts`, `desktopStateService.test.ts` in that directory, and `src/renderer/src/components/agents/local/RuntimePanel.test.tsx` cover selection, credential-free resolution, independent approvals and renderer state.
 - `e2e/specs/codex-engine.spec.ts` is the targeted built-Electron regression: persistent runtime/approvals and production detection/auth/launcher/adapter/chat/permission/question/Stop/restart-resume. Its disposable shell PATH and executable assertion prevent use of the developer's real CLI. Only the CLI/app-server peer is scripted.

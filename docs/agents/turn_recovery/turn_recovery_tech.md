@@ -50,7 +50,7 @@
 | `chat_id` | FK → `chats`, `ON DELETE CASCADE`. Indexed |
 | `agent_id` | the agent that answers |
 | `driver` | `a2a`, `managed`, `acp`, …, which selects the recoverer |
-| `user_message_id` | the user row the turn answers. A runner-originated send is always runner-owned, so it never has a marker. A marker without this id is settled as interrupted by both recoverers |
+| `user_message_id` | the user row the turn answers. A runner-originated send is always runner-owned, so it never has a marker. A marker without this id is settled as interrupted by both recoverers. An ACP follow-up turn's marker has none, because the agent started that turn with no user row |
 | `draft_message_id` | the current draft row. It has no FK, because the draft is deleted and replaced while the marker only points at it |
 | `started_at` | ms timestamp. `list()` returns oldest first |
 
@@ -79,7 +79,7 @@ None added. A recovered turn reaches the renderer as an ordinary active run: `ch
 
 ### Launch
 - `startup()` order: `initDatabase()` (whose `taskInputRequestRepo.expireOpen()` expires driver reply asks), `initSession()`, `taskRuntimeService.recover()`, `registerRecoverer('a2a' | 'managed')`, `interruptedTurnService.finalizeLeftovers()`, `userActivation.onProfileReady(resume)`, `remoteTurnRecoveryService.onRetryDue(…)` (checks the profile is still active), then IPC registration. `powerMonitor` resume calls `resume(getCurrentUserId())` when activated
-- `finalizeLeftovers()`: for each marker that is not live and not recoverable, `finalizeInterrupted(marker, INTERRUPTED_OUTCOME, { notice: INTERRUPTED_NOTICE })`. Then `finalizeOrphanedRuns()` → `jobService.setRunStatus(…, 'failed', INTERRUPTED_RUN_MESSAGE)`
+- `finalizeLeftovers()`: for each marker that is not live and not recoverable, `finalizeInterrupted(marker, INTERRUPTED_OUTCOME, { notice: interruptedNoticeFor(marker) })`. That is `INTERRUPTED_NOTICE`, or `INTERRUPTED_FOLLOW_UP` (*"The app closed while the agent was working on its own. What it wrote before that is above."*) for a marker with no `user_message_id`, since there is no message to send again. Then `finalizeOrphanedRuns()` → `jobService.setRunStatus(…, 'failed', INTERRUPTED_RUN_MESSAGE)`
 - `finalizeInterrupted(marker, outcome, { notice })`: when the turn is not superseded, it records `inboxService.recordRunEvent(terminalEventOf(outcome))` (skipped when parked on a next-message ask of this agent) and `recordTurnResult()` (`needs_input` when parked). It always calls `inflightTurnRepo.settle()`, which writes the notice and deletes the marker in one transaction. The notice row has no `detail` (`detail: null` to `saveError` / `errorContent`), so it shows no Details toggle; the A2A cut-off row is written the same way. For a superseded turn the notice goes through `insertUnderTurn()`
 - `userActivation.onProfileReady()`: listeners are told after `activate()` opens the gate, and again from `credentialsRenewed()` when the re-authed user is the active one. A throwing listener is logged and skipped
 
