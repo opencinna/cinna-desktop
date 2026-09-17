@@ -38,8 +38,20 @@ vi.mock('../../../stores/ui.store', () => ({
 // `useOpenAgentPath` is a real react-query mutation calling `window.api` —
 // never invoked in these tests (nothing here clicks "reveal"), but the
 // mutation hook still needs the shape to exist and a query client to mount.
-;(window as unknown as { api: { localAgents: { openPath: () => Promise<void> } } }).api = {
-  localAgents: { openPath: async () => undefined }
+;(
+  window as unknown as {
+    api: {
+      localAgents: {
+        openPath: () => Promise<void>
+        openCredentials: () => Promise<{ created: boolean; revealed: boolean }>
+      }
+    }
+  }
+).api = {
+  localAgents: {
+    openPath: async () => undefined,
+    openCredentials: async () => ({ created: false, revealed: false })
+  }
 }
 
 function agent(overrides: Partial<LocalAgentDto> = {}): LocalAgentDto {

@@ -22,7 +22,7 @@ This is the "develop your agent in your own assistant" half of Local Agents: the
 ## User Stories / Flows
 
 ### Opening an agent folder in a CLI assistant
-1. In either chat or Settings mode, the agent page's shared header shows **Open in <default tool>** — a split button. Its primary launches the default tool; its chevron opens a menu of every installed assistant, then every installed editor, then Terminal, Reveal folder and **Copy prompt for another tool**. With no usable default the whole button is the menu, labelled "Open in…"
+1. In either chat or Settings mode, the agent page's shared header shows **Open in <default tool>** — a split button. Its primary launches the default tool; its chevron opens a menu of every installed assistant, then every installed editor, then Terminal, Reveal folder, **Open credentials/.env** (for a kit agent) and **Copy prompt for another tool**. With no usable default the whole button is the menu, labelled "Open in…"
 2. User clicks the primary, or picks an assistant from the menu; the renderer sends the folder path, the tool id and the `terminal-command` action to the main process. A menu pick that differs from the current default **becomes** the default
 3. Main validates the folder against the registered agents roots and confirms the tool is installed
 4. A system terminal opens at the folder with the assistant already running: iTerm2 if it is installed, otherwise Terminal.app on macOS; Windows Terminal, else `cmd.exe`, on Windows; the first of `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xterm` found on Linux
@@ -36,6 +36,10 @@ This is the "develop your agent in your own assistant" half of Local Agents: the
 - **Reveal** hands the resolved folder to the OS file manager
 - **Terminal** opens the same terminal window as above, running nothing
 - Both are offered from the Open-in menu and again from the page's ⋯ menu; neither ever becomes the default tool
+
+### Opening the agent's secrets file
+- **Open credentials/.env** sits between Reveal folder and the copy, for a kit agent only — a bare folder declares no credential slots and the desktop never seeds the file there. It opens the file itself in an editor, creating it when the folder has none, the same action as the Runs-with panel's secrets line but reachable from either page mode. It closes the menu like a launch does, and never becomes the default tool
+- It is not an open-in request: it goes to the agent's own `local-agent:open-credentials` channel by **agent id**, because that action writes into the folder and the one file it may touch is fixed in main. Where nothing on the machine opens `.env` and the file was revealed in the file manager instead, the page's header line says so as a muted note; a refusal lands there as the usual red alert. The seed, the fallback order and the Folder tab's two links that do the same thing belong to [Agents Tab & Agent Page](agents_tab.md)
 
 ### Handing the folder to an assistant the desktop cannot launch
 1. User opens the Open-in menu and picks **Copy prompt for another tool**
@@ -73,10 +77,10 @@ This is the "develop your agent in your own assistant" half of Local Agents: the
 Most people build every agent with the same assistant. The button's primary action is that assistant, and the menu behind the chevron is for the exception.
 
 - **A pick is a statement of the default.** Choosing a tool from the Open-in menu or from "Build it with…" rewrites `localAgentsDefaultTool` — the setting exists so the button says the right thing next time, and the pick is the clearest statement of what "right" is. Nobody should have to go to Settings to say so; Settings → Default → Agents → Runtime → **Open agents with** is there to set or clear it explicitly ("Ask each time")
-- **Only a launchable kind can be the default.** Assistants and editors are launchable; a `runtime` tool (`uv`, `git`, `make`, `python3`) is detected for feature gating and never launched. Terminal and Reveal are actions, not tools, and never become the default
+- **Only a launchable kind can be the default.** Assistants and editors are launchable; a `runtime` tool (`uv`, `git`, `make`, `python3`) is detected for feature gating and never launched. Terminal, Reveal and Open credentials/.env are actions, not tools, and never become the default
 - **The setting is validated against the known ids, not against what is installed.** A tool can be uninstalled after being chosen, or the setting can predate this machine's `PATH`. The renderer resolves the id against the detected list on every read and falls back to "ask" — a button that fails after the click would be worse than a menu. The value check accepts any id in the tool table, runtimes included; the kind restriction is applied by that resolve, which only searches launchable tools, and again in main, where `requireTool` refuses a `runtime` for either open-in action — so a `git` written into the setting by hand degrades to "ask" and could not launch even if it reached the channel. An arbitrary string, though, is refused at the write — that string is exactly what `local-tools:open-in` would otherwise be asked to launch
 - **Auto-open is subordinate to the default.** `localAgentsAutoOpen` means nothing without a resolved default: the Settings checkbox is disabled until one resolves, and the New-agent flow asks as before when the default is unset or missing. **Clearing the default also turns auto-open off.** "Ask each time" and "open automatically" contradict each other, and a cleared default that left auto-open armed would silently re-arm it the next time any tool was picked from the page menu — so `useSetDefaultTool(null)` writes both settings
-- **A refusal moves nothing.** The Open-in button and the ⋯ menu report into one alert slot the agent page owns; the New-agent dialog's error line is a fixed-height slot on both steps. See [UX Rules](../../development/ui_guidelines/ux_rules.md)
+- **A refusal moves nothing.** The Open-in button and the ⋯ menu report into one message slot the agent page owns — red for a refusal, muted for the one note the `.env` item can add; the New-agent dialog's error line is a fixed-height slot on both steps. See [UX Rules](../../development/ui_guidelines/ux_rules.md)
 
 ### The init prompt
 
@@ -162,6 +166,13 @@ Agent page (Open-in menu -> "Copy prompt for another tool")
                     (bare folder: README.md, then its instructions file)
                  -> buildAgentInitPrompt (shared wording)
        <- prompt string -> navigator.clipboard.writeText -> "Copied"
+
+Agent page (Open-in menu -> "Open credentials/.env", kit agents only)
+  -> useOpenAgentCredentials                       (window.api.localAgents.*)
+       -> local-agent:open-credentials (agentId)   (the Agents tab slice's channel — see agents_tab.md)
+            -> localAgentService.openCredentials
+                 -> seed credentials/.env if absent -> shell.openPath -> fallback: editor / file manager
+       <- { created, revealed } -> header line: muted note when revealed, nothing otherwise
 ```
 
 ## Integration Points

@@ -8,9 +8,22 @@ import {
   type LocalAgentDto
 } from '../../../../../shared/localAgents'
 import { AgentCard } from './AgentCard'
-import { CredentialsCard, PublishedCard, RunsCard } from './ReadOnlyCards'
+import {
+  CredentialsCard,
+  PublishedCard,
+  RunsCard,
+  useOpenCredentialsFile,
+  type OpenCredentialsFile
+} from './ReadOnlyCards'
 
 const EMPTY = 'text-[10px] italic text-[var(--color-text-muted)]'
+
+/**
+ * The one file in the list that opens rather than reveals. Finder hides
+ * dotfiles, so revealing it selected nothing the user could see — and when the
+ * file does not exist yet, `showItemInFolder` is a silent no-op.
+ */
+const CREDENTIALS_FILE = 'credentials/.env'
 
 /** The files the page reads, in the order the folder model lists them. */
 const FILES: { rel: string; label?: string; what: string }[] = [
@@ -19,7 +32,7 @@ const FILES: { rel: string; label?: string; what: string }[] = [
   { rel: LOCAL_AGENT_PROMPT_PATHS.entrypoint, what: 'first message of an unattended run' },
   { rel: LOCAL_AGENT_PROMPT_PATHS.refiner, what: 'defaults and required inputs' },
   { rel: 'docs/CLI_COMMANDS.yaml', what: 'the /run: commands' },
-  { rel: 'credentials/.env', what: 'secrets — never read by Cinna' },
+  { rel: CREDENTIALS_FILE, what: 'secret values — never read by Cinna' },
   { rel: 'app-data/storage/STATUS.md', what: 'what the agent last said about itself' }
 ]
 
@@ -176,7 +189,13 @@ function IdentityCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
 }
 
 /** Every file the page reads, each a click from the file manager. */
-function FilesCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+function FilesCard({
+  agent,
+  env
+}: {
+  agent: LocalAgentDto
+  env: OpenCredentialsFile
+}): React.JSX.Element {
   const openPath = useOpenAgentPath()
   return (
     <AgentCard
@@ -189,12 +208,21 @@ function FilesCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
           <li key={file.label ?? file.rel} className="flex items-center gap-2 text-xs">
             <button
               type="button"
+              disabled={file.rel === CREDENTIALS_FILE && env.pending}
               onClick={() =>
-                openPath.mutate({ agentId: agent.id, relPath: file.rel || undefined })
+                file.rel === CREDENTIALS_FILE
+                  ? env.open('files')
+                  : openPath.mutate({ agentId: agent.id, relPath: file.rel || undefined })
               }
-              title={file.rel ? `Reveal ${file.rel}` : 'Reveal the folder'}
+              title={
+                file.rel === CREDENTIALS_FILE
+                  ? "Open credentials/.env in your text editor, creating it if it isn't there yet"
+                  : file.rel
+                    ? `Reveal ${file.rel}`
+                    : 'Reveal the folder'
+              }
               className="flex min-w-0 items-center gap-1 font-mono text-[10px] text-[var(--color-text)]
-                transition-colors hover:text-[var(--color-accent)]"
+                transition-colors hover:text-[var(--color-accent)] disabled:cursor-wait disabled:opacity-50"
             >
               <FileText size={11} className="shrink-0 text-[var(--color-text-muted)]" />
               <span className="truncate">{file.label ?? file.rel}</span>
@@ -205,6 +233,7 @@ function FilesCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
           </li>
         ))}
       </ul>
+      {env.outcome('files')}
     </AgentCard>
   )
 }
@@ -217,6 +246,8 @@ function FilesCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
  * page is a viewer over a folder and that is the tab where it says so.
  */
 export function FolderTab({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+  // One opener for the two cards that name `credentials/.env` — see the hook.
+  const env = useOpenCredentialsFile(agent.id)
   return (
     <div className="space-y-3">
       <ValidationCard agent={agent} />
@@ -228,8 +259,8 @@ export function FolderTab({ agent }: { agent: LocalAgentDto }): React.JSX.Elemen
         the desktop never creates for such a folder — an absence presented as a
         configuration the user might fill in. What it needs, it reads itself.
       */}
-      {agent.kind !== 'bare' && <CredentialsCard agent={agent} />}
-      <FilesCard agent={agent} />
+      {agent.kind !== 'bare' && <CredentialsCard agent={agent} env={env} />}
+      <FilesCard agent={agent} env={env} />
       {/*
         Publishing is a kit operation: it walks the folder against the
         contract's export rules and records a content hash in the manifest. A

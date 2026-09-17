@@ -21,13 +21,13 @@
 - `src/main/shell/env.ts` — `which()` and the resolved `PATH`; see [Shell Environment Resolution](../../development/shell_environment/shell_environment_tech.md)
 
 ### Preload
-- `src/preload/index.ts` — `window.api.localTools.list()`, `.refresh()`, `.openIn(request)`; `window.api.localAgents.initPrompt(agentId)`
+- `src/preload/index.ts` — `window.api.localTools.list()`, `.refresh()`, `.openIn(request)`; `window.api.localAgents.initPrompt(agentId)`; the menu's `.env` item also calls `window.api.localAgents.openCredentials(agentId)`, documented with [Agents Tab — Technical Details](agents_tab_tech.md)
 
 ### Renderer
 - `src/renderer/src/hooks/useLocalTools.ts` — `useLocalTools()`, `useAvailableTools(kind)`, `useRefreshLocalTools()`, `useOpenIn()`, `useDefaultTool()`, `useSetDefaultTool()`
 - `src/renderer/src/hooks/useLocalAgents.ts` — `useCopyAgentInitPrompt()`: fetch and clipboard write in **one** `mutationFn`, so a refused clipboard is a failed mutation rather than a "Copied" over an empty clipboard
 - `src/renderer/src/utils/localAgents.ts` — `launchableTools(tools)` (available assistants, then available editors, detection order within each) and `resolveDefaultTool(launchable, settingId)` (`null` for `''` or an id not in the launchable list); pure, tested in `localAgents.test.ts`
-- `src/renderer/src/components/agents/local/OpenInMenu.tsx` — the split button and its menu; `OpenInMenu.test.tsx`
+- `src/renderer/src/components/agents/local/OpenInMenu.tsx` — the split button and its menu, including the **Open credentials/.env** item (`openEnv`, `useOpenAgentCredentials`, hidden for `kind === 'bare'`, `onNote` for the file-manager fallback); `OpenInMenu.test.tsx`
 - `src/renderer/src/components/agents/local/AgentActionsMenu.tsx` — Reveal and Terminal again, from the ⋯ menu
 - `src/renderer/src/components/agents/local/NewLocalAgentModal.tsx` — the "Build it with…" step
 - `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — Runtime owns the Open agents with select and auto-open checkbox. Detected non-runtime tools and their Refresh action are rendered by `src/renderer/src/components/settings/DeveloperToolsSettingsSection.tsx` under Default → Local Development; runtime availability remains beside its picker under Agents.
@@ -47,6 +47,7 @@ No database schema: detection is a runtime probe and nothing about it is persist
 | `local-tools:claude-auth` | invoke | Whether the detected `claude` is logged in → `ClaudeAuthStatus`. The sibling fact to detection, answered the same way — by asking the machine — and cached in main behind a short window so the panel may ask on every mount. Owned by [The Claude Engine](claude_engine.md); it lives on this surface because it is a fact about the machine's tools, not about an agent |
 | `local-tools:open-in` | invoke | Perform an `OpenInRequest` → `{ success: true }`, or a `LocalToolsError` |
 | `local-agent:init-prompt` | invoke | `(agentId) → string` — the briefing for one folder. Throws `LocalAgentError('not_found')`; **not** a `LocalAgentOutcome`, because no renderer branch reads the code |
+| `local-agent:open-credentials` | invoke | `(agentId) → { created, revealed }` — called by the menu's `.env` item. Not this feature's channel: it writes into the folder, so it lives with the Agents tab slice and takes an id, never a path. Handler, seed and fallback order in [Agents Tab — Technical Details](agents_tab_tech.md) |
 
 All four `local-tools:*` handlers call `userActivation.requireActivated()` and are wrapped by `ipcHandle()`; they hold no logic beyond that — validation of the folder and the tool id lives in the service. Registration goes through `registerLocalToolsHandlers()` from `src/main/ipc/index.ts` (enforced by `src/main/ipc/registration.test.ts`).
 
@@ -101,6 +102,7 @@ All four `local-tools:*` handlers call `userActivation.requireActivated()` and a
 - `useDefaultTool()` — `{tool, launchable, autoOpen}`, memoised over the tools query and the app-settings query. `tool` is `null` when the setting is empty **or** names a tool that is not currently launchable; `autoOpen` is true only when `tool` resolved and `localAgentsAutoOpen` is on. This is where an uninstalled default degrades to "ask"
 - `useCopyAgentInitPrompt()` — mutation over `local-agent:init-prompt` **plus** `navigator.clipboard.writeText`, both inside the `mutationFn`. A rejected clipboard write is re-thrown as an app-authored `Error`, never the `DOMException`: it *is* an `Error`, so `unwrapIpcError` would take its message verbatim and show the user Chromium's own words ("Document is not focused." — what a notification stealing focus mid-copy produces)
 - `OpenInMenu` owns the copy's presentation, not this hook: `copied` / `copyError` state, a `COPIED_REVERT_MS = 1500` timer cleared on unmount, and a `menuOpen` ref the mutation callbacks read because they resolve after the click that started them and cannot see the `menu.open` their closure captured. Closing the menu clears both `copied` and `copyError`; `onSuccess` returns early when the menu has since closed, `onError` routes to the page's `onError` slot in that case
+- `OpenInMenu`'s `.env` item is the one that reports through `onNote` as well as `onError`: `openEnv` closes the menu, calls `useOpenAgentCredentials().mutate(agent.id, …)`, and on `revealed: true` hands the page a muted note rather than an error — the file was shown, just not in an editor. A `shownAgentId` ref guards both callbacks, since the macOS fallback can take 15 s and the page re-renders rather than remounts on an agent switch; the item is `disabled` while pending so a second click cannot open a second editor. Rendered only for a non-bare agent
 - `useSetDefaultTool()` — `(toolId | null) => void` over `useSetAppSetting`; `null` writes `''` **and** `localAgentsAutoOpen: false`, since "ask each time" with auto-open armed would re-arm it on the next pick. Called by the Open-in menu and the "Build it with…" step on a pick that differs from the current default, and by the Settings select. Pinned by `src/renderer/src/hooks/useLocalTools.test.tsx`
 
 ## Configuration

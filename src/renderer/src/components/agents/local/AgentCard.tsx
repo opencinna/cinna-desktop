@@ -19,6 +19,12 @@ interface AgentCardProps {
    * a card whose action lands on the folder rather than on the file it names.
    */
   revealTitle?: string
+  /**
+   * The reveal is in flight and must not be clicked again — a card whose
+   * action opens an editor rather than the file manager, where a second click
+   * would open a second one.
+   */
+  revealDisabled?: boolean
   /** Right-aligned controls: a save indicator, an "add", a disabled action. */
   actions?: React.ReactNode
   children: React.ReactNode
@@ -30,6 +36,7 @@ export function AgentCard({
   file,
   onReveal,
   revealTitle,
+  revealDisabled,
   actions,
   children
 }: AgentCardProps): React.JSX.Element {
@@ -41,9 +48,10 @@ export function AgentCard({
           <button
             type="button"
             onClick={onReveal}
+            disabled={revealDisabled}
             title={revealTitle ?? `Reveal ${file}`}
             className="flex items-center gap-1 text-[10px] font-mono text-[var(--color-text-muted)]
-              hover:text-[var(--color-text-secondary)] transition-colors min-w-0"
+              hover:text-[var(--color-text-secondary)] transition-colors min-w-0 disabled:cursor-wait disabled:opacity-50"
           >
             <FileText size={11} className="shrink-0" />
             <span className="truncate">{file}</span>

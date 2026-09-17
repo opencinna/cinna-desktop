@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { MessageSquare, Settings } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import {
@@ -85,6 +85,22 @@ export function LocalAgentPage(): React.JSX.Element {
   // message produced two unreadable overlapping boxes; and an old message
   // must not outlive the next action.
   const [actionError, setActionError] = useState<string | null>(null)
+  /**
+   * The same line, for the one header action whose outcome is worth a sentence
+   * without being a failure: "Open .env" falling back to the file manager
+   * because nothing on this machine opens `.env`. Muted and `status`, not red
+   * and `alert` — the file *was* shown. The two share the slot and clear each
+   * other, so the line still says exactly one thing about the last action.
+   */
+  const [actionNote, setActionNote] = useState<string | null>(null)
+  const reportError = useCallback((message: string | null): void => {
+    setActionNote(null)
+    setActionError(message)
+  }, [])
+  const reportNote = useCallback((message: string | null): void => {
+    setActionError(null)
+    setActionNote(message)
+  }, [])
 
   // A freshly scaffolded agent asks for its one-shot draft here rather than in
   // the form that created it: the call outlives that form, and this is the
@@ -100,6 +116,7 @@ export function LocalAgentPage(): React.JSX.Element {
   const draftedRef = useRef<string | null>(null)
   useEffect(() => {
     setActionError(null)
+    setActionNote(null)
   }, [activeLocalAgentId])
   useEffect(() => {
     if (!pendingDraftAgentId || pendingDraftAgentId !== activeLocalAgentId) return
@@ -236,7 +253,7 @@ export function LocalAgentPage(): React.JSX.Element {
             {mode === 'chat' && <RuntimePanel agent={agent} compact />}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            <OpenInMenu agent={agent} onError={setActionError} />
+            <OpenInMenu agent={agent} onError={reportError} onNote={reportNote} />
             <button
               type="button"
               onClick={() => {
@@ -252,7 +269,7 @@ export function LocalAgentPage(): React.JSX.Element {
               {mode === 'settings' ? <MessageSquare size={12} /> : <Settings size={12} />}
               {mode === 'settings' ? 'Start chat' : 'Settings'}
             </button>
-            <AgentActionsMenu agent={agent} onError={setActionError} />
+            <AgentActionsMenu agent={agent} onError={reportError} />
           </div>
         </header>
         {/*
@@ -261,11 +278,13 @@ export function LocalAgentPage(): React.JSX.Element {
           to two lines at the minimum window width. The full text is in `title`.
         */}
         <div
-          role="alert"
-          title={actionError ?? undefined}
-          className="h-4 truncate text-right text-[10px] leading-4 text-[var(--color-danger)]"
+          role={actionError ? 'alert' : 'status'}
+          title={actionError ?? actionNote ?? undefined}
+          className={`h-4 truncate text-right text-[10px] leading-4 ${
+            actionError ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-muted)]'
+          }`}
         >
-          {actionError}
+          {actionError ?? actionNote}
         </div>
 
         <ReadinessStrip

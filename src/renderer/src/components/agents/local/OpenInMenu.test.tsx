@@ -46,14 +46,17 @@ vi.mock('../../../hooks/useLocalTools', () => ({
  * its own home in `useCopyAgentInitPrompt`.
  */
 const copyInitPrompt = vi.fn()
+const openCredentials = vi.fn()
 vi.mock('../../../hooks/useLocalAgents', () => ({
-  useCopyAgentInitPrompt: () => ({ mutate: copyInitPrompt, isPending: false })
+  useCopyAgentInitPrompt: () => ({ mutate: copyInitPrompt, isPending: false }),
+  useOpenAgentCredentials: () => ({ mutate: openCredentials, isPending: false })
 }))
 
 const { OpenInMenu } = await import('./OpenInMenu')
 
-const AGENT = { id: 'folder:alpha', path: '/tmp/agents/alpha' } as LocalAgentDto
+const AGENT = { id: 'folder:alpha', path: '/tmp/agents/alpha', kind: 'kit' } as LocalAgentDto
 const onError = vi.fn()
+const onNote = vi.fn()
 
 afterEach(() => {
   vi.clearAllMocks()
@@ -62,7 +65,7 @@ afterEach(() => {
 
 describe('OpenInMenu', () => {
   it('launches the default tool in one click, without rewriting the default', () => {
-    render(createElement(OpenInMenu, { agent: AGENT, onError }))
+    render(createElement(OpenInMenu, { agent: AGENT, onError, onNote }))
     fireEvent.click(screen.getByRole('button', { name: /open in claude code/i }))
 
     expect(openIn).toHaveBeenCalledWith(
@@ -78,7 +81,7 @@ describe('OpenInMenu', () => {
   })
 
   it('makes a tool picked from the menu the new default, with the editor action for an editor', () => {
-    render(createElement(OpenInMenu, { agent: AGENT, onError }))
+    render(createElement(OpenInMenu, { agent: AGENT, onError, onNote }))
     fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
     fireEvent.click(screen.getByRole('menuitem', { name: /vs code/i }))
 
@@ -91,7 +94,7 @@ describe('OpenInMenu', () => {
 
   it('falls back to "Open in…" as a plain menu when there is no usable default', () => {
     defaultTool = null
-    render(createElement(OpenInMenu, { agent: AGENT, onError }))
+    render(createElement(OpenInMenu, { agent: AGENT, onError, onNote }))
     expect(screen.queryByRole('button', { name: /open in claude code/i })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /open in…/i }))
     expect(screen.getByRole('menuitem', { name: /claude code/i })).toBeTruthy()
@@ -99,8 +102,51 @@ describe('OpenInMenu', () => {
     expect(screen.getByRole('menuitem', { name: /reveal folder/i })).toBeTruthy()
   })
 
+  it('opens credentials/.env itself, and says so when only the file manager could show it', () => {
+    render(createElement(OpenInMenu, { agent: AGENT, onError, onNote }))
+    fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /open credentials\/\.env/i }))
+
+    // The file, by agent id — never a renderer-supplied path — and not a reveal.
+    expect(openCredentials).toHaveBeenCalledWith('folder:alpha', expect.anything())
+    expect(openIn).not.toHaveBeenCalled()
+    expect(setDefaultTool).not.toHaveBeenCalled()
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(onError).toHaveBeenCalledWith(null)
+
+    const [, options] = openCredentials.mock.calls[0] as [
+      unknown,
+      {
+        onSuccess: (r: { created: boolean; revealed: boolean }) => void
+        onError: (e: Error) => void
+      }
+    ]
+    // An editor opened: nothing to add — and nothing cleared, since the slot
+    // may by now hold a refusal from another action.
+    options.onSuccess({ created: true, revealed: false })
+    expect(onNote).not.toHaveBeenCalled()
+    // Nothing on this machine opens .env, so the fallback is said where the
+    // user can see it — as a note, not an error: the file was shown.
+    options.onSuccess({ created: false, revealed: true })
+    expect(onNote).toHaveBeenLastCalledWith(
+      'Nothing here opens .env, so credentials/.env was shown in the file manager.'
+    )
+    expect(onError).toHaveBeenLastCalledWith(null)
+    options.onError(
+      new Error("Error invoking remote method 'local-agent:open-credentials': The credentials folder could not be created.")
+    )
+    expect(onError).toHaveBeenLastCalledWith('The credentials folder could not be created.')
+  })
+
+  it('offers no .env for a bare folder, which has no credentials file', () => {
+    render(createElement(OpenInMenu, { agent: { ...AGENT, kind: 'bare' }, onError, onNote }))
+    fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
+    expect(screen.queryByRole('menuitem', { name: /open credentials\/\.env/i })).toBeNull()
+    expect(screen.getByRole('menuitem', { name: /reveal folder/i })).toBeTruthy()
+  })
+
   it('never makes Terminal or Reveal the default', () => {
-    render(createElement(OpenInMenu, { agent: AGENT, onError }))
+    render(createElement(OpenInMenu, { agent: AGENT, onError, onNote }))
     fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
     fireEvent.click(screen.getByRole('menuitem', { name: /reveal folder/i }))
 
@@ -112,7 +158,7 @@ describe('OpenInMenu', () => {
   })
 
   it('copies the prompt and confirms in place, without closing the menu', () => {
-    render(createElement(OpenInMenu, { agent: AGENT, onError }))
+    render(createElement(OpenInMenu, { agent: AGENT, onError, onNote }))
     fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
     fireEvent.click(screen.getByRole('menuitem', { name: /copy prompt for another tool/i }))
 
@@ -129,7 +175,7 @@ describe('OpenInMenu', () => {
   })
 
   it('shows a failed copy inside the menu, which stays open', () => {
-    render(createElement(OpenInMenu, { agent: AGENT, onError }))
+    render(createElement(OpenInMenu, { agent: AGENT, onError, onNote }))
     fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
     fireEvent.click(screen.getByRole('menuitem', { name: /copy prompt for another tool/i }))
 
@@ -148,7 +194,7 @@ describe('OpenInMenu', () => {
   })
 
   it('sends a failure that lands after the menu closed to the page slot instead', () => {
-    render(createElement(OpenInMenu, { agent: AGENT, onError }))
+    render(createElement(OpenInMenu, { agent: AGENT, onError, onNote }))
     fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
     fireEvent.click(screen.getByRole('menuitem', { name: /copy prompt for another tool/i }))
     fireEvent.click(screen.getByRole('menuitem', { name: /reveal folder/i }))
@@ -165,7 +211,7 @@ describe('OpenInMenu', () => {
   })
 
   it('does not re-arm "Copied" when the copy lands after the user has moved on', () => {
-    render(createElement(OpenInMenu, { agent: AGENT, onError }))
+    render(createElement(OpenInMenu, { agent: AGENT, onError, onNote }))
     fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
     fireEvent.click(screen.getByRole('menuitem', { name: /copy prompt for another tool/i }))
 

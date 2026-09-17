@@ -7,11 +7,12 @@ import {
   ClipboardCopy,
   Code2,
   FolderOpen,
+  KeyRound,
   TerminalSquare
 } from 'lucide-react'
 import { usePopover } from '../../ui/usePopover'
 import { useDefaultTool, useOpenIn, useSetDefaultTool } from '../../../hooks/useLocalTools'
-import { useCopyAgentInitPrompt } from '../../../hooks/useLocalAgents'
+import { useCopyAgentInitPrompt, useOpenAgentCredentials } from '../../../hooks/useLocalAgents'
 import { actionForTool, type DetectedTool } from '../../../../../shared/localTools'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { unwrapIpcError } from '../../../utils/ipcError'
@@ -74,13 +75,19 @@ interface OpenInMenuProps {
    * the popover: a failure landing after the user has closed the menu.
    */
   onError: (message: string | null) => void
+  /**
+   * The same slot, in a muted tone: what "Open .env" did when it could not do
+   * what its label says and nothing went wrong either — see `openEnv`.
+   */
+  onNote: (message: string | null) => void
 }
 
-export function OpenInMenu({ agent, onError }: OpenInMenuProps): React.JSX.Element {
+export function OpenInMenu({ agent, onError, onNote }: OpenInMenuProps): React.JSX.Element {
   const { tool: defaultTool, launchable } = useDefaultTool()
   const setDefaultTool = useSetDefaultTool()
   const openIn = useOpenIn()
   const copyInitPrompt = useCopyAgentInitPrompt()
+  const openCredentials = useOpenAgentCredentials()
   const menu = usePopover<HTMLButtonElement>('below-right')
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState<string | null>(null)
@@ -91,6 +98,14 @@ export function OpenInMenu({ agent, onError }: OpenInMenuProps): React.JSX.Eleme
   // discards (a transition, a Suspense boundary above this page) still runs
   // its body, and the ref would then describe a render that never committed.
   const menuOpen = useRef(menu.open)
+  // Which agent the page shows now. The macOS `open -t` fallback can take up to
+  // 15 s, and the page re-renders rather than remounts on an agent switch — so
+  // a result for the agent the user left must not be written under the one
+  // they moved to.
+  const shownAgentId = useRef(agent.id)
+  useEffect(() => {
+    shownAgentId.current = agent.id
+  }, [agent.id])
 
   // Both the confirmation and the reason belong to one opening of the menu:
   // either one still showing the next time it opens would describe an
@@ -115,6 +130,37 @@ export function OpenInMenu({ agent, onError }: OpenInMenuProps): React.JSX.Eleme
   const launchTool = (tool: DetectedTool): void => {
     if (tool.id !== defaultTool?.id) setDefaultTool(tool.id)
     launch({ folder: agent.path, toolId: tool.id, action: actionForTool(tool) })
+  }
+
+  /**
+   * Open `credentials/.env` itself — the file, not its folder. Finder hides
+   * dotfiles by default, so "Reveal folder" landed the user in a folder that
+   * looked empty. Main creates the file when it is missing and falls back to
+   * the file manager where nothing opens `.env`; that fallback is the one
+   * outcome the user cannot tell from a failure, so it is said in the page
+   * slot (ux_rules rule 6) — as a note, since nothing failed.
+   *
+   * Disabled while in flight, like the runtime panel's secrets link: that
+   * fallback waits up to 15 s, and a second click would launch a second editor.
+   */
+  const openEnv = (): void => {
+    const agentId = agent.id
+    onError(null)
+    menu.setOpen(false)
+    openCredentials.mutate(agentId, {
+      onSuccess: (result) => {
+        if (shownAgentId.current !== agentId) return
+        // Only the fallback is worth a line. A plain success writes nothing:
+        // the slot may by now hold a refusal from the ⋯ menu, and a note of
+        // `null` would clear it with nothing done about it.
+        if (result.revealed)
+          onNote('Nothing here opens .env, so credentials/.env was shown in the file manager.')
+      },
+      onError: (err) => {
+        if (shownAgentId.current !== agentId) return
+        onError(unwrapIpcError(err, 'credentials/.env could not be opened.'))
+      }
+    })
   }
 
   /**
@@ -190,6 +236,29 @@ export function OpenInMenu({ agent, onError }: OpenInMenuProps): React.JSX.Eleme
         <FolderOpen size={12} />
         Reveal folder
       </button>
+      {/*
+        Only a kit folder has a `credentials/.env`: a bare folder declares no
+        credential slots and the desktop never seeds the file there, which is
+        why the Folder tab hides its Credentials card for the same agent.
+      */}
+      {agent.kind !== 'bare' && (
+        <button
+          type="button"
+          role="menuitem"
+          className={MENU_ITEM}
+          disabled={openCredentials.isPending}
+          title="Open credentials/.env in your text editor, creating it if it isn't there yet"
+          onClick={openEnv}
+        >
+          <KeyRound size={12} />
+          {/*
+            The whole name, as every other surface on this page says it (rule 7):
+            the menu is announced as "Open this folder in", and "Open .env"
+            after that named a file nothing else here calls that.
+          */}
+          Open credentials/.env
+        </button>
+      )}
       <button
         type="button"
         role="menuitem"

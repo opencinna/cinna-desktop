@@ -69,7 +69,7 @@ Being the *same* external root is no longer among them; that is the re-selection
 1. Selecting its sidebar row opens the ordinary chat landing. Choose **Settings** for runtime controls and the detail tabs, with the manifest-shaped parts removed: no **Commands** or **Schedules** tab, and two cards on **Overview** — its **Name**, then its folder's `Readme`, rendered read-only and absent altogether where the folder has no `README.md`. The **Runs with** panel is the same panel a kit agent gets, controls and all
 2. **Prompts** is `Instructions` alone (the agent's instructions file, named in the card header — the whole system prompt, editable in place like any other prompt document and rendered as markdown while it is being read)
 3. **Permissions** and **Folder** are unchanged: the permission profile is the same for every folder agent — with all three instruction names on its identity-files list, so rewriting the file the agent *is* asks — and the Folder tab shows the bare findings
-4. **Open in <tool>**, **Start chat** and the ⋯ menu all behave as they do for a kit agent
+4. **Open in <tool>**, **Start chat** and the ⋯ menu all behave as they do for a kit agent, with one item fewer in the Open-in menu: **Open credentials/.env** is withheld, because a bare folder declares no credential slots and the desktop never seeds that file there — the same reason the Folder tab hides its Credentials card
 
 ### Renaming
 
@@ -283,7 +283,7 @@ The page was reused wholesale from the kit agent page, and ten separate surfaces
 | Manage agents (Settings) | An empty list says no folders with any of the three names were found, and adds no red refusal on top — that would repeat it and point at a folder picker the dialog does not have |
 | Folder → Identity | No `Kit` row — a folder with no manifest was reporting an *old* one ("legacy manifest"), which is both false and the wrong story — and a line saying the agent is identified by where its folder sits, so moving it starts a new agent |
 | Folder → Runs | Names no file; says the run state is kept on this machine, outside the folder |
-| Folder → Credentials, Published | Not rendered. Each could only say "none declared" / "not published" over a file the folder does not have — an absence presented as a configuration the user might fill in |
+| Folder → Credentials, Published | Not rendered. Each could only say "none declared" / "not published" over a file the folder does not have — an absence presented as a configuration the user might fill in. The Open-in menu's **Open credentials/.env** item is withheld for the same reason: it would create the file it names |
 | Permissions | The card names no file, and its examples say "editing its own" followed by the folder's instructions file (or the three names, where none resolved) instead of naming the manifest and `credentials/.env`. Two fictional examples out of three is how a reader comes to discount the third — and the third is the one that matters, because it is the sentence about a command reaching anything they can |
 | Settings badge and sub-line | "Added folder" with the installs-nothing tooltip, which names the three instruction files; `· not a kit folder` |
 

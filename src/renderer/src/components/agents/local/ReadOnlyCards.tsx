@@ -1,13 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Check, Circle, Minus } from 'lucide-react'
 import { markdownComponents } from '../../../utils/markdownComponents'
-import { useOpenAgentPath } from '../../../hooks/useLocalAgents'
+import { useOpenAgentCredentials, useOpenAgentPath } from '../../../hooks/useLocalAgents'
 import { useNewChatFlow } from '../../../hooks/useNewChatFlow'
 import { useUIStore } from '../../../stores/ui.store'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
+import { unwrapIpcError } from '../../../utils/ipcError'
 import { AgentCard } from './AgentCard'
 
 /**
@@ -26,25 +27,113 @@ import { AgentCard } from './AgentCard'
 const EMPTY = 'text-[10px] italic text-[var(--color-text-muted)]'
 
 /**
- * Credential slots and whether `credentials/.env` defines their variables.
+ * Open `credentials/.env` in an editor from the Folder tab, and say what the
+ * click did where the user cannot see it.
  *
- * Names only. No value in that file is ever read by the desktop, let alone sent
- * to the renderer, so this card can say a key is present and nothing more.
+ * Two outcomes need a line. A refusal — a read-only `credentials/`, a `.env`
+ * symlinked out of the folder — otherwise leaves the click inert, and a fallback
+ * to the file manager means the editor step did not happen, which is the
+ * *normal* outcome wherever nothing is registered for `.env` (ux_rules rule 6).
+ * `created` needs nothing: the file opens in front of the user. The line is
+ * rendered only once there is something to say, below everything the card
+ * shows, so it pushes nothing the user is about to click. It is replaced when
+ * the *next result* lands, never on the click: a line under the Credentials
+ * card vanishing as the Files row is pressed moved that row up under the
+ * pointer, and the second click a 15 s wait invites then landed on the row
+ * below it (ux_rules rule 1).
+ *
+ * **One instance per tab**, owned by `FolderTab` and handed to the two cards
+ * that name the file: the Credentials header and the Files row are the same
+ * action, so one note stands at a time — under the card that was clicked, which
+ * is why `open` takes the card's name and `outcome` asks for it back — and a
+ * click in flight (the macOS `open -t` fallback can take 15 s) disables both
+ * links, not only the one clicked. The page re-renders rather than remounts on
+ * an agent switch, so a result that lands after the switch is dropped rather
+ * than shown under the wrong agent.
  */
-export function CredentialsCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
-  const openPath = useOpenAgentPath()
+export type CredentialsOpener = 'credentials' | 'files'
+
+export interface OpenCredentialsFile {
+  open: (from: CredentialsOpener) => void
+  pending: boolean
+  /** The line for one card: its own last click's outcome, or nothing. */
+  outcome: (from: CredentialsOpener) => React.ReactNode
+}
+
+export function useOpenCredentialsFile(agentId: string): OpenCredentialsFile {
+  const openCredentials = useOpenAgentCredentials()
+  const [message, setMessage] = useState<{
+    from: CredentialsOpener
+    text: string
+    danger: boolean
+  } | null>(null)
+  const shownAgentId = useRef(agentId)
+  // A note about one agent's file must not survive a switch to another agent.
+  useEffect(() => {
+    shownAgentId.current = agentId
+    setMessage(null)
+  }, [agentId])
+  const open = (from: CredentialsOpener): void => {
+    openCredentials.mutate(agentId, {
+      onSuccess: (result) => {
+        if (shownAgentId.current !== agentId) return
+        setMessage(
+          result.revealed
+            ? {
+                from,
+                text: 'Nothing here opens .env, so credentials/.env was shown in the file manager.',
+                danger: false
+              }
+            : null
+        )
+      },
+      onError: (err) => {
+        if (shownAgentId.current !== agentId) return
+        setMessage({
+          from,
+          text: unwrapIpcError(err, 'credentials/.env could not be opened.'),
+          danger: true
+        })
+      }
+    })
+  }
+  const outcome = (from: CredentialsOpener): React.ReactNode =>
+    message && message.from === from ? (
+      <div
+        role={message.danger ? 'alert' : 'status'}
+        // Secondary, not muted: the Credentials card's standing paragraph is
+        // muted, and a note set the same way read as its third sentence rather
+        // than as what the click did.
+        className={`mt-2 text-[10px] ${
+          message.danger ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-secondary)]'
+        }`}
+      >
+        {message.text}
+      </div>
+    ) : null
+  return { open, pending: openCredentials.isPending, outcome }
+}
+
+export function CredentialsCard({
+  agent,
+  env
+}: {
+  agent: LocalAgentDto
+  /** The tab's one `credentials/.env` opener — see {@link useOpenCredentialsFile}. */
+  env: OpenCredentialsFile
+}): React.JSX.Element {
   return (
     <AgentCard
       title="Credentials"
       file="credentials/.env"
-      // The folder, not the file: a `.env` that does not exist yet cannot be
-      // revealed (`showItemInFolder` on a missing path is a silent no-op), and
-      // this tab's cards have nowhere to report a failure. Creating and opening
-      // the file is the *runtime panel's* affordance — "Add them in
-      // credentials/.env" — which has the reserved line to say what it did. So
-      // the title promises the folder rather than naming a file it never opens.
-      revealTitle="Reveal the credentials folder"
-      onReveal={() => openPath.mutate({ agentId: agent.id, relPath: 'credentials' })}
+      // The file itself, not its folder. Finder hides dotfiles by default, so a
+      // reveal of `credentials/` showed a folder that looked empty and left the
+      // user to find (or create) the file. Main creates it when it is missing,
+      // and the one outcome a click cannot show for itself — a fallback to the
+      // file manager, or a refusal — is said in the line below the card's text.
+      revealTitle="Open credentials/.env in your text editor, creating it if it isn't there yet"
+      onReveal={() => env.open('credentials')}
+      revealDisabled={env.pending}
     >
       {agent.credentials.length === 0 ? (
         <div className={EMPTY}>This agent declares no credentials.</div>
@@ -87,6 +176,7 @@ export function CredentialsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
         Values live in <code>credentials/.env</code>, which stays on this machine. Cinna reads only
         which variable names are set.
       </div>
+      {env.outcome('credentials')}
     </AgentCard>
   )
 }
