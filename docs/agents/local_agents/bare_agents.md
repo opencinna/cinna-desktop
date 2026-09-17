@@ -34,8 +34,8 @@ The same convention as the rest of this folder:
 
 ### Adopting one folder
 
-1. The Agents sidebar's **+** — now "Add an agent" — opens Add an agent: choose **Add a folder** for adoption; **New agent** scaffolds a kit folder, and the remaining choices connect external agents
-2. **Add a folder** opens a native directory picker in main. What was picked is walked, and the result previewed: nothing is registered yet and nothing has been written
+1. The Agents sidebar's **+** — now "Add an agent" — opens Add an agent: **New agent** scaffolds a kit folder (and a Cinna account also gets **Install from catalog**); **Advanced options** leads to the tiles, where **Add a folder** is adoption and the rest connect external agents
+2. **Add a folder** (on the advanced step) opens a native directory picker in main. What was picked is walked, and the result previewed: nothing is registered yet and nothing has been written
 3. One folder found means the picked folder *is* the agent. The step shows a single **Name** field, prefilled from the first `# heading` in its instructions file or the folder's own name, so Enter is a complete answer. The hint under it names the file main found — "`CLAUDE.md` is its instructions" — not the first name on the list
 4. **Add agent** registers the folder as an external root, scans it, and lands the user on the new agent — adopting is a create in every sense the user cares about, so it obeys the same rule ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 3). There is no "Build it with…" step: nothing was scaffolded, so there is nothing to hand to an assistant
 
@@ -58,7 +58,7 @@ The same convention as the rest of this folder:
 
 ### A pick that cannot be used
 
-The dialog stays on the choice step and says why, in its reserved error line. It never closes on a refusal ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 6). The reasons, in the order they are checked: the folder overlaps a registered root in either direction (including a **workshop** root at exactly this path, where the walk finds nothing anyway), nothing under it has an instructions file that counts, or — outside a re-selection — every agent in it has already been added. Cancelling the picker is not a refusal and says nothing at all.
+The dialog stays on the advanced step and says why, in the Add a folder tile, where the refusal replaces the tile's sub-line. It never closes on a refusal ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 6). The reasons, in the order they are checked: the folder overlaps a registered root in either direction (including a **workshop** root at exactly this path, where the walk finds nothing anyway), nothing under it has an instructions file that counts, or — outside a re-selection — every agent in it has already been added. Cancelling the picker is not a refusal and says nothing at all.
 
 "Nothing here" lists all three names — except where the picked folder is itself a **kit agent** (`cinna-agent.json`) or a **workshop** (`.cinna-kit/`). Such a folder has an `AGENTS.md` and a `CLAUDE.md` the user can see, which the walk skips on purpose, so "nothing in this folder has one" would be false in front of their eyes ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 9) and would not say where the folder belongs. The refusal names it as a Cinna agents folder or kit agent, says the `AGENTS.md` / `CLAUDE.md` it actually holds guide building — only the ones present, since naming one that is not there is the same false claim — and points at Settings → Agents → Add an agents folder. A kit-shaped folder holding neither gets the generic copy, which is then true.
 
@@ -81,7 +81,7 @@ Being the *same* external root is no longer among them; that is the re-selection
 
 1. **⋯ → Remove agent…** — the wording differs from a kit agent's "Delete agent…" because the outcome does
 2. The dialog offers two radio options: **Remove from the list only** (the default) and **Remove and move the folder to the Trash**. The recoverable one is first and selected
-3. Removing from the list marks the agent hidden. The folder is untouched, and there are two routes back, both of which the dialog names: re-picking the folder in **+ → Add a folder** reopens its list with this agent unticked, and Settings → Agents shows the count under that root, and that row's **Manage agents** dialog is where the user ticks which ones come back. Naming only a route that does not work is how a choice offered as the recoverable one becomes a dead end ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 5) — which is what this hint did while re-picking a registered folder was still refused
+3. Removing from the list marks the agent hidden. The folder is untouched, and there are two routes back, both of which the dialog names: re-picking the folder in **+ → Advanced options → Add a folder** reopens its list with this agent unticked, and Settings → Agents shows the count under that root, and that row's **Manage agents** dialog is where the user ticks which ones come back. Naming only a route that does not work is how a choice offered as the recoverable one becomes a dead end ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 5) — which is what this hint did while re-picking a registered folder was still refused
 4. The copy owns the half that cannot be undone: a job that uses the agent "will need it selected again even if you put the agent back". Removing drops the `agents` row and `job_agents` cascades with it; restoring re-creates the row under the same positional id, so chats re-bind, but the job's link does not come back
 
 ## Business Rules
@@ -279,7 +279,7 @@ The page was reused wholesale from the kit agent page, and ten separate surfaces
 | Prompts → Instructions | The card header names and reveals the agent's own instructions file. With none resolved it names no file and offers no reveal, and its missing note lists the three names |
 | Folder → Files | Lists the folder's **own two** files, its instructions file and `README.md`, not the kit layout's seven. With no instructions file the row reads "AGENT.md, AGENTS.md or CLAUDE.md" and reveals the folder, not a file that is not there |
 | Name and Readme cards | Cleared, the name falls back to the heading in the named instructions file; the Readme footer says the agent is told only that file |
-| Add a folder | The choice card offers "any project folder with an AGENT.md, AGENTS.md or CLAUDE.md"; a single find's hint names the file main found |
+| Add a folder | The advanced-step tile offers "A project folder with agent instructions. Nothing in it changes."; a single find's hint names the file main found |
 | Manage agents (Settings) | An empty list says no folders with any of the three names were found, and adds no red refusal on top — that would repeat it and point at a folder picker the dialog does not have |
 | Folder → Identity | No `Kit` row — a folder with no manifest was reporting an *old* one ("legacy manifest"), which is both false and the wrong story — and a line saying the agent is identified by where its folder sits, so moving it starts a new agent |
 | Folder → Runs | Names no file; says the run state is kept on this machine, outside the folder |
@@ -322,7 +322,7 @@ Known and not addressed:
 ```
 Agents sidebar "+" ─► NewLocalAgentModal
                         ├─ New agent  ─► local-agent:create        (kit, unchanged)
-                        └─ Add a folder
+                        └─ Advanced options ─► Add a folder
                              ├─ local-agent:folder-pick  ─► native dialog (main)
                              │                              discoverBareAgents  → preview
                              └─ local-agent:folder-add   ─► addExternalRoot (writes nothing

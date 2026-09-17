@@ -1,6 +1,6 @@
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DetectedTool } from '../../../../../shared/localTools'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 
@@ -66,6 +66,7 @@ vi.mock('../../../hooks/useAppSettings', () => ({
 }))
 
 const { NewLocalAgentModal } = await import('./NewLocalAgentModal')
+const { SETTLE_MS } = await import('../../../hooks/useSettleGuard')
 
 /** Resolve the create mutation the way react-query would, through `onSuccess`. */
 function succeedCreate(): void {
@@ -84,6 +85,17 @@ function openChoice(): { onClose: ReturnType<typeof vi.fn> } {
   const onClose = vi.fn()
   render(createElement(NewLocalAgentModal, { onClose }))
   return { onClose }
+}
+
+/** Choice step → Advanced options, where folders and connected agents live. */
+function toAdvanced(): void {
+  fireEvent.click(screen.getByRole('button', { name: /^Advanced options/ }))
+}
+
+/** Advanced options → Add a folder, which runs the OS picker. */
+function clickAddFolder(): void {
+  toAdvanced()
+  fireEvent.click(screen.getByRole('button', { name: /^Add a folder/ }))
 }
 
 /**
@@ -330,16 +342,19 @@ describe('NewLocalAgentModal — add a folder', () => {
     ]
   }
 
-  it('opens on a choice, not on a name field', () => {
+  it('opens on a choice, not on a name field, with Add a folder behind Advanced options', () => {
     openChoice()
     expect(screen.getByRole('dialog', { name: 'Add an agent' })).toBeTruthy()
     expect(screen.queryByLabelText('Name')).toBeNull()
-    expect(screen.getByRole('button', { name: /Add a folder/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Add a folder/ })).toBeNull()
+    toAdvanced()
+    expect(screen.getByRole('dialog', { name: 'Advanced options' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^Add a folder/ })).toBeTruthy()
   })
 
   it('names the single agent, and sends the picker’s own path back', () => {
     openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick(FOUND_ONE)
 
     // Prefilled from the AGENT.md heading — one Enter is a complete answer.
@@ -358,7 +373,7 @@ describe('NewLocalAgentModal — add a folder', () => {
     // empty pane left them reading "Select an agent from the sidebar" with the
     // agent they had just added sitting unselected behind it.
     openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick(FOUND_MANY)
     fireEvent.click(screen.getByRole('button', { name: 'Add 2 agents' }))
 
@@ -376,7 +391,7 @@ describe('NewLocalAgentModal — add a folder', () => {
 
   it('ticks everything addable and leaves the already-added ones out of the payload', () => {
     openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick(FOUND_MANY)
 
     // No name field for several: naming fifteen folders at adoption time is
@@ -397,7 +412,7 @@ describe('NewLocalAgentModal — add a folder', () => {
     // identifies it. The basename is in its own non-shrinking span, so it is on
     // screen at any width; the parent directory is the half that ellipsises.
     openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick({
       ...FOUND_ONE,
       path: '/Users/me/Documents/work/clients/acme/old-invoice-agent-v2'
@@ -417,7 +432,7 @@ describe('NewLocalAgentModal — add a folder', () => {
     // ticks Select all, the agents they came for are absent, and they read that
     // as the scanner having missed those folders.
     openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick({ ...FOUND_MANY, truncated: true })
 
     expect(screen.getByText(/first 3 folders found/)).toBeTruthy()
@@ -425,7 +440,7 @@ describe('NewLocalAgentModal — add a folder', () => {
 
   it('says nothing about a cap it did not hit', () => {
     openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick(FOUND_MANY)
 
     expect(screen.queryByText(/folders found/)).toBeNull()
@@ -436,7 +451,7 @@ describe('NewLocalAgentModal — add a folder', () => {
     // ticked one agent out of three with no way to add the others: the ⋯ menu
     // removes one at a time and Settings restores all of them at once.
     openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick({
       ...FOUND_MANY,
       reselecting: { rootId: 'r1', label: 'repo' },
@@ -475,7 +490,7 @@ describe('NewLocalAgentModal — add a folder', () => {
 
   it('adds without a confirmation when nothing is being removed', () => {
     openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick({
       ...FOUND_MANY,
       reselecting: { rootId: 'r1', label: 'repo' },
@@ -504,7 +519,7 @@ describe('NewLocalAgentModal — add a folder', () => {
     // legitimate answer — refusing it with a greyed-out button and no sentence
     // is the silent failure ux_rules rule 6 is about.
     openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick({
       ...FOUND_MANY,
       reselecting: { rootId: 'r1', label: 'repo' },
@@ -529,7 +544,7 @@ describe('NewLocalAgentModal — add a folder', () => {
     // A user who came to take one agent out must not be dropped onto another
     // agent's page (ux_rules rule 3 cuts the other way here).
     openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick({
       ...FOUND_MANY,
       reselecting: { rootId: 'r1', label: 'repo' },
@@ -558,7 +573,7 @@ describe('NewLocalAgentModal — add a folder', () => {
     // reads as a bad scan. Asserted *while re-selecting*, which is the only
     // state where the other rows are unlocked and this one still must not be.
     openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick({
       ...FOUND_MANY,
       reselecting: { rootId: 'r1', label: 'repo' },
@@ -580,32 +595,61 @@ describe('NewLocalAgentModal — add a folder', () => {
     // ux_rules rule 6: a dialog closes on success only. Closing here would
     // leave the user with a picker that did nothing and no message anywhere.
     const { onClose } = openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick({ ...FOUND_ONE, refusal: 'Nothing in this folder has an AGENT.md.', found: [] })
 
     expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert').textContent).toContain('AGENT.md')
-    expect(screen.getByRole('button', { name: /Add a folder/ })).toBeTruthy()
+    // On the step the folder was picked from, inside the tile that picked it,
+    // in place of its sub-line — below the grid it could fall off a short window.
+    expect(screen.getByRole('dialog', { name: 'Advanced options' })).toBeTruthy()
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toContain('AGENT.md')
+    const tile = screen.getByRole('button', { name: /^Add a folder/ })
+    expect(tile.parentElement!.contains(alert)).toBe(true)
+    expect(tile.textContent).not.toContain('Nothing in it changes')
+  })
+
+  it('shows the folder tile’s sub-line when there is nothing to report', () => {
+    openChoice()
+    toAdvanced()
+    const tile = screen.getByRole('button', { name: /^Add a folder/ })
+    expect(tile.textContent).toContain(
+      'A project folder with agent instructions. Nothing in it changes.'
+    )
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('does nothing at all when the picker is cancelled', () => {
     const { onClose } = openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick({ cancelled: true })
 
     expect(onClose).not.toHaveBeenCalled()
     expect(addFolder).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert').textContent).toBe('')
+    // No error slot at all: a message is rendered only when there is one.
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  it('goes back to the choice without adopting anything', () => {
+  it('goes back to Advanced options — where it came from — without adopting anything', () => {
     openChoice()
-    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    clickAddFolder()
     resolvePick(FOUND_MANY)
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
 
-    expect(screen.getByRole('dialog', { name: 'Add an agent' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'Advanced options' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^Add a folder/ })).toBeTruthy()
     expect(addFolder).not.toHaveBeenCalled()
+  })
+
+  it('clears a refusal when the user leaves the advanced step', () => {
+    openChoice()
+    clickAddFolder()
+    resolvePick({ ...FOUND_ONE, refusal: 'Nothing in this folder has an AGENT.md.', found: [] })
+    expect(screen.getByRole('alert')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.getByRole('dialog', { name: 'Add an agent' })).toBeTruthy()
+    toAdvanced()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })
 
@@ -613,7 +657,80 @@ it('offers A2A setup without requiring a local agents folder', () => {
   const onA2A = vi.fn()
   const onCreateFolder = vi.fn(() => false)
   render(createElement(NewLocalAgentModal, { onClose: vi.fn(), onA2A, onCreateFolder }))
+  toAdvanced()
   fireEvent.click(screen.getByRole('button', { name: /A2A agent/ }))
   expect(onA2A).toHaveBeenCalledOnce()
   expect(onCreateFolder).not.toHaveBeenCalled()
+})
+
+describe('NewLocalAgentModal — the choice step', () => {
+  it('offers Install from catalog first, focused, only when given onCatalog', () => {
+    const onCatalog = vi.fn()
+    render(createElement(NewLocalAgentModal, { onClose: vi.fn(), onCatalog }))
+    const catalog = screen.getByRole('button', { name: /^Install from catalog/ })
+    const newAgent = screen.getByRole('button', { name: /^New agent/ })
+    expect(catalog.compareDocumentPosition(newAgent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(document.activeElement).toBe(catalog)
+    fireEvent.click(catalog)
+    expect(onCatalog).toHaveBeenCalledOnce()
+  })
+
+  it('has no catalog card without onCatalog, and focuses New agent instead', () => {
+    openChoice()
+    expect(screen.queryByRole('button', { name: /Install from catalog/i })).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /^New agent/ }))
+  })
+
+  it('lists exactly the handler-backed tiles on Advanced options, and Back returns', () => {
+    const handlers = { onA2A: vi.fn(), onRemoteAcp: vi.fn(), onCustom: vi.fn(), onManaged: vi.fn() }
+    const view = render(createElement(NewLocalAgentModal, { onClose: vi.fn(), ...handlers }))
+    toAdvanced()
+    fireEvent.click(screen.getByRole('button', { name: /^Remote ACP agent/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Command-line agent/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Managed \(Claude\)/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^A2A agent.*Agent Card URL/ }))
+    for (const handler of Object.values(handlers)) expect(handler).toHaveBeenCalledOnce()
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.getByRole('dialog', { name: 'Add an agent' })).toBeTruthy()
+    view.unmount()
+
+    openChoice()
+    toAdvanced()
+    expect(screen.getByRole('button', { name: /^Add a folder/ })).toBeTruthy()
+    for (const name of [/A2A agent/, /Remote ACP agent/, /Command-line agent/, /Managed/]) {
+      expect(screen.queryByRole('button', { name })).toBeNull()
+    }
+  })
+})
+
+describe('NewLocalAgentModal — right after Advanced options opens', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('ignores a pointer click on a tile until the step has settled', () => {
+    const onA2A = vi.fn()
+    render(createElement(NewLocalAgentModal, { onClose: vi.fn(), onA2A }))
+    fireEvent.click(screen.getByRole('button', { name: /^Advanced options/ }), { detail: 1 })
+    // The second half of the double-click, landing on what opened under it.
+    fireEvent.click(screen.getByRole('button', { name: /^A2A agent/ }), { detail: 2 })
+    fireEvent.click(screen.getByRole('button', { name: /^Add a folder/ }), { detail: 2 })
+    expect(onA2A).not.toHaveBeenCalled()
+    expect(pickFolder).not.toHaveBeenCalled()
+
+    act(() => vi.advanceTimersByTime(SETTLE_MS))
+    fireEvent.click(screen.getByRole('button', { name: /^A2A agent/ }), { detail: 1 })
+    expect(onA2A).toHaveBeenCalledOnce()
+  })
+
+  it('acts on Enter at once — a keyboard press is not the tail of a double-click', () => {
+    const onA2A = vi.fn()
+    render(createElement(NewLocalAgentModal, { onClose: vi.fn(), onA2A }))
+    fireEvent.click(screen.getByRole('button', { name: /^Advanced options/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^A2A agent/ }), { detail: 0 })
+    expect(onA2A).toHaveBeenCalledOnce()
+  })
 })

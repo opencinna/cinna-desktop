@@ -30,7 +30,7 @@ The failure this replaced: `ensureHome` was on every read path that wanted the h
 
 ### The rest of the app while the question stands
 1. The sidebar list says *"Your agents need a folder"* with **Set one up** (or **Pick another folder** after a refusal), not "No agents yet" — the two states want different words and a different button
-2. The `+` opens Add an agent. Only **New agent** requests the unavailable home; **Add a folder**, A2A, ACP and managed connections remain available without it
+2. The `+` opens Add an agent. Only **New agent** requests the unavailable home; **Install from catalog** and everything under **Advanced options** — **Add a folder**, A2A, ACP and managed connections — remain available without it
 3. The empty agent pane says the folder is missing rather than pointing at that `+`
 4. Settings → Agents shows the home's place in the **Agent Folders** list as a row naming the state and the path, carrying the button that resolves it
 5. **Not now** is always available, and every one of those surfaces is a way back in

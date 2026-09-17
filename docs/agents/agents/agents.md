@@ -26,7 +26,7 @@ Universal agent integration that lets users chat with external AI agents through
 ### Adding an A2A Agent
 
 1. User opens the Agents sidebar and presses **+** to open **Add an agent**
-2. Chooses **A2A agent**, opening the **Add A2A Agent** dialog
+2. Chooses **Advanced options**, then **A2A agent**, opening the **Add A2A Agent** dialog
 3. Enters the agent's card URL (base URL or direct `.well-known/agent-card.json` path)
 4. Optionally enters an access token for authenticated agents
 5. Clicks "Test Connection" — app fetches the agent card, negotiates protocol, and displays:

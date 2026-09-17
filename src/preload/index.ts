@@ -110,6 +110,7 @@ import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot } from '../shar
 import type {
   CatalogEntryDto,
   CatalogInstallResultDto,
+  CatalogOutcome,
   InstallContextDto,
   SetupCredentialSummaryDto,
   SetupStatusDto
@@ -1208,8 +1209,10 @@ const api = {
   },
 
   catalog: {
-    list: (): Promise<CatalogEntryDto[]> => ipcRenderer.invoke('catalog:list'),
-    quickInstall: (bundleId: string): Promise<CatalogInstallResultDto> =>
+    // Both resolve with a `CatalogOutcome`; the renderer unwraps it, since a
+    // code thrown from here would not survive contextBridge.
+    list: (): Promise<CatalogOutcome<CatalogEntryDto[]>> => ipcRenderer.invoke('catalog:list'),
+    quickInstall: (bundleId: string): Promise<CatalogOutcome<CatalogInstallResultDto>> =>
       ipcRenderer.invoke('catalog:quick-install', bundleId),
     installContext: (bundleId: string): Promise<InstallContextDto> =>
       ipcRenderer.invoke('catalog:install-context', bundleId),

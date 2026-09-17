@@ -3,12 +3,13 @@
 ## File Locations
 
 ### Shared
-- `src/shared/catalog.ts` — DTOs (`CatalogEntryDto` incl. `pendingUpdate`, `CatalogCredentialSpec`, `CatalogInstallResultDto`, `InstallContextDto`, `InstallContextSpecDto`, `InstallContextPublisherSummaryDto`, `SetupStatusDto`, `SetupMissingItemDto`, `SetupCredentialSummaryDto`) consumed by the main service, preload bridge, and renderer
+- `src/shared/catalog.ts` — DTOs (`CatalogEntryDto` incl. `pendingUpdate`, `CatalogCredentialSpec`, `CatalogInstallResultDto`, `InstallContextDto`, `InstallContextSpecDto`, `InstallContextPublisherSummaryDto`, `SetupStatusDto`, `SetupMissingItemDto`, `SetupCredentialSummaryDto`) consumed by the main service, preload bridge, and renderer; plus `CatalogOutcome<T>` and `unwrapCatalogOutcome`, the returned-failure shape of `catalog:list` / `catalog:quick-install` (see Security)
 - `src/main/services/cinna-http.ts` — shared Cinna HTTP client (`cinnaFetch`, `resolveBaseUrl`); consumed by both `catalogService` and `agentService`
 
 ### Main Process
 - `src/main/services/catalogService.ts` — `catalogService` object; proxies catalog + setup endpoints, projects server snake_case → desktop camelCase, hides secrets
-- `src/main/ipc/catalog.ipc.ts` — `registerCatalogHandlers()`; thin `ipcHandle(...)` wrappers, no business logic
+- `src/main/ipc/catalog.ipc.ts` — `registerCatalogHandlers()`; thin `ipcHandle(...)` wrappers, no business logic. The module-private `outcome()` wraps `list` and `quick-install`: a `CinnaReauthRequired` (as `reauth_required`) or any `DomainError` is returned as `{success:false, code, message}` with a `warn` log; an uncoded error still throws so `_wrap` logs it as unexpected
+- `src/main/ipc/catalog.ipc.test.ts` — pins that shape: success wrapped, a normalised and a raw expired session both returned as `reauth_required`, an uncoded failure still thrown, and the round trip through `unwrapCatalogOutcome` keeping the code
 - `src/main/ipc/index.ts` — wires `registerCatalogHandlers` into `registerAllIpcHandlers()`
 
 ### Preload
@@ -18,6 +19,12 @@
 - `src/renderer/src/hooks/useCatalog.ts` — `useCatalog`, `useRefreshCatalogState`, `useQuickInstallBundle`, `useUninstallBundle`, `useInstallContext`, `useSetupStatus`, `useSetupCredentials`, `useCatalogServerUrl` React Query hooks
 - `src/renderer/src/components/settings/CatalogSettingsSection.tsx` — Settings → Profile → Catalog page entry point
 - `src/renderer/src/components/settings/CatalogCard.tsx` — One expandable card per bundle; renders header + the expanded body wrapper. Composes `CatalogCardCredentials` for the install-context sections and `CatalogCardFooter` for installed-bundle actions
+- `src/renderer/src/stores/catalogInstall.store.ts` — `useCatalogInstallStore` (`installingBundleId`, `error: CatalogInstallError | null` keyed by `bundleId`, `pendingSetup: PendingCatalogSetup | null`, `install`, `clearError`, `setPendingSetup`) and `landCatalogInstall(queryClient, agentId, result)`. Scoped logger `catalog-install`
+- `src/renderer/src/hooks/useCatalogInstall.ts` — `useCatalogInstall({ onInstalled, onInstalledDetached })`, the component view over the store
+- `src/renderer/src/hooks/useCatalogPicker.ts` — the chat picker's wrapper; see [Inline Catalog Install](./inline_install.md)
+- `src/renderer/src/components/agents/CatalogBrowserModal.tsx` — the sidebar's Agent catalog dialog. Module-private `CatalogTile`, `EntryAction`, `InstalledPill`, `EmptyState`
+- `src/renderer/src/components/agents/CatalogSetupHost.tsx` — renders `CatalogSetupModal` for `pendingSetup`; mounted once in `src/renderer/src/App.tsx` inside `AuthGate`
+- `src/renderer/src/components/agents/local/LocalAgentsList.tsx`, `NewLocalAgentModal.tsx` — the entry point (`onCatalog`); see [Agents Tab — Technical Details](../local_agents/agents_tab_tech.md)
 - `src/renderer/src/components/settings/CatalogCardCredentials.tsx` — Self-contained subcomponent that owns the install-context React Query subscription, the required-credentials list with per-spec match icons, the AI credentials sibling section, and the error chip + retry. Inline helpers: `ProvidedByBadge`, `TypeBadge`, `CredentialIcon`, `AICredentialsSection`, `AIPublisherRow`
 - `src/renderer/src/components/settings/CatalogCardFooter.tsx` — Self-contained footer rendered only for installed bundles; owns `useCatalogServerUrl`, `useUninstallBundle`, and the `CatalogUninstallModal` state. Returns `null` when `entry.userInstallId` is missing
 - `src/renderer/src/components/settings/CatalogSetupModal.tsx` — Post-install dialog with credential status cards and 3s polling
@@ -34,8 +41,8 @@ None. The desktop is a stateless proxy — all bundle, install, and credential r
 
 | Channel | Args | Returns |
 |---------|------|---------|
-| `catalog:list` | — | `CatalogEntryDto[]` |
-| `catalog:quick-install` | `bundleId: string` | `CatalogInstallResultDto` |
+| `catalog:list` | — | `CatalogOutcome<CatalogEntryDto[]>` |
+| `catalog:quick-install` | `bundleId: string` | `CatalogOutcome<CatalogInstallResultDto>` |
 | `catalog:install-context` | `bundleId: string` | `InstallContextDto` |
 | `catalog:uninstall` | `installId: string` | `{ success: true }` |
 | `catalog:setup-status` | `installId: string` | `SetupStatusDto` |
@@ -72,7 +79,7 @@ The Cinna HTTP plumbing lives in the shared `src/main/services/cinna-http.ts` (e
 
 | Hook | Notes |
 |------|-------|
-| `useCatalog()` | Query key `['catalog']`; gated on `currentUser?.type === 'cinna_user'`; 60s staleTime |
+| `useCatalog()` | Query key `['catalog']`; gated on `currentUser?.type === 'cinna_user'`; 60s staleTime; retries up to 3 times, except a `reauth_required` failure, which is never retried so **Re-authenticate** shows at once |
 | `useRefreshCatalogState()` | Memoized callback: invalidates `['catalog']` AND fires `window.api.agents.syncRemote()`. The single source of truth for "catalog state changed on the server" — consumed by `useQuickInstallBundle.onSuccess`, `CatalogSettingsSection.handleModalReady`, and the Refresh button. Does NOT invalidate `['agents']` directly — the sync's `agents:remote-sync-complete` broadcast handles that downstream (see `useAgents`), avoiding a stale-read race during the sync window |
 | `useQuickInstallBundle()` | Mutation; on success runs `useRefreshCatalogState()` so the card flips to Active and the freshly-installed agent appears in the `@` picker without waiting for the 5-min periodic sync |
 | `useUninstallBundle()` | Mutation; on success runs `useRefreshCatalogState()` so the card flips back to uninstalled and the remote-agent sync drops the row. Errors are deliberately *not* surfaced as a global toast — `CatalogCard` keeps the confirmation modal open and renders the error inline so the user sees it in context |
@@ -97,7 +104,7 @@ Flow inside `handleInstall(bundleId, displayName)`:
 2. `quickInstall.mutateAsync(bundleId)` — the mutation's `onSuccess` runs `useRefreshCatalogState()` internally
 3. `queryClient.fetchQuery(['catalog', 'setup-status', installId], () => window.api.catalog.setupStatus(installId))` — populates the cache so the modal's `useSetupStatus` reads from cache on first render
 4. Branches on `status`: `ready` → success toast; otherwise → `setActiveSetup({...})`
-5. Errors on the **update** path translate `err.code === 'reauth_required'` to a re-auth-prompted toast (the code is available because `agent:apply-bundle-update` returns it as data). The **install** path attempts the same branch off a thrown `catalog:quick-install` rejection and cannot reach it
+5. Errors on both the **install** and the **update** path translate `err.code === 'reauth_required'` to a re-auth-prompted toast. The code is there because both channels return it as data — `catalog:quick-install` as a `CatalogOutcome` that `useQuickInstallBundle` unwraps, `agent:apply-bundle-update` as `{success:false, code, error}` — and any other install failure shows `Install failed: <message>`, the main-process sentence without the IPC prefix — a coded failure arrives clean in the outcome, and an uncoded one (which `outcome()` still throws) is stripped by `unwrapIpcError`
 
 ### `CatalogCard`
 Thin orchestrator. Owns only the local `expanded` UI state and renders the card header (status dot, name, version, install/installed indicator, expand chevron) plus the expanded body wrapper (description, publisher line, bundle-id pill). Delegates the rest:
@@ -107,7 +114,35 @@ Thin orchestrator. Owns only the local `expanded` UI state and renders the card 
 
 The header action has three states: **Install** button (uninstalled), an amber **"Update to v\<latest>"** button (installed + behind latest), or an "Installed" indicator (installed + up to date). The update state is driven by the `bundleVersion` prop (joined from the synced agent) with `entry.pendingUpdate` as fallback — see [Bundle Updates tech](./bundle_updates_tech.md). All states gate on `installing` / `updating` / `disabled` from the parent so only one install or update runs at a time across the whole catalog.
 
+### Sidebar agent catalog
+
+**`useCatalogInstallStore.install({ bundleId, queryClient, onInstalled })`** — returns immediately; the work is an unawaited async block.
+1. A module-level `inFlight` flag returns early on a second call. It is not store state because two clicks in one tick both read the pre-`set` state, and the dialog and the picker are separate callers
+2. Records `useAuthStore.getState().currentUser?.id`; clears `error`; sets `installingBundleId`
+3. `unwrapCatalogOutcome(await window.api.catalog.quickInstall(bundleId))`, then `await window.api.agents.syncRemote()`, then invalidates `['catalog']`
+4. Sync `success: false` → `error` = the "Installed, but…" message (its `reauth_required` wording keyed off the **returned** `sync.code`, which does survive IPC); return
+5. Invalidates `['agents']` and `fetchQuery(['agents'])` — not `setQueryData`, which would race the `agents:remote-sync-complete` broadcast's own invalidation; finds `remoteTargetId === result.installId` → `onInstalled(agentId, result)`, else `error` = "it will appear after the next sync"
+6. `catch` → `error` = the `reauth_required` wording ("Cinna session expired …", keyed off the code the unwrapped outcome carries) or `unwrapIpcError(err, 'Install failed.')` cut to 160 characters
+7. Before every `set` after an await, and before `onInstalled`, the profile is re-read; a change logs and returns. `finally` clears `inFlight` and `installingBundleId`
+
+**`useCatalogInstall`** reads the three state fields from the store and returns `install(bundleId)`, which captures both callbacks **at click time** (the chat picker's is bound to the chat on screen, and `ChatInput` switches chats without remounting). `onInstalledDetached` always runs; `onInstalled` runs only while the caller is mounted (a `mounted` ref). The detached callback must touch only stores and the query client.
+
+**`landCatalogInstall`** — returns if there is no profile; sets `agentPageMode: 'chat'`, `activeExternalAgentId`, `activeView: 'external-agent'` on `useUIStore`; then `fetchQuery(['catalog', 'setup-status', installId])`. A status other than `ready`, or a rejected fetch, sets `pendingSetup: { installId, agentName, profileId }` — unless the profile changed during the fetch.
+
+**`CatalogSetupHost`** — returns `null` unless `pendingSetup.profileId` equals the current profile id. The entry is hidden, not cleared, under another profile, so it reappears on switching back. `onClose` clears it; `onReady` clears it and runs `useRefreshCatalogState()`.
+
+**`CatalogBrowserModal`** (props: `onClose`, `installingBundleId`, `installError`, `onInstall`, `onOpen`) — portalled, `role="dialog"` `aria-label="Agent catalog"`, fixed `h-[36rem]`. Escape and a `mousedown` outside close it. Reads `useCatalog()`, `useAgents()` (to map `userInstallId` → local agent id for **Open**), `useRefreshCatalogState()` and `useCinnaReauth()`.
+- The header's refresh is icon-only beside the close button — `RefreshCw`, `title` and `aria-label` "Refresh catalog", spinning and disabled while `catalog.isFetching` — styled like the agent status overlay's refresh, so the dialog's title row holds a title and two icons rather than a text button competing with the title
+- The grid stays mounted under the detail, `invisible` + `inert` + `aria-hidden`, so its scroll position survives; focus returns to the search field when the detail closes. A `selectedId` whose bundle disappears on refresh falls back to the grid
+- Filtering (`matches`) is case-insensitive over `displayName`, `description`, `publisherName`, `publisherHandle`, `bundleId`
+- `CatalogTile` is a `role="group"` named by the display name, holding the body button (opens the detail) and the action as siblings — not a button inside a button. The error renders last in the tile so the button that caused it does not move
+- `EntryAction`: uninstalled → **Install** (disabled while any install runs, titled "Another agent is installing" on the others; "Installing…" spinner on its own); installed → **Installed** pill plus **Open** when a synced agent exists. The detail passes `useSettleGuard(selectedId)`; each click checks `isUnsettledClick`
+- The detail renders `CatalogCardCredentials` with `enabled={!selected.isInstalled}` and `compact`
+- `LocalAgentsList` runs the install and passes the state in, so closing the dialog mid-install loses nothing
+
 ### `CatalogCardCredentials`
+Takes an optional `compact` prop (default `false`) that drops its body text from `text-[12px]` to `text-[11px]` for the Agent catalog dialog's detail; the inner `AICredentialsSection` and `AIPublisherRow` receive it as `text`.
+
 Owns its own `useInstallContext(entry.bundleId, enabled)` subscription so the lazy fetch only happens when the parent passes `enabled=true` (uninstalled bundle, card expanded). `ctxBySpec` is memoised on `installContext.data` so the rebuild only runs when the query result actually changes. While fetching (initial load OR background refetch) and verdict data hasn't arrived yet, a small spinner sits next to the "Required credentials" header and each row's icon is a `Loader2` placeholder. Once data arrives, `CredentialIcon` picks per spec:
 
 - `CheckCircle2` (success) — publisher row, or `hasSuggestedMatch === true` (the installer's existing credential will be linked at install time)
@@ -162,7 +197,9 @@ No catalog-specific env vars or settings; the feature inherits its surface area 
 - IPC handlers gate on `userActivation.requireActivated()` and the active profile's user id (`getProfileScopeUserId()`) — a deactivated session can't proxy catalog calls
 - `setup-status` returns *names and types only*; no credential secrets cross the IPC boundary
 - `install-context` proxy is bisected at the projection layer: `quickInstall` consumes the raw shape (which carries `suggested_credential_id` UUIDs needed to build the install body) entirely inside the main process, while `getInstallContext` re-projects the response into `InstallContextDto` and *drops* the UUIDs so the renderer-facing surface only carries a `hasSuggestedMatch: boolean` per spec
-- **`CinnaApiError` codes do NOT survive a thrown rejection, and this doc used to claim they did.** `ipcMain.handle` serialises a rejection to message + stack and `contextBridge` re-clones it, so `_wrap.ts`'s re-attached `code` never reaches the renderer — `_wrap.ts:32-99` states this and records the same false claim being fixed there. Corrected at `12686f0` on 4 Sep 2026 by reading `_wrap.ts`, `catalog.ipc.ts` and `agent.ipc.ts:105`. See [Main-Process Layering](../../development/main_layering/main_layering_llm.md). Where a code *is* available to the renderer it is because the handler **returned** it rather than threw it:
-  - `agent:apply-bundle-update` (`agent.ipc.ts:105`) catches internally and returns `{success:false, code, error}`; `useApplyBundleUpdate` (`useAgents.ts:234`) rebuilds the `Error` renderer-side and sets `.code`. **`AgentCard.tsx:101` and `CatalogSettingsSection.tsx:137` therefore work.**
-  - Every `catalog:*` channel (`catalog.ipc.ts`) is a bare `ipcHandle` that lets the `CinnaApiError` throw. **`CatalogSettingsSection.tsx:107` and `useCatalogPicker.ts:100` read `err.code` off that rejection, so their `reauth_required` branch is dead** — see Known gaps in [Bundles Catalog](./bundles_catalog.md).
+- **`CinnaApiError` codes do NOT survive a thrown rejection, and this doc used to claim they did.** `ipcMain.handle` serialises a rejection to message + stack and `contextBridge` re-clones it, so `_wrap.ts`'s re-attached `code` never reaches the renderer — `_wrap.ts` states this and records the same false claim being fixed there. Corrected at `12686f0` on 4 Sep 2026 by reading `_wrap.ts`, `catalog.ipc.ts` and `agent.ipc.ts` (`agent:apply-bundle-update`, now at line 146). See [Main-Process Layering](../../development/main_layering/main_layering_llm.md). Where a code *is* available to the renderer it is because the handler **returned** it rather than threw it:
+  - `agent:apply-bundle-update` (`agent.ipc.ts:146`) catches internally and returns `{success:false, code, error}`; `useApplyBundleUpdate` (`useAgents.ts:293`) rebuilds the `Error` renderer-side and sets `.code`. **`settings/AgentCard.tsx:132` and `CatalogSettingsSection.tsx:139` therefore work.**
+  - `agent:sync-remote` (`agent.ipc.ts`) catches `CinnaReauthRequired` and returns `{success:false, code:'reauth_required'}`; the install store's post-install sync message (`catalogInstall.store.ts:99`) therefore works.
+  - `catalog:list` and `catalog:quick-install` return a `CatalogOutcome` through `outcome()`, and the renderer calls `unwrapCatalogOutcome` **after** the `contextBridge` crossing — in `useCatalog`'s `queryFn`, `useQuickInstallBundle`'s `mutationFn` and the install store — so the rebuilt `Error` keeps its `code`. **The `reauth_required` branches in `CatalogSettingsSection.tsx:108` and `:198`, `CatalogBrowserModal.tsx:164` and `catalogInstall.store.ts:148` therefore work.** Until 17 Sep 2026 both channels threw and all four branches were dead — an expired session got **Retry** instead of **Re-authenticate** and a server message instead of *"Cinna session expired …"* — while `CatalogBrowserModal.test.tsx` passed on a mock that attached `code` to the rejection by hand; it now mocks the outcome. A returned `success:false` with the re-auth code still raises the app-wide modal: `_wrap`'s `isReauthResult` checks returned values, not only thrown ones.
+  - The other `catalog:*` channels — `install-context`, `uninstall`, `setup-status`, `setup-credentials`, `server-url` — are bare `ipcHandle`s that let the `CinnaApiError` throw. Their failures are shown only as sentences; a code branch on one of them would be dead until the channel is moved to `outcome()`.
 - The server-supplied `setup_url` is treated as the authoritative frontend host; the desktop never substitutes its own host (matches the trust model used by existing cinna-server deep links in `JobRunRow.tsx` / `CinnaTaskRunView.tsx`)

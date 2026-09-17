@@ -8,6 +8,7 @@
 import { useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../stores/auth.store'
+import { isReauthRequiredError } from '../stores/reauth.store'
 import type {
   CatalogEntryDto,
   CatalogInstallResultDto,
@@ -15,13 +16,16 @@ import type {
   SetupCredentialSummaryDto,
   SetupStatusDto
 } from '../../../shared/catalog'
+import { unwrapCatalogOutcome } from '../../../shared/catalog'
 
 export function useCatalog() {
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   return useQuery<CatalogEntryDto[]>({
     queryKey: ['catalog'],
-    queryFn: () => window.api.catalog.list(),
+    queryFn: async () => unwrapCatalogOutcome(await window.api.catalog.list()),
     enabled: isCinnaUser,
+    // An expired session does not heal on retry; show Re-authenticate now.
+    retry: (failures, err) => !isReauthRequiredError(err) && failures < 3,
     staleTime: 60_000
   })
 }
@@ -54,7 +58,8 @@ export function useRefreshCatalogState() {
 export function useQuickInstallBundle() {
   const refreshCatalogState = useRefreshCatalogState()
   return useMutation<CatalogInstallResultDto, Error, string>({
-    mutationFn: (bundleId: string) => window.api.catalog.quickInstall(bundleId),
+    mutationFn: async (bundleId: string) =>
+      unwrapCatalogOutcome(await window.api.catalog.quickInstall(bundleId)),
     onSuccess: refreshCatalogState
   })
 }

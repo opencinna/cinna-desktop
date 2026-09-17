@@ -42,6 +42,8 @@ test('A2A agents use the same chat-first page and structured settings', async ({
   const page = cinna.page
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
   await page.getByRole('button', { name: 'Add an agent', exact: true }).click()
+  await page.getByRole('button', { name: /^Advanced options/ }).click()
+  await page.getByRole('dialog', { name: 'Advanced options', exact: true }).locator('[data-settled="true"]').waitFor()
   await page.getByRole('button', { name: /A2A agent.*Agent Card URL/ }).click()
   await page.getByLabel('Agent Card URL', { exact: true }).fill('https://agent.example.com')
   await page.getByRole('button', { name: 'Save Agent', exact: true }).click()

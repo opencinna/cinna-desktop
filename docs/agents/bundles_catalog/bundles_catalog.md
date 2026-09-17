@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Browse and one-click-install agent bundles published on the connected Cinna server, without leaving the desktop app. The desktop never re-implements the publisher's credential setup forms — when a freshly installed bundle is missing credentials, the user is deep-linked into the cinna-server credential pages and the desktop polls until the runtime gate clears.
+Browse and one-click-install agent bundles published on the connected Cinna server, without leaving the desktop app. Three surfaces offer it: Settings → Profile → Catalog, the **Agent catalog** dialog behind the Agents sidebar's **+ → Install from catalog**, and the chat composer's add-agents picker ([Inline Catalog Install](inline_install.md)). The desktop never re-implements the publisher's credential setup forms — when a freshly installed bundle is missing credentials, the user is deep-linked into the cinna-server credential pages and the desktop polls until the runtime gate clears.
 
 ## Core Concepts
 
@@ -16,6 +16,8 @@ Browse and one-click-install agent bundles published on the connected Cinna serv
 | **Missing Item** | One credential the install can't run without — either an empty user placeholder (`placeholder_empty`) or a broken publisher-shared row (`publisher_credential_missing` / `_unshared`) |
 | **Setup Modal** | Post-install dialog that lists missing credentials as status cards; clicking a card opens the cinna-server credential page in the OS browser. Polls every 3s and on window focus until the gate goes `ready` |
 | **Credentials Draft** | A placeholder credential cinna-server pre-creates during install for each user-provided spec — the desktop only needs to open it on the web for the user to fill in |
+| **Agent catalog dialog** | The sidebar's catalog: a fixed-height dialog with a search field over a grid of bundle tiles, and a detail view per bundle. It displays; it does not own the install |
+| **Install store** | The app-wide install state that runs a quick install for the Agent catalog dialog and the chat picker, so one install runs at a time across both and outlives whichever surface started it. Settings → Catalog keeps its own |
 | **Catalog State Refresh** | The shared "catalog changed on the server" reaction: re-fetch `['catalog']` AND fire a remote-agent sync so the local `agents` table catches up immediately. Triggered by Install success, the setup modal flipping to `ready`, and the manual Refresh button |
 | **Install Context** | Per-bundle install preview from `GET /catalog/{bundle_id}/install-context` — the server's auto-prefill matcher runs across every required credential and returns a per-spec verdict (matched / not matched) plus the publisher-AI-credential summaries (name + type per role). The desktop never sees the matched credential's UUID at this stage; only the boolean and the publisher's AI name/type strings reach the IPC boundary |
 | **AI Credentials** | Two-role pair (Conversation, Building) the install binds separately from the required-credential specs. When the bundle ships AI credentials they're "provided by publisher" (billed to publisher); otherwise the install falls back to the user's account-wide AI defaults configured on the cinna server |
@@ -30,6 +32,15 @@ Browse and one-click-install agent bundles published on the connected Cinna serv
 4. Expanding an uninstalled card triggers a lazy `useInstallContext(bundleId)` fetch; while it resolves, a spinner sits next to the "Required credentials" header and each row's icon stays as a placeholder. Once resolved, the icon flips per spec — green check (covered), template (cinna-server will materialise template fields the user fills in after install), or key (no match — the user will provide a brand new credential). An **AI credentials** sibling section appears under the required-credentials list and either names the publisher-provided Conversation / Building credentials (green check, "Shared by publisher" badge) or shows a single "AI credentials — your account defaults" row with a warning key icon
 5. If the install-context fetch errors, a single warning chip appears at the top of the expanded body ("Couldn't check matching credentials — icons may be approximate") with a one-click Retry button; the credential icons fall back to the same provided_by-only heuristic the installed-card path uses, and the AI section hides itself because there's no publisher data to display
 6. Bundles the user has already installed render a green "Active" pill and an "Installed" indicator instead of the Install button; the install-context query stays disabled for them and the credential icons fall back to a provided_by-only classification (publisher/template → green, user → key) because the match data wouldn't be actionable. The expanded body grows a footer with two actions: **Uninstall** (destructive, left-aligned) opens a confirmation modal that calls `POST /api/v1/agents/{install_id}/uninstall` — same endpoint cinna-server's own web UI uses — and **Open Agent** (right-aligned) opens `{cinnaServerUrl}/agent/{userInstallId}` in the OS browser. The uninstall modal mirrors cinna-server's wording: "This install will be removed and its environment stopped. Your per-bundle App Data is preserved — it will reattach automatically if you reinstall the bundle later." Server-rejected uninstalls (e.g. publisher install) render their server-supplied error inline in the modal so the user sees it in context
+
+### Installing from the Agents sidebar
+
+1. A Cinna user presses **+** in the Agents sidebar and chooses **Install from catalog** (the card is absent for any other profile). See [Agents Tab](../local_agents/agents_tab.md#installing-from-the-catalog)
+2. The **Agent catalog** dialog opens on a searchable grid. Search matches name, description, publisher name or handle, and bundle id. Each tile shows name, version (`v<latest>` / `rev <n>`), publisher, a three-line description and the install count; its footer holds **Install**, or **Installed** plus **Open** once the install has synced into a local agent. **Refresh** runs the Catalog State Refresh
+3. Clicking a tile's body opens the bundle's detail over the grid — description in full, publisher and email, publish date, install count, bundle id, and the same credential preview the Settings card shows (`CatalogCardCredentials`, one step down the type scale; lazy install-context fetch only for an uninstalled bundle). Back returns to the grid with its search and scroll position intact
+4. **Install** runs the same quick install as Settings, then *awaits* a remote-agent sync and reads the agent list back to find the new local agent (`remoteTargetId === installId`)
+5. On success the dialog closes and the user lands on that agent's page in chat mode. The setup status is then fetched; anything but `ready` — including a failed check — raises the **Setup Modal** over the page
+6. A failure lands at the bottom of that bundle's tile and under the detail header, and closes nothing. A load failure shows **Retry** in the grid
 
 ### Update Available
 
@@ -83,7 +94,12 @@ The version state that drives this flow rides the **agent sync**, not the catalo
 - **Quick install only** — the desktop deliberately does not re-implement the cinna-server install form. Custom installs (per-spec credential picks, AI credential overrides) require the user to open the bundle on the web
 - **Auto-prefill via install-context** — quick install always pre-fetches `/install-context` and forwards the server's per-spec `suggested_credential_id` as `use_existing` in the install body. Posting `{}` would tell the server to skip every spec and materialise a fresh placeholder/template row even for credentials the installer already owns; the context-driven payload is the only thing that links existing credentials at install time. The matching itself stays on the server (`CredentialsService.find_match_for_spec`) — the desktop never inspects the user's credential list
 - **Install-context UUIDs stop at the main process** — the same `install-context` endpoint feeds both `quickInstall` (which keeps the matched UUIDs to build the install body) and the catalog card's per-spec icon (which only needs a `hasSuggestedMatch` boolean). The `InstallContextDto` projection deliberately drops `suggested_credential_id` / `suggested_credential_name` so the renderer never receives credential UUIDs over IPC
-- **One install at a time** — while a Quick Install is in flight the other cards' Install buttons disable. Card-body expansion still works
+- **One install at a time** — while a Quick Install is in flight the other cards' Install buttons disable. Card-body expansion still works. The Agent catalog dialog and the chat picker share one app-wide guard in the install store, so an install started in one disables Install in the other; Settings → Catalog has its own `pendingBundleId` and does not share it
+- **A sidebar install outlives the sidebar** — switching sidebar tabs unmounts the Agents list that opened the dialog. The install and its landing therefore live in the install store, and the setup dialog is rendered at the app root (`CatalogSetupHost`), so an install finished after the switch still opens the agent and still asks for credentials
+- **A result that lands under another profile is dropped** — the store records the active profile when an install starts and discards its success or failure if the profile has changed by the time it finishes; the setup dialog hides under any profile but the one it was raised for. The new agent belongs to the other account, so nothing about it should appear under this one
+- **Installed is not the same as added** — the store awaits the sync. If the sync fails, the tile says *"Installed, but it could not be added to your agents yet: …"* (or, for an expired session, *"Installed, but your Cinna session expired before it could be added — re-authenticate and it will appear."*); if the sync succeeds but the agent is not in the list, *"Installed — it will appear in your agents after the next sync."* The server install succeeded in each case, so the message never says it failed
+- **Pointer clicks on a just-opened detail are ignored for 300 ms** — the detail's Install / Open appear where the tile was clicked, and a double-click on a tile would otherwise install the bundle. Keyboard activation is never ignored. See [Agents Tab](../local_agents/agents_tab.md#a-control-that-appears-under-the-pointer-ignores-the-click-that-revealed-it)
+- **The dialog never resizes** — it has a fixed height; switching between grid and detail, filtering and an install error scroll inside it ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 1)
 - **Setup polling stops at ready** — `useSetupStatus` cancels the 3-second interval as soon as the query data settles on `status === 'ready'`. Window-focus and explicit refetch are the only paths that hit the server after that
 - **Per-credential deep link requires a UUID** — only `placeholder_empty` items can resolve to `/credential/{id}` because the install owner doesn't have a credential row for `publisher_credential_*` reasons. Those cards render disabled, and the fallback "Open on server" button surfaces the install's Credentials tab from `setup-status.setup_url`
 - **Uninstall is a server round-trip** — the catalog card's Uninstall button and the agent header's **Uninstall agent** action call `POST /api/v1/agents/{install_id}/uninstall` (same endpoint cinna-server's web UI uses). Server contract: the install row + environment go away, the per-bundle App Data volume is preserved (re-attached on next install of the same bundle), and publisher-installs are 400-rejected with a clear message that we render inline in the confirmation modal. The shared Catalog State Refresh then runs so the card flips back to uninstalled and the agent disappears from the `@` picker without waiting for the periodic remote-agent sync
@@ -91,13 +107,14 @@ The version state that drives this flow rides the **agent sync**, not the catalo
 - **Version state lives on the sync, not the catalog** — the catalog list (`/catalog/`) only carries `user_install_pending_update` + `latestVersion`; the installed version (needed for "v1.0 → v1.2") rides `bundle_version` on the agent-sync feed (`/external/agents`). The Catalog card joins the two by install id (`userInstallId === remoteTargetId`); the Agents list reads `bundle_version` straight off each synced agent. A single `deriveBundleUpdate()` helper produces the labels + gate for both
 - **Reuses the profile activation gate** — every catalog IPC handler calls `userActivation.requireActivated()` first; deactivated profiles error before any HTTP call is made
 - **Open-in-browser uses the shared `system.openExternal` IPC** — http(s)-restricted in the main process; the renderer never holds a `shell` reference
-- **Error codes flow end-to-end only where the handler *returns* them.** This bullet used to read *"`CinnaApiError` codes … are re-emitted by `ipcHandle` so the renderer can switch on `err.code`"*, which was never true: `ipcMain.handle` plus `contextBridge` strip an error's own properties at two boundaries (see [Main-Process Layering](../../development/main_layering/main_layering_llm.md)). The **update** path returns `{success:false, code}` and the renderer rebuilds the Error, so its `reauth_required` affordance works; the **install** path throws, so its equivalent branch does not fire. Corrected at `12686f0` on 4 Sep 2026 by reading `_wrap.ts`, `catalog.ipc.ts`, `agent.ipc.ts:105` and all four renderer branches.
+- **A failure's reason reaches the screen that acted** — loading the catalog, Quick Install and Update each report *why* they failed, not just that they did, so an expired Cinna session offers **Re-authenticate** (in the load banner of both Settings → Catalog and the Agent catalog dialog) and install or update errors name the expired session. The app-wide re-auth prompt is raised as well. How the reason crosses the process boundary is in [Technical Reference → Security](./bundles_catalog_tech.md)
+- **Other catalog calls report only a sentence** — install preview, uninstall, setup status, setup credentials and the server URL show their failure as text; none of them branches on an expired session
 
 ## Known gaps
 
 Each entry carries the date it was checked and the method.
 
-- **The re-auth toast on Quick Install never fires.** `CatalogSettingsSection.tsx:107` and `useCatalogPicker.ts:100` branch on `(err as {code?:string}).code === 'reauth_required'` from a rejected `catalog:quick-install`. That channel is a bare `ipcHandle`, so the code is stripped in transit and the value is always `undefined`. An expired Cinna session during an install therefore shows the generic fallback — *"Install failed: Error invoking remote method 'catalog:quick-install': CinnaApiError: …"* — instead of *"Cinna session expired — re-authenticate to install …"*. **The fix is the shape, not the string**: have `catalog:quick-install` return `{success:false, code, error}` the way `agent:apply-bundle-update` already does. **Reported by a documentation round; no code was changed.** Found at `12686f0` on 4 Sep 2026 by reading `catalog.ipc.ts`, `useCatalog.ts:57` (whose `mutationFn` is a bare `invoke` with no renderer-side `Error` construction) and the two call sites. **The update path was checked separately and is correct** — a fix must not tidy both together.
+- None open. Until 17 Sep 2026 an expired session during catalog load or Quick Install showed a generic error with only **Retry**, because the failure's reason was lost between the main process and the renderer. See [Technical Reference → Security](./bundles_catalog_tech.md) for the fix and the test that pins it.
 
 ## Architecture Overview
 
@@ -140,6 +157,24 @@ Quick Install Flow:
       • status !== 'ready'   → open CatalogSetupModal (re-runs the same
                                 refresh hook when status flips to ready)
 
+Sidebar Install Flow:
+  Agents sidebar + → Add an agent → Install from catalog
+    → CatalogBrowserModal (owned by LocalAgentsList; displays only)
+  User clicks Install
+    → useCatalogInstall → catalogInstall.store.install(bundleId)
+        (app-wide guard; profile id recorded)
+      → catalog:quick-install
+      → await agents:sync-remote          (failure → "Installed, but…" on the tile)
+      → invalidate ['catalog'], ['agents'] → fetchQuery(['agents'])
+      → find remoteTargetId === installId (missing → "it will appear…")
+      → profile changed? → drop
+      → landCatalogInstall                 (runs even if the list unmounted)
+          → ui.store: external-agent page, chat mode
+          → fetchQuery(['catalog', 'setup-status', installId])
+          → not ready / check failed → store.pendingSetup
+              → CatalogSetupHost (App root) → CatalogSetupModal
+      → close the dialog                   (only if the list is still mounted)
+
 Setup Modal Flow:
   CatalogSetupModal mounts
     → useSetupStatus({ installId, poll: true }) starts 3s polling
@@ -155,7 +190,8 @@ Setup Modal Flow:
 
 ## Integration Points
 
-- **[Composer `[+]` Menu](../../chat/composer_menu/composer_menu.md)** — The same Quick Install is surfaced inline in the new-chat / add-agents Capability Picker via a bottom **Catalog** section (`useCatalogPicker`). It runs the identical `catalog.quickInstall` → `agents.syncRemote` sequence, then auto-selects the freshly-synced agent (matched by `remoteTargetId === installId`) so the user can start chatting in one click. It deliberately omits the post-install setup-status check / `CatalogSetupModal` — an incomplete install simply auto-replies "setup not complete" on first message, keeping the in-chat path seamless.
+- **[Agents Tab](../local_agents/agents_tab.md)** — **+ → Install from catalog** opens the Agent catalog dialog; a finished install lands on the new agent's page
+- **[Composer `[+]` Menu](../../chat/composer_menu/composer_menu.md)** — The same Quick Install is surfaced inline in the new-chat / add-agents Capability Picker via a bottom **Catalog** section (`useCatalogPicker`). It runs through the same install store as the Agent catalog dialog, then auto-selects the freshly-synced agent (matched by `remoteTargetId === installId`) so the user can start chatting in one click. It deliberately omits the post-install setup-status check / `CatalogSetupModal` — an incomplete install simply auto-replies "setup not complete" on first message, keeping the in-chat path seamless.
 - **[Remote Agents](../remote_agents/remote_agents.md)** — Once a bundle is installed on the server, the existing periodic remote-agent sync pulls the new install into the local `agents` table on its next cycle, surfacing it in the agent selector and Settings → Profile → Agents. The cinna-server `/external/agents` response carries `bundle_uuid` and `is_publisher_install` under `metadata`, which the desktop persists into `RemoteAgentMetadata`. Profile → Agents is one server-domain visibility list, including hidden installs. The agent page uses `isBundleAgent` (`bundle_uuid` or `bundle_id`, excluding explicit publisher installs) to route its header action to Uninstall; publisher working copies use the eligible server-delete path. Connection shows available bundle updates
 - **[Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md)** — All catalog calls use `getCinnaAccessToken()` so token rotation and 401-driven re-auth work the same as for `cinnaApiService`
 - **[Cinna Re-authentication](../../auth/cinna_accounts/reauthentication.md)** — The inline "Re-authenticate" button in the catalog error banner shares the `useCinnaReauth` flow used by the Profile → Agents section

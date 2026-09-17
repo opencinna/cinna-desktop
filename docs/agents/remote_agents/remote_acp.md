@@ -5,7 +5,7 @@ Connect Cinna Desktop directly to a Cinna-core ACP connector or another ACP WebS
 ## Connect to Cinna-core
 
 1. In Cinna-core, create or open the agent's **ACP connector** and issue an ACP token. Copy its WebSocket endpoint, such as `wss://api.example.com/acp/{connector_id}`.
-2. In Desktop, open **Agents → + → Remote ACP Agent** in **Add an agent**.
+2. In Desktop, open **Agents → + → Advanced options → Remote ACP agent** in **Add an agent**.
 3. Paste the **ACP endpoint** and **Access token** separately. Keep **Remote working directory** at `/app/workspace` for Cinna-core. Other servers can use a different absolute server-side path.
 4. Press **Test**. Desktop opens a connection, sends `initialize`, displays the advertised name/version, then closes the connection. Testing creates no remote session and sends no prompt.
 5. Press **Add agent**, then send a message. Text, thought and tool updates stream into the conversation; ACP permission and form-question requests use the existing reply widgets. **Stop** sends `session/cancel`.

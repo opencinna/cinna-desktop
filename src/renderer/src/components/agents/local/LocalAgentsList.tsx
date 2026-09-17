@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { MessageSquare, Plus } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import { useAgentsHomeStore } from '../../../stores/agentsHome.store'
@@ -17,6 +18,9 @@ import { A2AAgentForm } from '../../settings/A2AAgentForm'
 import { serverLabel } from '../../../utils/agentNavigation'
 import { AgentTypeIcon } from '../AgentTypeIcon'
 import { useAuthStore } from '../../../stores/auth.store'
+import { CatalogBrowserModal } from '../CatalogBrowserModal'
+import { useCatalogInstall } from '../../../hooks/useCatalogInstall'
+import { landCatalogInstall } from '../../../stores/catalogInstall.store'
 
 function AgentChatShortcut({ agentId, name, available = true }: {
   agentId: string
@@ -148,6 +152,46 @@ export function LocalAgentsList(): React.JSX.Element {
   const [custom, setCustom] = useState<string | true | null>(null)
   const profile = useAuthStore((state) => state.currentUser)
   const profileId = profile?.id
+  const isCinna = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
+  const [catalogOpen, setCatalogOpen] = useState(false)
+  // A catalog opened under one account is not the next account's: close it on
+  // a profile switch (adjusting state during render, not in an effect).
+  const [catalogProfileId, setCatalogProfileId] = useState(profileId)
+  if (catalogProfileId !== profileId) {
+    setCatalogProfileId(profileId)
+    setCatalogOpen(false)
+  }
+  const queryClient = useQueryClient()
+  const openExternalAgent = useCallback(
+    (agentId: string): void => {
+      setAgentPageMode('chat')
+      setActiveExternalAgentId(agentId)
+      setActiveView('external-agent')
+    },
+    [setAgentPageMode, setActiveExternalAgentId, setActiveView]
+  )
+  /**
+   * The catalog install runs in a store, not in the catalog dialog or in this
+   * list: the user may close the dialog, or switch sidebar tabs (which
+   * unmounts this list), mid-install, and the landing must still happen. The
+   * landing — open the agent, raise the setup dialog if its credentials are
+   * incomplete — touches only stores, so it runs either way; closing the
+   * dialog is this list's own state and only matters while it is mounted.
+   */
+  const catalogInstall = useCatalogInstall({
+    onInstalled: () => setCatalogOpen(false),
+    onInstalledDetached: (agentId, result) => landCatalogInstall(queryClient, agentId, result)
+  })
+  const { clearError: clearCatalogError } = catalogInstall
+  /** A stale install error belongs to the last visit, not the next one. */
+  const openCatalog = (): void => {
+    clearCatalogError()
+    setCatalogOpen(true)
+  }
+  const closeCatalog = (): void => {
+    setCatalogOpen(false)
+    clearCatalogError()
+  }
   const { data: agentData } = useAgents()
   const allAgents = agentData?.filter((agent) => agent.source !== 'remote' || agent.enabled !== false)
   const remoteAgents = profile?.type === 'cinna_user' ? (allAgents ?? []).filter((agent) => agent.source === 'remote') : []
@@ -198,7 +242,7 @@ export function LocalAgentsList(): React.JSX.Element {
       {showSections && <div className="px-2.5 pb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] truncate">{label}</div>}
       {agents.map((agent) => <ExternalAgentRow key={agent.id} agent={agent}
         active={activeView === 'external-agent' && activeExternalAgentId === agent.id}
-        onClick={() => { setAgentPageMode('chat'); setActiveExternalAgentId(agent.id); setActiveView('external-agent') }}
+        onClick={() => openExternalAgent(agent.id)}
       />)}
     </div>
   )
@@ -271,10 +315,22 @@ export function LocalAgentsList(): React.JSX.Element {
         {managedAgents.length > 0 && renderExternalGroup('Managed', managedAgents)}
       </div>
 
-      {creating && <NewLocalAgentModal onClose={() => setCreating(false)} onA2A={() => { setCreating(false); setAddingA2A(true) }} onManaged={() => { setCreating(false); setManaged(true) }} onCustom={() => { setCreating(false); setCustom(true) }} onRemoteAcp={() => { setCreating(false); setRemoteAcp(true) }} onCreateFolder={() => {
+      {creating && <NewLocalAgentModal onClose={() => setCreating(false)} onCatalog={isCinna ? () => { setCreating(false); openCatalog() } : undefined} onA2A={() => { setCreating(false); setAddingA2A(true) }} onManaged={() => { setCreating(false); setManaged(true) }} onCustom={() => { setCreating(false); setCustom(true) }} onRemoteAcp={() => { setCreating(false); setRemoteAcp(true) }} onCreateFolder={() => {
         if (homeAccess && homeAccess !== 'ready') { setCreating(false); useAgentsHomeStore.getState().reopen(homeAccess); return false }
         return true
       }} />}
+      {catalogOpen && isCinna && (
+        <CatalogBrowserModal
+          onClose={closeCatalog}
+          installingBundleId={catalogInstall.installingBundleId}
+          installError={catalogInstall.error}
+          onInstall={catalogInstall.install}
+          onOpen={(agentId) => {
+            closeCatalog()
+            openExternalAgent(agentId)
+          }}
+        />
+      )}
       {addingA2A && <A2AAgentForm key={profileId} onClose={() => setAddingA2A(false)} />}
       {remoteAcp && <CustomAgentModal remote onClose={() => setRemoteAcp(false)} />}
       {custom !== null && <CustomAgentModal key={`${profileId}:${custom}`} agentId={typeof custom === 'string' ? custom : undefined} onClose={() => setCustom(null)} />}

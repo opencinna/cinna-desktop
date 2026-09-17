@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRootDto, LocalAgentDto } from '../../../../../shared/localAgents'
@@ -28,19 +28,24 @@ let showAgentSidebarSections = true
 vi.mock('../../../hooks/useAppSettings', () => ({ useAppSettings: () => ({ data: { showAgentSidebarSections } }) }))
 const setActiveExternalAgentId = vi.fn()
 vi.mock('../../../hooks/useAgents', () => ({ useAgents: () => ({ data: externalAgents }) }))
-vi.mock('../../../stores/ui.store', () => ({
-  useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({
-      activeLocalAgentId: null,
-      activeView: 'local-agent',
-      setActiveLocalAgentId,
-      setActiveExternalAgentId,
-      setAgentPageMode,
-      setActiveView,
-      setPendingAgentId,
-      setSidebarTab
-    })
-}))
+vi.mock('../../../stores/ui.store', () => {
+  const state = (): Record<string, unknown> => ({
+    activeLocalAgentId: null,
+    activeView: 'local-agent',
+    setActiveLocalAgentId,
+    setActiveExternalAgentId,
+    setAgentPageMode,
+    setActiveView,
+    setPendingAgentId,
+    setSidebarTab
+  })
+  // `getState` too: the catalog install lands through the store, not a hook.
+  const useUIStore = Object.assign(
+    (selector: (s: Record<string, unknown>) => unknown) => selector(state()),
+    { getState: state }
+  )
+  return { useUIStore }
+})
 
 const ROOT: AgentRootDto = {
   id: 'root-1',
@@ -80,9 +85,29 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
   useRaiseAgentsHomeQuestion: () => undefined
 }))
 vi.mock('../../../hooks/useProviders', () => ({ useProviders: () => ({ data: [] }) }))
-vi.mock('./NewLocalAgentModal', () => ({ NewLocalAgentModal: () => null }))
+let newAgentProps: { onCatalog?: () => void } | null = null
+vi.mock('./NewLocalAgentModal', () => ({
+  NewLocalAgentModal: (props: { onCatalog?: () => void }) => {
+    newAgentProps = props
+    return null
+  }
+}))
+let catalogProps: {
+  onClose: () => void
+  onInstall: (bundleId: string) => void
+  onOpen: (agentId: string) => void
+  installingBundleId: string | null
+  installError: { bundleId: string; message: string } | null
+} | null = null
+vi.mock('../CatalogBrowserModal', () => ({
+  CatalogBrowserModal: (props: NonNullable<typeof catalogProps>) => {
+    catalogProps = props
+    return createElement('div', { role: 'dialog', 'aria-label': 'Agent catalog' })
+  }
+}))
 
 const { useAuthStore } = await import('../../../stores/auth.store')
+const { useCatalogInstallStore } = await import('../../../stores/catalogInstall.store')
 const { LocalAgentsList } = await import('./LocalAgentsList')
 
 function renderList(): ReturnType<typeof render> {
@@ -182,5 +207,136 @@ describe('LocalAgentsList — the row’s chat button', () => {
     renderList()
     expect(screen.getByRole('button', { name: /^Alpha/ })).toBeTruthy()
     expect(screen.queryByRole('button', { name: CHAT })).toBeNull()
+  })
+})
+
+describe('LocalAgentsList — Install from catalog', () => {
+  const CINNA = { id: 'p1', type: 'cinna_user', username: 'u', displayName: 'U', hasPassword: false }
+  let setupStatus: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    AGENTS = [AGENT]
+    externalAgents = []
+    newAgentProps = null
+    catalogProps = null
+    useCatalogInstallStore.setState({ installingBundleId: null, error: null, pendingSetup: null })
+    setupStatus = vi.fn().mockResolvedValue({ status: 'ready', missing: [], setupUrl: null })
+    window.api = {
+      catalog: {
+        quickInstall: vi.fn().mockResolvedValue({
+          success: true,
+          value: { installId: 'inst-1', bundleId: 'b', agentName: 'Invoices' }
+        }),
+        setupStatus
+      },
+      agents: {
+        syncRemote: vi.fn().mockResolvedValue({ success: true }),
+        list: vi.fn().mockResolvedValue([{ id: 'remote:inv', remoteTargetId: 'inst-1' }])
+      },
+      logger: { log: vi.fn().mockResolvedValue(undefined) }
+    } as never
+  })
+
+  it('offers the catalog only to a Cinna account', () => {
+    useAuthStore.setState({ currentUser: null })
+    renderList()
+    fireEvent.click(screen.getByRole('button', { name: 'Add an agent' }))
+    expect(newAgentProps?.onCatalog).toBeUndefined()
+  })
+
+  it('lands on the installed agent, closing the catalog, with no setup when ready', async () => {
+    useAuthStore.setState({ currentUser: CINNA as never })
+    renderList()
+    fireEvent.click(screen.getByRole('button', { name: 'Add an agent' }))
+    act(() => newAgentProps!.onCatalog!())
+    expect(screen.getByRole('dialog', { name: 'Agent catalog' })).toBeTruthy()
+
+    act(() => catalogProps!.onInstall('b'))
+    await waitFor(() => expect(setActiveExternalAgentId).toHaveBeenCalledWith('remote:inv'))
+    expect(setActiveView).toHaveBeenCalledWith('external-agent')
+    expect(setAgentPageMode).toHaveBeenCalledWith('chat')
+    expect(screen.queryByRole('dialog', { name: 'Agent catalog' })).toBeNull()
+    await waitFor(() => expect(setupStatus).toHaveBeenCalledWith('inst-1'))
+    await act(async () => {})
+    expect(useCatalogInstallStore.getState().pendingSetup).toBeNull()
+  })
+
+  it('raises setup over the agent when its credentials are incomplete, or unknown', async () => {
+    setupStatus.mockRejectedValue(new Error('offline'))
+    useAuthStore.setState({ currentUser: CINNA as never })
+    renderList()
+    fireEvent.click(screen.getByRole('button', { name: 'Add an agent' }))
+    act(() => newAgentProps!.onCatalog!())
+    act(() => catalogProps!.onInstall('b'))
+    await waitFor(() =>
+      expect(useCatalogInstallStore.getState().pendingSetup).toEqual({
+        installId: 'inst-1',
+        agentName: 'Invoices',
+        profileId: 'p1'
+      })
+    )
+    expect(setActiveExternalAgentId).toHaveBeenCalledWith('remote:inv')
+  })
+
+  it('still lands on the agent when the list was unmounted mid-install (a sidebar tab switch)', async () => {
+    let finish!: (value: unknown) => void
+    ;(window.api.catalog.quickInstall as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise((resolve) => (finish = resolve))
+    )
+    setupStatus.mockResolvedValue({ status: 'needs_setup', missing: [], setupUrl: null })
+    useAuthStore.setState({ currentUser: CINNA as never })
+    const view = renderList()
+    fireEvent.click(screen.getByRole('button', { name: 'Add an agent' }))
+    act(() => newAgentProps!.onCatalog!())
+    act(() => catalogProps!.onInstall('b'))
+    view.unmount()
+    await act(async () => finish({ success: true, value: { installId: 'inst-1', bundleId: 'b', agentName: 'Invoices' } }))
+
+    await waitFor(() => expect(setActiveExternalAgentId).toHaveBeenCalledWith('remote:inv'))
+    expect(setActiveView).toHaveBeenCalledWith('external-agent')
+    expect(setAgentPageMode).toHaveBeenCalledWith('chat')
+    await waitFor(() =>
+      expect(useCatalogInstallStore.getState().pendingSetup?.installId).toBe('inst-1')
+    )
+  })
+
+  it('clears a stale install error when the catalog opens, and when it closes', () => {
+    useAuthStore.setState({ currentUser: CINNA as never })
+    useCatalogInstallStore.setState({ error: { bundleId: 'b', message: 'Quota reached.' } })
+    renderList()
+    fireEvent.click(screen.getByRole('button', { name: 'Add an agent' }))
+    act(() => newAgentProps!.onCatalog!())
+    expect(catalogProps!.installError).toBeNull()
+
+    act(() => useCatalogInstallStore.setState({ error: { bundleId: 'b', message: 'Again.' } }))
+    expect(catalogProps!.installError?.message).toBe('Again.')
+    act(() => catalogProps!.onClose())
+    expect(screen.queryByRole('dialog', { name: 'Agent catalog' })).toBeNull()
+    expect(useCatalogInstallStore.getState().error).toBeNull()
+  })
+
+  it('closes the catalog when the profile changes', () => {
+    useAuthStore.setState({ currentUser: CINNA as never })
+    renderList()
+    fireEvent.click(screen.getByRole('button', { name: 'Add an agent' }))
+    act(() => newAgentProps!.onCatalog!())
+    expect(screen.getByRole('dialog', { name: 'Agent catalog' })).toBeTruthy()
+    act(() => useAuthStore.setState({ currentUser: { ...CINNA, id: 'p2' } as never }))
+    expect(screen.queryByRole('dialog', { name: 'Agent catalog' })).toBeNull()
+    // And it stays closed on the way back.
+    act(() => useAuthStore.setState({ currentUser: CINNA as never }))
+    expect(screen.queryByRole('dialog', { name: 'Agent catalog' })).toBeNull()
+  })
+
+  it('opens an installed agent from the catalog', () => {
+    useAuthStore.setState({ currentUser: CINNA as never })
+    renderList()
+    fireEvent.click(screen.getByRole('button', { name: 'Add an agent' }))
+    act(() => newAgentProps!.onCatalog!())
+    act(() => catalogProps!.onOpen('remote:other'))
+    expect(setActiveExternalAgentId).toHaveBeenCalledWith('remote:other')
+    expect(setActiveView).toHaveBeenCalledWith('external-agent')
+    expect(screen.queryByRole('dialog', { name: 'Agent catalog' })).toBeNull()
   })
 })

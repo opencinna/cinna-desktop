@@ -48,13 +48,13 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 ### Before there is anywhere to put a folder agent
 
 1. Opening Agents reports **Your agents need a folder** with **Set one up** or **Pick another folder** when needed; opening the tab alone does not raise the consent modal
-2. **+** still opens **Add an agent**. External connections and adopting an existing folder do not require the default agents home. Only choosing **New agent** asks to prepare the home when it is unavailable
+2. **+** still opens **Add an agent**. Installing from the catalog, external connections and adopting an existing folder (under **Advanced options**) do not require the default agents home. Only choosing **New agent** asks to prepare the home when it is unavailable
 3. Any registered root makes the folder list usable; the unresolved default home remains manageable in application Settings
 4. See [The Agents Folder Question](home_access.md) for the consent and recovery flow
 
 ### Creating an agent
 
-1. **+** — "Add an agent" — offers folder choices alongside **A2A agent**, **Remote ACP agent**, **Command-line agent** and **Managed (Claude)**: **New agent** (scaffold a folder) and **Add a folder** (adopt one that already is an agent). The fork is at the front because the two have nothing in common: one *writes* a kit folder into the agents home and hands it to an assistant to build, the other *reads* a folder the user already owns and changes nothing in it. An "or point at an existing folder" link under a name field would have made the second look like an option on the first
+1. **+** — "Add an agent" — offers the two ways most people get an agent: **Install from catalog** (Cinna accounts only; see [Installing from the catalog](#installing-from-the-catalog)) and **New agent** (scaffold a folder), as two same-size tiles side by side; New agent takes the whole row when there is no catalog to offer. Below them an **Advanced options** link opens a second step, a two-column grid of tiles: **Add a folder** (adopt one that already is an agent — its sub-line reads "A project folder with agent instructions. Nothing in it changes."), **A2A agent**, **Remote ACP agent**, **Command-line agent** and **Managed (Claude)**. The advanced step has a Back arrow to the first. New agent and Add a folder stay on separate steps, not one form with an option, because they have nothing in common: one *writes* a kit folder into the agents home and hands it to an assistant to build, the other *reads* a folder the user already owns and changes nothing in it. An "or point at an existing folder" link under a name field would have made the second look like an option on the first
 2. **New agent** is the form that already existed. It asks for one thing: a **name**. Enter creates
 3. The folder name (slug) is derived from the name and shown as a real path preview (`<root>/Local/<slug>`) under the field. It is a directory an assistant will `cd` into and a Cinna instance will import by, so it is shown before anything is written
 4. **More options** holds the choices almost nobody makes at creation time: a description (**optional** — "What should it do?"), the folder name (editable), and which agents folder to scaffold into (only when there is more than one root). The agent is about to be built in Claude Code or Codex or OpenCode, and *that* is where its description usually gets written
@@ -64,11 +64,19 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 
 ### Adding a folder that is already an agent
 
-1. **Add a folder** opens the OS directory picker in main and previews what is in it. Nothing is registered and nothing is written; a refusal keeps the dialog on the choice step and says why
+1. **+ → Advanced options → Add a folder** opens the OS directory picker in main and previews what is in it. Nothing is registered and nothing is written; a refusal keeps the dialog on the advanced step and says why, in place of that tile's sub-line. The folder step's **Back** returns to the advanced step, where the user came from
 2. One agent folder found means the picked folder *is* the agent: one **Name** field, prefilled from its heading, and Enter is a complete answer
 3. Several means a repository of them: a scrolling checkbox list with **Select all** / **Clear all**, rows already added under another root ticked and disabled, and names as the app shows them — the user's own where they have renamed the agent, else the folder's `AGENT.md` heading
 4. **Add** registers the whole picked folder as an external root, then **lands the user on the agent they just added** (the first, where there are several) rather than closing to the empty pane — adopting is a create, and rule 3 applies to it. There is no "Build it with…" step: nothing was scaffolded, so there is nothing to hand to an assistant. See [Bare Agents & External Roots](bare_agents.md)
 5. Picking a folder that is **already registered** is not a refusal but a **re-selection**: the same list, opened on the state the app is in, where unticking an agent takes it out of the list and ticking one puts it back. It is the only surface that lists a repository's agents one by one, so it is the only place a sixteenth can be added after fifteen were. Anything leaving the list is confirmed first, by name, in a step inside the dialog
+
+### Installing from the catalog
+
+1. On a Cinna account, **+ → Install from catalog** closes Add an agent and opens **Agent catalog**: a search field over a grid of tiles, one per bundle published to the account, each with its name, version, publisher, description, install count and an **Install** button (or **Installed** and **Open** once it is installed and synced). An icon-only refresh ("Refresh catalog", spinning while it fetches) beside the close button re-fetches the catalog and syncs remote agents. When the catalog cannot load, a banner says so with **Retry** — or, when the Cinna session has expired, **Re-authenticate**
+2. Clicking a tile's body opens its detail over the grid: description, publisher and email, publish date, install count, bundle id, and the same credential preview as Settings → Profile → Catalog. A Back arrow returns to the grid with its search and scroll intact
+3. **Install** spins on that tile and disables every other Install, in this dialog and in the chat `[+]` picker alike. The user may close the dialog, or switch to another sidebar tab, while it runs
+4. When the install has synced, the dialog closes (if still open) and the user lands on the new agent's page in chat mode. If its credentials are incomplete — or the check fails — the setup dialog from Settings → Catalog opens over it, deep-linking each missing credential to the Cinna web pages. See [Bundles Catalog](../bundles_catalog/bundles_catalog.md)
+5. A failed install shows its message at the bottom of that bundle's tile (and under the detail header) and closes nothing; the next install attempt, or reopening the dialog, clears it
 
 ### Opening the folder in a tool
 
@@ -208,6 +216,32 @@ A chat message owns its region; a `README.md` or an `AGENT.md` is drawn inside a
 **And the click must not resize the card under the pointer.** Rendered markdown and raw source are different heights, so `InlineFileEditor` measures the view it is about to replace and hands the textarea that height as a floor. The mismatch was invisible while every card's two views were the same monospace text and became a visible jerk the moment `AGENT.md` began rendering ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 1). A file whose source genuinely needs more lines than its rendered form still grows — the one direction that cannot be closed without hiding text from the person editing it.
 
 **A card that says a file is missing says it in that folder's own terms.** `PromptDocCard`'s default note tells the user to run the agent's scaffold again, which is right for a kit prompt and nonsense for an adopted folder — nothing scaffolded it, so that is an instruction its owner cannot follow (rule 7). A missing instructions file is reported, with the three names it could have, as the file that makes the folder an agent, to be added there. Its card header then names no file and offers no reveal, because any one name there would assert a file the folder does not have.
+
+### The add dialog leads with the two common paths
+
+Add an agent used to list seven equal cards: New agent, Add a folder, then every connection kind. The two paths most people want — take a published agent, or start a new one — were no easier to find than a WebSocket ACP endpoint. They now come first, and the rest sit one click further on **Advanced options**.
+
+- **Install from catalog is offered only to a Cinna account.** It hands off to the catalog dialog and does nothing itself; without a Cinna server there is no catalog to show, so the card is absent rather than disabled
+- **The dialog is anchored near the top of the window, not centred.** A step change or a refusal then grows it downwards only, and nothing above the pointer moves ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 1). The advanced step replaces the large icon header with a single Back / title / close row so the grid, with a refusal in it, fits an 800×600 window
+- **Every tile is the same size, on both steps.** Each has a title and a sub-line held at exactly two lines — clamped when longer, padded when shorter — so a short description cannot make one tile smaller than its neighbour and the two paths on the first step read as equal choices rather than a primary and an afterthought. A refusal on the Add a folder tile replaces its sub-line (below)
+- **The first step has no error line.** Nothing on it can fail; a refused folder is reported on the advanced step where it was picked, in place of the Add a folder tile's sub-line — not below the grid, where a short window would put it off-screen
+
+### A control that appears under the pointer ignores the click that revealed it
+
+A view change puts new controls where the pointer already is, and the second press of a double-click then lands on one: a double-click on **Advanced options** opened the folder picker, and a double-click on a catalog tile would have started an install from its detail. So the advanced step's tiles, and the catalog detail's **Install** / **Open**, ignore a pointer click for 300 ms after their view appears (`useSettleGuard`).
+
+- **Only pointer clicks are ignored.** Enter or Space on a focused control is a deliberate choice and always goes through; the advanced step focuses Add a folder, so a keyboard user loses nothing
+- **The view the dialog opens on counts as settled**, so the first step and the catalog grid respond immediately
+- **E2E must wait for it.** The advanced grid exposes `data-settled`; a Playwright click before it flips to `true` is dropped without a trace. See [Writing E2E Tests](../../development/e2e/e2e_llm.md)
+
+### A catalog install outlives the surface that started it
+
+The install runs in an app-wide store (`catalogInstall.store.ts`), not in the catalog dialog or the sidebar list. The Agents sidebar list is unmounted when the user switches sidebar tabs, and an install that lived in it would have finished with nowhere to land. So:
+
+- **One install at a time, app-wide.** The sidebar catalog and the chat `[+]` picker share the guard and the spinner; a second Install anywhere is ignored until the first ends. The guard is a module-level flag, not store state, because two clicks in the same tick both read the old state
+- **The landing touches only stores and the query cache** — open the agent page, then raise the setup dialog, which is rendered once at the app root (`CatalogSetupHost`) for the same reason. Closing the catalog dialog is the list's own state and happens only if the list is still mounted
+- **A profile switch drops the result.** An install that finishes under a different profile than it started under does nothing — its agent belongs to the other account. The setup dialog records the profile it was raised for and hides under any other; a profile switch also closes an open catalog dialog
+- **An install is not finished until the sync has run.** The store awaits `agents.syncRemote()` and reads the agent list back; a sync failure is reported on the tile as "Installed, but…" (with a re-authenticate hint when the session expired), not as a failure: the bundle *is* installed on the server and appears once a later sync succeeds. An install that synced but whose agent is not yet in the list says the same — "it will appear in your agents after the next sync"
 
 ### A description is optional, and the name stands in
 
@@ -383,7 +417,11 @@ Sidebar tab strip ── Agents ──► LocalAgentsList ──► LocalAgentPa
                                      │                            Folder   ─ FolderTab (validation, identity,
                                      │                                       credentials, files, published, runs)
                                      │
-NewLocalAgentModal ── name ─► local-agent:create ─► "Build it with…" ─► local-tools:open-in (+ default tool)
+NewLocalAgentModal ─┬─ New agent ── name ─► local-agent:create ─► "Build it with…" ─► local-tools:open-in (+ default tool)
+                    ├─ Install from catalog ─► CatalogBrowserModal ─► catalogInstall.store
+                    │        (quickInstall → awaited syncRemote → agents list) ─► agent page
+                    │        └─ setup incomplete ─► CatalogSetupHost (App root) ─► CatalogSetupModal
+                    └─ Advanced options ─► Add a folder │ A2A │ Remote ACP │ Command-line │ Managed
                                      │
 Settings ── Agents ──► LocalAgentsSettingsSection (roots, readiness, tools, default tool, auto-open)
 
@@ -415,6 +453,7 @@ Settings ── Agents ──► LocalAgentsSettingsSection (roots, readiness, t
 - [Agents Home, Scanner & Folder Index](folder_index.md) — everything this surface renders: the roots, the scan, readiness, the identity rules, the turn lock and the stamp guard
 - [The Agents Folder Question](home_access.md) — what the sidebar, the `+`, the empty pane and the Settings row say while there is no agents folder, and the modal that asks about it
 - [Bare Agents & External Roots](bare_agents.md) — the Add-a-folder half of the + dialog, and every difference on the page of an agent adopted that way
+- [Bundles Catalog](../bundles_catalog/bundles_catalog.md) — the catalog, quick install and setup dialog behind **Install from catalog**; the install store is shared with its [inline install](../bundles_catalog/inline_install.md) in the chat picker
 - [Agents Folder Updates](folder_updates.md) — the update line under a settings root that is a git working tree
 - [Kit Contract & Manifest Layer](kit_contract.md) — the manifest schema and validator behind every card, and the templates the scaffold and the draft's "untouched?" check read
 - [Open in… (Local Agent Tools)](open_in_tools.md) — the Open-in split button on the agent page, the "Build it with…" step of the New-agent flow, the default tool they both write, and the Developer Tools section in Settings

@@ -32,7 +32,12 @@ interface CatalogCardCredentialsProps {
   entry: CatalogEntryDto
   /** Gates the lazy install-context fetch; pass false for installed bundles. */
   enabled: boolean
+  /** One step down the type scale (12px → 11px), for the catalog dialog's detail. */
+  compact?: boolean
 }
+
+/** The component's body text size. */
+type TextSize = 'text-[12px]' | 'text-[11px]'
 
 const PROVIDED_BY_LABEL: Record<string, string> = {
   user: 'You provide',
@@ -116,24 +121,26 @@ function AICredentialsSection({
   aiProvidedByPublisher,
   conversation,
   building,
-  isFetching
+  isFetching,
+  text
 }: {
   aiProvidedByPublisher: boolean
   conversation: InstallContextPublisherSummaryDto | null
   building: InstallContextPublisherSummaryDto | null
   isFetching: boolean
+  text: TextSize
 }): React.JSX.Element {
   if (aiProvidedByPublisher) {
     return (
       <>
         {conversation && (
-          <AIPublisherRow role="Conversation" icon={MessageCircle} summary={conversation} />
+          <AIPublisherRow role="Conversation" icon={MessageCircle} summary={conversation} text={text} />
         )}
         {building && (
-          <AIPublisherRow role="Building" icon={Wrench} summary={building} />
+          <AIPublisherRow role="Building" icon={Wrench} summary={building} text={text} />
         )}
         {!conversation && !building && (
-          <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)]">
+          <div className={`flex items-center gap-2 ${text} text-[var(--color-text-secondary)]`}>
             <CheckCircle2 size={11} className="text-[var(--color-success)] shrink-0" />
             <span>AI credentials</span>
             <span className="ml-auto">
@@ -145,7 +152,7 @@ function AICredentialsSection({
     )
   }
   return (
-    <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)]">
+    <div className={`flex items-center gap-2 ${text} text-[var(--color-text-secondary)]`}>
       {isFetching ? (
         <Loader2 size={11} className="animate-spin text-[var(--color-text-muted)] shrink-0" />
       ) : (
@@ -165,14 +172,16 @@ function AICredentialsSection({
 function AIPublisherRow({
   role,
   icon: Icon,
-  summary
+  summary,
+  text
 }: {
   role: 'Conversation' | 'Building'
   icon: typeof MessageCircle
   summary: InstallContextPublisherSummaryDto
+  text: TextSize
 }): React.JSX.Element {
   return (
-    <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)]">
+    <div className={`flex items-center gap-2 ${text} text-[var(--color-text-secondary)]`}>
       <CheckCircle2 size={11} className="text-[var(--color-success)] shrink-0" />
       <Icon size={11} className="text-[var(--color-text-muted)] shrink-0" />
       <span className="text-[var(--color-text-muted)]">{role}:</span>
@@ -187,8 +196,10 @@ function AIPublisherRow({
 
 export function CatalogCardCredentials({
   entry,
-  enabled
+  enabled,
+  compact = false
 }: CatalogCardCredentialsProps): React.JSX.Element | null {
+  const text: TextSize = compact ? 'text-[11px]' : 'text-[12px]'
   const installContext = useInstallContext(entry.bundleId, enabled)
   const ctxBySpec = useMemo(
     () =>
@@ -230,7 +241,7 @@ export function CatalogCardCredentials({
 
       {entry.requiredCredentialSpecs.length > 0 && (
         <div>
-          <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-muted)] mb-1">
+          <label className={`flex items-center gap-1.5 ${text} text-[var(--color-text-muted)] mb-1`}>
             Required credentials ({entry.requiredCredentialSpecs.length})
             {installContext.isFetching && (
               <Loader2
@@ -246,7 +257,7 @@ export function CatalogCardCredentials({
               return (
                 <div
                   key={s.name}
-                  className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)]"
+                  className={`flex items-center gap-2 ${text} text-[var(--color-text-secondary)]`}
                 >
                   <CredentialIcon
                     spec={s}
@@ -274,7 +285,7 @@ export function CatalogCardCredentials({
        */}
       {installContext.data && (
         <div>
-          <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-muted)] mb-1">
+          <label className={`flex items-center gap-1.5 ${text} text-[var(--color-text-muted)] mb-1`}>
             AI credentials
           </label>
           <div className="space-y-0.5">
@@ -283,6 +294,7 @@ export function CatalogCardCredentials({
               conversation={installContext.data.aiPublisherSummaries.conversation}
               building={installContext.data.aiPublisherSummaries.building}
               isFetching={installContext.isFetching}
+              text={text}
             />
           </div>
         </div>

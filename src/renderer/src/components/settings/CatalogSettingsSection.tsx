@@ -22,6 +22,7 @@ import { useAuthStore } from '../../stores/auth.store'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { useQueryClient } from '@tanstack/react-query'
 import { CatalogCard } from './CatalogCard'
+import { unwrapIpcError } from '../../utils/ipcError'
 import { CatalogSetupModal } from './CatalogSetupModal'
 
 interface ActiveSetup {
@@ -110,7 +111,8 @@ export function CatalogSettingsSection(): React.JSX.Element {
           text: `Cinna session expired — re-authenticate to install ${displayName}.`
         })
       } else {
-        const msg = err instanceof Error ? err.message : String(err)
+        // Uncoded failures still arrive as a thrown IPC error; strip its prefix.
+        const msg = unwrapIpcError(err, 'unknown error')
         setToast({ kind: 'err', text: `Install failed: ${msg.slice(0, 160)}` })
       }
     } finally {

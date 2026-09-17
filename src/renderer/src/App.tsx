@@ -8,6 +8,7 @@ import { MainArea } from './components/layout/MainArea'
 import { LoginScreen } from './components/auth/LoginScreen'
 import { OnboardingScreen } from './components/auth/OnboardingScreen'
 import { ReauthModal } from './components/auth/ReauthModal'
+import { CatalogSetupHost } from './components/agents/CatalogSetupHost'
 import { ConnectIntentModal } from './components/auth/ConnectIntentModal'
 import { LocalDevConsentModal } from './components/localdev/LocalDevConsentModal'
 import { AgentsHomeModal } from './components/agents/local/AgentsHomeModal'
@@ -216,6 +217,7 @@ function App(): React.JSX.Element {
         <LogsOverlay />
         <AgentStatusOverlay />
         <ReauthModal />
+        <CatalogSetupHost />
         <SyncSetupModal />
         <FilePreviewModal />
       </AuthGate>

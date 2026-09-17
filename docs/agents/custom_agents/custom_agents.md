@@ -16,7 +16,7 @@ Connect an ACP command to a conversation, including an agent reached through SSH
 
 ## User Stories / Flows
 
-1. Open **Agents**, press **+**, and choose **Command-line agent**.
+1. Open **Agents**, press **+**, choose **Advanced options**, then **Command-line agent**.
 2. Enter the executable and arguments as a JSON array, and the agent's **Working directory**. **More options** provides a display name and separate **Local process directory**.
 3. Press **Test**. Cinna starts the command, exchanges ACP initialize and closes the process. It shows the advertised agent name/version and authentication methods. It sends no session or chat message and performs no sign-in.
 4. If initialization succeeds, press **Add agent** to save and open a chat. An edit to command or directories requires a fresh Test. Failed Test or Save retains the dialog and its values.

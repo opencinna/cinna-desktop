@@ -122,3 +122,24 @@ export interface InstallContextDto {
     building: InstallContextPublisherSummaryDto | null
   }
 }
+
+/**
+ * What `catalog:list` and `catalog:quick-install` resolve with.
+ *
+ * A failure is returned, not thrown: a thrown error's `code` does not survive
+ * `ipcMain.handle` and `contextBridge` (see `src/main/ipc/_wrap.ts`), and the
+ * renderer needs `reauth_required` to offer re-authentication rather than a
+ * bare retry. `success: false` plus `code` is also the shape `_wrap` inspects to
+ * raise the app-wide session-expired prompt.
+ */
+export type CatalogOutcome<T> =
+  | { success: true; value: T }
+  | { success: false; code: string; message: string }
+
+/** Turn an outcome back into a value, or a thrown error carrying its `code`. */
+export function unwrapCatalogOutcome<T>(outcome: CatalogOutcome<T>): T {
+  if (outcome.success) return outcome.value
+  const error = new Error(outcome.message) as Error & { code: string }
+  error.code = outcome.code
+  throw error
+}

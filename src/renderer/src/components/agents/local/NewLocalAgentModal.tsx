@@ -5,11 +5,13 @@ import {
   Bot,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Code2,
   FolderInput,
   FolderOpen,
   Sparkles,
+  Store,
   TerminalSquare,
   Waypoints,
   X
@@ -31,9 +33,12 @@ import {
 } from '../../../../../shared/localAgents'
 import { actionForTool, type DetectedTool } from '../../../../../shared/localTools'
 import { unwrapIpcError } from '../../../utils/ipcError'
+import { isUnsettledClick, useSettleGuard } from '../../../hooks/useSettleGuard'
 
 interface NewLocalAgentModalProps {
   onClose: () => void
+  /** Opens the Agent Catalog. Passed only for Cinna accounts; the card shows only when set. */
+  onCatalog?: () => void
   onManaged?: () => void
   onA2A?: () => void
   onRemoteAcp?: () => void
@@ -46,6 +51,14 @@ const INPUT =
   'border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none ' +
   'placeholder:text-[var(--color-text-muted)]'
 const LABEL = 'block text-xs font-medium text-[var(--color-text)]'
+const BACK =
+  'px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-text-secondary)] ' +
+  'hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50'
+const TILE =
+  'flex h-full w-full flex-col overflow-hidden rounded-lg border border-[var(--color-border)] text-xs'
+const TILE_BUTTON =
+  'flex w-full flex-1 flex-col items-start gap-1.5 p-3 text-left ' +
+  'transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-40'
 const CHOICE =
   'flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-xs ' +
   'transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-40'
@@ -53,13 +66,20 @@ const CHOICE =
 /** Dialog `aria-label` and heading per step. Tests and E2E find it by this. */
 const DIALOG_LABEL: Record<Step['kind'], string> = {
   choose: 'Add an agent',
+  advanced: 'Advanced options',
   name: 'New agent',
   folder: 'Add a folder',
   tool: 'Build it with'
 }
 
 /**
- * `choose` → (`name` | `folder`) → `tool`.
+ * `choose` → (`name` → `tool`) | `advanced`, and `advanced` → `folder` → `tool`.
+ *
+ * `choose` offers the two paths most people want — Install from catalog (Cinna
+ * accounts only; it hands off to the catalog modal) and New agent. Everything
+ * else — adding an existing folder, A2A, remote ACP, command-line and Managed
+ * agents — sits one click further, on `advanced`, as a grid of tiles. The
+ * folder step's Back returns to `advanced`, which is where the user came from.
  *
  * The fork at the front exists because the two ways to get an agent have
  * nothing in common: one **writes** a kit folder into the agents home and hands
@@ -70,6 +90,7 @@ const DIALOG_LABEL: Record<Step['kind'], string> = {
  */
 type Step =
   | { kind: 'choose' }
+  | { kind: 'advanced' }
   | { kind: 'name' }
   | { kind: 'folder'; pick: PickedFolder }
   | { kind: 'tool'; agent: LocalAgentDto }
@@ -107,7 +128,15 @@ interface PickedFolder {
  * and "open automatically" on, the second step is skipped entirely: one name,
  * one Enter, and the assistant is running in the new folder.
  */
-export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, onA2A, onCreateFolder }: NewLocalAgentModalProps): React.JSX.Element {
+export function NewLocalAgentModal({
+  onClose,
+  onCatalog,
+  onManaged,
+  onCustom,
+  onRemoteAcp,
+  onA2A,
+  onCreateFolder
+}: NewLocalAgentModalProps): React.JSX.Element {
   const { data: roots } = useAgentRoots()
   const createAgent = useCreateLocalAgent()
   const openIn = useOpenIn()
@@ -139,6 +168,8 @@ export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, 
   // turns auto-open off.
   const [rememberAuto, setRememberAuto] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // The advanced tiles open under the pointer that clicked "Advanced options".
+  const settled = useSettleGuard(step.kind)
 
   // `slugOverride` holds what the user is typing, not the finished slug:
   // normalising on every keystroke makes a hyphen impossible to type, since
@@ -209,7 +240,7 @@ export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, 
    * Open the OS picker, then show what was found.
    *
    * A refusal — no `AGENT.md` anywhere, everything already added, a folder that
-   * overlaps a registered root — keeps the dialog on the choice step and says
+   * overlaps a registered root — keeps the dialog on the advanced step and says
    * why, rather than closing (UX rule 6). Cancelling the picker is not a
    * refusal and says nothing at all.
    */
@@ -356,105 +387,165 @@ export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, 
     )
   }
 
+  const closeButton = (
+    <button
+      type="button"
+      onClick={onClose}
+      className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+      title={step.kind === 'tool' ? 'Close' : 'Cancel'}
+      aria-label={step.kind === 'tool' ? 'Close' : 'Cancel'}
+    >
+      <X size={14} />
+    </button>
+  )
+
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 px-4">
+    // Anchored to the top, not centred: a step change or an error then only
+    // grows the dialog downwards, and nothing above the pointer moves (UX rule 1).
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/25 px-4 pt-[8vh]">
       <div
         ref={cardRef}
         role="dialog"
         aria-label={DIALOG_LABEL[step.kind]}
-        className="w-full max-w-[30rem] max-h-[90vh] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg p-6"
+        className="w-full max-w-[30rem] max-h-[84vh] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg p-6"
       >
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-            title={step.kind === 'tool' ? 'Close' : 'Cancel'}
-            aria-label={step.kind === 'tool' ? 'Close' : 'Cancel'}
-          >
-            <X size={14} />
-          </button>
-        </div>
-
-        <div className="text-center space-y-2 -mt-2">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[var(--color-accent)]/10">
-            <Bot size={28} className="text-[var(--color-accent)]" />
-          </div>
-          <div className="text-lg font-semibold text-[var(--color-text)]">
-            {step.kind === 'tool' ? `Build ${step.agent.name} with…` : DIALOG_LABEL[step.kind]}
-          </div>
-          {step.kind === 'tool' && (
-            <div className="text-[11px] text-[var(--color-text-muted)]">
-              The folder is ready. Open it in the tool you build agents with — your choice becomes
-              the default.
+        {step.kind === 'advanced' ? (
+          /* One compact row instead of the icon header: the tile grid has to fit
+             an 800x600 window with a refusal in it. */
+          <div className="-mt-1 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setError(null)
+                setStep({ kind: 'choose' })
+              }}
+              aria-label="Back"
+              title="Back"
+              className="-ml-1.5 p-1 rounded text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <div className="min-w-0 flex-1 truncate text-base font-semibold text-[var(--color-text)]">
+              {DIALOG_LABEL.advanced}
             </div>
-          )}
-          {step.kind === 'folder' && <PickedPath path={step.pick.path} />}
-        </div>
+            {closeButton}
+          </div>
+        ) : (
+          <>
+            <div className="flex justify-end">{closeButton}</div>
+
+            <div className="text-center space-y-2 -mt-2">
+              <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[var(--color-accent)]/10">
+                <Bot size={28} className="text-[var(--color-accent)]" />
+              </div>
+              <div className="text-lg font-semibold text-[var(--color-text)]">
+                {step.kind === 'tool' ? `Build ${step.agent.name} with…` : DIALOG_LABEL[step.kind]}
+              </div>
+              {step.kind === 'tool' && (
+                <div className="text-[11px] text-[var(--color-text-muted)]">
+                  The folder is ready. Open it in the tool you build agents with — your choice
+                  becomes the default.
+                </div>
+              )}
+              {step.kind === 'folder' && <PickedPath path={step.pick.path} />}
+            </div>
+          </>
+        )}
 
         {step.kind === 'choose' ? (
           <div className="mt-5 space-y-3">
-            <button
-              type="button"
-              autoFocus
-              onClick={() => {
-                if (onCreateFolder && !onCreateFolder()) return
-                setError(null)
-                setStep({ kind: 'name' })
-              }}
-              className={`${CHOICE} items-start border-[var(--color-border)]`}
-            >
-              <Sparkles size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
-              <span className="min-w-0">
-                <span className="block font-medium text-[var(--color-text)]">New agent</span>
-                <span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-                  Creates a folder in your agents folder, ready to build in Claude Code, Codex or
-                  your editor.
-                </span>
-              </span>
-            </button>
-            <button
-              type="button"
-              disabled={pickFolder.isPending}
-              onClick={handlePickFolder}
-              className={`${CHOICE} items-start border-[var(--color-border)]`}
-            >
-              <FolderInput size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
-              <span className="min-w-0">
-                <span className="block font-medium text-[var(--color-text)]">
-                  {pickFolder.isPending ? 'Choosing…' : 'Add a folder'}
-                </span>
-                <span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-                  Any project folder with an {bareInstructionsFileList()}, or a folder that
-                  holds several such projects. Adding it changes nothing inside it.
-                </span>
-              </span>
-            </button>
-            {onA2A && (
-              <button type="button" onClick={onA2A} className={`${CHOICE} items-start border-[var(--color-border)]`}>
-                <Waypoints size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
-                <span className="min-w-0">
-                  <span className="block font-medium text-[var(--color-text)]">A2A agent</span>
-                  <span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">Connect using an Agent Card URL.</span>
-                </span>
-              </button>
-            )}
-            {onRemoteAcp && <button type="button" onClick={onRemoteAcp} className={`${CHOICE} items-start border-[var(--color-border)]`}>
-              <Waypoints size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
-              <span className="min-w-0"><span className="block font-medium text-[var(--color-text)]">Remote ACP agent</span><span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">Connect to Cinna-core or another ACP server by WebSocket.</span></span>
-            </button>}
-            {onCustom && <button type="button" onClick={onCustom} className={`${CHOICE} items-start border-[var(--color-border)]`}>
-              <Bot size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
-              <span className="min-w-0"><span className="block font-medium text-[var(--color-text)]">Command-line agent</span><span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">Run an ACP agent locally or through SSH.</span></span>
-            </button>}
-            {onManaged && <button type="button" onClick={onManaged} className={`${CHOICE} items-start border-[var(--color-border)]`}>
-              <Bot size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
-              <span className="min-w-0"><span className="block font-medium text-[var(--color-text)]">Managed (Claude)</span><span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">Connect an agent and environment in your Claude workspace.</span></span>
-            </button>}
-            {/* Reserved: a refusal must not push the cards around (UX rule 1). */}
-            <div role="alert" className="min-h-8 text-[10px] text-[var(--color-danger)]">
-              {error}
+            {/* Side by side and the same size: two equal ways in. New agent
+                takes the full width when there is no catalog to offer. */}
+            <div className={`grid gap-2 ${onCatalog ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              {onCatalog && (
+                <Tile
+                  icon={Store}
+                  title="Install from catalog"
+                  sub="Browse agents published on your Cinna server."
+                  autoFocus
+                  settled
+                  onClick={onCatalog}
+                />
+              )}
+              <Tile
+                icon={Sparkles}
+                title="New agent"
+                sub="A new folder, ready to build in Claude Code, Codex or your editor."
+                autoFocus={!onCatalog}
+                settled
+                onClick={() => {
+                  if (onCreateFolder && !onCreateFolder()) return
+                  setError(null)
+                  setStep({ kind: 'name' })
+                }}
+              />
             </div>
+            {/* Nothing on this step can fail, so it has no error slot: a refused
+                folder is reported on the advanced step, where it was picked. */}
+            <button
+              type="button"
+              onClick={() => {
+                setError(null)
+                setStep({ kind: 'advanced' })
+              }}
+              className="flex items-center gap-1 text-[11px] font-medium text-[var(--color-accent)] transition-colors hover:text-[var(--color-accent-hover)]"
+            >
+              Advanced options
+              <ChevronRight size={12} />
+            </button>
+          </div>
+        ) : step.kind === 'advanced' ? (
+          // `data-settled`: E2E waits on it before clicking a tile, since a
+          // click that lands earlier is ignored on purpose.
+          <div data-settled={settled} className="mt-4 grid grid-cols-2 gap-2">
+            {/* A refusal replaces this tile's sub-line rather than landing
+                below the grid, where a short window would put it off-screen. */}
+            <Tile
+              icon={FolderInput}
+              title={pickFolder.isPending ? 'Choosing…' : 'Add a folder'}
+              sub="A project folder with agent instructions. Nothing in it changes."
+              error={error}
+              autoFocus
+              disabled={pickFolder.isPending}
+              settled={settled}
+              onClick={handlePickFolder}
+            />
+            {onA2A && (
+              <Tile
+                icon={Waypoints}
+                title="A2A agent"
+                sub="Connect using an Agent Card URL."
+                settled={settled}
+                onClick={onA2A}
+              />
+            )}
+            {onRemoteAcp && (
+              <Tile
+                icon={Waypoints}
+                title="Remote ACP agent"
+                sub="Connect to Cinna-core or another ACP server by WebSocket."
+                settled={settled}
+                onClick={onRemoteAcp}
+              />
+            )}
+            {onCustom && (
+              <Tile
+                icon={Bot}
+                title="Command-line agent"
+                sub="Run an ACP agent locally or through SSH."
+                settled={settled}
+                onClick={onCustom}
+              />
+            )}
+            {onManaged && (
+              <Tile
+                icon={Bot}
+                title="Managed (Claude)"
+                sub="Connect an agent and environment in your Claude workspace."
+                settled={settled}
+                onClick={onManaged}
+              />
+            )}
           </div>
         ) : step.kind === 'folder' ? (
           <FolderStep
@@ -467,7 +558,7 @@ export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, 
             isPending={addFolder.isPending}
             onBack={() => {
               setError(null)
-              setStep({ kind: 'choose' })
+              setStep({ kind: 'advanced' })
             }}
             onAdd={() => handleAddFolder(step.pick)}
           />
@@ -512,7 +603,7 @@ export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, 
                 type="button"
                 onClick={() => setMoreOpen((open) => !open)}
                 aria-expanded={moreOpen}
-                className="flex items-center gap-1 text-[11px] text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text)]"
+                className="flex items-center gap-1 text-[11px] font-medium text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text)]"
               >
                 {moreOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                 More options
@@ -968,8 +1059,7 @@ function FolderStep({
           type="button"
           onClick={() => (confirming ? setConfirming(false) : onBack())}
           disabled={isPending}
-          className="px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-text-muted)]
-            hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
+          className={BACK}
         >
           {confirming ? 'Back to the list' : 'Back'}
         </button>
@@ -1001,6 +1091,70 @@ function FolderStep({
         </button>
       </div>
     </form>
+  )
+}
+
+interface TileProps {
+  icon: typeof Bot
+  title: string
+  sub: string
+  onClick: () => void
+  /** Shown in place of `sub`, in the danger colour, when set. */
+  error?: string | null
+  disabled?: boolean
+  autoFocus?: boolean
+  /** False right after the step opened: a pointer click is then ignored. */
+  settled: boolean
+}
+
+/**
+ * One choice on the advanced step: icon on top, title, one sub-line. The
+ * accessible name starts with the title, which is how tests and E2E find it.
+ *
+ * An error takes the sub-line's place, outside the button so it is announced as
+ * an alert (a button's children are presentational) and so the title — the
+ * thing just clicked — does not move.
+ */
+function Tile({
+  icon: Icon,
+  title,
+  sub,
+  onClick,
+  error,
+  disabled,
+  autoFocus,
+  settled
+}: TileProps): React.JSX.Element {
+  return (
+    <div className={TILE}>
+      <button
+        type="button"
+        autoFocus={autoFocus}
+        disabled={disabled}
+        onClick={(event) => {
+          if (isUnsettledClick(settled, event)) return
+          onClick()
+        }}
+        className={`${TILE_BUTTON} ${error ? 'pb-0' : ''}`}
+      >
+        <Icon size={16} className="shrink-0 text-[var(--color-accent)]" />
+        <span className="block font-medium text-[var(--color-text)]">{title}</span>
+        {/* Always two lines tall, so every tile in a grid is the same size. */}
+        {!error && (
+          <span className="h-[2lh] line-clamp-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+            {sub}
+          </span>
+        )}
+      </button>
+      {error && (
+        <div
+          role="alert"
+          className="px-3 pt-1.5 pb-3 text-[11px] leading-relaxed text-[var(--color-danger)]"
+        >
+          {error}
+        </div>
+      )}
+    </div>
   )
 }
 

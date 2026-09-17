@@ -12,14 +12,14 @@ Let the final user install a catalog agent at the exact moment they want to use 
 |------|-----------|
 | **Catalog Section** | A group rendered at the bottom of the [Capability Picker](../../chat/composer_menu/composer_menu.md) (`AgentPickerModal`), below the user's own agents/MCP, listing not-yet-installed bundles |
 | **Catalog Install Card** | A card in the Catalog Section carrying an **Install** action (not a selection toggle). Spins while installing; disappears once installed |
-| **Inline Quick Install** | The picker's install flow: `catalog.quickInstall` → awaited `agents.syncRemote` → select the freshly-synced agent. The same server-side install as the settings catalog, minus the post-install setup gate |
+| **Inline Quick Install** | The picker's install flow: `catalog.quickInstall` → awaited `agents.syncRemote` → select the freshly-synced agent. The same server-side install as the settings catalog, minus the post-install setup gate. It runs in the app-wide install store it shares with the Agents sidebar's catalog dialog (see [Bundles Catalog](bundles_catalog.md#business-rules)) |
 
 ## User Stories / Flows
 
 ### Seamless install + select (happy path)
 1. User opens a new chat → `[+]` → **Add agents / MCP** (or `@`).
 2. Below their own agents/MCP they see a **Catalog** group of installable bundles.
-3. User clicks **Install** on a card. The card spins (overlay spinner + "Installing…"); every other Install button disables for the duration (one install at a time).
+3. User clicks **Install** on a card. The card spins (overlay spinner + "Installing…"); every other Install button disables for the duration (one install at a time — including an install already running from the Agents sidebar's catalog, which spins its card here too if it is listed).
 4. The bundle installs on cinna-server, the local `agents` table syncs, the card leaves the Catalog group, the agent reappears as a normal capability card — **already selected**.
 5. User starts the conversation with the agent immediately.
 
@@ -27,16 +27,19 @@ Let the final user install a catalog agent at the exact moment they want to use 
 - No special handling here, by design. If the install lands in `needs_setup` / `publisher_broken`, the agent is still selected; messaging it triggers the agent's own "setup not complete" auto-reply (see [Agents](../agents/agents.md)). The in-chat path stays a single click — the [`CatalogSetupModal`](bundles_catalog.md#quick-install-with-missing-credentials) is intentionally not shown here (it remains the Settings → Catalog path).
 
 ### Install failure (hard error)
-- Auth/network/server errors are caught and surfaced as an inline error row at the top of the Catalog Section (e.g. *"Cinna session expired — re-authenticate in Settings to install."*). The card stops spinning; nothing is selected. The error clears on the next install attempt.
+- Auth/network/server errors are caught and surfaced as an inline error row at the top of the Catalog Section, showing the server's message with the IPC wrapper stripped. The card stops spinning; nothing is selected. The error clears on the next install attempt. An expired Cinna session shows *"Cinna session expired — re-authenticate in Settings to install."*, and the app-wide re-auth modal opens as well. Both depend on `catalog:quick-install` **returning** its failure code rather than throwing it (see [Bundles Catalog](bundles_catalog.md#business-rules)); until 17 Sep 2026 it threw, the code was lost in transit, and the row showed the server's message instead.
+- An install the server accepted but the desktop could not add yet is reported the same way, not as a failure: *"Installed, but it could not be added to your agents yet: …"*, *"Installed, but your Cinna session expired before it could be added — re-authenticate and it will appear."*, or *"Installed — it will appear in your agents after the next sync."* Nothing is selected in any of them.
+- **The row shows only the error of an install this picker started.** The error lives in the shared store, so a failure left behind by the sidebar catalog would otherwise appear here on a bundle the user never touched.
 
 ## Business Rules
 
 - **Cinna-only** — the Catalog Section is driven by `useCatalog()`, which is gated on `currentUser.type === 'cinna_user'`. Non-Cinna profiles get an empty section (no group rendered).
 - **Only non-installed bundles** — `catalogItems` filters `useCatalog()` to `!isInstalled`; installed bundles already appear as regular agent cards after the remote-agent sync.
 - **Picker opens for catalog-only users** — the composer `[+]` "Add agents / MCP" row shows when `hasCapabilities || catalogItems.length > 0`, so a user with no agents/MCP yet can still reach the picker to install their first agent.
-- **One install at a time** — while an install is in flight (`installingBundleId !== null`) all Install buttons disable; the in-flight card shows the spinner.
+- **One install at a time, app-wide** — while an install is in flight (`installingBundleId !== null`, from the shared store) all Install buttons disable; the in-flight card shows the spinner. The guard covers the Agents sidebar's catalog too.
+- **The selection belongs to the picker as it was when clicked** — the completion is captured at click time, and runs only while the picker is still mounted. If the picker has gone, the install still completes but nothing is selected: there is nowhere to select it. `ChatInput` switches chats without remounting, so a callback read at completion time would have selected the agent in whichever chat was on screen by then.
 - **Auto-select via the shared routing** — after install the new agent is selected by calling the picker's own `toggleCapability(agentId)`: a freshly-synced agent is unselected, so toggle *engages* it — buffered into the new-chat pending list, or attached as an on-demand orchestrated tool in an active chat (mirrors the `@`-mention path; see [Composer `[+]` Menu](../../chat/composer_menu/composer_menu.md)).
-- **Awaited sync, React-Query cache flow** — unlike the settings catalog's fire-and-forget `useRefreshCatalogState`, this path must *await* `agents.syncRemote()` so the install is in the local table before it reads it back. It then invalidates `['catalog']` + `['agents']` and `fetchQuery(['agents'])` — cache writes stay inside React Query rather than a direct `setQueryData`, avoiding a race with the `agents:remote-sync-complete` broadcast invalidation.
+- **Awaited sync, React-Query cache flow** — unlike the settings catalog's fire-and-forget `useRefreshCatalogState`, this path must *await* `agents.syncRemote()` so the install is in the local table before it reads it back; a failed sync (returned as data) stops here with the "Installed, but…" message. It then invalidates `['catalog']` + `['agents']` and `fetchQuery(['agents'])` — cache writes stay inside React Query rather than a direct `setQueryData`, avoiding a race with the `agents:remote-sync-complete` broadcast invalidation.
 - **Match key** — the new local agent is found by `remoteTargetId === installId` (the cinna-server Agent UUID from `CatalogInstallResultDto`; the synced local row stores it as `remoteTargetId`).
 - **No setup-status gate** — deliberately skipped (see flow above). The only post-install branch is success (select) vs. error (inline message).
 
@@ -45,22 +48,27 @@ Let the final user install a catalog agent at the exact moment they want to use 
 ```
 New chat → [+] → Add agents / MCP → AgentPickerModal (Catalog section)
   User clicks Install
-    → useCatalogPicker.install(bundleId)
-        → window.api.catalog.quickInstall(bundleId)        (CatalogInstallResultDto)
-        → await window.api.agents.syncRemote()             (local agents table catches up)
-        → invalidate ['catalog'] + ['agents']
-        → fetchQuery(['agents'])  → find a.remoteTargetId === installId
-        → onInstalled(agentId)  ==  toggleCapability(agentId)
+    → useCatalogPicker.install(bundleId)       (remembers the bundle it started)
+      → useCatalogInstall                      (captures onInstalled now)
+        → catalogInstall.store.install          (app-wide guard, shared with the sidebar)
+            → window.api.catalog.quickInstall(bundleId)    (CatalogOutcome → unwrapCatalogOutcome → CatalogInstallResultDto)
+            → await window.api.agents.syncRemote()         (failure → "Installed, but…")
+            → invalidate ['catalog'] + ['agents']
+            → fetchQuery(['agents'])  → find a.remoteTargetId === installId
+            → profile changed? → drop
+        → picker still mounted? → onInstalled(agentId) == toggleCapability(agentId)
               new chat  → pending buffer (ChatWorkspace)
               active    → on-demand attach / orchestrate
     → card flips from Catalog Install card → selected capability card
-  On error → setError → inline error row in the Catalog section
+  On error → store.error {bundleId, message} → inline error row, if bundleId is the one this picker started
 ```
 
 ## Technical Notes
 
 ### File Locations
-- `src/renderer/src/hooks/useCatalogPicker.ts` — the hook backing the section: `catalogItems`, `installingBundleId`, `install(bundleId)`, `error`. Reuses `useCatalog()`; calls `window.api.catalog.quickInstall` + `window.api.agents.syncRemote` + `window.api.agents.list`. Skips the setup-status gate; scoped logger `catalog-picker` emits `catalog quick install` / `catalog install complete` / failure logs.
+- `src/renderer/src/hooks/useCatalogPicker.ts` — the hook backing the section: `catalogItems`, `installingBundleId`, `install(bundleId)`, `error` (a string, or `null` unless the store's error is for the bundle this picker last started). Reuses `useCatalog()` and `useCatalogInstall({ onInstalled })` with no detached callback, so no setup-status gate runs.
+- `src/renderer/src/stores/catalogInstall.store.ts`, `src/renderer/src/hooks/useCatalogInstall.ts` — the install itself, shared with the sidebar catalog; scoped logger `catalog-install` emits `catalog quick install` / `catalog install complete` / failure and profile-change logs. See [Bundles Catalog — Technical Reference](bundles_catalog_tech.md#sidebar-agent-catalog)
+- `src/renderer/src/hooks/useCatalogInstall.test.tsx` — includes `useCatalogPicker` showing only the error of the install it started
 - `src/renderer/src/components/agents/AgentPickerModal.tsx` — renders the Catalog section from the optional props `catalogItems` / `installingBundleId` / `onInstallCatalog` / `catalogError`; exports the `CatalogPickerItem` type. Section is appended after the agent/MCP grid; cards are mouse-driven (outside the keyboard-nav `entries` list).
 - `src/renderer/src/components/chat/ChatInput.tsx` — wires `useCatalogPicker(toggleCapability)` and forwards the props to `AgentPickerModal`; widens the `[+]` visibility to `hasCapabilities || catalogItems.length > 0`.
 
@@ -69,7 +77,7 @@ New chat → [+] → Add agents / MCP → AgentPickerModal (Catalog section)
 - The local-agent join field (`remoteTargetId`) is populated by `src/main/db/agents.ts` `syncRemote()` (`remoteTargetId = target.targetId`); remote-synced agents default to `enabled: true`, so the installed agent is immediately selectable.
 
 ## Integration Points
-- **[Bundles Catalog](bundles_catalog.md)** — same Quick Install / server contract; this is the in-chat entry point alongside Settings → Profile → Catalog.
+- **[Bundles Catalog](bundles_catalog.md)** — same Quick Install / server contract; this is the in-chat entry point alongside Settings → Profile → Catalog and the Agents sidebar's Agent catalog dialog, with which it shares the install store.
 - **[Composer `[+]` Menu](../../chat/composer_menu/composer_menu.md)** — hosts the Capability Picker the Catalog Section lives in; auto-select reuses its `toggleCapability` routing.
 - **[Remote Agents](../remote_agents/remote_agents.md)** — `agents.syncRemote()` pulls the new install into the local `agents` table; the agent then behaves like any other remote agent.
 - **[Agents](../agents/agents.md)** — handles the "setup not complete" auto-reply that covers incomplete-credential installs, which is why this flow can skip the setup modal.

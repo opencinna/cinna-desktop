@@ -101,7 +101,7 @@ What the renderer receives is a plain `Error` whose only own properties are `mes
 
 **So a handler whose failure code must drive renderer behaviour has to return the code as data rather than throw it.** Two established shapes:
 
-- `{ success: false, code, error }` — the older, more widespread convention. The renderer builds the `Error` and sets `.code` itself (`useAgents.ts:234` `useApplyBundleUpdate` is the worked example), so the code never goes near the wire.
+- `{ success: false, code, error }` — the older, more widespread convention. The renderer builds the `Error` and sets `.code` itself (`useAgents.ts:293` `useApplyBundleUpdate` is the worked example), so the code never goes near the wire. `CatalogOutcome<T>` in `src/shared/catalog.ts` (`catalog:list`, `catalog:quick-install`) is the same shape with the success value wrapped too, plus a shared `unwrapCatalogOutcome` the renderer calls after the crossing — so `_wrap`'s `isReauthResult` still sees `success: false` and raises the session-expired prompt.
 - `LocalAgentOutcome<T>` in `src/shared/localAgents.ts` — main returns `{ok: false, code, name, message}` and the **renderer**, not preload, turns it back into a throw.
 
 **A renderer `catch` that reads `err.code` off a rejected `invoke()` is a silent no-op**, and it looks correct in review. Check what the channel does before writing one: a handler that catches internally and returns an outcome gives you a code; a bare `ipcHandle` that lets a `DomainError` throw does not.

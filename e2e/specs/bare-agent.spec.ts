@@ -84,6 +84,24 @@ async function openAddDialog(cinna: CinnaApp): Promise<void> {
   await expect(page.getByRole('dialog', { name: 'Add an agent' })).toBeVisible()
 }
 
+/**
+ * The choice step → Advanced options, where Add a folder lives. Answers the
+ * advanced step's dialog, which is where a refusal is reported and where the
+ * folder list's Back returns to.
+ */
+async function openAdvanced(cinna: CinnaApp): Promise<Locator> {
+  await cinna.page
+    .getByRole('dialog', { name: 'Add an agent' })
+    .getByRole('button', { name: /^Advanced options/ })
+    .click()
+  const advanced = cinna.page.getByRole('dialog', { name: 'Advanced options' })
+  await expect(advanced).toBeVisible()
+  // A tile ignores a pointer click for a moment after the step opens (the
+  // double-click guard); wait for it rather than have the click dropped.
+  await advanced.locator('[data-settled="true"]').waitFor()
+  return advanced
+}
+
 const FOUND = [
   ['accounting_meta_agent', 'Accounting Meta Agent'],
   ['exchange_rates_agent', 'Exchange Rates Agent'],
@@ -96,17 +114,20 @@ test('a folder of three agents is adopted, and nothing is written into it', asyn
   for (const [slug, heading] of FOUND) writeBareAgent(join(repo, 'local_agents', slug), heading)
   const before = treeOf(repo)
 
-  await test.step('the + offers a choice, and one of the two is a folder', async () => {
+  await test.step('the + offers a choice, and a folder is under Advanced options', async () => {
     await openAddDialog(cinna)
     const choice = cinna.page.getByRole('dialog', { name: 'Add an agent' })
     await expect(choice.getByRole('button', { name: /^New agent/ })).toBeVisible()
-    await expect(choice.getByRole('button', { name: /^Add a folder/ })).toBeVisible()
+    // Not a Cinna account, so no catalog card.
+    await expect(choice.getByRole('button', { name: /Install from catalog/i })).toHaveCount(0)
+    const advanced = await openAdvanced(cinna)
+    await expect(advanced.getByRole('button', { name: /^Add a folder/ })).toBeVisible()
   })
 
   await test.step('the picked folder is previewed as a list of what it holds', async () => {
     await cinna.stubDirectoryPicker(repo)
     await cinna.page
-      .getByRole('dialog', { name: 'Add an agent' })
+      .getByRole('dialog', { name: 'Advanced options' })
       .getByRole('button', { name: /^Add a folder/ })
       .click()
 
@@ -161,18 +182,18 @@ test('a folder with no AGENT.md is refused, and the dialog stays open', async ({
 
   await openAddDialog(cinna)
   await cinna.stubDirectoryPicker(folder)
-  const choice = cinna.page.getByRole('dialog', { name: 'Add an agent' })
+  const choice = await openAdvanced(cinna)
   await choice.getByRole('button', { name: /^Add a folder/ }).click()
 
   // A refusal is a state, not a failure: the dialog closes on success only
-  // (ux_rules.md rule 6), so it is still the choice step and it names the file
-  // the user needs to look for.
+  // (ux_rules.md rule 6), so it is still the advanced step and it names the
+  // file the user needs to look for.
   await expect(choice.getByRole('alert')).toHaveText(
     "Nothing in this folder has an AGENT.md, AGENTS.md or CLAUDE.md. Choose the agent's own folder, or a folder that holds several of them."
   )
   await expect(choice).toBeVisible()
   await expect(cinna.page.getByRole('dialog', { name: 'Add a folder' })).toHaveCount(0)
-  await expect(choice.getByRole('button', { name: /^New agent/ })).toBeVisible()
+  await expect(choice.getByRole('button', { name: /^Command-line agent/ })).toBeVisible()
   await expect(choice.getByRole('button', { name: /^Add a folder/ })).toBeVisible()
 })
 
@@ -189,7 +210,7 @@ test.describe('a folder defined by CLAUDE.md or AGENTS.md', () => {
   async function pickFolder(cinna: CinnaApp, dir: string): Promise<Locator> {
     await openAddDialog(cinna)
     await cinna.stubDirectoryPicker(dir)
-    const choice = cinna.page.getByRole('dialog', { name: 'Add an agent' })
+    const choice = await openAdvanced(cinna)
     await choice.getByRole('button', { name: /^Add a folder/ }).click()
     return choice
   }
@@ -324,7 +345,7 @@ test.describe('a folder defined by CLAUDE.md or AGENTS.md', () => {
     )
     await expect(choice).toBeVisible()
     await expect(cinna.page.getByRole('dialog', { name: 'Add a folder' })).toHaveCount(0)
-    await expect(choice.getByRole('button', { name: /^New agent/ })).toBeVisible()
+    await expect(choice.getByRole('button', { name: /^Command-line agent/ })).toBeVisible()
     await expect(choice.getByRole('button', { name: /^Add a folder/ })).toBeVisible()
     expect(treeOf(folder)).toEqual(before)
   })
@@ -443,10 +464,7 @@ test('re-picking an adopted folder re-selects its agents, and confirms what leav
   const pickRepo = async (): Promise<Locator> => {
     await openAddDialog(cinna)
     await cinna.stubDirectoryPicker(repo)
-    await cinna.page
-      .getByRole('dialog', { name: 'Add an agent' })
-      .getByRole('button', { name: /^Add a folder/ })
-      .click()
+    await (await openAdvanced(cinna)).getByRole('button', { name: /^Add a folder/ }).click()
     const list = cinna.page.getByRole('dialog', { name: 'Add a folder' })
     await expect(list).toBeVisible()
     return list

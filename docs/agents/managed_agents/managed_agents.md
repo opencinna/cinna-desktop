@@ -13,7 +13,7 @@ Connect an existing Claude workspace agent and environment to a Cinna chat. Clau
 
 ## User Stories / Flows
 
-1. Open **Agents**, press **+**, and choose **Managed (Claude)**. No Agents Home folder is required.
+1. Open **Agents**, press **+**, choose **Advanced options**, then **Managed (Claude)**. No Agents Home folder is required.
 2. Choose an API credential and press **Load workspace**. Select an existing agent and environment. **More options** exposes a local name, workspace ID and agent version; leaving version empty uses latest.
 3. Press **Add agent**. Main verifies the selected remote resources before saving the local configuration; the new agent opens in chat. Failed loading or saving retains the dialog and entered values; the Load workspace control keeps its width while loading.
 4. Send a message. The first turn creates a remote session; later ready turns reuse that exact session. The transcript shows authoritative message text and tool activity as they arrive.

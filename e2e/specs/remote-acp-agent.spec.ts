@@ -8,6 +8,8 @@ test('adds a remote ACP connector, tests its token, streams, answers permission,
     await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
     await cinna.page.getByRole('button', { name: 'Agents', exact: true }).click()
     await cinna.page.getByRole('button', { name: 'Add an agent', exact: true }).click()
+    await cinna.page.getByRole('button', { name: /^Advanced options/ }).click()
+    await cinna.page.getByRole('dialog', { name: 'Advanced options', exact: true }).locator('[data-settled="true"]').waitFor()
     await cinna.page.getByRole('button', { name: /^Remote ACP agent/ }).click()
     const form = cinna.page.getByRole('dialog', { name: 'Add remote ACP agent', exact: true })
     await expect(form.getByLabel('Remote working directory', { exact: true })).toHaveValue('/app/workspace')
