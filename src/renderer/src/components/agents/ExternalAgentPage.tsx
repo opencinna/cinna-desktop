@@ -50,8 +50,8 @@ export function ExternalAgentPage(): React.JSX.Element {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
-      <div className="mx-auto max-w-3xl space-y-4 px-6 py-6">
+    <div className="flex flex-1 flex-col overflow-y-auto pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
+      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col space-y-4 px-6 py-6">
         {agent ? <>
           <header className="flex items-start gap-3">
             <div className="min-w-0 flex-1">
@@ -82,7 +82,7 @@ export function ExternalAgentPage(): React.JSX.Element {
             </div>
           </header>
           {developmentError?.id === agent.id && <p role="alert" className="text-xs text-[var(--color-danger)]">{developmentError.message}</p>}
-          <div hidden={settingsMode}><ChatWorkspace key={`${profile?.id}:${agent.id}`} agentId={agent.id} embedded /></div>
+          <div hidden={settingsMode} className={settingsMode ? undefined : 'flex flex-1 flex-col'}><ChatWorkspace key={`${profile?.id}:${agent.id}`} agentId={agent.id} embedded /></div>
           {settingsMode && <>
             <nav role="tablist" aria-label="Agent settings" className="flex gap-1 border-b border-[var(--color-border)]">
               {['overview', 'connection'].map((id) => <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`border-b-2 px-3 py-2 text-xs font-medium ${tab === id ? 'border-[var(--color-accent)] text-[var(--color-text)]' : 'border-transparent text-[var(--color-text-muted)]'}`}>{id === 'overview' ? 'Overview' : 'Connection'}</button>)}
