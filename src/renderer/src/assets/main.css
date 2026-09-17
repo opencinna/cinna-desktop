@@ -624,25 +624,29 @@
   }
 
   /* Clickable inline code — a span that acts when clicked (today: a file
-     reference in a folder agent's chat). The same box and fill as inline code,
-     with a thin edge so it reads as something to press rather than as more
-     text. The edge is an inset shadow, not a border: a border would grow the
-     span by 2px when the links appear after resolution and reflow the line.
-     The edge is a neutral tone one step lighter than the span's own fill, not
-     the accent: an accent edge reads as a frame and makes the inside look
-     cramped. No `box-decoration-break: clone` either: it pads each piece of a
-     wrapped link, which plain inline code does not, so the line shifts when
-     links appear. */
+     reference in a folder agent's chat). The same box as inline code, with a
+     fill tinted towards the accent (orange on dark, blue on light) and a thin
+     edge, so it reads as something to press rather than as more text. The
+     edge is an inset shadow, not a border: a border would grow the span by
+     2px when the links appear after resolution and reflow the line. The edge
+     is a neutral tone one step off the span's own fill, not the accent: an
+     accent edge reads as a frame and makes the inside look cramped. No
+     `box-decoration-break: clone` either: it pads each piece of a wrapped
+     link, which plain inline code does not, so the line shifts when links
+     appear. */
   .markdown-body code.file-ref {
-    --file-ref-edge: color-mix(in srgb, var(--color-bg-hover), white 10%);
-    --file-ref-edge-hover: color-mix(in srgb, var(--color-bg-hover), white 18%);
+    --file-ref-fill: color-mix(in srgb, var(--color-bg-hover), var(--color-accent) 12%);
+    --file-ref-edge: color-mix(in srgb, var(--file-ref-fill), white 10%);
+    --file-ref-edge-hover: color-mix(in srgb, var(--file-ref-fill), white 18%);
     cursor: pointer;
+    background: var(--file-ref-fill);
     box-shadow: inset 0 0 0 1px var(--file-ref-edge);
     transition: box-shadow 120ms ease;
   }
   [data-theme="light"] .markdown-body code.file-ref {
-    --file-ref-edge: color-mix(in srgb, var(--color-bg-hover), black 6%);
-    --file-ref-edge-hover: color-mix(in srgb, var(--color-bg-hover), black 12%);
+    --file-ref-fill: color-mix(in srgb, var(--color-bg-hover), var(--color-accent) 14%);
+    --file-ref-edge: color-mix(in srgb, var(--file-ref-fill), black 6%);
+    --file-ref-edge-hover: color-mix(in srgb, var(--file-ref-fill), black 12%);
   }
   .markdown-body code.file-ref:hover {
     box-shadow: inset 0 0 0 1px var(--file-ref-edge-hover);

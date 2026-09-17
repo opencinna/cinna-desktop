@@ -23,7 +23,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 ## User Stories / Flows
 
 ### Previewing a file the agent named
-1. The agent's reply finishes streaming and is saved. Inline code spans that name a real file gain a thin edge around the same inline code box, and the line does not move.
+1. The agent's reply finishes streaming and is saved. Inline code spans that name a real file gain an accent-tinted fill and a thin edge around the same inline code box, and the line does not move.
 2. The user clicks one. Main checks that the path may be used; for a path inside the agent folder the answer is immediate.
 3. The preview modal expands from the click point. It shows:
    - the file name and its path in the agent folder;
@@ -166,10 +166,10 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **A type with no preview is never read.**
 
 ### What a reference looks like
-- **It looks pressable.** It keeps the inline code box and its plain fill, and adds a 1px edge. The edge deepens on hover, and the cursor is a pointer. See [UX rule 11](../../development/ui_guidelines/ux_rules.md): a control must not look like the text beside it.
+- **It looks pressable.** It keeps the inline code box, tints its fill slightly towards the accent (orange in the dark theme, blue in the light one), and adds a 1px edge. The edge deepens on hover, and the cursor is a pointer. See [UX rule 11](../../development/ui_guidelines/ux_rules.md): a control must not look like the text beside it.
   - **The edge is neutral, one tone off the span's fill**: lighter than the fill in the dark theme, darker in the light one.
   - **It is never the accent.** An accent edge reads as a frame, and makes the text inside look cramped.
-  - **Only the edge marks a link.** The fill is the same as the inline code beside it.
+  - **The tint is faint.** It sets a link apart from the inline code beside it without reading as a highlight.
 - **Nothing moves when links appear.** Links arrive after resolution, under text the user may be reading.
   - The edge is an inset shadow, not a border: a border grows the span by 2px and reflows the line.
   - Wrapped pieces are not padded one by one (`box-decoration-break: clone`). Plain inline code is not padded that way, and with it the line shifted when links appeared.

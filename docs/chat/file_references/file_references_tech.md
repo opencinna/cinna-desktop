@@ -263,8 +263,10 @@ None.
 
 ### `src/renderer/src/assets/main.css`
 - `.markdown-body code.file-ref`:
-  - no background of its own: the fill is the `--color-bg-hover` of `.markdown-body code`;
-  - an inset 1px `box-shadow` edge in `--file-ref-edge`, a `color-mix` of `--color-bg-hover`:
+  - a `--file-ref-fill` background, `--color-bg-hover` mixed with `--color-accent` (orange on dark, blue on light):
+    - `12%` by default (dark);
+    - `14%` under `[data-theme="light"]`;
+  - an inset 1px `box-shadow` edge in `--file-ref-edge`, a `color-mix` of `--file-ref-fill`:
     - with `white 10%` by default (dark);
     - with `black 6%` under `[data-theme="light"]`;
   - `:hover` switches to `--file-ref-edge-hover` (`white 18%` / `black 12%`), with a 120 ms `box-shadow` transition;
