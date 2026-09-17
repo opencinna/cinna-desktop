@@ -151,7 +151,7 @@ async function openTask(cinna: CinnaApp): Promise<void> {
 }
 async function finalTranscript(cinna: CinnaApp, chatId: string, summary: string, calls: number[]): Promise<void> {
   await openTask(cinna)
-  await cinna.page.getByRole('button', { name: 'Open the conversation', exact: true }).click()
+  await cinna.page.getByRole('button', { name: 'Open the chat', exact: true }).click()
   await expect(cinna.page.getByText(summary, { exact: true })).toHaveCount(1)
   const chat = await cinna.page.evaluate((id) => window.api.chat.get(id), chatId)
   expect(chat?.messages.filter((message) => message.role === 'assistant' && message.content === summary)).toHaveLength(1)

@@ -220,7 +220,7 @@ Opening a root task also watches its children. `task:children` calls `taskSyncSe
 
 Reads coalesce per profile/parent and wait for the current profile pull and parent detail/push. They recheck profile generation, binding and root/child relationship before applying, accept only the same adapter/remote parent, and compare each child’s revision with the pre-read snapshot. A concurrent unchanged parent detail must not invalidate useful child data. Responses do not remove saved children merely because a remote omitted them. Active or durable unresolved creates defer child imports, just as they defer full discovery, until the new remote identity can be resolved without a duplicate.
 
-The renderer polls the snapshot every five seconds. Both a first offline read and a later failure retain known children; the footer reports the failed refresh and offers retry. Before the first successful refresh, an empty snapshot says loading rather than “No subtasks.” Local-only parents return a confirmed local snapshot without contacting an adapter.
+The renderer polls the snapshot every five seconds. Both a first offline read and a later failure retain known children; a line below the rows reports the failed refresh and offers retry, and a failed read shows the Subtasks section even for a parent with a zero count. Before the first successful refresh, an empty snapshot says loading rather than “No subtasks.” — for a parent whose saved count expects children; a parent with a zero count shows no section until the refresh finds one. Local-only parents return a confirmed local snapshot without contacting an adapter.
 
 ## Where it lives
 

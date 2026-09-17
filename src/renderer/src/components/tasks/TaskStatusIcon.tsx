@@ -34,12 +34,19 @@ import {
  * shape — which is the trade this component makes for the eye and must not make
  * for the ear.
  */
-export function TaskStatusIcon({ status }: { status: string }): React.JSX.Element {
+export function TaskStatusIcon({
+  status,
+  size = 14
+}: {
+  status: string
+  /** 14 in a row; the task page's header sets it beside an `xl` title. */
+  size?: number
+}): React.JSX.Element {
   const lc = status.toLowerCase()
   const { Icon, tone, spin } = describe(lc)
   return (
     <Icon
-      size={14}
+      size={size}
       aria-hidden="true"
       className={`shrink-0 ${tone} ${spin ? 'animate-spin' : ''}`}
     />

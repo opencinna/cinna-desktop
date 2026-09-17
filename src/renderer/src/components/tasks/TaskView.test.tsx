@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, within, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InboxEntry, InboxSnapshot, InboxUnreadableSource } from '../../../../shared/inbox'
@@ -26,6 +26,7 @@ function inbox(entries: InboxEntry[], unreadable: InboxUnreadableSource[] = []):
   return { entries, unreadable }
 }
 const getChat = vi.fn()
+const getJob = vi.fn<(jobId: string) => Promise<unknown>>()
 const setStatus = vi.fn<(taskId: string, status: TaskStatus) => Promise<TaskDto>>()
 const takeOver = vi.fn<(taskId: string, force?: boolean) => Promise<TaskDto>>()
 const remoteLive = vi.fn<(taskId: string) => Promise<boolean | null>>()
@@ -46,12 +47,15 @@ const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: 
   },
   inbox: { list: () => listInbox() },
   agents: {
-    list: async () => [{ id: 'a1', name: 'Invoice Checker', enabled: true }],
+    list: async () => [
+      { id: 'a1', name: 'Invoice Checker', enabled: true },
+      { id: 'folder:m1', name: 'Ledger Folder', enabled: true, source: 'folder' }
+    ],
     onRemoteSyncComplete: () => () => {},
     onReadinessChanged: () => () => {},
     checkReadiness: async () => undefined
   },
-  jobs: { get: async () => ({ id: 'j1', title: 'Nightly check' }) },
+  jobs: { get: (jobId: string) => getJob(jobId) },
   chat: { get: (chatId: string) => getChat(chatId) },
   run: {
     start: runSend
@@ -126,6 +130,7 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false, refetchInterval: false } }
   })
   listInbox.mockResolvedValue(inbox([]))
+  getJob.mockImplementation(async (jobId) => ({ id: jobId, title: 'Nightly check' }))
   getChat.mockResolvedValue({
     id: 'c1',
     messages: [
@@ -207,6 +212,22 @@ describe('a blocked task with nothing waiting on it', () => {
 })
 
 describe('the way back to a list of tasks', () => {
+  it('goes back to the job from a job task, named after the job once it loads', async () => {
+    await renderTask()
+    const back = await screen.findByRole('button', { name: 'Back to Nightly check' })
+    await act(async () => { back.click() })
+    expect(useUIStore.getState().activeView).toBe('job-detail')
+    expect(useUIStore.getState().activeJobId).toBe('j1')
+  })
+
+  it('gives a subtask with a job one arrow, to its parent, and the job in Details', async () => {
+    await renderTask({ parentTaskId: 'p1' })
+    expect(screen.getByRole('button', { name: 'Parent task' })).toBeTruthy()
+    const details = screen.getByRole('complementary', { name: 'Details' })
+    await waitFor(() => expect(within(details).getByRole('button', { name: 'Nightly check' })).toBeTruthy())
+    expect(screen.queryByRole('button', { name: 'Back to Nightly check' })).toBeNull()
+  })
+
   it('offers the Inbox to a task with neither a parent nor a job', async () => {
     // Mutation: drop the arm and this fails — with the sidebar's Tasks section
     // gone, a task a conversation minted at its first ask has no named route
@@ -914,4 +935,62 @@ it.each([
   await renderTask({ assignee: { kind, agentId: null, name: null } })
   expect(screen.getByText(label)).toBeTruthy()
   expect(screen.queryByText('The local model')).toBeNull()
+})
+
+it('shows the exact time when a relative one is clicked, and goes back on a second click', async () => {
+  await renderTask()
+  const details = screen.getByRole('complementary', { name: 'Details' })
+  const exact = BASE.updatedAt.toLocaleString()
+  const updated = within(details).getAllByRole('button', { pressed: false })[0]
+  expect(updated.textContent).not.toBe(exact)
+  fireEvent.click(updated)
+  expect(updated.textContent).toBe(exact)
+  fireEvent.click(updated)
+  expect(updated.textContent).not.toBe(exact)
+})
+
+it('keeps a long title on one line and puts the whole of it in the tooltip', async () => {
+  const title = 'Reconcile '.repeat(30).trim()
+  await renderTask({ title })
+  const heading = screen.getByRole('heading', { level: 1 })
+  expect(heading.className).toContain('truncate')
+  expect(heading.getAttribute('title')).toBe(title)
+})
+
+it('opens the assigned agent’s page from Details', async () => {
+  await renderTask()
+  const details = screen.getByRole('complementary', { name: 'Details' })
+  const agent = await within(details).findByRole('button', { name: 'Invoice Checker' })
+  await act(async () => { agent.click() })
+  expect(useUIStore.getState().activeView).toBe('external-agent')
+  expect(useUIStore.getState().activeExternalAgentId).toBe('a1')
+  expect(useUIStore.getState().sidebarTab).toBe('agents')
+})
+
+it('leaves an agent that is no longer listed as plain text', async () => {
+  await renderTask({ assignee: { kind: 'agent', agentId: 'gone', name: 'Old Checker' } })
+  const details = screen.getByRole('complementary', { name: 'Details' })
+  await within(details).findByText('Old Checker')
+  expect(within(details).queryByRole('button', { name: 'Old Checker' })).toBeNull()
+})
+
+it('opens a folder agent’s page on its local route', async () => {
+  await renderTask({ assignee: { kind: 'agent', agentId: 'folder:m1', name: 'Ledger Folder' } })
+  const details = screen.getByRole('complementary', { name: 'Details' })
+  const agent = await within(details).findByRole('button', { name: 'Ledger Folder' })
+  await act(async () => { agent.click() })
+  expect(useUIStore.getState().activeView).toBe('local-agent')
+  expect(useUIStore.getState().activeLocalAgentId).toBe('folder:m1')
+})
+
+it('sends a task whose job was deleted back to the Inbox, with no Job row', async () => {
+  // `tasks.job_id` outlives its job; the job page would load for ever.
+  getJob.mockRejectedValue(new Error('Job not found'))
+  await renderTask({ parentTaskId: null })
+  const back = await screen.findByRole('button', { name: 'Back to the Inbox' }, { timeout: 4000 })
+  expect(screen.queryByRole('button', { name: /^Back to (the job|Nightly)/ })).toBeNull()
+  const details = screen.getByRole('complementary', { name: 'Details' })
+  expect(within(details).queryByText('Job')).toBeNull()
+  await act(async () => { back.click() })
+  expect(useUIStore.getState().activeView).toBe('inbox')
 })

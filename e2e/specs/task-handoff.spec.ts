@@ -256,7 +256,7 @@ test('an existing desktop task hands off once and preserves its recipient and no
     const receipts = chat?.messages.filter((message) => message.role === 'agent_transition' && message.content.includes(REMOTE_KEY)) ?? []
     expect(receipts).toHaveLength(1)
     expect(receipts[0].content).toBe(RECEIPT)
-    await cinna.page.getByRole('button', { name: 'Open the conversation', exact: true }).click()
+    await cinna.page.getByRole('button', { name: 'Open the chat', exact: true }).click()
     // Persisted transition notices are collapsed in the default compact mode.
     const notice = cinna.page.getByRole('button', { name: 'Show agent notice', exact: true })
     await expect(notice).toHaveAttribute('title', RECEIPT)
@@ -331,7 +331,7 @@ test('a lost execute response sends one mutation and requires explicit recovery 
     // The journal's control survives leaving the original modal. It is the
     // same source chat, and no retry/execute is sent merely by opening it.
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
-    await cinna.page.getByRole('button', { name: 'Open the conversation', exact: true }).click()
+    await cinna.page.getByRole('button', { name: 'Open the chat', exact: true }).click()
     await cinna.page.getByRole('button', { name: 'Review pending handoff', exact: true }).click()
     const recovery = cinna.page.getByRole('dialog', { name: 'Review pending handoff', exact: true })
     await expect(recovery).toBeVisible()

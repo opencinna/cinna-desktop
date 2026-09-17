@@ -427,7 +427,7 @@ function parseAssigneeRef(v: unknown): Extract<JobDepDescriptor, { kind: 'agent'
  *
  *  - **`chat_id`.** Chats are not a synced collection, so an id from another
  *    device would name a row that does not exist here — and the task page would
- *    offer "Open the conversation" over nothing. A replica opens with no thread.
+ *    offer "Open the chat" over nothing. A replica opens with no thread.
  *  - **`assignee_agent_id`.** An `agents` row id is device-local. The portable
  *    descriptor in `assignee_ref` travels in its place and is resolved on the
  *    way in, exactly as a job's agent dependency is — this is the problem

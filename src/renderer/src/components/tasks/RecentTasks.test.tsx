@@ -61,6 +61,8 @@ it('shows ten tasks and adds ten more on Show more', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Show more tasks' }))
   expect(container.querySelectorAll('li')).toHaveLength(25)
   expect(screen.queryByRole('button', { name: 'Show more tasks' })).toBeNull()
+  // The button's slot stays filled, so no row slides under the pointer.
+  expect(screen.getByText('All 25 shown')).toBeTruthy()
 })
 
 it('reads the root list, not one task’s children', async () => {
@@ -140,7 +142,9 @@ it('holds the order a row first appeared in, however the next read is sorted', a
   await act(async () => {
     await client.refetchQueries({ queryKey: ['tasks', 'roots'] })
   })
-  expect(titles()).toEqual(['Task 0', 'Task 1', 'Task 2', 'Task 3'])
+  // Waited for: TanStack notifies observers on a later tick than the one
+  // `refetchQueries` resolves on, so under load the new row lands after `act`.
+  await waitFor(() => expect(titles()).toEqual(['Task 0', 'Task 1', 'Task 2', 'Task 3']))
 })
 
 it('keeps the rows it has when a later read fails', async () => {

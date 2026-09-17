@@ -244,7 +244,7 @@ describe('what a task carries across app-sync', () => {
     const { plaintext } = encode(deviceA, task.id)
 
     // `chat_id` — chats are not a synced collection, so an id from here names
-    // nothing there and would offer "Open the conversation" over a void.
+    // nothing there and would offer "Open the chat" over a void.
     expect(plaintext).not.toHaveProperty('chatId')
     // `assignee_agent_id` — device-local. `assigneeRef` travels in its place.
     expect(plaintext).not.toHaveProperty('assigneeAgentId')

@@ -13,6 +13,7 @@ import { ManagedAgentModal } from './ManagedAgentModal'
 import { ChatWorkspace } from '../layout/ChatWorkspace'
 import { canDevelopAgent, serverLabel } from '../../utils/agentNavigation'
 import { unwrapIpcError } from '../../utils/ipcError'
+import { describeOpenExternalFailure } from '../../hooks/useSystem'
 
 /** All non-folder agents share a chat landing page and a separate settings mode. */
 export function ExternalAgentPage(): React.JSX.Element {
@@ -60,7 +61,7 @@ export function ExternalAgentPage(): React.JSX.Element {
                 ? <a href={profile.cinnaServerUrl} onClick={(event) => {
                     event.preventDefault()
                     void window.api.system.openExternal(profile.cinnaServerUrl!).then((result) => {
-                      if (!result.success) setDevelopmentError({ id: agent.id, message: result.error ?? 'Could not open the Cinna server.' })
+                      if (!result.success) setDevelopmentError({ id: agent.id, message: describeOpenExternalFailure(result.error) })
                     }).catch((err) => setDevelopmentError({ id: agent.id, message: unwrapIpcError(err, 'Could not open the Cinna server.') }))
                   }}>{serverLabel(profile.cinnaServerUrl)}</a>
                 : agent.driver === 'managed' ? 'Claude workspace' : agent.protocol.toUpperCase()}</p>

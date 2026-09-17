@@ -352,7 +352,7 @@ test('a job parks on a permission ask, the user answers it in the Inbox, and the
     // A finished task needs no banner (`ux_rules.md` §2).
     await expect(page.getByRole('status')).toHaveCount(0)
 
-    await page.getByRole('button', { name: 'Open the conversation' }).click()
+    await page.getByRole('button', { name: 'Open the chat' }).click()
     await expect(page.getByText('Permission to run a command', { exact: true })).toBeVisible()
     await expect(page.getByText('rm -rf build', { exact: true })).toBeVisible()
     await expect(page.getByText('Allowed once.', { exact: true })).toBeVisible()

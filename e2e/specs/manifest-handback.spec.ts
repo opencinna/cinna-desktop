@@ -142,7 +142,7 @@ for (const typed of [true, false]) {
         .toMatchObject({ status: 'completed', runtime: { state: 'completed', ownerTurns: 3 } })
       await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
       await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true }).getByRole('button', { name: GOAL }).click()
-      await cinna.page.getByRole('button', { name: 'Open the conversation', exact: true }).click()
+      await cinna.page.getByRole('button', { name: 'Open the chat', exact: true }).click()
       await expect(cinna.page.getByText(SUMMARY, { exact: true })).toHaveCount(1)
       await expect(cinna.page.getByText(`/handback ${NOTE}`, { exact: false })).toHaveCount(1)
       const preview = notice.length > 120 ? `${notice.slice(0, 117)}…` : notice

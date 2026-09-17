@@ -1,6 +1,6 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTaskList } from '../../hooks/useTaskList'
 import { TaskRow } from './TaskRow'
+import { useTaskRowsInPlace } from './useTaskRowsInPlace'
 
 /**
  * The recent tasks, under the asks on the Inbox screen.
@@ -15,14 +15,13 @@ import { TaskRow } from './TaskRow'
  * is doing, at that screen's scale (`ux_rules.md` §12 — one type scale per
  * surface).
  *
- * ## Its own component, sharing `TaskList`'s query
+ * ## Its own component, sharing `TaskList`'s query and row
  *
  * Same `useTaskList()` with no parent id, so the two surfaces cannot disagree
- * about what a root task is or pay twice to find out — and no `variant` prop on
- * `TaskList`, because the two differ in scale, row shape, page size, empty
- * copy and heading, which is a second component wearing the first one's name.
- * `TaskList` keeps the one job it still has: the Subtasks region on a task
- * page.
+ * about what a root task is or pay twice to find out. Both render `TaskRow`
+ * through `useTaskRowsInPlace`; what differs — scale, page size, empty copy,
+ * the half-failed remote refresh only children have — is why `TaskList` (a
+ * task page's Subtasks) is a second component rather than a `variant` here.
  *
  * ## The row is `TaskRow`
  *
@@ -33,76 +32,24 @@ const PAGE = 10
 
 export function RecentTasks(): React.JSX.Element {
   const tasks = useTaskList()
-  const [visible, setVisible] = useState(PAGE)
   const rows = tasks.data?.tasks ?? []
   // The root list is read straight out of SQLite, so there is no half-failure
   // to report here: `refreshError` belongs to the children query `TaskList`
   // uses, where a remote refresh can fail under rows that are still true.
   const failed = tasks.isError
 
-  /**
-   * The order each row was first seen in, held for the life of the mount.
-   *
-   * The query is `ORDER BY updated_at DESC` re-run every five seconds, so
-   * without this **any** task changing anywhere in the app — an agent writing
-   * progress, a peer's row arriving over sync — jumps to the top and pushes
-   * every row below it down by exactly one row, under whatever the pointer was
-   * on (`ux_rules.md` §1). The list directly above this one spends twelve lines
-   * of comment refusing to do that to a permission ask; a task row opening the
-   * wrong task is a smaller harm than a permission answered by accident, but it
-   * is the same movement and it has the same cure.
-   *
-   * The cost is that a task updated while this screen is open keeps its place
-   * instead of rising, and a brand-new one appends at the end rather than the
-   * top. Both resolve by leaving the Inbox and coming back, which is when the
-   * order is taken again — the same bargain `InboxView` makes.
-   */
-  const order = useRef<string[]>([])
-  const ordered = useMemo(() => {
-    const byId = new Map(rows.map((task) => [task.id, task]))
-    const known = new Set(order.current)
-    const fresh = rows.filter((task) => !known.has(task.id))
-    if (fresh.length > 0) order.current = [...order.current, ...fresh.map((task) => task.id)]
-    return order.current.map((id) => byId.get(id)).filter((task) => task !== undefined)
-  }, [rows])
-
-  /**
-   * Keep **Show more tasks** under the pointer that just pressed it.
-   *
-   * The rows it reveals are inserted below everything the user is reading, so
-   * nothing above the button moves — but the button itself drops by the height
-   * of ten rows (measured: 343 px in an 800 px window, which puts it 288 px
-   * below the fold) and a task row slides into the pixels it left. A second
-   * click then opens a task nobody chose.
-   *
-   * Scrolling by exactly the height that was added is allowed here where a
-   * poll-driven shift would not be: it is the direct consequence of a gesture
-   * the user made, it is what brings the rows they asked for into view, and it
-   * leaves the control they are still pointing at where they left it.
-   */
-  const section = useRef<HTMLElement>(null)
-  const grownFrom = useRef<number | null>(null)
-
-  const showMore = (): void => {
-    grownFrom.current = section.current?.getBoundingClientRect().height ?? null
-    setVisible((count) => count + PAGE)
-  }
-
-  useLayoutEffect(() => {
-    const before = grownFrom.current
-    grownFrom.current = null
-    if (before === null || !section.current) return
-    const grew = section.current.getBoundingClientRect().height - before
-    const scroller = section.current.closest('[data-inbox-scroll]')
-    if (scroller && grew > 0) scroller.scrollTop += grew
-  }, [visible])
+  // Fixed order and an in-place Show more — see `useTaskRowsInPlace`.
+  const { ordered, visible, expanded, showMore, sectionRef } = useTaskRowsInPlace(
+    rows,
+    PAGE,
+    '[data-inbox-scroll]'
+  )
 
   return (
-    <section ref={section} aria-label="Recent tasks" className="space-y-3">
+    <section ref={sectionRef} aria-label="Recent tasks" className="space-y-3">
       {/*
         The visible name and the accessible one are the same words (§10), at
-        the size every other section title in the app is set at — `TaskView`'s
-        `Section`, one click away through any of these rows. At `text-base` it
+        section-title size rather than page-title size: at `text-base` it
         computed to the same 17px/600 as the `Inbox` h1 above the rule, which
         made it a second page title and the screen read as two screens rather
         than one screen with a second section (§12).
@@ -141,7 +88,7 @@ export function RecentTasks(): React.JSX.Element {
         </ul>
       )}
 
-      {ordered.length > visible && (
+      {ordered.length > visible ? (
         <button
           type="button"
           onClick={showMore}
@@ -149,6 +96,8 @@ export function RecentTasks(): React.JSX.Element {
         >
           Show more tasks
         </button>
+      ) : expanded && (
+        <p className="px-2 text-[13px] text-[var(--color-text-muted)]">All {ordered.length} shown</p>
       )}
 
       {/*

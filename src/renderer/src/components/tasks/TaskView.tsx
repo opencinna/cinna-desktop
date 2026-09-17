@@ -31,11 +31,13 @@ import { useUIStore } from '../../stores/ui.store'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { markdownComponents } from '../../utils/markdownComponents'
+import { TaskStatusIcon } from './TaskStatusIcon'
 import { TaskStatusPill } from './TaskStatusPill'
 import { PendingHandoffControl } from './PendingHandoffControl'
 import { HandOffTaskControl } from './HandOffTaskControl'
 import { TaskList } from './TaskList'
 import { TaskRuntimeControl } from './TaskRuntimeControl'
+import { isFolderAgentId } from '../../../../shared/localAgents'
 import type { TaskArtifact, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
 
@@ -139,7 +141,8 @@ export function TaskView(): React.JSX.Element {
     )
   }
 
-  return <TaskPage task={task.data} isStale={task.isError || !!task.data.remote?.refreshError} />
+  // Keyed: a link refusal, or one arriving late, belongs to the task it was for.
+  return <TaskPage key={task.data.id} task={task.data} isStale={task.isError || !!task.data.remote?.refreshError} />
 }
 
 function TaskPage({
@@ -156,7 +159,15 @@ function TaskPage({
   task: TaskDto
   isStale: boolean
 }): React.JSX.Element {
-  const { data: job } = useJob(task.jobId)
+  const jobQuery = useJob(task.jobId)
+  const job = jobQuery.data ?? null
+  /*
+    `tasks.job_id` outlives its job (no foreign key, on purpose), so a task can
+    name a job that no longer exists. Once the read has settled without one,
+    the job is treated as gone: no arrow into a page that would load for ever,
+    no Job row stuck on its placeholder.
+  */
+  const jobGone = !!task.jobId && !jobQuery.isPending && !job
   const { data: agents, isPending: agentsPending } = useAgents()
   const inbox = useInboxList()
   const openChat = useOpenChatFromRun()
@@ -252,6 +263,33 @@ function TaskPage({
     return task.assignee.name
   })()
 
+  /*
+    The agent's own page, when the assignee is an agent this app still lists —
+    a folder agent opens its local page, anything else its external page, the
+    same split the sidebar makes. A deleted agent, a remote one hidden from the
+    desktop, a script, a model or the user stay plain text: there is no page to
+    open. `setSidebarTab('agents')` so the sidebar shows the row that was opened.
+  */
+  const assigneeAgent = task.assignee.kind === 'agent' && task.assignee.agentId && !agentsPending
+    ? (agents ?? []).find((a) => a.id === task.assignee.agentId && (a.source !== 'remote' || a.enabled)) ?? null
+    : null
+  const setAgentPageMode = useUIStore((s) => s.setAgentPageMode)
+  const setSidebarTab = useUIStore((s) => s.setSidebarTab)
+  const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
+  const setActiveExternalAgentId = useUIStore((s) => s.setActiveExternalAgentId)
+  const openAssignee = (): void => {
+    if (!assigneeAgent) return
+    setAgentPageMode('chat')
+    setSidebarTab('agents')
+    if (isFolderAgentId(assigneeAgent.id)) {
+      setActiveLocalAgentId(assigneeAgent.id)
+      setActiveView('local-agent')
+    } else {
+      setActiveExternalAgentId(assigneeAgent.id)
+      setActiveView('external-agent')
+    }
+  }
+
   const handleBackToJob = (): void => {
     if (!task.jobId) return
     setActiveJobId(task.jobId)
@@ -266,7 +304,7 @@ function TaskPage({
    * task, and step 11 is that step — a chat's first ask now mints one. The
    * obvious fix was a second back link pointing at the chat, and the UX review
    * measured what that actually produced: *Back to the conversation* and the
-   * header's own **Open the conversation** (rendered for any task with a
+   * header's own **Open the chat** (rendered for any task with a
    * `chatId`, ~400 px away on the same header row) — two controls, one
    * destination, one noun (`ux_rules.md` §2, §7).
    *
@@ -276,210 +314,227 @@ function TaskPage({
    * on this machine to go back to, so nothing is the right answer.
    */
 
+  /*
+    The way back, as one arrow at the head of the title row: to the parent for
+    a subtask, else to the job, else to the Inbox — a task a conversation
+    minted at its first ask, or one that arrived over sync, has no other named
+    route to a list of tasks. One arrow, never two: a subtask that also has a
+    job reaches the job from Details, where it is a fact about the task rather
+    than a second "back" (§2, §7). The arrow is there before the job's name
+    is — `useJob` starts only once the task read returns — and only its name
+    arrives late.
+  */
+  const back = task.parentTaskId
+    ? { label: 'Parent task', go: () => openTask(task.parentTaskId!) }
+    : task.jobId && !jobGone
+      ? { label: job ? `Back to ${job.title}` : 'Back to the job', go: handleBackToJob }
+      : { label: 'Back to the Inbox', go: () => setActiveView('inbox') }
+
+  /*
+    The page follows the local agent page: the title row with the actions level
+    with it, then a body — the work (goal, description, handoff note,
+    artifacts) with the facts about it in a panel beside it, below it when the
+    page is narrower than `@2xl` — and the subtasks under both.
+
+    The first row sits where the local agent page's does (`py-6` under the
+    top bar), with the title and the actions sharing a top edge, so moving
+    between the two pages moves nothing.
+  */
   return (
-    <div className="flex-1 overflow-y-auto pt-[var(--topbar-h)]">
-      <div className="max-w-2xl mx-auto px-6 py-6 space-y-6">
-        <div>
-          <header className="flex items-start justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              {/*
-                **The slot is there before the job's name is.** `useJob` cannot
-                start until the task read returns, so the link used to be
-                *inserted* above the title a moment later and pushed the whole
-                page down by its height — 28 px, measured, and everything below
-                it with it (`ux_rules.md` §1). The space is reserved for any
-                task that has a job; only the sentence in it arrives late.
-
-                A task with no job gets no slot for *that* link, and the third
-                arm below covers what is left.
-              */}
-              {task.parentTaskId && (
-                <button type="button" onClick={() => openTask(task.parentTaskId!)}
-                  className="inline-flex items-center gap-1 mb-1.5 text-[11px] font-medium text-[var(--color-accent)]">
-                  <ArrowLeft size={11} />Parent task
-                </button>
-              )}
-              {/*
-                **The way back to a list of tasks, for the task that has no
-                other.** A subtask goes up to its parent and a job's task goes
-                back to its job; a task with neither — one a conversation minted
-                at its first ask, one that arrived over sync — had nothing here
-                at all. That was survivable while the sidebar carried a Tasks
-                section: the list was on screen beside the page. With the list
-                moved to the Inbox, the only route left was the top-bar icon,
-                which announces "Inbox" and says nothing about tasks, so the
-                escape existed and was not named after what is behind it.
-
-                Deliberately **not** added to a header that already has one of
-                the two above. Those two are independent of each other — a
-                child that also carries a job renders both, and each names a
-                different relationship — but a third arrow beside them is the
-                "two controls, one noun" the note further up rejected, and the
-                page then argues with itself about where back is. So this arm
-                only ever fills a header that would otherwise have none.
-              */}
-              {!task.parentTaskId && !task.jobId && (
-                <button type="button" onClick={() => setActiveView('inbox')}
-                  className="inline-flex items-center gap-1 mb-1.5 text-[11px] font-medium text-[var(--color-accent)]">
-                  <ArrowLeft size={11} />Back to the Inbox
-                </button>
-              )}
-              {task.jobId && (
-                <div className="min-h-[1.125rem] mb-1.5">
-                  {job && (
-                    <button
-                      type="button"
-                      onClick={handleBackToJob}
-                      title={`Back to ${job.title}`}
-                      className="inline-flex max-w-full items-center gap-1 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-                    >
-                      <ArrowLeft size={11} className="shrink-0" />
-                      <span className="min-w-0 truncate">Back to {job.title}</span>
-                    </button>
-                  )}
-                </div>
-              )}
-              {/*
-                **The title wraps; it does not truncate.** A task's title is a
-                sentence an agent or a job wrote, not a label — at `truncate` it
-                was cut at around sixty characters even on a wide window, and
-                the page's subject is the one thing on it that has to be
-                readable (`ux_rules.md` §7). Wrapping changes this block's
-                height between one task and the next, which is not a jump: it
-                never changes while the user is looking at one.
-              */}
-              <div className="flex items-center gap-2">
-                <h1 className="text-base font-semibold text-[var(--color-text)] min-w-0 [overflow-wrap:anywhere]">
-                  {task.title}
-                </h1>
-                <TaskStatusPill status={task.status} />
-              </div>
-              {task.remote?.key && (
-                <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5 font-mono">
-                  {task.remote.key}
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              {task.chatId && (
-                <button
-                  type="button"
-                  onClick={() => openChat(task.chatId as string)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-                    border border-[var(--color-border)] text-[var(--color-text-secondary)]
-                    hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
-                >
-                  <MessageSquare size={12} />
-                  Open the conversation
-                </button>
-              )}
-              {task.remote?.url && (
-                <button
-                  type="button"
-                  onClick={() => void openUrl(task.remote?.url as string)}
-                  className="p-1.5 rounded-md border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
-                  // The tooltip and the announced name are one sentence
-                  // (`ux_rules.md` §10): an icon-only control has no visible
-                  // text to fall back on, so a hover that said one thing and a
-                  // screen reader that said another would be two controls.
-                  title="Open this task in the service it is connected to"
-                  aria-label="Open this task in the service it is connected to"
-                >
-                  <ExternalLink size={12} />
-                </button>
-              )}
-            </div>
-          </header>
-          {/*
-            Always present, so a refused link cannot move the page it was
-            clicked on. One line of the app-chrome scale's leading, written as
-            such, and inside the header block so an empty slot does not open a
-            second gap above what follows.
-          */}
-          <div
-            role="alert"
-            title={openError ?? undefined}
-            className="min-h-[1.125rem] truncate text-[11px] text-[var(--color-danger)]"
-          >
-            {openError}
+    <div data-task-scroll className="@container flex-1 overflow-y-auto pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
+      <div className="max-w-4xl mx-auto px-6 py-6 space-y-3">
+        {/*
+          **One line, always.** The title is a sentence an agent or a job
+          wrote and can run to a paragraph; the goal below says everything, so
+          the header names the task and the full title is in the tooltip. One
+          line is also what lets the actions sit level with it at every width:
+          a label that changes width on a poll (Hand off → Review pending
+          handoff) only changes where the title is cut, never the height of
+          anything (§1).
+        */}
+        <header className="flex items-start gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <button
+              type="button"
+              onClick={back.go}
+              title={back.label}
+              aria-label={back.label}
+              className="shrink-0 rounded-md border border-[var(--color-border)] p-1 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors"
+            >
+              <ArrowLeft size={14} />
+            </button>
+            {/* The status as an icon, the way it leads a task row; the word is in Details. */}
+            <span className="flex shrink-0 items-center" title={task.status.replace(/_/g, ' ')}>
+              <TaskStatusIcon status={task.status} size={18} />
+            </span>
+            <h1
+              title={task.title}
+              className="min-w-0 truncate text-xl font-semibold text-[var(--color-text)]"
+            >
+              {task.title}
+            </h1>
           </div>
+          {/*
+            Least to most important, left to right. Hand off is first because
+            it can change width on its own — a pending receipt turns it into
+            Review pending handoff on a poll — and in a right-aligned group only
+            what is to its left moves: here, where the title is cut.
+          */}
+          <div className="flex shrink-0 items-center gap-1.5">
+            <HandOffTaskControl key={task.id} task={task} />
+            {task.remote?.url && (
+              <button
+                type="button"
+                onClick={() => void openUrl(task.remote?.url as string)}
+                className="p-1.5 rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
+                // The tooltip and the announced name are one sentence (§10).
+                title="Open this task in the service it is connected to"
+                aria-label="Open this task in the service it is connected to"
+              >
+                <ExternalLink size={14} />
+              </button>
+            )}
+            {task.chatId && (
+              <button
+                type="button"
+                onClick={() => openChat(task.chatId as string)}
+                className="inline-flex items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-md text-xs font-medium
+                  bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors"
+              >
+                <MessageSquare size={12} />
+                Open the chat
+              </button>
+            )}
+          </div>
+        </header>
+        {/*
+          Always rendered, exactly one line, so a refused link cannot move the
+          page it was clicked on. `describeOpenExternalFailure` keeps the
+          sentence to one line; the slot clamps as a guarantee.
+        */}
+        <div
+          role="alert"
+          title={openError ?? undefined}
+          className="h-4 truncate text-right text-[11px] leading-4 text-[var(--color-danger)]"
+        >
+          {openError}
         </div>
 
-        <div className="flex justify-end min-h-8"><HandOffTaskControl key={task.id} task={task} /></div>
         {/*
           Directly under the header and above everything else, which is where a
           status that changes on its own is allowed to appear: the controls are
           in the header above it, so a block arriving on a poll pushes prose
-          down and never a button the user was reaching for (`ux_rules.md` §1).
-          The action the block is about lives *inside* it, for the same reason.
+          down and never a button the user was reaching for (§1). The action the
+          block is about lives *inside* it, for the same reason.
         */}
         <Attention task={task} asks={asks} />
 
-        <Section title="Goal">
-          <Prose>{task.goal}</Prose>
-        </Section>
+        <div className="grid gap-6 @2xl:grid-cols-[minmax(0,1fr)_13rem]">
+          <div className="min-w-0 space-y-6">
+            <Section title="Goal">
+              <Prose>{task.goal}</Prose>
+            </Section>
 
-        {task.description && (
-          <Section title="Description">
-            <Prose>{task.description}</Prose>
-          </Section>
-        )}
-
-        {task.handoffNote && (
-          <Section title="Handoff note">
-            <Prose>{task.handoffNote}</Prose>
-          </Section>
-        )}
-
-        {task.artifacts.length > 0 && (
-          <Section title="Artifacts">
-            <ul className="space-y-1 list-none m-0 p-0">
-              {task.artifacts.map((artifact, i) => (
-                <ArtifactRow key={`${artifact.ref}-${i}`} artifact={artifact} onOpen={openUrl} />
-              ))}
-            </ul>
-          </Section>
-        )}
-
-        <Section title="Details">
-          <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 m-0">
-            <Detail label="Assignee" value={assignee} />
-            <Detail label="Priority" value={capitalize(task.priority)} />
-            {task.executor === 'remote' && (
-              <Detail label="Running" value="in the connected service" />
+            {task.description && (
+              <Section title="Description">
+                <Prose>{task.description}</Prose>
+              </Section>
             )}
-            <Detail
-              label="Created"
-              value={formatRelativeFromDate(task.createdAt, now)}
-              title={task.createdAt.toLocaleString()}
-            />
-            <Detail
-              label="Started"
-              value={task.startedAt ? formatRelativeFromDate(task.startedAt, now) : null}
-              title={task.startedAt?.toLocaleString()}
-            />
-            <Detail
-              label="Finished"
-              value={task.finishedAt ? formatRelativeFromDate(task.finishedAt, now) : null}
-              title={task.finishedAt?.toLocaleString()}
-            />
-            {task.subtaskCount > 0 && (
-              <Detail
-                label="Subtasks"
-                value={`${task.subtaskCompletedCount} of ${task.subtaskCount} done`}
-              />
-            )}
-          </dl>
-        </Section>
 
-        {!task.parentTaskId && <TaskList key={task.id} parentTaskId={task.id} />}
+            {task.handoffNote && (
+              <Section title="Handoff note">
+                <Prose>{task.handoffNote}</Prose>
+              </Section>
+            )}
+
+            {task.artifacts.length > 0 && (
+              <Section title="Artifacts">
+                <ul className="space-y-1 list-none m-0 p-0">
+                  {task.artifacts.map((artifact, i) => (
+                    <ArtifactRow key={`${artifact.ref}-${i}`} artifact={artifact} onOpen={openUrl} />
+                  ))}
+                </ul>
+              </Section>
+            )}
+          </div>
+
+          <aside
+            aria-label="Details"
+            className="self-start rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-3"
+          >
+            {/*
+              Label left, value right, one fact per row. Two columns of rows
+              when the panel sits below the work, one beside it.
+            */}
+            <dl className="m-0 grid grid-cols-1 gap-x-6 gap-y-2 @md:grid-cols-2 @2xl:grid-cols-1">
+              <Detail label="Status">
+                <TaskStatusPill status={task.status} />
+              </Detail>
+              <Detail label="Assignee">
+                {assigneeAgent ? (
+                  <button
+                    type="button"
+                    onClick={openAssignee}
+                    title={assigneeAgent.name}
+                    className="block max-w-full truncate text-right font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
+                  >
+                    {assignee}
+                  </button>
+                ) : assignee}
+              </Detail>
+              <Detail label="Priority">{capitalize(task.priority)}</Detail>
+              {task.executor === 'remote' && (
+                <Detail label="Running">In the connected service</Detail>
+              )}
+              {task.remote?.key && (
+                <Detail label="Key">
+                  <span className="font-mono text-[11px]">{task.remote.key}</span>
+                </Detail>
+              )}
+              {task.jobId && !jobGone && (
+                <Detail label="Job">
+                  {/* Here as well as in the back arrow: a subtask's arrow goes to its parent. */}
+                  {job ? (
+                    <button
+                      type="button"
+                      onClick={handleBackToJob}
+                      title={job.title}
+                      className="block max-w-full truncate text-right font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
+                    >
+                      {job.title}
+                    </button>
+                  ) : (
+                    <span className="text-[var(--color-text-muted)]">…</span>
+                  )}
+                </Detail>
+              )}
+              <Detail label="Updated"><Timestamp at={task.updatedAt} now={now} /></Detail>
+              <Detail label="Created"><Timestamp at={task.createdAt} now={now} /></Detail>
+              {task.startedAt && (
+                <Detail label="Started"><Timestamp at={task.startedAt} now={now} /></Detail>
+              )}
+              {task.finishedAt && (
+                <Detail label="Finished"><Timestamp at={task.finishedAt} now={now} /></Detail>
+              )}
+              {task.subtaskCount > 0 && (
+                <Detail label="Subtasks">
+                  {`${task.subtaskCompletedCount} of ${task.subtaskCount} done`}
+                </Detail>
+              )}
+            </dl>
+          </aside>
+        </div>
+
+        {/* Renders nothing for a task with no subtasks — see `TaskList`. */}
+        {!task.parentTaskId && (
+          <TaskList key={task.id} parentTaskId={task.id} expected={task.subtaskCount > 0} />
+        )}
 
         {/*
           Under everything, never over it: a poll can fail at any moment,
           including while the pointer is on the re-run button, and a line that
-          appeared above it would move it (`ux_rules.md` §1). What is above is
-          the last good read — this line says only that it may have stopped
-          being current.
+          appeared above it would move it (§1). What is above is the last good
+          read — this line says only that it may have stopped being current.
         */}
         {isStale && (
           <div className="flex items-center gap-2 pt-1 text-[11px] text-[var(--color-text-muted)]">
@@ -1163,7 +1218,7 @@ function Section({
 }): React.JSX.Element {
   return (
     <section>
-      <h2 className="text-xs font-semibold text-[var(--color-text-secondary)] mb-2">{title}</h2>
+      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">{title}</h2>
       {children}
     </section>
   )
@@ -1184,29 +1239,47 @@ function Prose({ children }: { children: string }): React.JSX.Element {
 }
 
 /**
- * One fact. A row with nothing to say is **not rendered** rather than rendered
- * with a dash: "Finished —" on a task that is still running is a sentence that
- * reads as an error where the absence of the row reads as what it is.
+ * One fact: label on the left, value on the right. A fact with nothing to say
+ * is **not rendered** rather than rendered with a dash: "Finished —" on a task
+ * that is still running reads as an error where an absent row reads as what it
+ * is — so callers leave the row out, and an empty value renders nothing too.
  */
 function Detail({
   label,
-  value,
-  title
+  children
 }: {
   label: string
-  value: string | null | undefined
-  title?: string
+  children: React.ReactNode
 }): React.JSX.Element | null {
-  if (!value) return null
+  if (children === null || children === undefined || children === '') return null
   return (
-    <>
-      <dt className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] pt-0.5">
-        {label}
-      </dt>
-      <dd className="text-xs text-[var(--color-text-secondary)] m-0 min-w-0 truncate" title={title}>
-        {value}
+    <div className="flex min-w-0 items-baseline justify-between gap-3">
+      <dt className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">{label}</dt>
+      <dd className="m-0 min-w-0 break-words text-right text-xs text-[var(--color-text-secondary)]">
+        {children}
       </dd>
-    </>
+    </div>
+  )
+}
+
+/**
+ * A time, relative until clicked, then the full local date and time; a second
+ * click goes back. A tooltip alone would hide the exact time from anyone not
+ * hovering, and a keyboard user never hovers. Dotted underline, because a
+ * value that is also a control has to look like one before it is pointed at
+ * (§11).
+ */
+function Timestamp({ at, now }: { at: Date; now: Date }): React.JSX.Element {
+  const [exact, setExact] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={() => setExact((value) => !value)}
+      aria-pressed={exact}
+      className="text-right tabular-nums underline decoration-dotted decoration-[var(--color-text-muted)] underline-offset-2 hover:text-[var(--color-text)] transition-colors"
+    >
+      {exact ? at.toLocaleString() : formatRelativeFromDate(at, now)}
+    </button>
   )
 }
 

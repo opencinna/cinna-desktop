@@ -8,6 +8,7 @@ import { useChatStore } from '../stores/chat.store'
 import { useUIStore } from '../stores/ui.store'
 import { useLocalDevStore } from '../stores/localDev.store'
 import { unwrapIpcError } from '../utils/ipcError'
+import { describeOpenExternalFailure } from './useSystem'
 
 /** Query and action boundary for the account-bound development workspace. */
 export function useDevelopmentWorkspace() {
@@ -72,7 +73,7 @@ export function useDevelopmentWorkspace() {
     if (!user?.cinnaServerUrl) return
     try {
       const result = await window.api.system.openExternal(user.cinnaServerUrl)
-      if (!result.success) throw new Error(result.error ?? 'Could not open the Cinna server.')
+      if (!result.success) throw new Error(describeOpenExternalFailure(result.error))
     } catch (err) {
       if (mounted.current) setError(unwrapIpcError(err, 'Could not open the Cinna server.'))
     }

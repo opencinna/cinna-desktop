@@ -217,7 +217,7 @@ test('Task Continue attaches to main-owned live output before the turn finishes'
     fake.emit(FIRST + SECOND)
     await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
     await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true }).getByRole('button', { name: TASK_TITLE }).click()
-    await cinna.page.getByRole('button', { name: 'Open the conversation', exact: true }).click()
+    await cinna.page.getByRole('button', { name: 'Open the chat', exact: true }).click()
     await expect(cinna.page.getByText(FIRST + SECOND, { exact: true })).toHaveCount(1)
     fake.emit(FIRST + SECOND + THIRD)
     await stopAndCheck(cinna, fake, running.chatId!, TASK_PROMPT)
