@@ -85,6 +85,7 @@ describe('composer recheck feedback', () => {
     vi.useFakeTimers()
     const run = vi.fn()
     const readiness: ComposerReadiness = {
+      notice: { state: 'invalid', reason: 'Update local development tooling.' },
       refusal: { state: 'invalid', reason: 'Update local development tooling.' },
       blocksSend: true,
       text: 'Update local development tooling.',

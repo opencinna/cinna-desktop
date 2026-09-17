@@ -180,7 +180,7 @@ Tests: `src/renderer/src/utils/cinnaCli.test.ts`, `src/renderer/src/components/c
 
 ### Composer readiness warnings
 
-`ChatInput` renders `ComposerReadinessWarning` immediately above its input container. `useComposerReadiness` continues to refuse only the direct/addressed target, exempts exact catalog `/run:` commands, and attaches the full reason through Send's `aria-describedby`. Known credential/login/install issues use warning tone; unreachable/invalid/contract states use danger. `ComposerWarning` wraps the reason and puts the Check again/Re-authenticate action below it. No refusal means no panel or reserved empty line. The build entry uses the same component for setup and action errors; pending setup without a known failure uses a neutral status panel.
+`ChatInput` renders `ComposerReadinessWarning` immediately above its input container. `useComposerReadiness` continues to refuse only the direct/addressed target, never refuses a folder agent's `credentials_needed` (the panel still shows), exempts exact catalog `/run:` commands, and attaches the full reason through Send's `aria-describedby`. Known credential/login/install issues use warning tone; unreachable/invalid/contract states use danger. `ComposerWarning` wraps the reason and puts the Check again/Re-authenticate action below it. No non-`ok` answer means no panel or reserved empty line. The build entry uses the same component for setup and action errors; pending setup without a known failure uses a neutral status panel.
 
 ### Generic tool-call rows
 

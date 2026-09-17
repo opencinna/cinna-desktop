@@ -83,6 +83,20 @@ describe('local schedule admission and persistence', () => {
     expect(driverRun).toHaveBeenCalledTimes(1)
   })
 
+  it('enables and runs a schedule on an agent whose credentials are missing, but not on an invalid one', async () => {
+    const healthy = state.get.getMockImplementation()!
+    const withReadiness = (readiness: string) => () => ({ ...(healthy() as object), readiness, readinessReason: `Folder is ${readiness}.` })
+    state.get.mockImplementation(withReadiness('invalid'))
+    expect(localScheduleService.list(scope, AGENT)[0].problem).toBe('Folder is invalid.')
+    state.get.mockImplementation(withReadiness('credentials_needed'))
+    expect(localScheduleService.list(scope, AGENT)[0].problem).toBeNull()
+    const binding = enable()
+    expect(localScheduleService.list(scope, AGENT)[0].binding).toMatchObject({ enabled: true, reason: null })
+    check()
+    await settled(binding.id)
+    expect(driverRun).toHaveBeenCalledTimes(1)
+  })
+
   it('does not let a soft-deleted blocked task reserve every later occurrence', async () => {
     const binding = enable()
     const prepared = scriptRuntimeService.prepareJob(scope, jobsRepo.getById(USER, binding.jobId)!)

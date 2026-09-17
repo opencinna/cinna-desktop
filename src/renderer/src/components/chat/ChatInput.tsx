@@ -835,18 +835,18 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const blocksSendRef = useRef(readiness.blocksSend)
   blocksSendRef.current = readiness.blocksSend
   const readinessReasonId = useId()
-  // Check again removes itself when its check clears the refusal, and the focus
+  // Check again removes itself when its check clears the warning, and the focus
   // it held falls to the page body; hand it to the message box, where the user
-  // goes next. Only from the body: a refusal cleared in the background never
+  // goes next. Only from the body: a warning cleared in the background never
   // takes focus from wherever the user is.
-  const refused = readiness.refusal !== null
-  const wasRefusedRef = useRef(refused)
+  const warned = readiness.notice !== null
+  const wasWarnedRef = useRef(warned)
   useEffect(() => {
-    if (wasRefusedRef.current && !refused && document.activeElement === document.body) {
+    if (wasWarnedRef.current && !warned && document.activeElement === document.body) {
       focusComposer()
     }
-    wasRefusedRef.current = refused
-  }, [refused, focusComposer])
+    wasWarnedRef.current = warned
+  }, [warned, focusComposer])
 
   // Drag-drop wiring. `dragOverDepth` is a counter (not a boolean) because
   // dragenter/dragleave fire on every child during a drag — we'd flicker
@@ -1863,7 +1863,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               }}
               aria-label={editingId ? 'Save' : 'Send'}
               aria-describedby={!editingId && readiness.text ? readinessReasonId : undefined}
-              title={editingId ? 'Save queued message' : readiness.title ?? (isStreaming ? 'Send a follow-up · Esc Esc to stop' : undefined)}
+              title={editingId ? 'Save queued message' : (readiness.refusal ? readiness.title : null) ?? (isStreaming ? 'Send a follow-up · Esc Esc to stop' : undefined)}
               disabled={
                 sending ||
                 (editingId

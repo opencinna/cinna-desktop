@@ -138,7 +138,7 @@ export interface AgentReadiness {
   state: AgentReadinessState
   /**
    * One short sentence explaining a non-`ok` state, in the user's words — it is
-   * shown beside a disabled Send, truncated to what fits. Null when `ok`.
+   * shown in the composer's warning, truncated to what fits. Null when `ok`.
    */
   reason: string | null
   /**
@@ -146,6 +146,24 @@ export interface AgentReadiness {
    * never the only thing a surface shows. Absent when the reason says it all.
    */
   detail?: string | null
+}
+
+/**
+ * Whether a readiness answer stops a turn to an agent from starting.
+ *
+ * A folder agent's `credentials_needed` is a warning, not a refusal: an agent
+ * under development routinely has a half-filled `credentials/.env`, and a
+ * missing variable breaks only what uses it — the engine itself still runs.
+ * The same state from an agent with no folder (a rejected A2A token, a Managed
+ * agent with no credential) means the turn would only fail, so it refuses.
+ * `null` (never checked, or a check that could not tell) never refuses.
+ */
+export function readinessBlocksTurn(
+  readiness: AgentReadiness | null | undefined,
+  capabilities: Pick<AgentCapabilities, 'cwd'>
+): boolean {
+  if (readiness == null || readiness.state === 'ok') return false
+  return !(readiness.state === 'credentials_needed' && capabilities.cwd)
 }
 
 /**

@@ -21,11 +21,14 @@ const finished = new Set(['completed', 'failed', 'cancelled', 'skipped_overlap']
 const terminalTasks = new Set(['completed', 'error', 'cancelled', 'archived'])
 const jobFingerprint = (job: JobRow) => hash([job.userId, job.type, job.title, job.prompt, job.router, job.script, job.budget])
 const revisionOf = (definition: LocalScheduleDefinition) => hash(definition)
+const folderCanRun = (agent: LocalAgentDto) => agent.readiness === 'ok' || agent.readiness === 'credentials_needed'
 
 function definitionFor(scope: RunScope, agent: LocalAgentDto, raw: unknown, fallbackZone?: string): LocalScheduleDefinition {
   if (agent.kind !== 'kit' || typeof agent.manifest.id !== 'string' || agent.id !== `folder:${agent.manifest.id}`) throw new Error('Local schedules require a kit agent with a stable manifest identity.')
   if (!(agentOverrideRepo.get(scope.profileUserId, agent.id)?.enabled ?? agent.enabled)) throw new Error('Enable this agent before reviewing its schedules.')
-  if (agent.readiness !== 'ok') throw new Error(agent.readinessReason ?? 'Finish this agent’s setup before enabling schedules.')
+  // Missing credentials only warn, as they do for chat and tasks: a folder under
+  // development often has a half-filled credentials/.env.
+  if (!folderCanRun(agent)) throw new Error(agent.readinessReason ?? 'Finish this agent’s setup before enabling schedules.')
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('This schedule definition is invalid.')
   const value = raw as Record<string, unknown>
   if (typeof value.name !== 'string' || !value.name.trim() || value.name !== value.name.trim() || value.name.length > 255) throw new Error('Use a unique schedule name of 1–255 characters without surrounding spaces.')
@@ -104,7 +107,7 @@ function rowsFor(scope: RunScope, agentId: string, reconcile = false): LocalSche
         !job || job.deletedAt || jobFingerprint(job) !== binding.jobFingerprint ? 'The scheduled job changed or was deleted. Review the schedule again.' : null)
       // Only the scheduler persists confirmed definition/job changes. Reads
       // and transient folder failures cannot revoke the user's opt-in.
-      if (reconcile && reason && agent?.readiness === 'ok') localScheduleRepo.save({ ...binding, enabled: false, reason })
+      if (reconcile && reason && agent && folderCanRun(agent)) localScheduleRepo.save({ ...binding, enabled: false, reason })
     }
     const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
     const last = binding ? localScheduleRepo.latest(scope.profileUserId, binding.id) : undefined

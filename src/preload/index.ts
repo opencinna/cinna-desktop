@@ -266,8 +266,8 @@ export interface AgentData {
   capabilities: AgentCapabilities
   /**
    * Whether the agent can take a turn right now — its driver's last answer, or
-   * null when not checked yet. The composer refuses a send only on a non-`ok`
-   * answer; null never blocks.
+   * null when not checked yet. The composer warns on any non-`ok` answer and
+   * refuses a send only where `readinessBlocksTurn` says so; null never blocks.
    */
   readiness: AgentReadiness | null
   createdAt: Date

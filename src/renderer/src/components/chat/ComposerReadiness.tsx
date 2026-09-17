@@ -6,6 +6,7 @@ import { useCheckAgentReadiness } from '../../hooks/useAgents'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { RUN_REFERENCE_PATTERN } from '../../../../shared/kit/manifest'
+import { readinessBlocksTurn } from '../../../../shared/agentDrivers'
 import type { AgentReadiness, AgentReadinessState } from '../../../../shared/agentDrivers'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
@@ -44,16 +45,23 @@ export function readinessTone(readiness: AgentReadiness): string {
   return TONE[readinessSeverity(readiness)]
 }
 
+/** The readiness a warning is shown for, or null when the agent is `ok` or unchecked. */
+export function readinessNotice(agent: AgentData | null | undefined): AgentReadiness | null {
+  const readiness = agent?.readiness ?? null
+  return readiness && readiness.state !== 'ok' ? readiness : null
+}
+
 /**
  * The readiness a send to `agent` is refused on, or null when it is not.
  *
  * Only an answer the agent's driver actually gave refuses: `null` — never
  * checked, or a check that could not tell — lets the message through, so a
- * probe that has not happened can never stop a working agent.
+ * probe that has not happened can never stop a working agent. Missing
+ * credentials warn without refusing (see `readinessBlocksTurn`).
  */
 export function readinessRefusal(agent: AgentData | null | undefined): AgentReadiness | null {
-  const readiness = agent?.readiness ?? null
-  return readiness && readiness.state !== 'ok' ? readiness : null
+  const readiness = readinessNotice(agent)
+  return agent && readinessBlocksTurn(readiness, agent.capabilities) ? readiness : null
 }
 
 /** The short sentence shown on screen. */
@@ -88,6 +96,8 @@ export interface ReadinessAction {
 }
 
 export interface ComposerReadiness {
+  /** The answer the warning is shown for; null when the agent is ready. */
+  notice: AgentReadiness | null
   /** The answer the send is refused on; null when nothing is refused. */
   refusal: AgentReadiness | null
   /** Whether Send and Enter are blocked — false for a catalog `/run:` even while refused. */
@@ -100,8 +110,9 @@ export interface ComposerReadiness {
 }
 
 /**
- * Everything the composer needs to refuse a send to an agent that is not
- * ready: whether to block, what to say, and what to offer.
+ * Everything the composer needs for an agent that is not ready: whether to
+ * block, what to say, and what to offer. A notice that does not refuse
+ * (missing credentials) is said and offered the same way, with Send left on.
  *
  * The line depends only on the agent's readiness and on the outcome of the
  * action — never on what is typed — so nothing appears or moves while the user
@@ -110,6 +121,7 @@ export interface ComposerReadiness {
 export function useComposerReadiness(target: AgentData | null, typed: string): ComposerReadiness {
   const check = useCheckAgentReadiness()
   const reauth = useCinnaReauth()
+  const notice = readinessNotice(target)
   const refusal = readinessRefusal(target)
   const agentId = target?.id ?? null
 
@@ -120,15 +132,15 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
   useEffect(() => {
     resetCheck()
     resetReauth()
-  }, [agentId, refusal?.state, refusal?.reason, resetCheck, resetReauth])
+  }, [agentId, notice?.state, notice?.reason, resetCheck, resetReauth])
 
-  if (!target || !refusal) {
-    return { refusal: null, blocksSend: false, text: null, title: null, action: null }
+  if (!target || !notice) {
+    return { notice: null, refusal: null, blocksSend: false, text: null, title: null, action: null }
   }
 
   // An expired Cinna session is not fixed by asking again: it is fixed by
   // signing in again, the same flow the chat's error bubble offers.
-  const reauthable = refusal.state === 'not_logged_in' && target.capabilities.auth === 'cinna'
+  const reauthable = notice.state === 'not_logged_in' && target.capabilities.auth === 'cinna'
   const failure = reauthable
     ? reauth.error
       ? unwrapIpcError(reauth.error, 'Re-authentication failed')
@@ -157,10 +169,11 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
       }
 
   return {
+    notice,
     refusal,
-    blocksSend: !isCatalogCommand(target, typed),
-    text: `${readinessText(refusal)}${suffix}`,
-    title: `${readinessTitle(refusal)}${suffix}`,
+    blocksSend: refusal !== null && !isCatalogCommand(target, typed),
+    text: `${readinessText(notice)}${suffix}`,
+    title: `${readinessTitle(notice)}${suffix}`,
     action
   }
 }
@@ -191,9 +204,9 @@ export function ComposerReadinessWarning({ readiness, reasonId }: {
   readiness: ComposerReadiness
   reasonId: string
 }): React.JSX.Element | null {
-  const { refusal, text, title, action } = readiness
-  if (!refusal || !text || !action) return null
-  return <ComposerWarning className="mb-3" tone={readinessSeverity(refusal)} action={
+  const { notice, text, title, action } = readiness
+  if (!notice || !text || !action) return null
+  return <ComposerWarning className="mb-3" tone={readinessSeverity(notice)} action={
     <ReadinessActionButton key={reasonId + action.label} action={action} />
   }>
     <p id={reasonId} title={title ?? undefined}>{text}</p>

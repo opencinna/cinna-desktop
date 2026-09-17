@@ -107,7 +107,7 @@ function catalogAgent(readiness: unknown): Record<string, unknown> {
   return agent(readiness, {
     id: 'folder:alpha',
     driver: 'opencode',
-    capabilities: { attachments: 'none', commands: 'catalog', auth: 'none' }
+    capabilities: { attachments: 'none', commands: 'catalog', auth: 'none', cwd: true }
   })
 }
 
@@ -205,6 +205,34 @@ describe('composer readiness refusal', () => {
     typeAndEnter('hello')
     expect(onNewChat).not.toHaveBeenCalled()
     expect(screen.getByText('Could not reach the agent.')).toBeTruthy()
+    expect(send().disabled).toBe(true)
+  })
+
+  it('warns about missing credentials on a folder agent without refusing the send', () => {
+    const reason = 'Add the credentials for Vendor in credentials/.env.'
+    mountActive(catalogAgent({ state: 'credentials_needed', reason }))
+    expect(screen.getByText(reason)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeTruthy()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'hello' } })
+    expect(send().disabled).toBe(false)
+    expect(send().title).not.toBe(reason)
+  })
+
+  it('leaves Send live on a new chat whose agent lacks credentials', () => {
+    const onNewChat = vi.fn()
+    mountNew(catalogAgent({ state: 'credentials_needed', reason: 'Add the credentials.' }), 'direct', onNewChat)
+    expect(screen.getByText('Add the credentials.')).toBeTruthy()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'hello' } })
+    expect(send().disabled).toBe(false)
+    typeAndEnter('hello')
+    expect(onNewChat).toHaveBeenCalledWith('hello', undefined, undefined)
+  })
+
+  it('still refuses an agent with no folder whose token was rejected', () => {
+    const onNewChat = vi.fn()
+    mountNew(agent({ state: 'credentials_needed', reason: 'The agent refused its access token (401).' }), 'direct', onNewChat)
+    typeAndEnter('hello')
+    expect(onNewChat).not.toHaveBeenCalled()
     expect(send().disabled).toBe(true)
   })
 

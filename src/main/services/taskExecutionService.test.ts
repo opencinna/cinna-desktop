@@ -12,7 +12,8 @@ vi.mock('../logger/logger', () => ({ createLogger: () => ({ info() {}, warn() {}
 const exportHandoff = vi.hoisted(() => vi.fn())
 vi.mock('./taskFileService', () => ({ taskFileService: { exportHandoff } }))
 const readiness = vi.hoisted(() => vi.fn(async () => ({ state: 'ok', reason: null })))
-vi.mock('../agents/drivers', () => ({ driverFor: () => ({ readiness }) }))
+const inFolder = vi.hoisted(() => ({ cwd: true }))
+vi.mock('../agents/drivers', () => ({ driverFor: () => ({ readiness, capabilities: () => inFolder }) }))
 vi.mock('./agentService', () => ({ agentService: {
   findAgent: (settings: string, _profile: string, id: string) => id === 'agent-one'
     ? { row: { id, name: 'One', enabled: state.enabled, driver: 'a2a' }, userId: settings } : null
@@ -100,6 +101,26 @@ describe('desktop task start', () => {
     expect(modelConfig).toHaveBeenCalledWith(SCOPE, 'mode-one')
     expect(readiness).not.toHaveBeenCalled()
     expect(chatRepo.getOwned('profile', result.chatId)).toMatchObject({ agentId: null, modeId: 'mode-one', providerId: 'p1', modelId: 'model-one' })
+  })
+
+  it('starts an agent whose credentials are missing, and refuses one that cannot run', async () => {
+    readiness.mockResolvedValueOnce({ state: 'credentials_needed', reason: 'Add credentials.' } as never)
+    await taskExecutionService.start(SCOPE, makeTask().id, TARGET)
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    readiness.mockResolvedValueOnce({ state: 'invalid', reason: 'Broken folder.' } as never)
+    await expect(taskExecutionService.start(SCOPE, makeTask().id, TARGET)).rejects.toThrow('Broken folder.')
+    expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses missing credentials on an agent that has no folder', async () => {
+    inFolder.cwd = false
+    try {
+      readiness.mockResolvedValueOnce({ state: 'credentials_needed', reason: 'Choose a credential.' } as never)
+      await expect(taskExecutionService.start(SCOPE, makeTask().id, TARGET)).rejects.toThrow('Choose a credential.')
+      expect(dispatch).not.toHaveBeenCalled()
+    } finally {
+      inFolder.cwd = true
+    }
   })
 
   it('refuses a duplicate start while readiness is pending', async () => {

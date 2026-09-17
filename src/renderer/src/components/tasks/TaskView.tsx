@@ -28,6 +28,7 @@ import {
   useTask
 } from '../../hooks/useTasks'
 import { useUIStore } from '../../stores/ui.store'
+import { readinessBlocksTurn } from '../../../../shared/agentDrivers'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { markdownComponents } from '../../utils/markdownComponents'
@@ -606,7 +607,7 @@ function StartTaskControls({ task }: { task: TaskDto }): React.JSX.Element {
   const [selected, setSelected] = useState('')
   const [error, setError] = useState<string | null>(null)
   const available = (agents ?? []).filter((agent) => agent.enabled &&
-    (!agent.readiness || agent.readiness.state === 'ok'))
+    !readinessBlocksTurn(agent.readiness, agent.capabilities))
   const onStart = async (): Promise<void> => {
     setError(null)
     if (!selected) { setError('Choose who will continue this task.'); return }

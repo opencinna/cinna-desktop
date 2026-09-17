@@ -52,7 +52,7 @@ Three of the four pieces this feature needs already existed before this slice: t
 
 ### A command runs even when the agent is refused
 
-The composer refuses a direct send to an agent its driver says cannot take a turn — but a bare `/run:<name>` to a catalog agent goes through regardless, with the refusal notice left where it is. A command is a script run in the folder on this machine, not a turn on the engine, so the agent's readiness (missing credentials for its model, a logged-out Claude Code) says nothing about whether the script can run. The composer matches with the same `RUN_REFERENCE_PATTERN` main applies, so `/run:check please` — text main hands to the engine — is still refused. See [Agent Drivers & Readiness](../drivers/drivers.md#what-the-composer-refuses-and-what-it-deliberately-does-not).
+The composer refuses a direct send to an agent its driver says cannot take a turn — but a bare `/run:<name>` to a catalog agent goes through regardless, with the refusal notice left where it is. A command is a script run in the folder on this machine, not a turn on the engine, so the agent's readiness (a folder that does not validate, a logged-out Claude Code) says nothing about whether the script can run. The composer matches with the same `RUN_REFERENCE_PATTERN` main applies, so `/run:check please` — text main hands to the engine — is still refused. See [Agent Drivers & Readiness](../drivers/drivers.md#what-the-composer-refuses-and-what-it-deliberately-does-not).
 
 ### The message has to be exactly a reference
 

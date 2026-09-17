@@ -14,6 +14,7 @@ import { resolveTaskModelConfig, type TaskModelConfig } from './taskModelConfig'
 import { getProfileScopeUserId } from '../auth/scope'
 import { userActivation } from '../auth/activation'
 import { canTransition } from '../../shared/taskStatus'
+import { readinessBlocksTurn } from '../../shared/agentDrivers'
 import { TaskError } from '../errors'
 import type { DesktopTaskTarget, TaskAssignee, TaskDto, TaskStartResult } from '../../shared/tasks'
 
@@ -88,8 +89,9 @@ export const taskExecutionService = {
             throw new TaskError('invalid_input', 'The agent configuration changed while starting. Try again.')
           }
         }
-        const readiness = await driverFor(located.row).readiness(located.userId, located.row)
-        if (readiness && readiness.state !== 'ok') {
+        const driver = driverFor(located.row)
+        const readiness = await driver.readiness(located.userId, located.row)
+        if (readiness && readinessBlocksTurn(readiness, driver.capabilities(located.row))) {
           throw new TaskError('invalid_input', readiness.reason ?? 'This agent is not ready. Check its configuration.')
         }
         assignee = { kind: 'agent', agentId: located.row.id, name: located.row.name }

@@ -137,7 +137,7 @@ What the external branch changes, and why, is [Bare Agents & External Roots](bar
 
 1. `contract_too_new` — the folder records a contract major this build cannot operate. Read-only until the app is updated
 2. `invalid` — validation failed, or the manifest could not be read at all. A command entry in `Local/<slug>/docs/CLI_COMMANDS.yaml` that could not be parsed also lands here: a dropped command is silent by construction, and "the list looks fine, it just lost one" is the worst way for that to surface
-3. `credentials_needed` — valid, but a required `credentials/.env` variable is missing
+3. `credentials_needed` — valid, but a required `credentials/.env` variable is missing. A warning, not a refusal: the agent still takes chat turns and tasks, because a half-filled `.env` is normal while an agent is being built ([Agent Drivers & Readiness](../drivers/drivers.md#what-the-composer-refuses-and-what-it-deliberately-does-not))
 4. `ok`
 
 Only variable **names** are ever read from `credentials/.env`. No value is read, returned or logged. The desktop writes that file in one place only — the agent page seeds it, with the declared names commented out, when the user clicks through to fill it in ([Agents Tab & Agent Page](agents_tab.md)) — and a seed carries no value either. A slot that declares no keys cannot be checked and counts as satisfied rather than blocking the agent on something unverifiable.

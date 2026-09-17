@@ -2201,6 +2201,26 @@ describe('readiness', () => {
     })
   })
 
+  describe('a folder missing credentials', () => {
+    const MISSING = { ...FOLDER, readiness: 'credentials_needed' as const, readinessReason: 'Add the credentials.' }
+
+    it('still asks the launcher, whose refusal outranks the warning', async () => {
+      const w = world({
+        folder: MISSING,
+        launcherReadiness: async () => ({ state: 'not_logged_in', reason: 'Sign in to Codex.' })
+      })
+      await expect(w.driver.readiness(USER_ID, ROW)).resolves.toEqual({ state: 'not_logged_in', reason: 'Sign in to Codex.' })
+    })
+
+    it('keeps the warning when the launcher is ok', async () => {
+      const w = world({ folder: MISSING, launcherReadiness: async () => ({ state: 'ok', reason: null }) })
+      await expect(w.driver.readiness(USER_ID, ROW)).resolves.toEqual({
+        state: 'credentials_needed',
+        reason: 'Add the credentials.'
+      })
+    })
+  })
+
   it('never starts a process to answer it', async () => {
     const w = world({ script: SAYS_HELLO })
     await w.driver.readiness(USER_ID, ROW)

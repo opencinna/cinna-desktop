@@ -451,7 +451,9 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
         if (runtime?.type === 'external') { runtime.validate(); return await runtime.readiness(options) }
         const folder = runtime?.folder ?? null
         const state = folderReadiness(folder)
-        if (state.state !== 'ok') return state
+        // Missing credentials only warn (`readinessBlocksTurn`), so the engine
+        // is still asked: a logout it would refuse must not hide behind them.
+        if (state.state !== 'ok' && state.state !== 'credentials_needed') return state
         // The engine's own rungs, asked about the launcher the **folder** names
         // rather than the one the row stores: a user who has just switched an
         // agent to Claude in the Runtime card is asking "can it run now", and
@@ -460,7 +462,8 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
         const launcher = deps.launcher(launcherOfFolder(folder?.runtime, deps.defaultEngine?.()))
         if (!launcher) return { state: 'invalid', reason: 'This agent declares an unsupported engine. Choose a supported runtime.' }
         if (!launcher.readiness) return state
-        return await launcher.readiness(options)
+        const engine = await launcher.readiness(options)
+        return engine.state !== 'ok' ? engine : state
       } catch (err) {
         // `readFolder` and the launcher rungs promise not to throw; this is the
         // backstop that keeps a list from failing on the day one does.
