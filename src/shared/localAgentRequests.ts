@@ -95,12 +95,15 @@ export function questionCallId(toolInput?: Record<string, unknown>): string | un
  * account-config sync from reaching the engine, for every folder agent, not
  * just this one. Unbounded, that turns one open dialog into an app-wide stall.
  *
- * Ten minutes is chosen to be far longer than a decision takes and far shorter
- * than a lunch break. Expiry posts a real `reject` rather than abandoning the
- * request, so the agent is told "denied" and the session goes idle by the same
- * path a deliberate Deny uses — the wedge this whole mechanism exists to avoid.
+ * Sixty minutes: long enough for an ask that reaches the Inbox to be answered
+ * after a meeting, not only from an open dialog. The turn ceiling is defined
+ * on top of this window (`ACP_TURN_CEILING_MS`), so a parked turn is not
+ * ended by the ceiling before its park expires. Expiry posts a real `reject`
+ * rather than abandoning the request, so the agent is told "denied" and the
+ * session goes idle by the same path a deliberate Deny uses — the wedge this
+ * whole mechanism exists to avoid.
  */
-export const REQUEST_PARK_TIMEOUT_MS = 10 * 60 * 1000
+export const REQUEST_PARK_TIMEOUT_MS = 60 * 60 * 1000
 
 /**
  * **"Always" is answered by the desktop, and never sent to the engine.**

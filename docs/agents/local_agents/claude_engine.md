@@ -218,7 +218,7 @@ triggers; a background shell does not. What the desktop owns is everything aroun
 - **It shows the turn Claude starts when the shell finishes.** That turn ends on the `usage_update`
   that carries `cost`, because Claude ends every turn with one, including the ones it starts itself
 
-The twenty-minute ceiling is what covers a turn that never ends at all — see [The Agent
+The eighty-minute ceiling is what covers a turn that never ends at all — see [The Agent
 Turn](agent_turn.md#a-turn-always-settles).
 
 ### A subagent's work stays inline, though the adapter no longer announces it

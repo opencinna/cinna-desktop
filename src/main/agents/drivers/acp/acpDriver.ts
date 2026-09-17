@@ -60,7 +60,7 @@ import type {
 import type { AgentRow } from '../../../db/agents'
 import type { RunAgentTurnResult, TurnIO, TurnSteer } from '../../../services/a2aStreamingService'
 import type { RunEvent } from '../../../../shared/runEvents'
-import { describeQuestionAnswers } from '../../../../shared/localAgentRequests'
+import { describeQuestionAnswers, REQUEST_PARK_TIMEOUT_MS } from '../../../../shared/localAgentRequests'
 import type {
   LocalPermissionRequest,
   RequestResolution
@@ -103,9 +103,11 @@ const remoteSessions = new WeakMap<AcpConnection, Set<string>>()
  *
  * A turn that never settles holds its per-agent lock for the life of the app.
  * Generous on purpose: a real agent doing real work takes minutes, and a
- * ceiling that fires on a working turn is worse than no ceiling.
+ * ceiling that fires on a working turn is worse than no ceiling. The ceiling
+ * also ends a parked ask, so it is the park window plus twenty minutes of
+ * work: a turn may wait the whole window for an answer and still finish.
  */
-export const ACP_TURN_CEILING_MS = 20 * 60 * 1000
+export const ACP_TURN_CEILING_MS = REQUEST_PARK_TIMEOUT_MS + 20 * 60 * 1000
 
 /**
  * How long an aborted turn waits for the agent to answer its `session/cancel`.
@@ -1607,7 +1609,7 @@ async function promptWithCancelGrace(
   const prompt = connection.prompt(params)
   onSent?.()
   // Nothing is bounded while the turn is simply running: an agent that takes
-  // ten minutes to think is working, and the ceiling is what covers one that
+  // twenty minutes to think is working, and the ceiling is what covers one that
   // never finishes. The clock starts only once a cancel has been asked for.
   const grace = cancelRequested.then(
     () =>

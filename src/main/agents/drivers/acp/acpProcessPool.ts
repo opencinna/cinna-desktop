@@ -32,7 +32,7 @@
  *
  * Reaping is time-based, and a turn can be quiet for minutes — a long Bash
  * tool call, a model thinking, a permission ask parked waiting for the user
- * (ten minutes, per the ask contract). Idle time is the wrong signal for "in
+ * (an hour, per the ask contract). Idle time is the wrong signal for "in
  * use", so a turn takes a {@link AcpProcessPool.hold} for its whole length and
  * the clock only starts when the last one is released.
  *

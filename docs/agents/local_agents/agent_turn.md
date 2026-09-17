@@ -35,7 +35,7 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 - **Replay** — the `session/update` notifications `session/load` emits for the *whole* prior conversation before it answers. Dropped, never ingested
 - **Parked request** — a permission ask or a question the agent is blocked on, mid-turn, waiting for a human. Over ACP the agent is blocked on a JSON-RPC request, so the park **is** the unresolved response
 - **Cancel grace** — the bounded wait for an agent to acknowledge a `session/cancel`. Three seconds, after which its process is retired
-- **Turn ceiling** — the backstop that ends a turn which never settles for any reason, found or unfound. Twenty minutes
+- **Turn ceiling** — the backstop that ends a turn which never settles for any reason, found or unfound. Eighty minutes: the sixty-minute park window plus twenty minutes of work, so a parked ask is not cut short by it
 - **Between-turn listening** — after a turn unbinds, the driver keeps an observer on the session it ended on, until the process goes, the session is replaced, or the chat stops answering to the agent
 - **Follow-up turn** — a turn the agent starts on its own after `session/prompt` has returned, with no user message. It is opened as a run of the chat and saved as an assistant turn
 
@@ -184,7 +184,7 @@ A parked request with no answer coming is a turn that never ends. So:
 
 ### A cancel is bounded, and the parks go first
 
-Stop and the twenty-minute ceiling do the same two things — send `session/cancel` and start the grace that bounds the wait for an acknowledgement — and they **share one signal**, because a grace armed only by the user's abort would leave the ceiling with no way out of a prompt the agent never answers: the timer fires, the notification goes unheard, and the turn holds its lock for the life of the app. Which is the failure the ceiling exists to prevent.
+Stop and the eighty-minute ceiling do the same two things — send `session/cancel` and start the grace that bounds the wait for an acknowledgement — and they **share one signal**, because a grace armed only by the user's abort would leave the ceiling with no way out of a prompt the agent never answers: the timer fires, the notification goes unheard, and the turn holds its lock for the life of the app. Which is the failure the ceiling exists to prevent.
 
 Inside that, the order is the point:
 
@@ -301,7 +301,7 @@ Engines talk between turns, and that traffic used to be dropped. Watched on the 
 **Whether and when it opens is the app's decision, not the driver's:**
 
 - **The chat must still be the profile's, not in the trash, and still answer to the agent**, as its root agent or as an agent attached to a chat the user routes. Otherwise the held asks are refused, the traffic is dropped, and the session is no longer listened to
-- **A busy chat is waited for.** The follow-up waits behind the chat's run, then is re-checked every second while a task runner or a handoff holds the chat, for up to twenty minutes. Past that the held traffic is dropped with a warning, but the session stays listened to
+- **A busy chat is waited for.** The follow-up waits behind the chat's run, then is re-checked every second while a task runner or a handoff holds the chat, for up to eighty minutes, matching the turn ceiling. Past that the held traffic is dropped with a warning, but the session stays listened to
 - **A turn the user starts on the same session meanwhile takes the held traffic**, replaying it after the load, and no follow-up opens. If that turn ends before it replayed the traffic, the updates go back to the observer, which may open a follow-up for them. The asks are refused
 - **Follow-ups of one chat run one after another.** Two in a row are two runs
 - **A turn with no chat of its own** (an orchestrated call) opens nothing
@@ -312,7 +312,7 @@ Engines talk between turns, and that traffic used to be dropped. Watched on the 
 
 - **The end marker:** a `usage_update` that carries `cost`. `claude-agent-acp` sends one at the end of every turn, including the ones it starts itself. Cost-less `usage_update`s arrive two to four times inside every turn and are not an end. No prompt is in flight during a follow-up, so the marker cannot belong to a prompted turn
 - **The process exiting.** The error row reads *"The agent's process ended before it finished this work."*
-- **The twenty-minute ceiling.** It sends `session/cancel`, and an agent that does not end the turn within the grace has its process retired, as in a prompted turn
+- **The eighty-minute ceiling.** It sends `session/cancel`, and an agent that does not end the turn within the grace has its process retired, as in a prompted turn
 - **Stop.** It releases the parks and sends `session/cancel`. If the agent does not end the turn within the grace, the turn ends canceled and **the process is left running**. Other chats' background work runs in it, and nothing here is blocked on the agent
 - **Ten seconds of quiet**, with no tool call open and no ask parked, but only for a launcher that sends no end marker (Codex, OpenCode, command-line agents). An engine with a marker is never ended by silence, because its model may think for minutes between two updates
 

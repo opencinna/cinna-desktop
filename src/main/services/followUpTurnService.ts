@@ -39,6 +39,7 @@ import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { chatAgentCursorRepo } from '../db/chatAgentCursors'
 import { messageRepo } from '../db/messages'
 import { routingOf } from '../../shared/chatRouting'
+import { REQUEST_PARK_TIMEOUT_MS } from '../../shared/localAgentRequests'
 import { createLogger } from '../logger/logger'
 import type { FollowUpRequest } from '../agents/drivers/driver'
 import type { RunEvent } from '../../shared/runEvents'
@@ -59,7 +60,9 @@ export const FOLLOW_UP_BUSY_POLL_MS = 1_000
  * agent's turn is running meanwhile, and its traffic is held (bounded) until
  * then; twenty minutes matches the turn ceiling.
  */
-export const FOLLOW_UP_MAX_WAIT_MS = 20 * 60_000
+// Matches `ACP_TURN_CEILING_MS`: a chat parked on an ask for the whole park window
+// is still busy, and the follow-up must outwait it.
+export const FOLLOW_UP_MAX_WAIT_MS = REQUEST_PARK_TIMEOUT_MS + 20 * 60_000
 
 /** Tests only: shorten the waits. */
 export const followUpTimings = { pollMs: FOLLOW_UP_BUSY_POLL_MS, maxWaitMs: FOLLOW_UP_MAX_WAIT_MS }

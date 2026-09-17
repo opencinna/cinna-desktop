@@ -7,7 +7,7 @@ Implementation reference for [`/run:<name>` — running a folder agent's catalog
 ### Main process
 - `src/main/services/localAgents/commandService.ts` (net-new) — the whole feature: catalog lookup, localisation call, subprocess execution, turn-lock, and shaping into `RunAgentTurnResult`
   - `MAX_OUTPUT_BYTES` (`:73`, `200_000`) — combined stdout+stderr cap, enforced as chunks arrive (`append`, `:205-215`): past it the pipes are still drained so the child never stalls on a full buffer, but nothing more is kept — the bound is on this process's heap, not only on the DB row
-  - `COMMAND_TIMEOUT_MS` (`:83`, 5 min) — per-command ceiling, deliberately shorter than `ACP_TURN_CEILING_MS` (20 min, `agents/drivers/acp/acpDriver.ts`)
+  - `COMMAND_TIMEOUT_MS` (`:83`, 5 min) — per-command ceiling, deliberately shorter than `ACP_TURN_CEILING_MS` (80 min, `agents/drivers/acp/acpDriver.ts`)
   - `killTree(child)` (`:120-146`) — POSIX: `process.kill(-child.pid, 'SIGKILL')` against the process group; win32: `taskkill /pid <pid> /T /F`. Falls back to signalling the child directly if there is no pid or no process group
   - `execute(localCommand, agentDir, env, signal?, timeoutMs?)` (`:149-235`) — spawns under a shell (`shell: true`), `detached: process.platform !== 'win32'` so `killTree` can reach the group, checks `signal?.aborted` *before* spawning (closes the gap between an abort fired while `getShellEnv()` is still pending and the listener being attached)
   - `commandService.matchRunCommand(wireContent)` (`:266-269`) — `RUN_REFERENCE_PATTERN.exec(wireContent.trim())`, anchored to the whole trimmed message
@@ -84,7 +84,7 @@ Success: `{text: '```\n<output>\n```', parts: [{kind:'command_result', text, com
 | Constant | Where | Value | Why |
 |---|---|---|---|
 | `MAX_OUTPUT_BYTES` | `commandService.ts:73` | 200,000 | Combined stdout+stderr cap, enforced as output arrives; a runaway script must not grow the DB row — or the main process's heap — without bound |
-| `COMMAND_TIMEOUT_MS` | `commandService.ts:83` | 5 min | Shorter than `TURN_CEILING_MS` (20 min) on purpose — a catalog command is a script, not an LLM turn, so a tighter ceiling is still generous for a one-click Run button |
+| `COMMAND_TIMEOUT_MS` | `commandService.ts:83` | 5 min | Shorter than `TURN_CEILING_MS` (80 min) on purpose — a catalog command is a script, not an LLM turn, so a tighter ceiling is still generous for a one-click Run button |
 
 ## Security
 

@@ -62,7 +62,7 @@ These reads/mutations require activation. `localAgentService.setCodexApproval` l
 
   A subagent that runs again after ending becomes a new item, `<thread>#2`.
 - The launcher does not set `endsTurnsWithCostedUsage`. A follow-up turn on Codex would also end on `ACP_FOLLOW_UP_QUIET_MS` of quiet. No Codex follow-up has been observed: its between-turn `tool_call_update`s are for calls of the saved turn, and the gate drops them.
-- Shared ACP startup, replay gating, saved-session fallback, two-minute idle reaping (deferred while background work runs), process-tree shutdown, twenty-minute turn ceiling and bounded cancellation remain in the [Agent Turn](agent_turn_tech.md). Cinna's transcript does not restore missing CLI history.
+- Shared ACP startup, replay gating, saved-session fallback, two-minute idle reaping (deferred while background work runs), process-tree shutdown, eighty-minute turn ceiling and bounded cancellation remain in the [Agent Turn](agent_turn_tech.md). Cinna's transcript does not restore missing CLI history.
 
 ### Authentication and diagnostics
 
