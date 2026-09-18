@@ -1,3 +1,5 @@
+import assert from 'node:assert/strict'
+import { TITLE_SYSTEM_PROMPT } from '../../src/main/services/aiFunctionPrompts.ts'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,12 +11,17 @@ import { ConductorMcpServer } from '../../src/main/services/conductorMcpServer.t
 // Local SSE fake provider only; HOME/config/data/cwd are temporary and removed.
 const binary=process.argv[2]
 if(!binary)throw new Error('Pass the installed OpenCode executable path as the only argument.')
+const DRAFT_SYSTEM_PROMPT = 'Draft exactly one instruction. FUNCTION_DRAFT_SYSTEM_MARKER.'
+const REVIEW_SYSTEM_PROMPT = 'Review exactly one instruction. FUNCTION_REVIEW_SYSTEM_MARKER.'
+const functionRequests = []
 const home = mkdtempSync(join(tmpdir(), 'cinna-opencode-conductor-probe-'))
-const cwd = join(home, 'chat-one'), secondCwd=join(home,'chat-two'), utilityCwd=join(home,'utility'), configDir=join(home,'config')
-for(const dir of [cwd,secondCwd,utilityCwd,configDir])mkdirSync(dir)
+const cwd = join(home, 'chat-one'), secondCwd=join(home,'chat-two'), utilityCwd=join(home,'utility'), draftCwd=join(home,'draft'), reviewCwd=join(home,'review'), configDir=join(home,'config')
+for(const dir of [cwd,secondCwd,utilityCwd,draftCwd,reviewCwd,configDir])mkdirSync(dir)
 writeFileSync(join(cwd,'AGENTS.md'),'Chat mode instructions. CHAT_ONE_ONLY_MARKER. No file access.\n')
 writeFileSync(join(secondCwd,'AGENTS.md'),'Chat mode instructions. CHAT_TWO_ONLY_MARKER. No file access.\n')
-writeFileSync(join(utilityCwd,'AGENTS.md'),'Utility instructions only.\n')
+writeFileSync(join(utilityCwd,'AGENTS.md'),`${TITLE_SYSTEM_PROMPT}\n`)
+writeFileSync(join(draftCwd,'AGENTS.md'),`${DRAFT_SYSTEM_PROMPT}\n`)
+writeFileSync(join(reviewCwd,'AGENTS.md'),`${REVIEW_SYSTEM_PROMPT}\n`)
 const evidence={binaryVersion:null,isolatedHome:true,isolatedCwd:true,apiCredentialEnvInherited:false,realProviderRequests:0,initialize:null,sessionNew:null,models:[],providerResolutions:0,mcpCalls:[],updates:[],refresh:null,utility:null,stderrSummary:[]}
 let generation=0,turn=0,slowPrompt,slowSessionId,markSlowStarted;const slowStarted=new Promise(r=>markSlowStarted=r);evidence.callMetadata=[];evidence.toolCallShapes=[];evidence.cancel={signalObserved:false};
 const toolName=()=>generation===2?'probe_slow':generation?'probe_refresh':'probe'
@@ -25,8 +32,14 @@ const model=createServer(async(req,res)=>{
  let body;try{body=JSON.parse(raw)}catch{res.writeHead(400);res.end();return}
  const names=(body.tools??[]).map(t=>t.function?.name??t.name)
  const messages=body.messages??[]
+ const contentText = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(block=>block.text??'').join('\n') : ''
  const last=messages.at(-1)
- evidence.models.push({path:req.url,toolNames:names,messageRoles:messages.map(m=>m.role),hasChatOneMarker:JSON.stringify(messages).includes('CHAT_ONE_ONLY_MARKER'),hasChatTwoMarker:JSON.stringify(messages).includes('CHAT_TWO_ONLY_MARKER'),hasChatInstructions:messages.some(m=>typeof m.content==='string'&&m.content.includes('Chat mode instructions')),hasUtilityInstructions:messages.some(m=>typeof m.content==='string'&&m.content.includes('Utility instructions only'))})
+ for(const [kind,prompt] of [['title',TITLE_SYSTEM_PROMPT],['draft',DRAFT_SYSTEM_PROMPT],['review',REVIEW_SYSTEM_PROMPT]]) {
+  // The engine's internal title request adds its own user instruction before
+  // this same last input. A fresh utility turn has exactly one user message.
+  if(messages.filter(m=>m.role==='user').length===1&&last?.role==='user'&&contentText(last.content)===`FUNCTION_INPUT_${kind}`) functionRequests.push({kind,systemHasPrompt:messages.some(m=>m.role==='system'&&contentText(m.content).includes(prompt)),userHasPrompt:messages.some(m=>m.role==='user'&&contentText(m.content).includes(prompt)),hasTools:names.length>0,otherPromptPresent:[TITLE_SYSTEM_PROMPT,DRAFT_SYSTEM_PROMPT,REVIEW_SYSTEM_PROMPT].filter(p=>p!==prompt).some(p=>messages.some(m=>contentText(m.content).includes(p)))})
+ }
+ evidence.models.push({path:req.url,toolNames:names,messageRoles:messages.map(m=>m.role),hasChatOneMarker:JSON.stringify(messages).includes('CHAT_ONE_ONLY_MARKER'),hasChatTwoMarker:JSON.stringify(messages).includes('CHAT_TWO_ONLY_MARKER'),hasChatInstructions:messages.some(m=>typeof m.content==='string'&&m.content.includes('Chat mode instructions')),hasUtilityInstructions:messages.some(m=>typeof m.content==='string'&&m.content.includes(TITLE_SYSTEM_PROMPT))})
  const expected=names.find(name=>name.endsWith(toolName()))
  const useTool=expected&&last?.role!=='tool'&&!JSON.stringify(last).includes('without tools')
  res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache'})
@@ -37,7 +50,7 @@ const model=createServer(async(req,res)=>{
 })
 await new Promise(resolve=>model.listen(0,'127.0.0.1',resolve))
 const port=model.address().port
-const config={enabled_providers:['probe'],model:'probe/probe-model',provider:{probe:{npm:'@ai-sdk/openai-compatible',name:'Loopback fake model',options:{baseURL:`http://127.0.0.1:${port}/v1`,apiKey:'not-a-real-key'},models:{'probe-model':{name:'Probe',limit:{context:32000,output:1000}}}}},agent:{chat:{mode:'primary',prompt:'Chat mode instructions.',permission:{'*':'deny','cinna_*':'allow'}},utility:{mode:'primary',prompt:'Utility instructions only.',permission:{'*':'deny'}}}}
+const config={enabled_providers:['probe'],model:'probe/probe-model',provider:{probe:{npm:'@ai-sdk/openai-compatible',name:'Loopback fake model',options:{baseURL:`http://127.0.0.1:${port}/v1`,apiKey:'not-a-real-key'},models:{'probe-model':{name:'Probe',limit:{context:32000,output:1000}}}}},agent:{chat:{mode:'primary',prompt:'Chat mode instructions.',permission:{'*':'deny','cinna_*':'allow'}},utility:{mode:'primary',prompt:TITLE_SYSTEM_PROMPT,permission:{'*':'deny'}},draft:{mode:'primary',prompt:DRAFT_SYSTEM_PROMPT,permission:{'*':'deny'}},review:{mode:'primary',prompt:REVIEW_SYSTEM_PROMPT,permission:{'*':'deny'}}}}
 writeFileSync(join(configDir,'opencode.json'),JSON.stringify(config))
 const env=Object.fromEntries(['PATH','USER','LOGNAME','SHELL'].filter(k=>process.env[k]).map(k=>[k,process.env[k]]))
 Object.assign(env,{HOME:home,XDG_CONFIG_HOME:join(home,'xdg-config'),XDG_DATA_HOME:join(home,'xdg-data'),XDG_CACHE_HOME:join(home,'xdg-cache'),OPENCODE_CONFIG:join(configDir,'opencode.json'),OPENCODE_CONFIG_DIR:configDir,OPENCODE_DISABLE_AUTOUPDATE:'1',OPENCODE_DISABLE_MODELS_FETCH:'1'})
@@ -64,10 +77,13 @@ try{
  generation=2;await session.refreshTools();await new Promise(r=>setTimeout(r,300));slowSessionId=sid;slowPrompt=rpc('session/prompt',{sessionId:sid,prompt:[{type:'text',text:'Call probe_slow.'}]});await Promise.race([slowStarted,new Promise(r=>setTimeout(r,5000))])
  }
  const madeUtility=await rpc('session/new',{cwd:utilityCwd,mcpServers:[]});evidence.utility={sessionNew:result(madeUtility)}
- if(!madeUtility.error){const sid=madeUtility.result.sessionId;evidence.utility.mode=result(await rpc('session/set_config_option',{sessionId:sid,configId:'mode',value:'utility'}));evidence.utility.prompt=result(await rpc('session/prompt',{sessionId:sid,prompt:[{type:'text',text:'Return OK.'}]}))}
+ if(!madeUtility.error){const sid=madeUtility.result.sessionId;evidence.utility.mode=result(await rpc('session/set_config_option',{sessionId:sid,configId:'mode',value:'utility'}));evidence.utility.prompt=result(await rpc('session/prompt',{sessionId:sid,prompt:[{type:'text',text:'FUNCTION_INPUT_title'}]}))}
  }
  if(slowPrompt){child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'session/cancel',params:{sessionId:slowSessionId}})+'\n');evidence.cancel.prompt=result(await slowPrompt);await new Promise(r=>setTimeout(r,250));}
  const second=await rpc('session/new',{cwd:secondCwd,mcpServers:[session.descriptor]});evidence.secondChat={sessionNew:result(second)};if(!second.error){const sid=second.result.sessionId;await rpc('session/set_config_option',{sessionId:sid,configId:'mode',value:'chat'});evidence.secondChat.prompt=result(await rpc('session/prompt',{sessionId:sid,prompt:[{type:'text',text:'Return OK without tools.'}]}))}
+ for(const [kind,dir] of [['draft',draftCwd],['review',reviewCwd]]){const created=await rpc('session/new',{cwd:dir,mcpServers:[]});assert.ok(!created.error);const sid=created.result.sessionId;await rpc('session/set_config_option',{sessionId:sid,configId:'mode',value:kind});const answered=await rpc('session/prompt',{sessionId:sid,prompt:[{type:'text',text:`FUNCTION_INPUT_${kind}`} ]});assert.ok(!answered.error)}
+ evidence.functionSystemPrompts=functionRequests
+ for(const kind of ['title','draft','review']){const request=functionRequests.find(r=>r.kind===kind);assert.deepEqual(request,{kind,systemHasPrompt:true,userHasPrompt:false,hasTools:false,otherPromptPresent:false})}
  evidence.stderrSummary=stderr.split('\n').filter(l=>/error|failed/i.test(l)).map(l=>l.replaceAll(home,'<throwaway>').replaceAll(String(port),'<loopback-port>')).slice(-5)
  console.log(JSON.stringify(evidence,null,2))
 }finally{for(const {timer}of pending.values())clearTimeout(timer);try{process.kill(-child.pid,'SIGTERM')}catch{};await mcp.dispose();model.closeAllConnections();await new Promise(r=>model.close(r));lines.close();await new Promise(r=>{child.once('exit',r);setTimeout(r,1500).unref()});try{process.kill(-child.pid,'SIGKILL')}catch{};rmSync(home,{recursive:true,force:true})}

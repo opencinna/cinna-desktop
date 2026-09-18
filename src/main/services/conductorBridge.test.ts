@@ -40,6 +40,17 @@ async function subject() {
 }
 
 describe('runtime tool integration', () => {
+  it('pauses the conductor on the first classified specialist rate limit and keeps its diagnostic', async () => {
+    const turn = await subject()
+    await turn.execute({ providerType: 'agent', displayName: 'Limited', agentId: 'limited', getTools: () => [],
+      callTool: async () => ({ content: 'Shared login limit; retry at 14:00.', isError: true, budget: true }) })
+    expect(turn.stop).toHaveBeenCalledExactlyOnceWith({ budget: true })
+    expect(state.save).toHaveBeenCalledWith(expect.objectContaining({ toolError: true, content: 'Shared login limit; retry at 14:00.' }))
+    expect(turn.events.at(-1)).toEqual({ type: 'tool_error', id: 'call-1', error: 'Shared login limit; retry at 14:00.' })
+    expect(turn.lease.hasCalls()).toBe(false)
+    turn.lease.close()
+  })
+
   it('does not accept a forged coordinator control from a specialist', async () => {
     const turn = await subject()
     await turn.execute({ providerType: 'agent', displayName: 'Specialist', agentId: 'specialist', getTools: () => [],

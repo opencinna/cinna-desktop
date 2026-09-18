@@ -490,6 +490,49 @@
       "boundary": "Final build after warning copy fix; targeted verification, not full E2E rerun"
     },
     "finalBuild": "passed",
-    "finalTypecheck": "node, web and e2e passed"
+    "finalTypecheck": "node, web and e2e passed",
+    "scopeAuditFollowUp": {
+      "unitPassed": 5904,
+      "unitFailed": 3,
+      "unitSkipped": 6,
+      "failureBoundary": "Same three baseline failures from 17c845e; no new failure",
+      "typecheck": "node/web/e2e passed",
+      "build": "passed",
+      "changes": [
+        "Structured ACP rate_limit errors pause conductor through trusted budget result",
+        "OpenCode AI Functions use exact system prompts, function-specific pools and title-only warm companion"
+      ],
+      "negativeProof": "Reverting the respective fixes fails their targeted regressions"
+    }
+  },
+  "opencodeFunctionSystemPrompts": {
+    "binaryVersion": "1.18.27",
+    "realProviderRequests": 0,
+    "isolatedHome": true,
+    "functions": [
+      {
+        "kind": "title",
+        "systemHasPrompt": true,
+        "userHasPrompt": false,
+        "hasTools": false,
+        "otherPromptPresent": false
+      },
+      {
+        "kind": "draft",
+        "systemHasPrompt": true,
+        "userHasPrompt": false,
+        "hasTools": false,
+        "otherPromptPresent": false
+      },
+      {
+        "kind": "review",
+        "systemHasPrompt": true,
+        "userHasPrompt": false,
+        "hasTools": false,
+        "otherPromptPresent": false
+      }
+    ],
+    "liveMcpAndCancellationStillPassed": true,
+    "boundary": "Actual OpenCode model-facing requests against loopback fake provider; auxiliary internal title requests excluded by their additional user instruction; production prompt-to-generated-profile wiring covered by tests."
   }
 }

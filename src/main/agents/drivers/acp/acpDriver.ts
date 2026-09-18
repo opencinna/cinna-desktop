@@ -58,6 +58,7 @@ import type {
   RequestPermissionResponse,
   SessionNotification
 } from '@agentclientprotocol/sdk'
+import { RequestError } from '@agentclientprotocol/sdk'
 import type { AgentRow } from '../../../db/agents'
 import type { RunAgentTurnResult, TurnIO, TurnSteer } from '../../../services/a2aStreamingService'
 import type { RunEvent } from '../../../../shared/runEvents'
@@ -1275,7 +1276,14 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         return finish(ctx, accumulator, sessionId, ceilingMessage())
       }
       logger.warn('an ACP turn failed', { agentId: agent.id, chatId, error: message })
-      return finish(ctx, accumulator, sessionId, message)
+      const result = finish(ctx, accumulator, sessionId, message)
+      // The adapter's structured category is authoritative. Text mentioning
+      // a rate limit (for example, a tool error) must not pause the whole chat.
+      if (err instanceof RequestError && err.data && typeof err.data === 'object' &&
+        'errorKind' in err.data && err.data.errorKind === 'rate_limit' && !ctx.conductorOutcome) {
+        return { ...result, stopReason: 'budget', error: { message, raw: message, code: 'rate_limit' } }
+      }
+      return result
     } finally {
       unbind?.()
     }

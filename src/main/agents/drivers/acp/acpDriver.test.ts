@@ -354,6 +354,45 @@ describe('a turn', () => {
     // An error must not blank a partial answer.
     expect(result.text).toContain('Working on it')
   })
+
+  it('classifies an adapter rate-limit RequestError as a budget pause without losing partial work or diagnostics', async () => {
+    const w = world({ script: { prompt: {
+      emit: [{ kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Verified the first file.' } } }],
+      error: { code: -32603, message: 'This login has reached its limit. Try again at 14:00.', data: { errorKind: 'rate_limit' } }
+    } } })
+    const result = await w.run()
+    expect(result).toMatchObject({ stopReason: 'budget', text: 'Verified the first file.',
+      error: { code: 'rate_limit', message: 'This login has reached its limit. Try again at 14:00.', raw: 'This login has reached its limit. Try again at 14:00.' } })
+    expect(result.parts).toContainEqual(expect.objectContaining({ kind: 'text', text: 'Verified the first file.' }))
+  })
+
+  it.each([undefined, { errorKind: 'authentication_failed' }, { error: 'rate_limit' }])(
+    'does not classify an untyped or unrelated error as a shared rate limit (%j)', async (data) => {
+      const w = world({ script: { prompt: { error: { code: -32603, message: 'A tool reported rate_limit.', data } } } })
+      const result = await w.run()
+      expect(result.stopReason).not.toBe('budget')
+      expect(result.error?.message).toBe('A tool reported rate_limit.')
+    }
+  )
+
+  it('does not infer a shared login limit from an HTTP 429 message alone', async () => {
+    const w = world({ script: { prompt: { error: { code: -32603, message: 'HTTP 429: rate limit reached by the requested tool.' } } } })
+    const result = await w.run()
+    expect(result.stopReason).not.toBe('budget')
+    expect(result.error?.message).toBe('HTTP 429: rate limit reached by the requested tool.')
+  })
+
+  it('keeps user cancellation authoritative when the adapter subsequently reports a rate limit', async () => {
+    const w = world({ script: { prompt: { emit: [{ kind: 'awaitCancel' }],
+      error: { code: -32603, message: 'Shared login exhausted', data: { errorKind: 'rate_limit' } } } } })
+    const controller = new AbortController()
+    const running = w.run({ signal: controller.signal })
+    await waitFor(() => w.fake.received('session/prompt').length > 0, 'prompt')
+    controller.abort()
+    const result = await running
+    expect(result.stopReason).toBe('canceled')
+    expect(result.error).toBeUndefined()
+  })
 })
 
 describe('manifest-authorized coordinator handback', () => {

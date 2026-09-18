@@ -27,7 +27,7 @@ function subject() {
     init: { protocolVersion: 1, clientCapabilities: {} }, session: { mcpServers: [] },
     setup: { modeId: 'default' }
   }
-  const prepare = vi.fn(async () => ({ poolKey: 'utility', plan, cwd: '/synthetic', instructionPrefix: 'Function:\n' }))
+  const prepare = vi.fn(async () => ({ poolKey: 'utility', plan, cwd: '/synthetic' }))
   const run = createAiFunctionRuntime({ pool, prepare })
   const input = { userId: 'user', systemPrompt: 'Function', userText: 'Input', warmOnly: false, signal: new AbortController().signal, maxOutputChars: 9 }
   return { run, input, conn, pool, prepare, unbind, release, handlers: () => handlers! }
@@ -41,7 +41,7 @@ describe('one-shot runtime sessions', () => {
     expect(s.conn.newSession).toHaveBeenCalledTimes(2)
     expect(s.conn.newSession).toHaveBeenCalledWith({ cwd: '/synthetic', mcpServers: [] })
     expect(s.conn.loadSession).not.toHaveBeenCalled()
-    expect(s.conn.prompt).toHaveBeenLastCalledWith({ sessionId: 'new-2', prompt: [{ type: 'text', text: 'Function:\nInput' }] })
+    expect(s.conn.prompt).toHaveBeenLastCalledWith({ sessionId: 'new-2', prompt: [{ type: 'text', text: 'Input' }] })
     expect(await s.handlers().onPermission({} as never)).toEqual({ outcome: { outcome: 'cancelled' } })
     expect(await s.handlers().onElicitation?.({} as never)).toEqual({ action: 'cancel' })
     expect(s.conn.cancel).toHaveBeenCalledWith('new-1')

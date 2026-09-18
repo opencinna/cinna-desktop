@@ -21,7 +21,8 @@ import { createRequire } from 'node:module'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { applyConductorToolPolicy } from './acp/conductorToolPolicy'
-import { AI_FUNCTION_INSTRUCTIONS, syntheticRuntimePoolKey, utilityAgentId } from '../../services/syntheticRuntimePooling'
+import { aiFunctionRuntimePoolKey, syntheticRuntimePoolKey, utilityAgentId } from '../../services/syntheticRuntimePooling'
+import { TITLE_SYSTEM_PROMPT } from '../../services/aiFunctionPrompts'
 import type { ConductorContext } from '../../services/chatConductorService'
 import { engineAgentKey } from '../../engine/configGenerator'
 import { join } from 'node:path'
@@ -286,7 +287,7 @@ function folderSystemPrompt(
     const synthetic = syntheticRuntimeProfiles.get(agentId)
     if (synthetic?.userId === userId) return synthetic.context.instructions
     const utility = aiFunctionProfiles.get(agentId)
-    if (utility?.userId === userId) return AI_FUNCTION_INSTRUCTIONS
+    if (utility?.userId === userId) return utility.systemPrompt
     const conductor = agentRepo.getOwned(userId, agentId)
     if (conductor && isChatConductor(conductor)) return conductorContext(conductor).instructions
     const development = developmentAgentContext(userId, agentId)
@@ -315,23 +316,25 @@ export const codexAuthProbe = new CodexAuthProbe({
 })
 
 const syntheticRuntimeProfiles = new Map<string, { userId: string; context: ConductorContext }>()
-const aiFunctionProfiles = new Map<string, { userId: string; modelId: string | null; credentialId: string | null }>()
+const aiFunctionProfiles = new Map<string, { userId: string; modelId: string | null; credentialId: string | null; systemPrompt: string }>()
 
 /** A dedicated utility profile owns a warm process, but never owns resumable sessions. */
 export async function prepareAiFunctionRuntime(userId: string, systemPrompt: string, warmOnly: boolean): Promise<{
-  poolKey: string; plan: AcpLaunchPlan; cwd: string; instructionPrefix: string
+  poolKey: string; plan: AcpLaunchPlan; cwd: string
 }> {
   const runtime = runtimeService.resolve(undefined, providerService.listMerged())
   if (runtime.reason) throw new Error(runtime.reason)
   const engine = runtime.launcher
-  const digest = createHash('sha256').update(JSON.stringify([userId, engine, runtime.credentialId, runtime.modelId])).digest('hex').slice(0, 24)
-  let poolKey = `ai-function:${digest}`
+  let poolKey = aiFunctionRuntimePoolKey(userId, engine, runtime.credentialId ?? null, runtime.modelId ?? null, systemPrompt)
+  // Claude shares a process across function prompts, but instruction files are
+  // session-owned too: concurrent functions must never rewrite each other's cwd.
+  const digest = createHash('sha256').update(JSON.stringify([poolKey, systemPrompt])).digest('hex').slice(0, 24)
   // Claude's process configuration is independent of the per-session prompt
   // and native tool list. A fresh sealed utility session may reuse this
   // profile's warm chat process, without loading that chat's session/history.
   const liveAgents = agentRepo.list(userId).filter((agent) => agent.driver === 'acp' && acpProcessPool.status(agent.id).state === 'running')
   const compatibleCandidates = engine === 'claude' ? liveAgents.map((agent) => agent.id) : []
-  const opencodeCandidate = engine === 'opencode' ? liveAgents.find((agent) => {
+  const opencodeCandidate = engine === 'opencode' && systemPrompt === TITLE_SYSTEM_PROMPT ? liveAgents.find((agent) => {
     if (!isChatConductor(agent)) return false
     const context = conductorContext(agent)
     return context.engine === engine && context.credentialId === runtime.credentialId && context.modelId === runtime.modelId
@@ -341,8 +344,8 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   }
   const cwd = join(app.getPath('userData'), 'chat-conductors', 'ai-functions', digest)
   mkdirSync(cwd, { recursive: true, mode: 0o700 })
-  for (const name of ['CLAUDE.md', 'AGENTS.md']) writeFileSync(join(cwd, name), `${AI_FUNCTION_INSTRUCTIONS}\n`, { mode: 0o600 })
-  aiFunctionProfiles.set(poolKey, { userId, modelId: runtime.modelId, credentialId: runtime.credentialId })
+  for (const name of ['CLAUDE.md', 'AGENTS.md']) writeFileSync(join(cwd, name), `${systemPrompt}\n`, { mode: 0o600 })
+  aiFunctionProfiles.set(poolKey, { userId, modelId: runtime.modelId, credentialId: runtime.credentialId, systemPrompt })
   const launcher = acpLaunchers[engine]
   if (!launcher) throw new Error('The default runtime cannot run AI functions')
   const opencodeContext = opencodeCandidate ? conductorContext(opencodeCandidate) : undefined
@@ -379,9 +382,7 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
     const warmKey = [poolKey, ...compatibleCandidates].find((key) => acpProcessPool.peek?.(key, plan.spec.key))
     if (warmKey) poolKey = warmKey
   }
-  // Codex/OpenCode set their system prompt at process creation. A stable utility
-  // prompt keeps that process reusable; the particular function is user input.
-  return { poolKey, plan, cwd, instructionPrefix: engine === 'claude' ? '' : `${systemPrompt}\n\nInput:\n` }
+  return { poolKey, plan, cwd }
 }
 
 const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
@@ -442,10 +443,10 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
         if (synthetic.userId !== userId) continue
         const context = synthetic.context
         input.agents.push({ agentId, slug: 'chat-runtime', description: 'Chat runtime', prompt: context.instructions, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: context.toolPolicy === 'none' ? { '*': 'deny' } : { '*': 'deny', 'cinna_*': 'allow' } })
-        input.agents.push({ agentId: utilityAgentId(agentId), slug: 'ai-function', description: 'One-shot AI function', prompt: AI_FUNCTION_INSTRUCTIONS, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
+        input.agents.push({ agentId: utilityAgentId(agentId), slug: 'ai-function', description: 'Chat title', prompt: TITLE_SYSTEM_PROMPT, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
       }
       for (const [agentId, utility] of aiFunctionProfiles) {
-        if (utility.userId === userId) input.agents.push({ agentId, slug: 'ai-function', description: 'One-shot AI function', prompt: AI_FUNCTION_INSTRUCTIONS, providerId: utility.credentialId ?? '', modelId: utility.modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
+        if (utility.userId === userId) input.agents.push({ agentId, slug: 'ai-function', description: 'One-shot AI function', prompt: utility.systemPrompt, providerId: utility.credentialId ?? '', modelId: utility.modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
       }
       for (const row of agentRepo.list(userId).filter(isChatConductor)) {
         const context = conductorContext(row)

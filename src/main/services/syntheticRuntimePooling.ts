@@ -9,5 +9,11 @@ export function syntheticRuntimePoolKey(userId: string, context: ConductorContex
   ])).digest('hex').slice(0, 32)}`
 }
 
-export const AI_FUNCTION_INSTRUCTIONS = 'You perform one short text transformation. Follow the function instructions in the request and return only its output. Never use tools, read files, run commands, or ask questions.'
+/** OpenCode instructions are process config; incompatible functions cannot share that process. */
+export function aiFunctionRuntimePoolKey(userId: string, engine: ConductorContext['engine'], credentialId: string | null, modelId: string | null, systemPrompt: string): string {
+  const digest = createHash('sha256').update(JSON.stringify([
+    userId, engine, credentialId, modelId, engine === 'opencode' ? systemPrompt : null
+  ])).digest('hex').slice(0, 24)
+  return `ai-function:${digest}`
+}
 export const utilityAgentId = (poolKey: string): string => `${poolKey}:utility`

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { AcpProcessPool } from './acp/types'
 import type { AgentRow } from '../../db/agents'
 
 /**
@@ -27,6 +28,10 @@ import type { AgentRow } from '../../db/agents'
  */
 
 const state = vi.hoisted(() => ({
+  utilityPlans: false,
+  utilityEngine: 'opencode',
+  liveRows: [] as AgentRow[],
+  configInput: null as null | ((userId: string) => Promise<{ agents: { agentId: string; prompt: string }[] }>),
   development: false,
   restore: vi.fn(),
   developmentEngine: 'claude',
@@ -77,7 +82,7 @@ vi.mock('../../engine/binaryResolver', () => ({
 vi.mock('../../engine/engineConfigSource', () => ({
   collectEngineConfigInput: async () => ({ providers: [], agents: [] })
 }))
-vi.mock('../../db/agents', () => ({ agentRepo: { getOwned: () => undefined, list: () => [] }, agentSessionRepo: { getByChatAndAgent: vi.fn(), upsert: vi.fn() } }))
+vi.mock('../../db/agents', () => ({ agentRepo: { getOwned: () => undefined, list: () => state.liveRows }, agentSessionRepo: { getByChatAndAgent: vi.fn(), upsert: vi.fn() } }))
 vi.mock('../../auth/scope', () => ({ getSettingsScopeUserId: () => 'user-1' }))
 vi.mock('../../auth/cinna-oauth', () => ({ CinnaReauthRequired: class CinnaReauthRequired extends Error {} }))
 vi.mock('../../services/localAgents/localAgentService', () => ({
@@ -141,16 +146,19 @@ vi.mock('./a2aConnection', () => ({
  */
 vi.mock('./acp/acpLaunchers', async (importOriginal) => {
   const original = await importOriginal<typeof import('./acp/acpLaunchers')>()
-  const marker = (id: string) => () => ({
+  const marker = (id: string) => (options?: { configInput?: typeof state.configInput }) => {
+    if (id === 'opencode') state.configInput = options?.configInput ?? null
+    return ({
     id,
     plan: async (context: { folder: { coordinatorHandback?: boolean; path: string; runtimeMode?: unknown } }) => {
+      if (state.utilityPlans) return { spec: { command: id, args: [], env: {}, cwd: context.folder.path, key: 'utility-key' }, init: { protocolVersion: 1 }, session: { mcpServers: [] }, setup: { configOptions: [{ configId: 'mode', value: 'utility' }] } }
       state.developmentPaths.push(context.folder.path)
       state.handbackPlans.push(context.folder.coordinatorHandback === true)
       state.runtimeModes.push(context.folder.runtimeMode)
       state.ran.push(id)
       return { error: `refused by the ${id} launcher` }
     }
-  })
+  }) }
   return {
     ...original,
     createOpencodeLauncher: marker('opencode'),
@@ -166,14 +174,15 @@ vi.mock('./acp/claudeAuth', () => ({
 }))
 vi.mock('./acp/claudeEnv', () => ({ buildClaudeEnv: () => ({}) }))
 vi.mock('../../services/localAgents/runtimeService', () => ({
-  runtimeService: { resolve: () => ({ modelId: 'sonnet' }) }
+  runtimeService: { resolve: () => ({ launcher: state.utilityEngine, modelId: 'sonnet', credentialId: null }) }
 }))
 vi.mock('../../shell/env', () => ({ getShellEnv: vi.fn(), shellEnvForChild: () => ({}) }))
 vi.mock('../../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-const { driverFor } = await import('./index')
+const { driverFor, prepareAiFunctionRuntime, acpProcessPool } = await import('./index')
+const { TITLE_SYSTEM_PROMPT } = await import('../../services/aiFunctionPrompts')
 
 const folderRow = (launcher: string | null): AgentRow =>
   ({
@@ -200,6 +209,8 @@ async function ranFor(agent: AgentRow): Promise<string[]> {
 }
 
 beforeEach(() => {
+  vi.restoreAllMocks()
+  state.utilityPlans = false; state.utilityEngine = 'opencode'; state.liveRows = []
   state.restore.mockClear()
   state.development = false; state.developmentComplexity = 'complex'; state.developmentPaths = []
   state.runtime = { engine: 'opencode' }
@@ -351,5 +362,48 @@ describe('driverFor', () => {
         { kind: 'permission', reply: 'once' }
       )
     ).toEqual({ delivered: false })
+  })
+})
+
+
+describe('AI function runtime production prompt wiring', () => {
+  beforeEach(() => { state.utilityPlans = true })
+
+  it('keys OpenCode by exact system prompt and puts it in the generated utility agent', async () => {
+    const first = await prepareAiFunctionRuntime('prompt-profile', 'Write a summary.', false)
+    const repeated = await prepareAiFunctionRuntime('prompt-profile', 'Write a summary.', false)
+    const second = await prepareAiFunctionRuntime('prompt-profile', 'Write a review.', false)
+    expect(first.poolKey).toBe(repeated.poolKey)
+    expect(first.cwd).toBe(repeated.cwd)
+    expect(second.poolKey).not.toBe(first.poolKey)
+    const config = await state.configInput!('prompt-profile')
+    expect(config.agents.find(agent => agent.agentId === first.poolKey)?.prompt).toBe('Write a summary.')
+    expect(config.agents.find(agent => agent.agentId === second.poolKey)?.prompt).toBe('Write a review.')
+  })
+
+  it('only title instructions may reuse the fixed no-tools companion on a warm chat process', async () => {
+    state.liveRows = [{ id: 'chat-root', driver: 'acp', driverConfig: {
+      conductorChatId: 'chat', conductorEngine: 'opencode', conductorModel: 'sonnet',
+      conductorPrompt: 'Chat instructions', cwd: '/owned/chat'
+    } } as unknown as AgentRow]
+    vi.spyOn(acpProcessPool, 'status').mockImplementation(id => ({ state: id === 'chat-root' ? 'running' : 'stopped' }) as ReturnType<typeof acpProcessPool.status>)
+    vi.spyOn(acpProcessPool as Required<Pick<AcpProcessPool, 'peek'>>, 'peek').mockReturnValue({} as never)
+    const title = await prepareAiFunctionRuntime('warm-profile', TITLE_SYSTEM_PROMPT, true)
+    expect(title.poolKey).toMatch(/^chat-runtime:/)
+    const config = await state.configInput!('warm-profile')
+    expect(config.agents.find(agent => agent.agentId === `${title.poolKey}:utility`)?.prompt).toBe(TITLE_SYSTEM_PROMPT)
+    await expect(prepareAiFunctionRuntime('warm-profile', 'Draft new instructions.', true)).rejects.toThrow('deferred')
+    const draft = await prepareAiFunctionRuntime('warm-profile', 'Draft new instructions.', false)
+    expect(draft.poolKey).toMatch(/^ai-function:/)
+  })
+
+  it('Claude keeps the function prompt in its per-session system prompt', async () => {
+    state.utilityEngine = 'claude'
+    const first = await prepareAiFunctionRuntime('claude-profile', 'Summarize.', false)
+    const second = await prepareAiFunctionRuntime('claude-profile', 'Review.', false)
+    expect(first.poolKey).toBe(second.poolKey)
+    expect(first.cwd).not.toBe(second.cwd)
+    expect(first.plan.session.meta).toMatchObject({ claudeCode: { options: { systemPrompt: 'Summarize.', tools: [] } } })
+    expect(second.plan.session.meta).toMatchObject({ claudeCode: { options: { systemPrompt: 'Review.', tools: [] } } })
   })
 })

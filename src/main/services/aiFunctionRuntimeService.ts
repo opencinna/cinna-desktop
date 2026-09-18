@@ -13,7 +13,7 @@ export interface AiFunctionRuntimeInput {
 export interface AiFunctionRuntimeDeps {
   pool: AcpProcessPool
   prepare(userId: string, systemPrompt: string, warmOnly: boolean): Promise<{
-    poolKey: string; plan: AcpLaunchPlan; cwd: string; instructionPrefix: string
+    poolKey: string; plan: AcpLaunchPlan; cwd: string
   }>
 }
 
@@ -70,7 +70,7 @@ export function createAiFunctionRuntime(deps: AiFunctionRuntimeDeps): (input: Ai
           catch (error) { if (!option.optional) throw error }
         }
         input.signal.throwIfAborted()
-        const answer = await conn.prompt({ sessionId, prompt: [{ type: 'text', text: `${prepared.instructionPrefix}${input.userText}` }] })
+        const answer = await conn.prompt({ sessionId, prompt: [{ type: 'text', text: input.userText }] })
         if (answer.stopReason !== 'end_turn' && answer.stopReason !== 'max_tokens') throw new Error(`AI function stopped: ${answer.stopReason}`)
         return text
       }

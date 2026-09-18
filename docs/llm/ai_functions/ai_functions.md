@@ -14,7 +14,7 @@ Run a short text transformation for titles and agent drafts with one output stri
 
 1. Select an AI Functions credential/model or leave Default runtime selected. Changing credential clears the model selection.
 2. Drafting may start a cold runtime and waits for the result. Background titles request a warm process only; without one they defer, leaving the ordinary derived title in place.
-3. A runtime utility receives fixed no-tools instructions plus the function's instructions and input. It never receives a chat's transcript or attached connectors.
+3. A runtime utility receives the function's instructions as its system prompt and the caller's text as user input. It never receives a chat's transcript or attached connectors.
 
 ## Business Rules
 
@@ -22,6 +22,7 @@ Run a short text transformation for titles and agent drafts with one output stri
 - Both backends obey caller cancellation, a 90-second ceiling and a maximum 16000 output characters; callers can request a smaller cap. Whitespace-only output is an error.
 - The runtime session is canceled/unbound after one reply. ACP has no session/delete; discarding the address is the non-reuse boundary. A late session/new after cancellation is canceled before any prompt.
 - Claude/OpenCode enforce the synthetic no-native-tools policy. Codex runtime fallback refuses until its adapter can enforce that contract; selecting an AI Functions credential remains an available alternative.
+- OpenCode utility processes are keyed by the exact function system prompt as well as profile/runtime/credential/model. Repeated matching functions reuse that process with fresh sessions. A warm synthetic chat has a fixed title-only companion mode; only the shared title prompt may reuse it. Claude keeps function instructions in its per-session system prompt.
 - Background title generation does not create a process merely to title a chat. Drafting and chat execution may deliberately use different backends.
 - Errors use `AiFunctionError`: no_provider, llm_failed or empty_output. Secret values stay in main and never appear in the settings status.
 

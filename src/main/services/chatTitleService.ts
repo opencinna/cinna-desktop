@@ -1,3 +1,4 @@
+import { MAX_TITLE_CHARS, TITLE_SYSTEM_PROMPT } from './aiFunctionPrompts'
 import { chatRepo } from '../db/chats'
 import { messageRepo } from '../db/messages'
 import { appSettingsRepo } from '../db/appSettings'
@@ -10,7 +11,6 @@ import { deriveTitleFromMessage } from '../../shared/chatTitle'
 
 const logger = createLogger('chat-title')
 
-const MAX_TITLE_CHARS = 40
 const DEFAULT_CHAT_TITLE = 'New Chat'
 
 /**
@@ -82,20 +82,6 @@ function broadcastTitleUpdate(chatId: string, title: string): void {
     win.webContents.send(CHAT_TITLE_UPDATED_CHANNEL, { chatId, title })
   }
 }
-
-const TITLE_SYSTEM_PROMPT = [
-  'You generate concise chat titles.',
-  '',
-  'Given the user\'s first message in a new conversation, output a short',
-  `title (max ${MAX_TITLE_CHARS} characters) summarizing the topic.`,
-  '',
-  'Rules:',
-  '- Output ONLY the title text. No quotes, no preamble, no explanation.',
-  '- No trailing punctuation.',
-  '- Plain text, no markdown.',
-  '- Prefer nouns / noun phrases over full sentences.',
-  '- Match the language of the user\'s message.'
-].join('\n')
 
 export const chatTitleService = {
   /**

@@ -161,11 +161,15 @@ export class A2AAsMcpProvider implements ToolProvider {
 
     if (result.needsInput) return { content: result.text, parts: result.parts, needsInput: true }
     if (result.stopReason === 'canceled') return { content: 'The specialist was stopped. You may continue with the results already available.', parts: result.parts, isError: true }
+    if (result.stopReason === 'budget') {
+      const diagnostic = result.error?.message
+      const content = diagnostic
+        ? [diagnostic, ...(result.text && result.text !== diagnostic ? [result.text] : [])].join('\n\n')
+        : result.text || 'The agent paused at its remote budget. Review the session in Claude before continuing.'
+      return { budget: true, content, parts: result.parts, isError: true }
+    }
     if (result.error) {
       return { content: result.error.message, parts: result.parts, isError: true }
-    }
-    if (result.stopReason === 'budget') {
-      return { budget: true, content: result.text || 'The agent paused at its remote budget. Review the session in Claude before continuing.', parts: result.parts, isError: true }
     }
     // Compact text to the orchestrator; rich parts ride along for the UI.
     return { content: result.text, parts: result.parts }

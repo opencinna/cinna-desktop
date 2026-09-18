@@ -40,3 +40,13 @@ it('owns static attribution and frames a driver turn once with its real agent an
 it('never offers the conductor as its own specialist tool', () => {
   expect(buildAgentToolProviders('chat', 'default', 'profile', new Set(), 'conductor').map((provider) => provider.agentId)).toEqual(['agent-alpha'])
 })
+
+it('preserves the classified rate limit ahead of generic errors so the conductor pauses', async () => {
+  const parts = [{ kind: 'text', text: 'Verified the first file.' }]
+  driverRun.mockResolvedValue({ text: 'Verified the first file.', parts, stopReason: 'budget',
+    error: { code: 'rate_limit', message: 'Shared login limit; retry at 14:00.', raw: 'Shared login limit; retry at 14:00.' } })
+  const provider = new A2AAsMcpProvider('chat-limit', { id: 'limited', name: 'Limited' } as AgentRow, 'owner', 'limited')
+  expect(await provider.callTool('limited', { message: 'Check' })).toEqual({
+    budget: true, isError: true, content: 'Shared login limit; retry at 14:00.\n\nVerified the first file.', parts
+  })
+})
