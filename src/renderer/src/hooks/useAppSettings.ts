@@ -9,6 +9,14 @@ const logger = createLogger('app-settings')
 const APP_SETTINGS_KEY = ['app-settings'] as const
 
 /**
+ * Where AI Functions will run, as main decides it. Derived in main from the
+ * AI Functions binding *and* the chosen credential's row, so it is stale after
+ * either changes: `useSetAppSetting` invalidates it on every write, and the
+ * provider mutations and account-config sync in `useProviders` do too.
+ */
+export const AI_FUNCTIONS_BACKEND_KEY = ['ai-functions-backend'] as const
+
+/**
  * Tagged union over the schema so `(key, value)` stays type-safe at the
  * call site even as new settings are added — TanStack Query can't infer
  * a generic `<K>` mutation-fn parameter on its own.
@@ -27,6 +35,18 @@ export function useAppSettings() {
   return useQuery({
     queryKey: APP_SETTINGS_KEY,
     queryFn: () => window.api.settings.getAll()
+  })
+}
+
+/**
+ * Main's answer to "where do titles and drafts run right now". The Features tab
+ * renders only this, never its own reading of the binding. One fixed key, so a
+ * refetch keeps showing the previous answer until the new one lands.
+ */
+export function useAiFunctionsBackend() {
+  return useQuery({
+    queryKey: AI_FUNCTIONS_BACKEND_KEY,
+    queryFn: () => window.api.settings.aiFunctionsBackend()
   })
 }
 
@@ -89,6 +109,10 @@ export function useSetAppSetting() {
        */
       queryClient.invalidateQueries({ queryKey: DEFAULT_RUNTIME_KEY })
       queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      // `aiFunctionsCredentialId` / `aiFunctionsModelId` are what main's
+      // "Runs on" answer is derived from. Unconditional for the same reason
+      // as the credential bindings above.
+      queryClient.invalidateQueries({ queryKey: AI_FUNCTIONS_BACKEND_KEY })
     }
   })
 }

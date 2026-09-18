@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import type { OllamaDetectionData } from '../../../preload'
 import { AGENT_CREDENTIAL_BINDINGS_KEY } from './useLocalAgents'
+import { AI_FUNCTIONS_BACKEND_KEY } from './useAppSettings'
 
 function getApi() {
   if (!window.api) {
@@ -25,6 +26,9 @@ export function useProviders() {
       // agent resolves to with nothing on screen having been clicked. Without
       // this the sidebar keeps the dot it drew before the sync.
       queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
+      // Same for the AI Functions credential: a retired or disabled managed
+      // row moves titles onto the Default runtime.
+      queryClient.invalidateQueries({ queryKey: AI_FUNCTIONS_BACKEND_KEY })
     })
   }, [queryClient])
 
@@ -72,6 +76,9 @@ export function useUpsertProvider() {
       // the "would this stop anything" question behind the switch are stale the
       // moment this returns.
       queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
+      // A key, the on/off switch, the default model or a deletion each change
+      // where AI Functions run (Settings → Features "Runs on").
+      queryClient.invalidateQueries({ queryKey: AI_FUNCTIONS_BACKEND_KEY })
     }
   })
 }
@@ -86,6 +93,9 @@ export function useDeleteProvider() {
       // Deleting the Ollama credential makes the offer worth showing again.
       queryClient.invalidateQueries({ queryKey: ['ollama-detection'] })
       queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
+      // A key, the on/off switch, the default model or a deletion each change
+      // where AI Functions run (Settings → Features "Runs on").
+      queryClient.invalidateQueries({ queryKey: AI_FUNCTIONS_BACKEND_KEY })
     }
   })
 }

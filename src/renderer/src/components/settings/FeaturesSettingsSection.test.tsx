@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AiFunctionsBackendStatus } from '../../../../shared/aiFunctions'
 
 const HEALTHY = {
   autoChatTitles: true,
@@ -10,16 +11,23 @@ const HEALTHY = {
 let settings: Record<string, boolean | string> | undefined = HEALTHY
 let isError = false
 let saveError: Error | null = null
+let functionsBackend: AiFunctionsBackendStatus | undefined = { runsOn: 'runtime', reason: 'unset' }
+let providers: unknown[] = []
+let models: unknown[] = []
 const setSetting = vi.fn()
 beforeEach(() => {
+  functionsBackend = { runsOn: 'runtime', reason: 'unset' }
+  providers = []
+  models = []
   settings = HEALTHY
   isError = false
   saveError = null
   setSetting.mockReset()
 })
-vi.mock('../../hooks/useProviders', () => ({ useProviders: () => ({ data: [] }) }))
-vi.mock('../../hooks/useModels', () => ({ useModels: () => ({ data: [] }) }))
+vi.mock('../../hooks/useProviders', () => ({ useProviders: () => ({ data: providers }) }))
+vi.mock('../../hooks/useModels', () => ({ useModels: () => ({ data: models }) }))
 vi.mock('../../hooks/useAppSettings', () => ({
+  useAiFunctionsBackend: () => ({ data: functionsBackend }),
   useAppSettings: () => ({ data: settings, isLoading: false, isError }),
   useSetAppSetting: () => ({ mutate: setSetting, isPending: false, error: saveError })
 }))
@@ -124,8 +132,66 @@ it('saves the default routing independently from existing chats', () => {
 
 it('says a missing AI Functions credential runs on the Default runtime', () => {
   settings = { ...HEALTHY, aiFunctionsCredentialId: 'deleted-credential', aiFunctionsModelId: '' }
+  functionsBackend = { runsOn: 'runtime', reason: 'missing' }
   render(<FeaturesSettingsSection />)
   expect(screen.getByText('Runs on: Default runtime — the chosen credential is missing')).toBeTruthy()
   // The picker keeps marking the stale choice.
   expect(screen.getByRole('option', { name: 'Missing credential' })).toBeTruthy()
+})
+
+/**
+ * The "Runs on" line is main's answer (`settings:ai-functions-backend`), not a
+ * renderer-side reading of the binding: it used to say a credential while main
+ * was falling back to the Default runtime.
+ */
+describe('AI Functions "Runs on" line', () => {
+  const SONNET = { id: 'cred', type: 'anthropic', name: 'Sonnet', enabled: true, hasApiKey: true }
+
+  it.each([
+    [{ runsOn: 'runtime', reason: 'unset' }, 'Runs on: Default runtime'],
+    [{ runsOn: 'runtime', reason: 'missing' }, 'Runs on: Default runtime — the chosen credential is missing'],
+    [{ runsOn: 'runtime', reason: 'inactive' }, 'Runs on: Default runtime — the chosen credential is inactive'],
+    [{ runsOn: 'runtime', reason: 'no_model' }, 'Runs on: Default runtime — the chosen credential has no model'],
+    [{ runsOn: 'credential', credentialId: 'cred', credentialName: 'Sonnet', modelId: 'claude-x' }, 'Runs on: Sonnet · claude-x']
+  ] as [AiFunctionsBackendStatus, string][])('renders %o as "%s"', (status, text) => {
+    functionsBackend = status
+    render(<FeaturesSettingsSection />)
+    expect(screen.getByText(text)).toBeTruthy()
+  })
+
+  it('names main\'s model from the loaded model list of that credential only', () => {
+    functionsBackend = { runsOn: 'credential', credentialId: 'cred', credentialName: 'Sonnet', modelId: 'claude-x' }
+    models = [{ id: 'claude-x', name: 'Other credential’s name', providerId: 'other' }]
+    const { unmount } = render(<FeaturesSettingsSection />)
+    expect(screen.getByText('Runs on: Sonnet · claude-x')).toBeTruthy()
+    unmount()
+    models = [...models, { id: 'claude-x', name: 'Claude X', providerId: 'cred' }]
+    render(<FeaturesSettingsSection />)
+    expect(screen.getByText('Runs on: Sonnet · Claude X')).toBeTruthy()
+  })
+
+  it('follows main when an active credential has no model, even though the renderer sees it active', () => {
+    settings = { ...HEALTHY, aiFunctionsCredentialId: 'cred', aiFunctionsModelId: '' }
+    providers = [SONNET]
+    functionsBackend = { runsOn: 'runtime', reason: 'no_model' }
+    render(<FeaturesSettingsSection />)
+    expect(screen.getByText('Runs on: Default runtime — the chosen credential has no model')).toBeTruthy()
+    expect(screen.queryByText(/Sonnet · /)).toBeNull()
+  })
+
+  it('names the stored model main uses even when it is not in the credential list, and keeps the picker entry', () => {
+    settings = { ...HEALTHY, aiFunctionsCredentialId: 'cred', aiFunctionsModelId: 'retired-model' }
+    providers = [SONNET]
+    functionsBackend = { runsOn: 'credential', credentialId: 'cred', credentialName: 'Sonnet', modelId: 'retired-model' }
+    render(<FeaturesSettingsSection />)
+    expect(screen.getByText('Runs on: Sonnet · retired-model')).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'Choose a model for this credential' })).toBeTruthy()
+  })
+
+  it('keeps the line, with a neutral placeholder, while the status loads', () => {
+    functionsBackend = undefined
+    render(<FeaturesSettingsSection />)
+    const line = screen.getByText('Runs on: —')
+    expect(line.getAttribute('aria-busy')).toBe('true')
+  })
 })

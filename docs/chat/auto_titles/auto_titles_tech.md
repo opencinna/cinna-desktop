@@ -38,7 +38,7 @@
 
 | File | Role |
 |------|------|
-| `src/main/ipc/settings.ipc.ts` | Registers `settings:get-all` and `settings:set`. Loose `(key: string, value: unknown)` signature pushes validation to `appSettingsService.set`. |
+| `src/main/ipc/settings.ipc.ts` | Registers `settings:get-all`, `settings:set` and `settings:ai-functions-backend` (what AI Functions actually run on, as data — see [AI Functions](../../llm/ai_functions/ai_functions.md)). Loose `(key: string, value: unknown)` signature pushes validation to `appSettingsService.set`. |
 | `src/main/ipc/index.ts` | Calls `registerSettingsHandlers()` from `registerAllIpcHandlers`. |
 | `src/main/index.ts` | `getMainWindow()` is the broadcast target the title service uses to emit `CHAT_TITLE_UPDATED_CHANNEL`. |
 
@@ -82,6 +82,7 @@ No new columns on `messages` or `chats`. The feature reuses `chats.title` and wr
 |---------|-----------|---------|---------|
 | `settings:get-all` | renderer → main | none | `AppSettingsSchema` (full snapshot with defaults applied for missing rows) |
 | `settings:set` | renderer → main | `(key: string, value: unknown)` | `{ success: true }`; throws `AppSettingsError` (`invalid_key` / `invalid_value`) on validation failure |
+| `settings:ai-functions-backend` | renderer → main | none | `AiFunctionsBackendStatus`: `{ runsOn: 'credential', credentialId, credentialName, modelId }` or `{ runsOn: 'runtime', reason: 'unset' \| 'missing' \| 'inactive' \| 'no_model' }` |
 
 ### Title broadcast
 

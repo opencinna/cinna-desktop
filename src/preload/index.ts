@@ -1,4 +1,5 @@
 import type { RuntimeModelCatalog } from '../shared/runtimeModelCatalog'
+import type { AiFunctionsBackendStatus } from '../shared/aiFunctions'
 import type { ChatModeRuntime } from '../shared/chatModeRuntime'
 import type { DevelopmentContext } from '../shared/developmentSession'
 import type { AgentEngine } from '../shared/engine'
@@ -1330,7 +1331,10 @@ const api = {
     set: <K extends keyof AppSettingsSchema>(
       key: K,
       value: AppSettingsSchema[K]
-    ): Promise<{ success: true }> => ipcRenderer.invoke('settings:set', key, value)
+    ): Promise<{ success: true }> => ipcRenderer.invoke('settings:set', key, value),
+    /** Where AI Functions will run right now, and why it falls back when it does. */
+    aiFunctionsBackend: (): Promise<AiFunctionsBackendStatus> =>
+      ipcRenderer.invoke('settings:ai-functions-backend')
   },
 
   /**

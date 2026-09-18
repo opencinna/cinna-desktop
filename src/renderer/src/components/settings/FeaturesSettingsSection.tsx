@@ -1,7 +1,8 @@
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
 import { isCredentialActive } from '../../../../shared/credentials'
-import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
+import { useAiFunctionsBackend, useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
+import type { AiFunctionsBackendStatus } from '../../../../shared/aiFunctions'
 import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
 import { useUIStore, type ThemePreference } from '../../stores/ui.store'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -15,6 +16,22 @@ import {
   settingsInputClass,
   settingsDropdownRowClass
 } from './SettingsLayout'
+
+/** Every fallback cause fits one line in the 428px box at an 800px window. */
+const FALLBACK_TEXT: Record<Extract<AiFunctionsBackendStatus, { runsOn: 'runtime' }>['reason'], string> = {
+  unset: 'Default runtime',
+  missing: 'Default runtime — the chosen credential is missing',
+  inactive: 'Default runtime — the chosen credential is inactive',
+  no_model: 'Default runtime — the chosen credential has no model'
+}
+
+/** Main picks the credential and model; the name comes from the loaded model list, else the id. */
+function describeRunsOn(status: AiFunctionsBackendStatus | undefined, models: readonly { id: string; name: string; providerId: string }[]): string {
+  if (!status) return '—'
+  if (status.runsOn === 'runtime') return FALLBACK_TEXT[status.reason]
+  const modelName = models.find((model) => model.providerId === status.credentialId && model.id === status.modelId)?.name
+  return `${status.credentialName} · ${modelName ?? status.modelId}`
+}
 
 /**
  * Features tab — opt-in toggles grouped by domain:
@@ -42,6 +59,8 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const { data: models } = useModels()
   const functionCredential = providers?.find((provider) => provider.id === settings?.aiFunctionsCredentialId)
   const functionModels = (models ?? []).filter((model) => model.providerId === settings?.aiFunctionsCredentialId)
+  const { data: functionsBackend } = useAiFunctionsBackend()
+  const runsOnText = describeRunsOn(functionsBackend, models ?? [])
 
   const disabled = isLoading || setSetting.isPending
   const saveError = setSetting.error ? unwrapIpcError(setSetting.error, 'Could not save this setting.') : null
@@ -120,8 +139,12 @@ export function FeaturesSettingsSection(): React.JSX.Element {
                 {settings?.aiFunctionsModelId && !functionModels.some((model) => model.id === settings.aiFunctionsModelId) && <option value={settings.aiFunctionsModelId}>Choose a model for this credential</option>}
               </select>
             </div>
-            <p className="mt-2 text-[13px] text-[var(--color-text-muted)]">
-              Runs on: {functionCredential && isCredentialActive(functionCredential) ? `${functionCredential.name} · ${functionModels.find((model) => model.id === settings?.aiFunctionsModelId)?.name ?? 'default model'}` : functionCredential ? 'Default runtime — the chosen credential is inactive' : settings?.aiFunctionsCredentialId ? 'Default runtime — the chosen credential is missing' : 'Default runtime'}
+            {/* Main's answer, not ours: this line used to judge the binding in
+                the renderer and named a credential main was falling back from.
+                One line, fixed height, and the previous answer (or a dash on
+                first load) while a refetch runs — it never empties (rule 1). */}
+            <p className="mt-2 truncate text-[13px] text-[var(--color-text-muted)]" title={runsOnText} aria-busy={!functionsBackend}>
+              Runs on: {runsOnText}
             </p>
           </SettingsRow>
           <SettingsToggleRow

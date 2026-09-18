@@ -7,6 +7,8 @@ import { getSettingsScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
 import type { AppSettingsSchema } from '../../shared/appSettings'
 import { ipcHandle } from './_wrap'
+import { aiFunctions } from '../services/aiFunctionsService'
+import type { AiFunctionsBackendStatus } from '../../shared/aiFunctions'
 
 const logger = createLogger('settings-ipc')
 
@@ -40,6 +42,19 @@ export function registerSettingsHandlers(): void {
      */
     await defaultEngineService.lockIfUnset()
     return appSettingsService.getAll()
+  })
+
+  /**
+   * Where AI Functions will run, as `aiFunctions.resolveBackend` decides it —
+   * the Settings → Features "Runs on" line renders this and nothing else, so it
+   * cannot claim a credential that main is quietly falling back from. Every
+   * fallback is returned as a reason, never thrown: a thrown code would not
+   * survive IPC. DB-only: no provider request on a settings read; the renderer
+   * names the model from the `useModels` list it already holds.
+   */
+  ipcHandle('settings:ai-functions-backend', async (): Promise<AiFunctionsBackendStatus> => {
+    userActivation.requireActivated()
+    return aiFunctions.describeBackend()
   })
 
   ipcHandle(

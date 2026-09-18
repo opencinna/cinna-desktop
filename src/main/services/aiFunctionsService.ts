@@ -2,7 +2,8 @@ import { appSettingsRepo } from '../db/appSettings'
 import { llmProviderRepo, type LlmProviderRow } from '../db/llmProviders'
 import { decryptApiKey } from '../security/keystore'
 import { requiresApiKey } from '../../shared/credentials'
-import { createAdapter, isProviderType } from '../llm/factory'
+import { createAdapter, isProviderType, type ProviderType } from '../llm/factory'
+import type { AiFunctionsBackendStatus, AiFunctionsFallbackReason } from '../../shared/aiFunctions'
 import { DomainError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { getManagedResourceScopes } from '../auth/scope'
@@ -39,14 +40,23 @@ interface ProviderModelPair {
   modelId: string | null
 }
 
+type Eligibility =
+  | { ok: true; provider: LlmProviderRow & { type: ProviderType }; modelId: string }
+  | { ok: false; reason: AiFunctionsFallbackReason }
+
 /**
+ * Every check that decides whether the AI Functions binding can run, and no
+ * more: it reads the DB only — no key decrypted, no adapter built — so Settings
+ * can ask it on every render ({@link aiFunctions.describeBackend}) and the real
+ * call ({@link tryResolve}) cannot disagree with what Settings says.
+ *
  * User credentials live in Default scope; managed credentials may live in the
  * active profile. Resolve the explicit AI Functions binding across both.
  */
-function tryResolve(pair: ProviderModelPair): Extract<AiFunctionBackend, { kind: 'adapter' }> | null {
+function checkEligibility(pair: ProviderModelPair): Eligibility {
   if (!pair.providerId) {
     logger.debug('candidate skipped: missing provider/model id', pair)
-    return null
+    return { ok: false, reason: 'unset' }
   }
   // User-created providers live in Default scope; account-provisioned managed
   // ones in the active Profile scope. Search both.
@@ -57,7 +67,7 @@ function tryResolve(pair: ProviderModelPair): Extract<AiFunctionBackend, { kind:
   }
   if (!provider) {
     logger.debug('candidate skipped: provider not found', { providerId: pair.providerId })
-    return null
+    return { ok: false, reason: 'missing' }
   }
   // A keyless credential (Ollama) has no key to be missing, and skipping it here
   // would silently exclude a local model from every AI function — chat titles,
@@ -68,7 +78,7 @@ function tryResolve(pair: ProviderModelPair): Extract<AiFunctionBackend, { kind:
     logger.debug('candidate skipped: provider has no api key', {
       providerId: pair.providerId
     })
-    return null
+    return { ok: false, reason: 'inactive' }
   }
   // A managed subscription token that cannot call the API is not a usable
   // one-shot credential, even while its associated runtime can authenticate.
@@ -76,18 +86,43 @@ function tryResolve(pair: ProviderModelPair): Extract<AiFunctionBackend, { kind:
     logger.debug('candidate skipped: provider disabled', {
       providerId: pair.providerId
     })
-    return null
+    return { ok: false, reason: 'inactive' }
   }
+  // `createAdapter` returns null for exactly the types this rejects, so passing
+  // here is what lets the describe path promise an adapter without building one.
   if (!isProviderType(provider.type)) {
     logger.debug('candidate skipped: unsupported provider type', {
       providerId: pair.providerId,
       type: provider.type
     })
+    return { ok: false, reason: 'inactive' }
+  }
+  const modelId = pair.modelId || provider.defaultModelId || provider.availableModels?.[0]
+  if (!modelId) {
+    logger.debug('candidate skipped: no model resolvable', { providerId: pair.providerId })
+    return { ok: false, reason: 'no_model' }
+  }
+  return { ok: true, provider: provider as LlmProviderRow & { type: ProviderType }, modelId }
+}
+
+function tryResolve(pair: ProviderModelPair): Extract<AiFunctionBackend, { kind: 'adapter' }> | null {
+  const eligible = checkEligibility(pair)
+  if (!eligible.ok) return null
+  const { provider, modelId } = eligible
+  // A key that no longer decrypts (the keychain entry was reset) is as unusable
+  // as a missing one: fall back like every other unusable credential rather
+  // than failing every title and draft. Settings' line cannot see this case —
+  // `describeBackend` never decrypts — so it is logged at warn.
+  let apiKey = ''
+  try {
+    apiKey = provider.apiKeyEncrypted ? decryptApiKey(provider.apiKeyEncrypted) : ''
+  } catch (error) {
+    logger.warn('AI Functions credential key could not be decrypted', { providerId: provider.id, error: error instanceof Error ? error.message : String(error) })
     return null
   }
   const adapter = createAdapter(
     provider.type,
-    provider.apiKeyEncrypted ? decryptApiKey(provider.apiKeyEncrypted) : '',
+    apiKey,
     provider.id,
     {
       baseUrl: provider.baseUrl,
@@ -106,8 +141,14 @@ function tryResolve(pair: ProviderModelPair): Extract<AiFunctionBackend, { kind:
     })
     return null
   }
-  const modelId = pair.modelId || provider.defaultModelId || provider.availableModels?.[0]
-  return modelId ? { kind: 'adapter', adapter, modelId } : null
+  return { kind: 'adapter', adapter, modelId }
+}
+
+function readBinding(): ProviderModelPair {
+  return {
+    providerId: appSettingsRepo.get('aiFunctionsCredentialId').trim() || null,
+    modelId: appSettingsRepo.get('aiFunctionsModelId').trim() || null
+  }
 }
 
 /** The stale credential last warned about, so the fallback logs once, not per call. */
@@ -116,9 +157,10 @@ let warnedStaleCredentialId: string | null = null
 /** AI Functions have their own binding; chat modes never choose this backend. */
 export const aiFunctions = {
   resolveBackend(userId: string): AiFunctionBackend {
-    const providerId = appSettingsRepo.get('aiFunctionsCredentialId').trim()
+    const binding = readBinding()
+    const providerId = binding.providerId
     if (!providerId) return { kind: 'runtime', userId }
-    const resolved = tryResolve({ providerId, modelId: appSettingsRepo.get('aiFunctionsModelId').trim() || null })
+    const resolved = tryResolve(binding)
     if (resolved) {
       warnedStaleCredentialId = null
       return resolved
@@ -131,6 +173,22 @@ export const aiFunctions = {
       logger.warn('AI Functions credential unavailable; using the default runtime', { providerId })
     }
     return { kind: 'runtime', userId }
+  },
+
+  /**
+   * What {@link resolveBackend} would choose right now, and why it falls back
+   * when it does — the same checks, without decrypting a key or building an
+   * adapter. Side-effect free: no warn-once state is touched.
+   */
+  describeBackend(): AiFunctionsBackendStatus {
+    const eligible = checkEligibility(readBinding())
+    if (!eligible.ok) return { runsOn: 'runtime', reason: eligible.reason }
+    return {
+      runsOn: 'credential',
+      credentialId: eligible.provider.id,
+      credentialName: eligible.provider.name,
+      modelId: eligible.modelId
+    }
   },
 
   /** Both backends obey the same cancellation, timeout and output contract. */
