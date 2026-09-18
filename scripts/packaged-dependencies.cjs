@@ -1,6 +1,7 @@
 const { existsSync, readFileSync, mkdtempSync, mkdirSync, renameSync, rmSync, statSync } = require('node:fs')
 const { basename, dirname, join, relative, resolve, sep } = require('node:path')
 const { tmpdir } = require('node:os')
+const { verifyCodexAcpPatch } = require('./patch-codex-acp.cjs')
 
 // These are the app-owned entry points executed with ELECTRON_RUN_AS_NODE.
 const CHILD_PACKAGES = [
@@ -141,6 +142,7 @@ function prepareCanvasPayload(appDir, target, pack = packWithNpm) {
 }
 
 function beforePack({ packager, electronPlatformName, arch }) {
+  verifyCodexAcpPatch(packager.info.appDir)
   const canvas = canvasTargets(packager.info.appDir, electronPlatformName, arch)
   canvas.forEach((target) => prepareCanvasPayload(packager.info.appDir, target))
   // electron-builder may hoist a nested dependency while collecting production
@@ -161,6 +163,7 @@ function afterPack({ packager, appOutDir, electronPlatformName, arch }) {
   // Fail the build if file filtering or dependency collection lost a package.
   const unpacked = join(packager.getResourcesDir(appOutDir), 'app.asar.unpacked')
   const packages = runtimePackages(unpacked)
+  verifyCodexAcpPatch(unpacked)
   console.log(`Verified ${packages.length} unpacked ACP runtime packages`)
   for (const target of canvasTargets(packager.info.appDir, electronPlatformName, arch)) {
     // Match the runtime's lookup origin even if electron-builder re-hoists it.

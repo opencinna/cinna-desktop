@@ -26,7 +26,11 @@ Build flow: installed production tree → `beforePack` dependency/target prepara
 - Track visited package directories to terminate cycles and preserve distinct nested versions. Return sorted, relative paths with forward slashes. Dev dependencies are outside this traversal.
 - Skip names beginning with `@anthropic-ai/claude-agent-sdk-` or `@openai/codex`, matching the root and nested CLI exclusions in `electron-builder.yml`. Keep the helper and file exclusions aligned; omitting a required launcher override would activate an intentionally absent fallback.
 
-`beforePack` prepares target Canvas payloads first (below), then derives one `**/node_modules/<package-name>/**` pattern per discovered name, merges it with existing `asarUnpack` entries and removes duplicates. Matching every depth matters: electron-builder can re-hoist a package after npm installed it nested. A source-directory-only pattern missed that destination. Target Canvas payload names receive the same all-depth patterns. Existing resource unpacking remains part of the configuration.
+`beforePack` first verifies the pinned Codex adapter patch, prepares target Canvas payloads (below), then derives one `**/node_modules/<package-name>/**` pattern per discovered name, merges it with existing `asarUnpack` entries and removes duplicates. Matching every depth matters: electron-builder can re-hoist a package after npm installed it nested. A source-directory-only pattern missed that destination. Target Canvas payload names receive the same all-depth patterns. Existing resource unpacking remains part of the configuration.
+
+`scripts/patch-codex-acp.cjs` runs after `electron-builder install-app-deps` in postinstall. It applies only the reviewed source transformation to adapter 1.11.0, with original and patched SHA-256 values in `src/main/agents/drivers/acp/codexAdapterPatch.json`. The patch preserves MCP deny entries during injection, enables the injected descriptor, and forwards per-session developer instructions on start/resume. An already-patched adapter is accepted; any other version/source digest refuses. `afterPack` verifies the shipped unpacked adapter bytes as well as the installed-tree check in `beforePack`. Neither step patches the user's Codex executable. See [restricted Codex policy](../../agents/local_agents/codex_engine_tech.md#restricted-chat-and-ai-function-policy).
+
+`electron-builder.yml` excludes `e2e/**` from file collection: traces and test results are transient and may be rewritten during validation, so they are neither runtime assets nor stable packaging inputs. It also excludes `dist/**` so prior installers are not collected when a validation build uses another output directory.
 
 Unpack patterns only act on packages electron-builder collects. The Claude SDK's required `@modelcontextprotocol/sdk` peer was installed by npm but omitted from the distribution while it was implicit. `package.json` declares `@modelcontextprotocol/sdk` at `1.29.0` as a production dependency, with `package-lock.json` updated accordingly. The app's `@modelcontextprotocol/client` dependency serves a separate consumer and does not replace this peer requirement.
 
@@ -65,7 +69,7 @@ Run from the checkout with dependencies installed. The fixture source, Node, Ele
 
 | Command | What it establishes |
 |---|---|
-| `npm run test:packaging` | Thirteen Node tests: six dependency/hook fixtures, five Canvas target/preparation fixtures and two main-check environment regressions. No package or Electron launch is required. |
+| `npm run test:packaging` | Node dependency/hook, Canvas target/preparation, main-check environment and pinned Codex patch fixtures. No package or Electron launch is required. |
 | `npm run test:packaged:acp -- <app-executable> <resources-directory>` | Both shipped adapters complete ACP v1 `initialize` using the supplied packaged Electron executable. |
 | `npm run test:packaged:main -- <resources-directory> [matching-electron-executable]` | The supplied Electron (or the project's installed Electron by default) loads the copied package's external main imports and exercises selected native/WASM/parser paths. |
 

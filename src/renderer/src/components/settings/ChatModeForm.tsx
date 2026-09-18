@@ -25,14 +25,13 @@ export function ChatModeForm({ onClose }: ChatModeFormProps): React.JSX.Element 
   const { data: defaultRuntime } = useDefaultRuntime()
   const upsert = useUpsertChatMode()
   const engine = runtime.engine ?? defaultRuntime?.engine
-  const unsupported = engine === 'codex'
   const credentialMode = engine === 'opencode'
   const enabledProviders = (providers ?? []).filter(isCredentialActive)
   const models = (allModels ?? []).filter((model) => model.providerId === runtime.providerId)
   const changeRuntime = (patch: Partial<ChatModeRuntimeValue>): void => setRuntime(previous => ({ ...previous, ...patch }))
 
   const handleCreate = (): void => {
-    if (!name.trim() || unsupported || upsert.isPending) return
+    if (!name.trim() || upsert.isPending) return
     upsert.mutate({ ...runtime, name: name.trim(), providerId: runtime.providerId || null,
       modelId: runtime.modelId || null, mcpProviderIds: Array.from(mcpIds), colorPreset }, { onSuccess: onClose })
   }
@@ -92,7 +91,7 @@ export function ChatModeForm({ onClose }: ChatModeFormProps): React.JSX.Element 
         </details>
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" onClick={onClose} className="px-3 py-1.5 rounded-md text-[14px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors">Cancel</button>
-          <button type="submit" disabled={!name.trim() || unsupported || upsert.isPending}
+          <button type="submit" disabled={!name.trim() || upsert.isPending}
             className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors">{upsert.isPending ? 'Creating…' : 'Create Mode'}</button>
         </div>
         {upsert.error && <p role="alert" className="text-[13px] text-[var(--color-danger)]">{unwrapIpcError(upsert.error, 'Could not create chat mode')}</p>}

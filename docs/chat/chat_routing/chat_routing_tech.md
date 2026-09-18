@@ -42,3 +42,5 @@
 ## Security
 
 Chat/participant mutations require activation and ownership. Remote participants never become conductors solely because their registration is local. Secrets remain in main. ACP injection, no-native-tools restrictions and endpoint lifetime are covered by [Orchestration](../orchestrated_agents/orchestrated_agents_tech.md).
+
+Routing to a chat-owned Codex root does not bypass launch compatibility: its [restricted policy](../../agents/local_agents/codex_engine_tech.md#restricted-chat-and-ai-function-policy) validates the installed CLI/adapter and effective model before prompting. A saved mode or a detected CLI is not proof that this synthetic policy is supported.

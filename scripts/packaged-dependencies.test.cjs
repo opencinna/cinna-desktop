@@ -1,11 +1,18 @@
 const assert = require('node:assert/strict')
-const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } = require('node:fs')
+const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
 const { join } = require('node:path')
 const { test } = require('node:test')
 const { spawnSync } = require('node:child_process')
 const { runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, beforePack, afterPack } = require('./packaged-dependencies.cjs')
 const { checkEnvironment } = require('./check-packaged-main.cjs')
+const codexPatch = require('../src/main/agents/drivers/acp/codexAdapterPatch.json')
+
+function copyCodexAdapter(directory) {
+  mkdirSync(join(directory, 'dist'), { recursive: true })
+  writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/codex-acp', version: codexPatch.version }))
+  copyFileSync(join(__dirname, '../node_modules/@agentclientprotocol/codex-acp/dist/index.js'), join(directory, 'dist/index.js'))
+}
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'cinna-package-tree-'))
@@ -73,7 +80,7 @@ test('excludes bundled Claude and Codex CLIs even when installed', (t) => {
 test('build hooks preserve resource patterns and reject a broken shipped tree', (t) => {
   const { root, pkg } = fixture(t)
   const agent = pkg('@agentclientprotocol/claude-agent-acp', { dependencies: { shared: '*' } })
-  pkg('@agentclientprotocol/codex-acp')
+  copyCodexAdapter(pkg('@agentclientprotocol/codex-acp'))
   pkg('shared', {}, agent) // Source is nested; electron-builder may hoist it.
   const canvasName = '@napi-rs/canvas-darwin-x64'
   pkg('@napi-rs/canvas', { optionalDependencies: { [canvasName]: '1.0.0' } })
@@ -91,7 +98,7 @@ test('build hooks preserve resource patterns and reject a broken shipped tree', 
   assert.ok(packager.config.asarUnpack.includes(`**/node_modules/${canvasName}/**`))
   const unpacked = join(root, 'app.asar.unpacked')
   pkg('@agentclientprotocol/claude-agent-acp', { dependencies: { shared: '*' } }, unpacked)
-  pkg('@agentclientprotocol/codex-acp', {}, unpacked)
+  copyCodexAdapter(pkg('@agentclientprotocol/codex-acp', {}, unpacked))
   assert.throws(() => afterPack(context), /Missing runtime dependency shared/)
   pkg('shared', {}, unpacked)
   assert.throws(() => afterPack(context), /Missing packaged Canvas payload/)

@@ -4,8 +4,6 @@ import type { ChatModeRuntime } from '../../../../shared/chatModeRuntime'
 import type { AgentEngine } from '../../../../shared/engine'
 import { SettingsLabel, settingsInputClass } from './SettingsLayout'
 
-export const CODEX_CHAT_MODE_WARNING = 'Codex unavailable. Choose Claude or OpenCode.'
-
 export type ChatModeRuntimeValue = ChatModeRuntime & { modelId?: string | null; providerId?: string | null }
 
 /** Runtime and permission profile shared by new and existing chat modes. */
@@ -24,17 +22,16 @@ export function ChatModeRuntimeFields({ value, onChange, section = 'all', resolv
     ? [{ id: 'haiku', name: 'Haiku' }, { id: 'sonnet', name: 'Sonnet' }, { id: 'opus', name: 'Opus' }] : []
   return <>
     {section !== 'options' && <div>
-      <SettingsLabel htmlFor={`${id}-runtime`} info="The runtime that answers this mode's chats. Claude uses your CLI login; OpenCode uses AI credentials. Codex is unavailable for chat modes because it cannot disable native file and shell tools.">Runtime</SettingsLabel>
+      <SettingsLabel htmlFor={`${id}-runtime`} info="Claude and Codex use your installed CLI login; OpenCode uses AI credentials. Runtime support is checked when the chat starts.">Runtime</SettingsLabel>
       <select id={`${id}-runtime`} value={value.engine ?? ''} className={settingsInputClass}
         onChange={(event) => { setCustomModel(false); onChange({ engine: (event.target.value || null) as AgentEngine | null, modelId: null, providerId: null }) }}>
         <option value="">Default runtime</option>
         <option value="claude">Claude</option>
-        <option value="codex" disabled>Codex (unavailable for chat modes)</option>
+        <option value="codex">Codex</option>
         <option value="opencode">OpenCode</option>
       </select>
-      {engine === 'codex' && <p role="status" className="mt-2 text-[13px] text-[var(--color-warning)]">{CODEX_CHAT_MODE_WARNING}</p>}
     </div>}
-    {section !== 'runtime' && <fieldset disabled={engine === 'codex'} className="space-y-3 disabled:opacity-60">
+    {section !== 'runtime' && <fieldset className="space-y-3">
     {(engine === 'claude' || engine === 'codex') && <div>
       <SettingsLabel htmlFor={`${id}-model`} info={catalog?.source === 'session'
         ? 'Models last advertised by this runtime in this profile. Runtime default follows its configuration; Other model accepts an explicit model ID.'

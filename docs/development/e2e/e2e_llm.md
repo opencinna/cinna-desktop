@@ -187,6 +187,8 @@ Sidebar tabs `Chats` `Jobs` `Notes` `Agents` (use `exact: true`) · onboarding `
 
 ## Debugging a failure
 
+- **Codex can create its own ephemeral title thread.** The adapter may emit `thread/start` with `ephemeral: true` even when Cinna's `autoChatTitles` is false. Assert conversational continuity using non-ephemeral thread starts and that conversation's `threadId`; do not count auxiliary turns as another chat. `codex-engine.spec.ts` uses a supported-version scripted CLI only for the synthetic policy case, while the installed ACP adapter and policy helper remain real.
+
 1. `e2e/test-results/<test>/error-context.md` — the aria snapshot at failure, with the failing locator. Read this first; it usually answers "what did the screen actually show".
 2. `test-failed-*.png` — one per window (main and tray).
 3. `make e2e-trace TRACE=e2e/test-results/<test>/trace.zip` — every step with DOM snapshots and console.

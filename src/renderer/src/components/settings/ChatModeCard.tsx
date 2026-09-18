@@ -27,7 +27,6 @@ export function ChatModeCard({ mode: persistedMode }: ChatModeCardProps): React.
   const latestMode = useRef(mode)
   const { data: defaultRuntime } = useDefaultRuntime()
   const effectiveEngine = mode.engine ?? defaultRuntime?.engine
-  const unsupportedRuntime = effectiveEngine === 'codex'
   const [expanded, setExpanded] = useState(false)
   const [nameDraft, setNameDraft] = useState(mode.name)
   /**
@@ -69,15 +68,12 @@ export function ChatModeCard({ mode: persistedMode }: ChatModeCardProps): React.
     : null
 
   /** Why this mode cannot start a chat, or null when it can. Shared wording. */
-  const inactive = unsupportedRuntime ? { short: 'runtime unavailable', detail: null } : effectiveEngine === 'claude' ? null : chatModeInactiveReason(mode.providerId, providers)
+  const inactive = effectiveEngine === 'claude' || effectiveEngine === 'codex' ? null : chatModeInactiveReason(mode.providerId, providers)
   const preset = getPreset(mode.colorPreset)
   const mcpIds = new Set(mode.mcpProviderIds ?? [])
 
   const save = useCallback(
     (patch: Partial<ChatModeRuntimeValue & { name: string; providerId: string | null; modelId: string | null; mcpProviderIds: string[]; colorPreset: string; isDefault: boolean }>) => {
-      if ((latestMode.current.engine ?? defaultRuntime?.engine) === 'codex' && patch.engine === undefined &&
-        ('systemPrompt' in patch || 'toolPolicy' in patch || 'modelId' in patch || 'providerId' in patch)) return
-      if (patch.engine === 'codex') return
       const next = { ...latestMode.current, ...patch }
       latestMode.current = next
       setMode(next)
@@ -88,7 +84,7 @@ export function ChatModeCard({ mode: persistedMode }: ChatModeCardProps): React.
         mcpProviderIds: next.mcpProviderIds ?? [], colorPreset: next.colorPreset, isDefault: next.isDefault
       })
     },
-    [upsert, defaultRuntime?.engine]
+    [upsert]
   )
 
   const toggleMcp = (id: string): void => {

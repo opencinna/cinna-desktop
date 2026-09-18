@@ -11,12 +11,8 @@ export function applyConductorToolPolicy(plan: AcpLaunchPlan, engine: AgentEngin
     } } } }
   }
   if (engine === 'codex') {
-    // Verified against codex-acp 1.11: its "read-only" mode sends
-    // sandboxPolicy.workspaceWrite on every turn/start, overriding config.
-    // Codex also selects apply_patch and optional native read tools from its
-    // model catalogue independently of shell_tool. Flags cannot establish the
-    // no-file-tools policy; never silently run a coding session as plain chat.
-    throw new Error('Codex cannot enforce this chat’s no-file-tools policy yet. Choose Claude or OpenCode as the default runtime, or choose an AI Functions credential in Settings → Features.')
+    if (plan.conductorPolicy === 'no-native-tools') return plan
+    throw new Error('Codex chat policy was not verified. Choose Claude or OpenCode, or check the installed Codex runtime.')
   }
   // OpenCode's generated agent entry already carries permission {'*':'deny'};
   // its caller owns generation, because the file participates in the spec key.

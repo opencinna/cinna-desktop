@@ -18,9 +18,10 @@ import { isCoordinatorHandover } from '../../../shared/kit/handovers'
  */
 
 import { createRequire } from 'node:module'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { applyConductorToolPolicy } from './acp/conductorToolPolicy'
+import { prepareCodexConductorPolicy } from './acp/codexConductorPolicy'
 import { aiFunctionRuntimePoolKey, syntheticRuntimePoolKey, utilityAgentId } from '../../services/syntheticRuntimePooling'
 import { TITLE_SYSTEM_PROMPT } from '../../services/aiFunctionPrompts'
 import type { ConductorContext } from '../../services/chatConductorService'
@@ -318,6 +319,13 @@ export const codexAuthProbe = new CodexAuthProbe({
 const syntheticRuntimeProfiles = new Map<string, { userId: string; context: ConductorContext }>()
 const aiFunctionProfiles = new Map<string, { userId: string; modelId: string | null; credentialId: string | null; systemPrompt: string }>()
 
+/** Process cwd is stable; acpDriver/AI Functions supply their own session cwd. */
+function codexProcessCwd(poolKey: string): string {
+  const path = join(app.getPath('userData'), 'chat-conductors', 'processes', createHash('sha256').update(poolKey).digest('hex'))
+  mkdirSync(path, { recursive: true, mode: 0o700 })
+  return path
+}
+
 /** A dedicated utility profile owns a warm process, but never owns resumable sessions. */
 export async function prepareAiFunctionRuntime(userId: string, systemPrompt: string, warmOnly: boolean): Promise<{
   poolKey: string; plan: AcpLaunchPlan; cwd: string
@@ -334,47 +342,55 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   // profile's warm chat process, without loading that chat's session/history.
   const liveAgents = agentRepo.list(userId).filter((agent) => agent.driver === 'acp' && acpProcessPool.status(agent.id).state === 'running')
   const compatibleCandidates = engine === 'claude' ? liveAgents.map((agent) => agent.id) : []
-  const opencodeCandidate = engine === 'opencode' && systemPrompt === TITLE_SYSTEM_PROMPT ? liveAgents.find((agent) => {
+  const chatCandidate = (engine === 'codex' || (engine === 'opencode' && systemPrompt === TITLE_SYSTEM_PROMPT)) ? liveAgents.find((agent) => {
     if (!isChatConductor(agent)) return false
     const context = conductorContext(agent)
     return context.engine === engine && context.credentialId === runtime.credentialId && context.modelId === runtime.modelId
   }) : undefined
-  if (warmOnly && acpProcessPool.status(poolKey).state !== 'running' && compatibleCandidates.length === 0 && !opencodeCandidate) {
+  if (warmOnly && acpProcessPool.status(poolKey).state !== 'running' && compatibleCandidates.length === 0 && !chatCandidate) {
     throw new Error('AI function deferred until the default runtime is warm')
   }
   const cwd = join(app.getPath('userData'), 'chat-conductors', 'ai-functions', digest)
   mkdirSync(cwd, { recursive: true, mode: 0o700 })
-  for (const name of ['CLAUDE.md', 'AGENTS.md']) writeFileSync(join(cwd, name), `${systemPrompt}\n`, { mode: 0o600 })
+  for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+    // The patched Codex adapter accepts exact per-session developer instructions.
+    // Do not duplicate function instructions into repository/user-message context.
+    if (engine === 'codex') rmSync(join(cwd, name), { force: true })
+    else writeFileSync(join(cwd, name), `${systemPrompt}\n`, { mode: 0o600 })
+  }
   aiFunctionProfiles.set(poolKey, { userId, modelId: runtime.modelId, credentialId: runtime.credentialId, systemPrompt })
   const launcher = acpLaunchers[engine]
   if (!launcher) throw new Error('The default runtime cannot run AI functions')
-  const opencodeContext = opencodeCandidate ? conductorContext(opencodeCandidate) : undefined
-  const candidateKey = opencodeContext ? syntheticRuntimePoolKey(userId, opencodeContext) : poolKey
-  if (opencodeContext) syntheticRuntimeProfiles.set(candidateKey, { userId, context: opencodeContext })
+  const chatContext = chatCandidate ? conductorContext(chatCandidate) : undefined
+  const candidateKey = chatContext ? syntheticRuntimePoolKey(userId, chatContext) : poolKey
+  if (chatContext) syntheticRuntimeProfiles.set(candidateKey, { userId, context: chatContext })
+  const restrict = async (proposed: AcpLaunchPlan): Promise<AcpLaunchPlan> => applyConductorToolPolicy(engine === 'codex'
+    ? await prepareCodexConductorPolicy(proposed, join(app.getPath('userData'), 'acp')) : proposed, engine)
   let proposed = await launcher.plan({ userId, agentId: candidateKey, folder: {
-    name: 'AI Functions', slug: 'ai-functions', description: 'One-shot AI function', path: opencodeContext?.path ?? cwd, kind: 'bare', runtimeMode: 'isolated'
+    name: 'AI Functions', slug: 'ai-functions', description: 'One-shot AI function', path: engine === 'codex' ? codexProcessCwd(candidateKey) : chatContext?.path ?? cwd, kind: 'bare', runtimeMode: 'isolated'
   } })
   if ('error' in proposed) throw new Error(proposed.error)
-  let plan = applyConductorToolPolicy(proposed, engine)
-  if (opencodeCandidate) {
+  let plan = await restrict(proposed)
+  if (chatCandidate) {
     if (acpProcessPool.peek?.(candidateKey, plan.spec.key)) {
       // Hold the process identity, not the chat alias: deleting or changing
       // that chat while a title runs must not move the utility's ownership.
       poolKey = candidateKey
-      plan = { ...plan, setup: { ...plan.setup, configOptions: plan.setup.configOptions?.map((option) => option.configId === 'mode'
+      if (engine === 'opencode') plan = { ...plan, setup: { ...plan.setup, configOptions: plan.setup.configOptions?.map((option) => option.configId === 'mode'
         ? { ...option, value: engineAgentKey(utilityAgentId(candidateKey), 'ai-function') } : option) } }
     } else {
       if (warmOnly) throw new Error('AI function deferred until the default runtime is warm')
       // A credential/environment change can make a live chat process stale.
       // Drafting is allowed to start its dedicated utility process instead.
       proposed = await launcher.plan({ userId, agentId: poolKey, folder: {
-        name: 'AI Functions', slug: 'ai-functions', description: 'One-shot AI function', path: cwd, kind: 'bare', runtimeMode: 'isolated'
+        name: 'AI Functions', slug: 'ai-functions', description: 'One-shot AI function', path: engine === 'codex' ? codexProcessCwd(poolKey) : cwd, kind: 'bare', runtimeMode: 'isolated'
       } })
       if ('error' in proposed) throw new Error(proposed.error)
-      plan = applyConductorToolPolicy(proposed, engine)
+      plan = await restrict(proposed)
     }
   }
   plan = { ...plan, init: { ...plan.init, clientCapabilities: {} }, session: { ...plan.session, mcpServers: [] } }
+  if (engine === 'codex') plan.session.meta = { ...plan.session.meta, cinna: { systemPrompt } }
   if (engine === 'claude') {
     const meta = plan.session.meta ?? {}
     const claude = meta.claudeCode as { options?: Record<string, unknown> } | undefined
@@ -604,8 +620,19 @@ export const acpDriver = createAcpDriver({
         const context = conductorContext(agent)
         const poolKey = syntheticRuntimePoolKey(ctx.userId, context)
         syntheticRuntimeProfiles.set(poolKey, { userId: ctx.userId, context })
-        const plan = await launcher.plan({ ...ctx, agentId: poolKey, folder: { ...ctx.folder, slug: 'chat-runtime' } })
-        if (!('error' in plan)) acpProcessPool.share?.(ctx.agentId, poolKey)
+        // Codex includes its process cwd in the launch identity. Keep that
+        // profile-owned while acpDriver supplies each chat's own session cwd.
+        const processCwd = id === 'codex' ? codexProcessCwd(poolKey) : ctx.folder.path
+        let plan = await launcher.plan({ ...ctx, agentId: poolKey, folder: { ...ctx.folder, path: processCwd, slug: 'chat-runtime' } })
+        if ('error' in plan) return plan
+        if (id === 'codex') {
+          try { plan = await prepareCodexConductorPolicy(plan, join(app.getPath('userData'), 'acp')) }
+          catch (error) {
+            return { error: error instanceof Error && error.message.startsWith('Codex cannot enforce the chat tool policy:')
+              ? error.message : 'Codex chat policy could not be verified. Check the installed runtime.' }
+          }
+        }
+        acpProcessPool.share?.(ctx.agentId, poolKey)
         return plan
       }
       const development = developmentAgentContext(ctx.userId, ctx.agentId)

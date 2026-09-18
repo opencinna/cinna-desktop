@@ -131,6 +131,8 @@ export interface AcpSessionSetup {
 }
 
 export interface AcpLaunchPlan {
+  /** Main-only seal, set after verifying the native runtime's restricted launch. */
+  conductorPolicy?: 'no-native-tools'
   spec: AcpLaunchSpec
   init: InitializeRequest
   /** Merged into `session/new` and `session/load` — `_meta`, `mcpServers`. */

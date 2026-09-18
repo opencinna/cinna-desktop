@@ -59,12 +59,2823 @@
     "adapterSourceObserved": "AgentMode.ReadOnly uses workspaceWrite; sendPrompt supplies that sandboxPolicy to turn/start. config sandbox_mode does not enforce read-only turns.",
     "publicSourceObserved": "Codex rust-v0.115.0 tools/spec.rs derives apply_patch from model metadata independently of shell_tool and exposes optional read_file/list_dir/grep_files from experimental_supported_tools.",
     "publicSource": "https://raw.githubusercontent.com/openai/codex/rust-v0.115.0/codex-rs/core/src/tools/spec.rs",
-    "decision": "Synthetic no-file-tools Codex chat/AI-function sessions fail closed; folder Codex agent coordination is unaffected.",
+    "decision": "The exact verified CLI, maintained adapter, and production policy helper passed the isolated loopback-provider matrix. Startup and per-session tool restrictions are both required. A same-name native stdio MCP entry is refused before a model request.",
     "notEstablished": [
-      "Live Codex conductor MCP calls",
-      "Native MCP isolation",
-      "File-tool exclusion with the current adapter"
-    ]
+      "Authenticated native Codex login or real-provider model behavior",
+      "Mid-session tools/list_changed adoption and cancellation propagation",
+      "Cross-process restart/session-load under the restricted policy",
+      "Future Codex versions/platforms or model catalogs"
+    ],
+    "catalogPolicyProbe": {
+      "reproduce": "node --experimental-strip-types scripts/probes/runtime-conductor-codex.mjs /path/to/codex",
+      "observed": {
+        "binaryVersion": "codex-cli 0.154.0-alpha.6.2",
+        "adapterVersion": "1.11.0",
+        "isolatedHome": true,
+        "isolatedCwd": true,
+        "realProviderRequests": 0,
+        "apiCredentialEnvironmentInherited": false,
+        "rawCatalogOrPromptsRetained": false,
+        "catalogTransforms": {
+          "apply_patch_tool_type": null,
+          "experimental_supported_tools": [],
+          "node_repl_disabled": true,
+          "supports_search_tool": false,
+          "tool_mode": null,
+          "use_responses_lite": false,
+          "multi_agent_version": null,
+          "multi_agent_reasoning_effort": null
+        },
+        "featuresDisabled": [
+          "shell_tool",
+          "unified_exec",
+          "view_image",
+          "multi_agent",
+          "multi_agent_v2",
+          "apps",
+          "plugins",
+          "remote_plugin",
+          "image_generation",
+          "browser_use",
+          "browser_use_external",
+          "computer_use",
+          "in_app_browser",
+          "code_mode",
+          "code_mode_only",
+          "code_mode_host",
+          "goals",
+          "sleep_tool",
+          "skill_search",
+          "tool_suggest",
+          "workspace_dependencies",
+          "hooks",
+          "shell_snapshot",
+          "default_mode_request_user_input"
+        ],
+        "scratchAdapterPatch": {
+          "anchor": "\"mcp_servers\": Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, this.createMcpSeverConfig(mcp.server)]))",
+          "replacement": "\"mcp_servers\": { ...configWithWorkspaceRoots.mcp_servers, ...Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, { enabled: true, ...this.createMcpSeverConfig(mcp.server) }])) }"
+        },
+        "results": [
+          {
+            "case": "cinna-tool",
+            "model": "gpt-5.5",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0057 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "astra-cinna-tool",
+            "model": "gpt-6-astra",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-6-astra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-6-astra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0046 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "utility",
+            "model": "gpt-5.5",
+            "mcpCalls": 0,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": []
+              }
+            ],
+            "clientRequests": [],
+            "toolCalls": [],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "reject-exec_command",
+            "model": "gpt-5.5",
+            "mcpCalls": 0,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  "unsupported call: exec_command"
+                ]
+              }
+            ],
+            "clientRequests": [],
+            "toolCalls": [],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "reject-apply_patch",
+            "model": "gpt-5.5",
+            "mcpCalls": 0,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  "unsupported call: apply_patch"
+                ]
+              }
+            ],
+            "clientRequests": [],
+            "toolCalls": [],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "reject-set_collaboration_mode",
+            "model": "gpt-5.5",
+            "mcpCalls": 0,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  "unsupported call: set_collaboration_mode"
+                ]
+              }
+            ],
+            "clientRequests": [],
+            "toolCalls": [],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "utility-reject-question",
+            "model": "gpt-5.5",
+            "mcpCalls": 0,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": [
+                  "request_user_input is unavailable in Default mode"
+                ]
+              }
+            ],
+            "clientRequests": [],
+            "toolCalls": [],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "inherited-thread-empty",
+            "model": "gpt-5.5",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe",
+                  "mcp__unwanted.unwanted"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe",
+                  "mcp__unwanted.unwanted"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0048 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "inherited-thread-disabled",
+            "model": "gpt-5.5",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe",
+                  "mcp__unwanted.unwanted"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe",
+                  "mcp__unwanted.unwanted"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0078 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "inherited-file-disabled",
+            "model": "gpt-5.5",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0048 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "inherited-wrapper-disabled",
+            "model": "gpt-5.5",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe",
+                  "mcp__unwanted.unwanted"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe",
+                  "mcp__unwanted.unwanted"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0045 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-cinna-gpt-6-astra",
+            "model": "gpt-6-astra",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-6-astra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-6-astra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0044 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-cinna-gpt-5.6-sol",
+            "model": "gpt-5.6-sol",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.6-sol",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.6-sol",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0045 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-cinna-gpt-5.6-terra",
+            "model": "gpt-5.6-terra",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.6-terra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.6-terra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0051 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-cinna-gpt-5.6-luna",
+            "model": "gpt-5.6-luna",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.6-luna",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.6-luna",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0048 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-cinna-gpt-daybreak-blue-latest",
+            "model": "gpt-daybreak-blue-latest",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-daybreak-blue-latest",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-daybreak-blue-latest",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0048 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-cinna-gpt-daybreak-red-latest",
+            "model": "gpt-daybreak-red-latest",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-daybreak-red-latest",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-daybreak-red-latest",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0050 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-cinna-gpt-5.5",
+            "model": "gpt-5.5",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0042 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-cinna-gpt-5.4",
+            "model": "gpt-5.4",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.4",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.4",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0044 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-cinna-gpt-5.4-mini",
+            "model": "gpt-5.4-mini",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.4-mini",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.4-mini",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0044 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-cinna-gpt-5.2",
+            "model": "gpt-5.2",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.2",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.2",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0051 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-cinna-codex-auto-review",
+            "model": "codex-auto-review",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "codex-auto-review",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "codex-auto-review",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0046 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-utility",
+            "model": "gpt-5.5",
+            "mcpCalls": 0,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": [
+                  "request_user_input is unavailable in Default mode"
+                ]
+              }
+            ],
+            "clientRequests": [],
+            "toolCalls": [],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-name-conflict",
+            "model": "gpt-5.5",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0044 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-disabled-name-conflict",
+            "model": "gpt-5.5",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0051 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-stdio-name-conflict",
+            "model": "gpt-5.5",
+            "mcpCalls": 0,
+            "requests": [],
+            "clientRequests": [],
+            "toolCalls": [],
+            "errors": [],
+            "sessionError": {
+              "code": -32603,
+              "message": "Internal error"
+            },
+            "passed": true,
+            "expectedFailClosed": true
+          },
+          {
+            "case": "patched-resume",
+            "model": "gpt-5.5",
+            "mcpCalls": 2,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0045 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              },
+              {
+                "model": "gpt-5.6-luna",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0045 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0045 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ],
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0036 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              },
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              },
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              },
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "resumedCollaborationMode": "plan",
+            "defaultReset": true,
+            "stopReason": "end_turn",
+            "stderr": "[SYSTEM_ERROR] Failed to publish current goal for session 01a0b345-4e12-7692-9c7f-a1d04f1cc634: Error: goals feature is disabled\nError: goals feature is disabled\n    at handleResponse (file:///private<throwaway>/codex-acp.mjs:2409:40)\n    at handleMessage (file:///private<throwaway>/codex-acp.mjs:2269:18)\n    at Immediate.<anonymous> (file:///private<throwaway>/codex-acp.mjs:2244:24)\n    at process.processImmediate (node:internal/timers:484:21)\n",
+            "passed": true
+          },
+          {
+            "case": "patched-resume-utility",
+            "model": "gpt-5.5",
+            "mcpCalls": 0,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": [
+                  "request_user_input is unavailable in Default mode"
+                ]
+              },
+              {
+                "model": "gpt-5.6-luna",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.6-luna",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": [
+                  "request_user_input is unavailable in Default mode"
+                ]
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": [
+                  "request_user_input is unavailable in Default mode"
+                ]
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": [
+                  "request_user_input is unavailable in Default mode",
+                  "request_user_input is unavailable in Default mode"
+                ]
+              }
+            ],
+            "clientRequests": [],
+            "toolCalls": [
+              {
+                "title": "request_user_input",
+                "kind": "other",
+                "rawInput": {
+                  "name": "request_user_input",
+                  "arguments": {
+                    "questions": [
+                      {
+                        "id": "probe",
+                        "header": "Probe",
+                        "question": "Deterministic probe?",
+                        "options": [
+                          {
+                            "label": "Yes",
+                            "description": "Accept"
+                          },
+                          {
+                            "label": "No",
+                            "description": "Decline"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "resumedCollaborationMode": "plan",
+            "defaultReset": true,
+            "stopReason": "end_turn",
+            "stderr": "[SYSTEM_ERROR] Failed to publish current goal for session 01a0b345-4fc0-7390-b25f-333f738ec235: Error: goals feature is disabled\nError: goals feature is disabled\n    at handleResponse (file:///private<throwaway>/codex-acp.mjs:2409:40)\n    at handleMessage (file:///private<throwaway>/codex-acp.mjs:2269:18)\n    at Immediate.<anonymous> (file:///private<throwaway>/codex-acp.mjs:2244:24)\n    at process.processImmediate (node:internal/timers:484:21)\n",
+            "passed": true
+          },
+          {
+            "case": "patched-model-change",
+            "model": "gpt-5.5",
+            "mcpCalls": 2,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0042 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0042 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              },
+              {
+                "model": "gpt-6-astra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.6-luna",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-6-astra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0035 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              },
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              },
+              {
+                "title": "Compact conversation",
+                "kind": "think",
+                "_meta": {
+                  "contextCompaction": {
+                    "version": 1
+                  }
+                }
+              },
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "modelChangedTo": "gpt-6-astra",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-quoted-mcp-name",
+            "model": "gpt-5.5",
+            "mcpCalls": 2,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0071 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0071 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              },
+              {
+                "model": "gpt-5.6-luna",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-6-astra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-6-astra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0055 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              },
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              },
+              {
+                "title": "Compact conversation",
+                "kind": "think",
+                "_meta": {
+                  "contextCompaction": {
+                    "version": 1
+                  }
+                }
+              },
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "modelChangedTo": "gpt-6-astra",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-escaped-mcp-name",
+            "model": "gpt-5.5",
+            "mcpCalls": 2,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0041 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0041 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              },
+              {
+                "model": "gpt-6-astra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.6-luna",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-6-astra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0033 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              },
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              },
+              {
+                "title": "Compact conversation",
+                "kind": "think",
+                "_meta": {
+                  "contextCompaction": {
+                    "version": 1
+                  }
+                }
+              },
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "modelChangedTo": "gpt-6-astra",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-session-prompts",
+            "model": "gpt-5.5",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [],
+                "chatPromptInSystem": true,
+                "titlePromptInSystem": false,
+                "titlePromptInUser": false,
+                "titleInput": false
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0042 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ],
+                "chatPromptInSystem": true,
+                "titlePromptInSystem": false,
+                "titlePromptInUser": false,
+                "titleInput": false
+              },
+              {
+                "model": "gpt-5.6-luna",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": [],
+                "chatPromptInSystem": false,
+                "titlePromptInSystem": false,
+                "titlePromptInUser": false,
+                "titleInput": false
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": [],
+                "chatPromptInSystem": false,
+                "titlePromptInSystem": true,
+                "titlePromptInUser": false,
+                "titleInput": true
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "sameProcessPromptIsolation": true,
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "production-helper-resume",
+            "model": "gpt-5.5",
+            "mcpCalls": 2,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0044 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              },
+              {
+                "model": "gpt-5.6-luna",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0044 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0044 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ],
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0029 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              },
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              },
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              },
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "productionHelper": {
+              "marker": "no-native-tools",
+              "defaultModeSetup": true
+            },
+            "initialCollaborationMode": "default",
+            "resumedCollaborationMode": "plan",
+            "defaultReset": true,
+            "stopReason": "end_turn",
+            "stderr": "[SYSTEM_ERROR] Failed to publish current goal for session 01a0b345-5952-75f2-a94d-86b7da306780: Error: goals feature is disabled\nError: goals feature is disabled\n    at handleResponse (file://<repository>/node_modules/@agentclientprotocol/codex-acp/dist/index.js:2409:40)\n    at handleMessage (file://<repository>/node_modules/@agentclientprotocol/codex-acp/dist/index.js:2269:18)\n    at Immediate.<anonymous> (file://<repository>/node_modules/@agentclientprotocol/codex-acp/dist/index.js:2244:24)\n    at process.processImmediate (node:internal/timers:484:21)\n",
+            "passed": true
+          },
+          {
+            "case": "production-helper-model-change",
+            "model": "gpt-5.5",
+            "mcpCalls": 2,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0046 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0046 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              },
+              {
+                "model": "gpt-5.6-luna",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-6-astra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-6-astra",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0039 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ]
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              },
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              },
+              {
+                "title": "Compact conversation",
+                "kind": "think",
+                "_meta": {
+                  "contextCompaction": {
+                    "version": 1
+                  }
+                }
+              },
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "productionHelper": {
+              "marker": "no-native-tools",
+              "defaultModeSetup": true
+            },
+            "initialCollaborationMode": "default",
+            "modelChangedTo": "gpt-6-astra",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "production-helper-stdio-refusal",
+            "model": "gpt-5.5",
+            "mcpCalls": 0,
+            "requests": [],
+            "clientRequests": [],
+            "toolCalls": [],
+            "errors": [],
+            "expectedFailClosed": true,
+            "productionHelperRefusal": "Codex cannot enforce the chat tool policy: a personal stdio MCP named cinna conflicts with the chat connector; rename that MCP server. Choose Claude or OpenCode for this chat, or use the verified Codex CLI version.",
+            "passed": true
+          },
+          {
+            "case": "production-helper-session-prompts",
+            "model": "gpt-5.5",
+            "mcpCalls": 1,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [],
+                "chatPromptInSystem": true,
+                "titlePromptInSystem": false,
+                "titlePromptInUser": false,
+                "titleInput": false
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  [
+                    {
+                      "type": "input_text",
+                      "text": "Wall time: 0.0044 seconds\nOutput:"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "OK"
+                    }
+                  ]
+                ],
+                "chatPromptInSystem": true,
+                "titlePromptInSystem": false,
+                "titlePromptInUser": false,
+                "titleInput": false
+              },
+              {
+                "model": "gpt-5.6-luna",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": [],
+                "chatPromptInSystem": false,
+                "titlePromptInSystem": false,
+                "titlePromptInUser": false,
+                "titleInput": false
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "request_user_input"
+                ],
+                "outputs": [],
+                "chatPromptInSystem": false,
+                "titlePromptInSystem": true,
+                "titlePromptInUser": false,
+                "titleInput": true
+              }
+            ],
+            "clientRequests": [
+              {
+                "method": "session/request_permission",
+                "allowedOnlyDeterministicProbe": true
+              }
+            ],
+            "toolCalls": [
+              {
+                "title": "mcp.cinna.probe",
+                "kind": "execute",
+                "rawInput": {
+                  "server": "cinna",
+                  "tool": "probe",
+                  "arguments": {}
+                },
+                "_meta": {
+                  "is_mcp_tool_call": true
+                }
+              }
+            ],
+            "errors": [],
+            "productionHelper": {
+              "marker": "no-native-tools",
+              "defaultModeSetup": true,
+              "warmCompatibleProcess": true
+            },
+            "initialCollaborationMode": "default",
+            "sameProcessPromptIsolation": true,
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-reject-exec_command",
+            "model": "gpt-5.5",
+            "mcpCalls": 0,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  "unsupported call: exec_command"
+                ]
+              }
+            ],
+            "clientRequests": [],
+            "toolCalls": [],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-reject-apply_patch",
+            "model": "gpt-5.5",
+            "mcpCalls": 0,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  "unsupported call: apply_patch"
+                ]
+              }
+            ],
+            "clientRequests": [],
+            "toolCalls": [],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          },
+          {
+            "case": "patched-reject-set_collaboration_mode",
+            "model": "gpt-5.5",
+            "mcpCalls": 0,
+            "requests": [
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": []
+              },
+              {
+                "model": "gpt-5.5",
+                "tools": [
+                  "list_mcp_resources",
+                  "list_mcp_resource_templates",
+                  "read_mcp_resource",
+                  "request_user_input",
+                  "mcp__cinna.probe"
+                ],
+                "outputs": [
+                  "unsupported call: set_collaboration_mode"
+                ]
+              }
+            ],
+            "clientRequests": [],
+            "toolCalls": [],
+            "errors": [],
+            "initialCollaborationMode": "default",
+            "stopReason": "end_turn",
+            "passed": true
+          }
+        ]
+      },
+      "boundaries": [
+        "Every model response is generated by a loopback deterministic Responses fixture. No credentials or personal profile were copied, inherited, or modified.",
+        "39 checks passed, including two expected fail-closed stdio collisions: scratch adapter session creation and production helper preparation.",
+        "Scratch adapter comparisons reconstruct the original MCP merge and the maintained merge without editing the installed adapter. Production-helper cases transpile the actual helper into scratch, use real config discovery and generated artifacts, and drive the installed digest-verified adapter.",
+        "All 11 bundled model slugs were checked with transformed metadata. Native-action feature flags, disabled web search and inherited MCP disables must apply at both process startup and thread configuration; testing only the initial main session missed auxiliary model requests after resume/model changes.",
+        "No-MCP Default-mode sessions expose one schema (request_user_input), whose valid invocation is rejected as unavailable. Fabricated set_collaboration_mode calls are unsupported. This is no usable tool action, not a zero-schema assertion.",
+        "Same-process session/load preserved a Plan mode fixture until explicit Default setup. Resumed requests, actual model changes and auxiliary model requests retained the restricted tool sets. Cross-process resume remains unverified.",
+        "The production helper generated an identical process key/wrapper for chat and title prompts. Actual separate session directories in one process received distinct exact developer/system instructions; title had no chat prompt, no user-prefix instruction and no usable tool.",
+        "Empty MCP maps and startup CLI disables alone did not isolate inherited providers after adapter session configuration. The maintained merge preserves explicit thread disables. Literal dotted, quoted, semicolon and newline MCP names were disabled safely with a quoted-key inline TOML table.",
+        "A same-name HTTP entry, including disabled, works when the injected endpoint is explicitly enabled and adapter name filtering is disabled. A same-name stdio entry is refused before any model request.",
+        "guardian_approval and enable_request_compression overrides were removed and the final matrix passed; they are not part of the no-native-action policy.",
+        "Unknown explicit model slugs must be rejected by application policy; the engine itself accepts unknown slugs.",
+        "No account authentication, real-provider quality/billing, cross-process resume, cancellation or list-change behavior was established by this Codex probe."
+      ]
+    }
   },
   "automatedServerEvidence": {
     "testFile": "src/main/services/conductorMcpServer.test.ts",
@@ -503,6 +3314,43 @@
         "OpenCode AI Functions use exact system prompts, function-specific pools and title-only warm companion"
       ],
       "negativeProof": "Reverting the respective fixes fails their targeted regressions"
+    },
+    "codexCompletion": {
+      "unitPassed": 5929,
+      "unitFailed": 3,
+      "unitSkipped": 6,
+      "testFiles": 357,
+      "failureBoundary": "Same two fileRef.css assertions and kind-branch ratchet reproduced on baseline 17c845e; no feature failure remains.",
+      "typecheck": "node/web/e2e passed",
+      "build": "passed",
+      "packagingTests": 15,
+      "targetedElectron": {
+        "runtimeConductor": 6,
+        "codexEngine": 3,
+        "failed": 0
+      },
+      "independentUX": {
+        "passed": 1,
+        "viewportWidth": 800,
+        "geometryMovementPx": 0
+      },
+      "realCodexLoopbackMatrix": {
+        "passed": 39,
+        "failed": 0,
+        "realProviderRequests": 0
+      },
+      "notificationFixture": "Wait for the successful notification GET before changing tools; 20 repeated suites (160 tests) passed, removing the wait reproduced the timeout.",
+      "review": "Independent code and UX reviews completed; actionable error propagation fixed and reviewed.",
+      "packagedRuntime": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "electron": "41.2.1",
+        "unsigned": true,
+        "acpAdapters": "Claude and patched Codex initialize passed with packaged executable",
+        "main": "24 external imports, SQLite, libsodium, native Canvas, RTF and PDF/worker passed using matching project Electron against the isolated shipped archive",
+        "guards": "117 unpacked ACP runtime packages and Canvas payload verified"
+      },
+      "boundary": "Targeted Electron checks and actual CLI fake-provider probes do not establish paid-account authentication/concurrency or every engine-specific behavior. Earlier full E2E baseline record remains unchanged."
     }
   },
   "opencodeFunctionSystemPrompts": {

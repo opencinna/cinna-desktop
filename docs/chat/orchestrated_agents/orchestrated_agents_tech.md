@@ -4,7 +4,7 @@
 
 - Main transport: `src/main/services/conductorMcpServer.ts`, `src/main/services/conductorBridge.ts`, `src/main/services/conductorToolCorrelation.ts`.
 - Runtime profile/history/media: `src/main/services/chatConductorService.ts`, `src/main/services/syntheticRuntimePooling.ts`, `src/main/services/conductorTranscript.ts`, `src/main/services/acpAttachments.ts`.
-- Policy: `src/main/agents/drivers/acp/conductorToolPolicy.ts`; generated OpenCode permissions in `src/main/agents/drivers/index.ts`.
+- Policy: `src/main/agents/drivers/acp/conductorToolPolicy.ts`, `codexConductorPolicy.ts` and `codexAdapterPatch.json` in the same directory; generated OpenCode permissions in `src/main/agents/drivers/index.ts`.
 - Nested work: `src/main/services/a2aAsMcpProvider.ts`, `src/main/services/nestedAgentTurn.ts`, `src/main/services/nestedContinuationService.ts`, `src/main/services/inboxService.ts`.
 - Driver lifecycle: `src/main/agents/drivers/acp/acpDriver.ts`, `acpProcessPool.ts`, `acpFollowUp.ts`; service wiring in `src/main/agents/drivers/index.ts`.
 - Renderer: `src/renderer/src/components/chat/AgentToolSubThread.tsx`, `AgentContribution.tsx`, `MessageStream.tsx`; shared child event handling in `src/renderer/src/hooks/useChatStream.ts`.
@@ -45,7 +45,7 @@ Routing and AI Functions preferences are installation-wide. Chat modes store eng
 
 ## Security
 
-The HTTP listener binds only 127.0.0.1, checks Host/Origin before parsing, validates bearer tokens with constant-time comparison, and rejects another session's token. Dispose aborts calls and destroys tokens. MCP results preserve valid structured content, but trusted control fields remain main-only. Synthetic Claude/OpenCode native tools are restricted before prompt dispatch; unsupported Codex no-file-tools sessions refuse.
+The HTTP listener binds only 127.0.0.1, checks Host/Origin before parsing, validates bearer tokens with constant-time comparison, and rejects another session's token. Dispose aborts calls and destroys tokens. MCP results preserve valid structured content, but trusted control fields remain main-only. Synthetic native tools are restricted before prompt dispatch. Codex requires a main-only verified plan seal; startup and thread configuration both exclude native actions and inherited MCPs because auxiliary requests can bypass thread-only restrictions. Its exact version/model/platform checks, adapter patch and per-session instructions are described in [Codex policy](../../agents/local_agents/codex_engine_tech.md#restricted-chat-and-ai-function-policy).
 
 ## Evidence
 

@@ -193,7 +193,7 @@ Renderer run.start → run:start → runExecutionService → router → AgentDri
 | Command-line / SSH | acp / custom | Resumable child session; captured command and external CLI/SSH configuration |
 | Claude Managed | managed | Credential-bound remote session; Anthropic API key |
 
-Local ACP roots conduct through `src/main/services/conductorBridge.ts`; SDK adapters serve AI Functions only. Remote drivers remain callable participants. Codex synthetic no-file-tools profiles refuse; folder Codex runtime behavior retains its separate evidence limits.
+Local ACP roots conduct through `src/main/services/conductorBridge.ts`; SDK adapters serve AI Functions only. Remote drivers remain callable participants. Codex synthetic profiles require the [verified restricted launch](../local_agents/codex_engine_tech.md#restricted-chat-and-ai-function-policy); unsupported configurations refuse. Folder Codex runtime behavior retains its separate evidence limits.
 
 ## Integration Points
 

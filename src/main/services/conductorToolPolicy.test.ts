@@ -19,7 +19,11 @@ describe('conductor native tool policy', () => {
     expect(restricted.session.mcpServers).toEqual(original.session.mcpServers)
     expect(original.session.meta).toMatchObject({ claudeCode: { options: { tools: ['Bash'] } } })
   })
-  it('refuses synthetic Codex sessions because its adapter overrides the no-file-tools policy', () => {
+  it('refuses Codex sessions without a verified restricted launch', () => {
     expect(() => applyConductorToolPolicy(plan(), 'codex')).toThrow('Choose Claude or OpenCode')
+  })
+  it('preserves a Codex plan sealed by the runtime policy inspector', () => {
+    const sealed = { ...plan(), conductorPolicy: 'no-native-tools' as const }
+    expect(applyConductorToolPolicy(sealed, 'codex')).toBe(sealed)
   })
 })

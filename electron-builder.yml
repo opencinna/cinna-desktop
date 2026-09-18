@@ -3,6 +3,10 @@ productName: Cinna Desktop
 directories:
   buildResources: build
 files:
+  # Test output is transient and may be rewritten during local validation.
+  - '!e2e/**'
+  # Keep prior installers out when validating with a different output directory.
+  - '!dist/**'
   - '!**/.vscode/*'
   - '!src/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'

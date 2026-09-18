@@ -7,6 +7,8 @@
 - `src/main/agents/drivers/acp/codexLauncher.ts` — `createCodexLauncher`, readiness, launch plan and invalidation key.
 - `src/main/agents/drivers/acp/codexAuth.ts` — `CodexAuthProbe`, `probeCodexAuth`, `parseCodexAuthStatus`.
 - `src/main/agents/drivers/acp/codexEnv.ts` — `buildCodexEnv`, the CLI profile exception to the shared child allowlist.
+- `src/main/agents/drivers/acp/codexConductorPolicy.ts` — verified restricted launch for synthetic chats and AI Functions; `codexAdapterPatch.json` in the same directory pins the adapter version and original/patched checksums.
+- `scripts/patch-codex-acp.cjs` — idempotent, checksum-checked postinstall patch for the app-owned adapter; also verified before and after packaging.
 - `src/main/agents/drivers/index.ts` — production dependencies, `codexAuthProbe`, adapter entry resolution, folder prompt and runtime-setting readers.
 - `src/main/agents/drivers/acp/acpDriver.ts`, `acpConnection.ts`, `acpProcessPool.ts` in the same directory — shared turn, stdio transport, process ownership and lifecycle.
 - `src/main/agents/drivers/acp/acpPermissions.ts` and `acpQuestions.ts` in the same directory — Codex permission scope and elicitation conversion.
@@ -88,19 +90,36 @@ These reads/mutations require activation. `localAgentService.setCodexApproval` l
 | `runtime.complexity` | `simple → low`, `medium/default → medium`, `complex → high` reasoning effort. |
 | `codexApproval` | `ask/default → read-only`; `auto → agent` in this adapter's mode vocabulary. |
 | `CODEX_HOME` | Preserved from the resolved shell, then process fallback; selects the user's Codex profile. Cinna does not read/copy that profile's credentials. |
-| `CODEX_PATH` | Always overwritten with the executable found by Cinna's tool detector. |
-| `CODEX_CONFIG` | JSON carrying `developer_instructions`, optional `model`, and `model_reasoning_effort`. Supplied at both app-server thread creation and resume by the adapter. |
+| `CODEX_PATH` | Folder plans name the detected executable. Restricted synthetic plans name a private generated wrapper that executes that same CLI with startup policy overrides. |
+| `CODEX_CONFIG` | Folder plans carry `developer_instructions`, optional `model`, and `model_reasoning_effort`. Restricted plans move instructions into session metadata and add native-tool/MCP restrictions. The adapter applies the configuration at thread creation and resume. |
 | `INITIAL_AGENT_MODE` | Set by the launcher in addition to mandatory per-session setup. |
 | `ELECTRON_RUN_AS_NODE` | `1`, supplied by the shared Electron runtime; no separately installed Node is needed to run the adapter. |
 
-`buildCodexEnv` starts with `shellEnvForChild`; shell `OPENAI_API_KEY`, `CODEX_API_KEY`, `OPENAI_BASE_URL`, `CODEX_CONFIG`, `CODEX_PATH` and `INITIAL_AGENT_MODE` are excluded before launcher-owned values are added. Normal Codex user/project settings, model-provider routing, skills and MCP configuration remain active. Changes inside those configuration files are not hashed by Cinna; Codex owns when it reads them.
+`buildCodexEnv` starts with `shellEnvForChild`; shell `OPENAI_API_KEY`, `CODEX_API_KEY`, `OPENAI_BASE_URL`, `CODEX_CONFIG`, `CODEX_PATH` and `INITIAL_AGENT_MODE` are excluded before launcher-owned values are added. Normal folder Codex user/project settings, model-provider routing, skills and MCP configuration remain active. Their configuration files are not hashed by the folder launcher; Codex owns when it reads them. Synthetic plans additionally inspect effective model/MCP names and generate the restrictions below.
+
+### Restricted chat and AI-function policy
+
+`prepareCodexConductorPolicy` accepts only `codex-cli 0.154.0-alpha.6.2`, the exact patched adapter digest in `codexAdapterPatch.json`, and POSIX startup. Windows, unknown versions, malformed catalogs, missing bundled model slugs and a personal stdio MCP named `cinna` refuse before a prompt. Folder agents do not use this policy.
+
+Preparation runs bounded CLI version/catalog commands and a temporary app-server for `initialize`, `config/read` with `includeLayers: false`, and, only when needed, `model/list`. Model selection is explicit mode model, effective CLI model, then the CLI's single advertised default. It never guesses a model by catalog order. The shared deadline is 15 seconds; cancellation kills the inspection child. Inspection does not create a model turn or copy authentication files, and raw config/error output is not logged or returned.
+
+The bundled catalog retains its metadata except native action selectors: patch type, tool mode and multi-agent version/effort become null; experimental tools become empty; Node REPL and search/Responses Lite choices are disabled. The helper generates a private catalog and POSIX wrapper under the app's configuration root. Atomic, content-addressed artifacts prevent one active process from seeing another preparation rewrite its policy; directory/wrapper mode is 0700 and catalog mode is 0600. The wrapper forwards arguments to the unchanged detected executable using shell quoting.
+
+Native feature disables, disabled web search and every inherited MCP name are applied twice: startup `-c` overrides and thread-level `CODEX_CONFIG`. Startup also selects the restricted catalog. Thread-only restrictions previously left auxiliary Codex requests able to expose native tools and personal MCPs. Startup-only MCP restrictions were overwritten by ACP injection. Both layers are required. MCP names are literal quoted keys in a TOML inline table, not interpolated dotted paths. Login/profile/provider routing remains the CLI's own; no personal config or credentials are rewritten.
+
+The app-owned adapter patch preserves per-name MCP deny entries when session descriptors are injected and explicitly enables the injected descriptor. `DISABLE_MCP_CONFIG_FILTERING=true` lets the session's Cinna HTTP descriptor override a same-name personal HTTP entry, including a disabled one. A same-name stdio entry refuses because a deep merge can retain incompatible transport fields. Every new/loaded session must set `collaboration_mode` to `default` before prompting. The catalog can still expose an unusable `request_user_input` schema in this mode; the guarantee is no usable native action, not an empty schema list.
+
+The same patch accepts the main-owned `_meta.cinna.systemPrompt` as native `developerInstructions` on thread start/resume. The helper removes the prompt from process configuration and seals the plan as `conductorPolicy: no-native-tools`. A stable canonical process cwd makes compatible plans reusable while each chat/function retains its own session cwd and exact instructions. Codex utility sessions omit instruction files, use no MCP descriptors and never load a chat's transcript; warm title generation can reuse a compatible chat process without starting one solely for a title.
+
+Policy fixtures cover executable/argument quoting, immutable generations, authentication preservation, strict refusals, real subprocess config/default-model discovery and cancellation. The retained [ACP evidence](acp_contract.md) distinguishes real CLI/local-loopback probes from paid-provider behavior; this version-specific policy is not a general Codex compatibility or native sandbox claim.
 
 ### Adapter compatibility and packaging
 
-- The exact dependency is `@agentclientprotocol/codex-acp@1.11.0`. Its package declares `@openai/codex ^0.153.4`, and the lockfile resolves `0.153.4`. This is upstream compatibility evidence, not a Cinna-enforced minimum or a tested matrix of CLI versions.
+- The exact dependency is `@agentclientprotocol/codex-acp@1.11.0`. Its package declares `@openai/codex ^0.153.4`, and the lockfile resolves `0.153.4`. That upstream range is not a tested CLI matrix. Folder launches retain their existing version behavior; restricted chats/functions require the exact version above.
+- Postinstall verifies the original adapter hash before applying the MCP merge and session-instruction patch, or accepts the exact already-patched hash. Changed source/version refuses patching. `beforePack` checks the installed adapter and `afterPack` checks the shipped unpacked copy, so a missed install script cannot silently ship the original adapter. The user's CLI is never patched.
 - The maintained adapter bridges ACP to `codex app-server`. See the pinned [adapter source](https://github.com/agentclientprotocol/codex-acp/tree/v1.11.0), especially `src/AgentMode.ts`, `src/CodexAcpClient.ts` and `src/index.ts` within that upstream repository. <!-- nocheck -->
 - Development resolves the adapter entry through `createRequire`. Packaged builds use `<resources>/app.asar.unpacked/node_modules/@agentclientprotocol/codex-acp/dist/index.js`; `electron-builder.yml` registers `scripts/packaged-dependencies.cjs` to unpack the adapter and its installed runtime dependency tree at every depth, then validate required manifests in the shipped tree. See [Packaged Runtime Dependencies](../../development/distribution/packaged_runtime.md) for collection, re-hoisting and optional/peer rules.
-- Packaging excludes root and nested `@openai/codex*` dependencies, including platform copies. This is safe only while `CODEX_PATH` always names the user's detected CLI; omitting it would activate an excluded dependency fallback.
+- Packaging excludes root and nested `@openai/codex*` dependencies, including platform copies. `CODEX_PATH` must name the user's detected CLI or the generated wrapper forwarding to it; omitting it would activate an excluded dependency fallback.
 
 ## Security
 
@@ -121,4 +140,4 @@ These reads/mutations require activation. `localAgentService.setCodexApproval` l
 - `e2e/specs/codex-engine.spec.ts` is the targeted built-Electron regression: persistent runtime/approvals and production detection/auth/launcher/adapter/chat/permission/question/Stop/restart-resume. Its disposable shell PATH and executable assertion prevent use of the developer's real CLI. Only the CLI/app-server peer is scripted.
 - Run focused Vitest files or `npm test`, plus `npm run typecheck` and `npm run build`. The full E2E suite is a separate manual validation.
 - `npm run test:packaging` covers dependency/build-hook and isolated-environment regressions separately from Vitest. The manual [packaged runtime checks](../../development/distribution/packaged_runtime.md#commands-and-coverage) use actual shipped files; macOS arm64 initialization passed with the fake app-server, including a check-runner Node path containing spaces. No Windows/Linux runtime result is implied by the build guard or Windows fixture launcher.
-- No real paid Codex model turn, live account login flow, actual automatic-review decision or native sandbox enforcement is established by these tests. The adapter behavior and generated native arguments are exercised; real CLI version/platform compatibility, forgotten-session error shapes, and provider/configuration variations remain external validation limits.
+- No real paid Codex model turn, live account login flow, actual automatic-review decision or native sandbox enforcement is established by these tests. The exact restricted CLI/local-provider evidence is recorded in [the ACP contract](acp_contract.md); other CLI versions/platforms, forgotten-session error shapes and provider/configuration variations remain external validation limits.

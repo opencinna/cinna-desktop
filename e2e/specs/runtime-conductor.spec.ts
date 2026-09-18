@@ -49,7 +49,8 @@ async function arrangeAgents(cinna: CinnaApp) {
   return { localId: local.id, remoteId: remote.id!, peer }
 }
 
-test('routing preference and runtime chat-mode fields persist through the real settings UI', async ({ cinna }) => {
+for (const engine of ['claude', 'codex'] as const) {
+test(`${engine} routing preference and runtime chat-mode fields persist through the real settings UI`, async ({ cinna }) => {
   await cinna.skipOnboarding()
   await openSettings(cinna, 'Features')
   await expect(cinna.page.getByRole('button', { name: 'You route', exact: true })).toHaveAttribute('aria-pressed', 'true')
@@ -61,22 +62,25 @@ test('routing preference and runtime chat-mode fields persist through the real s
   await cinna.page.getByRole('button', { name: 'Chats', exact: true }).click()
   await cinna.page.getByRole('button', { name: 'Add Chat Mode', exact: true }).click()
   await cinna.page.getByPlaceholder('e.g. Development, Writing, Research...').fill('Subscription writing')
-  await cinna.page.getByLabel('Runtime', { exact: true }).selectOption('claude')
+  await cinna.page.getByLabel('Runtime', { exact: true }).selectOption(engine)
   await cinna.page.getByText('More options', { exact: true }).click()
-  await cinna.page.getByLabel('Model', { exact: true }).selectOption('sonnet')
+  const model = engine === 'claude' ? 'sonnet' : 'gpt-5.5'
+  if (engine === 'claude') await cinna.page.getByLabel('Model', { exact: true }).selectOption(model)
+  else await cinna.page.getByLabel('Model', { exact: true }).fill(model)
   await cinna.page.getByLabel('Tools', { exact: true }).selectOption('none')
   await cinna.page.getByLabel('Instructions', { exact: true }).fill('Use short sentences and plain language.')
   await cinna.page.getByLabel('Name', { exact: true }).press('Enter')
-  await expect.poll(() => cinna.page.evaluate(async () => (await window.api.chatModes.list()).find((mode) => mode.name === 'Subscription writing'))).toMatchObject({ engine: 'claude', modelId: 'sonnet', providerId: null, toolPolicy: 'none', systemPrompt: 'Use short sentences and plain language.' })
+  await expect.poll(() => cinna.page.evaluate(async () => (await window.api.chatModes.list()).find((mode) => mode.name === 'Subscription writing'))).toMatchObject({ engine, modelId: model, providerId: null, toolPolicy: 'none', systemPrompt: 'Use short sentences and plain language.' })
   await cinna.relaunch()
   await cinna.skipOnboarding()
   await openSettings(cinna, 'Chats')
   await cinna.page.getByText('Subscription writing', { exact: true }).click()
-  await expect(cinna.page.getByLabel('Runtime', { exact: true })).toHaveValue('claude')
+  await expect(cinna.page.getByLabel('Runtime', { exact: true })).toHaveValue(engine)
   await expect(cinna.page.getByLabel('Instructions', { exact: true })).toHaveValue('Use short sentences and plain language.')
-  await cinna.page.screenshot({ path: '/tmp/runtime-conductor-chat-mode.png', animations: 'disabled' })
+  await cinna.page.screenshot({ path: `/tmp/runtime-conductor-${engine}-chat-mode.png`, animations: 'disabled' })
   expect((await cinna.page.evaluate(() => window.api.settings.getAll())).defaultMultiAgentRouting).toBe('coordinator')
 })
+}
 
 test('AI routes previews Local and remote-first coordinators without reordering selected agents', async ({ cinna }) => {
   await arrangeAgents(cinna)

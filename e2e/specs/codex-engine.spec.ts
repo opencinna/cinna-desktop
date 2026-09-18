@@ -3,6 +3,8 @@ import { join, resolve } from 'node:path'
 import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { DESKTOP_STATE_FILE, MANIFEST_FILE } from '../../src/shared/kit/manifest'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 async function openAgent(cinna: CinnaApp, name: string): Promise<void> {
   await cinna.page.getByRole('button', { name: 'Agents', exact: true }).click()
@@ -120,4 +122,99 @@ test('Codex chats, approves, answers questions, stops, and resumes through the p
   const turns = requests().filter((request) => request.method === 'turn/start' && request.params.threadId === 'codex-session')
   expect(turns).toHaveLength(5)
   expect(turns.every((turn) => turn.params.effort === 'high' && turn.params.approvalsReviewer === 'user')).toBe(true)
+})
+
+test('a plain Codex chat applies its runtime policy and keeps the session for a second turn', async ({ cinna }) => {
+  test.setTimeout(90_000)
+  const instructions = 'PLAIN_CODEX_MODE_7241: answer with concise prose.'
+  const bin = join(cinna.sandbox.home, 'bin')
+  mkdirSync(bin)
+  const executable = join(bin, 'codex')
+  const fixture = readFileSync(resolve('src/main/agents/drivers/acp/testSupport/fakeCodexAppServer.mjs'), 'utf8')
+    .replace('codex-cli 0.153.4', 'codex-cli 0.154.0-alpha.6.2')
+  // Only this fixture advertises the policy-verified CLI version/catalog. The
+  // real installed ACP adapter, policy preparation and launcher remain in use.
+  const prelude = `
+appendFileSync(join(process.env.CODEX_HOME ?? process.env.HOME, 'codex-invocations.jsonl'), JSON.stringify({ args: process.argv.slice(2) }) + '\\n')
+if (process.argv.slice(2).join(' ') === 'debug models --bundled') {
+  console.log(JSON.stringify({ models: [{ slug: 'test-model', display_name: 'Test model', shell_type: 'unified_exec' }] }))
+  process.exit(0)
+}
+`
+  writeFileSync(executable, `#!${process.execPath}\n${prelude}\n${fixture}`, { mode: 0o755 })
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'"
+  for (const profile of ['.zprofile', '.zshrc', '.bash_profile', '.profile']) {
+    const file = join(cinna.sandbox.home, profile)
+    writeFileSync(file, readFileSync(file, 'utf8') + `\nexport PATH=${quote(bin)}:$PATH\nexport CODEX_HOME=${quote(cinna.sandbox.home)}\n`)
+  }
+  await cinna.relaunch()
+  await cinna.skipOnboarding()
+  expect((await cinna.page.evaluate(() => window.api.localTools.list())).find((tool) => tool.id === 'codex')?.path).toBe(executable)
+  await cinna.page.evaluate(async (systemPrompt) => {
+    await window.api.settings.set('autoChatTitles', false)
+    await window.api.chatModes.upsert({ name: 'Plain Codex', engine: 'codex', providerId: null,
+      modelId: 'test-model', systemPrompt, toolPolicy: 'none', isDefault: true })
+  }, instructions)
+  await cinna.relaunch()
+  await cinna.skipOnboarding()
+  await cinna.page.getByRole('button', { name: 'New Chat', exact: true }).click()
+  const send = async (text: string) => {
+    const input = cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })
+    await input.fill(text)
+    await input.press('Enter')
+  }
+  await send('Start the plain Codex conversation.')
+  await expect(cinna.page.getByText('Hello from Codex.', { exact: true })).toBeVisible()
+  await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
+  const requests = () => readFileSync(join(cinna.sandbox.home, 'codex-requests.jsonl'), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line))
+  // The adapter can generate its own ephemeral title thread independently of
+  // Cinna's title setting. Continuity belongs to the conversational thread.
+  const starts = requests().filter((request) => request.method === 'thread/start' && !request.params.ephemeral)
+  expect(starts).toHaveLength(1)
+  expect(starts[0].params.developerInstructions).toBe(instructions)
+  expect(starts[0].params.cwd).toContain(join(cinna.sandbox.userData, 'chat-conductors'))
+  expect(starts[0].params.config).toMatchObject({ model: 'test-model', web_search: 'disabled',
+    features: { shell_tool: false, unified_exec: false, view_image: false, multi_agent: false,
+      multi_agent_v2: false, code_mode: false, code_mode_only: false, code_mode_host: false,
+      browser_use: false, computer_use: false, default_mode_request_user_input: false } })
+  // Plain chats keep the stable bridge descriptor from their first turn. A
+  // no-tools mode must expose an empty live tool list through that endpoint.
+  const endpoint = starts[0].params.config.mcp_servers.cinna
+  expect(endpoint.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp\//)
+  const client = new Client({ name: 'cinna-e2e-policy-check', version: '1' })
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(endpoint.url), {
+      requestInit: { headers: endpoint.http_headers }
+    }))
+    expect((await client.listTools()).tools).toEqual([])
+  } finally { await client.close() }
+  expect(starts[0].params.config).not.toHaveProperty('developer_instructions')
+  const invocations = readFileSync(join(cinna.sandbox.home, 'codex-invocations.jsonl'), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line) as { args: string[] })
+  const catalogOverride = invocations.find((call) => call.args.includes('app-server') &&
+    call.args.some((arg) => arg.startsWith('model_catalog_json=')))?.args.find((arg) => arg.startsWith('model_catalog_json='))
+  expect(catalogOverride).toBeTruthy()
+  const catalogPath = JSON.parse(catalogOverride!.slice('model_catalog_json='.length)) as string
+  expect(catalogPath).toContain(cinna.sandbox.userData)
+  expect(JSON.parse(readFileSync(catalogPath, 'utf8')).models).toEqual([
+    expect.objectContaining({ slug: 'test-model', apply_patch_tool_type: null,
+      experimental_supported_tools: [], node_repl_disabled: true, multi_agent_version: null })
+  ])
+  const [chat] = await cinna.page.evaluate(() => window.api.chat.list())
+  const detail = await cinna.page.evaluate((id) => window.api.chat.get(id), chat.id)
+  expect(await cinna.page.evaluate((id) => window.api.agents.list().then((agents) => agents.find((agent) => agent.id === id)), detail!.agentId!))
+    .toMatchObject({ conductor: true, name: 'Codex' })
+  await send('Continue the same plain Codex conversation.')
+  await expect(cinna.page.getByText('Hello from Codex.', { exact: true })).toHaveCount(2)
+  await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
+  const turns = requests().filter((request) => request.method === 'turn/start' && request.params.threadId === 'codex-session')
+  expect(turns).toHaveLength(2)
+  expect(turns.map((turn) => turn.params.threadId)).toEqual(['codex-session', 'codex-session'])
+  expect(requests().filter((request) => request.method === 'thread/start' && !request.params.ephemeral)).toHaveLength(1)
+  const resumed = requests().filter((request) => request.method === 'thread/resume')
+  expect(resumed).toHaveLength(1)
+  expect(resumed[0].params).toMatchObject({ threadId: 'codex-session', developerInstructions: instructions })
+  expect(resumed[0].params.config.mcp_servers.cinna).toEqual(endpoint)
+  await cinna.page.screenshot({ path: '/tmp/cinna-plain-codex-chat.png', animations: 'disabled' })
 })

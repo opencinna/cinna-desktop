@@ -143,3 +143,5 @@ Renderer (useChatList effect)
 The rule the renderer uses to derive its fallback title from a first user message lives in `src/shared/chatTitle.ts` as `deriveTitleFromMessage(message)` + `AUTO_TITLE_MAX_FROM_MESSAGE = 50`. Both layers import it; if the rule ever changes (different limit, different ellipsis), the title service's "untouched" check stays in sync structurally — there is no second copy to update.
 
 Runtime fallback uses warmOnly: true. If no compatible process is warm, title generation defers and keeps the derived title; it does not spawn a process in the background. Explicit AI Functions credentials still use one SDK request.
+
+A compatible warm Codex chat process can serve a fresh restricted title session with its own cwd, exact per-session developer instructions and no MCP descriptors. The chat transcript and prompt are not reused. Compatibility still requires the [verified Codex policy](../../agents/local_agents/codex_engine_tech.md#restricted-chat-and-ai-function-policy); an installed or merely selected runtime is not itself a warm process.

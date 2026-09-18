@@ -28,15 +28,23 @@ async function subject(options: ConductorMcpSessionOptions = { getProviders: () 
   return { server, session: await server.ensureSession('chat:agent', options) }
 }
 
-async function connect(session: ConductorMcpSession) {
+async function connect(session: ConductorMcpSession, beforeSubscribe?: Promise<void>) {
   const client = new Client({ name: 'conductor-test', version: '1' })
   clients.push(client)
+  let subscribed!: (response: Response) => void
+  const subscription = new Promise<Response>((resolve) => { subscribed = resolve })
   const transport = new StreamableHTTPClientTransport(new URL(session.descriptor.url), {
+    fetch: async (input, init) => {
+      if (init?.method === 'GET') await beforeSubscribe
+      const response = await fetch(input, init)
+      if (init?.method === 'GET') subscribed(response)
+      return response
+    },
     requestInit: { headers: Object.fromEntries(session.descriptor.headers.map(({ name, value }) => [name, value])) },
     reconnectionOptions: { maxRetries: 0, maxReconnectionDelay: 0, initialReconnectionDelay: 0, reconnectionDelayGrowFactor: 1 }
   })
   await client.connect(transport)
-  return { client, transport }
+  return { client, transport, subscription }
 }
 
 function status(session: ConductorMcpSession, headers: Record<string, string> = {}): Promise<number> {
@@ -90,9 +98,16 @@ describe('conductor MCP loopback server', () => {
     const duplicate = provider('same', 'second')
     let providers = [provider('self', 'root')]
     const { session } = await subject({ conductorAgentId: 'root', getProviders: () => providers })
-    const { client } = await connect(session)
+    // connect() starts the standalone notification GET in the background.
+    // A tools/list POST can finish first: hold that GET to exercise the race,
+    // then establish the live subscription before changing the tool list.
+    let allowSubscribe!: () => void
+    const beforeSubscribe = new Promise<void>((resolve) => { allowSubscribe = resolve })
+    const { client, subscription } = await connect(session, beforeSubscribe)
     expect((await client.listTools()).tools).toEqual([])
     const notified = new Promise<void>((resolve) => client.setNotificationHandler(ToolListChangedNotificationSchema, () => resolve()))
+    allowSubscribe()
+    expect((await subscription).status).toBe(200)
     providers = [provider('self', 'root'), first, duplicate]
     await session.refreshTools()
     await notified

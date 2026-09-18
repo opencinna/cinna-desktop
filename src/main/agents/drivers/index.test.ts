@@ -30,6 +30,7 @@ import type { AgentRow } from '../../db/agents'
 const state = vi.hoisted(() => ({
   utilityPlans: false,
   utilityEngine: 'opencode',
+  codexPolicy: vi.fn(),
   liveRows: [] as AgentRow[],
   configInput: null as null | ((userId: string) => Promise<{ agents: { agentId: string; prompt: string }[] }>),
   development: false,
@@ -66,8 +67,13 @@ vi.mock('../../services/customAgentService', () => ({ customAgentService: {
   launcher: { id: 'custom', plan: async () => { state.ran.push('custom'); return { error: 'custom' } } },
   runtime: () => ({ type: 'external', validate() {}, readSession: () => null, saveSession() {}, isGranted: () => false, rememberGrant: () => false })
 } }))
-vi.mock('./acp/codexLauncher', () => ({ createCodexLauncher: (options: { settings: (userId: string, agentId: string) => { effort: string } }) => { state.codexSettings = options.settings; return { id: 'codex',
-  plan: async (context: { folder: { path: string; runtimeMode?: unknown } }) => {
+vi.mock('./acp/codexConductorPolicy', () => ({ prepareCodexConductorPolicy: async (plan: unknown, root: string) => {
+  state.codexPolicy(plan, root)
+  return { ...(plan as object), conductorPolicy: 'no-native-tools' }
+} }))
+vi.mock('./acp/codexLauncher', () => ({ createCodexLauncher: (options: { settings: (userId: string, agentId: string) => { effort: string }; systemPrompt: (userId: string, agentId: string, mode: unknown) => string }) => { state.codexSettings = options.settings; return { id: 'codex',
+  plan: async (context: { userId: string; agentId: string; folder: { path: string; runtimeMode?: unknown } }) => {
+    if (state.utilityPlans) return { spec: { command: 'codex', args: [], env: { CODEX_CONFIG: JSON.stringify({ developer_instructions: options.systemPrompt(context.userId, context.agentId, context.folder.runtimeMode) }) }, cwd: context.folder.path, key: 'utility-key' }, init: { protocolVersion: 1 }, session: { mcpServers: [] }, setup: {} }
     state.ran.push('codex'); state.developmentPaths.push(context.folder.path)
     state.runtimeModes.push(context.folder.runtimeMode)
     return { error: 'refused by the codex launcher' }
@@ -82,7 +88,8 @@ vi.mock('../../engine/binaryResolver', () => ({
 vi.mock('../../engine/engineConfigSource', () => ({
   collectEngineConfigInput: async () => ({ providers: [], agents: [] })
 }))
-vi.mock('../../db/agents', () => ({ agentRepo: { getOwned: () => undefined, list: () => state.liveRows }, agentSessionRepo: { getByChatAndAgent: vi.fn(), upsert: vi.fn() } }))
+vi.mock('../../db/agents', () => ({ agentRepo: { getOwned: (_userId: string, agentId: string) => state.liveRows.find((row) => row.id === agentId), list: () => state.liveRows }, agentSessionRepo: { getByChatAndAgent: vi.fn(), upsert: vi.fn() } }))
+vi.mock('../../db/chats', () => ({ chatRepo: { getOwned: (_userId: string, chatId: string) => ({ id: chatId, deletedAt: null }) } }))
 vi.mock('../../auth/scope', () => ({ getSettingsScopeUserId: () => 'user-1' }))
 vi.mock('../../auth/cinna-oauth', () => ({ CinnaReauthRequired: class CinnaReauthRequired extends Error {} }))
 vi.mock('../../services/localAgents/localAgentService', () => ({
@@ -212,6 +219,7 @@ beforeEach(() => {
   vi.restoreAllMocks()
   state.utilityPlans = false; state.utilityEngine = 'opencode'; state.liveRows = []
   state.restore.mockClear()
+  state.codexPolicy.mockClear()
   state.development = false; state.developmentComplexity = 'complex'; state.developmentPaths = []
   state.runtime = { engine: 'opencode' }
   state.readiness = 'ok'
@@ -222,6 +230,34 @@ beforeEach(() => {
 })
 
 describe('driverFor', () => {
+  it.each([
+    ['Codex cannot enforce the chat tool policy: only the verified Codex CLI version is supported. Choose Claude or OpenCode.',
+      'Codex cannot enforce the chat tool policy: only the verified Codex CLI version is supported. Choose Claude or OpenCode.'],
+    ['private CLI config: secret-token', 'Codex chat policy could not be verified. Check the installed runtime.']
+  ])('surfaces a safe synthetic Codex policy refusal through the production driver (%s)', async (reason, expected) => {
+    state.utilityPlans = true
+    const agent: AgentRow = { ...folderRow('codex'), id: 'conductor:error', source: 'local', enabled: true,
+      driverConfig: { launcher: 'codex', conductorChatId: turn.chatId, conductorEngine: 'codex',
+        cwd: '/tmp/conductor-error', conductorPrompt: 'Chat instructions' } }
+    state.liveRows = [agent]
+    state.codexPolicy.mockImplementationOnce(() => { throw new Error(reason) })
+    const result = await driverFor(agent).run('user-1', agent, turn)
+    expect(result.error?.message).toBe(expected)
+    expect(state.codexPolicy).toHaveBeenCalledOnce()
+    expect(result.error?.raw).not.toContain('secret-token')
+  })
+
+  it('does not seal ordinary folder Codex launches with the synthetic chat policy', async () => {
+    state.runtime = { engine: 'codex' }
+    state.kind = 'bare'
+    const agent = folderRow('codex')
+    state.liveRows = [agent]
+    const result = await driverFor(agent).run('user-1', agent, turn)
+    expect(result.error?.message).toBe('refused by the codex launcher')
+    expect(state.runtimeModes).toEqual(['native'])
+    expect(state.codexPolicy).not.toHaveBeenCalled()
+  })
+
   it.each([['simple', 'low'], ['medium', 'medium'], ['complex', 'high']])('passes %s build complexity to Codex as %s effort', (complexity, effort) => {
     state.development = true
     state.developmentComplexity = complexity
@@ -405,5 +441,36 @@ describe('AI function runtime production prompt wiring', () => {
     expect(first.cwd).not.toBe(second.cwd)
     expect(first.plan.session.meta).toMatchObject({ claudeCode: { options: { systemPrompt: 'Summarize.', tools: [] } } })
     expect(second.plan.session.meta).toMatchObject({ claudeCode: { options: { systemPrompt: 'Review.', tools: [] } } })
+  })
+
+  it('verifies the Codex policy and gives shared-process functions independent system prompts and folders', async () => {
+    state.utilityEngine = 'codex'
+    const first = await prepareAiFunctionRuntime('codex-profile', 'Summarize.', false)
+    const second = await prepareAiFunctionRuntime('codex-profile', 'Review.', false)
+    expect(first.poolKey).toBe(second.poolKey)
+    expect(first.cwd).not.toBe(second.cwd)
+    expect(first.plan.spec.cwd).toBe(second.plan.spec.cwd)
+    expect(state.codexPolicy).toHaveBeenCalledTimes(2)
+    expect(first.plan.session.meta).toMatchObject({ cinna: { systemPrompt: 'Summarize.' } })
+    expect(second.plan.session.meta).toMatchObject({ cinna: { systemPrompt: 'Review.' } })
+    expect(first.plan.session.mcpServers).toEqual([])
+    expect(first.plan.conductorPolicy).toBe('no-native-tools')
+  })
+
+  it('reuses a compatible warm Codex chat process with the function instructions and no MCP tools', async () => {
+    state.utilityEngine = 'codex'
+    state.liveRows = [{ id: 'codex-chat-root', driver: 'acp', driverConfig: {
+      conductorChatId: 'chat', conductorEngine: 'codex', conductorModel: 'sonnet',
+      conductorPrompt: 'Private chat instructions', cwd: '/owned/codex-chat'
+    } } as unknown as AgentRow]
+    vi.spyOn(acpProcessPool, 'status').mockImplementation(id => ({ state: id === 'codex-chat-root' ? 'running' : 'stopped' }) as ReturnType<typeof acpProcessPool.status>)
+    vi.spyOn(acpProcessPool as Required<Pick<AcpProcessPool, 'peek'>>, 'peek').mockReturnValue({} as never)
+    const title = await prepareAiFunctionRuntime('codex-warm-profile', TITLE_SYSTEM_PROMPT, true)
+    expect(title.poolKey).toMatch(/^chat-runtime:/)
+    expect(title.plan.session.meta).toMatchObject({ cinna: { systemPrompt: TITLE_SYSTEM_PROMPT } })
+    expect(title.plan.session.mcpServers).toEqual([])
+    expect(title.cwd).not.toBe('/owned/codex-chat')
+    expect(title.plan.spec.cwd).toContain('/chat-conductors/processes/')
+    expect(state.codexPolicy).toHaveBeenCalledTimes(1)
   })
 })
