@@ -280,16 +280,3 @@ test.describe('Codex', () => {
     })
   })
 })
-
-/* ------------------------------------------------------------------ Claude */
-
-test.describe('Claude', () => {
-  test('the whole flow A–D runs on the real pinned Claude Code against a fake provider', async () => {
-    test.fixme(true,
-      'Blocked, and not by this spec: production offers no way to send an app-spawned Claude Code to a loopback provider. ' +
-      '`buildClaudeEnv` strips ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN from every child on purpose (claudeEnv.ts, CLAUDE_STRIPPED_ENV), ' +
-      'and the one other route — an `env` block in the sandbox `~/.claude/settings.json` — is not read by the sessions this flow starts: ' +
-      'the Default-runtime chat runs with `settingSources: []`, under which 2.1.276 answers "Not logged in" and sends nothing (probed 2026-09-18; with `user` sources the same file does route to the fake). ' +
-      'Covering Claude here needs a new production seam, which is a design decision, not a test change. Until then: `make contract ENGINE=claude` (Level 1) and `make live-flow ENGINE=claude`.')
-  })
-})
