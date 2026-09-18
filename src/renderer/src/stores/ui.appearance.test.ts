@@ -13,6 +13,7 @@ const system = vi.hoisted(() => {
 })
 
 import { useUIStore } from './ui.store'
+import { readThemePreference } from '../utils/theme'
 
 beforeEach(() => {
   system.dark = false
@@ -26,6 +27,15 @@ describe('appearance preferences', () => {
     useUIStore.getState().setExtraUIAnimation(false)
     expect(useUIStore.getState().extraUIAnimation).toBe(false)
     expect(localStorage.getItem('cinna-extra-ui-animation')).toBe('0')
+  })
+
+  it('defaults to System when nothing valid is saved', () => {
+    localStorage.removeItem('cinna-theme')
+    expect(readThemePreference()).toBe('system')
+    localStorage.setItem('cinna-theme', 'bogus')
+    expect(readThemePreference()).toBe('system')
+    localStorage.setItem('cinna-theme', 'dark')
+    expect(readThemePreference()).toBe('dark')
   })
 
   it('follows live OS changes only while System is selected', () => {

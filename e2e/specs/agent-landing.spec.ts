@@ -87,6 +87,8 @@ test('A2A agents use the same chat-first page and structured settings', async ({
 test('dark sidebar uses secondary text for unselected external agents and primary text for selection', async ({ cinna }, testInfo) => {
   await cinna.skipOnboarding()
   await cinna.page.evaluate(async () => {
+    // A fresh install follows the OS, so pin Dark rather than inherit the host's appearance.
+    localStorage.setItem('cinna-theme', 'dark')
     for (const name of ['Remote color one', 'Remote color two']) {
       const result = await window.api.agents.upsert({ name, protocol: 'a2a', cardUrl: 'http://127.0.0.1:1/agent-card.json' })
       if (!result.success) throw new Error(result.error)

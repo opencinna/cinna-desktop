@@ -48,7 +48,7 @@ System is resolved before IPC; main never receives `system`. The handler updates
 
 ### Preference resolution and propagation
 
-- `readThemePreference` accepts saved `system` or `light`, otherwise returns `dark`, preserving the existing default even for malformed storage. `resolveTheme` evaluates `prefers-color-scheme: dark` only for System; without matchMedia, System resolves Light.
+- `readThemePreference` accepts saved `dark` or `light`, otherwise returns `system`, so a fresh install (and malformed storage) follows the OS. `resolveTheme` evaluates `prefers-color-scheme: dark` only for System; without matchMedia, System resolves Light.
 - `useUIStore.setThemePreference` saves the preference, resolves it, applies `data-theme` to the document, asks main to update icons and publishes both state values. `toggleTheme` selects the opposite resolved theme as a fixed preference.
 - The store applies its theme at module load. `followSystemTheme` updates the resolved theme on OS changes only while the preference is System, without overwriting the saved preference. IPC rejection is caught so renderer appearance remains usable.
 - `syncAppearance` rereads relevant keys on cross-window storage events; a null key rereads both. HMR disposal removes the store's OS and storage listeners.
@@ -107,7 +107,7 @@ Grid/border state is per host; the secondary-button singleton, header scheduler 
 
 | Storage / environment | Value and default |
 |---|---|
-| `cinna-theme` localStorage | `system`, `dark`, `light`; missing/invalid → Dark |
+| `cinna-theme` localStorage | `system`, `dark`, `light`; missing/invalid → System |
 | `cinna-extra-ui-animation` localStorage | Setters write `1`/`0`; only `0` disables, so missing/other values → enabled |
 | `prefers-color-scheme: dark` | Resolves System in main-window and popup renderers |
 | `prefers-reduced-motion: reduce` | Suppresses decorative effects without rewriting the preference |

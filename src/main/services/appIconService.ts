@@ -4,7 +4,7 @@ import iconLightPath from '../../../resources/cinna-desktop-icon-light.png?asset
 
 export type AppTheme = 'dark' | 'light'
 
-// Dark is the default theme, so the dark icon is also the default at startup.
+// The dark icon shows at startup until the renderer applies its resolved theme.
 let currentTheme: AppTheme = 'dark'
 
 function iconImageForTheme(theme: AppTheme): Electron.NativeImage {

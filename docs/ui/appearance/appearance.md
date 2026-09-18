@@ -6,7 +6,7 @@ Let the user choose the app's color theme and whether chat switches and idle sur
 
 ## Core Concepts
 
-- **Theme preference** — System, Dark or Light. System follows the operating system; Dark and Light remain fixed. Dark is the fallback when no valid preference is saved.
+- **Theme preference** — System, Dark or Light. System follows the operating system; Dark and Light remain fixed. System is the default on a fresh install and whenever no valid preference is saved.
 - **Resolved theme** — The current Dark or Light appearance after resolving System. The app surface, dock/window icon and tray popup use this result; the menu-bar glyph follows the OS separately.
 - **Extra UI animation** — One default-on preference for quick chat-switch transitions, the new-chat logo's draw and sweep, grid pulses, input/sidebar border glows, secondary-button border glows and header-button background waves. These effects convey no readiness, progress or required action.
 - **New-chat logo** — A thin wireframe of the app icon's wordmark above "What can I help with?", in the resolved theme's icon colors. Hidden until its reserved space is clicked; the only decoration that responds to input.

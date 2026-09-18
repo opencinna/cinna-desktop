@@ -3,7 +3,7 @@ export type ThemePreference = 'system' | Theme
 
 export function readThemePreference(): ThemePreference {
   const saved = localStorage.getItem('cinna-theme')
-  return saved === 'system' || saved === 'light' ? saved : 'dark'
+  return saved === 'dark' || saved === 'light' ? saved : 'system'
 }
 
 export function resolveTheme(preference: ThemePreference): Theme {

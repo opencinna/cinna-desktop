@@ -45,7 +45,7 @@ A macOS menu-bar (status-bar) icon with a small popover window that surfaces age
 - **Own store/query instances.** The popup is a separate renderer; it re-hydrates the active user on window focus and relies on focus-refetch to refresh statuses each time it is shown.
 - **Card click opens detail in the main window**, not in the popup — the popup is a launcher, not a detail surface.
 - **Platform fallback.** macOS gets vibrancy + native rounded corners/shadow; other platforms fall back to a translucent CSS-rounded panel without blur, positioned near the cursor.
-- **Theme.** The popup surface resolves the shared System/Dark/Light preference from `cinna-theme` on startup, cross-window preference changes and OS appearance changes. System follows the OS live; fixed choices remain fixed; a missing/invalid preference resolves Dark. The menu-bar **glyph** color follows the OS appearance (light/dark menu bar), not the app theme.
+- **Theme.** The popup surface resolves the shared System/Dark/Light preference from `cinna-theme` on startup, cross-window preference changes and OS appearance changes. System follows the OS live; fixed choices remain fixed; a missing/invalid preference means System. The menu-bar **glyph** color follows the OS appearance (light/dark menu bar), not the app theme.
 
 ## Architecture Overview
 
