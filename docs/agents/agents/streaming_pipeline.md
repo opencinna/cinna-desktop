@@ -26,8 +26,9 @@ The main executor publishes these normalized events through the shared [live-run
 | **Tool ID** | Value of `metadata['cinna.tool_id']` — pairing key set on `'tool'` parts (identifies the call) and on `'tool_result'` parts (matches them back to the originating call). For CLI commands this is the backend `exec_id`; for LLM tools it is the provider tool-call id |
 | **Tool Stream** | Value of `metadata['cinna.tool_stream']` on `'tool_result'` parts: `'stdout'` or `'stderr'`. Defaults to `'stdout'` when absent — unknown values are coerced server-side |
 | **Per-part delta** | The new substring appended to a TextPart since the last seen snapshot of that part. Keyed by `(messageId, partIndex)` |
-| **Structured parts** | `MessagePart[]` — flat in-order list of `{ kind, text, toolName?, toolInput?, toolId?, toolStream? }` entries persisted on the assistant message row |
-| **Answer text** | Concatenation of `text`-kind parts only — stored in `messages.content` for previews/search/title generation |
+| **Structured parts** | `MessagePart[]` — flat in-order list of `{ kind, text, toolName?, toolInput?, toolId?, toolStream?, parentToolId? }` entries persisted on the assistant message row. Flat even when a subagent worked inside the turn: its parts sit in arrival order among the agent's own, told apart by `parentToolId` |
+| **Lane** | The parts that share one `parentToolId`. A part with none is in the **main lane**, the agent's own; a part carrying the id of an `Agent`/`Task` call is a subagent's work under that call. Merging, the answer text and the renderer all read lanes: see [Lanes](#lanes--a-subagents-work-inside-the-agents-turn) |
+| **Answer text** | Concatenation of the main lane's `text` and `command_result` parts — stored in `messages.content` for previews/search/title generation. A subagent's text is its report to the agent, not the agent's answer, so it is left out |
 
 ## Cinna Metadata Contract (with the backend)
 
@@ -43,6 +44,7 @@ The Cinna backend (`a2a_event_mapper.py`) tags every emitted A2A `TextPart` with
 | `cinna.command_invocation` | string | Always on `command_result`; on `tool` / `tool_result` only when the pair was synthesized to wrap a `/run:*` execution | Verbatim slash invocation (`/files`, `/agent-status`, `/run:rotate_status`, …). Marks the part as originating from a cinna-core slash command (absent → LLM-initiated tool call). Renderer wraps the affected blocks in a "Command: <invocation>" frame so both flows (synchronous `command_result` and tool-pair `/run:*`) read as a single slash-command UI. See [Command Results](../../chat/command_results/command_results.md) |
 | `cinna.file_id` | string | Always on `file` parts (FileParts) | Cinna backend file UUID for an agent-attached file. The renderer builds a `cinna`-sourced `MessageAttachment` from it and downloads via the OAuth bearer path; the signed `?token=` download URI on the FilePart is ignored. See [Agent Attachments](../../chat/agent_attachments/agent_attachments.md) |
 | `cinna.file_name` / `cinna.file_mime` / `cinna.file_size` | string / string / int | On `file` parts (each optional) | Display name, MIME type, byte size for the attachment badge. Fall back to the FilePart's `file.name` / `file.mimeType`, then to `attachment` / `application/octet-stream` / `0` |
+| `cinna.parent_tool_id` | string | On any kind, only on a subagent's parts | The `Agent`/`Task` call the part runs under; read into `parentToolId` and puts the part in that call's [lane](#lanes--a-subagents-work-inside-the-agents-turn). Today only the desktop's own ACP translator sets it, from a Claude child session's `_meta.claudeCode.parentToolUseId`; the accumulator reads it from any sender |
 
 When metadata is absent (non-Cinna A2A servers), parts default to `kind: 'text'` — backward-compatible plain rendering.
 
@@ -83,11 +85,15 @@ For each event (status-update | artifact-update | message | task):
         toolId     = (kind === 'tool' || kind === 'tool_result')       ? metadata['cinna.tool_id']     : undefined
         toolStream = (kind === 'tool_result')                          ? metadata['cinna.tool_stream'] ?? 'stdout' : undefined
         commandInvocation = metadata['cinna.command_invocation']  # any kind; present iff cinna-core slash command
-        append to internal parts[] (merge with last only if continuesPart():
+        parentToolId = metadata['cinna.parent_tool_id']           # any kind; present iff a subagent's part
+        append to internal parts[] (merge with the last part OF THE SAME LANE only if continuesPart():
+          - two lanes never merge
           - text/thinking/command_result: same kind + toolName (both unset)
           - tool: same kind + toolName, and not two different toolIds
           - tool_result: same kind + toolId + toolStream)
-        port.postMessage({ type: 'delta', kind, text: delta, toolName, toolInput, toolId, toolStream, commandInvocation })
+          newPart = true when skipping other lanes would have continued a part
+                    built from a different source key (see Lanes)
+        port.postMessage({ type: 'delta', kind, text: delta, toolName, toolInput, toolId, toolStream, commandInvocation, parentToolId?, newPart? })
         if first time we see (toolName, toolInput) for this part -> opts.onToolCall({...})
   - Update latestContextId / latestTaskId / latestTaskState from the event
   - First event that carries a task id: agentSessionRepo.upsert({ contextId, taskId, taskState: null })
@@ -105,7 +111,7 @@ For each event (status-update | artifact-update | message | task):
 On stream completion (the runner):
   - no final event seen → collect the turn from tasks/get (below), else:
   - parts   = accumulator.snapshotParts()
-  - answer  = accumulator.answerText()    # concat of 'text'-kind parts
+  - answer  = accumulator.answerText()    # concat of the main lane's 'text' and 'command_result' parts
   - notices = accumulator.snapshotNotices()  # one entry per distinct notice part
   - agentSessionRepo.upsert(...) whenever the stream completes, a failed task state included; a throw skips this end-of-turn save
   - return { text: answer, parts, notices, ... }
@@ -191,6 +197,8 @@ Keying the seen-text map by `(messageId, partIndex)` and computing `delta = text
 | `toolStream` | `'stdout' \| 'stderr' \| undefined` | Set only when `kind === 'tool_result'`. Defaulted to `'stdout'` if metadata was absent |
 | `commandInvocation` | string \| undefined | Verbatim slash invocation from `cinna.command_invocation`. Always set for `kind: 'command_result'`; set on `kind: 'tool' \| 'tool_result'` only when the pair was synthesized to wrap a `/run:*` execution. Absent → LLM-initiated tool call |
 | `file` | `{ fileId, filename, mimeType, size }` \| undefined | Set only when `kind === 'file'`. The complete attachment descriptor (no incremental assembly — one delta per file). `text` is empty for file deltas |
+| `parentToolId` | string \| undefined | From `cinna.parent_tool_id`: the fragment is a subagent's, in the lane of that `Agent`/`Task` call. Absent on the agent's own fragments |
+| `newPart` | `true` \| undefined | Start a new part with this fragment even where "continue the last part of the same lane" would join it to an earlier one. Set only by the accumulator, only when it made that decision (see [Lanes](#lanes--a-subagents-work-inside-the-agents-turn)); `chat.store` and the live-run replay cache both honour it |
 
 For `kind: 'notice'` deltas, only `text` and `kind` are populated; all `tool*` fields are `undefined`. The renderer appends them as `notice` text blocks in `chat.store.streamingBlocks`, rendered as muted system messages. After the stream completes they're persisted as `role: 'agent_transition'` rows and the streaming block is cleared.
 
@@ -216,7 +224,9 @@ For a slash-command turn (`/files`, `/run:check`, …) the entire assistant mess
 ]
 ```
 
-`toolInput`, `toolId`, and `toolStream` are optional — older parts and any backend that doesn't emit the matching metadata simply omit the field. Pairing between a `tool` part and its `tool_result` part(s) is done by matching `toolId`; interleaved `stdout`/`stderr` chunks keep their chronology because the merge rule requires both `toolId` AND `toolStream` to match.
+A turn in which a Claude subagent worked keeps the same flat shape: the subagent's parts carry `"parentToolId": "<Agent call id>"` and sit where they arrived, between the agent's own parts. Rows written before the field existed have no lanes and render as they always did.
+
+`toolInput`, `toolId`, `toolStream` and `parentToolId` are optional — older parts and any backend that doesn't emit the matching metadata simply omit the field. Pairing between a `tool` part and its `tool_result` part(s) is done by matching `toolId`; interleaved `stdout`/`stderr` chunks keep their chronology because the merge rule requires both `toolId` AND `toolStream` to match.
 
 Renderer prefers `parts[]` when present; falls back to `messages.content` (the flat answer text) for legacy/LLM messages with no parts.
 
@@ -230,6 +240,7 @@ For both live streaming blocks and persisted parts, the renderer routes by `kind
 - `kind: 'tool_result'` → `ToolResultBlock` (collapsible monospace card with terminal icon). Renders the raw stdout/stderr emitted by a tool execution; `stderr` chunks switch to danger-color styling. The block is shown immediately under its originating `tool` part — the in-order parts list places them adjacent naturally, no explicit lookup needed
 - `kind: 'command_result'` → `CommandResultBlock` (bordered card with terminal icon and `Command output` header, markdown-rendered body). Default-expanded inline because it IS the assistant turn (the agent stream did not run), not auxiliary narration. Visually distinct from the assistant text bubble so the user can see they're looking at platform output, not an LLM voice
 - `kind: 'file'` → `AgentAttachment` (downloadable badge via `AttachmentList`, left-aligned). The FilePart arrives at finalize, so the badge renders below the reply text (end of the turn) — the mirror of how a user's own attachments render under their message. Click downloads via the Cinna OAuth bearer path. See [Agent Attachments](../../chat/agent_attachments/agent_attachments.md)
+- **Any kind with `parentToolId`** is taken out of the flat list first and drawn inside a nested sub-thread under its `Agent`/`Task` call — live, saved, and inside an orchestrated specialist's sub-thread. See [Conversation UI](../../chat/conversation_ui/conversation_ui.md#subagent-work-in-the-transcript)
 - `kind: 'notice'` → live during streaming via a `notice` block in `chat.store.streamingBlocks`, rendered through `NoticeBlock` with `live` (left-aligned `Info`+text row, no collapse). Persisted as a `role: 'agent_transition'` row that also renders through `NoticeBlock`, with `defaultExpanded={verboseMode}` — compact mode collapses to a small info-toned dot the user clicks to read; verbose mode keeps the row expanded inline. Notices never appear in an assistant message's `parts[]`
 
 Streaming blocks merge consecutive deltas with **the** rule the main-process accumulator persists with — one function, `continuesPart` in `src/shared/partMerge.ts`, called by the accumulator, `chat.store.appendDelta` and the orchestrated sub-thread's `appendAgentDeltaPart`. They used to be three hand-kept copies, and a transcript that streams one way and reloads another is exactly what three copies drift into. The rule:
@@ -238,6 +249,19 @@ Streaming blocks merge consecutive deltas with **the** rule the main-process acc
 - `tool_result` merges only when both `toolId` AND `toolStream` match, so interleaved stdout/stderr keep their chronology
 - Everything else merges on `toolName` — and a `tool` part also refuses to merge when both sides name **different** `toolId`s. Two calls to one tool are two calls. Before this clause, two back-to-back permission asks (the same reserved tool name, different `per_` ids) folded into one block, and the second ask's id — the address its answer is posted to — never reached the renderer, leaving that ask parked until its timeout
 - A fragment with no `toolId` still continues the part before it, because a backend may send `cinna.tool_id` on a part's first frame only
+- "The part before it" is the last part **of the same lane**, and two lanes never merge. With no `parentToolId` anywhere, everything is one lane and this is the plain last-part rule. See below
+
+## Lanes — a subagent's work inside the agent's turn
+
+A Claude subagent streams its child session on the same connection as the agent that launched it, and the agent keeps talking meanwhile. Its parts land in the turn's one flat list, marked with `parentToolId`. Three rules keep the two voices apart:
+
+- **"Continue the last part" skips other lanes.** `continuingPartIndex` walks back past every part whose `parentToolId` differs from the fragment's, and only then asks `continuesPart`. Before lanes, a subagent's tool call landing between two fragments of the agent's sentence counted as "a tool call ends the text", and the agent's paragraph was cut in two mid-word. The subagent's own text still splits around the subagent's own tool calls, because they are in its lane. An `undefined` entry in the list — a caller's non-text block, such as a live `tool_call` block — counts as the main lane
+- **Skipping continues a part only from the source part that built it.** The accumulator remembers which source key (`idPrefix:idx`) last fed each part. When the lane skip would continue a part from a *different* source part, across another lane's parts, it starts a new part instead. Without this, a background subagent's run broke the rule in the other direction: the agent's "launched" and its later "Command completed: sub-ok" — two A2A messages with only subagent work between them — were glued into one sentence. The renderer cannot see source keys, so the accumulator puts `newPart: true` on that fragment's delta, and `chat.store`, the sub-thread's `appendAgentDeltaPart` and the live-run replay cache (which never folds a `newPart` delta into the one before) all open a part there too. With no lanes nothing is ever skipped and `newPart` is never set
+- **A boundary ends every lane.** The accumulator's continuation boundary (a steer taken into the turn) applies to all lanes, and `chat.store.appendDelta` matches it live: a `user` block ends the subagent's run of text as well as the agent's, so a live paragraph does not run on across a steer and then split there once saved. Only a tool call named by id may still grow on the far side, as before
+
+What lanes leave out of the answer: `answerText()` skips a lane's `text`, the ACP driver's end-of-turn `text` skips lane parts when it falls back to joining every part, and `sliceText` — the `content` of a row saved past a steer — skips them too. A subagent's report is addressed to the agent; before this, a turn in which the agent said nothing of its own showed the subagent's words as the chat preview and title source.
+
+Where lanes come from is the ACP translator's business ([The Agent Turn](../local_agents/agent_turn.md#the-translator-maintains-a-cumulative-message-the-accumulator-computes-the-delta)); where they are drawn is the renderer's ([Conversation UI](../../chat/conversation_ui/conversation_ui.md#subagent-work-in-the-transcript)).
 
 ## File References
 
@@ -248,7 +272,7 @@ Streaming blocks merge consecutive deltas with **the** rule the main-process acc
 - DB column: `src/main/db/migrations/messages.ts` (`parts` JSON column)
 - Renderer store: `src/renderer/src/stores/chat.store.ts:appendDelta` <!-- nocheck -->
 - Renderer hook: `src/renderer/src/hooks/useChatStream.ts:handleRun` <!-- nocheck -->
-- Renderer routing: `src/renderer/src/components/chat/MessageStream.tsx`
+- Renderer routing: `src/renderer/src/components/chat/MessageStream.tsx`; lane nesting in `src/renderer/src/components/chat/subagentParts.ts`
 - Characterization: `src/renderer/src/hooks/useChatStream.events.test.tsx` pins what each event does to the chat store, and the per-runner golden streams pin what reaches it. See [Characterization tests](../local_agents/agent_turn_tech.md#characterization-tests)
 - Block components: `src/renderer/src/components/chat/ThinkingBlock.tsx`, `src/renderer/src/components/chat/ToolNarrationBlock.tsx`, `src/renderer/src/components/chat/ToolResultBlock.tsx`, `src/renderer/src/components/chat/CommandResultBlock.tsx`, `src/renderer/src/components/chat/AgentAttachment.tsx` (`file` kind), `src/renderer/src/components/chat/NoticeBlock.tsx`. Both live and persisted notices route through `NoticeBlock` (live: forced-expanded row; persisted: collapsed dot or expanded row per verbose mode)
 

@@ -24,6 +24,7 @@ import { ToolResultBlock } from './ToolResultBlock'
 import { CommandResultBlock } from './CommandResultBlock'
 import { AgentAttachment } from './AgentAttachment'
 import { AgentToolSubThread } from './AgentToolSubThread'
+import { nestSubagentParts, type SubagentGroup } from './subagentParts'
 import { CommandToolFrame } from './CommandToolFrame'
 import { CinnaCliBlock } from './CinnaCliBlock'
 import { pairCinnaCliTools } from '../../utils/cinnaCli'
@@ -52,7 +53,55 @@ import {
   createTranscriptExpansionStore,
   type TranscriptExpansionStore
 } from './transcriptExpansion'
-import type { ToolStream } from '../../../../shared/messageParts'
+import type { MessagePart, ToolStream } from '../../../../shared/messageParts'
+
+/** A live block as the nesting helper sees it: a text block's part, or a placeholder. */
+type LiveBlockView = MessagePart | { kind: 'tool_call' | 'user'; text: string }
+
+function isLivePart(view: LiveBlockView): view is MessagePart {
+  return view.kind !== 'tool_call' && view.kind !== 'user'
+}
+
+interface SubagentGroupRender {
+  verbose: boolean
+  live?: boolean
+  /** The transcript's own request block, so a subagent's ask is answerable where it sits. */
+  renderRequest: (part: MessagePart, decision?: string) => React.JSX.Element | null
+  /** Whether an ask is still waiting on the user (by its `toolId`). */
+  isOpenRequest: (toolId?: string) => boolean
+}
+
+/**
+ * A Claude subagent's work, nested under the Agent call that launched it
+ * (`subagentParts.ts`). One node for all three render paths; plain, never
+ * folded into a dots group, and with no Stop — the subagent is the agent's to
+ * stop, not a nested turn of the desktop's.
+ */
+function renderSubagentGroup(
+  group: Omit<SubagentGroup<unknown>, 'tool' | 'parts'> & { parts: MessagePart[] },
+  { verbose, live = false, renderRequest, isOpenRequest }: SubagentGroupRender
+): React.JSX.Element {
+  // An ask the subagent is parked on keeps its thread open until it is answered.
+  const holdOpen = group.parts.some(
+    (part) =>
+      part.kind === 'tool' &&
+      (isPermissionRequestTool(part.toolName) || isAskUserQuestionTool(part.toolName)) &&
+      isOpenRequest(part.toolId)
+  )
+  return (
+    <AgentToolSubThread
+      agentName={group.agentName}
+      parts={group.parts}
+      askMessage={group.askMessage}
+      status={group.status}
+      isStreaming={live && group.status === 'pending'}
+      errorText={group.errorText}
+      verbose={verbose}
+      renderRequest={renderRequest}
+      holdOpen={holdOpen}
+    />
+  )
+}
 
 /**
  * Pair `tool` parts/blocks (with `cinna.command_invocation`) to their matching
@@ -499,6 +548,18 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
    * request still open" has exactly one right answer and four copies of it
    * would drift.
    */
+  const isOpenRequest = (toolId?: string): boolean =>
+    !!toolId &&
+    !isSettledInputRequest({ settledInputRequestIds }, toolId) &&
+    (isPending(toolId) || isLiveInputRequest({ inputRequests }, toolId))
+  /** What a subagent group needs from the transcript to show its asks answerable. */
+  const subagentRender = (verbose: boolean, live = false): SubagentGroupRender => ({
+    verbose,
+    live,
+    renderRequest: (part, decision) => renderRequestBlock(`nested-${part.toolId}`, part, false, decision),
+    isOpenRequest
+  })
+
   const renderRequestBlock = (
     key: string,
     part: { toolName?: string; toolId?: string; toolInput?: Record<string, unknown> },
@@ -510,12 +571,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
     // open: the stream's `needs_input` arrives with the ask, the registry poll
     // up to a tick later but also across a reload. The stream's word that it is
     // settled wins over both, because the poll can lag it by the same tick.
-    const live =
-      part.toolId &&
-      !isSettledInputRequest({ settledInputRequestIds }, part.toolId) &&
-      (isPending(part.toolId) || isLiveInputRequest({ inputRequests }, part.toolId))
-        ? part.toolId
-        : undefined
+    const live = isOpenRequest(part.toolId) ? part.toolId : undefined
     // **A block replayed from history must never be live.** These parts are
     // persisted and re-rendered when the chat is reopened, and by then the
     // `per_*` behind them is long dead — the registry that owns it is
@@ -674,8 +730,9 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               // `parts[]` were persisted on the row — render the nested,
               // expandable sub-thread instead of the bare tool block. Plain
               // slot (not collapsible-grouped) since it's a substantial thread.
-              const subParts = msg.parts
-              if (Array.isArray(subParts) && subParts.length > 0) {
+              if (Array.isArray(msg.parts) && msg.parts.length > 0) {
+                // The delegated agent's own subagents nest inside its thread.
+                const subNested = nestSubagentParts(msg.parts)
                 const askMessage =
                   msg.toolInput && typeof (msg.toolInput as Record<string, unknown>).message === 'string'
                     ? ((msg.toolInput as Record<string, unknown>).message as string)
@@ -688,8 +745,12 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                       <AgentToolSubThread
                         agentName={msg.toolProvider ?? msg.toolName ?? 'Agent'}
                         agentId={msg.toolAgentId}
-                        parts={subParts}
+                        parts={subNested.items}
                         renderRequest={(part, decision) => renderRequestBlock(`nested-${part.toolId}`, part, false, decision)}
+                        renderNested={(index) => {
+                          const group = subNested.groups.get(index)
+                          return group ? renderSubagentGroup(group, subagentRender(verboseMode)) : null
+                        }}
                         askMessage={askMessage}
                         status={msg.toolError ? 'error' : 'done'}
                         errorText={msg.toolError ? msg.content : undefined}
@@ -733,7 +794,10 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               }
               continue
             }
-            const parts = msg.parts
+            // A subagent's parts come out of the flat list, into its Agent call's
+            // group; every index below refers to this filtered list.
+            const nested = Array.isArray(msg.parts) ? nestSubagentParts(msg.parts) : null
+            const parts = nested ? nested.items : msg.parts
             // Skip empty assistant rows — but NOT when they carry structured
             // parts (e.g. an agent turn that only attached a file has no text
             // content yet still renders a download badge from `parts[]`).
@@ -784,6 +848,8 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                     <div className="space-y-2">
                       {parts.map((p, idx) => {
                         const k = `${msg.id}-${idx}`
+                        const group = nested?.groups.get(idx)
+                        if (group) return <div key={k}>{renderSubagentGroup(group, subagentRender(verboseMode))}</div>
                         // tool_result already absorbed into a CommandToolFrame
                         // alongside its paired tool — skip the standalone render.
                         if (consumed.has(idx)) return null
@@ -864,6 +930,11 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               } else {
                 parts.forEach((p, idx) => {
                   const k = `${msg.id}-${idx}`
+                  const group = nested?.groups.get(idx)
+                  if (group) {
+                    renderNodes.push({ slot: 'plain', key: k, node: renderSubagentGroup(group, subagentRender(verboseMode)) })
+                    return
+                  }
                   if (consumed.has(idx)) return
                   const cliCall = cli.calls.get(idx)
                   if (cliCall) {
@@ -1084,17 +1155,37 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
           // Pair streaming `tool` + `tool_result` blocks the same way as
           // persisted parts so live `/run:*` turns render in a CommandToolFrame
           // even before the stream finishes.
-          const streamingTextBlocks = streamingBlocks.map((b) =>
+          // A subagent's live blocks are nested under its Agent call first, as
+          // on the persisted path; every index below is into `visibleBlocks`.
+          const streamingViews: LiveBlockView[] = streamingBlocks.map((b) =>
             b.type === 'text'
-              ? { kind: b.kind, toolId: b.toolId, commandInvocation: b.commandInvocation, toolName: b.toolName, toolInput: b.toolInput, toolStream: b.toolStream }
-              : { kind: b.type }
+              ? { kind: b.kind, text: b.content, toolId: b.toolId, commandInvocation: b.commandInvocation, toolName: b.toolName, toolInput: b.toolInput, toolStream: b.toolStream, parentToolId: b.parentToolId }
+              : { kind: b.type, text: '' }
           )
+          const liveNested = nestSubagentParts(streamingViews, { live: isStreaming })
+          const visibleBlocks = liveNested.origin.map((index) => streamingBlocks[index])
+          const streamingTextBlocks = liveNested.items
           const { pairResultIdx: streamPairResultIdx, consumed: streamConsumed } =
             pairCommandTools(streamingTextBlocks)
           const streamingCli = pairCinnaCliTools(streamingTextBlocks)
           streamingCli.consumed.forEach((index) => streamConsumed.add(index))
-          streamingBlocks.forEach((block, i) => {
-            const isLastBlock = i === streamingBlocks.length - 1
+          // "Last" is the last block of the whole stream, nested ones included:
+          // while a subagent streams, the agent's own last words are not the
+          // live ones and keep no cursor. -1 when the last block is nested.
+          const lastVisible =
+            liveNested.origin[liveNested.origin.length - 1] === streamingBlocks.length - 1 ? visibleBlocks.length - 1 : -1
+          visibleBlocks.forEach((block, i) => {
+            const isLastBlock = i === lastVisible
+            const group = liveNested.groups.get(i)
+            if (group) {
+              renderNodes.push({
+                slot: 'plain',
+                // A lane split by a steer is two groups: keyed by where each starts.
+                key: `stream-subagent-${group.parentToolId}-${liveNested.origin[i]}`,
+                node: renderSubagentGroup({ ...group, parts: group.parts.filter(isLivePart) }, subagentRender(verboseMode, isStreaming))
+              })
+              return
+            }
             if (streamConsumed.has(i)) return
             if (block.type === 'user') {
               // Sent while the turn ran and taken into it, where it landed. A
@@ -1111,10 +1202,10 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             const cliCall = streamingCli.calls.get(i)
             if (cliCall && block.type === 'text') {
               const results = cliCall.resultIndices.flatMap((index) => {
-                const result = streamingBlocks[index]
+                const result = visibleBlocks[index]
                 return result.type === 'text' ? [{ text: result.content, toolStream: result.toolStream }] : []
               })
-              const live = isStreaming && (!results.length || isLastBlock || cliCall.resultIndices.includes(streamingBlocks.length - 1))
+              const live = isStreaming && (!results.length || isLastBlock || cliCall.resultIndices.includes(lastVisible))
               const key = `stream-cli-${i}`
               const node = <CinnaCliBlock command={cliCall.command} narration={block.content} results={results} isStreaming={live} />
               renderNodes.push(verboseMode ? { slot: 'plain', key, node } : {
@@ -1130,13 +1221,13 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             if (block.type === 'text' && block.kind === 'tool' && block.commandInvocation) {
               const ri = streamPairResultIdx.get(i)
               const resultBlock =
-                ri !== undefined && streamingBlocks[ri].type === 'text'
-                  ? (streamingBlocks[ri] as Extract<typeof streamingBlocks[number], { type: 'text' }>)
+                ri !== undefined && visibleBlocks[ri].type === 'text'
+                  ? (visibleBlocks[ri] as Extract<typeof visibleBlocks[number], { type: 'text' }>)
                   : undefined
               // Live: streaming flag rides the whole frame so the header shows
               // a pulse while either the tool or its paired result is still
               // arriving (last block in the stream).
-              const live = isStreaming && (isLastBlock || (ri !== undefined && ri === streamingBlocks.length - 1))
+              const live = isStreaming && (isLastBlock || (ri !== undefined && ri === lastVisible))
               const key = `stream-cmd-tool-${i}`
               renderNodes.push({
                 slot: 'plain',
@@ -1153,7 +1244,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                   frameDefaultExpanded: true,
                   frameIsStreaming: live,
                   narrationIsStreaming: live && !resultBlock,
-                  resultIsStreaming: live && ri === streamingBlocks.length - 1
+                  resultIsStreaming: live && ri === lastVisible
                 })
               })
               return
@@ -1194,7 +1285,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 // buttons and said nothing about what happened, and collapsed
                 // by the height of the button row.
                 const dri = streamPairResultIdx.get(i)
-                const decisionBlock = dri !== undefined ? streamingBlocks[dri] : undefined
+                const decisionBlock = dri !== undefined ? visibleBlocks[dri] : undefined
                 renderNodes.push({
                   slot: 'plain',
                   key: `stream-askq-${i}`,
@@ -1325,6 +1416,9 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             if (block.providerType === 'agent') {
               const askMessage =
                 typeof block.input.message === 'string' ? block.input.message : undefined
+              // The delegated agent's own subagents nest inside its thread, as saved.
+              const subLive = block.status === 'pending'
+              const subNested = nestSubagentParts(block.subParts ?? [], { live: subLive })
               renderNodes.push({
                 slot: 'plain',
                 key: `stream-agent-${block.id}`,
@@ -1332,8 +1426,12 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                   <AgentToolSubThread
                     agentName={block.provider ?? block.name}
                     agentId={block.agentId}
-                    parts={block.subParts ?? []}
+                    parts={subNested.items}
                     renderRequest={(part, decision) => renderRequestBlock(`nested-${part.toolId}`, part, false, decision)}
+                    renderNested={(index) => {
+                      const group = subNested.groups.get(index)
+                      return group ? renderSubagentGroup(group, subagentRender(verboseMode, subLive)) : null
+                    }}
                     onStop={() => window.api.agents.cancelMessage(`nested:${JSON.stringify([chatId, block.id])}`)}
                     askMessage={askMessage}
                     status={block.status}

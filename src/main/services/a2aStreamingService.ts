@@ -348,14 +348,17 @@ interface PersistCursor {
 
 /**
  * The preview text of a slice of parts, the way a whole turn's `text` is
- * derived: the answer (`text` and `command_result`), else everything.
+ * derived: the answer (`text` and `command_result`), else everything. A
+ * subagent's parts (`parentToolId`) are its report to the agent, not the
+ * agent's answer, so they are left out of both — as `answerText()` does.
  */
 function sliceText(parts: MessagePart[]): string {
-  const answer = parts
+  const own = parts.filter((part) => !part.parentToolId)
+  const answer = own
     .filter((part) => part.kind === 'text' || part.kind === 'command_result')
     .map((part) => part.text)
     .join('')
-  return answer || parts.map((part) => part.text).join('')
+  return answer || own.map((part) => part.text).join('')
 }
 
 /**

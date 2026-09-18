@@ -58,6 +58,16 @@
  * *forces* this rule — it is here so the transcript does not depend on that
  * being true of every agent, which the protocol never promised.
  *
+ * **Subagent lanes.** The Claude adapter streams a subagent's child session on
+ * the same connection, each frame carrying `_meta.claudeCode.parentToolUseId`
+ * = the Agent call that launched it (`claude/subagent_{sync,background}.json`),
+ * and the parent keeps talking meanwhile. Those frames form a *lane* of that
+ * call: their parts carry `cinna.parent_tool_id`, are filed under the message
+ * that owns the Agent call, and touch neither the parent's `generation` nor
+ * `currentMessageId` — a child tool call is not the parent's, and before this
+ * one cut the parent's sentence mid-word. Each lane has a generation of its
+ * own, so the child's text → tool → text still splits as rule 3 says.
+ *
  * **4. The union is far wider than the kinds handled here**, and it grows.
  * `SessionUpdate` has 15 members at SDK 1.4.0 and four of them are marked
  * unstable. **Unknown kinds are ignored silently and by default**, and nothing
@@ -80,6 +90,7 @@ import {
 import type { InputQuestion } from '../../../../shared/runEvents'
 import {
   KIND_METADATA_KEY,
+  PARENT_TOOL_ID_METADATA_KEY,
   TOOL_ID_METADATA_KEY,
   TOOL_INPUT_METADATA_KEY,
   TOOL_NAME_METADATA_KEY,
@@ -145,8 +156,20 @@ export class AcpMessageStream {
   private readonly toolMessage = new Map<string, string>()
   /** Which message each ask's block lives in, so its decision joins it. */
   private readonly requestMessage = new Map<string, string>()
+  /**
+   * `requestId` → the subagent lane of the tool call it is about. An ask a
+   * subagent's tool raised is the subagent's, so it and its decision join
+   * that lane instead of cutting the parent's sentence.
+   */
+  private readonly requestLane = new Map<string, string>()
   /** Bumped by every new tool call: what makes text after a call a new part. */
   private generation = 0
+  /** Agent call id → its lane's own generation (see "Subagent lanes"). */
+  private readonly laneGeneration = new Map<string, number>()
+  /** Agent call id → the message its lane's parts are filed under, fixed on first sight. */
+  private readonly laneMessage = new Map<string, string>()
+  /** `toolCallId` → the lane it was first seen in, for an update that omits it. */
+  private readonly toolLane = new Map<string, string>()
   /** One slot per note, so a turn that says two things says them twice. */
   private notes = 0
   /** The last plan rendered, to swallow a re-send that changed nothing. */
@@ -204,6 +227,7 @@ export class AcpMessageStream {
     const messageId =
       (request.callId ? this.toolMessage.get(request.callId) : undefined) ?? this.owner()
     this.requestMessage.set(requestId, messageId)
+    const lane = this.laneOfRequest(requestId, request.callId)
     return this.writePart(
       messageId,
       `perm:${requestId}`,
@@ -211,7 +235,8 @@ export class AcpMessageStream {
         [KIND_METADATA_KEY]: 'tool',
         [TOOL_NAME_METADATA_KEY]: PERMISSION_TOOL_NAME,
         [TOOL_ID_METADATA_KEY]: requestId,
-        [TOOL_INPUT_METADATA_KEY]: request as unknown as Record<string, unknown>
+        [TOOL_INPUT_METADATA_KEY]: request as unknown as Record<string, unknown>,
+        ...(lane ? { [PARENT_TOOL_ID_METADATA_KEY]: lane } : {})
       },
       describeAcpPermission(request)
     )
@@ -253,6 +278,7 @@ export class AcpMessageStream {
       this.requestMessage.get(requestId) ??
       this.owner()
     this.requestMessage.set(requestId, messageId)
+    const lane = this.laneOfRequest(requestId, callId)
     return this.writePart(
       messageId,
       `question:${requestId}`,
@@ -260,7 +286,8 @@ export class AcpMessageStream {
         [KIND_METADATA_KEY]: 'tool',
         [TOOL_NAME_METADATA_KEY]: QUESTION_TOOL_NAME,
         [TOOL_ID_METADATA_KEY]: requestId,
-        [TOOL_INPUT_METADATA_KEY]: callId ? { questions, callId } : { questions }
+        [TOOL_INPUT_METADATA_KEY]: callId ? { questions, callId } : { questions },
+        ...(lane ? { [PARENT_TOOL_ID_METADATA_KEY]: lane } : {})
       },
       questions.length > 1 ? `Asked ${questions.length} questions.` : 'Asked a question.'
     )
@@ -388,6 +415,21 @@ export class AcpMessageStream {
     // resource in a message chunk is dropped rather than announced, because a
     // `[image]` placeholder spliced into a sentence reads worse than the gap.
     const text = content?.type === 'text' ? str(content.text) : undefined
+    const lane = laneOf(update)
+    if (lane) {
+      // A subagent speaking: its own lane, never the parent's current message.
+      if (text === undefined) return {}
+      const messageId = this.messageOfLane(lane)
+      const state = this.messageState(messageId)
+      const key = `${kind}:lane:${lane}:${str(update.messageId) ?? ''}:${this.laneGeneration.get(lane) ?? 0}`
+      const idx = this.slot(state, key, () => ({
+        kind: 'text',
+        text: '',
+        metadata: { [KIND_METADATA_KEY]: kind, [PARENT_TOOL_ID_METADATA_KEY]: lane }
+      }))
+      state.parts[idx] = { ...state.parts[idx], text: (state.parts[idx].text ?? '') + text }
+      return { message: { messageId, parts: state.parts } }
+    }
     const messageId = str(update.messageId) ?? this.owner()
     this.currentMessageId = messageId
     if (text === undefined) return {}
@@ -436,14 +478,22 @@ export class AcpMessageStream {
 
     const fresh = !this.toolNames.has(toolCallId)
     this.recordEvidence(toolCallId, update)
+    const lane = this.toolLane.get(toolCallId) ?? (fresh ? laneOf(update) : undefined)
     if (fresh) {
       this.toolNames.set(toolCallId, resolveToolName(update))
       // Rule 3: whatever text was streaming has ended. The next chunk opens a
-      // new part instead of continuing the paragraph this call interrupted.
-      this.generation += 1
+      // new part instead of continuing the paragraph this call interrupted —
+      // in the call's own lane: a subagent's call ends only the subagent's text.
+      if (lane) {
+        this.toolLane.set(toolCallId, lane)
+        this.laneGeneration.set(lane, (this.laneGeneration.get(lane) ?? 0) + 1)
+      } else {
+        this.generation += 1
+      }
     }
     const name = this.toolNames.get(toolCallId) ?? 'tool'
-    const messageId = this.toolMessage.get(toolCallId) ?? this.owner()
+    const messageId =
+      this.toolMessage.get(toolCallId) ?? (lane ? this.messageOfLane(lane) : this.owner())
     this.toolMessage.set(toolCallId, messageId)
 
     const state = this.messageState(messageId)
@@ -456,7 +506,8 @@ export class AcpMessageStream {
       metadata: {
         [KIND_METADATA_KEY]: 'tool',
         [TOOL_NAME_METADATA_KEY]: name,
-        [TOOL_ID_METADATA_KEY]: toolCallId
+        [TOOL_ID_METADATA_KEY]: toolCallId,
+        ...(lane ? { [PARENT_TOOL_ID_METADATA_KEY]: lane } : {})
       }
     }))
 
@@ -479,7 +530,7 @@ export class AcpMessageStream {
       state.parts[idx] = { ...state.parts[idx], text: narration }
       changed = true
     }
-    if (this.toolResult(update, toolCallId, state)) changed = true
+    if (this.toolResult(update, toolCallId, state, lane)) changed = true
 
     return changed ? { message: { messageId, parts: state.parts } } : {}
   }
@@ -496,7 +547,8 @@ export class AcpMessageStream {
   private toolResult(
     update: Record<string, unknown>,
     toolCallId: string,
-    state: MessageState
+    state: MessageState,
+    lane: string | undefined
   ): boolean {
     const status = str(update.status)
     if (status !== 'completed' && status !== 'failed') return false
@@ -512,7 +564,8 @@ export class AcpMessageStream {
         // The renderer always wants a stream label. A tool that failed is
         // `stderr` so it reads as the error it is — which is also how a refused
         // permission arrives ("User refused permission to run tool").
-        [TOOL_STREAM_METADATA_KEY]: status === 'failed' ? 'stderr' : 'stdout'
+        [TOOL_STREAM_METADATA_KEY]: status === 'failed' ? 'stderr' : 'stdout',
+        ...(lane ? { [PARENT_TOOL_ID_METADATA_KEY]: lane } : {})
       }
     }))
     if ((state.parts[idx].text ?? '').length >= text.length) return false
@@ -579,6 +632,27 @@ export class AcpMessageStream {
     return this.currentMessageId ?? ANON_MESSAGE_ID
   }
 
+  /** The lane of the tool call an ask is about (none for the parent's own), remembered for its decision. */
+  private laneOfRequest(requestId: string, callId: string | undefined): string | undefined {
+    const lane = (callId ? this.toolLane.get(callId) : undefined) ?? this.requestLane.get(requestId)
+    if (lane) this.requestLane.set(requestId, lane)
+    return lane
+  }
+
+  /**
+   * Where a subagent lane's parts go: the message that owns its Agent call, or
+   * — for a call announced in an earlier turn — the parent's current message
+   * when the lane first speaks. Fixed then, so the lane stays in one message.
+   */
+  private messageOfLane(lane: string): string {
+    let messageId = this.laneMessage.get(lane)
+    if (!messageId) {
+      messageId = this.toolMessage.get(lane) ?? this.owner()
+      this.laneMessage.set(lane, messageId)
+    }
+    return messageId
+  }
+
   private messageState(id: string): MessageState {
     let state = this.messages.get(id)
     if (!state) {
@@ -620,17 +694,29 @@ export class AcpMessageStream {
   private settle(requestId: string, text: string): AcpStreamUpdate {
     const messageId = this.requestMessage.get(requestId)
     if (!messageId || !str(text)) return {}
+    const lane = this.requestLane.get(requestId)
     return this.writePart(
       messageId,
       `decision:${requestId}`,
       {
         [KIND_METADATA_KEY]: 'tool_result',
         [TOOL_ID_METADATA_KEY]: requestId,
-        [TOOL_STREAM_METADATA_KEY]: 'stdout'
+        [TOOL_STREAM_METADATA_KEY]: 'stdout',
+        ...(lane ? { [PARENT_TOOL_ID_METADATA_KEY]: lane } : {})
       },
       text
     )
   }
+}
+
+/** The Agent call a child-session frame runs under, when it is one. */
+function laneOf(update: Record<string, unknown>): string | undefined {
+  return str(record(record(update._meta)?.claudeCode)?.parentToolUseId)
+}
+
+/** The rest of `name` after `prefix`, or null. */
+function withPrefix(name: string | undefined, prefix: string): string | null {
+  return name?.startsWith(prefix) && name.length > prefix.length ? name.slice(prefix.length) : null
 }
 
 /**
@@ -645,11 +731,6 @@ export class AcpMessageStream {
  * resort, because a transcript saying "edit" is still better than one saying
  * "Preparing file…".
  */
-/** The rest of `name` after `prefix`, or null. */
-function withPrefix(name: string | undefined, prefix: string): string | null {
-  return name?.startsWith(prefix) && name.length > prefix.length ? name.slice(prefix.length) : null
-}
-
 function resolveToolName(update: Record<string, unknown>): string {
   const claudeCode = record(record(update._meta)?.claudeCode)
   return (

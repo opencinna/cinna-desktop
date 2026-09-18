@@ -486,6 +486,7 @@ The launch text a terminal shows for a background subagent is the CLI's own and 
 
 - routes the child session to whoever hears the parent (`aliasSession`)
 - writes the missing `Agent` call back into the stream ([Session Activity (tech)](../session_activity/session_activity_tech.md#the-synthesized-agent-call-subagentframes))
+- files every child frame as a lane of that call by its `parentToolUseId`, so the child's parts neither cut the parent's text nor count as its answer ([The Agent Turn](agent_turn.md#the-translator-maintains-a-cumulative-message-the-accumulator-computes-the-delta))
 
 **Codex: nothing links the child to the call, so it is not sent the capability.**
 

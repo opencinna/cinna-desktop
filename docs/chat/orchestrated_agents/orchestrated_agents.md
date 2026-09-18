@@ -15,7 +15,7 @@ Let one Local runtime conduct a chat using attached agents and MCP servers as to
 
 1. Start a coordinated chat using the [routing preference or one-way action](../chat_routing/chat_routing.md).
 2. The Local runtime sees attached agent tools plus connected baseline/on-demand MCP tools. Calls to different agents may run concurrently; the same agent's lock serializes its calls.
-3. Agent tool calls show the request followed by thinking, tools and text in a sub-thread. Compact view groups consecutive tool steps; verbose view keeps them inline. A finished sub-thread collapses unless verbose is on.
+3. Agent tool calls show the request, clamped to two lines with Show more, followed by thinking, tools and text in a sub-thread. Compact view groups consecutive tool steps; verbose view keeps them inline. A finished sub-thread collapses unless verbose is on; a failed one stays open with "error" in its header in both modes.
 4. A specialist's permission request stays live and can be answered in its sub-thread or the Inbox. A question becomes a durable Inbox request; the conductor ends its turn instead of repeatedly calling the waiting agent — but only once every call running in parallel with it has finished. Ending the turn cancels the session, and with it each sibling specialist still at work.
 5. Answer the question in the Inbox. The specialist resumes through its driver. Its completed result returns to the conductor as a new prompt naming the original tool call, rather than pretending the earlier MCP request is still open.
 6. Add/remove capabilities during the session: Cinna changes the tool list and emits `tools/list_changed`, preserving endpoint identity. Engine adoption is separate from server fixture coverage: OpenCode 1.18.27 adopted it in the real-adapter/local-fake-model probe; authenticated Claude/Codex behavior remains unverified.
@@ -34,7 +34,7 @@ Let one Local runtime conduct a chat using attached agents and MCP servers as to
 - Replacement-session replay is separate from bounded per-agent catch-up and belongs to the chat's answerer root only; an addressed participant gets catch-up alone. Stored error/transition rows are excluded; prior speakers and tool-call IDs are attributed. Current user content is not replayed twice.
 - Compatible synthetic runtimes share a process keyed by profile, engine, credential, model, instructions and tool policy. Each chat still has its own cwd, session, tools and transcript. Folder agents retain their per-agent processes. No cross-profile conversation is shared.
 - Permanent chat deletion and Empty Trash remove only that chat’s generated runtime row and instruction directory. Moving a chat to Trash retains them for restoration; user-added agents and their folders are never deleted as a side effect.
-- Live permission parks expire at turn end/restart; durable questions survive. No sub-sub-thread is rendered.
+- Live permission parks expire at turn end/restart; durable questions survive. No specialist-of-a-specialist sub-thread exists, because nested specialists get no Cinna bridge. A specialist's own Claude subagent is different: its work nests inside that specialist's sub-thread, live and saved, as it does in a direct chat ([Conversation UI](../conversation_ui/conversation_ui.md#subagent-work-in-the-transcript)).
 
 ## Architecture Overview
 

@@ -40,7 +40,7 @@ Existing run, agent-answer, child-cancel and Inbox APIs carry execution; the loo
 
 ## Renderer Components
 
-Agent tool rows render rich child parts and actionable permission controls. Durable questions use the existing Inbox. Coordinator/Participant chips retain selection order; synthetic conductors are visible as the root but excluded from pickers.
+Agent tool rows render rich child parts and actionable permission controls. A child `delta` keeps its `parentToolId` and `newPart` through `appendToolSubEvent` → `chat.store.ts:appendAgentDeltaPart` <!-- nocheck -->, which merges by lane exactly as the top-level store does, and `MessageStream` runs `nestSubagentParts` over the sub-thread's parts so a specialist's own subagent renders inside it through `AgentContribution.renderNested`. A failed sub-thread stays open and marks "error" in compact mode ([Conversation UI tech](../conversation_ui/conversation_ui_tech.md#subagent-nesting)). Durable questions use the existing Inbox. Coordinator/Participant chips retain selection order; synthetic conductors are visible as the root but excluded from pickers.
 
 ## Configuration
 

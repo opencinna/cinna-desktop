@@ -102,3 +102,64 @@ describe('replay', () => {
     expect(accumulator.snapshotNotices().map((n) => n.text)).toEqual(['Starting up'])
   })
 })
+
+describe('subagent lanes', () => {
+  const lane = { 'cinna.parent_tool_id': 'agent-1' }
+  const text = (t: string, meta: Record<string, unknown> = {}) => ({ kind: 'text', text: t, metadata: { 'cinna.content_kind': 'text', ...meta } })
+
+  it('keeps the parent’s paragraph whole across a subagent’s tool call and result', () => {
+    // The real session: parent delta, child tool, child result, parent delta.
+    // Mutation: drop `parentToolId` from `continuingPartIndex` → three parent parts.
+    const accumulator = new StreamPartsAccumulator()
+    const events: { kind: string; text: string; parentToolId?: string }[] = []
+    const port = { postMessage: (event: { kind: string; text: string; parentToolId?: string }) => { events.push(event) } }
+    accumulator.ingestArtifact({ artifactId: 'p1', parts: [text('the Florian Rockenhä')] }, port)
+    accumulator.ingestArtifact({ artifactId: 'c1', parts: [{ kind: 'text', text: 'Bash: psql', metadata: { 'cinna.content_kind': 'tool', 'cinna.tool_name': 'Bash', 'cinna.tool_id': 'bash-1', ...lane } }] }, port)
+    accumulator.ingestArtifact({ artifactId: 'c2', parts: [{ kind: 'text', text: 'ok', metadata: { 'cinna.content_kind': 'tool_result', 'cinna.tool_id': 'bash-1', ...lane } }] }, port)
+    accumulator.ingestArtifact({ artifactId: 'c3', parts: [text('Confirmed "pg".', lane)] }, port)
+    // The same source part grows (ACP re-sends the whole message), so it continues.
+    accumulator.ingestArtifact({ artifactId: 'p1', parts: [text('the Florian Rockenhäuser / Traffective')] }, port)
+    const parts = accumulator.snapshotParts()
+    expect(parts.filter((p) => !p.parentToolId)).toEqual([{ kind: 'text', text: 'the Florian Rockenhäuser / Traffective' }])
+    expect(parts.filter((p) => p.parentToolId === 'agent-1').map((p) => p.kind)).toEqual(['tool', 'tool_result', 'text'])
+    // Mutation: add child text to `answer` → the child's words reach the preview.
+    expect(accumulator.answerText()).toBe('the Florian Rockenhäuser / Traffective')
+    expect(events.map((e) => e.parentToolId)).toEqual([undefined, 'agent-1', 'agent-1', 'agent-1', undefined])
+  })
+
+  it('applies a continuation boundary to every lane', () => {
+    const accumulator = new StreamPartsAccumulator()
+    const port = { postMessage: () => {} }
+    accumulator.ingestArtifact({ artifactId: 'c1', parts: [text('child before', lane)] }, port)
+    accumulator.breakContinuation()
+    accumulator.ingestArtifact({ artifactId: 'c2', parts: [text('child after', lane)] }, port)
+    expect(accumulator.snapshotParts().map((p) => p.text)).toEqual(['child before', 'child after'])
+  })
+})
+
+describe('lanes: a different source part after another lane', () => {
+  const lane = { 'cinna.parent_tool_id': 'agent-1' }
+  const text = (t: string, meta: Record<string, unknown> = {}) => ({ kind: 'text', text: t, metadata: { 'cinna.content_kind': 'text', ...meta } })
+
+  it('starts a new part, and says so on the delta', () => {
+    // Mutation: drop the source check in `appendToList` → "launchedCommand completed".
+    const accumulator = new StreamPartsAccumulator()
+    const events: { text: string; newPart?: true }[] = []
+    const port = { postMessage: (event: { text: string; newPart?: true }) => { events.push(event) } }
+    accumulator.ingestMessage({ messageId: 'm1', parts: [text('launched')] }, port)
+    accumulator.ingestMessage({ messageId: 'm1', parts: [text('launched'), text('Bash', lane)] }, port)
+    accumulator.ingestMessage({ messageId: 'm2', parts: [text('Command completed')] }, port)
+    expect(accumulator.snapshotParts().filter((p) => !p.parentToolId).map((p) => p.text)).toEqual(['launched', 'Command completed'])
+    expect(events.map((e) => e.newPart)).toEqual([undefined, undefined, true])
+  })
+
+  it('is unchanged without lanes: a new source part still continues the last part', () => {
+    const accumulator = new StreamPartsAccumulator()
+    const events: { text: string; newPart?: true }[] = []
+    const port = { postMessage: (event: { text: string; newPart?: true }) => { events.push(event) } }
+    accumulator.ingestMessage({ messageId: 'm1', parts: [text('one ')] }, port)
+    accumulator.ingestMessage({ messageId: 'm2', parts: [text('two')] }, port)
+    expect(accumulator.snapshotParts()).toEqual([{ kind: 'text', text: 'one two' }])
+    expect(events.every((e) => !('newPart' in e))).toBe(true)
+  })
+})

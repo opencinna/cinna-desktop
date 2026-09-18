@@ -2227,7 +2227,8 @@ function finish(
       stopReason: ctx.conductorOutcome.budget ? 'budget' as const : 'end_turn' as const,
       taskState: ctx.conductorOutcome.needsInput ? 'input-required' : 'completed'
     } : {}),
-    text: answer || parts.map((part) => part.text).join(''),
+    // A subagent's parts are its report to the agent, never the agent's text (as `sliceText`).
+    text: answer || parts.filter((part) => !part.parentToolId).map((part) => part.text).join(''),
     parts,
     notices: accumulator.snapshotNotices(),
     ...(ctx.steers.length ? { steers: ctx.steers.slice() } : {}),

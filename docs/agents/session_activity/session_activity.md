@@ -33,7 +33,7 @@ Before this existed, all of it was invisible. A background shell finished, Claud
 
 ### Watching subagents
 1. A Claude agent hands work to a subagent. A **Subagents** badge appears, and its popover lists the subagent's name and task
-2. The subagent's own tool calls and text appear **inline in the chat**, under the agent's `Agent` tool call, exactly as they did before the capability was advertised
+2. The subagent's own tool calls and text appear **in the chat**, in a nested sub-thread under the agent's `Agent` tool call, while the agent's own words continue around it ([Conversation UI](../../chat/conversation_ui/conversation_ui.md#subagent-work-in-the-transcript)). Advertising the capability changed nothing here: the desktop writes the `Agent` call back into the stream
 3. The badge leaves when the last subagent has ended and its popover is closed
 
 ### Seeing the chat's tasks

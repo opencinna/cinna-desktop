@@ -86,4 +86,11 @@ export interface MessagePart {
    * `text` is empty for file parts; the badge renders from this metadata.
    */
   file?: MessagePartFile
+  /**
+   * From `metadata['cinna.parent_tool_id']`: the part is a subagent's work,
+   * launched by the Agent tool call with this id (a Claude folder agent's
+   * child session). Absent on the agent's own parts and on every row written
+   * before it existed. The renderer nests these under that call.
+   */
+  parentToolId?: string
 }

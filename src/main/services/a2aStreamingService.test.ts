@@ -148,6 +148,26 @@ describe('a2aStreamingService.streamToAgent', () => {
     expect(p.posted.at(-1)).toEqual({ type: 'done', stopReason: 'end_turn' })
   })
 
+  it('leaves a subagent’s words out of each steered row’s content', async () => {
+    // Mutation: drop the `parentToolId` filter in `sliceText` → the first row reads "aChild says".
+    const p = fakePort()
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1', agentId: 'folder:abc', port: p.port,
+      run: async () => ({
+        text: 'ac',
+        parts: [
+          { kind: 'text', text: 'a' },
+          { kind: 'text', text: 'Child says', parentToolId: 'agent-1' },
+          { kind: 'tool', toolName: 'Bash', text: 'Child tool', parentToolId: 'agent-1' },
+          { kind: 'text', text: 'c' }
+        ],
+        notices: [],
+        steers: [{ afterPart: 2, text: 'steer' }]
+      })
+    })
+    expect(rows.filter((row) => row.role !== 'user').map((row) => row.content)).toEqual(['a', 'c'])
+  })
+
   it('keeps one row with the turn’s own text when nothing was steered', async () => {
     const p = fakePort()
     await a2aStreamingService.streamToAgent({

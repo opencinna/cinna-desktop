@@ -46,7 +46,7 @@ Do not re-split. A new protocol maps onto `RunEvent`; it does not get its own un
 
 - `request-id { requestId }` — first, exactly once, posted by the layer above the driver (`streamToAgent`, main run executor). The id `cancel` takes
 - `status { state: RunState, taskId?, contextId? }` — `RunState` = `submitted | working | needs_input | completed | failed | canceled | rejected | unknown`. Posted by drivers including A2A and Managed. The renderer ignores it; a `needs_input` state is always followed by its own event, and that is what the store records — which is also why the live-run replay cache does not retain it
-- `delta { kind: ContentKind, text, toolName?, toolInput?, toolId?, toolStream?, commandInvocation?, file? }` — already a true delta. Field meanings: [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md#delta-event-payload-over-messageport)
+- `delta { kind: ContentKind, text, toolName?, toolInput?, toolId?, toolStream?, commandInvocation?, file?, parentToolId?, newPart? }` — already a true delta. `parentToolId` puts it in a subagent's lane; `newPart: true` forces a new part where the lane rule would continue one. Field meanings: [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md#delta-event-payload-over-messageport)
 - `tool_use { id, name, input, provider?, providerType?: 'mcp' | 'agent' | 'coordinator', providerAgentId? }` — LLM path only, posted before the call resolves
 - `tool_result { id, result: unknown }`, `tool_error { id, error }` — pair with `tool_use` by `id`. Not the `tool_result` **content kind**, which is a `delta`
 - `needs_input { requestId, request: InputRequest, resume: 'reply' | 'next_message' }` — see the contract below
@@ -90,7 +90,7 @@ Rules, each pinned by a driver-contract clause (see [The driver contract](../../
 - `tool_result` / `tool_error` → resolve or fail the tool block, then `dropInputRequestsFor(id)`: a nested agent's asks end with its call
 - `needs_input` → `addInputRequest` (a repeated id replaces its entry in place and is no longer settled); `input_resolved` → `resolveInputRequest`, which removes the entry and records the id in `settledInputRequestIds` whether or not the store held it — an ask known only through the registry poll is just as settled
 - `child` → a nested `needs_input` / `input_resolved` goes to the same list, tagged with `toolCallId`; a `child` inside a `child` is dropped, because the sub-thread renders one level and nothing sends deeper; everything else goes to `appendToolSubEvent`, which keeps non-`notice` `delta`s only — so a nested `status`, `done` or `error` never ends the outer turn
-- `user_message` → `appendUserMessage`, a `user` block after the blocks so far; being non-text, it also ends the run of text before it
+- `user_message` → `appendUserMessage`, a `user` block after the blocks so far; being non-text, it also ends the run of text before it — in every lane, a subagent's included
 - `status` → ignored
 
 Store lifecycle (`src/renderer/src/stores/chat.store.ts`):
@@ -147,7 +147,7 @@ A new optional field on an existing variant needs only step 1; the compiler flag
 
 ## Part Merge Rule
 
-Live blocks and persisted parts split in the same places because one function decides it: `continuesPart` in `src/shared/partMerge.ts`, called by the accumulator, `chat.store.appendDelta` and the sub-thread's `appendAgentDeltaPart`. The rule, and the two-asks defect it fixed, are in [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md#renderer-routing).
+Live blocks and persisted parts split in the same places because one module decides it: `continuingPartIndex` / `continuesPart` in `src/shared/partMerge.ts`, called by the accumulator, `chat.store.appendDelta` and the sub-thread's `appendAgentDeltaPart`. "The last part" is the last part of the same lane, and where main decided otherwise the delta says so with `newPart`, which both renderer paths and the live-run replay cache honour ([lanes](../../agents/agents/streaming_pipeline.md#lanes--a-subagents-work-inside-the-agents-turn)). The rule, and the two-asks defect it fixed, are in [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md#renderer-routing).
 
 ## Subtype Assignment Quirk
 

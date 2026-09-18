@@ -15,9 +15,16 @@ async function ask(path, body, signal) {
   return response.json()
 }
 
-/** Send the controller's `updates` (bare `session/update` payloads) on this session, in order. */
+/**
+ * Send the controller's `updates` on this session, in order: bare `session/update`
+ * payloads, or `{ sessionId, update }` for a frame another session sends (a
+ * Claude subagent's child session).
+ */
 async function send(client, sessionId, updates) {
-  for (const update of updates ?? []) await client.notify('session/update', { sessionId, update })
+  for (const entry of updates ?? []) {
+    const routed = typeof entry.sessionId === 'string' && entry.update && !('sessionUpdate' in entry)
+    await client.notify('session/update', routed ? { sessionId: entry.sessionId, update: entry.update } : { sessionId, update: entry })
+  }
 }
 
 const app = agent({ name: 'script-e2e-acp' })
@@ -39,7 +46,14 @@ const app = agent({ name: 'script-e2e-acp' })
       // `after: true` asks the controller, once this prompt has returned, for
       // the traffic the agent then sends on its own (a background task ending,
       // a turn nobody prompted) — held until the test releases it.
-      const { text, updates, after } = await ask('/prompt', { cwd: process.cwd(), pid: process.pid, ...ctx.params }, controller.signal)
+      let reply = await ask('/prompt', { cwd: process.cwd(), pid: process.pid, ...ctx.params }, controller.signal)
+      // `more: true` keeps the prompt open after its `updates`: the controller
+      // holds `/more` until the test releases the next stage of the same turn.
+      while (reply.more) {
+        await send(ctx.client, sessionId, reply.updates)
+        reply = await ask('/more', { sessionId }, controller.signal)
+      }
+      const { text, updates, after } = reply
       await send(ctx.client, sessionId, updates)
       if (text) {
         await ctx.client.notify('session/update', { sessionId,

@@ -25,6 +25,28 @@ describe('live run hub', () => {
     hub.watch('u', 'c', (m) => replay.push(m))
     expect(replay[0]).toMatchObject({ events: [{ type: 'request-id', requestId: 'req' }, delta('Hello! Still running')] })
   })
+  it('keeps a subagent’s text out of the agent’s own when replaying', () => {
+    // Mutation: drop the lane check in `continuesPart` → the child's words join the parent's delta.
+    const hub = createLiveRunHub()
+    const run = hub.begin('u', 'c', 'r', [])
+    run.push(delta('Parent '))
+    run.push({ ...delta('child'), parentToolId: 'agent-1' })
+    run.push({ ...delta(' more'), parentToolId: 'agent-1' })
+    const replay: RunWatchMessage[] = []
+    hub.watch('u', 'c', (m) => replay.push(m))
+    expect(replay[0]).toMatchObject({ events: [delta('Parent '), { ...delta('child more'), parentToolId: 'agent-1' }] })
+  })
+  it('does not fold a `newPart` delta into the one before it', () => {
+    // Mutation: drop the `newPart` check in `merge` → one replayed delta, and the renderer glues the two messages.
+    const hub = createLiveRunHub()
+    const run = hub.begin('u', 'c', 'r', [])
+    run.push(delta('launched'))
+    run.push({ ...delta('Command'), newPart: true })
+    run.push(delta(' completed'))
+    const replay: RunWatchMessage[] = []
+    hub.watch('u', 'c', (m) => replay.push(m))
+    expect(replay[0]).toMatchObject({ events: [delta('launched'), { ...delta('Command completed'), newPart: true }] })
+  })
   it('isolates profiles and chats, survives bad subscribers, and keeps idle watches across runs', () => {
     const hub = createLiveRunHub()
     const messages: RunWatchMessage[] = []

@@ -15,7 +15,7 @@ import {
 } from './acpActivity'
 import { AcpMessageStream } from './acpMessages'
 import type { AcpConnection } from './types'
-import { KIND_METADATA_KEY, TOOL_ID_METADATA_KEY } from '../../streamPartsAccumulator'
+import { KIND_METADATA_KEY, StreamPartsAccumulator, TOOL_ID_METADATA_KEY } from '../../streamPartsAccumulator'
 import { beforeCapability, loadActivityFixture as load, type ActivityFixture as Fixture } from './testSupport/subagentFixtures'
 
 const CHAT = 'chat-1'
@@ -560,5 +560,36 @@ describe('an Agent call is announced once per session (review fix 4)', () => {
     expect(shape(followUp.expand(hook))).toEqual([['tool_call_update', 'call', undefined]])
     // Nor does a failed end open a placeholder for a child linked earlier.
     expect(shape(followUp.expand(stateUpdate('failed')))).toEqual([['subagent_state_update', undefined, undefined]])
+  })
+})
+
+describe('the parent’s messages around a background subagent (lanes)', () => {
+  it('keep two parent messages two parts when only subagent parts came between them', () => {
+    // The real run: "launched" (msg …uFi), the subagent's Bash and report, then
+    // "Command completed: sub-ok" (msg …zUd6). The lane-skip must not glue them.
+    const fixture = load('claude', 'subagent_background')
+    const registry = createSessionActivityRegistry()
+    const connection = fakeConnection()
+    const frames = new SubagentFrames((id) => registry.lookup(connection, id))
+    const stream = new AcpMessageStream({ launcher: 'claude' })
+    const accumulator = new StreamPartsAccumulator()
+    const deltas: { kind: string; text: string; parentToolId?: string; newPart?: true }[] = []
+    const port = { postMessage: (d: (typeof deltas)[number]): void => { deltas.push(d) } }
+    for (const n of fixture.notifications) {
+      ;(registry.lookup(connection, n.sessionId) ?? registry.session(connection, n.sessionId, { chatId: CHAT, agentId: AGENT })).observe(n)
+      for (const frame of frames.expand(n)) {
+        const { message } = stream.apply(frame)
+        if (message) accumulator.ingestMessage(message, port)
+      }
+    }
+    const own = accumulator.snapshotParts().filter((p) => p.kind === 'text' && !p.parentToolId).map((p) => p.text)
+    expect(own.some((t) => t.includes('launched') && t.includes('Command completed'))).toBe(false)
+    expect(own.filter((t) => t.includes('Command completed: sub-ok'))).toHaveLength(1)
+    expect(accumulator.snapshotParts().some((p) => p.parentToolId)).toBe(true)
+    // The renderer is told the same thing: the second message's first delta opens a part.
+    const ownDeltas = deltas.filter((d) => d.kind === 'text' && !d.parentToolId)
+    expect(ownDeltas.map((d) => [d.text, d.newPart])).toEqual([
+      ['launched', undefined], ['Command', true], [' completed:', undefined], [' sub', undefined], ['-ok', undefined]
+    ])
   })
 })

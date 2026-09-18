@@ -39,7 +39,8 @@ const isRequestTool = (toolName?: string): boolean =>
   isPermissionRequestTool(toolName) || toolName?.toLowerCase().replace(/[^a-z]/g, '') === QUESTION_TOOL_NAME
 
 function merge(last: RunEvent, next: RunEvent): { event: RunEvent; growth: number } | null {
-  if (last.type === 'delta' && next.type === 'delta' && continuesPart(last, next)) {
+  // A `newPart` delta opens a part of its own, so it is never folded into the one before.
+  if (last.type === 'delta' && next.type === 'delta' && !next.newPart && continuesPart(last, next)) {
     // An adopted input is copied: its size is measured once, here, so a caller
     // that later mutated its own object must not grow the cache unaccounted.
     const event = { ...last, text: last.text + next.text,

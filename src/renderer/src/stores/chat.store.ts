@@ -102,11 +102,16 @@ function appendAgentDeltaPart(
     toolStream?: ToolStream
     commandInvocation?: string
     file?: MessagePartFile
+    parentToolId?: string
+    newPart?: boolean
   }
 ): MessagePart[] {
-  const { kind, text, toolName, toolInput, toolId, toolStream, commandInvocation, file } = delta
+  const { kind, text, toolName, toolInput, toolId, toolStream, commandInvocation, file, parentToolId, newPart } = delta
   const out = parts.slice()
-  const index = continuingPartIndex(out, { kind, toolName, toolId, toolStream })
+  // Lanes as on the top-level path: a delegated agent's own subagent keeps its
+  // parts apart, and `newPart` is main's word that this fragment starts one.
+  // (A sub-thread has no user blocks, so nothing else ends a lane here.)
+  const index = newPart ? -1 : continuingPartIndex(out, { kind, toolName, toolId, toolStream, parentToolId })
   const last = out[index]
   // The accumulator's own rule (`shared/partMerge.ts`), so the live sub-thread
   // splits exactly where the persisted one will.
@@ -126,6 +131,7 @@ function appendAgentDeltaPart(
     if (toolStream) next.toolStream = toolStream
     if (commandInvocation) next.commandInvocation = commandInvocation
     if (file) next.file = file
+    if (parentToolId) next.parentToolId = parentToolId
     out.push(next)
   }
   return out
@@ -146,6 +152,8 @@ interface TextBlock {
   commandInvocation?: string
   /** Set only when `kind === 'file'` — agent-attached file (A2A FilePart). */
   file?: MessagePartFile
+  /** A subagent's block: the Agent call it runs under — see MessagePart. */
+  parentToolId?: string
 }
 
 /**
@@ -245,7 +253,9 @@ interface ChatStore {
     toolId?: string,
     toolStream?: ToolStream,
     commandInvocation?: string,
-    file?: MessagePartFile
+    file?: MessagePartFile,
+    parentToolId?: string,
+    newPart?: boolean
   ) => void
   addToolCall: (tc: {
     id: string
@@ -376,11 +386,24 @@ export const useChatStore = create<ChatStore>((set) => ({
     toolId,
     toolStream,
     commandInvocation,
-    file
+    file,
+    parentToolId,
+    newPart
   ) =>
     set((state) => {
       const blocks = [...state.streamingBlocks]
-      const index = continuingPartIndex(blocks.map((block) => block.type === 'text' ? block : undefined), { kind, toolName, toolId, toolStream })
+      // A non-text block is `undefined` here, which the rule counts as the
+      // main lane: it ends the agent's own run of text, not a subagent's.
+      let index = continuingPartIndex(blocks.map((block) => block.type === 'text' ? block : undefined), { kind, toolName, toolId, toolStream, parentToolId })
+      // A user message taken into the turn ends every lane, as the
+      // accumulator's `breakContinuation` does: only a tool call named by id
+      // may still grow on its far side. Otherwise a subagent's text would run
+      // on across it live and split there once saved.
+      const userAt = blocks.findLastIndex((block) => block.type === 'user')
+      if (index >= 0 && index < userAt && !(kind === 'tool' && toolId)) index = -1
+      // Main decided this fragment opens a part (another source part, with
+      // another lane's parts between) — see `RunDeltaEvent.newPart`.
+      if (newPart) index = -1
       const last = blocks[index]
       // The main-process accumulator's rule, from one place
       // (`shared/partMerge.ts`), so live blocks split where persisted parts do.
@@ -400,6 +423,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         if (toolStream) next.toolStream = toolStream
         if (commandInvocation) next.commandInvocation = commandInvocation
         if (file) next.file = file
+        if (parentToolId) next.parentToolId = parentToolId
         blocks.push(next)
       }
       return {
@@ -441,7 +465,9 @@ export const useChatStore = create<ChatStore>((set) => ({
                   toolId: event.toolId,
                   toolStream: event.toolStream,
                   commandInvocation: event.commandInvocation,
-                  file: event.file
+                  file: event.file,
+                  parentToolId: event.parentToolId,
+                  newPart: event.newPart
                 })
               }
             : b

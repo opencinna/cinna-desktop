@@ -107,6 +107,15 @@ export interface RunDeltaEvent {
    * each file delta is a complete attachment.
    */
   file?: MessagePartFile
+  /** A subagent's fragment: the Agent tool call it runs under (see `MessagePart.parentToolId`). */
+  parentToolId?: string
+  /**
+   * Start a new part with this fragment even where "continue the last part of
+   * the same lane" would join it to an earlier one: the main process saw it
+   * come from a different source part, with another lane's parts in between.
+   * Set only then (`StreamPartsAccumulator`); the renderer store honours it.
+   */
+  newPart?: true
 }
 
 /**

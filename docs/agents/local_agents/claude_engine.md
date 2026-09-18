@@ -294,6 +294,19 @@ subagent's launch text is missing**, because the CLI writes it and it is not on 
 that ends with its call still open is closed with a line saying how it ended ("Subagent failed.",
 "Subagent stopped.", "Subagent disconnected.").
 
+**Inline means under its call, not mixed into the agent's words.** The child's frames carry
+`_meta.claudeCode.parentToolUseId`, and the translator files them as a *lane* of that `Agent` call
+([The Agent Turn](agent_turn.md#the-translator-maintains-a-cumulative-message-the-accumulator-computes-the-delta)):
+
+- the agent's own paragraph stays one part while the subagent's tool calls stream beside it. Before
+  lanes, the first child tool call cut the agent's sentence mid-word
+- the subagent's text is its report to the agent, so it is never the turn's answer, the chat preview
+  or the title source
+- the transcript draws the lane as a nested sub-thread under the `Agent` call, named by the call's
+  `description`, with its `prompt` as the ask line; a subagent's permission ask or question is
+  answered there, and holds the thread open until it is
+  ([Conversation UI](../../chat/conversation_ui/conversation_ui.md#subagent-work-in-the-transcript))
+
 ### A message sent mid-turn goes into the running turn, between tool calls
 
 The adapter advertises the ACP steering extension, so a message the user sends to this agent while its turn runs is taken into that turn instead of waiting for it to end, and it is saved in the transcript where it landed. The desktop asks with `idleBehavior: promptRequired` — with no turn running, start nothing — which is the only idle behaviour the adapter accepts.
@@ -493,7 +506,7 @@ spawn: <this app, ELECTRON_RUN_AS_NODE=1> <claude-agent-acp>/dist/index.js
    │    after EVERY new and load, on BOTH branches: a user's or a folder's
    │    defaultMode wins otherwise, and options.permissionMode is ignored
    └─ session/prompt
-        session/update ─────────► acpMessages ──► parts
+        session/update ─────────► acpMessages ──► parts   (a child session's frames: a lane of their Agent call)
         session/request_permission ──► standing grants
         │                              └ covered → allow_once, silently
         │                              └ else → parked block → answered

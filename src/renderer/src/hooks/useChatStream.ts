@@ -53,7 +53,9 @@ export function useRunEventHandler(): (chatId: string, event: RunEvent) => void 
             event.toolId,
             event.toolStream,
             event.commandInvocation,
-            event.file
+            event.file,
+            event.parentToolId,
+            event.newPart
           )
           break
         case 'tool_use':

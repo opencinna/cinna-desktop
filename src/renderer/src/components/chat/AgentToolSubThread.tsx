@@ -2,7 +2,9 @@ import { useContext, useEffect, useState } from 'react'
 import { Bot, ChevronRight, Loader2, X } from 'lucide-react'
 import type { MessagePart } from '../../../../shared/messageParts'
 import { presetForAgentId } from '../../utils/agentColors'
-import { AgentContribution } from './AgentContribution'
+import { AgentContribution, AskLine } from './AgentContribution'
+import { isPermissionRequestTool } from '../../../../shared/localAgentRequests'
+import { isAskUserQuestionTool } from '../../utils/askUserQuestion'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { TranscriptVisibleContext, useTranscriptDisclosure } from './transcriptExpansion'
 
@@ -19,7 +21,29 @@ interface AgentToolSubThreadProps {
   errorText?: string
   verbose?: boolean
   renderRequest?: (part: MessagePart, decision?: string) => React.JSX.Element | null
+  /**
+   * An ask inside is waiting on the user: the thread is open, and stays open
+   * even if the user collapsed it, until the ask is settled — otherwise the
+   * only way to answer it would be hidden.
+   */
+  holdOpen?: boolean
+  /** Passed to {@link AgentContribution}: a nested group drawn in place of a part. */
+  renderNested?: (index: number) => React.JSX.Element | null
   onStop?: () => Promise<unknown>
+}
+
+/**
+ * What the header counts as a step: calls and what the agent said or thought —
+ * not a call's output, and not a permission or question ask (by their reserved
+ * names) or its decision, which are the user's part of the thread.
+ */
+function countSteps(parts: MessagePart[]): number {
+  return parts.filter(
+    (part) =>
+      (part.kind === 'tool' && !isPermissionRequestTool(part.toolName) && !isAskUserQuestionTool(part.toolName)) ||
+      part.kind === 'text' ||
+      part.kind === 'thinking'
+  ).length
 }
 
 /**
@@ -28,7 +52,8 @@ interface AgentToolSubThreadProps {
  * {status}`) over an inset, hash-colored {@link AgentContribution}. Auto-
  * expands while the agent is streaming and collapses on completion (respecting
  * verbose mode), so the user watches the active agent work and can drill into
- * a finished one on demand.
+ * a finished one on demand. A failed one never collapses and says "error" in
+ * the header in compact mode too; a pending ask inside holds it open.
  */
 export function AgentToolSubThread({
   agentName,
@@ -40,11 +65,16 @@ export function AgentToolSubThread({
   errorText,
   verbose,
   renderRequest,
+  holdOpen,
+  renderNested,
   onStop
 }: AgentToolSubThreadProps): React.JSX.Element {
-  const [expanded, setExpanded, setAutoExpanded] = useTranscriptDisclosure(
-    !!isStreaming || !!verbose
+  // A failed thread opens and stays open, in every mode: its error is inside,
+  // and a failure folded away reads as a success (UX rule 6).
+  const [userExpanded, setExpanded, setAutoExpanded] = useTranscriptDisclosure(
+    !!isStreaming || !!verbose || status === 'error'
   )
+  const expanded = userExpanded || !!holdOpen
   // The body stays mounted while closed, so blocks inside must know it is hidden.
   const visible = useContext(TranscriptVisibleContext)
 
@@ -61,16 +91,16 @@ export function AgentToolSubThread({
       setAutoExpanded(true)
       setWasStreaming(true)
     } else if (!isStreaming && wasStreaming) {
-      setAutoExpanded(verbose ? true : false)
+      setAutoExpanded(!!verbose || status === 'error')
       setWasStreaming(false)
     }
-  }, [isStreaming, wasStreaming, verbose, setAutoExpanded])
+  }, [isStreaming, wasStreaming, verbose, status, setAutoExpanded])
 
   // Color by stable agent id when known so a given agent shows the same color
   // whether the model called it (here) or the user addressed it directly
   // (switchboard); fall back to the display name for legacy rows.
   const color = presetForAgentId(agentId ?? agentName)
-  const steps = parts.length
+  const steps = countSteps(parts)
   const statusLabel =
     status === 'pending' ? 'running' : status === 'error' ? 'error' : 'done'
 
@@ -81,7 +111,15 @@ export function AgentToolSubThread({
           of transcript when the specialist starts, fails to stop, or ends. */}
       <div className="flex items-center min-w-0">
       <button
-        onClick={() => setExpanded((v) => !v)}
+        type="button"
+        aria-expanded={expanded}
+        // Held open by an ask: a click here would be stored and snap the thread
+        // shut the moment the ask is answered (UX rule 1), so it does nothing.
+        aria-disabled={holdOpen || undefined}
+        title={holdOpen ? 'Answer the request first' : undefined}
+        onClick={() => {
+          if (!holdOpen) setExpanded((v) => !v)
+        }}
         className="flex items-center gap-1.5 px-1.5 py-1 rounded-md hover:bg-gradient-to-r hover:from-[var(--color-bg-hover)] hover:to-transparent transition-colors min-w-0 text-left"
       >
         <ChevronRight
@@ -118,6 +156,13 @@ export function AgentToolSubThread({
             )}
           </>
         )}
+        {/* Compact mode shows no status, except a failure: it must not read as done. */}
+        {!verbose && status === 'error' && (
+          <span className="inline-flex items-center gap-0.5 text-[11px] text-[var(--color-danger)] whitespace-nowrap shrink-0">
+            <X size={11} />
+            {statusLabel}
+          </span>
+        )}
       </button>
       {isStreaming && onStop && (
         <button type="button" disabled={stopping} aria-label={`Stop ${agentName}`}
@@ -147,8 +192,12 @@ export function AgentToolSubThread({
             style={{ borderLeft: `2px solid ${color.border}` }}
           >
             {parts.length === 0 && status === 'pending' ? (
-              <div className="text-[11px] text-[var(--color-text-muted)] italic">
-                {askMessage ? `Working on: ${askMessage}` : 'Working…'}
+              // The prompt on the same ↳ line `AgentContribution` draws it on,
+              // so it stays put when the first part arrives and takes the
+              // "Working…" line's place below it.
+              <div className="space-y-2">
+                {askMessage && <AskLine text={askMessage} />}
+                <div className="text-[11px] text-[var(--color-text-muted)] italic">Working…</div>
               </div>
             ) : (
               <AgentContribution
@@ -158,6 +207,7 @@ export function AgentToolSubThread({
                 isStreaming={isStreaming}
                 verbose={verbose}
                 renderRequest={renderRequest}
+                renderNested={renderNested}
               />
             )}
             {errorText && (

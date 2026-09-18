@@ -19,6 +19,8 @@ import type { SessionNotification } from '@agentclientprotocol/sdk'
 import { AcpMessageStream, describeAcpToolCall } from './acpMessages'
 import {
   KIND_METADATA_KEY,
+  PARENT_TOOL_ID_METADATA_KEY,
+  StreamPartsAccumulator,
   TOOL_ID_METADATA_KEY,
   TOOL_INPUT_METADATA_KEY,
   TOOL_NAME_METADATA_KEY,
@@ -416,6 +418,153 @@ describe('Claude', () => {
     const stream = new AcpMessageStream({ launcher: 'claude' })
     expect(stream.applyExt(fixture.method!, fixture.params!)).toEqual({})
     expect(stream.applyExt('_session/goal', { goal: 'anything' })).toEqual({})
+  })
+})
+
+describe('subagent lanes', () => {
+  const PARENT = 'toolu_agent'
+  const lane = { claudeCode: { parentToolUseId: PARENT } }
+  const agentCall = {
+    sessionId: 'ses_parent',
+    update: {
+      sessionUpdate: 'tool_call',
+      toolCallId: PARENT,
+      title: 'Task',
+      status: 'pending',
+      rawInput: { description: 'check pg', prompt: 'Confirm pg' },
+      _meta: { claudeCode: { toolName: 'Agent' } }
+    }
+  } as unknown as SessionNotification
+  const childTool = (status?: string, output?: string): SessionNotification =>
+    ({
+      sessionId: 'ses_child',
+      update: {
+        sessionUpdate: status ? 'tool_call_update' : 'tool_call',
+        toolCallId: 'toolu_child_bash',
+        ...(status ? { status } : { title: 'Terminal', rawInput: { command: 'psql -c 1' } }),
+        ...(output ? { rawOutput: output } : {}),
+        _meta: { claudeCode: { toolName: 'Bash', ...lane.claudeCode } }
+      }
+    }) as unknown as SessionNotification
+  const childChunk = (text: string): SessionNotification =>
+    ({
+      sessionId: 'ses_child',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: 'msg_child',
+        content: { type: 'text', text },
+        _meta: lane
+      }
+    }) as unknown as SessionNotification
+  const laneOf = (part: PartLike): unknown => part.metadata?.[PARENT_TOOL_ID_METADATA_KEY]
+
+  /** The real session: the parent's sentence, cut mid-word by its subagent's work. */
+  const interleaved = (): SessionNotification[] => [
+    chunk('msg_parent', 'Launching a check.'),
+    agentCall,
+    chunk('msg_parent2', '…(the Florian Rockenhä'),
+    childTool(),
+    chunk('msg_parent2', 'user /'),
+    childTool('completed', 'ok'),
+    childChunk('Confirmed "pg".'),
+    chunk('msg_parent2', ' Traffective metric)…')
+  ]
+
+  it('keeps the parent’s text one part while child frames interleave', () => {
+    const stream = new AcpMessageStream({ launcher: 'claude' })
+    const messages = new Map<string, PartLike[]>()
+    for (const n of interleaved()) {
+      const update = stream.apply(n)
+      if (update.message) messages.set(update.message.messageId, update.message.parts)
+    }
+    const parent = messages.get('msg_parent2')!
+    const own = parent.filter((p) => kindOf(p) === 'text' && !laneOf(p))
+    expect(own.map((p) => p.text)).toEqual(['…(the Florian Rockenhäuser / Traffective metric)…'])
+    // Every child part carries the lane, and none of the parent's does.
+    const child = [...messages.values()].flat().filter((p) => laneOf(p) === PARENT)
+    expect(child.map((p) => kindOf(p))).toEqual(['tool', 'tool_result', 'text'])
+    expect(child.map((p) => toolIdOf(p))).toEqual(['toolu_child_bash', 'toolu_child_bash', undefined])
+    // Filed under the message that owns the Agent call, not the child's own id.
+    expect(messages.has('msg_child')).toBe(false)
+    expect(messages.get('msg_parent')!.filter((p) => laneOf(p) === PARENT)).toHaveLength(3)
+  })
+
+  it('still starts a new part after a tool call of the parent’s own', () => {
+    const stream = new AcpMessageStream({ launcher: 'claude' })
+    stream.apply(chunk('msg_p', 'Before'))
+    stream.apply(childTool())
+    stream.apply(chunk('msg_p', ' still before.'))
+    stream.apply({
+      sessionId: 'ses_parent',
+      update: { sessionUpdate: 'tool_call', toolCallId: 'toolu_own', title: 'Read', _meta: { claudeCode: { toolName: 'Read' } } }
+    } as unknown as SessionNotification)
+    const parts = stream.apply(chunk('msg_p', 'After.')).message!.parts
+    expect(parts.filter((p) => kindOf(p) === 'text' && !laneOf(p)).map((p) => p.text)).toEqual([
+      'Before still before.',
+      'After.'
+    ])
+  })
+
+  it('splits the child’s own text around the child’s tool call', () => {
+    const stream = new AcpMessageStream({ launcher: 'claude' })
+    stream.apply(agentCall)
+    stream.apply(childChunk('Looking.'))
+    stream.apply(childTool())
+    const parts = stream.apply(childChunk('Found it.')).message!.parts
+    expect(parts.filter((p) => laneOf(p) && kindOf(p) === 'text').map((p) => p.text)).toEqual(['Looking.', 'Found it.'])
+  })
+
+  it('files a subagent tool’s permission ask, question and decisions in its lane, so the parent’s text stays whole', () => {
+    // Mutation: drop the lane from `askPermission`/`settle` → the parent's sentence splits around the ask.
+    const stream = new AcpMessageStream({ launcher: 'claude' })
+    const acc = new StreamPartsAccumulator()
+    const port = { postMessage: (): void => {} }
+    const feed = (update: { message?: { messageId: string; parts: PartLike[] } }): void => { if (update.message) acc.ingestMessage(update.message, port) }
+    feed(stream.apply(agentCall))
+    feed(stream.apply(chunk('msg_p', 'Waiting on')))
+    feed(stream.apply(childTool()))
+    feed(stream.askPermission('per_child', { action: 'bash', resources: ['psql -c 1'], savable: [], callId: 'toolu_child_bash' }))
+    feed(stream.askQuestion('que_child', [{ question: 'Which db?', header: 'db', options: [], multiSelect: false }], 'toolu_child_bash'))
+    feed(stream.settlePermission('per_child', 'Allowed once.'))
+    feed(stream.settleQuestion('que_child', 'Answered: pg'))
+    feed(stream.apply(chunk('msg_p', ' the subagent.')))
+    const parts = acc.snapshotParts()
+    expect(parts.filter((p) => p.kind === 'text' && !p.parentToolId).map((p) => p.text)).toEqual(['Waiting on the subagent.'])
+    expect(parts.filter((p) => p.toolId === 'per_child' || p.toolId === 'que_child').map((p) => [p.kind, p.toolId, p.parentToolId])).toEqual([
+      ['tool', 'per_child', PARENT],
+      ['tool', 'que_child', PARENT],
+      ['tool_result', 'per_child', PARENT],
+      ['tool_result', 'que_child', PARENT]
+    ])
+  })
+
+  it('leaves the parent’s own asks in the main lane', () => {
+    const stream = new AcpMessageStream({ launcher: 'claude' })
+    stream.apply(agentCall)
+    const asked = stream.askPermission('per_own', { action: 'bash', resources: ['ls'], savable: [], callId: PARENT })
+    const settled = stream.settlePermission('per_own', 'Allowed once.')
+    for (const update of [asked, settled]) {
+      expect(update.message!.parts.filter((p) => toolIdOf(p) === 'per_own').every((p) => !laneOf(p))).toBe(true)
+    }
+  })
+
+  it('persists one parent paragraph and an answer without the child’s words', () => {
+    const stream = new AcpMessageStream({ launcher: 'claude' })
+    const acc = new StreamPartsAccumulator()
+    const deltas: { kind: string; text: string; parentToolId?: string }[] = []
+    const port = { postMessage: (d: { kind: string; text: string; parentToolId?: string }): void => { deltas.push(d) } }
+    for (const n of interleaved()) {
+      const update = stream.apply(n)
+      if (update.message) acc.ingestMessage(update.message, port)
+    }
+    const parts = acc.snapshotParts()
+    expect(parts.filter((p) => p.kind === 'text' && !p.parentToolId).map((p) => p.text)).toEqual([
+      'Launching a check.',
+      '…(the Florian Rockenhäuser / Traffective metric)…'
+    ])
+    expect(parts.filter((p) => p.parentToolId === PARENT).map((p) => p.kind)).toEqual(['tool', 'tool_result', 'text'])
+    expect(acc.answerText()).toBe('Launching a check.…(the Florian Rockenhäuser / Traffective metric)…')
+    expect(deltas.filter((d) => d.parentToolId === PARENT).map((d) => d.kind)).toEqual(['tool', 'tool_result', 'text'])
   })
 })
 

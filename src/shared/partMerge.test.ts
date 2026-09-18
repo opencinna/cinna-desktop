@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { continuesPart, type PartMergeKey } from './partMerge'
+import { continuesPart, continuingPartIndex, type PartMergeKey } from './partMerge'
 
 const cases: [string, PartMergeKey, PartMergeKey, boolean][] = [
   ['text continues text', { kind: 'text' }, { kind: 'text' }, true],
@@ -53,5 +53,35 @@ const cases: [string, PartMergeKey, PartMergeKey, boolean][] = [
 describe('continuesPart', () => {
   it.each(cases)('%s', (_name, last, next, expected) => {
     expect(continuesPart(last, next)).toBe(expected)
+  })
+})
+
+describe('continuingPartIndex lanes', () => {
+  it('continues the last part of the same lane, skipping other lanes', () => {
+    const parts: PartMergeKey[] = [
+      { kind: 'text' },
+      { kind: 'tool', toolName: 'Bash', toolId: 'b1', parentToolId: 'agent-1' },
+      { kind: 'tool_result', toolId: 'b1', toolStream: 'stdout', parentToolId: 'agent-1' },
+      { kind: 'text', parentToolId: 'agent-1' }
+    ]
+    expect(continuingPartIndex(parts, { kind: 'text' })).toBe(0)
+    expect(continuingPartIndex(parts, { kind: 'text', parentToolId: 'agent-1' })).toBe(3)
+    expect(continuingPartIndex(parts, { kind: 'text', parentToolId: 'agent-2' })).toBe(-1)
+  })
+
+  it('treats an undefined entry as a main-lane break', () => {
+    const parts = [{ kind: 'text' } as PartMergeKey, undefined, { kind: 'text', parentToolId: 'a' } as PartMergeKey]
+    expect(continuingPartIndex(parts, { kind: 'text' })).toBe(-1)
+    expect(continuingPartIndex(parts, { kind: 'text', parentToolId: 'a' })).toBe(2)
+  })
+
+  it('never merges across lanes', () => {
+    expect(continuesPart({ kind: 'text' }, { kind: 'text', parentToolId: 'a' })).toBe(false)
+  })
+
+  it('is the plain last-part rule when no lane is set', () => {
+    const parts: PartMergeKey[] = [{ kind: 'text' }, { kind: 'tool', toolName: 'Bash' }]
+    expect(continuingPartIndex(parts, { kind: 'text' })).toBe(-1)
+    expect(continuingPartIndex(parts, { kind: 'tool', toolName: 'Bash' })).toBe(1)
   })
 })

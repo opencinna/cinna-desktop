@@ -46,7 +46,18 @@
  *   `(messageId|artifactId, partIndex)` is one persisted notice row.
  *
  * `answerText()` returns concat of `text` and `command_result` parts — used as
- * the message preview/fallback content (`messages.content`).
+ * the message preview/fallback content (`messages.content`). Parts of a
+ * subagent's lane are left out of it.
+ *
+ * **Lanes.** A part with `cinna.parent_tool_id` is a subagent's work under that
+ * Agent call. It carries the id as `parentToolId`, and "continue the last part"
+ * looks only at the last part of the same lane, so a subagent's tool calls
+ * landing between two of the agent's own text fragments do not split its
+ * paragraph (`shared/partMerge.ts`). Skipping is allowed only for a fragment
+ * of the same source part (`idPrefix:idx`) that last fed the target: a new
+ * source part after other lanes' parts starts a part of its own, and its
+ * delta says so with `newPart: true`, since the renderer cannot see sources.
+ * The boundary below applies to every lane.
  *
  * **Replay.** A message ingested with `{ replay: true }` may repeat parts the
  * stream already delivered under another message id — the Cinna backend ends a
@@ -75,6 +86,11 @@ export const TOOL_INPUT_METADATA_KEY = 'cinna.tool_input'
 export const TOOL_ID_METADATA_KEY = 'cinna.tool_id'
 export const TOOL_STREAM_METADATA_KEY = 'cinna.tool_stream'
 export const COMMAND_INVOCATION_METADATA_KEY = 'cinna.command_invocation'
+/**
+ * The Agent tool call a part runs under — set on a subagent's parts (ACP
+ * child-session frames) so they form a lane of their own. See `partMerge.ts`.
+ */
+export const PARENT_TOOL_ID_METADATA_KEY = 'cinna.parent_tool_id'
 // Agent-attachment FilePart metadata (see backend a2a_event_mapper.py).
 export const FILE_ID_METADATA_KEY = 'cinna.file_id'
 export const FILE_NAME_METADATA_KEY = 'cinna.file_name'
@@ -159,6 +175,11 @@ export function partCommandInvocationOf(part: PartLike): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined
 }
 
+export function partParentToolIdOf(part: PartLike): string | undefined {
+  const v = part.metadata?.[PARENT_TOOL_ID_METADATA_KEY]
+  return typeof v === 'string' && v.length > 0 ? v : undefined
+}
+
 /**
  * Read the agent-attachment metadata off an A2A FilePart. Returns `undefined`
  * (so the part is skipped) when there's no `cinna.file_id` — without it the
@@ -238,6 +259,12 @@ export class StreamPartsAccumulator {
    */
   private seenFileIds = new Set<string>()
   private parts: MessagePart[] = []
+  /**
+   * Accumulated part index → the source key (`idPrefix:idx`) that last fed it.
+   * Lets the lane-skip continue a part only from the source part it was built
+   * from (see "Lanes" in the module note).
+   */
+  private partSource = new Map<number, string>()
   /** Parts below this index are closed to "continue the last part" merging. */
   private boundary = 0
   private answer = ''
@@ -309,7 +336,9 @@ export class StreamPartsAccumulator {
       // command (`/run:*` synthesized tool calls; all `command_result` parts).
       // Absent → LLM-initiated tool call, unchanged routing.
       const commandInvocation = partCommandInvocationOf(part)
-      this.appendToList(kind, delta, toolName, toolInput, toolId, toolStream, commandInvocation)
+      // A subagent's part: its own lane, never the answer (see the module note).
+      const parentToolId = partParentToolIdOf(part)
+      const newPart = this.appendToList(key, kind, delta, toolName, toolInput, toolId, toolStream, commandInvocation, parentToolId)
       port.postMessage({
         type: 'delta',
         kind,
@@ -318,7 +347,9 @@ export class StreamPartsAccumulator {
         toolInput,
         toolId,
         toolStream,
-        commandInvocation
+        commandInvocation,
+        ...(parentToolId ? { parentToolId } : {}),
+        ...(newPart ? { newPart } : {})
       })
 
       if (toolName && toolInput && !this.loggedToolCalls.has(key)) {
@@ -380,19 +411,40 @@ export class StreamPartsAccumulator {
     this.opts.onFile?.({ status: 'attached', fileId: file.fileId, filename: file.filename })
   }
 
+  /**
+   * Returns `true` only when a new part was started where the lane-skip would
+   * have continued an earlier one — the renderer's merge cannot see source
+   * keys, so the delta carries the decision (`RunDeltaEvent.newPart`).
+   */
   private appendToList(
+    source: string,
     kind: ContentKind,
     delta: string,
     toolName?: string,
     toolInput?: Record<string, unknown>,
     toolId?: string,
     toolStream?: ToolStream,
-    commandInvocation?: string
-  ): void {
-    let index = continuingPartIndex(this.parts, { kind, toolName, toolId, toolStream })
+    commandInvocation?: string,
+    parentToolId?: string
+  ): true | undefined {
+    let index = continuingPartIndex(this.parts, { kind, toolName, toolId, toolStream, parentToolId })
     // Past a boundary only a tool call named by id may still grow (its input
     // can fill in later); text on the far side starts a part of its own.
     if (index >= 0 && index < this.boundary && !(kind === 'tool' && toolId)) index = -1
+    // Skipping another lane's parts continues a part only from the source part
+    // that built it: two of the agent's messages with only subagent work
+    // between them are two parts, not one glued sentence. With no lanes
+    // nothing is ever skipped, so this never fires.
+    let newPart: true | undefined
+    if (
+      index >= 0 &&
+      !(kind === 'tool' && toolId) &&
+      this.partSource.get(index) !== source &&
+      this.parts.slice(index + 1).some((part) => part.parentToolId !== parentToolId)
+    ) {
+      index = -1
+      newPart = true
+    }
     const last = this.parts[index]
     if (last) {
       last.text += delta
@@ -402,6 +454,7 @@ export class StreamPartsAccumulator {
       if (toolInput && !last.toolInput) last.toolInput = toolInput
       if (toolId && !last.toolId) last.toolId = toolId
       if (commandInvocation && !last.commandInvocation) last.commandInvocation = commandInvocation
+      this.partSource.set(index, source)
     } else {
       const next: MessagePart = { kind, text: delta }
       if (toolName) next.toolName = toolName
@@ -409,12 +462,16 @@ export class StreamPartsAccumulator {
       if (toolId) next.toolId = toolId
       if (toolStream) next.toolStream = toolStream
       if (commandInvocation) next.commandInvocation = commandInvocation
+      if (parentToolId) next.parentToolId = parentToolId
+      this.partSource.set(this.parts.length, source)
       this.parts.push(next)
     }
     // `command_result` is the substantive answer for slash-command turns
     // (the agent stream did not run), so it joins `text` in the preview
-    // string used for chat list snippets and title generation.
-    if (kind === 'text' || kind === 'command_result') this.answer += delta
+    // string used for chat list snippets and title generation. A subagent's
+    // text is its report to the agent, not the agent's answer.
+    if (!parentToolId && (kind === 'text' || kind === 'command_result')) this.answer += delta
+    return newPart
   }
 
   /** How many parts the turn has so far — the position a mid-turn user message lands at. */

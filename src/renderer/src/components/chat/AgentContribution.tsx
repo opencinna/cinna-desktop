@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react'
 import { Bot, CornerDownRight } from 'lucide-react'
 import type { MessagePart } from '../../../../shared/messageParts'
 import { presetForAgentId } from '../../utils/agentColors'
@@ -33,6 +34,57 @@ interface AgentContributionProps {
    */
   verbose?: boolean
   renderRequest?: (part: MessagePart, decision?: string) => React.JSX.Element | null
+  /**
+   * A node drawn at `parts[index]` instead of the part — the caller's nested
+   * group there (a delegated agent's own subagent, `subagentParts.ts`), plain
+   * and never folded into a dots group. `null` draws the part as usual.
+   */
+  renderNested?: (index: number) => React.JSX.Element | null
+}
+
+/**
+ * The task that went to the agent, clamped to two lines: a long prompt is a
+ * wall of text above the work it asked for (UX rule 2). "Show more" sits under
+ * the text, so opening it grows the line downward and moves nothing above it.
+ * The toggle exists only when the text actually overflows two lines.
+ */
+export function AskLine({ text }: { text: string }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const [overflows, setOverflows] = useState(false)
+  const ref = useRef<HTMLSpanElement>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || expanded) return
+    const measure = (): void => setOverflows(el.scrollHeight > el.clientHeight + 1)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [text, expanded])
+  return (
+    <div className="flex items-start gap-1 text-[11px] text-[var(--color-text-muted)] italic">
+      <CornerDownRight size={11} className="mt-0.5 shrink-0" />
+      <div className="min-w-0">
+        {/* Never `block` beside `line-clamp-2`: the clamp needs `display: -webkit-box`,
+            and in the built CSS `block` comes later and wins, so nothing is clamped
+            and "Show more" never appears. jsdom has no CSS, so no test sees it. */}
+        <span ref={ref} data-testid="agent-ask" className={`break-words whitespace-pre-wrap ${expanded ? 'block' : 'line-clamp-2'}`}>
+          {text}
+        </span>
+        {(overflows || expanded) && (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((v) => !v)}
+            className="not-italic font-medium text-[var(--color-accent)] hover:underline"
+          >
+            {expanded ? 'Show less' : 'Show more'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -51,7 +103,8 @@ export function AgentContribution({
   askMessage,
   isStreaming,
   verbose,
-  renderRequest
+  renderRequest,
+  renderNested
 }: AgentContributionProps): React.JSX.Element {
   const color = agentName || agentId ? presetForAgentId(agentId ?? agentName ?? '') : null
   const lastIdx = parts.length - 1
@@ -61,6 +114,11 @@ export function AgentContribution({
   parts.forEach((p, idx) => {
     const k = `part-${idx}`
     const live = isStreaming && idx === lastIdx
+    const nestedNode = renderNested?.(idx)
+    if (nestedNode) {
+      renderNodes.push({ slot: 'plain', key: k, node: nestedNode })
+      return
+    }
     if (cli.consumed.has(idx)) return
     if (renderRequest && p.kind === 'tool') {
       const decision = parts.find((part) => part.kind === 'tool_result' && part.toolId === p.toolId)?.text
@@ -173,12 +231,7 @@ export function AgentContribution({
         </div>
       )}
 
-      {askMessage && (
-        <div className="flex items-start gap-1 text-[11px] text-[var(--color-text-muted)] italic">
-          <CornerDownRight size={11} className="mt-0.5 shrink-0" />
-          <span className="break-words whitespace-pre-wrap">{askMessage}</span>
-        </div>
-      )}
+      {askMessage && <AskLine text={askMessage} />}
 
       {groupConsecutiveCollapsibles(renderNodes)}
     </div>

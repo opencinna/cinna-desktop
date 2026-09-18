@@ -302,6 +302,18 @@ describe('a turn', () => {
     ])
   })
 
+  it('leaves a subagent’s words out of the turn’s text when the agent said nothing itself', async () => {
+    // Mutation: fall back to every part's text → the child's report is the turn's preview.
+    const lane = { claudeCode: { parentToolUseId: 'call_agent' } }
+    const w = world({ script: { prompt: { emit: [
+      { kind: 'update', update: { sessionUpdate: 'tool_call', toolCallId: 'call_agent', title: 'Agent', kind: 'other', status: 'in_progress', _meta: { claudeCode: { toolName: 'Agent' } } } },
+      { kind: 'update', update: { sessionUpdate: 'agent_message_chunk', messageId: 'child', content: { type: 'text', text: 'CHILD REPORT' }, _meta: lane } }
+    ] } } })
+    const result = await w.run()
+    expect(result.parts.some((part) => part.parentToolId === 'call_agent' && part.text === 'CHILD REPORT')).toBe(true)
+    expect(result.text).not.toContain('CHILD REPORT')
+  })
+
   it('runs in the agent’s folder, with the environment the launcher named and nothing else', async () => {
     const w = world({ script: SAYS_HELLO })
     await w.run()

@@ -118,7 +118,7 @@ The persisted user content equals the optimistic `content` verbatim (`prepareAge
 ## Renderer Components
 
 - `src/renderer/src/components/chat/MessageStream.tsx` — Renders the message list and owns the scroll container; bottom-following is delegated to `useStickToBottom` (see [Transcript Scrolling tech](../conversation_ui/scroll_following_tech.md)), which also renders the "Jump to latest" pill state
-- `src/renderer/src/components/chat/MessageBubble.tsx` — Renders a single message with react-markdown + remark-gfm + rehype-highlight; info icon shows metadata popup on hover
+- `src/renderer/src/components/chat/MessageBubble.tsx` — Renders a single message with react-markdown + remark-gfm + rehype-highlight (plus remark-breaks for a user bubble, so a single newline is a line break); info icon shows metadata popup on hover
 - `src/renderer/src/components/chat/ToolCallBlock.tsx` — Animated collapsible block: provider badge shown first (accent-colored with Plug icon) followed by muted tool name; chevron rotates on expand; CSS grid `gridTemplateRows` animation (150ms); shimmer progress bar on top during pending state; structured JSON input/result view with MCP content block unwrapping
 - `src/renderer/src/components/chat/ChatInput.tsx` — Input textarea; controls row below: [+] config on left, model/MCP center, send on right
 

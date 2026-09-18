@@ -15,6 +15,11 @@ export interface PartMergeKey {
   toolName?: string
   toolId?: string
   toolStream?: ToolStream
+  /**
+   * The lane a part belongs to: a subagent's work carries the id of the Agent
+   * call that launched it; the agent's own parts carry none (the main lane).
+   */
+  parentToolId?: string
 }
 
 /**
@@ -33,6 +38,8 @@ export interface PartMergeKey {
  */
 export function continuesPart(last: PartMergeKey, next: PartMergeKey): boolean {
   if (last.kind !== next.kind || next.kind === 'file') return false
+  // Two lanes never merge: a subagent's text is not the agent's own.
+  if (last.parentToolId !== next.parentToolId) return false
   if (next.kind === 'tool_result') {
     return last.toolId === next.toolId && last.toolStream === next.toolStream
   }
@@ -43,12 +50,21 @@ export function continuesPart(last: PartMergeKey, next: PartMergeKey): boolean {
 
 /** Stable tool identity survives intervening permission and decision blocks.
  * Results retain their append order so stdout/stderr chronology is preserved.
+ *
+ * **Lanes.** A subagent's parts stream in between the agent's own, so "the
+ * last part" means the last part *of the same lane* (same `parentToolId`;
+ * none is the main lane). Parts of other lanes are skipped, so a paragraph
+ * the agent is still writing is not cut by its subagent's tool calls. An
+ * `undefined` entry — a caller's non-part block — counts as the main lane.
+ * When nobody sets `parentToolId` everything is one lane and this is the
+ * plain "continue the last part" rule.
  */
 export function continuingPartIndex(parts: readonly (PartMergeKey | undefined)[], next: PartMergeKey): number {
   if (next.kind === 'tool' && next.toolId) {
     const index = parts.findIndex((part) => part?.kind === 'tool' && part.toolId === next.toolId && continuesPart(part, next))
     if (index >= 0) return index
   }
-  const index = parts.length - 1
-  return parts[index] && continuesPart(parts[index]!, next) ? index : -1
+  let index = parts.length - 1
+  while (index >= 0 && parts[index]?.parentToolId !== next.parentToolId) index -= 1
+  return index >= 0 && parts[index] && continuesPart(parts[index]!, next) ? index : -1
 }

@@ -2,10 +2,14 @@ import { memo, useContext, useMemo, useState } from 'react'
 import { Info, Bot, ArrowRight, X } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
 import { MetaPopup } from './MetaPopup'
 import { FileRefContext, chatMarkdownComponents } from './fileRefs'
 import { repairNestedFences } from '../../utils/nestedFences'
+
+const REMARK_PLUGINS = [remarkGfm]
+const USER_REMARK_PLUGINS = [remarkGfm, remarkBreaks]
 
 /**
  * Memoized markdown renderer. Two reasons it's split out:
@@ -16,17 +20,23 @@ import { repairNestedFences } from '../../utils/nestedFences'
  *    streaming — re-highlighting every fenced block on every token is the main
  *    streaming-jank source, and highlighting an incomplete code block isn't
  *    useful anyway. The full pass runs once the turn finalizes.
+ *
+ * `breaks` turns a single newline into a line break. Only a user's message
+ * gets it: they typed Shift+Enter for a new line and expect one, while a
+ * model writes Markdown and relies on a lone newline being a soft wrap.
  */
 const MarkdownContent = memo(function MarkdownContent({
   content,
-  highlight
+  highlight,
+  breaks = false
 }: {
   content: string
   highlight: boolean
+  breaks?: boolean
 }): React.JSX.Element {
   return (
     <Markdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={breaks ? USER_REMARK_PLUGINS : REMARK_PLUGINS}
       rehypePlugins={highlight ? [rehypeHighlight] : []}
       components={chatMarkdownComponents}
     >
@@ -121,7 +131,7 @@ export function MessageBubble({
           >
             <div className={animate ? 'anim-user-bubble-content' : ''}>
               <FileRefContext.Provider value={fileRefs}>
-                <MarkdownContent content={markdown} highlight />
+                <MarkdownContent content={markdown} highlight breaks />
               </FileRefContext.Provider>
             </div>
             {addressedAgentName && (
