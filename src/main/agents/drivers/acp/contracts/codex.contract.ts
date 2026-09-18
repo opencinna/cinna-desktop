@@ -38,7 +38,7 @@ export type ContractSurface = 'CLI' | 'provider request' | 'env var' | 'app-serv
  * an enum: this file is read under a type-stripping Node.
  */
 export const FLOW_STEPS = {
-  A: 'plain chat on the Default runtime, then its AI title',
+  A: 'plain chat on the Default runtime, then its title (the engine’s own on Codex, Cinna’s AI title elsewhere)',
   B: 'a specialist @-added mid-chat, called through Cinna’s MCP server',
   C: 'continuity: a later turn remembers the first',
   D: 'a specialist attached before the first turn',
@@ -158,6 +158,13 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     feature: 'Chat-mode instructions and AI-function prompts are lost, or leak between sessions sharing one warm process.',
     flow: { steps: ['A'] }
   },
+  {
+    id: 'codex.session.info-title', area: 'session lifecycle', surface: 'ACP field', name: 'session_info_update.title',
+    expectation: 'After a thread’s first prompt the session reports `session_info_update` with a `title` twice: first the prompt text verbatim (a placeholder), then the title the CLI’s own title request produced.',
+    owners: ['src/main/agents/drivers/acp/acpSessionTitle.ts#isPromptPlaceholder', 'src/main/agents/drivers/acp/acpSessionTitle.ts#sessionInfoTitle', 'src/main/services/chatTitleService.ts#applyEngineTitle'],
+    feature: 'A chat whose root runs on Codex keeps the title derived from its first message — Cinna runs no AI title of its own for it — or, if the placeholder stopped being first or verbatim, is named after the prompt itself.',
+    flow: { steps: ['A'], note: 'the chat’s title is the fake provider’s answer to the CLI’s title request' }
+  },
 
   /* ------------------------------------------------------------- tools & MCP */
   {
@@ -193,8 +200,8 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
   {
     id: 'codex.permission.mcp-call-asks', area: 'permissions & questions', surface: 'ACP method', name: 'session/request_permission',
     expectation: 'Every Cinna MCP call raises a permission request with `toolCall.kind: "execute"`, an `allow_once` option, and the `toolCallId` of the `tool_call` update that named the tool — the request itself carries no title or `rawInput`.',
-    owners: ['src/main/agents/drivers/acp/acpPermissions.ts#toAcpPermissionRequest', 'src/main/agents/drivers/acp/acpPermissions.ts#pickPermissionOption'],
-    feature: 'Either tool calls stall with no ask to answer, or (if the ask disappears) the recorded `codex:<kind>` grants stop matching anything.',
+    owners: ['src/main/agents/drivers/acp/acpPermissions.ts#toAcpPermissionRequest', 'src/main/agents/drivers/acp/acpPermissions.ts#pickPermissionOption', 'src/main/agents/drivers/acp/acpMessages.ts#cinnaTool'],
+    feature: 'A conducting session allows these asks silently when the `tool_call` with the same id carried `rawInput.server: "cinna"`; if the id stops matching, every Cinna call in a chat surfaces an opaque ask again, and a folder agent’s recorded `codex:<kind>` grants stop matching anything.',
     flow: { steps: ['B', 'D'] }
   },
   {

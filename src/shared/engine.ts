@@ -82,8 +82,14 @@ export type EngineBinaryState =
       /** `opencode --version`, or null when the probe failed but the file runs. */
       version: string | null
     }
-  /** One sentence explaining it. Never carries a secret. */
-  | { state: 'failed'; error: string }
+  /**
+   * One sentence explaining it. Never carries a secret.
+   *
+   * `pathError`, when present, is the same failure worded for the runtime's own
+   * Path field in Settings → Local Development — without the redirect to that
+   * tab that `error` carries for every other surface.
+   */
+  | { state: 'failed'; error: string; pathError?: string }
 
 /** Main → renderer push whenever {@link EngineBinaryState} changes. */
 export const ENGINE_BINARY_CHANNEL = 'engine:binary-state'

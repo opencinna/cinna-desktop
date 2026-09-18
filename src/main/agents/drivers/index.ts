@@ -704,6 +704,12 @@ export const acpDriver = createAcpDriver({
   resolveRequest,
   withLock: (agentId, owner, fn, queuedSignal) => queuedSignal
     ? turnLock.withQueuedLock(agentId, owner, queuedSignal, fn) : turnLock.withLock(agentId, owner, fn),
+  // The title a Codex chat's root session gives its thread names the chat.
+  sessionTitle: ({ profileUserId, chatId, agentId, title }) => {
+    void import('../../services/chatTitleService')
+      .then(({ chatTitleService }) => chatTitleService.applyEngineTitle({ userId: profileUserId, chatId, agentId, title }))
+      .catch((err: unknown) => logger.warn('could not apply an engine title', { chatId, error: err instanceof Error ? err.message : String(err) }))
+  },
   // Subagents and background processes a session reports, for the composer's badges.
   activity: sessionActivityHub,
   // A turn the agent starts between the user's turns becomes a run of the

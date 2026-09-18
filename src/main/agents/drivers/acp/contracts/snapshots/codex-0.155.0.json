@@ -101,6 +101,10 @@
         "session_info_update"
       ]
     },
+    "sessionInfoTitles": [
+      "<first prompt>",
+      "<provider title>"
+    ],
     "sessionNew": {
       "configOptionIds": [
         "collaboration_mode",

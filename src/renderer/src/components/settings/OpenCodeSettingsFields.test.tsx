@@ -7,24 +7,40 @@ vi.mock('../../hooks/useAppSettings', () => ({
   useAppSettings: () => ({ data: appSettings }),
   useSetAppSetting: () => ({ mutate: setAppSetting })
 }))
+const READY = { state: 'ready', path: '/usr/local/bin/opencode', source: 'path', version: '1.2.3' }
+let binary: Record<string, unknown> = READY
 vi.mock('../../hooks/useEngine', () => ({
-  useEngineBinary: () => ({ data: { state: 'ready', path: '/usr/local/bin/opencode', version: '1.2.3' } })
+  useEngineBinary: () => ({ data: binary })
 }))
 const { OpenCodeSettingsFields } = await import('./OpenCodeSettingsFields')
 
 beforeEach(() => {
   appSettings = { localAgentsEnginePath: '' }
+  binary = READY
   setAppSetting.mockReset()
 })
 
 describe('OpenCodeSettingsFields', () => {
-  it('notes a saved path the status line does not describe yet, last in its card', () => {
-    appSettings = { ...appSettings, localAgentsEnginePath: '/opt/opencode' }
-    render(<OpenCodeSettingsFields />)
+  it('adds no line under the field between a save and main’s re-resolution', () => {
+    // Main re-resolves when this path is saved (`engine.ipc.ts`), so "still the
+    // old path" would last a frame, lengthening the card and taking it back.
+    appSettings = { localAgentsEnginePath: '/opt/opencode' }
+    const view = render(<OpenCodeSettingsFields />)
+    const card = view.container.firstElementChild!
+    expect(card.querySelectorAll('p')).toHaveLength(0)
+  })
 
-    expect(
-      screen.getByText('Used from the next agent run. The status above is still the old path.')
-    ).toBeTruthy()
+  it('says a failed path without sending the user to the tab they are on', () => {
+    appSettings = { localAgentsEnginePath: '/opt/opencode' }
+    binary = {
+      state: 'failed',
+      error: 'OpenCode path is not a file — fix it in Local Development.',
+      pathError: 'OpenCode path is not a file — fix or clear it.'
+    }
+    render(<OpenCodeSettingsFields />)
+    const reason = screen.getByText('OpenCode path is not a file — fix or clear it.')
+    expect(reason.getAttribute('title')).toBe('OpenCode path is not a file — fix or clear it.')
+    expect(screen.queryByText(/Local Development/)).toBeNull()
   })
 
   it('discards a half-typed OpenCode Path on Escape instead of saving it', () => {

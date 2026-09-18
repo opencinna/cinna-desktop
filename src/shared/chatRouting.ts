@@ -80,11 +80,6 @@ export interface ChatRouting {
    * the target agent's `capabilities.attachments`.
    */
   attachmentTarget: 'cinna' | 'local'
-  /**
-   * Whether this chat cannot send without a resolvable provider + model. False
-   * for every chat an agent answers — which is the whole point of `human`.
-   */
-  needsModel: boolean
   /** Who answers the next user message. */
   answerer: (addressing?: Addressing) => RunTarget
 }
@@ -116,7 +111,6 @@ export function routingOf(chat: RoutableChat): ChatRouting {
     attachmentTarget: router !== 'human' && !rootAgentId
       ? 'local'
       : 'cinna',
-    needsModel: router !== 'human' && !rootAgentId,
     answerer: (addressing) => answererOf(router, rootAgentId, addressing)
   }
 }

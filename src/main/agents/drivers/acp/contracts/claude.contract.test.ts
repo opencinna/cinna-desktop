@@ -351,9 +351,13 @@ const entry = (id: string): string => {
   return `${id} — ${found.live ? `LIVE ONLY: ${found.live}` : found.expectation}`
 }
 
-describe.runIf(!binaryRef && !allowSkip)('Claude interface contract — no binary', () => {
-  it('has a managed Claude Code to check', () => { throw new Error(NO_BINARY) })
-})
+// Registered only when it applies: a `describe.runIf` guard is still collected
+// when the binary IS there, and shows up as an unexplained skip in every run.
+if (!binaryRef && !allowSkip) {
+  describe('Claude interface contract — no binary', () => {
+    it('has a managed Claude Code to check', () => { throw new Error(NO_BINARY) })
+  })
+}
 
 describe.skipIf(!binaryRef)('Claude interface contract', () => {
   const binary = binaryRef?.path ?? ''

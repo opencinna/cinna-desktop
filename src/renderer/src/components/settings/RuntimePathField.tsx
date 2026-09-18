@@ -30,7 +30,6 @@ export function RuntimePathField({
   placeholder,
   binary,
   saveErrorFallback,
-  pendingMessage,
   stacked = false
 }: {
   id: string
@@ -42,14 +41,6 @@ export function RuntimePathField({
   /** The resolved binary state the status row elsewhere is describing. */
   binary: EngineBinaryState | undefined
   saveErrorFallback: string
-  /**
-   * Shown while the saved path is not yet what the status row describes.
-   * Omitted by a field whose runtime is re-resolved the moment its path is
-   * saved (Codex): there is no such interval to describe, and a line that
-   * appeared for one frame between the save and main's push would lengthen the
-   * card and take it back (ux_rules rule 1).
-   */
-  pendingMessage?: string
   /**
    * Directly under another path field. The first field's `mt-3` separates it
    * from the table above; repeated on a second field it would put 24px above
@@ -64,28 +55,12 @@ export function RuntimePathField({
   const [draftPath, setDraftPath] = useState<string | null>(null)
   const path = draftPath ?? savedPath
   const [pathError, setPathError] = useState<string | null>(null)
-  /**
-   * A saved path is not what the status row is describing yet.
-   *
-   * For OpenCode the resolution is memoised per configured path and nothing
-   * re-resolves on save, so a change takes effect the next time a turn asks —
-   * and until then the row still names the binary that was found for the old
-   * path. Saying so beats leaving the user to wonder why the version line did
-   * not move. (Not *Try again*: that action exists only on a **failed** row,
-   * and this message only on a **ready** one, so it is never reachable from
-   * here.) Each agent's child is replaced on its next turn, because the path
-   * feeds the launch spec's key.
-   *
-   * Codex passes no `pendingMessage`: main re-resolves when its path is saved
-   * (`engine.ipc.ts`), so the status row follows the save by itself — out of a
-   * failed install's red included — and there is nothing pending to announce.
+  /*
+   * No "still the old path" note: main re-resolves every runtime the moment its
+   * path is saved (`engine.ipc.ts`), so the status row follows the save by
+   * itself, and a line shown for the one frame in between would lengthen the
+   * card and take it back (ux_rules rule 1).
    */
-  const pathPending =
-    pendingMessage !== undefined &&
-    binary?.state === 'ready' &&
-    (savedPath !== ''
-      ? savedPath !== binary.path || binary.source !== 'configured'
-      : binary.source === 'configured')
 
   /**
    * Set by Escape just before it blurs the field. `onBlur` runs `commitPath`
@@ -158,16 +133,16 @@ export function RuntimePathField({
             rules 1 and 12). */}
         {pathError ? (
           <p className="mt-1.5 text-[13px] text-[var(--color-danger)]">{pathError}</p>
-        ) : pathPending ? (
-          <p className="mt-1.5 text-[13px] text-[var(--color-warning)]">{pendingMessage}</p>
         ) : binary?.state === 'failed' ? (
           // This runtime's failure, under the field that is the way out of it.
           // The three used to be stacked as unlabelled red paragraphs *above*
           // all three fields, where pressing Enter on a bad path moved the field
           // being edited down a line. One line, the whole sentence in `title`:
           // main's copy names the tool itself, so nothing here labels it again.
-          <p className="mt-1.5 truncate text-[13px] text-[var(--color-danger)]" title={binary.error}>
-            {binary.error}
+          // `pathError` where main has one: the shared `error` ends by sending
+          // the user to Local Development, which is where this field is.
+          <p className="mt-1.5 truncate text-[13px] text-[var(--color-danger)]" title={binary.pathError ?? binary.error}>
+            {binary.pathError ?? binary.error}
           </p>
         ) : null}
       </div>

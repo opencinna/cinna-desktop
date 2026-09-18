@@ -60,6 +60,7 @@ import type {
 } from '@agentclientprotocol/sdk'
 import { RequestError } from '@agentclientprotocol/sdk'
 import { cinnaToolName } from './conductorToolPolicy'
+import { createSessionTitles, type SessionTitleScope, type SessionTitleSink, type SessionTitles } from './acpSessionTitle'
 import type { AgentRow } from '../../../db/agents'
 import type { RunAgentTurnResult, TurnIO, TurnSteer } from '../../../services/a2aStreamingService'
 import type { RunEvent } from '../../../../shared/runEvents'
@@ -189,6 +190,12 @@ export interface AcpDriverDeps {
    * Absent: nothing is reported, and subagent frames are still routed.
    */
   activity?: SessionActivityReporter
+  /**
+   * Where the title a chat's root session gives itself goes (see
+   * `acpSessionTitle.ts`: Codex only, placeholder dropped). Absent: titles are
+   * not read.
+   */
+  sessionTitle?: SessionTitleSink
   /** Override how long a follow-up turn may stay silent before it is over. Tests only. */
   followUpQuietMs?: number
   /** Override the turn ceiling. Tests only. */
@@ -302,7 +309,8 @@ const NOTHING_HELD: HeldHandover = { replay: () => {}, refuse: () => {}, giveBac
 function createSessionObservers(
   sinkFor: SessionTrafficSinkFactory,
   activity: SessionActivityRegistry,
-  gateFor?: FollowUpGateFactory
+  gateFor?: FollowUpGateFactory,
+  titles?: SessionTitles
 ): SessionObservers {
   const activitySessions = activity
   const byConnection = new WeakMap<AcpConnection, Map<string, ObservedSession>>()
@@ -371,6 +379,9 @@ function createSessionObservers(
       const heard: SessionTrafficSink = {
         update: (notification) => {
           feed.observe(notification)
+          // Codex names its thread after the turn is over, so this is where
+          // the title usually arrives.
+          titles?.observe(scope, notification)
           sink.update(notification)
         },
         permission: (params) => sink.permission(params),
@@ -417,6 +428,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
   const parkedRuntimes = new Map<string, AcpRuntimeView>()
   const openFollowUp = deps.openFollowUp
   const sessionActivity = createSessionActivityRegistry(deps.activity)
+  const titles = createSessionTitles(deps.sessionTitle)
   const observers = createSessionObservers(
     deps.sessionTraffic ?? refusingSessionTrafficSink,
     sessionActivity,
@@ -438,7 +450,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
           driverId: 'acp',
           scope: runScope,
           run: (io) => runFollowUp(deps, {
-            ...armed, chatId: scope.chatId, connection, sessionId: scope.sessionId, gate, knownToolCalls, parkedRuntimes, activity: sessionActivity
+            ...armed, chatId: scope.chatId, connection, sessionId: scope.sessionId, gate, knownToolCalls, parkedRuntimes, activity: sessionActivity, titles
           }, io),
           wanted: () => gate.pending,
           abandon: (reason, options) => {
@@ -453,7 +465,8 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
         })
       })
       return gate
-    })
+    }),
+    titles
   )
   const driver: AcpDriver = {
     id: 'acp',
@@ -545,9 +558,9 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
 
       try {
         if (input.queueWhenBusy) return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, observers, activity: sessionActivity, steers: [], savedSession: null }), input.signal)
+          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null }), input.signal)
         return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, observers, activity: sessionActivity, steers: [], savedSession: null })
+          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null })
         )
       } catch (err) {
         // `turnLock.acquire` throws rather than queueing, and its message is
@@ -587,6 +600,12 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
 
 interface TurnContext {
   conductorOutcome?: ConductorOutcome
+  /**
+   * The session has a conductor lease: Cinna's MCP server is attached and
+   * answers for this chat. True for a chat-owned runtime and for a user's
+   * agent conducting a chat alike.
+   */
+  conducting?: boolean
   userId: string
   agent: AgentRow
   runtime: AcpRuntimeView
@@ -594,6 +613,8 @@ interface TurnContext {
   observers: SessionObservers
   /** The sessions' activity feeds, shared with the between-turn listener. */
   activity: SessionActivityRegistry
+  /** The titles a chat's root session gives itself, shared with the between-turn listener. */
+  titles?: SessionTitles
   launcherId: AcpLauncherId
   plan: AcpLaunchPlan
   input: RunInput
@@ -739,6 +760,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   const toolsDone = new Set<string>()
   /** Every tool call id this turn saw, for the between-turn listener. */
   const toolCallsSeen = new Set<string>()
+  /** This turn's session as a chat's title source: only a root turn, which has a chat of its own. */
+  const titleScope = (): SessionTitleScope => ({
+    launcherId: ctx.launcherId, chatId, agentId: agent.id, sessionId: sessionId ?? '',
+    ...(!input.nested && input.runScope ? { profileUserId: input.runScope.profileUserId } : {})
+  })
   /** The function the window offers, while it exists; `offered` is whether the caller holds it now. */
   let steerOffer: SteerFn | null = null
   let offered = false
@@ -1001,6 +1027,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       ctx.conductorOutcome = outcome
       setTimeout(() => { if (turn.open) askAgentToStop() }, 0)
     }, () => ctx.observers.wake(chatId, agent.id))
+    ctx.conducting = conductor !== undefined
     /**
      * **A listener added to an already-aborted signal never fires**, and
      * everything before this point can await — planning walks the login-shell
@@ -1036,6 +1063,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         // compare against.
         if (turn.replaying) return
         observeActivity(ctx.activity, live, notification, { chatId, agentId: agent.id })
+        ctx.titles?.observe(titleScope(), notification)
         // A subagent's call the agent no longer announces is written in first.
         conductor?.observe?.(notification)
         for (const frame of frames.expand(notification)) {
@@ -1234,6 +1262,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         if (typeof transcript === 'string') { if (transcript) prompt.unshift({ type: 'text', text: transcript }) }
         else prompt.unshift(...transcript)
       }
+      ctx.titles?.prompted(titleScope(), prompt)
       const answer = await promptWithCancelGrace(
         deps,
         connection,
@@ -1400,6 +1429,7 @@ interface FollowUpWorld extends ArmedTurn {
   knownToolCalls: Set<string>
   parkedRuntimes: Map<string, AcpRuntimeView>
   activity: SessionActivityRegistry
+  titles?: SessionTitles
 }
 
 /**
@@ -1461,7 +1491,8 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     plan: world.plan,
     input,
     steers: [],
-    savedSession: sessionId
+    savedSession: sessionId,
+    ...(world.titles ? { titles: world.titles } : {})
   }
   const stream = new AcpMessageStream({ launcher: world.launcherId })
   const accumulator = new StreamPartsAccumulator({
@@ -1555,6 +1586,8 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
       armQuiet()
       conductor?.observe?.(notification)
       observeActivity(world.activity, connection, notification, { chatId, agentId: agent.id })
+      ctx.titles?.observe({ launcherId: world.launcherId, chatId, agentId: agent.id, sessionId,
+        ...(world.runScope ? { profileUserId: world.runScope.profileUserId } : {}) }, notification)
       for (const frame of frames.expand(notification)) {
         const update = frame.update
         if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
@@ -1599,6 +1632,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   let leftover: HeldTraffic[] = []
   try {
     conductor = await deps.prepareConductor?.(world.userId, agent, { ...input, flush: () => { accumulator.breakContinuation(); input.flush?.() } }, world.plan, (outcome) => { if (ctx.conductorOutcome) return; ctx.conductorOutcome = outcome; setTimeout(() => { if (!ended) askAgentToStop(false) }, 0) }, () => gate.wake())
+    ctx.conducting = conductor !== undefined
     if (!connection.alive) {
       end('exited')
     } else if (!gate.pending) {
@@ -1899,7 +1933,15 @@ async function answerPermission(
   // milliseconds later would be a widget the user cannot act on, in the middle
   // of streaming text.
   // A chat-owned runtime may only ever be asked about Cinna's own tools.
-  if (typeof agent.driverConfig?.conductorChatId === 'string' && !isCinnaToolAsk(toolName, params)) return selected('reject')
+  const chatOwned = typeof agent.driverConfig?.conductorChatId === 'string'
+  if (chatOwned && !isCinnaToolAsk(toolName, params)) return selected('reject')
+  // And a session conducting a chat is not asked about them at all: Cinna's
+  // tools are the conductor's whole job, the user attached them, and an ask per
+  // call is an opaque widget with nothing to decide (Codex raises one for every
+  // MCP call, `codex.permission.mcp-call-asks`). Identified from what the
+  // adapter set for the call (`AcpMessageStream.cinnaTool`), never from a
+  // title; nothing is recorded, so no grant outlives the turn.
+  if ((chatOwned || ctx.conducting) && world.stream.cinnaTool(params.toolCall.toolCallId) !== null) return selected('allow')
   let granted = false
   try {
     runtime.validate(input.chatId)

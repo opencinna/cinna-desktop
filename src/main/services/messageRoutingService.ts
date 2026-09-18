@@ -21,7 +21,7 @@ const logger = createLogger('routing')
  *     debug, so they don't drown out other signal.
  *   - `chat_renamed_mid_flight`: rare — the user renamed the chat in the
  *     window between our adapter call starting and finishing → info.
- *   - everything else (`no_provider`, `llm_failed`, `empty_output`,
+ *   - everything else (`llm_failed`, `empty_output`,
  *     `chat_not_found`): real failures → warn.
  */
 const titlesInFlight = new Set<string>()
@@ -79,6 +79,12 @@ export interface PrepareAgentSendInput {
    * the transcript never shows a user bubble nobody typed.
    */
   origin?: TurnInputOrigin
+  /**
+   * The answering agent's engine names the chat itself (Codex, through
+   * `chatTitleService.applyEngineTitle`): Cinna's own AI title is not run, so
+   * the two never race for the same chat. Absent: Cinna titles it.
+   */
+  engineTitles?: boolean
 }
 
 export interface PreparedSend {
@@ -101,8 +107,8 @@ export const messageRoutingService = {
    * persisted before its own turn has spawned anything. The turn ending is the
    * first moment that process is warm; every precondition still applies.
    */
-  retryTitleAfterTurn(userId: string, chatId: string): void {
-    fireTitleGenInBackground(userId, chatId)
+  retryTitleAfterTurn(userId: string, chatId: string, engineTitles = false): void {
+    if (!engineTitles) fireTitleGenInBackground(userId, chatId)
   },
 
   prepareAgentSend(input: PrepareAgentSendInput): PreparedSend {
@@ -130,7 +136,7 @@ export const messageRoutingService = {
 
     // A chat is titled after what the person said in it. A handover's return
     // packet would title it after another project's report.
-    if (!isDesktopAuthored(input.origin)) fireTitleGenInBackground(userId, chatId)
+    if (!isDesktopAuthored(input.origin) && !input.engineTitles) fireTitleGenInBackground(userId, chatId)
 
     return { wireContent: userContent, userMessageId }
   }

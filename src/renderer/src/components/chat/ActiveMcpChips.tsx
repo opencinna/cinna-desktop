@@ -12,9 +12,7 @@ type ActiveMcpChipsProps = {
   /**
    * Mode-owned baseline MCPs (`chat_mcp_providers`, or the selected mode's
    * list before the chat exists), resolved by the composer. Rendered first and
-   * **locked** — the chat mode owns them, so they carry no `×`. Empty whenever
-   * `ChatControls` is on screen, since its toggle pills already show the
-   * baseline and would duplicate these chips.
+   * **locked** — the chat mode owns them, so they carry no `×`.
    */
   baselineIds: string[]
 } & (

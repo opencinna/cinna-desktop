@@ -4,8 +4,9 @@ import type { LLMAdapter } from '../llm/types'
 const state = vi.hoisted(() => ({
   settings: { aiFunctionsCredentialId: '', aiFunctionsModelId: '' },
   provider: { id: 'credential', type: 'openai', enabled: true, unsupported: false, apiKeyEncrypted: Buffer.from('encrypted'), defaultModelId: 'default-model', availableModels: [] as string[], baseUrl: null },
-  stream: vi.fn(), runtime: vi.fn(), lookup: vi.fn()
+  stream: vi.fn(), runtime: vi.fn(), lookup: vi.fn(), warn: vi.fn()
 }))
+vi.mock('../logger/logger', () => ({ createLogger: () => ({ debug: () => {}, info: () => {}, warn: state.warn, error: () => {} }) }))
 vi.mock('../db/appSettings', () => ({ appSettingsRepo: { get: (key: keyof typeof state.settings) => state.settings[key] } }))
 vi.mock('../db/llmProviders', () => ({ llmProviderRepo: { getOwned: (...args: unknown[]) => state.lookup(...args) } }))
 vi.mock('../security/keystore', () => ({ decryptApiKey: () => 'decrypted' }))
@@ -13,7 +14,7 @@ vi.mock('../auth/scope', () => ({ getManagedResourceScopes: () => ['default', 'p
 vi.mock('../llm/factory', () => ({ isProviderType: () => true, createAdapter: () => ({ providerType: 'openai', stream: state.stream }) }))
 vi.mock('./aiFunctionRuntimeService', () => ({ runAiFunctionOnRuntime: (...args: unknown[]) => state.runtime(...args) }))
 
-import { aiFunctions, AiFunctionError, AI_FUNCTION_TIMEOUT_MS } from './aiFunctionsService'
+import { aiFunctions, AI_FUNCTION_TIMEOUT_MS } from './aiFunctionsService'
 
 beforeEach(() => {
   state.settings = { aiFunctionsCredentialId: '', aiFunctionsModelId: '' }
@@ -36,13 +37,27 @@ describe('AI Functions own binding and runtime fallback', () => {
     state.settings.aiFunctionsModelId = ''
     expect(aiFunctions.resolveBackend('profile')).toMatchObject({ modelId: 'default-model' })
   })
-  it('refuses a configured unavailable credential rather than silently charging another runtime', () => {
+  it('falls back to the default runtime when the configured credential is disabled, unsupported or deleted', () => {
     state.settings.aiFunctionsCredentialId = 'credential'
     state.provider.enabled = false
-    expect(() => aiFunctions.resolveBackend('profile')).toThrow(AiFunctionError)
+    expect(aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
     state.provider.enabled = true
     state.provider.unsupported = true
-    expect(() => aiFunctions.resolveBackend('profile')).toThrow(AiFunctionError)
+    expect(aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
+    state.lookup.mockReturnValue(undefined)
+    expect(aiFunctions.resolveBackend('profile')).toEqual({ kind: 'runtime', userId: 'profile' })
+    expect(state.lookup).toHaveBeenCalledWith('profile', 'credential')
+  })
+  it('warns once per stale credential, not on every call', () => {
+    state.settings.aiFunctionsCredentialId = 'gone'
+    state.lookup.mockReturnValue(undefined)
+    state.warn.mockClear()
+    aiFunctions.resolveBackend('profile')
+    aiFunctions.resolveBackend('profile')
+    expect(state.warn).toHaveBeenCalledTimes(1)
+    state.settings.aiFunctionsCredentialId = 'also-gone'
+    aiFunctions.resolveBackend('profile')
+    expect(state.warn).toHaveBeenCalledTimes(2)
   })
   it.each(['adapter', 'runtime'] as const)('applies the same trimmed output cap to %s', async (kind) => {
     const backend = kind === 'runtime' ? { kind, userId: 'profile' } : { kind, adapter: { stream: state.stream } as unknown as LLMAdapter, modelId: 'model' }

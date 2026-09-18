@@ -39,6 +39,7 @@ import {
   configuredClaudePath,
   configuredCodexPath,
   configuredEnginePath,
+  EngineBinaryError,
   realBinaryResolverDeps,
   realClaudeResolverDeps,
   realCodexResolverDeps,
@@ -283,7 +284,10 @@ export function createEngineBinaryService(
           pending = null
           pendingFor = undefined
           pendingToken = null
-          setState({ state: 'failed', error: message })
+          // A path failure has its own wording under the Path field, which
+          // must not send the user to the tab they are on.
+          const pathError = err instanceof EngineBinaryError ? err.pathFieldMessage : undefined
+          setState({ state: 'failed', error: message, ...(pathError ? { pathError } : {}) })
         }
         throw err
       }

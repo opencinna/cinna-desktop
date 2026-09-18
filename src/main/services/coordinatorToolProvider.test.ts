@@ -77,4 +77,8 @@ describe('coordinator tools', () => {
     vi.mocked(actions.assertCurrent).mockImplementation(() => { throw new Error('Task moved elsewhere') })
     await expect(provider.callTool('finish', { summary: 'Done' })).rejects.toThrow('moved elsewhere')
   })
+  it('exempts only progress and finish from the task tool-call budget', () => {
+    const { provider } = subject()
+    expect(['delegate', 'handoff', 'ask_user', 'update_task', 'finish'].filter((name) => provider.budgetExempt(name))).toEqual(['update_task', 'finish'])
+  })
 })

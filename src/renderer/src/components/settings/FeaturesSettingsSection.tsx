@@ -121,7 +121,7 @@ export function FeaturesSettingsSection(): React.JSX.Element {
               </select>
             </div>
             <p className="mt-2 text-[13px] text-[var(--color-text-muted)]">
-              Runs on: {functionCredential ? `${functionCredential.name} · ${functionModels.find((model) => model.id === settings?.aiFunctionsModelId)?.name ?? 'default model'}` : settings?.aiFunctionsCredentialId ? 'unavailable credential' : 'Default runtime'}
+              Runs on: {functionCredential && isCredentialActive(functionCredential) ? `${functionCredential.name} · ${functionModels.find((model) => model.id === settings?.aiFunctionsModelId)?.name ?? 'default model'}` : functionCredential ? 'Default runtime — the chosen credential is inactive' : settings?.aiFunctionsCredentialId ? 'Default runtime — the chosen credential is missing' : 'Default runtime'}
             </p>
           </SettingsRow>
           <SettingsToggleRow

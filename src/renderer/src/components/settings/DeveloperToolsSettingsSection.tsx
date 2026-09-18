@@ -140,7 +140,7 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
                 </td>
                 <td
                   className="truncate px-2.5 py-1.5"
-                  title={binary?.state === 'failed' ? binary.error : version}
+                  title={binary?.state === 'failed' ? (binary.pathError ?? binary.error) : version}
                 >
                   <span className={binary?.state === 'ready' && binary.version
                     ? 'font-mono text-[12px] text-[var(--color-text-secondary)]'
@@ -166,7 +166,7 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
                 </td>
                 <td
                   className="truncate px-2.5 py-1.5"
-                  title={codexBinary?.state === 'failed' ? codexBinary.error : codexCell.text || undefined}
+                  title={codexBinary?.state === 'failed' ? (codexBinary.pathError ?? codexBinary.error) : codexCell.text || undefined}
                 >
                   <span className={codexCell.mono
                     ? 'font-mono text-[12px] text-[var(--color-text-secondary)]'
@@ -185,7 +185,7 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
                 </td>
                 <td
                   className="truncate px-2.5 py-1.5"
-                  title={claudeBinary?.state === 'failed' ? claudeBinary.error : claudeCell.text || undefined}
+                  title={claudeBinary?.state === 'failed' ? (claudeBinary.pathError ?? claudeBinary.error) : claudeCell.text || undefined}
                 >
                   <span className={claudeCell.mono
                     ? 'font-mono text-[12px] text-[var(--color-text-secondary)]'

@@ -139,7 +139,7 @@ describe('resolveEngineBinaryWith — source precedence', () => {
     // telling them the path is wrong.
     await expect(
       resolveEngineBinaryWith(harness({ configuredPath: () => join(root, 'not-there') }))
-    ).rejects.toThrow(/does not point at a file/i)
+    ).rejects.toThrow(/^OpenCode path is not a file — fix it in Local Development\.$/)
     expect(downloads).toEqual([])
 
     const dud = join(root, 'dud')
@@ -148,7 +148,28 @@ describe('resolveEngineBinaryWith — source precedence', () => {
       resolveEngineBinaryWith(
         harness({ configuredPath: () => dud, probeVersion: async () => null })
       )
-    ).rejects.toThrow(/will not run/i)
+    ).rejects.toThrow(/^OpenCode path will not run — fix it in Local Development\.$/)
+    expect(downloads).toEqual([])
+  })
+
+  it('words a path failure without the redirect for the Path field that fixes it', async () => {
+    // One message function, two surfaces: under the field in Local Development
+    // "fix it in Local Development" names the tab the user is on.
+    const said = (deps: Parameters<typeof resolveEngineBinaryWith>[0]) =>
+      resolveEngineBinaryWith(deps).then(
+        () => null,
+        (err: EngineBinaryError) => [err.message, err.pathFieldMessage]
+      )
+    const dud = join(root, 'dud')
+    writeFileSync(dud, 'x')
+    expect(await said(harness({ configuredPath: () => join(root, 'not-there') }))).toEqual([
+      'OpenCode path is not a file — fix it in Local Development.',
+      'OpenCode path is not a file — fix or clear it.'
+    ])
+    expect(await said(harness({ configuredPath: () => dud, probeVersion: async () => null }))).toEqual([
+      'OpenCode path will not run — fix it in Local Development.',
+      'OpenCode path will not run — fix or clear it.'
+    ])
     expect(downloads).toEqual([])
   })
 
@@ -478,6 +499,8 @@ describe('resolveEngineBinaryWith — the managed Codex CLI', () => {
     await expect(
       resolveEngineBinaryWith(codex({ configuredPath: () => join(root, 'not-there') }))
     ).rejects.toThrow(/^Codex path is not a file — fix it in Local Development\.$/)
+    await expect(resolveEngineBinaryWith(codex({ configuredPath: () => join(root, 'not-there') })))
+      .rejects.toMatchObject({ pathFieldMessage: 'Codex path is not a file — fix or clear it.' })
     expect(downloads).toEqual([])
   })
 
@@ -677,6 +700,9 @@ describe('resolveEngineBinaryWith — the pinned Claude Code CLI', () => {
       .rejects.toThrow(/^Claude path is not a file — fix it in Local Development\.$/)
     await expect(resolveEngineBinaryWith(claude({ platformKey: () => 'win32-x64' })))
       .rejects.toThrow(/Set a Claude path in Settings.*no verified Claude Code build for win32-x64/i)
+    await expect(resolveEngineBinaryWith(claude({ platformKey: () => 'win32-x64' }))).rejects.toMatchObject({
+      pathFieldMessage: 'Set a Claude path: Cinna has no verified Claude Code build for win32-x64.'
+    })
     expect(downloads).toEqual([])
   })
 

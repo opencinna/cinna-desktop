@@ -24,7 +24,7 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { aiFunctions, AiFunctionError } from '../aiFunctionsService'
+import { aiFunctions } from '../aiFunctionsService'
 import { createLogger } from '../../logger/logger'
 import {
   LOCAL_AGENT_PROMPT_PATHS,
@@ -245,22 +245,8 @@ export const localAgentDraftService = {
       }
     }
 
-    let resolved
-    try {
-      resolved = aiFunctions.resolveBackend(userId)
-    } catch (err) {
-      if (err instanceof AiFunctionError && err.code === 'no_provider') {
-        logger.info('draft skipped — no AI credential configured', { agentId })
-        return {
-          status: 'skipped',
-          parts,
-          reason:
-            'No AI Functions backend is available, so the prompts were left as the template. Choose a credential in Settings → Features or configure the default runtime in Settings → Agents.',
-          agent
-        }
-      }
-      throw err
-    }
+    // A missing or unusable AI Functions credential falls back to the default runtime, so this cannot fail.
+    const resolved = aiFunctions.resolveBackend(userId)
 
     // Both stamps are taken here, before the model runs. A stamp taken after a
     // 30-second call would certify nothing about the file the write lands on.

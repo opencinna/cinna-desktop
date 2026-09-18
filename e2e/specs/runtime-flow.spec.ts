@@ -17,7 +17,8 @@ import { startEgressTrap, type EgressTrap } from '../../src/main/agents/drivers/
  * the steps are the ones the contract registries' `flow` fields name
  * (`FLOW_STEPS` in `contracts/codex.contract.ts`):
  *
- *   A  plain chat on the Default runtime, then its AI title
+ *   A  plain chat on the Default runtime, then its title — Codex's own thread
+ *      title, since a chat whose root runs on Codex gets no Cinna AI title
  *   B  a specialist @-added mid-chat, called through Cinna's MCP server
  *   C  continuity: a later turn remembers the first
  *   D  a specialist attached before the first turn
@@ -43,7 +44,8 @@ import { startEgressTrap, type EgressTrap } from '../../src/main/agents/drivers/
 const PLAIN_WORD = 'pine-4417'
 const CODE_WORD = 'maple-7731'
 const SPECIALIST = 'Vault Keeper'
-const AI_TITLE = 'Pine word check'
+/** What the fake answers the CLI's own title request with: the chat's title on Codex. */
+const CODEX_TITLE = 'Flow thread'
 const MODEL = 'gpt-5.5'
 const ASK = `Use your tool for the agent "${SPECIALIST}" to ask it for the project code word, then tell me the code word it gave you.`
 /**
@@ -63,10 +65,10 @@ const text = (value: string): ProviderReply => ({ kind: 'text', text: value })
 /** What a model would do with each request — decided from the request alone. */
 function decide(turn: ProviderTurn): ProviderReply {
   // The CLI's own requests (contract entry `codex.provider.auxiliary-request`).
-  if (turn.kind === 'title') return text(JSON.stringify({ title: 'Flow thread' }))
+  if (turn.kind === 'title') return text(JSON.stringify({ title: CODEX_TITLE }))
   if (turn.kind === 'compaction') return text('Summary: nothing to hand over.')
-  // Cinna's AI-title utility session.
-  if (turn.systemText.includes('You generate concise chat titles.')) return text(AI_TITLE)
+  // Cinna's AI-title utility session — which a Codex chat must never start (step A).
+  if (turn.systemText.includes('You generate concise chat titles.')) return text('CINNA AI TITLE')
   // The specialist: only its folder's AGENTS.md says this.
   const memory = /The code word is \*\*([a-z]+-\d+)\*\*/.exec(`${turn.systemText}\n${turn.userText}`)
   if (memory) return text(`The code word is ${memory[1]}.`)
@@ -91,11 +93,20 @@ interface ChatMessage { role: string; content: unknown; toolCallId?: string | nu
 const chatOf = async (cinna: CinnaApp, id: string): Promise<{ id: string; title: string | null; router: string | null; agentId: string | null; messages: ChatMessage[] }> =>
   (await cinna.page.evaluate((chatId) => window.api.chat.get(chatId), id)) as never
 
+/**
+ * Asks answered by {@link allowAsks}. A conductor's own Cinna tool calls are
+ * allowed without one, so steps B and D expect none at all.
+ */
+let asksAnswered = 0
+
 /** Answer a permission ask the way the live flow does, so a nested ask cannot park the run. */
 async function allowAsks(cinna: CinnaApp): Promise<void> {
   for (const name of [/^Allow/i, /^Approve/i]) {
     const button = cinna.page.getByRole('button', { name }).first()
-    if (await button.isVisible().catch(() => false)) await button.click().catch(() => undefined)
+    if (await button.isVisible().catch(() => false)) {
+      asksAnswered++
+      await button.click().catch(() => undefined)
+    }
   }
 }
 
@@ -195,12 +206,14 @@ test.describe('Codex', () => {
 
     const firstChat = async (): Promise<string | null> => (await cinna.page.evaluate(() => window.api.chat.list()))[0]?.id ?? null
 
-    await test.step('A — plain chat on the Default runtime, then its AI title', async () => {
+    await test.step('A — plain chat on the Default runtime, then Codex’s own title for it', async () => {
       await sendAndExpect(cinna, `Reply with exactly this and nothing else: ${PLAIN_WORD}`, firstChat, PLAIN_WORD)
       const chat = await chatOf(cinna, (await firstChat())!)
       const agents = await cinna.page.evaluate(() => window.api.agents.list())
       expect(agents.find((agent) => agent.id === chat.agentId)).toMatchObject({ conductor: true })
-      await expect.poll(async () => (await chatOf(cinna, chat.id)).title, { timeout: 60_000 }).toBe(AI_TITLE)
+      // Codex's generated title, not its placeholder (the prompt verbatim) and not Cinna's AI title.
+      await expect.poll(async () => (await chatOf(cinna, chat.id)).title, { timeout: 60_000 }).toBe(CODEX_TITLE)
+      expect(provider.turns.filter((turn) => turn.systemText.includes('You generate concise chat titles.')), 'Cinna ran its own AI title for a Codex chat').toEqual([])
       // The restricted-chat policy, as the provider saw it: nothing native was offered.
       const plainTurn = provider.turns.find((turn) => turn.kind === 'conversation' && turn.lastUserText.includes(PLAIN_WORD))
       expect(plainTurn, 'the plain turn never reached the fake provider').toBeTruthy()
@@ -217,7 +230,9 @@ test.describe('Codex', () => {
       expect((await chatOf(cinna, chatId)).agentId).toBe(rootAgentId)
       const attached = await cinna.page.evaluate((id) => window.api.chat.listOnDemandAgents(id), chatId)
       expect(attached.map((entry) => entry.agentId)).toEqual([specialist.id])
+      asksAnswered = 0
       await sendAndExpect(cinna, ASK, async () => chatId, CODE_WORD)
+      expect(asksAnswered, 'a Cinna tool call of the conductor raised a permission ask').toBe(0)
       const toolRows = (await chatOf(cinna, chatId)).messages.filter((entry) => entry.toolCallId)
       expect(toolRows.length).toBeGreaterThan(0)
       expect(toolRows.filter((entry) => entry.toolError)).toEqual([])
@@ -244,7 +259,9 @@ test.describe('Codex', () => {
       await cinna.page.reload()
       await cinna.page.getByRole('button', { name: 'Chats', exact: true }).waitFor()
       await cinna.page.getByText('Flow D', { exact: true }).first().click()
+      asksAnswered = 0
       await sendAndExpect(cinna, ASK, async () => chat!.id, CODE_WORD)
+      expect(asksAnswered, 'a Cinna tool call of the conductor raised a permission ask').toBe(0)
       const toolRows = (await chatOf(cinna, chat!.id)).messages.filter((entry) => entry.toolCallId)
       expect(toolRows.length).toBeGreaterThan(0)
       expect(toolRows.filter((entry) => entry.toolError)).toEqual([])

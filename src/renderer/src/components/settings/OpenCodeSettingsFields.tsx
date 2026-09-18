@@ -13,7 +13,6 @@ export function OpenCodeSettingsFields(): React.JSX.Element {
       placeholder="/usr/local/bin/opencode"
       binary={binary}
       saveErrorFallback="That engine path could not be saved."
-      pendingMessage="Used from the next agent run. The status above is still the old path."
       tip={
         <>
           <p>
@@ -23,10 +22,7 @@ export function OpenCodeSettingsFields(): React.JSX.Element {
             <code className="font-mono">opencode</code> on your PATH if you have one, and
             downloads a verified copy if you do not.
           </p>
-          <p>
-            Whether the file exists is checked the next time an agent runs, or when you retry
-            a failed runtime in Settings → Agents → Runtime.
-          </p>
+          <p>Cinna checks the file as soon as you save the path.</p>
         </>
       }
     />

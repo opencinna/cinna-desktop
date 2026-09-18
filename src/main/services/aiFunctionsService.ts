@@ -10,7 +10,7 @@ import type { LLMAdapter, ChatMessage } from '../llm/types'
 
 const logger = createLogger('ai-functions')
 
-export type AiFunctionErrorCode = 'no_provider' | 'llm_failed' | 'empty_output'
+export type AiFunctionErrorCode = 'llm_failed' | 'empty_output'
 
 export class AiFunctionError extends DomainError<AiFunctionErrorCode> {}
 
@@ -110,14 +110,27 @@ function tryResolve(pair: ProviderModelPair): Extract<AiFunctionBackend, { kind:
   return modelId ? { kind: 'adapter', adapter, modelId } : null
 }
 
+/** The stale credential last warned about, so the fallback logs once, not per call. */
+let warnedStaleCredentialId: string | null = null
+
 /** AI Functions have their own binding; chat modes never choose this backend. */
 export const aiFunctions = {
   resolveBackend(userId: string): AiFunctionBackend {
     const providerId = appSettingsRepo.get('aiFunctionsCredentialId').trim()
     if (!providerId) return { kind: 'runtime', userId }
     const resolved = tryResolve({ providerId, modelId: appSettingsRepo.get('aiFunctionsModelId').trim() || null })
-    if (resolved) return resolved
-    throw new AiFunctionError('no_provider', 'The AI Functions credential or model is unavailable. Choose one in Settings → Features, or use the default runtime.')
+    if (resolved) {
+      warnedStaleCredentialId = null
+      return resolved
+    }
+    // A deleted, disabled or keyless credential falls back to the Default
+    // runtime rather than failing every title and draft; Settings → Features
+    // still marks it missing. Warned once per stale credential, not per call.
+    if (warnedStaleCredentialId !== providerId) {
+      warnedStaleCredentialId = providerId
+      logger.warn('AI Functions credential unavailable; using the default runtime', { providerId })
+    }
+    return { kind: 'runtime', userId }
   },
 
   /** Both backends obey the same cancellation, timeout and output contract. */

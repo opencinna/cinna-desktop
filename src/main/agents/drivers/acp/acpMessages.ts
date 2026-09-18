@@ -135,6 +135,12 @@ export class AcpMessageStream {
   private currentMessageId: string | undefined
   /** `toolCallId` → the tool name, resolved once on first sight (see rule 2). */
   private readonly toolNames = new Map<string, string>()
+  /**
+   * `toolCallId` → what the **adapter** said about the call, as opposed to
+   * what the model wrote into it. Read by {@link cinnaTool}, which may settle a
+   * permission ask silently, so nothing a model can steer may count here.
+   */
+  private readonly toolEvidence = new Map<string, { adapterName?: string; firstTitle?: string; rawInput?: Record<string, unknown> }>()
   /** `toolCallId` → the message its call part lives in, so its result joins it. */
   private readonly toolMessage = new Map<string, string>()
   /** Which message each ask's block lives in, so its decision joins it. */
@@ -294,6 +300,44 @@ export class AcpMessageStream {
     return this.toolNames.get(toolCallId)
   }
 
+  /**
+   * The Cinna tool a call is for, or null — from what the adapter set, never
+   * from a title a model can influence.
+   *
+   * Engine by engine, because each spells it in a different place, and in two
+   * of them the place the others use is the model's own writing:
+   *
+   * - **Codex** puts `{server, tool, arguments}` in `rawInput` of an MCP call
+   *   (contract `codex.mcp.tool-call-naming`); the model's arguments sit one
+   *   level down. Its *title* is not enough: a shell call is titled with its
+   *   command, and a command can be named `mcp.cinna.x`.
+   * - **Claude** names the tool in `_meta.claudeCode.toolName`
+   *   (`mcp__cinna__<tool>`). Its `rawInput` is the tool's input — model
+   *   writing — so a `server: "cinna"` there means nothing.
+   * - **OpenCode** titles a call's first update with the tool name
+   *   (`cinna_<tool>`), a registered tool the model cannot invent; its
+   *   `rawInput` is the arguments, as for Claude.
+   *
+   * Anything else — a custom command, an engine this build does not know —
+   * answers null, which leaves the ask to the user.
+   */
+  cinnaTool(toolCallId: string): string | null {
+    const evidence = this.toolEvidence.get(toolCallId)
+    if (!evidence) return null
+    switch (this.launcher) {
+      case 'codex': {
+        const raw = evidence.rawInput
+        return raw?.server === 'cinna' && typeof raw.tool === 'string' && raw.tool !== '' ? raw.tool : null
+      }
+      case 'claude':
+        return withPrefix(evidence.adapterName, 'mcp__cinna__')
+      case 'opencode':
+        return withPrefix(evidence.firstTitle, 'cinna_')
+      default:
+        return null
+    }
+  }
+
   // ── translation ───────────────────────────────────────────────────────────
 
   private applyUpdate(notification: SessionNotification): AcpStreamUpdate {
@@ -359,6 +403,24 @@ export class AcpMessageStream {
     return { message: { messageId, parts: state.parts } }
   }
 
+  /** Fold one update's adapter-set facts into {@link toolEvidence}. */
+  private recordEvidence(toolCallId: string, update: Record<string, unknown>): void {
+    let evidence = this.toolEvidence.get(toolCallId)
+    if (!evidence) {
+      // Only the `tool_call` that opens a call carries the adapter's title.
+      // A later update's title can be model-written (OpenCode titles a bash
+      // call with its command), so a call first met as an update — a follow-up
+      // stream joining mid-call — gets no title at all.
+      evidence = { firstTitle: update.sessionUpdate === 'tool_call' ? str(update.title) : undefined }
+      this.toolEvidence.set(toolCallId, evidence)
+    }
+    const adapterName = str(record(record(update._meta)?.claudeCode)?.toolName)
+    if (adapterName && !evidence.adapterName) evidence.adapterName = adapterName
+    // Streams in as the call is written; the last complete one stands.
+    const raw = nonEmptyRecord(update.rawInput)
+    if (raw) evidence.rawInput = raw
+  }
+
   /**
    * One tool call, folded from however many updates describe it.
    *
@@ -373,6 +435,7 @@ export class AcpMessageStream {
     if (!toolCallId) return {}
 
     const fresh = !this.toolNames.has(toolCallId)
+    this.recordEvidence(toolCallId, update)
     if (fresh) {
       this.toolNames.set(toolCallId, resolveToolName(update))
       // Rule 3: whatever text was streaming has ended. The next chunk opens a
@@ -582,6 +645,11 @@ export class AcpMessageStream {
  * resort, because a transcript saying "edit" is still better than one saying
  * "Preparing file…".
  */
+/** The rest of `name` after `prefix`, or null. */
+function withPrefix(name: string | undefined, prefix: string): string | null {
+  return name?.startsWith(prefix) && name.length > prefix.length ? name.slice(prefix.length) : null
+}
+
 function resolveToolName(update: Record<string, unknown>): string {
   const claudeCode = record(record(update._meta)?.claudeCode)
   return (

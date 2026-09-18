@@ -21,19 +21,26 @@ vi.mock('../llm/toolProvider', () => ({ McpToolProvider: class {} }))
 vi.mock('./a2aAsMcpProvider', () => ({ buildAgentToolProviders: () => [] }))
 vi.mock('./chatConductorService', () => ({ canConduct: () => true, isChatConductor: () => false, conductorContext: () => ({}) }))
 vi.mock('./chatSessionRelease', () => ({ installChatSessionForgetter: vi.fn() }))
+const runtimes = vi.hoisted(() => new Map<string, import('../tasks/runtimeTypes').TaskRuntimeCheckpoint>())
+vi.mock('../db/taskRuntimes', () => ({ taskRuntimeRepo: {
+  get: (userId: string, taskId: string) => runtimes.get(`${userId}/${taskId}`) ?? null,
+  save: (userId: string, taskId: string, value: import('../tasks/runtimeTypes').TaskRuntimeCheckpoint) => { runtimes.set(`${userId}/${taskId}`, value) }
+} }))
 const { conductorBridge } = await import('./conductorBridge')
+const { taskRunnersByChat } = await import('./taskRunnerState')
 const agent = { id: 'root', driver: 'acp' } as Parameters<typeof conductorBridge.prepare>[1]
 function input(extra: Partial<RunInput> = {}): RunInput {
   return { chatId: 'chat', messageId: 'message', wireContent: 'hello', signal: new AbortController().signal, runScope: { settingsUserId: 'settings', profileUserId: 'profile' }, ...extra }
 }
 function plan(): AcpLaunchPlan { return { spec: {}, session: { mcpServers: [] } } as unknown as AcpLaunchPlan }
 const provider = { providerType: 'mcp' as const, displayName: 'connector', getTools: () => [], callTool: vi.fn(async () => ({ content: 'answer' })) }
-async function call() {
-  const context = { signal: new AbortController().signal, toolCallId: 'call', name: 'lookup', requestId: 1 }
+async function call(target: Parameters<ConductorMcpSessionOptions['executeTool'] & object>[0] = provider, name = 'lookup') {
+  const context = { signal: new AbortController().signal, toolCallId: 'call', name, requestId: 1 }
   await state.options!.beforeCall!(context)
-  return state.options!.executeTool!(provider, 'lookup', {}, { signal: context.signal, toolCallId: context.toolCallId }, context)
+  return state.options!.executeTool!(target, name, {}, { signal: context.signal, toolCallId: context.toolCallId }, context)
 }
-beforeEach(() => { vi.clearAllMocks() })
+const coordinator = { providerType: 'coordinator' as const, displayName: 'Task runner', getTools: () => [], budgetExempt: (name: string) => ['update_task', 'finish'].includes(name), callTool: vi.fn(async (name: string) => ({ content: `${name} ok` })) }
+beforeEach(() => { vi.clearAllMocks(); runtimes.clear(); taskRunnersByChat.clear() })
 afterEach(async () => { await conductorBridge.shutdown() })
 describe('conductor turn binding', () => {
   it('waits for the native follow-up owner to bind when MCP arrives between turns', async () => {
@@ -76,5 +83,46 @@ describe('conductor turn binding', () => {
     expect(state.refresh).not.toHaveBeenCalled()
     notifyMcpToolsChanged('connector')
     expect(state.refresh).toHaveBeenCalledOnce()
+  })
+  it('keeps finish and update_task callable at the task cap while every other tool is refused', async () => {
+    const stop = vi.fn()
+    const consume = vi.fn()
+    const lease = await conductorBridge.prepare('profile', agent, input({ toolCallBudget: { remaining: 0, consume } }), plan(), stop, () => true)
+    expect(await call(coordinator, 'update_task')).toMatchObject({ content: 'update_task ok' })
+    expect(await call(coordinator, 'finish')).toMatchObject({ content: 'finish ok' })
+    expect(coordinator.callTool.mock.calls.map(([name]) => name)).toEqual(['update_task', 'finish'])
+    expect(consume).not.toHaveBeenCalled()
+    expect(stop).not.toHaveBeenCalledWith({ budget: true })
+    // An agent call through the runner, and a connector tool that merely shares the name, still count.
+    expect(await call(coordinator, 'delegate')).toMatchObject({ isError: true })
+    expect(await call(provider, 'finish')).toMatchObject({ isError: true })
+    expect(coordinator.callTool).toHaveBeenCalledTimes(2)
+    expect(provider.callTool).not.toHaveBeenCalled()
+    expect(stop).toHaveBeenCalledWith({ budget: true })
+    lease!.close()
+  })
+  it('caps a follow-up opened between turns with the task checkpoint budget', async () => {
+    taskRunnersByChat.set('chat', { userId: 'profile', taskId: 'task', id: 'attempt', working: true, cancel: vi.fn() })
+    runtimes.set('profile/task', { budget: { maxRounds: 2, maxMinutes: 60 }, toolCalls: 1, owner: { kind: 'coordinator' },
+      coordinator: { agentId: 'root', providerId: null, modelId: null, modeId: null } } as unknown as import('../tasks/runtimeTypes').TaskRuntimeCheckpoint)
+    const stop = vi.fn()
+    const followup = await conductorBridge.prepare('profile', agent, input(), plan(), stop, () => true)
+    await call()
+    expect(provider.callTool).toHaveBeenCalledOnce()
+    expect(runtimes.get('profile/task')?.toolCalls).toBe(2)
+    expect(await call()).toMatchObject({ isError: true })
+    expect(provider.callTool).toHaveBeenCalledOnce()
+    expect(stop).toHaveBeenCalledWith({ budget: true })
+    followup!.close()
+  })
+  it('leaves a follow-up unbudgeted by the task when another agent owns the task turn', async () => {
+    taskRunnersByChat.set('chat', { userId: 'profile', taskId: 'task', id: 'attempt', working: true, cancel: vi.fn() })
+    runtimes.set('profile/task', { budget: { maxRounds: 1, maxMinutes: 60 }, toolCalls: 1, owner: { kind: 'agent', agentId: 'analyst', name: 'Analyst', note: '' },
+      coordinator: { agentId: 'root', providerId: null, modelId: null, modeId: null } } as unknown as import('../tasks/runtimeTypes').TaskRuntimeCheckpoint)
+    const lease = await conductorBridge.prepare('profile', agent, input(), plan(), vi.fn(), () => true)
+    await call()
+    expect(provider.callTool).toHaveBeenCalledOnce()
+    expect(runtimes.get('profile/task')?.toolCalls).toBe(1)
+    lease!.close()
   })
 })

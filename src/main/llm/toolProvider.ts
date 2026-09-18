@@ -77,6 +77,8 @@ export interface ToolProvider {
   eventSink?(toolCallId: string, publish: (event: RunEvent) => void): (event: RunEvent) => void
   /** Validated display target for a coordinator's dynamic delegate call. */
   describeCall?(name: string, input: Record<string, unknown>): { agentId: string; displayName: string } | undefined
+  /** True for a tool that does no outside work and so is not counted against a task's tool-call budget. */
+  budgetExempt?(name: string): boolean
   /** LLM-facing tool definitions this provider contributes. */
   getTools(): ToolDefinition[]
   /** Execute one of this provider's tools by its LLM-facing name. */

@@ -11,6 +11,7 @@ import { agentOverrideRepo } from '../db/agents'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import { handingOffChats } from './taskOperationState'
 import { runtimeBudget } from '../tasks/runtimeBudget'
+import { taskToolCallBudget } from '../tasks/toolCallBudget'
 import { taskSlots, withRuntimeAgent as withAgent } from '../tasks/runtimeAdmission'
 import type { TaskRuntimeCheckpoint } from '../tasks/runtimeTypes'
 import type { AutonomousTaskStart } from '../../shared/taskRuntime'
@@ -177,18 +178,7 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
           handbackEligible: next.owner.kind === 'agent' && !next.owner.toolCallId,
           ...(next.owner.kind === 'agent' && next.owner.toolCallId ? { nested: { toolCallId: next.owner.toolCallId } } : {}),
           ...(next.owner.kind === 'coordinator' && next.coordinator.agentId ? {
-            toolCallBudget: {
-              get remaining() {
-                const current = checkpoint(userId, taskId)
-                return Math.max(0, current.budget.maxRounds - (current.toolCalls ?? 0))
-              },
-              consume() {
-                assertCurrent()
-                const current = checkpoint(userId, taskId)
-                if ((current.toolCalls ?? 0) >= current.budget.maxRounds) throw new Error('The task reached its tool-call limit.')
-                store(userId, taskId, { ...current, toolCalls: (current.toolCalls ?? 0) + 1 })
-              }
-            }
+            toolCallBudget: taskToolCallBudget(userId, taskId, { assertCurrent, save: (value) => store(userId, taskId, value) })
           } : {}),
           observe: (context, event) => inboxService.recordRunEvent(context,
             next.owner.kind === 'agent' && next.owner.toolCallId

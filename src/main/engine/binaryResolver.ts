@@ -113,14 +113,35 @@ export interface RuntimeBinarySpec {
    * is discarded before it is published. Absent means "any runnable version".
    */
   acceptsVersion?(probed: string | null, version: string): boolean
+  /**
+   * The sentences a user reads when a source fails. The three a Path field can
+   * fix are said per {@link FailureSurface}: under the field itself a redirect
+   * to Local Development would point at the tab the user is already on.
+   */
   messages: {
-    unsupportedPlatform(key: string): string
-    configuredMissing: string
-    configuredUnusable: string
+    unsupportedPlatform(key: string, surface: FailureSurface): string
+    configuredMissing(surface: FailureSurface): string
+    configuredUnusable(surface: FailureSurface): string
     archiveMissingBinary: string
     versionMismatch(version: string): string
   }
 }
+
+/**
+ * Where a failure sentence is read. `pathField` is the runtime's own Path field
+ * in Settings → Local Development; `elsewhere` is every other surface (a chat
+ * error, the Runs-with panel, the Runtime settings row), which needs telling
+ * where the fix is.
+ */
+export type FailureSurface = 'elsewhere' | 'pathField'
+
+/** The remedy that ends a configured-path failure, on each surface. */
+const pathRemedy = (surface: FailureSurface): string =>
+  surface === 'pathField' ? 'fix or clear it' : 'fix it in Local Development'
+
+/** Where to set a path, said only where the user is not already looking at it. */
+const pathWhere = (surface: FailureSurface): string =>
+  surface === 'pathField' ? '' : ' in Settings → Local Development'
 
 export const OPENCODE_SPEC: RuntimeBinarySpec = {
   tool: 'opencode',
@@ -131,15 +152,14 @@ export const OPENCODE_SPEC: RuntimeBinarySpec = {
   messages: {
     // Remedy first, and short: this is the longest of the three and measured
     // 1039px problem-first, which clips at every window width.
-    unsupportedPlatform: (key) =>
-      `Install opencode yourself, or set the engine path in Settings: Cinna has no verified build for ${key}.`,
-    // **Remedy first, because this sentence is measured to clip.** It lands
-    // in the Runs-with panel's reserved line, which is 414px at the 800px
-    // minimum; problem-first it needed 667px and lost the half that says
-    // what to do (ux_rules rule 7). The Claude rung beside it leads with its
-    // remedy for the same reason.
-    configuredMissing: 'Fix the engine path in Settings, or clear it: it does not point at a file.',
-    configuredUnusable: 'Fix the engine path in Settings, or clear it: that file will not run.',
+    unsupportedPlatform: (key, surface) =>
+      surface === 'pathField'
+        ? `Install opencode yourself, or set its path: Cinna has no verified build for ${key}.`
+        : `Install opencode yourself, or set the engine path in Settings: Cinna has no verified build for ${key}.`,
+    // The Codex and Claude form: short enough for the Runs-with panel's
+    // reserved line (414px at the 800px minimum) with the remedy still in it.
+    configuredMissing: (surface) => `OpenCode path is not a file — ${pathRemedy(surface)}.`,
+    configuredUnusable: (surface) => `OpenCode path will not run — ${pathRemedy(surface)}.`,
     archiveMissingBinary: 'The downloaded engine archive did not contain an opencode executable.',
     versionMismatch: (version) => `The downloaded engine was not opencode ${version}, so it was discarded.`
   }
@@ -159,10 +179,10 @@ export const CODEX_SPEC: RuntimeBinarySpec = {
   },
   acceptsVersion: (probed, version) => probed === `codex-cli ${version}`,
   messages: {
-    unsupportedPlatform: (key) =>
-      `Set a Codex path in Settings → Local Development: Cinna has no verified Codex build for ${key}.`,
-    configuredMissing: 'Codex path is not a file — fix it in Local Development.',
-    configuredUnusable: 'Codex path will not run — fix it in Local Development.',
+    unsupportedPlatform: (key, surface) =>
+      `Set a Codex path${pathWhere(surface)}: Cinna has no verified Codex build for ${key}.`,
+    configuredMissing: (surface) => `Codex path is not a file — ${pathRemedy(surface)}.`,
+    configuredUnusable: (surface) => `Codex path will not run — ${pathRemedy(surface)}.`,
     archiveMissingBinary: 'The downloaded Codex archive did not contain a codex executable.',
     versionMismatch: (version) => `The downloaded Codex was not version ${version}, so it was discarded. Try again.`
   }
@@ -180,10 +200,10 @@ export const CLAUDE_SPEC: RuntimeBinarySpec = {
   },
   acceptsVersion: (probed, version) => probed === `${version} (Claude Code)`,
   messages: {
-    unsupportedPlatform: (key) =>
-      `Set a Claude path in Settings → Local Development: Cinna has no verified Claude Code build for ${key}.`,
-    configuredMissing: 'Claude path is not a file — fix it in Local Development.',
-    configuredUnusable: 'Claude path will not run — fix it in Local Development.',
+    unsupportedPlatform: (key, surface) =>
+      `Set a Claude path${pathWhere(surface)}: Cinna has no verified Claude Code build for ${key}.`,
+    configuredMissing: (surface) => `Claude path is not a file — ${pathRemedy(surface)}.`,
+    configuredUnusable: (surface) => `Claude path will not run — ${pathRemedy(surface)}.`,
     archiveMissingBinary: 'The Claude Code download did not contain a claude executable.',
     versionMismatch: (version) => `The downloaded Claude Code was not version ${version}, so it was discarded. Try again.`
   }
@@ -328,7 +348,24 @@ export type EngineBinaryErrorCode =
  * strings, same messages, and `instanceof ManagedAssetError` catches both — so
  * anything branching on `err.code` is unaffected by the extraction.
  */
-export class EngineBinaryError extends ManagedAssetError<EngineBinaryErrorCode> {}
+export class EngineBinaryError extends ManagedAssetError<EngineBinaryErrorCode> {
+  /**
+   * The same failure as said under the runtime's own Path field, when it has a
+   * wording of its own there (see {@link FailureSurface}). `message` is the
+   * wording for every other surface.
+   */
+  readonly pathFieldMessage?: string
+
+  constructor(code: EngineBinaryErrorCode, message: string, pathFieldMessage?: string) {
+    super(code, message)
+    if (pathFieldMessage !== undefined) this.pathFieldMessage = pathFieldMessage
+  }
+
+  /** One failure, both wordings, from one message function. */
+  static said(code: EngineBinaryErrorCode, say: (surface: FailureSurface) => string): EngineBinaryError {
+    return new EngineBinaryError(code, say('elsewhere'), say('pathField'))
+  }
+}
 
 /**
  * Install the pinned engine into `<engineRoot>/opencode-<version>/`, if it is
@@ -454,7 +491,7 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
   const key = deps.platformKey()
   const asset = deps.assets[key]
   if (!asset) {
-    throw new EngineBinaryError('unsupported_platform', spec.messages.unsupportedPlatform(key))
+    throw EngineBinaryError.said('unsupported_platform', (surface) => spec.messages.unsupportedPlatform(key, surface))
   }
 
   const root = deps.engineRoot()
@@ -565,13 +602,13 @@ async function resolveFromSources(
   const spec = deps.spec ?? OPENCODE_SPEC
   const configured = deps.configuredPath()?.trim()
   if (configured) {
-    // The sentences are the spec's (remedy first — see OPENCODE_SPEC for why).
+    // The sentences are the spec's, in both wordings (see FailureSurface).
     if (!(await isFile(configured))) {
-      throw new EngineBinaryError('configured_missing', spec.messages.configuredMissing)
+      throw EngineBinaryError.said('configured_missing', spec.messages.configuredMissing)
     }
     const version = await deps.probeVersion(configured)
     if (version === null) {
-      throw new EngineBinaryError('configured_unusable', spec.messages.configuredUnusable)
+      throw EngineBinaryError.said('configured_unusable', spec.messages.configuredUnusable)
     }
     // No version gate on a configured path, for either tool: "run the one I
     // told you to" is the whole point of the override, and the UI labels it

@@ -56,5 +56,19 @@ describe('the row a send stores', () => {
     )
     expect(autoTitle).not.toHaveBeenCalled()
   })
+})
 
+describe('whose title a chat gets', () => {
+  it('runs no Cinna AI title when the answering engine names the chat, before or after the turn', () => {
+    messageRoutingService.prepareAgentSend({ ...agentSend, engineTitles: true })
+    messageRoutingService.retryTitleAfterTurn('u', 'chat-1', true)
+    expect(autoTitle).not.toHaveBeenCalled()
+  })
+  it('still runs it for an engine that does not', async () => {
+    messageRoutingService.prepareAgentSend({ ...agentSend, engineTitles: false })
+    // The retry is refused while the first attempt is still in flight.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    messageRoutingService.retryTitleAfterTurn('u', 'chat-1', false)
+    expect(autoTitle).toHaveBeenCalledTimes(2)
+  })
 })

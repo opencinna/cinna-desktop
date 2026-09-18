@@ -11,7 +11,6 @@ import { useChatStream } from '../../hooks/useChatStream'
 import { useChatStore } from '../../stores/chat.store'
 import { useAuthStore } from '../../stores/auth.store'
 import { useHintsStore } from '../../stores/hints.store'
-import { ChatControls } from './ChatControls'
 import { AgentMentionPopup } from './AgentMentionPopup'
 import { AgentMcpMentionPopup, type AgentMcpItem } from './AgentMcpMentionPopup'
 import { ExamplePromptPopup } from './ExamplePromptPopup'
@@ -719,25 +718,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     }
   }, [chatId, routerInfo, chatRouting, boundAgent, answeringAgent, chatData?.modelId, models])
 
-  // `ChatControls` (model picker + baseline MCP toggle pills) is offered only
-  // on a mode-less chat **the local model answers** — that's the chat whose
-  // baseline the user manages by hand. Everywhere else the baseline is
-  // mode-owned, and this strip is the only place it can be seen.
-  //
-  // `needsModel`, not `!boundAgent`: a chat the user routes between agents has
-  // no bound root either, and offering it a model picker beside a badge saying
-  // no model is involved is two surfaces disagreeing about the same chat.
-  const showsChatControls = chatRouting.needsModel && !chatData?.modeId
+  // The chat's baseline MCPs, shown as locked chips below the composer. There
+  // is no per-chat model picker or MCP toggle strip: the baseline is owned by
+  // the chat mode (or the root runtime), and this strip is the only place it
+  // can be seen.
   const { data: chatBaselineLinks } = useChatMcpProviders(chatId)
   const baselineIds = useMemo(() => {
-    if (chatId) {
-      // Skip when ChatControls is on screen: its pills already list the
-      // baseline, and chips would double it up.
-      if (showsChatControls) return []
-      return (chatBaselineLinks ?? []).map((l) => l.mcpProviderId)
-    }
+    if (chatId) return (chatBaselineLinks ?? []).map((l) => l.mcpProviderId)
     return baselineMcpIds ?? []
-  }, [chatId, showsChatControls, chatBaselineLinks, baselineMcpIds])
+  }, [chatId, chatBaselineLinks, baselineMcpIds])
 
   // The `[+]` "Add agents / MCP" picker — cards, selection set, and toggle that
   // mirrors the `@`-mention routing. Logic lives in the hook (testable, out of
@@ -1755,9 +1744,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           right must never fold this cluster onto a second row and move the
           textarea while the user types. The chips shrink to a floor
           (`agentChipClass`) and what still does not fit scrolls sideways,
-          scrollbar hidden. The plus menu and ChatControls stay outside the
-          scroller, fixed width: their menus are positioned absolutely and a
-          scrolling box would clip them.
+          scrollbar hidden. The plus menu stays outside the scroller, fixed
+          width: its menus are positioned absolutely and a scrolling box would
+          clip them.
         */}
         <div className="flex items-center gap-1.5 flex-nowrap min-w-0">
           <div className="shrink-0">
@@ -1779,13 +1768,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               activeModeColor={modeColor ? { border: modeColor.border } : null}
             />
           </div>
-          {chatId && !boundAgent && showsChatControls && (
-            // Mode-less active LLM chats keep their manual model + baseline-MCP
-            // controls; moded chats configure those through the chat mode.
-            <div className="shrink-0">
-              <ChatControls chatId={chatId} inline />
-            </div>
-          )}
           <div
             data-testid="composer-chips"
             className="flex items-center gap-1.5 flex-nowrap min-w-0 overflow-x-auto p-0.5 -m-0.5 empty:hidden

@@ -12,10 +12,9 @@ import type { ChatModeData } from '../constants/chatModeColors'
  * that doesn't exist yet. Lives in a hook (not the composer/view) so the
  * mode-application rules sit in one layer and stay testable.
  *
- * Passing `null` deselects the mode: `modeId` is cleared and the chat falls
- * back to the manual `ChatControls` (model picker + MCP toggles). The baseline
- * MCP set is left alone in that case — the user's existing tools shouldn't
- * vanish just because the preset was detached.
+ * Passing `null` deselects the mode: `modeId` is cleared. The baseline MCP set
+ * is left alone in that case — the user's existing tools shouldn't vanish just
+ * because the preset was detached.
  */
 export function useApplyChatMode(): (
   chatId: string,

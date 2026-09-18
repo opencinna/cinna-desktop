@@ -8,6 +8,7 @@ import { RUNTIME_PINS } from '../../../../../shared/runtimePins'
 import { ConductorMcpServer } from '../../../../services/conductorMcpServer'
 import { prepareCodexConductorPolicy } from '../codexConductorPolicy'
 import { cinnaToolName } from '../conductorToolPolicy'
+import { isPromptPlaceholder } from '../acpSessionTitle'
 import { parseCodexAuthStatus } from '../codexAuth'
 import { airClientMeta } from '../acpActivity'
 import type { AcpLaunchPlan } from '../acpLaunchers'
@@ -101,6 +102,8 @@ const seen = {
   permission: null as AdapterMessage | null,
   permissionCount: 0, mcpCalls: 0,
   toolCall: null as Json | null,
+  /** Every `session_info_update` title the folder session reported after its first prompt, in order. */
+  infoTitles: [] as string[],
   toolsAfterListChanged: [] as string[],
   cancel: { stopReason: null as unknown, ms: 0 },
   load: { ok: false, modeBefore: null as unknown, modeAfter: null as unknown },
@@ -132,8 +135,9 @@ function mcpProvider(tools: () => string[], onCall: () => void): never {
  * answered with plain text leaves the thread untitled, and what the CLI does
  * with an untitled thread is not what a real provider would ever show us.
  */
+const CONTRACT_TITLE = 'Contract thread'
 const ownRequestReply = (turn: ProviderTurn): ProviderReply =>
-  turn.kind === 'title' ? { kind: 'text', text: JSON.stringify({ title: 'Contract thread' }) } : { kind: 'text', text: 'Summary: nothing to hand over.' }
+  turn.kind === 'title' ? { kind: 'text', text: JSON.stringify({ title: CONTRACT_TITLE }) } : { kind: 'text', text: 'Summary: nothing to hand over.' }
 
 const allowOnce = (request: AdapterMessage): Json | undefined => {
   if (request.method !== 'session/request_permission') return undefined
@@ -192,6 +196,12 @@ async function folderScenario(binary: string): Promise<void> {
     await prompt(FIRST_PROMPT)
     // The title request runs beside the turn, not inside it: give it a moment to land.
     await until(() => provider!.turns.some((turn) => turn.kind === 'title'), 5_000)
+    // And the title it produced is reported after that, often after the turn.
+    const infoTitles = (): string[] => connection!.updates
+      .filter((update) => update.sessionUpdate === 'session_info_update' && typeof update.title === 'string')
+      .map((update) => String(update.title))
+    await until(() => infoTitles().some((title) => title !== FIRST_PROMPT), 5_000)
+    seen.infoTitles = infoTitles()
     seen.firstTurn = provider.turns.find((turn) => turn.kind === 'conversation') ?? null
 
     mode = 'stall'
@@ -363,6 +373,7 @@ function snapshot(): Json {
         currentModeId: (created.modes as Json | undefined)?.currentModeId ?? null,
         configOptionIds: ((created.configOptions as Json[] | undefined) ?? []).map((option) => String(option.id)).sort() },
       folderSessionOfferedTools: [...(seen.firstTurn?.tools ?? [])].sort(),
+      sessionInfoTitles: seen.infoTitles.map((title) => title === FIRST_PROMPT ? '<first prompt>' : title === CONTRACT_TITLE ? '<provider title>' : '<other>'),
       toolCall: seen.toolCall ? { title: seen.toolCall.title ?? null, kind: seen.toolCall.kind ?? null,
         rawInput: { ...(seen.toolCall.rawInput as Json | undefined) }, metaKeys: keys(seen.toolCall._meta), updateKeys: keys(seen.toolCall) } : null,
       permissionRequest: { paramKeys: keys(permission), toolCallKeys: keys(toolCall), toolCallKind: toolCall.kind ?? null, toolCallTitle: toolCall.title ?? null,
@@ -432,9 +443,13 @@ const entry = (id: string): string => {
   return `${id} — ${found.expectation}`
 }
 
-describe.runIf(!binaryRef && !allowSkip)('Codex interface contract — no binary', () => {
-  it('has a managed Codex to check', () => { throw new Error(NO_BINARY) })
-})
+// Registered only when it applies: a `describe.runIf` guard is still collected
+// when the binary IS there, and shows up as an unexplained skip in every run.
+if (!binaryRef && !allowSkip) {
+  describe('Codex interface contract — no binary', () => {
+    it('has a managed Codex to check', () => { throw new Error(NO_BINARY) })
+  })
+}
 
 describe.skipIf(!binaryRef)('Codex interface contract', () => {
   const binary = binaryRef?.path ?? ''
@@ -512,6 +527,13 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     expect(conversation.length).toBeGreaterThan(0)
     expect(conversation.every((turn) => turn.systemText.includes(POLICY_MARKER))).toBe(true)
     expect(conversation.some((turn) => turn.userText.includes(POLICY_MARKER))).toBe(false)
+  })
+
+  it(entry('codex.session.info-title'), () => {
+    expect(seen.infoTitles).toEqual([FIRST_PROMPT, CONTRACT_TITLE])
+    // The owner's own rule tells the two apart.
+    expect(isPromptPlaceholder(seen.infoTitles[0], [FIRST_PROMPT])).toBe(true)
+    expect(isPromptPlaceholder(seen.infoTitles[1], [FIRST_PROMPT])).toBe(false)
   })
 
   it(entry('codex.mcp.session-injection'), () => {

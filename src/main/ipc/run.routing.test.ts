@@ -461,7 +461,7 @@ describe('run:send — the cursor', () => {
     input.onCompleted?.()
     expect(cursorAdvance).toHaveBeenCalledWith('chat-1', 'a-2', 'm-last')
     // A warm-only title could not run at persist: the finished turn retries it.
-    expect(retryTitleAfterTurn).toHaveBeenCalledWith(expect.any(String), 'chat-1')
+    expect(retryTitleAfterTurn).toHaveBeenCalledWith(expect.any(String), 'chat-1', false)
   })
 
   it('leaves the cursor alone when the chat has no messages to point at', async () => {

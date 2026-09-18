@@ -11,6 +11,11 @@ export type CoordinatorControl =
   | { kind: 'ask_user'; requestId: string; question: string }
 
 export const COORDINATOR_TOOL_NAMES = ['delegate', 'handoff', 'ask_user', 'update_task', 'finish'] as const
+/**
+ * Runner-control tools that do no outside work: a task's tool-call budget does
+ * not count them, so a coordinator at its cap can still record progress and finish.
+ */
+export const RUNNER_CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set<(typeof COORDINATOR_TOOL_NAMES)[number]>(['update_task', 'finish'])
 export interface CoordinatorAgent { id: string; name: string }
 export interface CoordinatorTaskUpdate { note?: string; artifacts?: TaskArtifact[] }
 export interface CoordinatorActions {
@@ -42,6 +47,11 @@ export class CoordinatorToolProvider implements ToolProvider {
   readonly providerType = 'coordinator' as const
   readonly displayName = 'Task coordinator'
   constructor(private readonly taskId: string, private readonly agents: readonly CoordinatorAgent[], private readonly actions: CoordinatorActions) {}
+
+  /** Progress and finish stay callable at the task's tool-call cap; delegate is real work and counts. */
+  budgetExempt(name: string): boolean {
+    return RUNNER_CONTROL_TOOL_NAMES.has(name)
+  }
 
   /** Delegates are already child-framed by callTool; gates belong directly to the root. */
   eventSink(_toolCallId: string, publish: (event: RunEvent) => void): (event: RunEvent) => void {

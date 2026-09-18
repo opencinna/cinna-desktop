@@ -23,7 +23,7 @@ import { migrateTasks } from './tasks'
 import { migrateLocalSchedules } from './local-schedules'
 import { migrateHandovers } from './handovers'
 import { migrateNotes } from './notes'
-import { migrateAppSettings } from './app-settings'
+import { migrateAppSettings, backfillAiFunctionsCredential } from './app-settings'
 import { runSyncMigrations } from './sync'
 import { runSyncDepsMigrations } from './sync-deps'
 
@@ -109,4 +109,7 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // Backfill `user_id` on legacy tables — must run AFTER table creation so
   // fresh installs don't ALTER tables that don't exist yet.
   migrateUserIdColumns(sqlite)
+  // One-time AI Functions credential backfill. Reads `chat_modes.user_id`, so
+  // it runs after the legacy `user_id` backfill above.
+  backfillAiFunctionsCredential(sqlite)
 }

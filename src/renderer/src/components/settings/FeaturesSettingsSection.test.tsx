@@ -121,3 +121,11 @@ it('saves the default routing independently from existing chats', () => {
   fireEvent.click(screen.getByRole('button', { name: 'AI routes' }))
   expect(setSetting).toHaveBeenCalledWith({ key: 'defaultMultiAgentRouting', value: 'coordinator' })
 })
+
+it('says a missing AI Functions credential runs on the Default runtime', () => {
+  settings = { ...HEALTHY, aiFunctionsCredentialId: 'deleted-credential', aiFunctionsModelId: '' }
+  render(<FeaturesSettingsSection />)
+  expect(screen.getByText('Runs on: Default runtime — the chosen credential is missing')).toBeTruthy()
+  // The picker keeps marking the stale choice.
+  expect(screen.getByRole('option', { name: 'Missing credential' })).toBeTruthy()
+})

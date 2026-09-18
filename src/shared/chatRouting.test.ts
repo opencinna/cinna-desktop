@@ -35,14 +35,12 @@ describe('routingOf — who answers', () => {
     const routing = routingOf({ router: 'direct', agentId: 'a-1' })
     expect(routing.rootAgentId).toBe('a-1')
     expect(routing.answerer()).toEqual({ kind: 'agent', agentId: 'a-1' })
-    expect(routing.needsModel).toBe(false)
     expect(routing.attachmentTarget).toBe('cinna')
   })
 
   it('sends a direct chat with no agent to the model', () => {
     const routing = routingOf({ router: 'direct', agentId: null })
     expect(routing.answerer()).toEqual({ kind: 'model' })
-    expect(routing.needsModel).toBe(true)
     expect(routing.attachmentTarget).toBe('local')
   })
 
@@ -50,20 +48,17 @@ describe('routingOf — who answers', () => {
     const routing = routingOf({ router: 'coordinator', agentId: 'a-1' })
     expect(routing.rootAgentId).toBe('a-1')
     expect(routing.answerer({ addressed: 'a-2', attached: ['a-2'] })).toEqual({ kind: 'agent', agentId: 'a-1' })
-    expect(routing.needsModel).toBe(false)
     expect(routing.attachmentTarget).toBe('cinna')
   })
 
   it('keeps model coordination for a coordinator with no root', () => {
     const routing = routingOf({ router: 'coordinator', agentId: null })
     expect(routing.answerer()).toEqual({ kind: 'model' })
-    expect(routing.needsModel).toBe(true)
     expect(routing.attachmentTarget).toBe('local')
   })
 
-  it('needs no model for a human chat — the whole point of it', () => {
+  it('stores a human chat\'s files with Cinna', () => {
     const routing = routingOf(HUMAN)
-    expect(routing.needsModel).toBe(false)
     expect(routing.attachmentTarget).toBe('cinna')
   })
 })

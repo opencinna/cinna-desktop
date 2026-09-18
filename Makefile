@@ -118,8 +118,8 @@ live-ctl: ## Build, then hold the app for live-backend testing on your REAL prof
 	npx electron-vite build
 	node scripts/live-backend/ctl.mjs
 
-live-flow: ## BILLED, manual: the whole flow on your REAL Claude/Codex login, throwaway userData: make live-flow ENGINE=claude|codex [ONLY=a|d] [DROP_PATH=<dir>] [KEEP=1] CONFIRM=1
-	$(call check-engine, [ONLY=a|d] [DROP_PATH=<dir>] [KEEP=1] CONFIRM=1)
+live-flow: ## BILLED, manual: the whole flow on your REAL Claude/Codex login, throwaway userData: make live-flow ENGINE=claude|codex [ONLY=a|d|e] [DROP_PATH=<dir>] [KEEP=1] CONFIRM=1
+	$(call check-engine, [ONLY=a|d|e] [DROP_PATH=<dir>] [KEEP=1] CONFIRM=1)
 	@test -f out/main/index.js || (echo "no build — run: npx electron-vite build"; exit 2)
 	$(STRIP) scripts/live/runtime-flow.mjs $(ENGINE)
 # ONLY, DROP_PATH, KEEP and CONFIRM reach the script through make's exported

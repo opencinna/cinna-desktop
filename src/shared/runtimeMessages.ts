@@ -220,8 +220,6 @@ export type EngineSkipCode =
   | 'credential_unavailable'
   /** The runtime resolved to no model at all. */
   | 'no_model'
-  /** Claude engine: no `claude` binary was found on this machine. */
-  | 'claude_not_installed'
   /** Claude engine: the binary is there, but that install has no login. */
   | 'claude_not_logged_in'
 
@@ -231,12 +229,9 @@ export function describeEngineSkip(code: EngineSkipCode): string {
       return 'The engine skipped this agent because its credential is not available to it.'
     case 'no_model':
       return 'The engine skipped this agent because its runtime names no model.'
-    // Both name the remedy, and both stop short of offering to do it. Logging in
-    // is something only the user can do, in their own terminal, against their own
-    // account — this app spawns the CLI they installed and never brokers its
-    // credentials.
-    case 'claude_not_installed':
-      return 'This agent runs on Claude, and no Claude Code installation was found on this machine.'
+    // Names the remedy, and stops short of offering to do it. Logging in is
+    // something only the user can do, in their own terminal, against their own
+    // account — this app spawns the CLI and never brokers its credentials.
     // **The second half is word-for-word the panel's line.** A user meets this
     // condition on two surfaces — the "Runs with" panel before a turn, and here
     // if they start one anyway — and two paraphrases of one instruction read as

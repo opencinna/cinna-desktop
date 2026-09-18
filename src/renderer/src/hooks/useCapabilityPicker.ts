@@ -26,9 +26,7 @@ interface UseCapabilityPickerArgs {
    * Mode-owned baseline MCPs, resolved by the composer (`chat_mcp_providers`
    * for an active chat, the selected mode's list on the new-chat screen).
    * Shown selected + locked, mirroring `boundAgent`: the chat mode owns them,
-   * so toggling here must not silently file an on-demand duplicate. Empty when
-   * `ChatControls` is on screen — the baseline is the user's own there, and its
-   * toggle pills already manage it.
+   * so toggling here must not silently file an on-demand duplicate.
    */
   baselineMcpIds?: string[]
   /** New-chat pending buffers (owned by MainArea). Ignored when `chatId` is set. */

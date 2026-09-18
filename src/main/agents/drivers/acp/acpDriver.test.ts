@@ -1763,6 +1763,92 @@ describe('a permission ask', () => {
   })
 })
 
+describe('a Cinna tool ask on a conducting session', () => {
+  const conducting: Partial<AcpDriverDeps> = { prepareConductor: async () => ({ close() {}, hasCalls: () => false }) }
+  /** Codex's shape: the ask carries only a kind and the id of the call that named the tool. */
+  const codexAsk = (toolCall: Record<string, unknown>): FakeAcpScript => ({
+    prompt: { emit: [
+      { kind: 'update', update: { sessionUpdate: 'tool_call', toolCallId: 'call_1', status: 'pending', ...toolCall } },
+      { kind: 'permission', toolCall: { toolCallId: 'call_1', kind: 'execute', status: 'pending' } }
+    ] }
+  })
+  const CINNA_CALL = { title: 'mcp.cinna.probe', kind: 'execute', rawInput: { server: 'cinna', tool: 'probe', arguments: {} } }
+
+  it('allows a Codex ask for a Cinna tool silently: no block, no grant', async () => {
+    const w = world({ launcher: 'codex', script: codexAsk(CINNA_CALL), deps: conducting })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(w.events.filter((event) => event.type === 'needs_input')).toEqual([])
+    expect(w.grants).toEqual([])
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'once' } })
+  })
+
+  it('asks the user when only the title names Cinna', async () => {
+    // A shell call is titled with its command, and a command can be called anything.
+    const w = world({ launcher: 'codex', script: codexAsk({ title: 'mcp.cinna.probe', kind: 'execute', rawInput: { command: ['mcp.cinna.probe'] } }), deps: conducting })
+    const running = w.run()
+    const asked = await askedFor(w)
+    w.driver.respond({ requestId: asked.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission' }, { kind: 'permission', reply: 'reject' })
+    await running
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'reject' } })
+  })
+
+  it('leaves a session that conducts nothing asking as before', async () => {
+    const w = world({ launcher: 'codex', script: codexAsk(CINNA_CALL) })
+    const running = w.run()
+    const asked = await askedFor(w)
+    expect(asked.request).toMatchObject({ kind: 'permission', callId: 'call_1' })
+    w.driver.respond({ requestId: asked.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission' }, { kind: 'permission', reply: 'once' })
+    await running
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'once' } })
+  })
+})
+
+describe('the title a chat’s root session gives itself', () => {
+  const SCOPE = { profileUserId: USER_ID, settingsUserId: USER_ID }
+  const info = (title: string): FakeAcpStep => ({ kind: 'update', update: { sessionUpdate: 'session_info_update', title } })
+  /** Codex's order: the prompt echoed as a placeholder, then the generated title. */
+  const TITLES: FakeAcpScript = { prompt: { emit: [...(SAYS_HELLO.prompt?.emit ?? []), info('hello'), info('Greeting the agent')] } }
+  const titled = (): { sink: ReturnType<typeof vi.fn>; deps: Partial<AcpDriverDeps> } => {
+    const sink = vi.fn()
+    return { sink, deps: { sessionTitle: sink } }
+  }
+
+  it('offers Codex’s generated title for the chat, and not the placeholder', async () => {
+    const { sink, deps } = titled()
+    const w = world({ launcher: 'codex', script: TITLES, deps })
+    await w.run({ runScope: SCOPE })
+    expect(sink.mock.calls).toEqual([[{ profileUserId: USER_ID, chatId: CHAT_ID, agentId: AGENT_ID, title: 'Greeting the agent' }]])
+  })
+
+  it('leaves Claude’s titles alone', async () => {
+    const { sink, deps } = titled()
+    const w = world({ launcher: 'claude', script: TITLES, deps })
+    await w.run({ runScope: SCOPE })
+    expect(sink).not.toHaveBeenCalled()
+  })
+
+  it('names nothing for a turn with no chat of its own', async () => {
+    const { sink, deps } = titled()
+    const w = world({ launcher: 'codex', script: TITLES, deps })
+    await w.run()
+    expect(sink).not.toHaveBeenCalled()
+  })
+
+  it('takes a title that arrives after the turn ended', async () => {
+    const { sink, deps } = titled()
+    const w = observedWorld({ launcher: 'codex', deps, script: { ...SAYS_HELLO, loadSession: { emit: [
+      { kind: 'update', sessionId: 'ses_fake', update: { sessionUpdate: 'session_info_update', title: 'hello' } },
+      { kind: 'update', sessionId: 'ses_fake', update: { sessionUpdate: 'session_info_update', title: 'Greeting the agent' } }
+    ] } } })
+    await w.run({ runScope: SCOPE })
+    w.sessions.set('chat-2', 'ses_two')
+    await w.run({ chatId: 'chat-2', runScope: SCOPE })
+    await waitFor(() => sink.mock.calls.length > 0, 'the title')
+    expect(sink.mock.calls).toEqual([[{ profileUserId: USER_ID, chatId: CHAT_ID, agentId: AGENT_ID, title: 'Greeting the agent' }]])
+  })
+})
+
 describe('a question', () => {
   const ASKS_QUESTION: FakeAcpScript = {
     prompt: {

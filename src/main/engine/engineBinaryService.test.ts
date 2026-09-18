@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ResolvedEngineBinary } from './binaryResolver'
+import { EngineBinaryError, type ResolvedEngineBinary } from './binaryResolver'
 import { createEngineBinaryService } from './engineBinaryService'
 
 /**
@@ -173,6 +173,18 @@ describe('createEngineBinaryService', () => {
     // The caller renders the state; a rejection here would make it handle the
     // same message twice.
     await expect(engine.refresh()).resolves.toEqual({ state: 'failed', error: 'no network' })
+  })
+
+  it('carries a path failure worded for the Path field beside the one for everywhere else', async () => {
+    // Under the field itself, "fix it in Local Development" points at the tab
+    // the user is on; every other surface still needs telling where to go.
+    resolve.mockRejectedValueOnce(EngineBinaryError.said('configured_missing', (surface) =>
+      surface === 'pathField' ? 'not a file — fix or clear it.' : 'not a file — fix it in Local Development.'))
+    await expect(service().refresh()).resolves.toEqual({
+      state: 'failed',
+      error: 'not a file — fix it in Local Development.',
+      pathError: 'not a file — fix or clear it.'
+    })
   })
 
   it('refreshes past a good answer, which is what Check again is for', async () => {

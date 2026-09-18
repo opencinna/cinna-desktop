@@ -8,6 +8,7 @@ import { DomainError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { CHAT_TITLE_UPDATED_CHANNEL } from '../../shared/appSettings'
 import { deriveTitleFromMessage } from '../../shared/chatTitle'
+import { routingOf } from '../../shared/chatRouting'
 
 const logger = createLogger('chat-title')
 
@@ -44,16 +45,12 @@ export type ChatTitleErrorCode =
    * generation lost a race against a manual rename.
    */
   | 'chat_renamed_mid_flight'
-  | 'no_provider'
   | 'llm_failed'
   | 'empty_output'
 
 export class ChatTitleError extends DomainError<ChatTitleErrorCode> {}
 
 function mapAiFunctionError(err: AiFunctionError): ChatTitleError {
-  if (err.code === 'no_provider') {
-    return new ChatTitleError('no_provider', err.message, err.detail)
-  }
   if (err.code === 'empty_output') {
     return new ChatTitleError('empty_output', err.message, err.detail)
   }
@@ -84,6 +81,40 @@ function broadcastTitleUpdate(chatId: string, title: string): void {
 }
 
 export const chatTitleService = {
+  /**
+   * The title the chat's own engine gave its thread (Codex's
+   * `session_info_update`, placeholder already dropped by the driver — see
+   * `agents/drivers/acp/acpSessionTitle.ts`). For such a chat it is the only
+   * title: Cinna's own is not generated (`messageRoutingService`), so this
+   * applies **whatever `autoChatTitles` says** — the setting is about Cinna
+   * spending a model call, and none is spent here.
+   *
+   * The one rule it shares with {@link autoGenerateForFirstMessage}: a title
+   * the user set is never replaced. Returns whether the title changed; never
+   * throws, because it runs on a notification nobody waits for.
+   */
+  applyEngineTitle(input: { userId: string; chatId: string; agentId: string; title: string }): boolean {
+    const { userId, chatId } = input
+    try {
+      const chat = chatRepo.getOwned(userId, chatId)
+      if (!chat || chat.deletedAt) return false
+      // Only the chat's root names it: an agent @-addressed in a human-routed
+      // chat, or a specialist, answers top-level too, but speaks for itself.
+      if (routingOf(chat).rootAgentId !== input.agentId) return false
+      const firstUserText = messageRepo.firstByRole(chatId, 'user')?.content.trim() ?? ''
+      if (!isUntouchedAutoTitle(chat.title, firstUserText)) return false
+      const title = sanitizeTitle(input.title)
+      if (!title || title === chat.title) return false
+      chatRepo.updateMeta(userId, chatId, { title })
+      logger.info('chat titled by its engine', { chatId, titleLen: title.length })
+      broadcastTitleUpdate(chatId, title)
+      return true
+    } catch (err) {
+      logger.warn('could not apply an engine title', { chatId, error: err instanceof Error ? err.message : String(err) })
+      return false
+    }
+  },
+
   /**
    * Fire-and-forget background title generation for a chat's first user
    * message. All failure modes are logged and swallowed by the caller — this

@@ -65,6 +65,15 @@ export function registerEngineHandlers(): void {
   })
 
   /**
+   * A saved OpenCode Path takes effect when it is saved, as Codex's and
+   * Claude's do below — see the Codex handler for why. OpenCode has no login
+   * probe to invalidate.
+   */
+  appSettingsService.onSaved('localAgentsEnginePath', () => {
+    void engineBinaryService.refresh()
+  })
+
+  /**
    * The **managed Codex CLI**, on the same three rules and the same state shape
    * as the OpenCode binary above — deliberately, so Settings renders both rows
    * from one vocabulary. Its own push channel, so neither row can be painted

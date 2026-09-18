@@ -12,6 +12,7 @@ import { onMcpToolsChanged } from '../mcp/toolChanges'
 import { createLogger } from '../logger/logger'
 import { McpToolProvider, type ToolProvider, type ToolExecutionResult } from '../llm/toolProvider'
 import { buildAgentToolProviders } from './a2aAsMcpProvider'
+import { taskToolCallBudgetForChat } from '../tasks/toolCallBudget'
 import { ConductorMcpServer, type ConductorMcpSession } from './conductorMcpServer'
 import { canConduct, conductorContext, isChatConductor } from './chatConductorService'
 import { installChatSessionForgetter } from './chatSessionRelease'
@@ -84,6 +85,8 @@ export const conductorBridge = {
     const key = JSON.stringify([input.chatId, agent.id])
     let entry = entries.get(key)
     const binding: Binding = { input, pending: 0, calls: 0 }
+    // A follow-up the engine opened between turns carries no budget of its own; the task's checkpoint still caps it.
+    const budget = input.toolCallBudget ?? taskToolCallBudgetForChat(input.chatId, input.runScope.profileUserId, agent.id)
     const options = {
       conductorAgentId: agent.id,
       getProviders: () => providers(entry!),
@@ -94,8 +97,10 @@ export const conductorBridge = {
       executeTool: async (provider: ToolProvider, name: string, args: Record<string, unknown>, opts: import('../llm/toolProvider').ToolCallOptions): Promise<ToolExecutionResult> => {
         const turn = entry!.binding
         if (!turn) throw new Error('This chat has no active turn.')
-        if (input.toolCallBudget ? input.toolCallBudget.remaining <= 0 : ++turn.calls > MAX_CALLS) { stop({ budget: true }); return { content: 'The chat reached its tool-call budget. Stop and ask the user to continue.', isError: true } }
-        try { input.toolCallBudget?.consume() } catch (error) {
+        // Runner controls (progress, finish) stay callable at the task's cap; the per-turn ceiling still bounds them.
+        const counted = budget && !provider.budgetExempt?.(name) ? budget : null
+        if (counted ? counted.remaining <= 0 : ++turn.calls > MAX_CALLS) { stop({ budget: true }); return { content: 'The chat reached its tool-call budget. Stop and ask the user to continue.', isError: true } }
+        try { counted?.consume() } catch (error) {
           stop({ budget: true })
           return { content: error instanceof Error ? error.message : 'The task reached its tool-call budget.', isError: true, budget: true }
         }

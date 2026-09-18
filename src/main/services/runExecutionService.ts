@@ -17,6 +17,7 @@ import { messageRoutingService } from './messageRoutingService'
 import { a2aStreamingService } from './a2aStreamingService'
 import { buildCatchUpPacket, buildTurnHeader, withCatchUp } from './threadContextService'
 import { driverFor } from '../agents/drivers'
+import { agentTitlesChat } from '../agents/drivers/acp/acpSessionTitle'
 import { resolveCommandRunner } from './localAgents/commandService'
 import { routingOf, type RoutableChat, type RunTarget } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
@@ -606,12 +607,16 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
 
   // Persist the user message + fire title generation in one place. The message
   // is stored as the user typed it; the packet travels on the wire only.
+  // A chat whose root runs on Codex is named by Codex's own thread title.
+  const engineTitles = !input.nested && agentTitlesChat(agent)
+    && routingOf(chatRepo.getOwned(profileUserId, chatId) ?? {}).rootAgentId === agentId
   const { wireContent, userMessageId } = messageRoutingService.prepareAgentSend({
     userId: profileUserId,
     chatId,
     agentId,
     userContent,
     attachments,
+    engineTitles,
     origin: input.inputOrigin,
     onPersisted: input.persisted
   })
@@ -669,7 +674,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
       onCompleted: () => {
         const last = messageRepo.lastId(chatId)
         if (last) chatAgentCursorRepo.advance(chatId, agentId, last)
-        if (!isDesktopAuthored(input.inputOrigin)) messageRoutingService.retryTitleAfterTurn(profileUserId, chatId)
+        if (!isDesktopAuthored(input.inputOrigin)) messageRoutingService.retryTitleAfterTurn(profileUserId, chatId, engineTitles)
       }
     }),
     (message) => input.refusal(chatId, message)

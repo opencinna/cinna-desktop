@@ -20,7 +20,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const holder = vi.hoisted(() => ({ current: null as TestDatabase | null }))
 const ai = vi.hoisted(() => ({
   /** Set per test: what `resolveBackend` should do. */
-  resolve: null as null | (() => { kind: 'adapter'; adapter: unknown; modelId: string } | { kind: 'runtime'; userId: string }),
+  resolve: (() => { throw new Error('resolve not set') }) as (() => { kind: 'adapter'; adapter: unknown; modelId: string } | { kind: 'runtime'; userId: string }),
   /** Set per test: one response per call, in order. */
   responses: [] as (string | (() => string))[],
   calls: [] as { label?: string; systemPrompt: string; userText: string }[]
@@ -62,12 +62,7 @@ vi.mock('../../db/client', () => ({
 vi.mock('../aiFunctionsService', () => ({
   AiFunctionError: FakeAiFunctionError,
   aiFunctions: {
-    resolveBackend: () => {
-      if (!ai.resolve) {
-        throw new FakeAiFunctionError('no_provider', 'No default chat mode with a provider')
-      }
-      return ai.resolve()
-    },
+    resolveBackend: () => ai.resolve(),
     runSingleShot: async (input: {
       label?: string
       systemPrompt: string
@@ -226,21 +221,6 @@ describe('draft', () => {
     await localAgentDraftService.draft(USER, agentId)
     expect(ai.calls[0].userText).toContain('Watches the invoice inbox.')
     expect(ai.calls[0].userText).toContain('Alpha')
-  })
-
-  it('skips the draft, and changes nothing, when the configured AI Functions credential is unavailable', async () => {
-    ai.resolve = null
-    const before = workflowText()
-
-    const result = await localAgentDraftService.draft(USER, agentId)
-
-    expect(result.status).toBe('skipped')
-    expect(result.reason).toMatch(/AI Functions backend/i)
-    expect(result.parts.workflowPrompt).toBe(false)
-    // The folder is untouched: the scaffold does not depend on a model.
-    expect(workflowText()).toBe(before)
-    expect(readManifest(manifestPath(agentDir)).example_prompts).toEqual([])
-    expect(ai.calls).toHaveLength(0)
   })
 
   it('leaves a workflow prompt someone has already written alone', async () => {

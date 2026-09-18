@@ -381,23 +381,6 @@ describe('healthy composer routing', () => {
   })
 })
 
-describe('the model picker', () => {
-  const modelPicker = (): HTMLElement | null =>
-    screen.queryByRole('button', { name: /model/i })
-
-  it('is offered in a plain chat with the local model', async () => {
-    await mount({ router: 'direct', agentId: null })
-    expect(modelPicker()).toBeTruthy()
-  })
-
-  it('is not offered in a chat the user routes between agents', async () => {
-    // The badge says no model is involved; a model picker beside it would be
-    // two surfaces disagreeing about the same chat.
-    await mount({ router: 'human', attached: ['a-1', 'a-2'] })
-    expect(modelPicker()).toBeNull()
-  })
-})
-
 describe('bringing a second agent into a direct chat with @', () => {
   /** Type `@`, then click the agent's row in the popup. */
   async function mentionAgent(name: string): Promise<void> {
