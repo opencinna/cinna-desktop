@@ -58,7 +58,7 @@ Replay itself has no durable event log. The separate [sidebar result record](../
 
 `src/main/services/liveRunHub.test.ts` covers compact replay, sequence continuity, independent scopes/subscribers, idle watches, overflow and serialization failure, and also `status` frames not spending the entry cap, a repeated tool input counted once, compaction before replay is given up, request tools never shortened, an adopted tool input copied so a later mutation cannot grow the cache unaccounted, and the single replay-lost log. `src/renderer/src/hooks/useLiveRunWatch.test.tsx` covers navigation, re-selecting the chat on screen mid-turn, overlapping delivery, failed-read recovery, stale completion, idle fast sends, fallback and profile changes. Native watch cases in `src/main/ipc/run.routing.test.ts` cover main-started replay, detach without cancellation and ownership revocation.
 
-See [Messaging](messaging.md), [main turn lifetime](../chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance), [task execution](../../jobs/tasks/tasks_tech.md) and [A2A streaming](../../agents/agents/streaming_pipeline.md).
+See [Messaging](messaging.md), [main turn lifetime](turn_completion.md#outcome-and-lifetime), [task execution](../../jobs/tasks/tasks_tech.md) and [A2A streaming](../../agents/agents/streaming_pipeline.md).
 
 ## Autonomous owner turns
 

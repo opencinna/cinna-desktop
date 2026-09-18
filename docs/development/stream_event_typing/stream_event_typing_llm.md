@@ -10,7 +10,7 @@ Project-specific wire contract for every `MessagePort` that carries a turn. LLM-
 | run:send | Same executor with a caller-owned port | Caller validates RunEvent |
 | Inbox next-message continuation | Same executor/services, without a renderer port | Main Inbox observer and persisted transcript |
 
-One union (`RunEvent`, `src/shared/runEvents.ts`), one guard (`isRunEvent`), one renderer handler. `runExecutionService` owns the turn independently of its optional port; liveRunHub supplies separate snapshot/replay subscription semantics. See [shared lifetime and acceptance](../../chat/chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance).
+One union (`RunEvent`, `src/shared/runEvents.ts`), one guard (`isRunEvent`), one renderer handler. `runExecutionService` owns the turn independently of its optional port; liveRunHub supplies separate snapshot/replay subscription semantics. See [shared lifetime and acceptance](../../chat/messaging/turn_completion.md#outcome-and-lifetime).
 
 ### The overturned rule: "Distinct unions — never unify"
 

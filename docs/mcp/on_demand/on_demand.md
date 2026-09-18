@@ -62,7 +62,6 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 - New-chat screen picks live in a renderer-session draft, isolated by profile and dashboard/agent surface, until the chat is created. Navigation and component remount do not clear them; restart does. See [Draft ownership](../../chat/conversation_ui/conversation_ui_tech.md#draft-ownership). `useNewChatFlow.startNewChat` flushes the buffer via `chat:on-demand-mcp-add` *before* the first send dispatches, so tools are available before the first prompt.
 - Detaching an on-demand MCP removes the row outright; there is no "soft disable" intermediate state.
 - The retained pendingAnnounce field is compatibility state. Runtime tool discovery uses the injected MCP endpoint and list-change notifications, not a one-shot system-note prefix.
-- The retained pendingAnnounce field is compatibility state. Runtime tool discovery uses the injected MCP endpoint and list-change notifications, not a one-shot system-note prefix.
 - The popup's "MCP" section is hidden outside active chats — the new-chat agent picker is unaffected.
 - Only MCPs with `enabled = true` in settings appear in the popup. Disabled MCPs can't connect and would just engage a dead chip.
 - The chip color is **fixed** (accent, matching the in-transcript MCP tool badge) — it no longer encodes connection status. Connection health is surfaced separately and only when there's a problem: a red status dot (with hover detail) after the name for any non-`connected` status.

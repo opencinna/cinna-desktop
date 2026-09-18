@@ -21,7 +21,6 @@ Phase 7b of Local Agents added the folder leg. Before it, this feature was Cinna
 - **Re-read** — A folder agent's status without forcing anything: read `STATUS.md` off disk. Takes no lock, spawns nothing. This is what the post-turn pull and "Refresh all" use for a folder agent.
 - **Partial failure / degradation strip** — The Cinna leg failing no longer costs the user the rows it did not invalidate. The list returns folder rows plus a `remoteError`, and the overlay renders a bounded error footer below the grid or detail while the tray keeps its strip above the rows. Both preserve surviving snapshots.
 - **Sentinel snapshot** — A remote row with both `severity == null` *and* `raw == null` — the agent has never published. Hidden. A folder agent with no `STATUS.md` is omitted for the same reason.
-- **`environmentId: 'local'` is a sentinel, not data.** The renderer reads `null` as a stopped remote environment. Folder snapshots use the non-null sentinel so a local file does not falsely claim that its environment is down; the value itself is not displayed.
 - **Status overlay** — Full-window frosted-glass modal opened from the top-bar activity icon: a responsive grid of agent cards, each expandable into a detail view with the full markdown body.
 - **Tray popup** — The macOS menu-bar popover showing the same list. See [Menu-Bar Tray](../../ui/tray/tray.md).
 

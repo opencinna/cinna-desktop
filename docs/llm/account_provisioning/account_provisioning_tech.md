@@ -63,8 +63,9 @@ cinna-core on Cinna-user activation and every 5 minutes.
   both the `enabled` flag and the `model_id` override onto managed modes;
   `resolveEffectiveDefault()`, `setManagedEnabled()`, `setManagedModel()`;
   `read_only` guards.
-- `src/main/services/aiFunctionsService.ts` — `tryResolve()` and the chat-mode
-  candidate builders are managed-aware (scope union + `baseUrl` + effective default).
+- `src/main/services/aiFunctionsService.ts` — `tryResolve()` looks the AI Functions
+  credential up across the scope union, so a managed credential can be chosen there
+  (it no longer reads chat modes).
 - `src/main/ipc/provider.ipc.ts`, `src/main/ipc/chatmode.ipc.ts` — handlers (below).
 - `src/main/errors.ts` — `read_only` added to `ProviderErrorCode` / `ChatModeErrorCode`.
 

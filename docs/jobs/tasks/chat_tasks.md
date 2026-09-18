@@ -55,4 +55,4 @@ Inbox answer or typed message → message transaction + resumeChat → same agen
 - [Jobs](../jobs/jobs.md) — job tasks retain their existing completion hook and attempt.
 - [Moving execution across the seam](remote_sync.md#moving-execution-across-the-seam) — handover and takeover controls.
 - [A Task on the User’s Other Devices](cross_device.md) — task rows travel; local conversations and continuation addresses do not.
-- [Tasks](tasks.md), [the Inbox](inbox.md) and [shared execution](../../chat/chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance) — work records, answer routing and runtime boundaries.
+- [Tasks](tasks.md), [the Inbox](inbox.md) and [shared execution](../../chat/messaging/turn_completion.md#outcome-and-lifetime) — work records, answer routing and runtime boundaries.

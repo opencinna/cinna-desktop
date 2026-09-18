@@ -104,7 +104,7 @@ Phase 3 additions and changes. Every handler is activation-gated and scoped with
 | `local-agent:get` | `(agentId) → LocalAgentOutcome<LocalAgentDto>` | **Changed shape.** `not_found` is a routine destination |
 | `local-agent:update-field` | `(UpdateLocalAgentFieldInput) → LocalAgentOutcome<LocalAgentDto>` | **Changed shape.** Three refusals, three behaviours |
 | `local-agent:read-doc` | `(ReadLocalAgentDocInput) → LocalAgentDocDto` | Text and stamp from one read of one file |
-| `local-agent:draft` | `(agentId) → DraftLocalAgentResult` | Async, up to ~90 s per call. Resolves `skipped` with no credential |
+| `local-agent:draft` | `(agentId) → DraftLocalAgentResult` | Async, up to ~90 s per call. Resolves `skipped` only when nothing is blank; no credential means the Default runtime, not a skip |
 | `local-agent:delete` | `(DeleteLocalAgentInput) → LocalAgentOutcome<DeleteLocalAgentResult>` | **Signature changed** (was `(agentId)`). Trash the folder, or — for a bare agent only — just hide it; then rescan the root. Codes: `not_found`, `turn_in_progress`, `write_failed`, `invalid_input` (a kit agent asked to be removed from the list alone). On success main also fires `engineManager.applyConfigChange` |
 | `local-agent:open-credentials` | `(agentId) → OpenLocalAgentCredentialsResult` | **An id, never a path** — unlike `:open-path`, this handler *writes*, so the one file it can touch is fixed in main. Seeds `credentials/.env` when it is absent, then opens it |
 | `local-agent:grants-list` | `(agentId) → StoredPermissionGrant[]` | The Permissions tab's list, newest first. An id, never a path — the folder is derived from `locate`'s ownership check |
@@ -131,7 +131,7 @@ The rest of the app uses the older convention — a **returned** `{success:false
 
 ### `src/main/services/localAgents/draftService.ts`
 - `localAgentDraftService.draft(userId, agentId)` — the in-flight `Set` guard, then `draftOnce`
-- `.draftOnce(userId, agentId)` — decides what is blank (`wantsWorkflow` / `wantsExamples` / `wantsTrigger`), resolves the adapter, **takes both stamps before any call**, runs at most two single-shots, writes each result through `saveField`, and reports partial success
+- `.draftOnce(userId, agentId)` — decides what is blank (`wantsWorkflow` / `wantsExamples` / `wantsTrigger`), resolves the backend (`aiFunctions.resolveBackend`, which never fails), **takes both stamps before any call**, runs at most two single-shots, writes each result through `saveField`, and reports partial success
 - `.runDraftCall({resolved, systemPrompt, userText, label, maxOutputChars})` — one `aiFunctions.runSingleShot` with `AbortSignal.timeout(90_000)`; returns `null` instead of throwing
 - `.saveField(userId, agentId, update, expectedStamp)` — one `localAgentService.updateField`; returns `null` on a stale-write refusal, which is logged and never retried
 - `parseDraftMeta(raw)` — the line-based `TRIGGER:` / `PROMPT:` parser

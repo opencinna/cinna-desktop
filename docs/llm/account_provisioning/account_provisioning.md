@@ -61,8 +61,9 @@ so a returning user is ready even before (or without) a fresh fetch.
    selection*). The user expands its card in Settings → Profile → Chats and picks
    a different model from the dropdown (chat-capable models only).
 2. The choice is stored locally in `managed_overrides.model_id` and overlays the
-   mode's model everywhere it's used (composer, chat start, AI functions). It
-   survives re-sync; picking again changes it.
+   mode's model everywhere it's used (composer, chat start). AI Functions do not
+   read chat modes; they have their own binding. The
+   override survives re-sync; picking again changes it.
 3. When the credential exposes no model list (server sent none and the registry is
    empty), the expanded card fetches the list live from the provider using the
    key. If that call fails, the provider's own error (e.g. "invalid x-api-key") is

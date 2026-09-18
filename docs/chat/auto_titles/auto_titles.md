@@ -51,7 +51,7 @@ On every subsequent user message, the routing service still fires the trigger; t
 
 ### Failures
 
-- The AI Functions credential is deleted, disabled or keyless → the call runs on the Default runtime instead (warned once per stale credential in the `ai-functions` log); it does not fail. See [AI Functions](../../llm/ai_functions/ai_functions.md).
+- The AI Functions credential is deleted, disabled, missing its API key or unsupported → the call runs on the Default runtime instead (warned once per stale credential in the `ai-functions` log); it does not fail. See [AI Functions](../../llm/ai_functions/ai_functions.md).
 - The Default runtime has no warm process → the call is deferred, the fallback title is kept, and the after-turn retry tries again.
 - LLM call fails (network, auth, rate limit) → `llm_failed`, warn, fallback kept.
 - Model returns empty or sanitises to empty → `empty_output`, warn, fallback kept.
@@ -99,7 +99,8 @@ In all cases, the user-visible streaming flow is untouched.
 - **Only the chat's root agent names the chat.** A specialist, a subagent's child session, an agent @-addressed in a human-routed chat and an AI Function's utility session report titles of their own; they speak for themselves, not the chat.
 - **Only while the title is untouched** — the same rule as Cinna's AI title, so a title the user set is never replaced, and once Codex's title is written it is no longer "untouched" and a later one does not replace it.
 - **Applied regardless of `autoChatTitles`.** The setting governs Cinna spending a model call; Codex makes its own title request whether Cinna uses the answer or not, and it cannot be switched off.
-- **The placeholder is dropped by matching, not by position.** A title equal to, or the start of, a prompt recently sent to that session (whitespace-normalised) is the echo; anything else is the real title. Were the placeholder applied, the chat would be named after the prompt itself.
+- **The placeholder is dropped by matching, not by position.** A title equal to a prompt recently sent to that session, or longer than 40 characters and the start of one (whitespace-normalised either way), is the echo; anything else is the real title. Were the placeholder applied, the chat would be named after the prompt itself.
+- **A short title the prompt merely starts with is a real name.** Codex often names a thread with the prompt's opening words — "Fix flaky parser test" for "Fix flaky parser test and add coverage" — and treating any start of the prompt as the echo threw those names away and left the chat on its derived fallback title. 40 characters is longer than any title Codex generates, so only a cut that long is read as the prompt truncated.
 - **A session this process never prompted names nothing.** After a restart a loaded session has no prompt to recognise its placeholder by, and was titled long ago anyway.
 - **Only Codex.** Claude reports the same update; its titles are not used.
 

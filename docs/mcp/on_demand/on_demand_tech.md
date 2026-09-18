@@ -37,8 +37,6 @@ Table: `chat_on_demand_mcps` (see `src/main/db/migrations/chats.ts`)
 - `created_at` (INTEGER, unix seconds)
 - Primary key: `(chat_id, mcp_provider_id)`
 
-- `src/main/services/conductorBridge.ts` unions baseline/on-demand connected MCP providers and refreshes the injected endpoint on chat/tool changes.
-
 ## IPC Channels
 
 - `chat:on-demand-mcp-list` — `(chatId: string) => Array<{ mcpProviderId: string; pendingAnnounce: boolean }>`
@@ -52,7 +50,6 @@ All three require `userActivation.requireActivated()` and use `getProfileScopeUs
 - `chatService.listOnDemandMcps(userId, chatId)` — ownership-checks the chat, returns rows from `chatOnDemandMcpRepo.list`
 - `chatService.addOnDemandMcp(userId, chatId, mcpProviderId)` — ownership-checks chat + verifies MCP exists in settings scope (`mcpProviderRepo.getOwned`), then `chatOnDemandMcpRepo.add` (upsert that re-arms `pendingAnnounce`)
 - `chatService.removeOnDemandMcp(userId, chatId, mcpProviderId)` — ownership-checks then `chatOnDemandMcpRepo.remove`
-- `pending_announce` remains schema/API compatibility state; ACP tool discovery does not consume it.
 - `src/main/services/conductorBridge.ts` unions baseline/on-demand connected MCP providers and refreshes the injected endpoint on chat/tool changes.
 
 ## Renderer Components
@@ -76,5 +73,4 @@ None. No env vars, no settings. The feature is always available inside an active
 
 ## Implementation Notes
 
-- `pending_announce` remains schema/API compatibility state; ACP tool discovery does not consume it.
 - **Why a second listbox component instead of extending `MentionPopup`**: `MentionPopup<T>` is a flat single-section primitive used by four call sites (agents, prompts, commands, chat modes). Adding grouping to it would complicate every caller; `AgentMcpMentionPopup` inlines the same surface treatment with section grouping local to itself.

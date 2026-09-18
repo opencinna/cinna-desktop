@@ -116,7 +116,7 @@ No environment variable or per-agent override controls these effects. Timing and
 
 ## Security
 
-Appearance storage contains presentation preferences only. Decoration performs no network, filesystem or agent operation and cannot intercept input; the new-chat logo's click lands only on its own box and changes nothing but its local shown state. The existing icon IPC accepts only fixed themes; it grants no OS appearance control. Builder identity and connection detail safety remain in [Chat Routing](../../chat/chat_routing/chat_routing_tech.md#connection-detail-lookup).
+Appearance storage contains presentation preferences only. Decoration performs no network, filesystem or agent operation and cannot intercept input; the new-chat logo's click lands only on its own box and changes nothing but its local shown state. The existing icon IPC accepts only fixed themes; it grants no OS appearance control. Builder identity and connection detail safety remain in [Chat Routing](../../chat/chat_routing/chat_routing_tech.md#renderer-components).
 
 ## Validation
 

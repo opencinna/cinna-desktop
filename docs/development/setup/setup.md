@@ -100,16 +100,15 @@ MainArea routes chats, Settings, Inbox, tasks, jobs, notes and agent pages. Chat
 - Tailwind CSS v4, SQLite with auto-migration, full chat CRUD
 - Three LLM adapters with streaming (Anthropic, OpenAI, Gemini)
 - MCP provider management (stdio/SSE/streamable-http) with OAuth DCR
-- MessagePort streaming, multi-turn tool-call loop (up to 10 rounds), per-chat model + MCP selection
+- MessagePort streaming, per-chat on-demand MCP selection (a chat's model comes from its chat mode or runtime)
 - Default provider/model, dark/light theme, markdown rendering
 - Compact UI with animated sidebar, controls row, metadata popups
 - Animated tool call blocks: provider-first badges, shimmer progress bar, smooth expand/collapse
 - Packaged ACP dependency discovery and shipped-tree guard; isolated ACP/main smoke checks, including native Canvas drawing, verified on signed macOS arm64 and x64 under Rosetta
 
 ### Known Gaps
-- Chat title auto-generation (currently truncated first message)
 - Keyboard shortcuts, error toasts, window state persistence
 - Inline chat rename, message editing/deletion
-- Conversation export, system prompt UI, image/file attachments
+- Conversation export
 - Streaming cancellation cleanup, search across chats
 - Packaged runtime checks on Windows/Linux remain unverified; build-time dependency validation also runs on cross-builds (see [Packaged Runtime Dependencies](../distribution/packaged_runtime.md))
