@@ -25,6 +25,7 @@ No new IPC or preload field exists. handbackEligible is an internal runner/execu
 - `readHandbackNote` normalizes newlines, removes trailing blank lines and accepts the final column-zero `/handback ` line with a trimmed nonempty note of at most 4,000 characters. It tracks backtick/tilde fences so an unclosed example is not a control. It returns data without altering the saved answer.
 - RunAgentTurnResult and TurnOutcome carry an optional typed handback note. The streaming wrapper forwards it only on completed outcomes after transcript persistence. Remote A2A metadata does not populate this field.
 - The coordinator validates authority and outcome/request bookkeeping before consuming the note. Open questions retain the specialist owner. On successful return it JSON-quotes the agent-provided note in both the transition and next coordinator input; ordinary unmarked return is unchanged.
+- `runExecutionService` supplies catch-up for the returning coordinator even when it is already the chat root. Its resumed ACP session needs the specialist answer as well as the explicit handback notice; retaining the session alone does not supply other participants’ turns.
 - `handoverSection` renders legacy sibling hints separately from conditional coordinator-marker guidance. Unknown kinds supply neither coordinator authority nor marker guidance. Kit and bare desktop context now describe unattended requests; no per-task IDs or capabilities are stored in shared prompt context.
 
 ## Renderer Components

@@ -247,7 +247,7 @@ export const localAgentDraftService = {
 
     let resolved
     try {
-      resolved = aiFunctions.resolveAdapterFromDefaultMode(userId)
+      resolved = aiFunctions.resolveBackend(userId)
     } catch (err) {
       if (err instanceof AiFunctionError && err.code === 'no_provider') {
         logger.info('draft skipped — no AI credential configured', { agentId })
@@ -255,7 +255,7 @@ export const localAgentDraftService = {
           status: 'skipped',
           parts,
           reason:
-            'No AI credential is configured, so the prompts were left as the template. Add one in Settings → AI Credentials, then draft them by hand or in your assistant.',
+            'No AI Functions backend is available, so the prompts were left as the template. Choose a credential in Settings → Features or configure the default runtime in Settings → Agents.',
           agent
         }
       }
@@ -386,7 +386,7 @@ export const localAgentDraftService = {
    * a provider that is down must degrade the draft, not the creation.
    */
   async runDraftCall(input: {
-    resolved: ReturnType<typeof aiFunctions.resolveAdapterFromDefaultMode>
+    resolved: ReturnType<typeof aiFunctions.resolveBackend>
     systemPrompt: string
     userText: string
     label: string
@@ -394,8 +394,7 @@ export const localAgentDraftService = {
   }): Promise<string | null> {
     try {
       return await aiFunctions.runSingleShot({
-        adapter: input.resolved.adapter,
-        modelId: input.resolved.modelId,
+        backend: input.resolved,
         systemPrompt: input.systemPrompt,
         userText: input.userText,
         label: input.label,

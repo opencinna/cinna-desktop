@@ -79,8 +79,8 @@
 ### Settings
 
 - `ChatModesSection` — Lists `useChatModes()` data, renders `ChatModeCard` per mode + `ChatModeForm` toggle
-- `ChatModeCard` — Expandable card; all fields except name auto-save on change via `useUpsertChatMode()`; name uses local draft state with onBlur save; header includes the `Star` button that toggles `isDefault` (mutation runs through `save({ isDefault: !mode.isDefault })`, which triggers the service-level invariant)
-- `ChatModeForm` — Inline creation form with name, color, provider, model, MCP checkboxes; calls `upsert` then `onClose`
+- `ChatModeCard` — Expandable card; selection fields auto-save on change via `useUpsertChatMode(mode.id)`; name uses local draft state with onBlur save; header includes the `Star` button that toggles `isDefault` (mutation runs through `save({ isDefault: !mode.isDefault })`, which triggers the service-level invariant)
+- `ChatModeForm` — Native inline form with Name and Runtime, conditional OpenCode credential, and collapsed More options for color/model/tools/instructions/MCP; Enter in Name submits. Calls `upsert` then `onClose`; errors use `unwrapIpcError`.
 
 ### Chat
 
@@ -103,3 +103,11 @@
 - No sensitive data — chat modes store only IDs and a color string; no keys or tokens
 - MCP provider IDs stored in the mode are validated at chat creation time when `setMcpProviders` is called
 - Ownership: every repo method filters by `userId`; settings UI runs at `getSettingsScopeUserId()` so chat modes live in the default (shared) scope
+
+## Runtime binding
+
+`src/shared/chatModeRuntime.ts` adds optional engine, systemPrompt and toolPolicy DTO fields. The guarded chat-mode migration adds engine (nullable), system_prompt (empty string default) and tool_policy (connectors default), backfilling existing provider-bound modes to opencode. Service validation accepts only supported engines, none/connectors policy and at most 100000 instruction characters; invalid values use ChatModeError invalid_value.
+
+`src/renderer/src/components/settings/ChatModeRuntimeFields.tsx` is shared by create/edit forms. Runtime changes clear credential/model; instructions and explicit model IDs save on blur. `src/renderer/src/hooks/useRuntimeModelCatalog.ts` reads engine:model-catalog through preload. `src/main/services/runtimeModelCatalog.ts` records advertised ACP model options, including groups and legacy models.availableModels, scoped by profile/engine with source and update time. Reading does not start a runtime. Synthetic creation/reconfiguration is owned by `src/main/services/chatConductorService.ts`, not the mode repository.
+
+Chat-mode editing keeps a synchronous optimistic draft before each full upsert, so an instructions blur followed by a tool/model selection cannot restore the previous prompt. TanStack mutation scopes serialize saves per mode; success awaits the refreshed mode list before syncing the persisted prop back into the draft. Delete is disabled while saves are pending. The Codex option is disabled, inherited Codex defaults block creation, and existing Codex modes show an inactive cause plus actionable runtime guidance. No local-agent runtime options change.

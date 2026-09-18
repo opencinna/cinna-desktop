@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
-import type { LLMAdapter, StreamParams, StreamResult } from '../llm/types'
+import type { StreamParams, StreamResult } from '../llm/types'
 import type { AgentDriver } from '../agents/drivers/driver'
 import type { AgentRow } from '../db/agents'
 
@@ -13,17 +13,19 @@ vi.mock('../logger/logger', () => ({ createLogger: () => ({ info() {}, debug() {
 vi.mock('../auth/scope', () => ({ getSettingsScopeUserId: () => '__default__', getAgentLookupScope: () => '__default__' }))
 vi.mock('../mcp/manager', () => ({ mcpManager: { getConnection: () => null } }))
 vi.mock('./fileStore', () => ({ attachmentToMediaPart: async () => null }))
+vi.mock('./chatConductorService', () => ({ chatConductorService: { remove() {}, bind: (_user: string, chat: { id: string }) => {
+  state.database!.raw.prepare('UPDATE chats SET agent_id = ? WHERE id = ?').run('runtime', chat.id)
+  return { ...chat, agentId: 'runtime' }
+} } }))
 vi.mock('./taskFileService', () => ({ taskFileService: { exportHandoff() {}, removeHandoff() {} } }))
 vi.mock('./chatTitleService', () => ({ chatTitleService: { autoGenerateForFirstMessage: async () => {} }, ChatTitleError: class extends Error {} }))
 vi.mock('./agentService', () => ({ agentService: {
   findAgent: (_settings: string, _user: string, id: string) => { const row = state.agents.find((agent) => agent.id === id); return row ? { row, userId: '__default__' } : null },
   listMerged: () => state.agents
 } }))
-vi.mock('../agents/drivers', () => ({ driverFor: () => ({ run: driverRun, capabilities: () => ({ commands: { source: 'none' } }) }) }))
+vi.mock('../agents/drivers', () => ({ driverFor: (agent: AgentRow) => ({ run: agent.id === 'runtime' ? runScriptedRuntime : driverRun, capabilities: () => ({ commands: { source: 'none' } }) }) }))
 vi.mock('./localAgents/commandService', () => ({ resolveCommandRunner: (_cap: unknown, _wire: string, _user: string, _agent: string, run: unknown) => run }))
-vi.mock('../llm/registry', () => ({ getAdapter: (): LLMAdapter => ({ providerType: 'openai', listModels: async () => [], stream,
-  modelCapability: () => ({ acceptedMimeTypes: [], nativeMimeTypes: [], maxFilesPerMessage: 0, maxFileSizeBytes: 0 }),
-  parseError: (error: Error) => ({ short: error.message, detail: error.message }) }) }))
+vi.mock('../llm/registry', () => ({ getAdapter: () => { throw new Error('Autonomous tasks must use the runtime driver') } }))
 
 const { taskRunnerService } = await import('./taskRunnerService')
 const { taskService } = await import('./taskService')
@@ -36,10 +38,42 @@ const { chatRunResultRepo } = await import('../db/chatRunResults')
 const { chatOnDemandAgentRepo } = await import('../db/chatOnDemandAgent')
 const { taskRunnersByChat } = await import('./taskRunnerState')
 const { activeRunsByChat } = await import('./runExecutionState')
+const { messageRepo } = await import('../db/messages')
 const USER = '__default__'
 const scope = { profileUserId: USER, settingsUserId: USER }
 let chatId: string
 const tool = (name: string, input: Record<string, unknown>): StreamResult => ({ content: '', toolCalls: [{ id: `call-${name}`, name, input }] })
+
+/** Scripted ACP conductor: only its responses are fake; runner admission, persistence and controls are real. */
+const runScriptedRuntime: AgentDriver['run'] = async (_owner, _agent, input) => {
+  try {
+    while (!input.signal.aborted) {
+      const result = await stream({ model: 'runtime', signal: input.signal, tools: input.coordinator?.getTools(),
+        messages: chatRepo.listMessages(input.chatId).filter((row) => ['system', 'user', 'assistant', 'tool_call'].includes(row.role))
+          .map((row) => ({ role: row.role as 'system' | 'user' | 'assistant' | 'tool_call', content: row.content })),
+        onDelta: (text) => input.onEvent?.({ type: 'delta', kind: 'text', text }) })
+      if (!result.toolCalls.length) return { text: result.content, parts: result.content ? [{ kind: 'text', text: result.content }] : [], notices: [] }
+      messageRepo.saveAssistant({ chatId: input.chatId, content: result.content, toolCalls: result.toolCalls })
+      for (const call of result.toolCalls) {
+        input.toolCallBudget?.consume()
+        const response = await input.coordinator!.callTool(call.name, call.input, { toolCallId: call.id, signal: input.signal, onEvent: input.onEvent })
+        const content = String(response.content)
+        const target = input.coordinator!.describeCall(call.name, call.input)
+        messageRepo.saveToolCall({ chatId: input.chatId, toolCallId: call.id, toolName: call.name, toolInput: call.input,
+          content, toolError: !!response.isError, toolAgentId: target?.agentId, parts: response.parts })
+        input.onEvent?.(response.isError ? { type: 'tool_error', id: call.id, error: content } : { type: 'tool_result', id: call.id, result: content })
+        if (response.control) {
+          const text = response.control.kind === 'finish' ? response.control.summary : ''
+          return { text, parts: text ? [{ kind: 'text', text }] : [], notices: [], control: response.control }
+        }
+      }
+    }
+    return { text: '', parts: [], notices: [], stopReason: 'canceled' }
+  } catch (error) {
+    return { text: '', parts: [], notices: [], ...(input.signal.aborted ? { stopReason: 'canceled' as const }
+      : { error: { message: String(error), raw: '' } }) }
+  }
+}
 
 beforeEach(() => {
   state.database = createTestDatabase()
@@ -48,6 +82,8 @@ beforeEach(() => {
   state.agents = ['Analyst', 'Writer'].map((name) => ({ id: name.toLowerCase(), name, driver: 'a2a', enabled: true, userId: USER } as AgentRow))
   for (const row of state.agents) state.database.raw.prepare(`INSERT INTO agents (id, user_id, name, protocol, enabled, source, driver, created_at)
     VALUES (?, ?, ?, 'a2a', 1, 'local', 'a2a', 1)`).run(row.id, USER, row.name)
+  state.agents.push({ id: 'runtime', name: 'Runtime', driver: 'acp', enabled: true, userId: USER } as AgentRow)
+  state.database.raw.prepare("INSERT INTO agents (id, user_id, name, protocol, enabled, source, driver, created_at) VALUES ('runtime', ?, 'Runtime', 'acp', 1, 'local', 'acp', 1)").run(USER)
   const chat = chatRepo.create(USER, { title: 'Work', router: 'coordinator', providerId: 'provider', modelId: 'model' })
   chatId = chat.id
   for (const row of state.agents) chatOnDemandAgentRepo.add(chatId, row.id)
@@ -63,6 +99,75 @@ afterEach(async () => {
 })
 
 describe('autonomous coordinator runner', () => {
+  function runtimeRoot(): void {
+    const root = state.agents.find((agent) => agent.id === 'writer')!
+    root.driver = 'acp'
+    root.driverConfig = { transport: 'stdio' }
+    state.database!.raw.prepare("UPDATE agents SET driver = 'acp' WHERE id = 'writer'").run()
+    state.database!.raw.prepare('UPDATE chats SET agent_id = ?, provider_id = NULL, model_id = NULL WHERE id = ?').run('writer', chatId)
+  }
+
+  it('runs an ACP coordinator without model credentials and never lets it delegate to itself', async () => {
+    runtimeRoot()
+    driverRun.mockImplementation(async (_owner, _row, input) => {
+      expect(input.coordinator).toBeDefined()
+      await expect(input.coordinator!.callTool('delegate', { agent: 'Writer', message: 'recurse' }, { toolCallId: 'self' })).rejects.toThrow('attached, available agent')
+      input.toolCallBudget!.consume()
+      const finished = await input.coordinator!.callTool('finish', { summary: 'Runtime completed the task' }, { toolCallId: 'finished' })
+      return { text: 'Runtime completed the task', parts: [], notices: [], control: finished.control }
+    })
+    const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Complete through the runtime' })
+    await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('completed'))
+    expect(stream).not.toHaveBeenCalled()
+    expect(taskRuntimeRepo.get(USER, taskId)).toMatchObject({ coordinator: { agentId: 'writer', providerId: null, modelId: null }, toolCalls: 1 })
+  })
+
+  it('refuses autonomous work before launch when the chat mode disables tools', () => {
+    runtimeRoot()
+    state.agents.find((agent) => agent.id === 'writer')!.driverConfig = { conductorChatId: chatId, conductorToolPolicy: 'none' }
+    expect(() => taskRunnerService.prepare(scope, { chatId, goal: 'Finish this task' })).toThrow('connected tools')
+    expect(driverRun).not.toHaveBeenCalled()
+    expect(taskRunnersByChat.has(chatId)).toBe(false)
+  })
+
+  it('persists the runtime MCP call budget before allowing side effects', async () => {
+    runtimeRoot()
+    let effects = 0
+    driverRun.mockImplementation(async (_owner, _row, input) => {
+      expect(input.toolCallBudget?.remaining).toBe(2)
+      try {
+        for (let i = 0; i < 3; i++) { input.toolCallBudget!.consume(); effects++ }
+      } catch (error) {
+        return { text: '', parts: [], notices: [], stopReason: 'budget', error: { message: String(error), raw: '' } }
+      }
+      throw new Error('The third effect should have been refused')
+    })
+    const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Bound tool work', budget: { maxRounds: 2 } })
+    await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('error'))
+    expect(effects).toBe(2)
+    expect(taskRuntimeRepo.get(USER, taskId)?.toolCalls).toBe(2)
+  })
+
+  it('restores the same runtime coordinator after a specialist handoff', async () => {
+    runtimeRoot()
+    let rootTurns = 0
+    driverRun.mockImplementation(async (_owner, row, input) => {
+      if (row.id === 'analyst') return { text: 'Analysis complete', parts: [], notices: [] }
+      rootTurns++
+      input.toolCallBudget!.consume()
+      const response = rootTurns === 1
+        ? await input.coordinator!.callTool('handoff', { agent: 'Analyst', note: 'Review the result' }, { toolCallId: 'handoff' })
+        : await input.coordinator!.callTool('finish', { summary: 'Review complete' }, { toolCallId: 'finish' })
+      return { text: 'Runtime turn', parts: [], notices: [], control: response.control }
+    })
+    const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Review with a specialist' })
+    await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('completed'))
+    expect(rootTurns).toBe(2)
+    expect(chatRepo.getOwned(USER, chatId)).toMatchObject({ router: 'coordinator', agentId: 'writer' })
+    expect(driverRun.mock.calls.map((call) => call[1].id)).toEqual(['writer', 'analyst', 'writer'])
+    expect(stream).not.toHaveBeenCalled()
+  })
+
   it('delegates, waits for a durable gate, hands off with context, hands back and finishes without a view', async () => {
     stream.mockResolvedValueOnce(tool('delegate', { agent: 'Analyst', message: 'Analyse the goal' }))
       .mockResolvedValueOnce(tool('ask_user', { question: 'Which branch?' }))
@@ -88,7 +193,7 @@ describe('autonomous coordinator runner', () => {
     const writer = driverRun.mock.calls.find((call) => call[1].id === 'writer')![2].wireContent
     for (const phrase of ['Ship the feature', 'Analyst result', 'main', 'Use the analysis']) expect(writer).toContain(phrase)
     expect(stream).toHaveBeenCalledTimes(4)
-    expect(stream.mock.calls[3][0].messages.some((row) => row.role === 'user' && row.content.includes('Writer handed the task back to the coordinator.'))).toBe(true)
+    expect(stream.mock.calls[3][0].messages.some((row) => row.role === 'system' && row.content.includes('Writer handed the task back to the coordinator.'))).toBe(true)
     expect(taskRuntimeRepo.get(USER, taskId)).toMatchObject({ state: 'completed', ownerTurns: 4 })
     const rows = chatRepo.listMessages(chatId)
     expect(rows.filter((row) => row.content === 'Goal completed and verified')).toHaveLength(1)
@@ -243,7 +348,7 @@ describe('autonomous coordinator runner', () => {
     taskRunnerService.resume(USER, taskId)
     await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('completed'))
     const resumed = stream.mock.calls[1][0].messages
-    expect(resumed.find((row) => row.content.startsWith('The previous execution was interrupted.'))?.role).toBe('user')
+    expect(resumed.find((row) => row.content.startsWith('The previous execution was interrupted.'))?.role).toBe('system')
     expect(chatRepo.listMessages(chatId).filter((row) => row.role === 'user').map((row) => row.content)).toEqual(['Initial goal'])
   })
 

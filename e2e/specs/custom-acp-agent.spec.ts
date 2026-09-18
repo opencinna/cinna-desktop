@@ -88,7 +88,10 @@ test('a command-line agent tests only initialization, then chats and answers one
   await openForm(cinna, peer)
   await testCommand(cinna, peer)
   await addAndSend(cinna)
-  expect(peer.received('session/new')[0].params).toEqual({ cwd: CUSTOM_CWD, mcpServers: [] })
+  expect(peer.received('session/new')[0].params).toEqual({ cwd: CUSTOM_CWD, mcpServers: [{
+    name: 'cinna', type: 'http', url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/mcp\//),
+    headers: [{ name: 'Authorization', value: expect.stringMatching(/^Bearer [\w-]{43}$/) }]
+  }] })
   expect(peer.received('session/prompt')[0].params?.prompt).toEqual([{ type: 'text', text: CUSTOM_PROMPT }])
   await cinna.page.getByRole('button', { name: 'Allow once', exact: true }).click()
   await expect(cinna.page.getByText(CUSTOM_ANSWER, { exact: true })).toBeVisible()

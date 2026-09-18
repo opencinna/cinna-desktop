@@ -41,7 +41,7 @@ export type ChatErrorCode =
   /** A `chats.router` value this build does not have. Never reachable from the app's own UI. */
   | 'invalid_router'
 
-export type ChatModeErrorCode = 'not_found' | 'read_only'
+export type ChatModeErrorCode = 'not_found' | 'read_only' | 'invalid_value'
 
 export type AuthErrorCode =
   | 'not_found'

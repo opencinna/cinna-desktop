@@ -1,13 +1,19 @@
+import { useProviders } from '../../hooks/useProviders'
+import { useModels } from '../../hooks/useModels'
+import { isCredentialActive } from '../../../../shared/credentials'
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
 import { useUIStore, type ThemePreference } from '../../stores/ui.store'
 import { unwrapIpcError } from '../../utils/ipcError'
 import {
   SettingsButton,
+  SettingsLabel,
   SettingsRow,
   SettingsRows,
   SettingsSection,
-  SettingsToggleRow
+  SettingsToggleRow,
+  settingsInputClass,
+  settingsDropdownRowClass
 } from './SettingsLayout'
 
 /**
@@ -32,6 +38,10 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const setExtraUIAnimation = useUIStore((s) => s.setExtraUIAnimation)
   const { data: settings, isLoading, isError } = useAppSettings()
   const setSetting = useSetAppSetting()
+  const { data: providers } = useProviders()
+  const { data: models } = useModels()
+  const functionCredential = providers?.find((provider) => provider.id === settings?.aiFunctionsCredentialId)
+  const functionModels = (models ?? []).filter((model) => model.providerId === settings?.aiFunctionsCredentialId)
 
   const disabled = isLoading || setSetting.isPending
   const saveError = setSetting.error ? unwrapIpcError(setSetting.error, 'Could not save this setting.') : null
@@ -75,10 +85,49 @@ export function FeaturesSettingsSection(): React.JSX.Element {
     <div className="space-y-6">
       <SettingsSection title="AI Functions">
         <SettingsRows insetDividers>
+          <SettingsRow className="flex items-center justify-between gap-3">
+            <SettingsLabel info="Choose who routes when a chat gains multiple agents. AI routes uses the first local agent or your default runtime as coordinator. Existing chats keep their routing.">Default multi-agent routing</SettingsLabel>
+            <div role="group" aria-label="Default multi-agent routing" className="flex shrink-0 rounded-md border border-[var(--color-border)] p-0.5">
+              {(['human', 'coordinator'] as const).map((value) => (
+                <button key={value} type="button" disabled={disabled}
+                  aria-pressed={(settings?.defaultMultiAgentRouting ?? 'human') === value}
+                  onClick={() => { if (settings && !disabled) setSetting.mutate({ key: 'defaultMultiAgentRouting', value }) }}
+                  className={`rounded px-2.5 py-1 text-[13px] transition-colors disabled:opacity-50 ${(settings?.defaultMultiAgentRouting ?? 'human') === value ? 'app-nav-active text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
+                  {value === 'human' ? 'You route' : 'AI routes'}
+                </button>
+              ))}
+            </div>
+          </SettingsRow>
+          <SettingsRow>
+            <div className={settingsDropdownRowClass}>
+              <SettingsLabel htmlFor="ai-functions-credential" info="Credentials used only for titles and drafting. With none chosen, these functions run a one-shot session on your Default runtime.">AI Functions credentials</SettingsLabel>
+              <select id="ai-functions-credential" className={settingsInputClass} disabled={disabled}
+                value={settings?.aiFunctionsCredentialId ?? ''}
+                onChange={(event) => setSetting.mutate({ key: 'aiFunctionsCredentialId', value: event.target.value })}>
+                <option value="">Default runtime</option>
+                {(providers ?? []).filter(isCredentialActive).map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+                {settings?.aiFunctionsCredentialId && !functionCredential && <option value={settings.aiFunctionsCredentialId}>Missing credential</option>}
+                {functionCredential && !isCredentialActive(functionCredential) && <option value={functionCredential.id}>{functionCredential.name} (inactive)</option>}
+              </select>
+            </div>
+            <div className={`mt-3 ${settingsDropdownRowClass}`}>
+              <SettingsLabel htmlFor="ai-functions-model" info="The model used by the selected AI Functions credential. With no credential, the Default runtime chooses its model.">AI Functions model</SettingsLabel>
+              <select id="ai-functions-model" className={settingsInputClass} disabled={disabled || !settings?.aiFunctionsCredentialId}
+                value={settings?.aiFunctionsModelId ?? ''}
+                onChange={(event) => setSetting.mutate({ key: 'aiFunctionsModelId', value: event.target.value })}>
+                <option value="">Default model</option>
+                {functionModels.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+                {settings?.aiFunctionsModelId && !functionModels.some((model) => model.id === settings.aiFunctionsModelId) && <option value={settings.aiFunctionsModelId}>Choose a model for this credential</option>}
+              </select>
+            </div>
+            <p className="mt-2 text-[13px] text-[var(--color-text-muted)]">
+              Runs on: {functionCredential ? `${functionCredential.name} · ${functionModels.find((model) => model.id === settings?.aiFunctionsModelId)?.name ?? 'default model'}` : settings?.aiFunctionsCredentialId ? 'unavailable credential' : 'Default runtime'}
+            </p>
+          </SettingsRow>
           <SettingsToggleRow
             id="feature-auto-chat-titles"
             label="Auto-generate chat titles"
-            description="Generates a short title from your first message in a new chat. Uses your default chat mode’s AI credentials — consumes tokens."
+            description="Generates a short title from your first message in a new chat. Uses the AI Functions runtime selected above."
             checked={autoChatTitles}
             disabled={disabled}
             onToggle={toggleAutoChatTitles}

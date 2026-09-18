@@ -207,6 +207,24 @@ const ALLOWLIST: string[] = [
  * A behavioural one moves into a driver.
  */
 const OWNERSHIP: { file: string; category: Category; count: number; why: string }[] = [
+  // Runtime conductor: these sites own saved runtime fields, presentation, or
+  // trusted tool authority. Engine execution/policy remains in ACP drivers.
+  { file: 'src/main/services/chatConductorService.ts', category: 'engine', count: 2,
+    why: 'owns the saved runtime credential binding and its human-readable engine identity' },
+  { file: 'src/main/services/conductorBridge.ts', category: 'providerType', count: 1,
+    why: 'accepts task-control authority only from the desktop-owned coordinator provider, never tool text' },
+  { file: 'src/shared/chatRouting.ts', category: 'source', count: 1,
+    why: 'classifies the local connection identity for conductor eligibility in the shared routing policy' },
+  { file: 'src/renderer/src/components/settings/ChatModeCard.tsx', category: 'engine', count: 2,
+    why: 'presents a saved mode runtime name and CLI subscription identity' },
+  { file: 'src/renderer/src/components/settings/ChatModeRuntimeFields.tsx', category: 'engine', count: 2,
+    why: 'edits authored engine fields and their credential/catalogue controls' },
+  { file: 'src/renderer/src/components/settings/ChatModeForm.tsx', category: 'engine', count: 1,
+    why: 'validates credential selection only for the mode engine that owns that field' },
+  { file: 'src/renderer/src/hooks/useNewChatFlow.ts', category: 'engine', count: 1,
+    why: 'preserves a mode CLI model identifier without interpreting it as an API credential catalogue id' },
+  { file: 'src/renderer/src/hooks/useRuntimeModelCatalog.ts', category: 'engine', count: 1,
+    why: 'selects the engine-owned catalogue for CLI model fields; OpenCode keeps its credential catalogue' },
   // Agents UI refactor: exact lifecycle/identity/presentation pins, not a
   // transport exception. Location icons and auth labels describe a connection;
   // sending, authenticating and answering its turns remain driver-owned.
@@ -226,7 +244,7 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
     why: 'excludes folder-owned pages and presents the owning Cinna profile domain link' },
   { file: 'src/renderer/src/components/agents/local/LocalAgentsList.tsx', category: 'source', count: 3,
     why: 'applies server-owned visibility and groups Cinna versus directly registered A2A rows in sidebar order' },
-  { file: 'src/renderer/src/components/chat/AgentConnectionDetails.tsx', category: 'source', count: 4,
+  { file: 'src/renderer/src/components/chat/AgentConnectionDetails.tsx', category: 'source', count: 3,
     why: 'presents location, folder runtime details, the owning profile domain fallback and an authentication label; it never resolves or sends turn credentials' },
   { file: 'src/renderer/src/hooks/useAgentDesktopVisibility.ts', category: 'source', count: 4,
     why: 'restricts hiding to server-owned rows, preserves folder selections and filters hidden server rows before choosing the next folder or external page' },
@@ -262,7 +280,6 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   { file: 'src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx', category: 'kind', count: 3, why: 'owns registered root layout and adoption controls' },
   { file: 'src/main/agents/status/index.ts', category: 'source', count: 2, why: 'resolves ownership of optional folder or synced Cinna status data; source implementations own read/refresh behavior' },
   { file: 'src/renderer/src/components/chat/MessageStream.tsx', category: 'providerType', count: 1, why: 'presents agent subthreads from the persisted/wire tool representation' },
-  { file: 'src/main/services/chatStreamingService.ts', category: 'providerType', count: 1, why: 'accepts runner controls only from a trusted coordinator provider; tool content grants no authority' },
   {
     file: 'src/main/services/localScheduleService.ts',
     category: 'kind',

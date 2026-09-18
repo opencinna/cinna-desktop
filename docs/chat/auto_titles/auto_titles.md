@@ -21,20 +21,20 @@ Opt-in background feature that replaces the renderer's truncated first-message f
 2. Toggles "Auto-generate chat titles" on
 3. The change is persisted via the `app_settings` IPC; subsequent sends will trigger title generation
 
-### First message in a new chat (LLM channel)
+### First message in a plain runtime chat
 
 1. User opens a new chat and sends their first message
 2. Renderer stamps the chat with the truncated-message fallback title and starts the LLM stream
 3. Main process persists the user message via `messageRoutingService.prepareLlmSend`
 4. Routing service fires `chatTitleService.autoGenerateForFirstMessage` in the background (fire-and-forget) — the streaming pipeline is not awaited on this
-5. Title service confirms the feature is on, the user-message count is exactly 1, the chat's current title is an untouched auto-title, and runs a one-shot LLM call against the user's default chat mode (`aiFunctions.resolveAdapterFromDefaultMode`)
+5. Title service confirms the feature is on, the user-message count is exactly 1, the chat's current title is an untouched auto-title, and runs a one-shot AI Functions call through `aiFunctions.resolveBackend`
 6. The model returns a short title; it is sanitised (quote/punct/whitespace stripping, hard 40-char cap)
 7. Service re-reads the chat title, confirms still untouched, then persists the new title and broadcasts `chats:title-updated`
 8. Renderer sidebar (chat list) and active chat header pick up the new title instantly via React Query cache invalidation
 
 ### First message in a new chat (agent channel)
 
-Identical to the LLM flow except step 3 uses `prepareAgentSend` instead of `prepareLlmSend`. The title-gen path is channel-agnostic and always uses the user's default chat mode for the title call (not the agent itself).
+Identical to the LLM flow except step 3 uses `prepareAgentSend` instead of `prepareLlmSend`. The title-gen path is channel-agnostic and always uses the AI Functions binding for the title call (not the agent itself).
 
 ### Non-first sends
 
@@ -77,7 +77,7 @@ In all cases, the user-visible streaming flow is untouched.
 
 ### Title generation
 
-- The LLM is the user's **default chat mode**'s provider/model, resolved via `aiFunctions.resolveAdapterFromDefaultMode`. The chat's own mode (if different) is not used — the title is a global utility call, not part of the conversation.
+- The backend is the **AI Functions** credential/model or Default runtime, resolved via `aiFunctions.resolveBackend`. The chat's own mode (if different) is not used — the title is a global utility call, not part of the conversation.
 - One-shot call, no tools, no streaming surfaced to the caller.
 - System prompt asks for a concise title in the user's language, no markdown, no quotes, no trailing punctuation. Hard cap 40 characters.
 - Output is sanitised: quotes/backticks stripped, whitespace collapsed, trailing punctuation removed. If sanitisation produces an empty string, treated as `empty_output` and skipped.
@@ -118,7 +118,7 @@ chatTitleService.autoGenerateForFirstMessage
    ├── messageRepo.countByRole(chatId, 'user')       → not_first_message?
    ├── messageRepo.firstByRole(chatId, 'user')       → first user text
    ├── isUntouchedAutoTitle(chat.title, firstText)   → chat_renamed_initial?
-   ├── aiFunctions.resolveAdapterFromDefaultMode(userId)  → no_provider?
+   ├── aiFunctions.resolveBackend(userId)  → no_provider?
    ├── aiFunctions.runSingleShot(...)                → llm_failed / empty_output?
    ├── sanitizeTitle(raw)                            → empty_output?
    ├── chatRepo.getOwned(...) re-read                → chat_renamed_mid_flight?
@@ -133,7 +133,7 @@ Renderer (useChatList effect)
 ## Integration Points
 
 - [AI Functions](../../llm/ai_functions/ai_functions.md) — Underlying one-shot LLM primitive. The title service is the primary consumer of `runSingleShot`.
-- [Chat Modes](../chat_modes/chat_modes.md) — The user's default chat mode supplies the provider/model used for the title LLM call (`resolveAdapterFromDefaultMode`).
+- [Chat Modes](../chat_modes/chat_modes.md) — Features → AI Functions supplies the title backend (`resolveBackend`).
 - [Messaging](../messaging/messaging.md) — Defines the `messages` table the COUNT/first-message queries target. The trigger fires from both `prepareLlmSend` and `prepareAgentSend`, so the first message gets a title whether it routes to the orchestrator or directly to an agent.
 - [Settings](../../ui/settings/settings.md) — The Features tab hosts the toggle.
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — `app_settings` is installation-global (no `user_id` column), matching the scope of Chat Modes and LLM Providers.
@@ -141,3 +141,5 @@ Renderer (useChatList effect)
 ## Shared Truncation Rule
 
 The rule the renderer uses to derive its fallback title from a first user message lives in `src/shared/chatTitle.ts` as `deriveTitleFromMessage(message)` + `AUTO_TITLE_MAX_FROM_MESSAGE = 50`. Both layers import it; if the rule ever changes (different limit, different ellipsis), the title service's "untouched" check stays in sync structurally — there is no second copy to update.
+
+Runtime fallback uses warmOnly: true. If no compatible process is warm, title generation defers and keeps the derived title; it does not spawn a process in the background. Explicit AI Functions credentials still use one SDK request.

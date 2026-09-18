@@ -39,7 +39,7 @@ Renders agent-side system messages — startup pings, environment transitions, a
 
 ### Exclusion from model inputs
 
-- The LLM history rebuild (`chatStreamingService._runStreamLoop`) skips `agent_transition` rows by role, so a notice never enters the orchestrator's context. A chat that previously talked directly to an agent will never see notice text in its conversation history after promotion to orchestrated.
+- Fresh runtime transcript replay excludes agent_transition rows; notices remain transcript presentation rather than model instructions.
 
 ### Rendering
 

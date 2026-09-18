@@ -44,7 +44,7 @@ Do not re-split. A new protocol maps onto `RunEvent`; it does not get its own un
 
 ## Variants
 
-- `request-id { requestId }` — first, exactly once, posted by the layer above the driver (`streamToAgent`, `chatStreamingService`). The id `cancel` takes
+- `request-id { requestId }` — first, exactly once, posted by the layer above the driver (`streamToAgent`, main run executor). The id `cancel` takes
 - `status { state: RunState, taskId?, contextId? }` — `RunState` = `submitted | working | needs_input | completed | failed | canceled | rejected | unknown`. Posted by drivers including A2A and Managed. The renderer ignores it; a `needs_input` state is always followed by its own event, and that is what the store records — which is also why the live-run replay cache does not retain it
 - `delta { kind: ContentKind, text, toolName?, toolInput?, toolId?, toolStream?, commandInvocation?, file? }` — already a true delta. Field meanings: [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md#delta-event-payload-over-messageport)
 - `tool_use { id, name, input, provider?, providerType?: 'mcp' | 'agent' | 'coordinator', providerAgentId? }` — LLM path only, posted before the call resolves
@@ -115,7 +115,7 @@ Liveness of an ask's block (`MessageStream.renderRequestBlock`): the part has an
 
 | Layer | Where | Typed surface |
 |-------|-------|---------------|
-| Streaming services | `services/a2aStreamingService.ts`, `services/chatStreamingService.ts` | each declares a `StreamPort` whose `postMessage` takes `RunEvent` |
+| Streaming services | `services/a2aStreamingService.ts`, `services/conductorBridge.ts` | each declares a `StreamPort` whose `postMessage` takes `RunEvent` |
 | Runner sink | `RunAgentTurnInput.onEvent` (`a2aStreamingService.ts`), `ToolCallOptions.onEvent` (`llm/toolProvider.ts`) | `(event: RunEvent) => void` |
 | Accumulator | `agents/streamPartsAccumulator.ts` | `DeltaPort.postMessage(RunDeltaEvent)` |
 | IPC pre-flight errors | `ipc/run.ipc.ts` | `postRunError(port, msg, extras?)` in `ipc/_streamPort.ts` |
@@ -123,7 +123,7 @@ Liveness of an ask's block (`MessageStream.renderRequestBlock`): the part has an
 **Rule:** every outbound frame goes through a typed surface. Raw `port.postMessage({ … })` is forbidden.
 
 - `postRunError` sets only the extras that are present. An `undefined` key survives structured clone as a present-but-undefined property, which is not the shape either retired helper put on the wire
-- `chatStreamingService` wires an agent provider's `onEvent` only when the provider has a `providerAgentId`, because `child` names the agent: a provider without one runs buffered rather than post a `child` with an invented id
+- `conductorBridge` uses trusted provider event sinks for child framing; presentation type alone cannot create a child identity.
 
 ## Bridge
 
@@ -162,7 +162,7 @@ Live blocks and persisted parts split in the same places because one function de
 - Vocabulary and guard: `src/shared/runEvents.ts`, `src/shared/runEvents.test.ts`
 - Merge rule: `src/shared/partMerge.ts`
 - Ask conventions and `RequestResolution`: `src/shared/localAgentRequests.ts`
-- Senders: `src/main/services/a2aStreamingService.ts`, `src/main/services/chatStreamingService.ts`, `src/main/agents/drivers/acp/acpDriver.ts`, `src/main/agents/streamPartsAccumulator.ts`
+- Senders: `src/main/services/a2aStreamingService.ts`, `src/main/services/conductorBridge.ts`, `src/main/agents/drivers/acp/acpDriver.ts`, `src/main/agents/streamPartsAccumulator.ts`
 - IPC error helper: `src/main/ipc/_streamPort.ts`
 - Preload bridge: `src/preload/index.ts`
 - Receiver: `src/renderer/src/hooks/useChatStream.ts`, `src/renderer/src/stores/chat.store.ts`, `src/renderer/src/components/chat/MessageStream.tsx`, `src/renderer/src/hooks/useAgentRequests.ts`
@@ -173,7 +173,7 @@ Live blocks and persisted parts split in the same places because one function de
 
 - `src/main/llm/toolProvider.ts`: optional `attribution` supplies static specialist history identity; optional `eventSink(toolCallId, publish)` selects live framing. These are trusted provider methods, never fields interpreted from tool output.
 - `A2AAsMcpProvider` wraps driver events once in `child`; `CoordinatorToolProvider` passes events through because its delegate already wraps once and its question gate belongs at root. Actual `McpToolProvider` supplies no sink.
-- `chatStreamingService` consumes the sink without testing presentation type. Dynamic `describeCall` attribution is per-call only. Successful coordinator controls still require the trusted coordinator provider; MCP content and specialist results cannot acquire that authority.
+- `conductorBridge` consumes the sink without testing presentation type. Dynamic `describeCall` attribution is per-call only. Successful coordinator controls still require the trusted coordinator provider; MCP content and specialist results cannot acquire that authority.
 - `useLiveRunWatch` invokes semantic `after_turn` status refresh only for live terminal events. Replaying a snapshot updates the projection without repeating the status side effect.
 
 ## Autonomous coordinator gates

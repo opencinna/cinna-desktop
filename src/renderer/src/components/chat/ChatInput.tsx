@@ -35,7 +35,7 @@ import { ActiveMcpChips } from './ActiveMcpChips'
 import { OnDemandAgentChips, agentChipClass } from './OnDemandAgentChips'
 import { RouterBadge, type RouterBadgeInfo } from './RouterBadge'
 import { SessionMetaBadges } from './SessionMetaBadges'
-import { routingOf } from '../../../../shared/chatRouting'
+import { canConduct, routingOf } from '../../../../shared/chatRouting'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { AttachmentList } from './AttachmentBadge'
 import { NoteBadgeList } from './NoteBadge'
@@ -221,6 +221,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // flips true once the stream's `request-id` arrives, so it can't block a
   // second Enter fired during the `attachNotesAsync` await — this ref does.
   const { data: chatData } = useChatDetail(chatId)
+  const { data: agents } = useAgents()
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   // Hint bar telemetry. Every call is "the user just did X" — the store decides
   // whether that retires a hint, fires a contextual one, or neither. Emitting
@@ -293,7 +294,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // than re-derived here — see `src/shared/chatRouting.ts`. Whether an attach
   // button is offered at all is a separate question, asked of the target
   // agent's `capabilities.attachments` further down.
-  const attachScope: 'cinna' | 'local' = chatId ? chatRouting.attachmentTarget : 'cinna'
+  const targetAgentForFiles = answerTarget.kind === 'agent' ? agents?.find((agent) => agent.id === answerTarget.agentId) : undefined
+  const attachScope: 'cinna' | 'local' = chatId
+    ? targetAgentForFiles?.capabilities.attachments === 'local' ? 'local' : chatRouting.attachmentTarget
+    : 'local'
   const {
     attachments: pendingAttachments,
     isUploading,
@@ -603,12 +607,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   }, [composerBusy, setHintsBusy])
   useEffect(() => () => setHintsBusy(false), [setHintsBusy])
 
-  const { data: agents } = useAgents()
   const enabledAgents = useMemo(
     // `enabled` and nothing else: it is the user's own toggle for this agent.
     // The folder-agent exclusion that used to sit beside it was a capability
     // gap — no local runner — and it is gone with the runner that closed it.
-    () => (agents ?? []).filter((a) => a.enabled),
+    () => (agents ?? []).filter((a) => a.enabled && !a.conductor),
     [agents]
   )
 
@@ -669,26 +672,22 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [chatId, chatRouting.router, answerTarget, setAddressedAgent]
   )
 
-  /**
-   * Handing the chat to the local model, and taking it back. Offered only where
-   * there is something to coordinate — a chat with at least one agent in it —
-   * because in a plain chat with the model it would be a toggle between two
-   * states that behave identically.
-   */
+  /** The one-way coordination action shared by the badge and [+] menu. */
   const setChatRouter = useSetChatRouter()
   const coordinateToggle = useMemo(() => {
-    if (!chatId) return undefined
+    if (!chatId) return routerInfo?.coordinateAction ? { coordinating: false, conductorName: routerInfo.coordinateAction.conductorName, pending: false, onToggle: (next: boolean) => { if (next) routerInfo.coordinateAction?.onCoordinate() } } : undefined
     const coordinating = chatRouting.router === 'coordinator'
     const hasAgents = attachedAgentIds.length > 0 || !!chatRouting.rootAgentId
-    if (!coordinating && !hasAgents) return undefined
+    if (coordinating || !hasAgents) return undefined
+    const firstAgent = boundAgent ?? (agents ?? []).find((agent) => agent.id === attachedAgentIds[0])
+    const conductorName = firstAgent && canConduct(firstAgent) ? firstAgent.name : 'Default runtime'
     return {
       coordinating,
+      conductorName,
       pending: setChatRouter.isPending,
       onToggle: (next: boolean) => {
-        // Off lands on `human` when agents remain and `direct` when none do —
-        // a chat with nothing but the model is `direct` to it, not a chat the
-        // user routes between nobody.
-        const router = next ? 'coordinator' : attachedAgentIds.length > 0 ? 'human' : 'direct'
+        if (!next) return
+        const router = 'coordinator'
         // `mutateAsync` with the failure handled here rather than a `mutate`
         // callback: turning coordination on is the one transition main can
         // refuse (no model), and a mutate-level `onError` is dropped if the
@@ -699,7 +698,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           .catch((err) => setSendError(unwrapIpcError(err, 'Could not change who answers')))
       }
     }
-  }, [chatId, chatRouting.router, chatRouting.rootAgentId, attachedAgentIds, setChatRouter, setSendError])
+  }, [chatId, routerInfo, chatRouting.router, chatRouting.rootAgentId, attachedAgentIds, boundAgent, agents, setChatRouter, setSendError])
 
   const badgeInfo: RouterBadgeInfo | null = useMemo(() => {
     if (!chatId) return routerInfo ?? null
@@ -707,6 +706,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     return {
       router: chatRouting.router,
       agentName: boundAgent?.name,
+      conductorName: chatRouting.router === 'coordinator' ? boundAgent?.name : undefined,
       answererName: answeringAgent?.name,
       // The model's **name**, not its id: the new-chat badge resolves one and a
       // tooltip that bolds `claude-opus-5` beside one that bolds `Opus 5` is
@@ -786,13 +786,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
    * the moment the user pivots to an incompatible target.
    */
   const attachmentTargetAgent: AgentData | null = chatId
-    ? boundAgent ?? null
+    ? answeringAgent ?? null
     : selectedAgent ?? null
   // Asked of the agent's driver, not its kind: only an agent whose files go to
   // the Cinna backend takes one.
   const targetTakesCinnaFiles = attachmentTargetAgent?.capabilities.attachments === 'cinna'
 
   // Active-chat gates: split by destination so the wrong scope never queues.
+  const canAttachToLocalAgent = attachmentTargetAgent?.capabilities.attachments === 'local'
   const canAttachToRemoteAgent = isCinnaUser && targetTakesCinnaFiles
   const canAttachToLlmModel =
     chatId !== null && !attachmentTargetAgent && modelSupportsMedia
@@ -803,11 +804,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // a configured LLM provider — so the button doesn't appear for users
   // who have no way to send a message yet.
   const canShowAttachButton = chatId
-    ? canAttachToRemoteAgent || canAttachToLlmModel
+    ? canAttachToLocalAgent || canAttachToRemoteAgent || canAttachToLlmModel
     : hasAnyDestination
 
   const targetSupportsAttachments = chatId
-    ? canAttachToRemoteAgent || canAttachToLlmModel
+    ? canAttachToLocalAgent || canAttachToRemoteAgent || canAttachToLlmModel
     : hasAnyDestination
 
   // The agent this message goes straight to, if it goes straight to one — the
@@ -1809,6 +1810,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               <OnDemandAgentChips
                 pendingIds={pendingAgentIds}
                 onRemovePending={onRemovePendingAgent}
+                coordination={routerInfo?.router === 'coordinator' ? { conductorId: routerInfo.conductorId ?? null, conductorName: routerInfo.conductorName ?? 'Default runtime' } : undefined}
               />
             ) : null}
             {chatId ? (
@@ -1834,6 +1836,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               agentName={badgeInfo.agentName}
               answererName={badgeInfo.answererName}
               modelName={badgeInfo.modelName}
+              conductorName={badgeInfo.conductorName}
+              coordinateAction={coordinateToggle ? { conductorName: coordinateToggle.conductorName, pending: coordinateToggle.pending, onCoordinate: () => coordinateToggle.onToggle(true) } : undefined}
             />
           )}
           {/* One button, always the rightmost, the same size in every state, so

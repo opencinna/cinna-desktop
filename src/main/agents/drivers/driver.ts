@@ -39,6 +39,14 @@ export type { AgentCapabilities, AgentDriverId, AgentReadiness }
 
 /** One turn's input. The agent row and its owner are separate arguments. */
 export interface RunInput {
+  /** Persist a completed text segment before a conductor tool row. */
+  flush?(): void
+  coordinator?: import('../../services/coordinatorToolProvider').CoordinatorToolProvider
+  attachments?: import('../../../shared/attachments').MessageAttachment[]
+  /** Main-owned specialist invocation. Never attach a conductor server or listen between turns. */
+  nested?: { toolCallId: string }
+  /** Runner-owned, durable MCP call budget. Consume synchronously before a tool side effect. */
+  toolCallBudget?: { remaining: number; consume(): void }
   /** Main-owned coordinator handoff; never inferred from protocol text or metadata. */
   handbackEligible?: boolean
   /** Internal autonomous admission; interactive turns keep immediate busy refusal. */

@@ -1,212 +1,102 @@
 import { useId, useState } from 'react'
 import { Check, X } from 'lucide-react'
+import { ChatModeRuntimeFields, type ChatModeRuntimeValue } from './ChatModeRuntimeFields'
+import { SettingsLabel, settingsInputClass } from './SettingsLayout'
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useUpsertChatMode } from '../../hooks/useChatModes'
+import { useDefaultRuntime } from '../../hooks/useEngine'
 import { COLOR_PRESETS } from '../../constants/chatModeColors'
 import { isCredentialActive } from '../../../../shared/credentials'
+import { unwrapIpcError } from '../../utils/ipcError'
 
-interface ChatModeFormProps {
-  onClose: () => void
-}
+interface ChatModeFormProps { onClose: () => void }
 
 export function ChatModeForm({ onClose }: ChatModeFormProps): React.JSX.Element {
+  const [runtime, setRuntime] = useState<ChatModeRuntimeValue>({ engine: null, systemPrompt: '', toolPolicy: 'connectors' })
   const [name, setName] = useState('')
-  const [providerId, setProviderId] = useState('')
-  const [modelId, setModelId] = useState('')
   const [mcpIds, setMcpIds] = useState<Set<string>>(new Set())
   const [colorPreset, setColorPreset] = useState('indigo')
-  /**
-   * Ids for `htmlFor`. Only one of these forms is ever on screen, so literal
-   * ids would work — but `ChatModeCard` next door renders one per chat mode and
-   * genuinely needs `useId`, and two components whose markup is otherwise the
-   * same should not differ here.
-   */
   const fieldId = useId()
-
   const { data: providers } = useProviders()
   const { data: allModels } = useModels()
   const { data: mcpProviders } = useMcpProviders()
+  const { data: defaultRuntime } = useDefaultRuntime()
   const upsert = useUpsertChatMode()
-
+  const engine = runtime.engine ?? defaultRuntime?.engine
+  const unsupported = engine === 'codex'
+  const credentialMode = engine === 'opencode'
   const enabledProviders = (providers ?? []).filter(isCredentialActive)
-  const modelsForProvider = (allModels ?? []).filter((m) => m.providerId === providerId)
-
-  const toggleMcp = (id: string): void => {
-    setMcpIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
+  const models = (allModels ?? []).filter((model) => model.providerId === runtime.providerId)
+  const changeRuntime = (patch: Partial<ChatModeRuntimeValue>): void => setRuntime(previous => ({ ...previous, ...patch }))
 
   const handleCreate = (): void => {
-    if (!name.trim()) return
-    upsert.mutate(
-      {
-        name: name.trim(),
-        providerId: providerId || null,
-        modelId: modelId || null,
-        mcpProviderIds: Array.from(mcpIds),
-        colorPreset
-      },
-      { onSuccess: onClose }
-    )
+    if (!name.trim() || unsupported || upsert.isPending) return
+    upsert.mutate({ ...runtime, name: name.trim(), providerId: runtime.providerId || null,
+      modelId: runtime.modelId || null, mcpProviderIds: Array.from(mcpIds), colorPreset }, { onSuccess: onClose })
   }
 
-  const inputClass =
-    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
-
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
+    <form aria-label="New chat mode" onSubmit={(event) => { event.preventDefault(); handleCreate() }}
+      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2.5">
         <span className="font-medium text-[14px] text-[var(--color-text)]">New Chat Mode</span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] transition-colors"
-        >
-          <X size={12} />
-        </button>
+        <button type="button" aria-label="Cancel new chat mode" disabled={upsert.isPending} onClick={onClose}
+          className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)] transition-colors"><X size={12} /></button>
       </div>
-
-      <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-3">
-        {/* Name */}
+      <fieldset disabled={upsert.isPending} className="border-t border-[var(--color-border)] px-4 py-3 space-y-3">
         <div>
-          <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Name</label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className={inputClass}
-            placeholder="e.g. Development, Writing, Research..."
-            autoFocus
-          />
+          <SettingsLabel htmlFor={`${fieldId}-name`}>Name</SettingsLabel>
+          <input id={`${fieldId}-name`} value={name} onChange={event => setName(event.target.value)}
+            className={settingsInputClass} placeholder="e.g. Development, Writing, Research..." autoFocus />
         </div>
-
-        {/* Color preset */}
-        <div>
-          <label className="block text-[12px] text-[var(--color-text-muted)] mb-1">Color</label>
-          <div className="flex flex-wrap gap-1.5">
-            {COLOR_PRESETS.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => setColorPreset(p.id)}
-                className="w-6 h-6 rounded-full flex items-center justify-center transition-transform hover:scale-110"
-                style={{ backgroundColor: p.border }}
-                title={p.name}
-              >
-                {colorPreset === p.id && <Check size={12} className="text-white" />}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* AI Credentials (a.k.a. LLM provider) */}
-        <div>
-          <label
-            htmlFor={`${fieldId}-credential`}
-            className="block text-[12px] text-[var(--color-text-muted)] mb-0.5"
-          >
-            AI Credentials
-          </label>
-          <select
-            id={`${fieldId}-credential`}
-            value={providerId}
-            onChange={(e) => {
-              setProviderId(e.target.value)
-              setModelId('')
-            }}
-            className={`${inputClass} cursor-pointer`}
-          >
+        <ChatModeRuntimeFields section="runtime" value={runtime} resolvedEngine={defaultRuntime?.engine} onChange={changeRuntime} />
+        {credentialMode && <div>
+          <SettingsLabel htmlFor={`${fieldId}-credential`}>AI Credentials</SettingsLabel>
+          <select id={`${fieldId}-credential`} value={runtime.providerId ?? ''} className={settingsInputClass}
+            onChange={event => changeRuntime({ providerId: event.target.value || null, modelId: null })}>
             <option value="">None (use default)</option>
-            {enabledProviders.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
+            {enabledProviders.map(provider => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
           </select>
-        </div>
-
-        {/* Model */}
-        {providerId && (
-          <div>
-            <label
-              htmlFor={`${fieldId}-model`}
-              className="block text-[12px] text-[var(--color-text-muted)] mb-0.5"
-            >
-              Model
-            </label>
-            <select
-              id={`${fieldId}-model`}
-              value={modelId}
-              onChange={(e) => setModelId(e.target.value)}
-              className={`${inputClass} cursor-pointer`}
-            >
-              <option value="">First available</option>
-              {modelsForProvider.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* MCP Providers */}
-        {(mcpProviders ?? []).length > 0 && (
-          <div>
-            <label className="block text-[12px] text-[var(--color-text-muted)] mb-1">
-              MCP Providers
-            </label>
-            <div className="space-y-1">
-              {(mcpProviders ?? []).map((mcp) => (
-                <button
-                  key={mcp.id}
-                  type="button"
-                  onClick={() => toggleMcp(mcp.id)}
-                  className="w-full text-left px-2.5 py-1.5 rounded-md text-[14px]
-                    hover:bg-[var(--color-bg-hover)] transition-colors flex items-center gap-2"
-                >
-                  <div
-                    className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
-                      mcpIds.has(mcp.id)
-                        ? 'bg-[var(--color-accent)] border-[var(--color-accent)]'
-                        : 'border-[var(--color-border)]'
-                    }`}
-                  >
-                    {mcpIds.has(mcp.id) && <Check size={9} className="text-white" />}
-                  </div>
-                  <span className="text-[var(--color-text)]">{mcp.name}</span>
-                </button>
-              ))}
+        </div>}
+        <details>
+          <summary className="cursor-pointer text-[13px] font-medium text-[var(--color-accent)]">More options</summary>
+          <div className="mt-3 space-y-3">
+            <div>
+              <SettingsLabel>Color</SettingsLabel>
+              <div className="flex flex-wrap gap-1.5">{COLOR_PRESETS.map(preset => <button key={preset.id} type="button"
+                onClick={() => setColorPreset(preset.id)} title={preset.name}
+                className="w-6 h-6 rounded-full flex items-center justify-center transition-transform hover:scale-110"
+                style={{ backgroundColor: preset.border }}>{colorPreset === preset.id && <Check size={12} className="text-white" />}</button>)}</div>
             </div>
+            <ChatModeRuntimeFields section="options" value={runtime} resolvedEngine={defaultRuntime?.engine} onChange={changeRuntime} />
+            {credentialMode && runtime.providerId && <div>
+              <SettingsLabel htmlFor={`${fieldId}-model`}>Model</SettingsLabel>
+              <select id={`${fieldId}-model`} value={runtime.modelId ?? ''} className={settingsInputClass}
+                onChange={event => changeRuntime({ modelId: event.target.value || null })}>
+                <option value="">First available</option>
+                {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+              </select>
+            </div>}
+            {(mcpProviders ?? []).length > 0 && <div>
+              <SettingsLabel>MCP Providers</SettingsLabel>
+              <div className="space-y-1">{mcpProviders!.map(mcp => <button key={mcp.id} type="button" aria-pressed={mcpIds.has(mcp.id)}
+                onClick={() => setMcpIds(previous => { const next = new Set(previous); if (next.has(mcp.id)) next.delete(mcp.id); else next.add(mcp.id); return next })}
+                className="w-full text-left px-2.5 py-1.5 rounded-md text-[14px] hover:bg-[var(--color-bg-hover)] transition-colors flex items-center gap-2">
+                <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${mcpIds.has(mcp.id) ? 'bg-[var(--color-accent)] border-[var(--color-accent)]' : 'border-[var(--color-border)]'}`}>
+                  {mcpIds.has(mcp.id) && <Check size={9} className="text-white" />}</span><span>{mcp.name}</span>
+              </button>)}</div>
+            </div>}
           </div>
-        )}
-
-        {/* Buttons */}
+        </details>
         <div className="flex justify-end gap-2 pt-1">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3 py-1.5 rounded-md text-[14px] font-medium text-[var(--color-text-muted)]
-              hover:text-[var(--color-text-secondary)] transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleCreate}
-            disabled={!name.trim() || upsert.isPending}
-            className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
-              text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          >
-            Create Mode
-          </button>
+          <button type="button" onClick={onClose} className="px-3 py-1.5 rounded-md text-[14px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors">Cancel</button>
+          <button type="submit" disabled={!name.trim() || unsupported || upsert.isPending}
+            className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors">{upsert.isPending ? 'Creating…' : 'Create Mode'}</button>
         </div>
-      </div>
-    </div>
+        {upsert.error && <p role="alert" className="text-[13px] text-[var(--color-danger)]">{unwrapIpcError(upsert.error, 'Could not create chat mode')}</p>}
+      </fieldset>
+    </form>
   )
 }

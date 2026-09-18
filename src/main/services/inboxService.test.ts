@@ -934,6 +934,26 @@ describe('next-message continuation', () => {
     expect(taskService.getById(USER, task.id).status).toBe('in_progress')
   })
 
+  it('resumes a nested specialist with its original tool identity and keeps repeated questions durable', async () => {
+    const task = makeTask()
+    const root = ctx({ agentId: null, rootRunId: 'original-run', turnId: 'original-run' })
+    inboxService.recordRunEvent(root, { type: 'child', agentId: AGENT, toolCallId: 'original-call', event: ask })
+    inboxService.recordRunEvent(root, { type: 'done', stopReason: 'end_turn' })
+    const [entry] = await listEntries(USER)
+    runStart.mockImplementationOnce((scope, payload, options) => {
+      const resumed = { userId: scope.profileUserId, chatId: payload.chatId, agentId: AGENT, rootRunId: 'resumed-run', turnId: 'resumed-run' }
+      options.onAccepted(resumed)
+      options.observe(resumed, { ...ask, requestId: 'follow-on-question' })
+      options.observe(resumed, { type: 'done', stopReason: 'end_turn' })
+      return { accepted: Promise.resolve(), completed: Promise.resolve({ state: 'needs_input', text: '' }) }
+    })
+    expect(await inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [['main']] })).toEqual({ ok: true })
+    expect(runStart).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ agentId: AGENT, nested: { toolCallId: 'original-call' } }))
+    const [repeated] = taskInputRequestRepo.listOpenForChat(CHAT)
+    expect(repeated).toMatchObject({ agentId: AGENT, rootRunId: 'resumed-run', invocationId: 'resumed-run:original-call', resume: 'next_message' })
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+  })
+
   it('retains the waiting ask and answer when dispatch is busy or refuses before acceptance', async () => {
     makeTask()
     inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
@@ -1098,9 +1118,8 @@ describe('run and invocation ownership', () => {
   })
 })
 
-describe('model child completion integration', () => {
-  it.each([false, true])('cleans up a driver that silently drops a reply before the next model round (failure=%s)', async (isError) => {
-    const { chatStreamingService } = await import('./chatStreamingService')
+describe('runtime child completion integration', () => {
+  it.each([false, true])('cleans up a driver that silently drops a reply before the next tool call (failure=%s)', async (isError) => {
     const { A2AAsMcpProvider } = await import('./a2aAsMcpProvider')
     const task = makeChatTask()
     const root = ctx({ agentId: null, rootRunId: 'model-run', turnId: 'model-run', completionOwner: 'runner' })
@@ -1112,23 +1131,18 @@ describe('model child completion integration', () => {
       expect(taskInputRequestRepo.getById('per_1')).toMatchObject({ rootRunId: 'model-run', invocationId: 'model-run:tool-1', status: 'open' })
       return { text: 'child output', parts: [], notices: [], ...(isError ? { error: { message: 'child failed', raw: 'failed' } } : {}) }
     })
-    let round = 0
-    const stream = vi.fn(async () => {
-      if (round++ === 0) return { content: '', toolCalls: [{ id: 'tool-1', name: 'alpha', input: { message: 'Build' } }] }
-      // The root is still executing. Only its ended child must be cleaned up.
-      expect(taskInputRequestRepo.getById('per_1')?.status).toBe('expired')
-      expect(taskInputRequestRepo.getById('sibling')?.status).toBe('open')
-      expect(taskService.getById(USER, task.id).status).toBe('blocked')
-      return { content: 'Final', toolCalls: [] }
+    const result = await provider.callTool('alpha', { message: 'Build' }, {
+      toolCallId: 'tool-1', onEvent: provider.eventSink('tool-1', (event) => inboxService.recordRunEvent(root, event))
     })
-    const adapter = { stream, modelCapability: () => ({ acceptedMimeTypes: [], nativeMimeTypes: [], maxFileSizeBytes: 0, maxFilesPerMessage: 0 }), parseError: (error: Error) => ({ short: error.message, detail: error.message }) }
-    await chatStreamingService._runStreamLoop('provider', 'model', USER, CHAT,
-      adapter as unknown as Parameters<typeof chatStreamingService._runStreamLoop>[4], [], new Map([['alpha', provider]]),
-      new AbortController(), { postMessage: (event) => inboxService.recordRunEvent(root, event), close() {} }, {}, 'Build', [], [], () => {})
-    expect(stream).toHaveBeenCalledTimes(2)
+    // The runtime MCP bridge emits the parent result before another call starts.
+    inboxService.recordRunEvent(root, result.isError
+      ? { type: 'tool_error', id: 'tool-1', error: String(result.content) }
+      : { type: 'tool_result', id: 'tool-1', result: result.content })
+    expect(taskInputRequestRepo.getById('per_1')?.status).toBe('expired')
+    expect(taskInputRequestRepo.getById('sibling')?.status).toBe('open')
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
     expect(toolRun).toHaveBeenCalledTimes(1)
-    const { messageRepo } = await import('../db/messages')
-    expect(messageRepo.firstByRole(CHAT, 'tool_call')).toMatchObject({ content: isError ? 'child failed' : 'child output' })
+    expect(result.content).toBe(isError ? 'child failed' : 'child output')
   })
 })
 

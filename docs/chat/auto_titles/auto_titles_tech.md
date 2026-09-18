@@ -27,7 +27,7 @@
 | `src/main/services/chatTitleService.ts` | Owns the title-gen orchestration: toggle check → first-message check → adapter resolve → one-shot LLM → sanitise → re-check → persist → broadcast. Exports `chatTitleService.autoGenerateForFirstMessage({ userId, chatId })` and `ChatTitleError`. |
 | `src/main/services/appSettingsService.ts` | Chokepoint for `app_settings` reads/writes. Validates `(key, value)` against `AppSettingsSchema` at runtime (`Object.hasOwn(DEFAULTS, key)` + `typeof value === typeof DEFAULTS[key]`). Throws `AppSettingsError`. |
 | `src/main/services/messageRoutingService.ts` | Hosts `fireTitleGenInBackground(userId, chatId)` — the fire-and-forget caller. Invoked from both `prepareLlmSend` and `prepareAgentSend` after `messageRepo.saveUser`. Classifies `ChatTitleError` codes into debug/info/warn log levels. |
-| `src/main/services/aiFunctionsService.ts` | Existing primitive. `resolveAdapterFromDefaultMode` + `runSingleShot` are the two methods the title service composes. Unchanged. |
+| `src/main/services/aiFunctionsService.ts` | Independent AI Functions backend resolution and one-shot execution; runtime calls are warm-only. |
 | `src/main/errors.ts` | `AppSettingsError` (codes: `invalid_key`, `invalid_value`). `ChatTitleError` is defined inside `chatTitleService.ts`, not here. |
 
 ### Main Process — IPC

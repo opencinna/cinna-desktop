@@ -12,6 +12,11 @@ export interface AppSettingsSchema {
    * after the first user message in a chat.
    */
   autoChatTitles: boolean
+  /** Applied only when a chat becomes multi-agent; existing routers are unchanged. */
+  /** Independent one-shot AI Functions binding; empty uses Default runtime. */
+  aiFunctionsCredentialId: string
+  aiFunctionsModelId: string
+  defaultMultiAgentRouting: 'human' | 'coordinator'
   /**
    * When true, the macOS menu-bar (status-bar) tray icon is created alongside
    * the main window. Toggling at runtime creates or destroys the tray live.

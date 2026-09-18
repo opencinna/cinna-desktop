@@ -1,3 +1,5 @@
+import type { RuntimeModelCatalog } from '../shared/runtimeModelCatalog'
+import type { ChatModeRuntime } from '../shared/chatModeRuntime'
 import type { DevelopmentContext } from '../shared/developmentSession'
 import type { AgentEngine } from '../shared/engine'
 import type { JobExecuteResult } from '../shared/jobs'
@@ -222,7 +224,7 @@ export interface OllamaDetectionData {
   alreadyConfigured: boolean
 }
 
-export interface ChatModeData {
+export interface ChatModeData extends ChatModeRuntime {
   id: string
   name: string
   providerId: string | null
@@ -240,6 +242,8 @@ export interface ChatModeData {
 }
 
 export interface AgentData {
+  /** Internal root owned by one chat, never a selectable participant. */
+  conductor?: boolean
   /** Internal account-bound builder, configured through Local Development. */
   development?: boolean
   /** Saved runtime for an account-bound builder. */
@@ -556,6 +560,9 @@ const api = {
       name: string
       providerId?: string | null
       modelId?: string | null
+      engine?: AgentEngine | null
+      systemPrompt?: string
+      toolPolicy?: import('../shared/chatModeRuntime').ChatToolPolicy
       mcpProviderIds?: string[]
       colorPreset?: string
       isDefault?: boolean
@@ -1621,6 +1628,8 @@ const api = {
    * text, never a handle.
    */
   engine: {
+    modelCatalog: (engine: import('../shared/engine').AgentEngine): Promise<RuntimeModelCatalog> =>
+      ipcRenderer.invoke('engine:model-catalog', engine),
     binary: (): Promise<EngineBinaryState> => ipcRenderer.invoke('engine:binary'),
     /**
      * Resolve one now, downloading and verifying the pinned build if this

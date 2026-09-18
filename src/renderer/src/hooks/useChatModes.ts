@@ -54,20 +54,24 @@ export function useSetManagedChatModeModel() {
   })
 }
 
-export function useUpsertChatMode() {
+export function useUpsertChatMode(modeId?: string) {
   const queryClient = useQueryClient()
   return useMutation({
+    scope: modeId ? { id: `chat-mode:${modeId}` } : undefined,
     mutationFn: (data: {
       id?: string
       name: string
       providerId?: string | null
       modelId?: string | null
+      engine?: import('../../../shared/engine').AgentEngine | null
+      systemPrompt?: string
+      toolPolicy?: import('../../../shared/chatModeRuntime').ChatToolPolicy
       mcpProviderIds?: string[]
       colorPreset?: string
       isDefault?: boolean
     }) => window.api.chatModes.upsert(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['chat-modes'] })
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['chat-modes'] })
       // The *default* chat mode is the last rung of an agent's runtime chain,
       // so editing, deleting or re-defaulting a mode can change which credential
       // an agent resolves to — and whether the sidebar should call it inactive.

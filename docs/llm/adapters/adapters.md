@@ -29,15 +29,15 @@ Unified abstraction layer over multiple LLM provider SDKs (Anthropic, OpenAI, Ge
 - Each provider type has its own SDK, streaming protocol, tool-calling format, and error handling
 - API keys are encrypted via `safeStorage` and never leave the main process
 - **A key is not what makes a credential usable — `isCredentialUsable` is.** A keyless credential registers an adapter on `enabled` alone; requiring a key would leave a saved Ollama invisible to the model picker forever. Any layer that tests `hasApiKey` by hand is a layer that can disagree with the one beside it
-- **`enabled` means off everywhere, including for the local engine.** Disabling a credential unregisters its adapter, so a chat on it fails with "Provider adapter not available" rather than falling back to another key — and `collectEngineProviders` leaves it out of the generated engine config, so folder agents running on it stop too. Every surface that named it says what stopped: see [Switching an AI Credential Off](credential_enablement.md). The predicate for "enabled *and* usable" is `isCredentialActive`
+- **`enabled` means off everywhere, including for the local engine.** Disabling a credential unregisters its adapter and makes dependent OpenCode runtimes unavailable rather than selecting another key — and `collectEngineProviders` leaves it out of the generated engine config, so folder agents running on it stop too. Every surface that named it says what stopped: see [Switching an AI Credential Off](credential_enablement.md). The predicate for "enabled *and* usable" is `isCredentialActive`
 - **A renderer-supplied `baseUrl` is honoured only for keyless types.** Pointing a row that holds a real key at an arbitrary URL would send that key wherever the renderer said; a gateway's endpoint is written by account-config sync instead. A credential's `type` is likewise fixed at creation, since re-typing a row would keep its stored key and spend it under another transport
 - **The credential row decides where a request goes and who it is billed to — the shell never does.** Each vendor SDK fills options the caller leaves unset from the process environment: a base URL, an auth token, custom headers, an organisation or project id. The app inherits a login shell's environment whenever it is launched from a terminal, so every adapter names those options explicitly instead of letting the client default them. Anthropic's are the widest (a custom-header line could replace the stored key outright); OpenAI's reach a host and two billing headers, and it has no custom-header variable at all. Both are pinned by tests that set the variables and assert nothing about the request moves
 - **A cancelled turn must reject, not resolve.** A stop that comes back as a normal return is indistinguishable from a finished answer: the partial text is saved as the assistant's message and the job run behind it is recorded as a success. The OpenAI SDK's stream reader swallows the abort and ends the loop cleanly, so that adapter raises the abort itself — see [Provider Integration](provider_integration.md#openai-an-abort-is-a-clean-end-of-stream-so-the-adapter-has-to-reject-itself)
 - Only one provider can be marked as default at a time (setting one clears others)
 - Each provider can have a default model; used when creating new chats
 - Adapters are single-turn streamers: they translate ChatMessage[] to native format, stream text deltas via `onDelta`, collect tool calls, and return a `StreamResult` (`{content, toolCalls}`)
-- Adapters do NOT own the tool-call loop — `chatStreamingService` runs the loop, executes tools, and calls the adapter again for each round
-- Shared concerns (tool execution, MCP aggregation, message persistence, tool loop orchestration) live in `chatStreamingService`
+- Adapters serve one-shot AI Functions and provider discovery. Their retained tool-translation interface is not the conversational execution path.
+- Chat tool execution and persistence are owned by the runtime conductor bridge; the runtime owns model iteration.
 
 ## Why a Custom Abstraction Over a Framework
 
@@ -48,16 +48,7 @@ Unified abstraction layer over multiple LLM provider SDKs (Anthropic, OpenAI, Ge
 
 ## Architecture Overview
 
-```
-chatStreamingService -> getAdapter(providerId) [from registry]
-  -> AnthropicAdapter / OpenAIAdapter / GeminiAdapter / OllamaAdapter
-  -> adapter.stream(params) -> streams deltas via onDelta, returns StreamResult {content, toolCalls}
-  -> chatStreamingService owns the tool-call loop: executes tools, saves to DB, calls adapter again
-  -> Results streamed back via MessagePort
-
-providerService -> createAdapter(type, apiKey, providerId, {baseUrl, fallbackModels}) [llm/factory.ts]
-  -> register/unregister in the registry on upsert/delete
-```
+AI Functions → resolveBackend → one adapter.stream call → trimmed result. Provider service → adapter factory → credential tests and model listing. Conversational chat → ACP driver/runtime → Cinna MCP bridge, independently of the SDK adapter path.
 
 ## Current Adapters
 
@@ -80,7 +71,7 @@ No adapter hardcodes versioned model IDs anywhere — listing is always live aga
 
 ## Integration Points
 
-- [Chat Messaging](../../chat/messaging/messaging.md) — Adapters are called by the streaming IPC handler
+- [Chat Messaging](../../chat/messaging/messaging.md) — Conversational execution uses runtimes; one-shot SDK calls belong to AI Functions
 - [MCP Connections](../../mcp/connections/connections.md) — MCP tools are converted to each provider's tool schema format
 - [Local Models & Keyless Credentials](../local_models/local_models.md) — the Ollama adapter, host detection, and the shared usability predicate
 - [Switching an AI Credential Off](credential_enablement.md) — what `enabled` stops, the confirm that names it, and the shared credential-reference resolver

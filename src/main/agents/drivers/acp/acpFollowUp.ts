@@ -112,6 +112,8 @@ export interface HeldHandover {
 }
 
 export interface FollowUpGate {
+  /** MCP traffic can start a turn before ACP reports its tool call. */
+  wake(): boolean
   sink: SessionTrafficSink
   /** A follow-up is wanted and its turn has not taken the traffic yet. */
   readonly pending: boolean
@@ -227,9 +229,9 @@ export function createFollowUpGate(scope: SessionTrafficScope, options: FollowUp
     held.push(item)
   }
 
-  const trigger = (item: HeldTraffic, why: string): void => {
+  const trigger = (item: HeldTraffic | null, why: string): void => {
     state = 'pending'
-    hold(item)
+    if (item) hold(item)
     if (options.hold && !releaseHold) {
       try {
         releaseHold = options.hold()
@@ -299,6 +301,7 @@ export function createFollowUpGate(scope: SessionTrafficScope, options: FollowUp
   }
 
   return {
+    wake: () => { if (state === 'closed') return false; if (state === 'idle') trigger(null, 'MCP tool call'); return true },
     sink,
     get pending() {
       return state === 'pending'

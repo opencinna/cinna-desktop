@@ -106,6 +106,16 @@ export const chatModeService = {
    * on every other mode owned by the same user first.
    */
   upsert(userId: string, input: ChatModeUpsertInput): { id: string } {
+    if (input.engine != null && !['claude', 'codex', 'opencode'].includes(input.engine)) {
+      throw new ChatModeError('invalid_value', 'Choose Default runtime, Claude, Codex, or OpenCode.')
+    }
+    if (input.toolPolicy !== undefined && input.toolPolicy !== 'none' && input.toolPolicy !== 'connectors') {
+      throw new ChatModeError('invalid_value', 'Choose No tools or Connected tools.')
+    }
+    if (input.systemPrompt !== undefined && (typeof input.systemPrompt !== 'string' || input.systemPrompt.length > 100_000)) {
+      throw new ChatModeError('invalid_value', 'Instructions must be text shorter than 100,000 characters.')
+    }
+
     if (input.id && isManagedModeId(input.id)) {
       throw new ChatModeError(
         'read_only',

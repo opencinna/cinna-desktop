@@ -232,6 +232,46 @@ afterEach(() => {
   for (const w of worlds.splice(0)) w.cleanup()
 })
 
+describe('conductor session integration', () => {
+  it('injects a stable server on new and load, closes each lease and replays only a fresh session', async () => {
+    const descriptor = { type: 'http' as const, name: 'cinna', url: 'http://127.0.0.1:12345/mcp/test', headers: [{name:'Authorization',value:'Bearer test'}] }
+    const close = vi.fn()
+    const replayTranscript = vi.fn(async () => '[user] Earlier question\n[assistant] Earlier answer')
+    const w = world({ script: SAYS_HELLO, deps: {
+      prepareConductor: async (_user, _agent, _input, plan) => { plan.session.mcpServers = [descriptor]; return {close,hasCalls:()=>false} },
+      replayTranscript
+    } })
+    const scope = { profileUserId: USER_ID, settingsUserId: USER_ID }
+    await w.run({runScope:scope})
+    await w.run({runScope:scope})
+    expect(w.fake.received('session/new')[0].params?.mcpServers).toEqual([descriptor])
+    expect(w.fake.received('session/load')[0].params?.mcpServers).toEqual([descriptor])
+    expect(w.fake.received('session/prompt')[0].params?.prompt).toEqual([
+      {type:'text',text:'[user] Earlier question\n[assistant] Earlier answer'}, {type:'text',text:'hello'}
+    ])
+    expect(w.fake.received('session/prompt')[1].params?.prompt).toEqual([{type:'text',text:'hello'}])
+    expect(replayTranscript).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledTimes(2)
+  })
+
+  it('ends an engine turn for a trusted task control without reporting user cancellation', async () => {
+    let stop!: Parameters<NonNullable<AcpDriverDeps['prepareConductor']>>[4]
+    const w = world({ script: { prompt: { emit: [{kind:'update',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Working'}}},{kind:'awaitCancel'}] } }, deps: {
+      prepareConductor: async (_user, _agent, _input, _plan, settle) => { stop = settle; return {close(){},hasCalls:()=>false} }
+    } })
+    const running = w.run()
+    await waitFor(() => w.fake.received('session/prompt').length > 0, 'prompt')
+    stop({control:{kind:'finish',summary:'Verified'}})
+    const result = await running
+    expect(result.error).toBeUndefined()
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.taskState).toBe('completed')
+    expect(result.control).toEqual({kind:'finish',summary:'Verified'})
+    expect(result.parts.filter((part) => part.kind === 'text').map((part) => part.text).join('')).toContain('Verified')
+    expect(w.events.filter((event) => event.type === 'delta' && event.text === 'Verified')).toHaveLength(1)
+  })
+})
+
 describe('a turn', () => {
   it('prompts the agent and returns what it streamed', async () => {
     const w = world({ script: SAYS_HELLO })
@@ -1072,6 +1112,26 @@ function followUpWorld(options: WorldOptions = {}): ReturnType<typeof observedWo
 
 const textOf = (result: { parts: { kind: string; text: string }[] }): string =>
   result.parts.filter((part) => part.kind === 'text').map((part) => part.text).join('')
+
+describe('MCP and ACP follow-up ownership', () => {
+  it.each(['mcp-first', 'acp-first'] as const)('binds exactly one follow-up when %s wakes the session', async (order) => {
+    let wake!: () => boolean
+    const prepare = vi.fn(async (_user, _agent, _input, _plan, _stop, requestWake) => {
+      wake = requestWake
+      return { close() {}, hasCalls: () => false }
+    }) as NonNullable<AcpDriverDeps['prepareConductor']>
+    const w = followUpWorld({ script: order === 'acp-first' ? thenOnItsOwn([say('Background', 'background')]) : SAYS_HELLO,
+      deps: { prepareConductor: prepare, followUpQuietMs: 50 } })
+    await w.run({ runScope: RUN_SCOPE })
+    if (order === 'acp-first') await waitFor(() => w.requests[0], 'ACP follow-up')
+    expect(wake()).toBe(true)
+    const request = await waitFor(() => w.requests[0], 'MCP follow-up')
+    await request.run(followUpIo().io)
+    expect(prepare).toHaveBeenCalledTimes(2)
+    expect(w.requests).toHaveLength(1)
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
+  })
+})
 
 describe('a turn the agent starts on its own', () => {
   it('is asked for in the chat’s scope and driven to the usage update that carries a cost', async () => {

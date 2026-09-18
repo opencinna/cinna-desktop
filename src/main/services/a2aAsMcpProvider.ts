@@ -21,6 +21,8 @@ import { driverFor } from '../agents/drivers'
 import { hasRunConfig } from '../agents/drivers/capabilities'
 import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { createLogger } from '../logger/logger'
+import { runNestedAgentTurn, SPECIALIST_WAITING } from './nestedAgentTurn'
+import { nanoid } from 'nanoid'
 
 const logger = createLogger('agent-tool')
 
@@ -133,7 +135,8 @@ export class A2AAsMcpProvider implements ToolProvider {
       request.agentId === this.agent.id && request.resume === 'next_message')) {
       return {
         isError: true,
-        content: 'This agent is waiting for a human answer in the Inbox. Do not call it again until that request is answered.'
+        content: SPECIALIST_WAITING,
+        needsInput: true
       }
     }
     const message =
@@ -147,19 +150,22 @@ export class A2AAsMcpProvider implements ToolProvider {
     // an expired Cinna session) fails with the same sentence here, and an
     // orchestrator abort tells a remote agent to cancel its task the same way a
     // user's Stop does — both live in the driver now, not beside each caller.
-    const result = await driverFor(this.agent).run(this.ownerId, this.agent, {
+    const result = await runNestedAgentTurn(driverFor(this.agent), this.ownerId, this.agent, {
       chatId: this.chatId,
+      nested: { toolCallId: opts?.toolCallId ?? nanoid() },
       wireContent: message,
       signal,
       ...(opts?.queueWhenBusy ? { queueWhenBusy: true } : {}),
       onEvent: opts?.onEvent
     })
 
+    if (result.needsInput) return { content: result.text, parts: result.parts, needsInput: true }
+    if (result.stopReason === 'canceled') return { content: 'The specialist was stopped. You may continue with the results already available.', parts: result.parts, isError: true }
     if (result.error) {
       return { content: result.error.message, parts: result.parts, isError: true }
     }
     if (result.stopReason === 'budget') {
-      return { content: result.text || 'The agent paused at its remote budget. Review the session in Claude before continuing.', parts: result.parts, isError: true }
+      return { budget: true, content: result.text || 'The agent paused at its remote budget. Review the session in Claude before continuing.', parts: result.parts, isError: true }
     }
     // Compact text to the orchestrator; rich parts ride along for the UI.
     return { content: result.text, parts: result.parts }
@@ -177,13 +183,15 @@ export function buildAgentToolProviders(
   chatId: string,
   defaultUserId: string,
   profileUserId: string,
-  reservedNames: Set<string>
+  reservedNames: Set<string>,
+  excludedAgentId?: string | null
 ): A2AAsMcpProvider[] {
   const agentIds = chatOnDemandAgentRepo.listAgentIds(chatId)
   const taken = new Set(reservedNames)
   const providers: A2AAsMcpProvider[] = []
 
   for (const agentId of agentIds) {
+    if (agentId === excludedAgentId) continue
     const located = agentService.findAgent(defaultUserId, profileUserId, agentId)
     // Skipped only when the row lacks what its driver needs. A folder agent
     // legitimately has no card URL (`cardUrl: null` at insert), so a bare

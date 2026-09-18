@@ -192,9 +192,8 @@ export const runtimeService = {
    *
    * Without the override it reads through `chatModeService.resolveEffectiveDefault`,
    * so it honours the local/account precedence toggle and a managed mode's
-   * per-profile model override — the same resolution
-   * `aiFunctions.resolveAdapterFromDefaultMode` uses, so "what drafts my
-   * prompts" and "what runs my agent" cannot disagree.
+   * per-profile model override. AI Functions have a separate credential/model
+   * binding; they use this runtime only when their own binding is empty.
    *
    * **`localAgentsDefaultCredentialId` breaks that tie on purpose.** Which
    * credential this machine's engine spends is a property of the machine, not

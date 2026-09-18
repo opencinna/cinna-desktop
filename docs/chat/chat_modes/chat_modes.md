@@ -2,11 +2,11 @@
 
 ## Purpose
 
-Let users define named presets that bundle an LLM provider + model, a set of MCP servers, and a color scheme — so they can start new chats for different workflows in one click instead of manually configuring each time.
+Let users define named presets that bundle a runtime engine, credential/model, instructions, tool policy, MCP servers and a color scheme — so they can start new chats for different workflows in one click instead of manually configuring each time.
 
 ## Core Concepts
 
-- **Chat Mode** — A saved configuration preset with a name, optional LLM provider/model, a set of MCP providers, and a color from 10 presets
+- **Chat Mode** — A saved configuration preset with a name, optional engine/credential/model, instructions, tool policy and a set of MCP providers, and a color from 10 presets
 - **Default Chat Mode** — At most one mode per user can be flagged `isDefault`. The new-chat screen auto-applies it whenever the user lands there without an explicit choice — this is the only implicit fallback when routing a message; there is no longer a "default LLM provider" concept
 - **Color Preset** — One of 10 named color themes (slate, indigo, violet, rose, amber, emerald, cyan, sky, orange, fuchsia) that visually distinguish modes in the UI
 - **Mode Selection** — Choosing a mode from the **Chat mode** sub-menu of the left-side `[+]` composer menu (`ComposerPlusMenu`), or via the `~` sole-character keyboard shortcut; available on both the new-chat screen and active chats that were created with a mode. (The standalone `ChatConfigMenu` `+` button was retired — its modes list now lives inside the unified `[+]` menu.)
@@ -17,15 +17,16 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 
 1. User navigates to Settings > Chats (first tab)
 2. User clicks "Add Chat Mode"
-3. Inline form appears: user enters a name, picks a color, selects an LLM provider + model, and toggles MCP providers
-4. User clicks "Create Mode" — mode is saved immediately
+3. Inline form shows Name and Runtime, plus AI Credentials for OpenCode. More options contains color, model override, Tools, Instructions, and MCP providers.
+4. User clicks "Create Mode" or presses Enter in Name — mode is saved immediately
 5. Mode appears as a card in the list; all further edits auto-save
 
 ### Editing a chat mode
 
 1. User expands a mode card in Settings > Chats
 2. Any change (color, provider, model, MCP toggles) saves automatically
-3. Name saves on blur or Enter key press
+3. Name saves on blur or Enter key press; instructions and explicit model IDs save on blur. Rapid edits preserve each other while saves run in order.
+4. Codex modes show Inactive with a runtime-unavailable cause. Their runtime fields stay disabled until Claude or OpenCode is selected; local Codex agents remain available.
 
 ### Starting a chat with a mode
 
@@ -40,7 +41,7 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 ### Deselecting a mode (new-chat screen)
 
 1. User reopens the `[+]` → **Chat mode** sub-menu and clicks the already-selected mode
-2. Mode deselects — input returns to default styling. Without a mode (and without a selected agent) the next send raises an inline "can't determine destination" error banner above the input; the user has to pick a mode or an agent to send
+2. Mode deselects — input returns to default styling. Without a mode or selected agent, the next send uses a chat-owned Default runtime; installation/login and policy requirements still apply
 
 ### Switching mode on an active chat
 
@@ -58,8 +59,8 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 
 ## Business Rules
 
-- A chat mode's provider and model are optional — if neither the mode nor the user explicitly selects a provider on the new-chat screen, sending fails with a "can't determine destination" error (no implicit provider fallback exists)
-- **A mode inherits its credential's state, and says so before the user finds out.** Switching the AI credential off unregisters its adapter, so a mode pinned to it fails the send with "Provider adapter not available" rather than degrading onto another key. The mode's card therefore carries an `Inactive` badge and a **visible** short cause — `credential switched off`, `no API key`, `credential missing` — with the whole sentence and its remedy in the expanded card. The cause is not left to a tooltip: the collapsed list is the state the tab opens in, and one word covering three situations is unambiguous only to someone who thought to hover. Account-provisioned modes use the same wording and styling as the user's own, so two lists of chat modes one settings group apart cannot report the same state differently — and it matters most there, whose header carries the mode's *own* on/off switch, where an unqualified `Inactive` would be a second meaning of "off" one control away
+- Engine, credential and model are optional. A plain chat binds the Default runtime instead of requiring an API provider. Claude/Codex engines use their CLI login; OpenCode uses the selected/default AI credential. Codex synthetic chats currently refuse because its no-file-tools policy cannot be enforced. Codex is disabled in the chat-mode runtime picker; an inherited Codex default blocks creation with guidance to select Claude or OpenCode.
+- **A mode inherits its credential's state, and says so before the user finds out.** Switching the AI credential off makes its OpenCode runtime unavailable rather than silently selecting another key. The mode's card therefore carries an `Inactive` badge and a **visible** short cause — `credential switched off`, `no API key`, `credential missing` — with the whole sentence and its remedy in the expanded card. The cause is not left to a tooltip: the collapsed list is the state the tab opens in, and one word covering three situations is unambiguous only to someone who thought to hover. Account-provisioned modes use the same wording and styling as the user's own, so two lists of chat modes one settings group apart cannot report the same state differently — and it matters most there, whose header carries the mode's *own* on/off switch, where an unqualified `Inactive` would be a second meaning of "off" one control away
 - **A mode with no credential is not inactive.** It runs on the default, which is what its own select already says ("None (use default)"); badging it would put a warning on the most ordinary chat mode there is. Nothing is badged while the credential list is still loading either, so a card cannot flash `Inactive` and un-flash
 - **The credential select never claims "None (use default)" over a mode that names a credential.** A `<select>` whose value matches no option displays the first one, so a mode bound to a switched-off credential read as unset — wrong, and unrecoverable, because the card never admitted what it was set to. The bound row is added as a synthetic option suffixed `— inactive`; a credential that has left the machine, where only its id survives, gets a plain `Missing credential`
 - A chat mode's MCP list is the chat's **complete** baseline MCP set. An empty list means the chat starts with **no** MCP servers — there is no "fall back to every enabled provider" rule (it used to exist and silently attached every connector the user owned, tool schemas included, to chats whose mode selected none). Extra servers are added per chat via [On-Demand MCP](../../mcp/on_demand/on_demand.md) (`@`-mention or the `[+]` picker), and a mode-less chat configures its own set through `ChatControls`
@@ -105,3 +106,11 @@ Active Chat (ChatWorkspace -> ChatInput -> ComposerPlusMenu "Chat mode" sub-menu
 - [Switching an AI Credential Off](../../llm/adapters/credential_enablement.md) — what the `Inactive` badge means, and the confirm that names the modes a credential's off switch will stop
 - [MCP Connections](../../mcp/connections/connections.md) — Mode stores a list of MCP provider IDs to enable for the chat
 - [Settings](../../ui/settings/settings.md) — "Chats" tab in settings is the management UI for modes
+
+## Runtime profile rules
+
+- Every synthetic chat profile excludes native file and shell tools. No tools additionally hides all connected tools; Connected tools permits the attached agents/MCPs. A No tools profile cannot start an autonomous task because it cannot invoke finish or ask_user.
+- Instructions initialize the chat-owned runtime folder. Existing chats capture their runtime; changing the machine default alone does not rewrite them. An explicit mode change refreshes the synthetic profile and causes a fresh session when its descriptor/config hash changes.
+- Claude/Codex model choices use the last catalog advertised by an actual session in this profile. Before discovery, Claude aliases and explicit model entry are fallbacks, not evidence that the CLI supports a model. The in-memory catalog resets at app restart. OpenCode retains credential model selection.
+- Existing credential-backed modes are migrated to OpenCode; engine-less modes inherit the Default runtime. Managed provider-backed modes retain their existing account-owned shape and resolve through OpenCode.
+- Chat token/cost metadata is suppressed; ACP session usage is not presented as an API bill.

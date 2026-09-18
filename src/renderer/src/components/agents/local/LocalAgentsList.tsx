@@ -193,7 +193,7 @@ export function LocalAgentsList(): React.JSX.Element {
     clearCatalogError()
   }
   const { data: agentData } = useAgents()
-  const allAgents = agentData?.filter((agent) => agent.source !== 'remote' || agent.enabled !== false)
+  const allAgents = agentData?.filter((agent) => !agent.conductor && (agent.source !== 'remote' || agent.enabled !== false))
   const remoteAgents = profile?.type === 'cinna_user' ? (allAgents ?? []).filter((agent) => agent.source === 'remote') : []
   const a2aAgents = (allAgents ?? []).filter((agent) => agent.source === 'local' && agent.protocol === 'a2a')
   const managedAgents = (allAgents ?? []).filter((agent) => agent.driver === 'managed')

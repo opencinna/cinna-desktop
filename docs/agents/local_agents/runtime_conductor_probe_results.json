@@ -1,0 +1,495 @@
+{
+  "recordedOn": "2026-09-18",
+  "environment": {
+    "platform": "darwin-arm64",
+    "home": "throwaway",
+    "cwd": "throwaway",
+    "apiCredentialEnvironmentInherited": false,
+    "realProfileFilesCopied": false,
+    "realProfileWritesRequested": false,
+    "realProviderModelPromptsSent": 0
+  },
+  "claude": {
+    "cliVersion": "2.1.275",
+    "adapterVersion": "0.76.0",
+    "authStatus": {
+      "exitCode": 1,
+      "loggedIn": false
+    },
+    "acpInitialize": {
+      "protocolVersion": 1,
+      "success": true
+    },
+    "sessionNewWithCinnaHttpDescriptor": {
+      "success": true
+    },
+    "updatesObserved": [
+      "available_commands_update"
+    ],
+    "mcpListRequestsObserved": 0,
+    "mcpCallsObserved": 0,
+    "blockedBy": "No native CLI login under the throwaway HOME. No credentials were copied and no login was attempted.",
+    "notEstablished": [
+      "Real model tool invocation through the injected MCP server",
+      "tools/list_changed adoption during a live Claude session",
+      "notifications/cancelled after ACP session/cancel",
+      "claudecode/toolUseId metadata on real calls",
+      "Concurrent Claude model sessions under one login",
+      "Steering while a real MCP call is running"
+    ],
+    "modelPromptsSent": 0
+  },
+  "codex": {
+    "cliVersion": "0.154.0-alpha.6.2",
+    "adapterVersion": "1.11.0",
+    "isolatedCommands": [
+      "--version",
+      "features list",
+      "app-server generate-json-schema"
+    ],
+    "featuresObserved": {
+      "shell_tool": "stable",
+      "view_image": "stable",
+      "apply_patch_freeform": "removed",
+      "js_repl": "removed"
+    },
+    "generatedToolsV2Properties": [
+      "web_search"
+    ],
+    "adapterSourceObserved": "AgentMode.ReadOnly uses workspaceWrite; sendPrompt supplies that sandboxPolicy to turn/start. config sandbox_mode does not enforce read-only turns.",
+    "publicSourceObserved": "Codex rust-v0.115.0 tools/spec.rs derives apply_patch from model metadata independently of shell_tool and exposes optional read_file/list_dir/grep_files from experimental_supported_tools.",
+    "publicSource": "https://raw.githubusercontent.com/openai/codex/rust-v0.115.0/codex-rs/core/src/tools/spec.rs",
+    "decision": "Synthetic no-file-tools Codex chat/AI-function sessions fail closed; folder Codex agent coordination is unaffected.",
+    "notEstablished": [
+      "Live Codex conductor MCP calls",
+      "Native MCP isolation",
+      "File-tool exclusion with the current adapter"
+    ]
+  },
+  "automatedServerEvidence": {
+    "testFile": "src/main/services/conductorMcpServer.test.ts",
+    "testsPassed": 8,
+    "transport": "real SDK Streamable HTTP over 127.0.0.1 with synthetic tool providers",
+    "covers": [
+      "bearer isolation",
+      "Host/Origin validation",
+      "stable reconnect descriptor",
+      "list_changed",
+      "conductor exclusion",
+      "parallel calls",
+      "wire cancellation",
+      "MCP session termination",
+      "disposal"
+    ],
+    "doesNotEstablish": "How Claude/Codex/OpenCode engines react to those protocol messages"
+  },
+  "opencode": {
+    "reproduce": "node --experimental-strip-types scripts/probes/runtime-conductor-opencode.mjs /path/to/opencode",
+    "provider": "Loopback OpenAI-compatible deterministic SSE fake model; no real provider credentials or billing",
+    "observed": {
+      "binaryVersion": "1.18.27",
+      "isolatedHome": true,
+      "isolatedCwd": true,
+      "apiCredentialEnvInherited": false,
+      "realProviderRequests": 0,
+      "initialize": {
+        "success": true
+      },
+      "sessionNew": {
+        "success": true
+      },
+      "models": [
+        {
+          "path": "/v1/chat/completions",
+          "toolNames": [],
+          "messageRoles": [
+            "system",
+            "user",
+            "user"
+          ],
+          "hasChatOneMarker": false,
+          "hasChatTwoMarker": false,
+          "hasChatInstructions": false,
+          "hasUtilityInstructions": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "toolNames": [
+            "cinna_probe"
+          ],
+          "messageRoles": [
+            "system",
+            "user"
+          ],
+          "hasChatOneMarker": true,
+          "hasChatTwoMarker": false,
+          "hasChatInstructions": true,
+          "hasUtilityInstructions": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "toolNames": [
+            "cinna_probe"
+          ],
+          "messageRoles": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ],
+          "hasChatOneMarker": true,
+          "hasChatTwoMarker": false,
+          "hasChatInstructions": true,
+          "hasUtilityInstructions": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "toolNames": [
+            "cinna_probe_refresh"
+          ],
+          "messageRoles": [
+            "system",
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "user"
+          ],
+          "hasChatOneMarker": true,
+          "hasChatTwoMarker": false,
+          "hasChatInstructions": true,
+          "hasUtilityInstructions": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "toolNames": [
+            "cinna_probe_refresh"
+          ],
+          "messageRoles": [
+            "system",
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "user",
+            "assistant",
+            "tool"
+          ],
+          "hasChatOneMarker": true,
+          "hasChatTwoMarker": false,
+          "hasChatInstructions": true,
+          "hasUtilityInstructions": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "toolNames": [
+            "cinna_probe_slow"
+          ],
+          "messageRoles": [
+            "system",
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "user"
+          ],
+          "hasChatOneMarker": true,
+          "hasChatTwoMarker": false,
+          "hasChatInstructions": true,
+          "hasUtilityInstructions": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "toolNames": [],
+          "messageRoles": [
+            "system",
+            "user",
+            "user"
+          ],
+          "hasChatOneMarker": false,
+          "hasChatTwoMarker": false,
+          "hasChatInstructions": false,
+          "hasUtilityInstructions": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "toolNames": [],
+          "messageRoles": [
+            "system",
+            "user"
+          ],
+          "hasChatOneMarker": false,
+          "hasChatTwoMarker": false,
+          "hasChatInstructions": false,
+          "hasUtilityInstructions": true
+        },
+        {
+          "path": "/v1/chat/completions",
+          "toolNames": [],
+          "messageRoles": [
+            "system",
+            "user",
+            "user"
+          ],
+          "hasChatOneMarker": false,
+          "hasChatTwoMarker": false,
+          "hasChatInstructions": false,
+          "hasUtilityInstructions": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "toolNames": [
+            "cinna_probe_slow"
+          ],
+          "messageRoles": [
+            "system",
+            "user"
+          ],
+          "hasChatOneMarker": false,
+          "hasChatTwoMarker": true,
+          "hasChatInstructions": true,
+          "hasUtilityInstructions": false
+        }
+      ],
+      "mcpCalls": [
+        {
+          "name": "probe"
+        },
+        {
+          "name": "probe_refresh"
+        },
+        {
+          "name": "probe_slow"
+        }
+      ],
+      "updates": [
+        "available_commands_update",
+        "tool_call",
+        "tool_call_update",
+        "agent_message_chunk",
+        "usage_update"
+      ],
+      "refresh": {
+        "success": true,
+        "stopReason": "end_turn"
+      },
+      "utility": {
+        "sessionNew": {
+          "success": true
+        },
+        "mode": {
+          "success": true
+        },
+        "prompt": {
+          "success": true,
+          "stopReason": "end_turn"
+        }
+      },
+      "stderrSummary": [],
+      "callMetadata": [
+        {
+          "name": "probe",
+          "metaKeys": [
+            "progressToken"
+          ]
+        },
+        {
+          "name": "probe_refresh",
+          "metaKeys": [
+            "progressToken"
+          ]
+        },
+        {
+          "name": "probe_slow",
+          "metaKeys": [
+            "progressToken"
+          ]
+        }
+      ],
+      "toolCallShapes": [
+        {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_1",
+          "title": "cinna_probe",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {}
+        },
+        {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_2",
+          "title": "cinna_probe_refresh",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {}
+        },
+        {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_3",
+          "title": "cinna_probe_slow",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {}
+        }
+      ],
+      "cancel": {
+        "signalObserved": true,
+        "prompt": {
+          "success": true,
+          "stopReason": "cancelled"
+        }
+      },
+      "mode": {
+        "success": true
+      },
+      "prompt": {
+        "success": true,
+        "stopReason": "end_turn"
+      },
+      "secondChat": {
+        "sessionNew": {
+          "success": true
+        },
+        "prompt": {
+          "success": true,
+          "stopReason": "end_turn"
+        }
+      },
+      "providerResolutions": 7
+    },
+    "established": [
+      "Real OpenCode ACP initialize and session/new with authenticated Cinna HTTP descriptor",
+      "Real model tool schemas contain only injected cinna tools under replacement deny-all native-tool policy",
+      "Actual MCP probe and probe_refresh calls reached Cinna server and returned into model conversation",
+      "tools/list_changed replaced the available tool schema in the same live ACP session",
+      "ACP session/cancel propagated cancellation to the running MCP call AbortSignal and returned cancelled",
+      "A fresh no-tools utility session completed while a chat session had an MCP tool call in flight on the same process",
+      "Utility mode sent no tool schemas and included its own instructions without either chat folder marker",
+      "Two same-mode sessions on one process used their own session cwd AGENTS.md markers without cross-session marker leakage",
+      "ACP tool_call.title uses cinna_<tool>; rawInput contains only arguments; MCP metadata contains progressToken, not ACP toolCallId"
+    ],
+    "notEstablished": [
+      "Real paid-provider authentication or model quality",
+      "Full application run/transcript/UI integration; this probe drives the real ACP engine and Cinna server directly",
+      "Two real-provider model streams under a single paid login",
+      "OpenCode behavior for future versions or different native permission policies"
+    ]
+  },
+  "packaging": {
+    "command": "npm run test:packaging",
+    "testsPassed": 13,
+    "testsFailed": 0,
+    "covers": "Packaging dependency/configuration unit checks; not a packaged application launch"
+  },
+  "applicationVerification": {
+    "initialFullE2E": {
+      "passed": 108,
+      "failed": 16,
+      "skipped": 3,
+      "status": "Not green; prior to runtime fixture and production handback corrections"
+    },
+    "unchangedBaseline": {
+      "commit": "17c845e",
+      "reproducedFailures": 6,
+      "cases": [
+        "agent-turn-failures: streamed failed A2A task records a failed job attempt and visible saved error",
+        "job-executor-refresh: accepted main-owned Job starts one ACP step",
+        "script-runtime: parallel folder agents survive Inbox gate",
+        "script-runtime: interrupted parallel script resumes unfinished step",
+        "session-activity: Stop on running background task removes its badge",
+        "local-schedules: reviewed schedule dispatches on real minutes and remains disabled after restart"
+      ]
+    },
+    "manifestHandback": {
+      "command": "make e2e-one SPEC=manifest-handback",
+      "beforeCatchUpFix": {
+        "passed": 0,
+        "failed": 2,
+        "failure": "Resumed coordinator history omitted specialist /handback answer"
+      },
+      "afterCatchUpFix": {
+        "passed": 2,
+        "failed": 0,
+        "durationSeconds": 12.9
+      },
+      "typecheckE2E": "passed"
+    },
+    "finalUnitSuite": {
+      "passed": 5893,
+      "failed": 3,
+      "skipped": 6,
+      "testFiles": 356,
+      "baselineCommit": "17c845e7f74044e669cb6bf6d9457758c19e3065",
+      "failures": [
+        "fileRef.css: neutral edge styling",
+        "fileRef.css: plain inline-code fill",
+        "kind-branch ratchet: existing TaskView/OpenInMenu branches"
+      ],
+      "boundary": "All three failures reproduced on unchanged baseline; full suite is not green"
+    },
+    "correctedFeatureE2E": {
+      "originalFullRunFailuresCorrected": 10,
+      "combinedBatch": {
+        "passed": 10,
+        "failed": 0,
+        "durationMinutes": 1.9,
+        "cases": [
+          "autonomous task: 2",
+          "plain runtime Stop: 1",
+          "runtime conductor: 5",
+          "Codex engine: 2"
+        ]
+      },
+      "normalAutonomousRepeat": {
+        "passed": 1,
+        "failed": 0,
+        "durationSeconds": 8.9
+      },
+      "boundary": "Targeted reruns, not a second full E2E suite; the other six initial failures were reproduced on unchanged baseline"
+    },
+    "latestFullUnitSuite": {
+      "passed": 5890,
+      "failed": 6,
+      "skipped": 6,
+      "failureClassification": {
+        "baseline": 3,
+        "missingRemoveInTestMocks": 3
+      },
+      "boundary": "This complete run was not green; the three new failures were missing chatConductorService.remove mock members, not runtime cleanup failures"
+    },
+    "cleanupMockFollowUp": {
+      "passed": 51,
+      "failed": 0,
+      "boundary": "Focused suites after repairing mock members; production cleanup has its own service test coverage"
+    },
+    "independentUX": {
+      "passed": 1,
+      "viewportWidth": 800,
+      "checked": [
+        "neighboring settings structure",
+        "stable per-keystroke geometry",
+        "compact creation and Enter submit",
+        "rapid instruction/tool saves",
+        "custom model persistence",
+        "unsupported inherited Codex state",
+        "clean IPC error retains editor"
+      ],
+      "finalAdjustment": "Shortened Codex warning; full reason remains in Runtime help"
+    },
+    "finalBuiltAppBatch": {
+      "passed": 7,
+      "failed": 0,
+      "cases": [
+        "manifest handback: 2",
+        "runtime conductor: 5"
+      ],
+      "boundary": "Final build after warning copy fix; targeted verification, not full E2E rerun"
+    },
+    "finalBuild": "passed",
+    "finalTypecheck": "node, web and e2e passed"
+  }
+}

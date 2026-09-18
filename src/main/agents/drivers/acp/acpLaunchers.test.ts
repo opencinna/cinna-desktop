@@ -102,6 +102,30 @@ describe('the OpenCode launcher', () => {
     expect(p.spec.cwd).toBe(FOLDER.path)
   })
 
+  it('keeps shared chat and utility modes in one stable config while sessions retain their own cwd', async () => {
+    const input = configInput()
+    const utilityId = `${AGENT_ID}:utility`
+    input.agents[0].permissions = { '*': 'deny', 'cinna_*': 'allow' }
+    input.agents.push({ ...input.agents[0], agentId: utilityId, slug: 'ai-function', prompt: 'Return only utility output.', permissionMode: 'replace', permissions: { '*': 'deny' } })
+    const shared = createOpencodeLauncher({
+      binary: async () => ({ path: '/usr/local/bin/opencode', version: '1.18.27' }),
+      configInput: async () => input, configRoot: () => root,
+      childEnv: async () => ({ PATH: '/usr/bin', HOME: '/throwaway' }),
+      companionAgentIds: () => [utilityId]
+    })
+    const first = plan(await shared.plan(CTX))
+    const second = plan(await shared.plan({ ...CTX, folder: { ...FOLDER, path: '/owned/chat-two' } }))
+    expect(first.spec.key).toBe(second.spec.key)
+    expect(first.spec.cwd).toBe(FOLDER.path)
+    expect(second.spec.cwd).toBe('/owned/chat-two')
+    const config = JSON.parse(readFileSync(first.spec.env.OPENCODE_CONFIG, 'utf8'))
+    const modes = Object.values(config.agent) as { prompt: string; permission: Record<string, unknown> }[]
+    expect(modes).toHaveLength(2)
+    expect(modes.find((mode) => mode.prompt === 'Return only utility output.')?.permission).toEqual({ '*': 'deny' })
+    expect(modes.find((mode) => mode.prompt === 'Return only utility output.')?.permission['cinna_*']).toBeUndefined()
+    expect(first.setup.configOptions?.find((option) => option.configId === 'mode')?.value).toBe(second.setup.configOptions?.find((option) => option.configId === 'mode')?.value)
+  })
+
   it('writes a config holding this agent alone, and names the credential in the environment', async () => {
     const p = plan(await launcher().plan(CTX))
     const configPath = p.spec.env.OPENCODE_CONFIG

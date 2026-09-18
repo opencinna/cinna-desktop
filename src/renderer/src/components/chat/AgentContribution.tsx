@@ -32,6 +32,7 @@ interface AgentContributionProps {
    * the main transcript uses.
    */
   verbose?: boolean
+  renderRequest?: (part: MessagePart, decision?: string) => React.JSX.Element | null
 }
 
 /**
@@ -49,7 +50,8 @@ export function AgentContribution({
   agentName,
   askMessage,
   isStreaming,
-  verbose
+  verbose,
+  renderRequest
 }: AgentContributionProps): React.JSX.Element {
   const color = agentName || agentId ? presetForAgentId(agentId ?? agentName ?? '') : null
   const lastIdx = parts.length - 1
@@ -60,6 +62,18 @@ export function AgentContribution({
     const k = `part-${idx}`
     const live = isStreaming && idx === lastIdx
     if (cli.consumed.has(idx)) return
+    if (renderRequest && p.kind === 'tool') {
+      const decision = parts.find((part) => part.kind === 'tool_result' && part.toolId === p.toolId)?.text
+      const request = renderRequest(p, decision)
+      if (request) {
+        renderNodes.push({ slot: 'plain', key: k, node: request })
+        return
+      }
+    }
+    if (renderRequest && p.kind === 'tool_result' && p.toolId) {
+      const call = parts.find((part) => part.kind === 'tool' && part.toolId === p.toolId)
+      if (call && renderRequest(call, p.text)) return
+    }
     const cliCall = cli.calls.get(idx)
     if (cliCall) {
       const results = cliCall.resultIndices.map((index) => parts[index])

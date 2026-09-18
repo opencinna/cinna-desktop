@@ -49,6 +49,9 @@ export function registerChatModeHandlers(): void {
         name: string
         providerId?: string | null
         modelId?: string | null
+      engine?: import('../../shared/engine').AgentEngine | null
+      systemPrompt?: string
+      toolPolicy?: import('../../shared/chatModeRuntime').ChatToolPolicy
         mcpProviderIds?: string[]
         colorPreset?: string
         isDefault?: boolean

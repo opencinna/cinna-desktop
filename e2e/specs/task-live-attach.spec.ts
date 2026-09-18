@@ -271,6 +271,14 @@ async function serveModelTool(): Promise<{
       }
       if (req.method !== 'POST' || req.url !== '/v1/chat/completions') { res.statusCode = 404; send({}); return }
       const body = JSON.parse(raw) as ModelRequest
+      // OpenCode may name its own session through a separate no-tools model
+      // request. It is not a conversation round or Cinna's opt-in auto-title.
+      if (!body.tools?.length) {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.end(`data: ${JSON.stringify({ id: 'engine-title', object: 'chat.completion.chunk', created: 1, model: MODEL,
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'Attachment check' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`)
+        return
+      }
       rounds.push(body)
       if (!body.stream) { res.statusCode = 400; send({ error: { message: 'The fixture only supports streamed model rounds' } }); return }
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })

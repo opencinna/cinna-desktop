@@ -1,3 +1,4 @@
+import type { ChatModeRuntime } from '../../shared/chatModeRuntime'
 import { nanoid } from 'nanoid'
 import { and, eq, inArray } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
@@ -5,9 +6,9 @@ import { getDb } from './client'
 import { chatModes, mcpProviders } from './schema'
 import type * as schema from './schema'
 
-export type ChatModeRow = typeof chatModes.$inferSelect
+export type ChatModeRow = Omit<typeof chatModes.$inferSelect, keyof ChatModeRuntime> & ChatModeRuntime
 
-export interface ChatModeUpsertInput {
+export interface ChatModeUpsertInput extends ChatModeRuntime {
   id?: string
   name: string
   providerId?: string | null
@@ -72,6 +73,9 @@ export const chatModeRepo = {
         name: input.name,
         providerId: input.providerId ?? null,
         modelId: input.modelId ?? null,
+        engine: input.engine ?? (input.providerId ? 'opencode' : null),
+        systemPrompt: input.systemPrompt ?? '',
+        toolPolicy: input.toolPolicy ?? 'connectors',
         mcpProviderIds: input.mcpProviderIds ?? [],
         colorPreset: input.colorPreset ?? 'slate',
         isDefault: input.isDefault ?? false,
@@ -97,6 +101,9 @@ export const chatModeRepo = {
         name: input.name,
         providerId: input.providerId ?? null,
         modelId: input.modelId ?? null,
+        engine: input.engine !== undefined ? input.engine : (existing.engine ?? (input.providerId ? 'opencode' : null)),
+        systemPrompt: input.systemPrompt ?? existing.systemPrompt ?? '',
+        toolPolicy: input.toolPolicy ?? existing.toolPolicy ?? 'connectors',
         mcpProviderIds: input.mcpProviderIds ?? [],
         colorPreset: input.colorPreset ?? 'slate',
         isDefault: input.isDefault ?? existing.isDefault,

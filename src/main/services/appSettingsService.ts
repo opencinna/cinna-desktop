@@ -72,6 +72,11 @@ function assertValueShape<K extends AppSettingKey>(
 const VALUE_CHECKS: {
   [K in AppSettingKey]?: (value: AppSettingsSchema[K]) => void
 } = {
+  defaultMultiAgentRouting: (value) => {
+    if (value !== 'human' && value !== 'coordinator') {
+      throw new AppSettingsError('invalid_value', 'Choose You route or AI routes.')
+    }
+  },
   taskRunnerConcurrency: (value) => {
     if (!Number.isSafeInteger(value) || value < 1 || value > 8) throw new AppSettingsError('invalid_value', 'Concurrent task limit must be an integer from 1 to 8.')
   },
@@ -225,6 +230,7 @@ export const appSettingsService = {
     assertValueShape(key, value)
     runValueCheck(key, value)
     appSettingsRepo.set(key, value)
+    if (key === 'aiFunctionsCredentialId') appSettingsRepo.set('aiFunctionsModelId', '')
     logger.info('app setting updated', { key, valueType: typeof value })
   }
 }

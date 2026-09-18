@@ -193,7 +193,7 @@ Renderer run.start → run:start → runExecutionService → router → AgentDri
 | Command-line / SSH | acp / custom | Resumable child session; captured command and external CLI/SSH configuration |
 | Claude Managed | managed | Credential-bound remote session; Anthropic API key |
 
-The LLM coordinator is separate: model adapters and chatStreamingService call MCP, agents and trusted coordinator controls through ToolProvider. Gemini ACP and ACP HTTP remain unimplemented. Codex uses the shared ACP launcher path; [its technical reference](../local_agents/codex_engine_tech.md) separates adapter tests from live CLI/model validation.
+Local ACP roots conduct through `src/main/services/conductorBridge.ts`; SDK adapters serve AI Functions only. Remote drivers remain callable participants. Codex synthetic no-file-tools profiles refuse; folder Codex runtime behavior retains its separate evidence limits.
 
 ## Integration Points
 

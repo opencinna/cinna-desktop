@@ -24,8 +24,10 @@ import { installTaskRunnerHooks } from './taskRunnerBridge'
 import { CoordinatorToolProvider, type CoordinatorAgent } from './coordinatorToolProvider'
 import { A2AAsMcpProvider } from './a2aAsMcpProvider'
 import { agentService } from './agentService'
-import { getAdapter } from '../llm/registry'
 import { createLogger } from '../logger/logger'
+import { canConduct } from '../../shared/chatRouting'
+import { nestedToolCallId } from './nestedContinuationService'
+import { chatConductorService } from './chatConductorService'
 
 const logger = createLogger('task-runner')
 const continuation = 'Continue coordinating the task from the saved conversation. Use finish only when the goal is achieved; use ask_user when a human decision is needed.'
@@ -49,7 +51,9 @@ function checkpoint(userId: string, taskId: string): TaskRuntimeCheckpoint {
   return value
 }
 function agents(scope: RunScope, chatId: string): CoordinatorAgent[] {
+  const conductorId = chatRepo.getOwned(scope.profileUserId, chatId)?.agentId
   return chatOnDemandAgentRepo.listAgentIds(chatId).flatMap((id) => {
+    if (id === conductorId) return []
     const located = agentService.findAgent(scope.settingsUserId, scope.profileUserId, id)
     if (!located || !(agentOverrideRepo.get(scope.profileUserId, id)?.enabled ?? located.row.enabled)) return []
     return [{ id, name: located.row.name }]
@@ -117,6 +121,15 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
     while (!execution.controller.signal.aborted) {
       owned(userId, taskId)
       saved = checkpoint(userId, taskId)
+      if (saved.owner.kind === 'coordinator' && !saved.coordinator.agentId) {
+        const chat = chatRepo.getOwned(userId, saved.chatId)!
+        const bound = chat.agentId ? chat : chatConductorService.bind(userId, chat)
+        if (bound.agentId) {
+          const root = agentService.findAgent(saved.settingsUserId, userId, bound.agentId)?.row
+          saved = { ...saved, coordinator: { ...saved.coordinator, agentId: bound.agentId, name: root?.name } }
+          store(userId, taskId, saved)
+        }
+      }
       if (saved.ownerTurns >= saved.budget.maxRounds) { finish(userId, taskId, 'error', 'The task reached its owner-turn limit.'); return }
       const scope = { profileUserId: userId, settingsUserId: saved.settingsUserId }
       const assertCurrent = (): void => { owned(userId, taskId); if (execution.controller.signal.aborted) throw new Error('The task was stopped.') }
@@ -161,8 +174,26 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
         execution.handle = runExecutionService.start(scope, { chatId: next.chatId, content: next.prompt }, {
           runnerTaskId: taskId, coordinator, inputOrigin: next.promptOrigin,
           agentId: next.owner.kind === 'agent' ? next.owner.agentId : undefined,
-          handbackEligible: next.owner.kind === 'agent',
-          observe: (context, event) => inboxService.recordRunEvent(context, event), onAccepted: assertCurrent
+          handbackEligible: next.owner.kind === 'agent' && !next.owner.toolCallId,
+          ...(next.owner.kind === 'agent' && next.owner.toolCallId ? { nested: { toolCallId: next.owner.toolCallId } } : {}),
+          ...(next.owner.kind === 'coordinator' && next.coordinator.agentId ? {
+            toolCallBudget: {
+              get remaining() {
+                const current = checkpoint(userId, taskId)
+                return Math.max(0, current.budget.maxRounds - (current.toolCalls ?? 0))
+              },
+              consume() {
+                assertCurrent()
+                const current = checkpoint(userId, taskId)
+                if ((current.toolCalls ?? 0) >= current.budget.maxRounds) throw new Error('The task reached its tool-call limit.')
+                store(userId, taskId, { ...current, toolCalls: (current.toolCalls ?? 0) + 1 })
+              }
+            }
+          } : {}),
+          observe: (context, event) => inboxService.recordRunEvent(context,
+            next.owner.kind === 'agent' && next.owner.toolCallId
+              ? { type: 'child', toolCallId: next.owner.toolCallId, agentId: next.owner.agentId, event } : event),
+          onAccepted: assertCurrent
         })
         store(userId, taskId, { ...checkpoint(userId, taskId), lastRunId: execution.handle.id })
         if (execution.controller.signal.aborted) execution.handle.cancel()
@@ -200,14 +231,19 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
         getDb().transaction(() => {
           let prompt = continuation
           if (saved.owner.kind === 'agent') {
-            taskService.setAssignee(userId, taskId, { kind: 'model', agentId: null, name: null })
-            chatRepo.updateMeta(userId, next.chatId, { router: 'coordinator', providerId: saved.coordinator.providerId, modelId: saved.coordinator.modelId })
+            taskService.setAssignee(userId, taskId, saved.coordinator.agentId
+              ? { kind: 'agent', agentId: saved.coordinator.agentId, name: saved.coordinator.name ?? null }
+              : { kind: 'model', agentId: null, name: null })
+            chatRepo.updateMeta(userId, next.chatId, { router: 'coordinator', agentId: saved.coordinator.agentId ?? null,
+              ...(saved.coordinator.providerId ? { providerId: saved.coordinator.providerId } : {}),
+              ...(saved.coordinator.modelId ? { modelId: saved.coordinator.modelId } : {}) })
             const note = outcome.handback?.note
             const notice = `${saved.owner.name} handed the task back to the coordinator.${note ? `\nAgent-provided handback note: ${JSON.stringify(note)}` : ''}`
             messageRepo.saveTransition({ chatId: next.chatId, content: notice, sourceAgentId: saved.owner.agentId })
             // Transition rows are UI notices and are omitted from provider
             // history. Include this ownership change in the next wire turn.
             prompt = `${notice}\n\n${continuation}`
+            if (saved.owner.toolCallId) prompt = `The specialist result below completes tool call ${JSON.stringify(saved.owner.toolCallId)} after its Inbox answer.\n\n${outcome.text}\n\n${prompt}`
           }
           store(userId, taskId, { ...saved, state: 'queued', owner: { kind: 'coordinator' }, prompt, promptOrigin: 'runner' })
         })
@@ -273,9 +309,22 @@ export const taskRunnerService = {
   /** Main-only admission seam: a job transaction commits before launch is called. */
   prepare(scope: RunScope, input: AutonomousTaskStart): { taskId: string; chatId: string; launch(): void } {
     if (!input || typeof input.goal !== 'string' || !input.goal.trim() || input.goal.length > 64000) throw new Error('Enter a task goal of at most 64000 characters.')
-    const chat = chatRepo.getOwned(scope.profileUserId, input.chatId)
-    if (!chat || chat.deletedAt || chat.router !== 'coordinator' || !chat.providerId || !chat.modelId || !getAdapter(chat.providerId)) {
-      throw new Error('Choose a configured coordinator model before running on its own.')
+    let chat = chatRepo.getOwned(scope.profileUserId, input.chatId)
+    if (!chat || chat.deletedAt || chat.router !== 'coordinator') {
+      throw new Error('Choose a coordinator before running on its own.')
+    }
+    if (!chat.agentId) chat = chatConductorService.bind(scope.profileUserId, chat)
+    const conductor = chat.agentId ? agentService.findAgent(scope.settingsUserId, scope.profileUserId, chat.agentId)?.row : undefined
+    if (chat.agentId) {
+      if (!conductor || !(agentOverrideRepo.get(scope.profileUserId, conductor.id)?.enabled ?? conductor.enabled) ||
+        !canConduct({ ...conductor, acpTransport: typeof conductor.driverConfig?.transport === 'string' ? conductor.driverConfig.transport : undefined })) {
+        throw new Error('Choose an enabled local coordinator before running on its own.')
+      }
+    } else {
+      throw new Error('Choose a configured coordinator runtime before running on its own.')
+    }
+    if (typeof conductor.driverConfig?.conductorChatId === 'string' && conductor.driverConfig.conductorToolPolicy === 'none') {
+      throw new Error('Choose a chat mode with connected tools before running on its own. Autonomous work needs task controls.')
     }
     if (runExecutionService.isRunning(chat.id) || taskRunnersByChat.has(chat.id)) throw new Error('This conversation already has a task or turn running.')
     if (handingOffChats.has(chat.id) || taskHandoffRepo.unresolvedForChat(scope.profileUserId, chat.id)) throw new Error('Resolve this conversation’s pending remote handoff before starting autonomous work.')
@@ -294,7 +343,7 @@ export const taskRunnerService = {
       const saved: TaskRuntimeCheckpoint = { attemptId: nanoid(), lastRunId: null, pendingRequestIds: [], chatId: chat.id, settingsUserId: scope.settingsUserId,
         state: 'queued', reason: null, ownerTurns: 0, elapsedMs: 0, budget, owner: { kind: 'coordinator' },
         prompt: input.goal.trim(), promptOrigin: 'user', gateRequestId: null, gateToolCallId: null, activeStartedAt: null,
-        coordinator: { providerId: chat.providerId!, modelId: chat.modelId!, modeId: chat.modeId } }
+        coordinator: { agentId: chat.agentId, ...(conductor ? { name: conductor.name } : {}), providerId: chat.providerId, modelId: chat.modelId, modeId: chat.modeId }, toolCalls: 0 }
       taskRuntimeRepo.save(scope.profileUserId, task.id, saved)
       messageRepo.saveSystem({ chatId: chat.id, content: 'You coordinate this task autonomously. Delegate only to attached agents. Use ask_user for human decisions, handoff to change owner, update_task for progress, and finish with a verified final summary.' })
       return task
@@ -381,8 +430,9 @@ export const taskRunnerService = {
         const target = request.agentId ? agents({ profileUserId: userId, settingsUserId: saved.settingsUserId }, saved.chatId)
           .find((agent) => agent.id === request.agentId) : undefined
         if (request.deliveryOwner === 'driver' && !target) return { ok: false, code: 'unavailable', reason: 'The waiting agent is no longer enabled and attached to this conversation.' }
+        const toolCallId = nestedToolCallId(request)
         const owner = request.deliveryOwner === 'runner' ? { kind: 'coordinator' as const }
-          : { kind: 'agent' as const, agentId: target!.id, name: target!.name, note: '' }
+          : { kind: 'agent' as const, agentId: target!.id, name: target!.name, note: '', ...(toolCallId ? { toolCallId } : {}) }
         getDb().transaction(() => {
           if (!taskInputRequestRepo.settle(requestId, 'answered', resolution)) throw new Error('This question has already been answered.')
           store(userId, request.taskId, { ...saved, pendingRequestIds: saved.pendingRequestIds.filter((id) => id !== requestId),

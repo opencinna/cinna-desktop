@@ -6,6 +6,7 @@ import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { createLogger } from '../logger/logger'
 import { getMainWindow } from '../index'
+import { notifyMcpToolsChanged } from './toolChanges'
 import { droppedChildEnvNames, getShellEnv, mergeEnv, shellEnvForChild } from '../shell/env'
 
 /**
@@ -29,6 +30,7 @@ interface InternalConnection extends McpConnection {
 }
 
 function broadcastStatusChange(providerId: string, status: string): void {
+  notifyMcpToolsChanged(providerId)
   const win = getMainWindow()
   if (win && !win.isDestroyed()) {
     win.webContents.send(MCP_STATUS_CHANGED_CHANNEL, { providerId, status })
@@ -153,6 +155,13 @@ export class MCPManager {
   private createClient(config: McpProviderConfig): Client {
     return new Client({ name: 'cinna-desktop', version: '0.1.0' }, {
       capabilities: {},
+      listChanged: { tools: { onChanged: (error, tools) => {
+        if (error || !tools) return
+        const connection = this.connections.get(config.id)
+        if (!connection || connection.config !== config || this.isSuperseded(config.id, connection)) return
+        connection.tools = tools.map((tool) => ({ name: tool.name, description: tool.description ?? '', inputSchema: tool.inputSchema as Record<string, unknown>, mcpProviderId: config.id, providerType: 'mcp' as const }))
+        notifyMcpToolsChanged(config.id)
+      } } },
       versionNegotiation: { mode: config.transportType === 'streamable-http' ? 'auto' : 'legacy', probe: { timeoutMs: 10_000, maxRetries: 0 } }
     })
   }

@@ -167,7 +167,7 @@ New-chat — pick or drag-drop:
     → startRun with real attachments
 
 Send → LLM stream loop:
-  chatStreamingService._runStreamLoop
+  ACP buildAcpPrompt: negotiated prompt capabilities → image/resource/text blocks
     → adapter.modelCapability(modelId)
     → for each user message:
         attachmentToMediaPart(att, { capability, userId })
@@ -210,3 +210,7 @@ Download:
 ## Backend Dependency
 
 Cinna-scoped attachments reach the agent environment only when the Cinna backend reads `metadata.cinna_file_ids` from the inbound A2A message and forwards them to `SessionService.send_session_message` as `file_ids`. Local-scoped attachments are entirely self-contained — no backend involvement.
+
+## Runtime conversation transport
+
+Local ACP answerers ingest into the local store even when the router is coordinator. `promptCapabilities.image` permits native image blocks; embeddedContext permits embedded resources. Unsupported native formats use the existing extracted-text path (including PDFs where extraction is available), and unreadable media contributes an explicit attachment-unavailable marker. The runtime owns its format limits; an API adapter's model capability is no longer the conversational authority. Fresh-session recovery replays historical attachments through the same conversion, not just their file names. Remote Cinna agents retain their upload/file-ID path.

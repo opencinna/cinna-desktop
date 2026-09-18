@@ -13,7 +13,7 @@
  *  - `handover` — a file handover coming back to the chat that asked for it
  *                 (`drafts/file_handovers` §3.6). Owns no task runner.
  */
-export type TurnInputOrigin = 'user' | 'runner' | 'handover'
+export type TurnInputOrigin = 'user' | 'runner' | 'handover' | 'specialist'
 
 /**
  * Did the desktop write this message rather than a person?

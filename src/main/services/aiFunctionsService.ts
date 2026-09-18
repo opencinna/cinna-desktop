@@ -1,5 +1,4 @@
-import { chatRepo } from '../db/chats'
-import { chatModeService } from './chatModeService'
+import { appSettingsRepo } from '../db/appSettings'
 import { llmProviderRepo, type LlmProviderRow } from '../db/llmProviders'
 import { decryptApiKey } from '../security/keystore'
 import { requiresApiKey } from '../../shared/credentials'
@@ -15,19 +14,22 @@ export type AiFunctionErrorCode = 'no_provider' | 'llm_failed' | 'empty_output'
 
 export class AiFunctionError extends DomainError<AiFunctionErrorCode> {}
 
-export interface ResolvedAdapter {
-  adapter: LLMAdapter
-  modelId: string
-}
+export type AiFunctionBackend =
+  | { kind: 'adapter'; adapter: LLMAdapter; modelId: string }
+  | { kind: 'runtime'; userId: string }
+
+export const AI_FUNCTION_TIMEOUT_MS = 90_000
+export const AI_FUNCTION_MAX_OUTPUT_CHARS = 16_000
 
 export interface RunSingleShotInput {
-  adapter: LLMAdapter
-  modelId: string
+  backend: AiFunctionBackend
+  /** Background titles may reuse a warm runtime, but must not spawn one. */
+  warmOnly?: boolean
   systemPrompt: string
   userText: string
   /** Short tag emitted in logs (`label=rewrite`, `label=title`, etc.). */
   label?: string
-  /** Truncate the trimmed output at this many characters. No cap when omitted. */
+  /** Truncate output, bounded by the shared AI-function ceiling. */
   maxOutputChars?: number
   signal?: AbortSignal
 }
@@ -38,12 +40,11 @@ interface ProviderModelPair {
 }
 
 /**
- * LLM providers and chat modes are shared across profiles — they live under
- * the settings scope, not the active profile. Resolve adapters from there
- * regardless of which profile is calling us.
+ * User credentials live in Default scope; managed credentials may live in the
+ * active profile. Resolve the explicit AI Functions binding across both.
  */
-function tryResolve(pair: ProviderModelPair): ResolvedAdapter | null {
-  if (!pair.providerId || !pair.modelId) {
+function tryResolve(pair: ProviderModelPair): Extract<AiFunctionBackend, { kind: 'adapter' }> | null {
+  if (!pair.providerId) {
     logger.debug('candidate skipped: missing provider/model id', pair)
     return null
   }
@@ -69,9 +70,9 @@ function tryResolve(pair: ProviderModelPair): ResolvedAdapter | null {
     })
     return null
   }
-  // Managed providers are always active (enabled stays true; usability is gated
-  // by their chat mode), so a single `enabled` check covers both kinds.
-  if (!provider.enabled) {
+  // A managed subscription token that cannot call the API is not a usable
+  // one-shot credential, even while its associated runtime can authenticate.
+  if (!provider.enabled || provider.unsupported) {
     logger.debug('candidate skipped: provider disabled', {
       providerId: pair.providerId
     })
@@ -105,183 +106,68 @@ function tryResolve(pair: ProviderModelPair): ResolvedAdapter | null {
     })
     return null
   }
-  return { adapter, modelId: pair.modelId }
+  const modelId = pair.modelId || provider.defaultModelId || provider.availableModels?.[0]
+  return modelId ? { kind: 'adapter', adapter, modelId } : null
 }
 
-/**
- * Build the ordered provider/model candidate list for a chat: its own chat
- * mode, then the user's default chat mode, then (LLM chats) the chat's bound
- * provider/model. Shared by the adapter resolver and the provider/model-pair
- * resolver so both honor the same precedence.
- */
-function buildChatModeCandidates(
-  userId: string,
-  chatId: string
-): Array<{ source: string } & ProviderModelPair> {
-  const chat = chatRepo.getOwned(userId, chatId)
-  if (!chat) {
-    throw new AiFunctionError('no_provider', 'Chat not found for AI-function adapter resolution')
-  }
-
-  const candidates: Array<{ source: string } & ProviderModelPair> = []
-  if (chat.modeId) {
-    // Managed-aware lookup: the mode may be a Default-scope user mode or an
-    // account-provisioned Profile-scope managed mode.
-    const mode = chatModeService.findMerged(chat.modeId)
-    if (mode) {
-      candidates.push({ source: 'chat-mode', providerId: mode.providerId, modelId: mode.modelId })
-    }
-  }
-  // Effective default honors managed precedence (account default outranks local).
-  const defaultMode = chatModeService.resolveEffectiveDefault()
-  if (defaultMode) {
-    candidates.push({
-      source: 'default-mode',
-      providerId: defaultMode.providerId,
-      modelId: defaultMode.modelId
-    })
-  }
-  if (chat.providerId && chat.modelId) {
-    candidates.push({ source: 'chat-bound', providerId: chat.providerId, modelId: chat.modelId })
-  }
-
-  logger.debug('resolve adapter candidates', {
-    chatId,
-    profileUserId: userId,
-    chatModeId: chat.modeId,
-    defaultModeId: defaultMode?.id ?? null,
-    candidates: candidates.map((c) => ({
-      source: c.source,
-      providerId: c.providerId,
-      modelId: c.modelId
-    }))
-  })
-
-  return candidates
-}
-
-/**
- * One-shot LLM utilities shared across features that need to run a short,
- * non-streaming, non-tool LLM call — Smart Rewrite (multi-agent), future
- * chat-title autogeneration, future chat-summary, etc.
- *
- * Two pieces:
- *   - adapter resolvers — pick `{adapter, modelId}` from a chat's chat mode
- *     or the user's default chat mode
- *   - runSingleShot — execute the call against the resolved adapter
- *
- * Callers compose these and map `AiFunctionError` codes to their own
- * domain errors before crossing IPC.
- */
+/** AI Functions have their own binding; chat modes never choose this backend. */
 export const aiFunctions = {
-  /**
-   * Resolve the provider/model pair an orchestrated chat should run on, using
-   * the same precedence as the adapter resolver (chat mode → default mode →
-   * chat-bound). Each candidate is validated via {@link tryResolve} so a
-   * provider that is missing, disabled, or has no key is skipped. Throws
-   * `AiFunctionError('no_provider')` when none are usable — the caller maps
-   * this to the "configure a model" refusal when promoting a chat.
-   */
-  resolveProviderModelFromChatMode(
-    userId: string,
-    chatId: string
-  ): { providerId: string; modelId: string } {
-    const candidates = buildChatModeCandidates(userId, chatId)
-    for (const candidate of candidates) {
-      if (candidate.providerId && candidate.modelId && tryResolve(candidate)) {
-        logger.info('resolved provider/model', {
-          source: candidate.source,
-          providerId: candidate.providerId,
-          modelId: candidate.modelId
-        })
-        return { providerId: candidate.providerId, modelId: candidate.modelId }
-      }
-    }
-    logger.warn('no provider/model resolved', { chatId, profileUserId: userId })
-    throw new AiFunctionError(
-      'no_provider',
-      'No chat mode with a configured LLM provider is available for this AI function'
-    )
+  resolveBackend(userId: string): AiFunctionBackend {
+    const providerId = appSettingsRepo.get('aiFunctionsCredentialId').trim()
+    if (!providerId) return { kind: 'runtime', userId }
+    const resolved = tryResolve({ providerId, modelId: appSettingsRepo.get('aiFunctionsModelId').trim() || null })
+    if (resolved) return resolved
+    throw new AiFunctionError('no_provider', 'The AI Functions credential or model is unavailable. Choose one in Settings → Features, or use the default runtime.')
   },
 
-  /**
-   * Resolve an adapter from the user's default chat mode only. Useful for
-   * AI functions that run before a chat exists (e.g. generating a title
-   * from the first user message on a brand-new chat).
-   */
-  resolveAdapterFromDefaultMode(_userId: string): ResolvedAdapter {
-    const defaultMode = chatModeService.resolveEffectiveDefault()
-    if (defaultMode) {
-      const resolved = tryResolve({
-        providerId: defaultMode.providerId,
-        modelId: defaultMode.modelId
-      })
-      if (resolved) return resolved
-    }
-    throw new AiFunctionError(
-      'no_provider',
-      'No default chat mode with a configured LLM provider is available'
-    )
-  },
-
-  /**
-   * Run a single-shot LLM call: system prompt + user text in, trimmed text
-   * out. Streaming is internally consumed but never propagated to the
-   * caller — these are utility calls, not conversational. Tool use is not
-   * enabled.
-   *
-   * Throws `AiFunctionError('llm_failed')` on adapter errors and
-   * `AiFunctionError('empty_output')` when the model returns nothing
-   * usable after trimming.
-   */
+  /** Both backends obey the same cancellation, timeout and output contract. */
   async runSingleShot(input: RunSingleShotInput): Promise<string> {
-    const {
-      adapter,
-      modelId,
-      systemPrompt,
-      userText,
-      label = 'ai-function',
-      maxOutputChars,
-      signal
-    } = input
-
-    const messages: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userText }
-    ]
-
+    const { backend, systemPrompt, userText, label = 'ai-function' } = input
+    const cap = Math.max(1, Math.min(input.maxOutputChars ?? AI_FUNCTION_MAX_OUTPUT_CHARS, AI_FUNCTION_MAX_OUTPUT_CHARS))
+    const controller = new AbortController()
+    const forwardAbort = (): void => controller.abort(input.signal?.reason)
+    input.signal?.addEventListener('abort', forwardAbort, { once: true })
+    if (input.signal?.aborted) forwardAbort()
+    const timeout = setTimeout(() => controller.abort(new Error('AI function timed out')), AI_FUNCTION_TIMEOUT_MS)
+    timeout.unref?.()
+    let removeAbort = (): void => {}
     try {
+      controller.signal.throwIfAborted()
       const started = Date.now()
-      const result = await adapter.stream({
-        model: modelId,
-        messages,
-        onDelta: () => {
-          /* utility call — caller does not subscribe to streamed deltas */
-        },
-        signal
-      })
-      const trimmed = result.content.trim()
-      const output = maxOutputChars ? trimmed.slice(0, maxOutputChars) : trimmed
-      logger.info('single-shot complete', {
-        label,
-        modelId,
-        providerType: adapter.providerType,
-        duration: Date.now() - started,
-        inLen: userText.length,
-        outLen: output.length
-      })
-      if (!output) {
-        throw new AiFunctionError(
-          'empty_output',
-          `${label}: model returned empty output`
-        )
+      const work = async (): Promise<string> => {
+        if (backend.kind === 'runtime') {
+          const { runAiFunctionOnRuntime } = await import('./aiFunctionRuntimeService')
+          controller.signal.throwIfAborted()
+          return runAiFunctionOnRuntime({
+            userId: backend.userId, systemPrompt, userText, warmOnly: input.warmOnly ?? false,
+            signal: controller.signal, maxOutputChars: cap
+          })
+        }
+        const messages: ChatMessage[] = [
+          { role: 'system', content: systemPrompt }, { role: 'user', content: userText }
+        ]
+        const result = await backend.adapter.stream({ model: backend.modelId, messages, onDelta: () => {}, signal: controller.signal })
+        return result.content
       }
+      // A provider ignoring its abort signal cannot hold a draft/title caller.
+      const canceled = new Promise<never>((_resolve, reject) => {
+        const onAbort = (): void => reject(controller.signal.reason ?? new Error('AI function canceled'))
+        controller.signal.addEventListener('abort', onAbort, { once: true })
+        removeAbort = () => controller.signal.removeEventListener('abort', onAbort)
+      })
+      const output = (await Promise.race([work(), canceled])).trim().slice(0, cap)
+      if (!output) throw new AiFunctionError('empty_output', `${label}: model returned empty output`)
+      logger.info('single-shot complete', { label, backend: backend.kind, duration: Date.now() - started, inLen: userText.length, outLen: output.length })
       return output
-    } catch (err) {
-      if (err instanceof AiFunctionError) throw err
-      const detail = err instanceof Error ? err.message : String(err)
-      logger.error('single-shot failed', { label, modelId, error: detail })
-      throw new AiFunctionError('llm_failed', `${label} LLM call failed`, detail)
+    } catch (error) {
+      if (error instanceof AiFunctionError) throw error
+      const detail = error instanceof Error ? error.message : String(error)
+      logger.warn('single-shot failed', { label, backend: backend.kind, error: detail })
+      throw new AiFunctionError('llm_failed', `${label} call failed`, detail)
+    } finally {
+      clearTimeout(timeout)
+      removeAbort()
+      input.signal?.removeEventListener('abort', forwardAbort)
     }
   }
 }

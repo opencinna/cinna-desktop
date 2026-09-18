@@ -38,6 +38,7 @@ vi.mock('../auth/scope', () => ({
 const resolvedModel = vi.hoisted(
   () => ({ current: { providerId: 'p-1', modelId: 'm-1' } as { providerId: string; modelId: string } | null })
 )
+vi.mock('./chatModeService', () => ({ chatModeService: { findMerged: (id: string) => id === 'claude-mode' ? { providerId: null, modelId: 'sonnet' } : null } }))
 // The error class is declared **inside** the factory rather than imported into
 // it: a `vi.mock` factory is hoisted above the file's imports, so a reference to
 // one is still in its temporal dead zone when the factory runs, and the module
@@ -58,7 +59,20 @@ vi.mock('./aiFunctionsService', () => {
     }
   }
 })
-vi.mock('./agentService', () => ({ agentService: { findAgent: () => null } }))
+vi.mock('./agentService', async () => {
+  const { agentRepo } = await import('../db/agents')
+  return { agentService: { findAgent: (settings: string, profile: string, id: string) => {
+    const row = agentRepo.getOwned(settings, id) ?? agentRepo.getOwned(profile, id)
+    return row ? { row, userId: row.userId } : null
+  } } }
+})
+vi.mock('./chatConductorService', async (original) => {
+  const actual = await original<typeof import('./chatConductorService')>()
+  const { agentRepo } = await import('../db/agents')
+  return { ...actual, chatConductorService: { remove: vi.fn(), ensure: (userId: string, chat: {id:string}) => agentRepo.createRuntime(userId,
+    { name: 'Claude', driver: 'acp', config: { launcher: 'claude', conductorChatId: chat.id } }) } }
+})
+vi.mock('./conductorBridge', () => ({ conductorBridge: { refresh: async () => {} } }))
 
 const USER = 'profile-1'
 
@@ -170,6 +184,13 @@ afterEach(() => {
   holder.current = null
 })
 
+it('clears the previous API credential and model when switching to a CLI mode', () => {
+  const chatId = directChat()
+  chatRepo.updateMeta(USER, chatId, { providerId: 'old-api', modelId: 'old-api-model' })
+  chatService.update(USER, chatId, { modeId: 'claude-mode' })
+  expect(chatRepo.getOwned(USER, chatId)).toMatchObject({ modeId: 'claude-mode', providerId: null, modelId: 'sonnet' })
+})
+
 describe('chatService.setRouter', () => {
   it('moves a direct chat to human with no model configured at all', () => {
     resolvedModel.current = null
@@ -192,37 +213,34 @@ describe('chatService.setRouter', () => {
     expect(agentSessionRepo.getByChat(chatId)?.contextId).toBe('ctx-1')
   })
 
-  it('refuses a move to coordinator when no model can be resolved', () => {
+  it('uses the default runtime for a remote root with no model configured', () => {
     resolvedModel.current = null
     const chatId = directChat()
-
-    expect(() => chatService.setRouter(USER, chatId, 'coordinator')).toThrow(ChatError)
-    // And changes nothing: the chat is still talking to its agent.
-    const chat = chatRepo.getOwned(USER, chatId)!
-    expect(chat.router).toBe('direct')
-    expect(chat.agentId).toBe('a-1')
-    expect(chatOnDemandAgentRepo.listAgentIds(chatId)).toEqual([])
-  })
-
-  it('resolves and stores a model when the coordinator takes over', () => {
-    const chatId = directChat()
     chatService.setRouter(USER, chatId, 'coordinator')
-
     const chat = chatRepo.getOwned(USER, chatId)!
     expect(chat.router).toBe('coordinator')
-    expect(chat.providerId).toBe('p-1')
-    expect(chat.modelId).toBe('m-1')
+    expect(chat.agentId).toBeTruthy()
+    expect(chat.agentId).not.toBe('a-1')
+    expect(chat.providerId).toBeNull()
     expect(chatOnDemandAgentRepo.listAgentIds(chatId)).toEqual(['a-1'])
+    expect(agentSessionRepo.getByChatAndAgent(chatId, 'a-1')?.contextId).toBe('ctx-1')
   })
 
-  it('turns coordination off onto human, keeping the attached agents', () => {
+  it('keeps a local root and its session when it starts conducting', () => {
+    holder.current!.raw.prepare("UPDATE agents SET driver='acp', driver_config=? WHERE id='a-1'").run(JSON.stringify({launcher:'claude'}))
     const chatId = directChat()
     chatService.setRouter(USER, chatId, 'coordinator')
-    chatOnDemandAgentRepo.add(chatId, 'a-2')
+    expect(chatRepo.getOwned(USER, chatId)?.agentId).toBe('a-1')
+    expect(chatOnDemandAgentRepo.listAgentIds(chatId)).toEqual([])
+    expect(agentSessionRepo.getByChatAndAgent(chatId, 'a-1')?.contextId).toBe('ctx-1')
+  })
 
-    chatService.setRouter(USER, chatId, 'human')
-    expect(chatRepo.getOwned(USER, chatId)!.router).toBe('human')
-    expect(chatOnDemandAgentRepo.listAgentIds(chatId).sort()).toEqual(['a-1', 'a-2'])
+  it('refuses both router and metadata paths back from AI routing', () => {
+    const chatId = directChat()
+    chatService.setRouter(USER, chatId, 'coordinator')
+    expect(() => chatService.setRouter(USER, chatId, 'human')).toThrow('AI routing cannot be turned off')
+    expect(() => chatService.update(USER, chatId, {router:'direct'})).toThrow('AI routing cannot be turned off')
+    expect(chatRepo.getOwned(USER, chatId)?.router).toBe('coordinator')
   })
 
   it('binds the single attached agent as the root on the way back to direct', () => {

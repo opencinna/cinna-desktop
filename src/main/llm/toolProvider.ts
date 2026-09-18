@@ -36,6 +36,8 @@ export interface ToolCallOptions {
 }
 
 export interface ToolExecutionResult {
+  /** Trusted specialist runtime limit; stop the parent rather than retrying the same login. */
+  budget?: boolean
   /** Only a coordinator provider may return a runner control. */
   control?: CoordinatorControl
   /** A completed delegate is waiting for a persisted human continuation. */

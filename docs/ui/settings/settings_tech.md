@@ -171,3 +171,7 @@ Settings components interact with these IPC channels via `window.api.*`. The lis
 
 - `settings.getAll()` — Snapshot of every known key with defaults applied for missing rows (returns `AppSettingsSchema`)
 - `settings.set(key, value)` — Update one setting; throws `AppSettingsError` (`invalid_key` / `invalid_value`) on validation failure. Backs service-owned Features toggles; renderer appearance uses its UI store directly; see [Auto Chat Titles](../../chat/auto_titles/auto_titles.md) for the schema-update pattern.
+
+## Runtime conductor settings
+
+`FeaturesSettingsSection.tsx` persists defaultMultiAgentRouting (human/coordinator, default human), aiFunctionsCredentialId and aiFunctionsModelId (empty by default). Changing the credential clears the model. `ChatModeRuntimeFields.tsx` shares runtime/policy/instruction controls across mode forms; `ChatModesSection.tsx` uses SettingsSection and a title-level Add action. `engine:model-catalog(engine)` returns RuntimeModelCatalog scoped to the activated profile without probing/spawning; model names originate from ACP session metadata.

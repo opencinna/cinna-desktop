@@ -15,6 +15,9 @@ export interface RouterBadgeInfo {
   answererName?: string
   /** The model that would conduct, for `coordinator`. */
   modelName?: string
+  conductorName?: string
+  conductorId?: string | null
+  coordinateAction?: { conductorName: string; pending?: boolean; onCoordinate(): void }
 }
 
 /** Icon, short label and tone per router. The label is what the pill shows. */
@@ -54,7 +57,9 @@ export function RouterBadge({
   connectionAgent,
   agentName,
   answererName,
-  modelName
+  modelName,
+  conductorName,
+  coordinateAction
 }: RouterBadgeInfo): React.JSX.Element {
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
@@ -62,11 +67,11 @@ export function RouterBadge({
   const tooltipId = useId()
   const open = (hovered || focused) && !dismissed
   const location = router === 'direct' && connectionAgent ? agentLocation(connectionAgent) : null
-  const face = location ? { ...FACE.direct, label: location, icon: location === 'Local' ? SquareTerminal : Waypoints } : FACE[router]
+  const face = location ? { ...FACE.direct, label: location, icon: location === 'Local' ? SquareTerminal : Waypoints } : router === 'coordinator' && conductorName ? { ...FACE.coordinator, label: `${conductorName} routes` } : FACE[router]
   const Icon = face.icon
   const who = agentName ? `“${agentName}”` : 'the agent'
   const next = answererName ? `“${answererName}”` : 'the agent you last wrote to'
-  const model = modelName ?? 'your local model'
+  const model = conductorName ?? modelName ?? 'your local model'
 
   return (
     <div
@@ -77,7 +82,7 @@ export function RouterBadge({
       // hover is not a gesture a keyboard has. Focus opens it too — on the
       // wrapper, so the badge stays one stop rather than two.
       onFocus={() => { setFocused(true); setDismissed(false) }}
-      onBlur={() => setFocused(false)}
+      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false) }}
       onKeyDown={(event) => { if (event.key === 'Escape') setDismissed(true) }}
     >
       <div
@@ -85,11 +90,11 @@ export function RouterBadge({
           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${face.tone}`}
         role="status"
         tabIndex={0}
-        aria-label={location ? `${location} agent connection` : ARIA[router]}
+        aria-label={location ? `${location} agent connection` : router === 'coordinator' && conductorName ? `Coordinated by ${conductorName}` : ARIA[router]}
         aria-describedby={open ? tooltipId : undefined}
       >
         <Icon size={12} className="shrink-0" />
-        <span className="text-[11px] font-semibold tracking-wide whitespace-nowrap">
+        <span className="text-[11px] font-semibold tracking-wide whitespace-nowrap max-w-[10rem] truncate" title={face.label}>
           {face.label}
         </span>
       </div>
@@ -97,12 +102,20 @@ export function RouterBadge({
       {open && (
         <div
           id={tooltipId}
-          role="tooltip"
-          className={`absolute bottom-full mb-1.5 right-0 z-50 w-72 rounded-lg border
+          role={coordinateAction || router === 'coordinator' || router === 'human' ? "dialog" : "tooltip"}
+          aria-label="Chat routing"
+          className={`absolute bottom-full right-0 z-50 w-72 rounded-lg border
             border-[var(--color-border)] bg-[var(--color-overlay-panel)] backdrop-blur-xl
             shadow-xl px-3 py-2.5 text-[11px] leading-relaxed text-[var(--color-text-secondary)]`}
         >
-          {router === 'script' && (
+          {coordinateAction && router !== 'coordinator' && (
+            <button type="button" aria-disabled={coordinateAction.pending || undefined}
+              onClick={() => { if (!coordinateAction.pending) coordinateAction.onCoordinate() }}
+              className="mb-2 w-full rounded-md border border-[var(--color-border)] px-2 py-1.5 text-left font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">
+              Coordinate by {coordinateAction.conductorName}
+            </button>
+          )}
+          {router === 'script'  && (
             <>
               <p className="text-[var(--color-text)] font-semibold mb-1">Script routes this job</p>
               <p>Agents follow the saved steps. Independent steps can run together; questions wait in the Inbox.</p>
@@ -147,22 +160,13 @@ export function RouterBadge({
           {router === 'coordinator' && (
             <>
               <p className="text-[var(--color-text)] font-semibold mb-1">
-                Coordinated by your local model
+                Coordinated by {model}
               </p>
               <p>
                 <strong>{model}</strong> runs the conversation and calls the selected agents and
                 MCP tools as needed.
               </p>
-              <p className="mt-1.5">
-                <strong>How to use:</strong> mention each tool or agent by name to invoke it — the
-                model calls the ones you reference.
-              </p>
-              <p className="mt-1.5">
-                <strong>Cost &amp; trade-offs:</strong> you pay local-model tokens every turn{' '}
-                <em>plus</em> each agent invocation, tool schemas add to context, latency is
-                higher, and an agent&apos;s live thinking/tool stream is summarized into a single
-                tool result rather than shown verbatim.
-              </p>
+              <p className="mt-1.5">Write to the coordinator. It can ask participants and use the connected tools; their work appears in sub-threads.</p>
             </>
           )}
         </div>

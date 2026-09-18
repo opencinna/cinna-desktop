@@ -16,6 +16,9 @@ import type { AppSettingKey, AppSettingsSchema } from '../../shared/appSettings'
 export const DEFAULTS: AppSettingsSchema = {
   taskRunnerConcurrency: 2,
   autoChatTitles: false,
+  defaultMultiAgentRouting: 'human',
+  aiFunctionsCredentialId: '',
+  aiFunctionsModelId: '',
   enableTrayIcon: true,
   showHints: true,
   showAgentSidebarSections: true,

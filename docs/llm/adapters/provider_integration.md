@@ -8,15 +8,9 @@ For the higher-level abstraction and configuration story see [Adapters](./adapte
 
 ## Unified Surface vs Per-Adapter Translation
 
-### Shared (lives in `chatStreamingService`)
+### Shared one-shot execution
 
-- Tool-call loop (max 10 rounds, then bail)
-- MCP tool aggregation and execution (`mcpManager.getToolsForProviders`, `mcpManager.callTool`)
-- History load + replay from `messages` table
-- Message persistence (assistant + tool_call rows saved per round)
-- MessagePort streaming protocol (`request-id`, `delta`, `tool_use`, `tool_result`, `tool_error`, `done`, `error`)
-- AbortController plumbing and cancel IPC
-- Logging (`stream request`, `stream response`, `tool call`, `tool result`, `tool failed`)
+`src/main/services/aiFunctionsService.ts` owns explicit binding, cancellation, timeout and output caps. It calls an adapter once with no tools or conversational history. Chat iteration, MCP transport and transcript recovery belong to the ACP conductor instead.
 
 ### Per-adapter (lives in `src/main/llm/<provider>.ts`) <!-- nocheck -->
 
@@ -112,23 +106,9 @@ The same weights can be `llava:13b`, `llava:latest`, or whatever a `Modelfile` c
 
 Listing gets 1.5 s because `getAllModels()` walks the adapters sequentially with no cache, before every engine start and on every `provider:list-models` — a loopback server that is down refuses instantly, but a powered-off box on the LAN hangs. Probing gets 5 s because it is a foreground action the user asked for and its whole job is to wait long enough to be believed: a false "nothing answered" about a slow LAN host sends the user to fix something that is not broken.
 
-## Tool-Call Loop Contract
+## Adapter execution contract
 
-The adapter is a **single-turn streamer**. `chatStreamingService` owns iteration:
-
-```
-for round in 0..MAX_TOOL_ROUNDS:
-  StreamResult = adapter.stream({ messages, tools, ... })
-  save assistant message (with toolCalls if any)
-  if no toolCalls: break
-  for tc in toolCalls:
-    result = mcpManager.callTool(tc.mcpProviderId, tc.name, tc.input)
-    save tool_call message
-    append tool_call message to history
-  loop continues with updated history
-```
-
-An adapter must not call MCP, must not loop, must not persist. It receives history, emits one round, returns.
+An adapter is a single-request streamer. It must not call MCP, loop or persist. Its tool/history translation interfaces remain implemented and tested, but current AI Functions calls provide no tools; conversational chats execute through the ACP runtime rather than iterating this adapter.
 
 ## Why a Custom Layer Instead of a Framework
 
@@ -153,5 +133,5 @@ An adapter must not call MCP, must not loop, must not persist. It receives histo
 - [Local Models & Keyless Credentials](../local_models/local_models.md) — the Ollama adapter's host, detection probe and tiering rules
 - [Adapters Tech](./adapters_tech.md) — File paths, IPC channels, DB schema
 - [Tool Schema Translation](./tool_schema_translation.md) — MCP JSON Schema → each provider's tool-definition shape, and what Gemini's subset costs
-- [Chat Messaging](../../chat/messaging/messaging.md) — The tool-call loop in `chatStreamingService` that drives every adapter
+- [Chat Messaging](../../chat/messaging/messaging.md) — Runtime-owned conversational execution, separate from the one-shot adapter caller
 - [MCP Connections](../../mcp/connections/connections.md) — Source of `ToolDefinition[]` with raw MCP `inputSchema`

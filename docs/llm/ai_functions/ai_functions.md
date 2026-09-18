@@ -2,56 +2,40 @@
 
 ## Purpose
 
-Shared primitive for **one-shot LLM calls** — short, non-streaming, no-tools requests that compose a system prompt + user text and return a single trimmed string. Used today by Auto Chat Titles; substrate for future chat-summary and similar utility features that should not live inside the conversational streaming pipeline. The module also hosts the provider/model resolution shared with orchestration promotion.
+Run a short text transformation for titles and agent drafts with one output string, no chat history and no tools. Its billing/runtime choice is independent of the chat mode and of the agent being drafted.
 
 ## Core Concepts
 
-- **One-shot call** — A single round-trip to an LLM with a fixed system prompt and a single user message. No streaming visible to the caller, no tool use, no multi-turn history.
-- **Adapter resolution** — Picking which provider/model to run the call against: `resolveAdapterFromDefaultMode` returns a ready `{ adapter, modelId }` from the user's default chat mode (no chat involved — e.g. generating a title before the chat exists). A sibling `resolveProviderModelFromChatMode(userId, chatId)` returns the validated `{ providerId, modelId }` pair (chat mode → default mode → chat-bound) without building an adapter — used by orchestration promotion to pick the conductor model.
-- **Labelled execution** — Each call site passes a short `label` (e.g. `chat-title`). The label is emitted in the log line so the same primitive serves many features without losing call-site identity in the logger overlay.
+- **Explicit binding** — Settings → Features → AI Functions credential and model. Empty credential selects the Default runtime; an unavailable explicitly selected credential is an error, never an excuse to spend another key.
+- **Adapter backend** — a configured provider SDK executes one request with system/user messages. Adapter types, credential testing and catalogs remain available; adapters no longer drive conversational chat/tool loops.
+- **Runtime backend** — a fresh ACP session on a compatible pooled process, using a no-tools utility profile. Its session address is never saved or loaded again.
 
-## Architecture Overview
+## User Stories / Flows
 
-```
-Caller (chatTitleService, future summaryService)
-   └── aiFunctions.resolveAdapterFromDefaultMode(userId)       -> { adapter, modelId }
-   │
-   └── aiFunctions.runSingleShot({ adapter, modelId, systemPrompt, userText, label, maxOutputChars?, signal? })
-       -> Promise<string>   (trimmed, capped to maxOutputChars)
-       -> throws AiFunctionError('no_provider' | 'llm_failed' | 'empty_output')
-
-Handing a chat to the model (chatService.setRouter -> 'coordinator')
-   └── aiFunctions.resolveProviderModelFromChatMode(userId, chatId) -> { providerId, modelId }
-       -> throws AiFunctionError('no_provider')
-```
+1. Select an AI Functions credential/model or leave Default runtime selected. Changing credential clears the model selection.
+2. Drafting may start a cold runtime and waits for the result. Background titles request a warm process only; without one they defer, leaving the ordinary derived title in place.
+3. A runtime utility receives fixed no-tools instructions plus the function's instructions and input. It never receives a chat's transcript or attached connectors.
 
 ## Business Rules
 
-- Adapter resolution always reads chat modes and LLM providers from the **settings scope** (the shared `__default__` user), matching the rest of the app's scope discipline. The caller-supplied `userId` is used only for chat ownership when scoping to a chat.
-- The system prompt is sent as a real `role: 'system'` message — the adapters route it correctly per provider (Anthropic top-level `system` field, Gemini `systemInstruction`, OpenAI inline `system` role).
-- Output is trimmed and optionally truncated by `maxOutputChars`. An empty trimmed output throws `empty_output`.
-- Logs go to scope `ai-functions`. Successful calls log `single-shot complete` with `{ label, modelId, providerType, duration, inLen, outLen }`. Failures log `single-shot failed` with the underlying error.
+- `aiFunctions.resolveBackend(userId)` resolves the explicit credential across shared/default and active managed scopes. It does not read the default chat mode to choose an adapter.
+- Both backends obey caller cancellation, a 90-second ceiling and a maximum 16000 output characters; callers can request a smaller cap. Whitespace-only output is an error.
+- The runtime session is canceled/unbound after one reply. ACP has no session/delete; discarding the address is the non-reuse boundary. A late session/new after cancellation is canceled before any prompt.
+- Claude/OpenCode enforce the synthetic no-native-tools policy. Codex runtime fallback refuses until its adapter can enforce that contract; selecting an AI Functions credential remains an available alternative.
+- Background title generation does not create a process merely to title a chat. Drafting and chat execution may deliberately use different backends.
+- Errors use `AiFunctionError`: no_provider, llm_failed or empty_output. Secret values stay in main and never appear in the settings status.
 
-## Composing a new AI function
+## Architecture Overview
 
-For a new feature, follow this template inside its own service:
-
-1. Resolve an adapter via the appropriate helper.
-2. Build a domain-specific system prompt + user text.
-3. Call `aiFunctions.runSingleShot` with a descriptive `label`.
-4. Catch `AiFunctionError` and map its `code` to your feature's domain error so the renderer-facing surface stays stable.
-
-See `chatTitleService` for the reference implementation.
+Title/draft caller → resolveBackend → runSingleShot → one provider SDK request or fresh no-tools ACP session → trimmed, capped string.
 
 ## Integration Points
 
-- [LLM Adapters](../adapters/adapters.md) — `runSingleShot` invokes `adapter.stream` and consumes the result without exposing deltas to the caller.
-- [Auto Chat Titles](../../chat/auto_titles/auto_titles.md) — Background title generation uses `runSingleShot` (via `resolveAdapterFromDefaultMode`) after the first user message in a new chat.
-- [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — In-chat promotion resolves the conductor model via `resolveProviderModelFromChatMode`; no provider → the promotion is refused.
+- [Settings](../../ui/settings/settings.md) — independent credential/model selectors.
+- [Runtime orchestration](../../chat/orchestrated_agents/orchestrated_agents.md) — pooled processes and synthetic policy.
+- [Auto titles](../../chat/auto_titles/auto_titles.md) — warm-only background behavior.
+- [LLM adapters](../adapters/adapters.md) — one-shot provider implementation and model discovery.
 
 ## Technical Reference
 
-- Service: `src/main/services/aiFunctionsService.ts`
-- Error class: `AiFunctionError` (codes: `no_provider`, `llm_failed`, `empty_output`)
-- Settings scope helper: `src/main/auth/scope.ts` → `getSettingsScopeUserId()`
-- Logger scope: `ai-functions`
+`src/main/services/aiFunctionsService.ts` owns resolution and common timeout/output limits; `src/main/services/aiFunctionRuntimeService.ts` owns the throwaway session lifecycle; `src/main/agents/drivers/index.ts` prepares runtime plans; `src/main/services/syntheticRuntimePooling.ts` owns compatibility keys. Settings keys are aiFunctionsCredentialId and aiFunctionsModelId; empty strings mean no explicit selection.

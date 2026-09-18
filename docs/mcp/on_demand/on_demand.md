@@ -48,7 +48,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 ### Engaging an MCP that's also in the chat mode baseline
 
 1. The current chat mode already includes the GitHub MCP, so it's already on screen as a locked chip and shows as selected (locked) in the `[+]` picker — the user can see there's nothing to add.
-2. If they `@-mention` it anyway, the on-demand row is inserted with `pendingAnnounce = true`. The next send doesn't gain extra tools (GitHub was already attached via the baseline) but the LLM still receives the silent announcement that the user just emphasised this server. The chip is drawn once, and stays locked — detaching the on-demand row wouldn't remove GitHub from the chat, so no `×` is offered.
+2. If they `@-mention` it anyway, the on-demand row is inserted with `pendingAnnounce = true`. The next send doesn't gain extra tools (GitHub was already attached via the baseline) and the runtime continues to see one tool set. The chip is drawn once, and stays locked — detaching the on-demand row wouldn't remove GitHub from the chat, so no `×` is offered.
 
 ### Engaging an MCP that's disconnected
 
@@ -57,12 +57,12 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 
 ## Business Rules
 
-- On-demand MCPs apply to LLM-channel (orchestrator) sends only. A2A agent turns have their own tool set and bypass `chatStreamingService` — the on-demand list does not affect them. (Picks made on the new-chat screen still persist onto the chat row, so an orchestrated chat picks them up on its first send.)
+- Local ACP sessions receive attached connectors through the Cinna MCP bridge. Remote agents retain their own tool sets. Synthetic No tools modes expose no connectors.
 - The on-demand set is persisted per chat (`chat_on_demand_mcps`) and survives reload, app restart, and chat reopen. It is intentionally *not* per-message.
-- New-chat screen picks live in a renderer-session draft, isolated by profile and dashboard/agent surface, until the chat is created. Navigation and component remount do not clear them; restart does. See [Draft ownership](../../chat/conversation_ui/conversation_ui_tech.md#draft-ownership). `useNewChatFlow.startNewChat` flushes the buffer via `chat:on-demand-mcp-add` *before* the first send dispatches, so the announce prefix fires on the very first turn.
+- New-chat screen picks live in a renderer-session draft, isolated by profile and dashboard/agent surface, until the chat is created. Navigation and component remount do not clear them; restart does. See [Draft ownership](../../chat/conversation_ui/conversation_ui_tech.md#draft-ownership). `useNewChatFlow.startNewChat` flushes the buffer via `chat:on-demand-mcp-add` *before* the first send dispatches, so tools are available before the first prompt.
 - Detaching an on-demand MCP removes the row outright; there is no "soft disable" intermediate state.
-- The silent announcement is built once per engagement: the moment the user picks the MCP, `pendingAnnounce = true`; the next stream consumes it and flips it false; only re-adding the MCP (via the popup) re-arms it.
-- **The flag is consumed by the local model's stream loop, and by nothing else.** In a chat an agent answers — `direct` to an agent, or `human`, where no model runs at all — an on-demand MCP row can sit with `pendingAnnounce` still set indefinitely, because there is nobody to read the prefix. That is correct rather than a leak: MCP servers are the *model's* tools and an agent cannot call them, so an unread announce describes a tool nothing could have used. The flag stays armed and fires on the first turn after the chat moves to `coordinator`, which is the first turn where it means anything. See [Chat Routing](../../chat/chat_routing/chat_routing.md).
+- The retained pendingAnnounce field is compatibility state. Runtime tool discovery uses the injected MCP endpoint and list-change notifications, not a one-shot system-note prefix.
+- The retained pendingAnnounce field is compatibility state. Runtime tool discovery uses the injected MCP endpoint and list-change notifications, not a one-shot system-note prefix.
 - The popup's "MCP" section is hidden outside active chats — the new-chat agent picker is unaffected.
 - Only MCPs with `enabled = true` in settings appear in the popup. Disabled MCPs can't connect and would just engage a dead chip.
 - The chip color is **fixed** (accent, matching the in-transcript MCP tool badge) — it no longer encodes connection status. Connection health is surfaced separately and only when there's a problem: a red status dot (with hover detail) after the name for any non-`connected` status.
@@ -72,54 +72,12 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 
 ## Architecture Overview
 
-```
-User types '@' in any chat context
-  -> ChatInput trigger -> AgentMcpMentionPopup
-       (combined agents + MCPs, single selectedIndex)
-  -> User picks an MCP row
-       Active chat:
-         -> useAddOnDemandMcp -> chat:on-demand-mcp-add
-              -> chatService.addOnDemandMcp
-                   -> chatOnDemandMcpRepo.add (pendingAnnounce=true)
-         -> ActiveMcpChips reads DB via React Query, renders the chip
-       New chat (no chatId yet):
-         -> onTogglePendingMcp pushes id into ChatWorkspace's buffer
-         -> ActiveMcpChips (pending mode) reads the buffer, renders the chip
-
-ChatInput resolves the mode-owned baseline once:
-  Active chat: useChatMcpProviders(chatId), unless ChatControls is showing
-  New chat:    ChatWorkspace's `baselineMcpIds` (the selected mode's list)
-  -> passed to BOTH ActiveMcpChips (locked chips) and useCapabilityPicker
-     (locked selections), so the two surfaces can't disagree
-
-User presses Enter
-  Active chat:
-    -> run:send (main routes to the model) -> chatStreamingService.stream
-  New chat:
-    -> useNewChatFlow.startNewChat
-         -> chat:create
-         -> chat:on-demand-mcp-add per buffered id (BEFORE the send)
-         -> startRun -> run:send -> chatStreamingService.stream
-
-chatStreamingService.stream:
-  -> baseline MCP ids (chat_mcp_providers)
-  -> on-demand MCP ids (chat_on_demand_mcps)
-  -> mcpManager.getToolsForProviders(union)
-  -> chatOnDemandMcpRepo.peekPending(chatId)
-       -> resolves names -> "[System note: ...]" prefix
-  -> wireContent = prefix + userContent
-  -> _runStreamLoop: on first successful adapter response,
-     chatOnDemandMcpRepo.clearPending(chatId, ids)
-
-User clicks × on a chip
-  Active chat: useRemoveOnDemandMcp -> chat:on-demand-mcp-remove
-  New chat:    onRemovePendingMcp removes from ChatWorkspace buffer
-```
+Picker → buffered draft or owned on-demand table → conductorBridge unions baseline/on-demand IDs → connected MCP manager tools → authenticated ACP endpoint. Adds/removals and connector tool changes emit tools/list_changed. The runtime re-lists tools; no adapter-loop prefix is consumed.
 
 ## Integration Points
 
 - [MCP Connections](../connections/connections.md) — Owns the MCP connection lifecycle; on-demand engagement reuses the live connection rather than opening a fresh one.
-- [Messaging](../../chat/messaging/messaging.md) — `chatStreamingService` is the chokepoint that unions the on-demand set with the baseline and emits the announce prefix.
-- [Chat Routing](../../chat/chat_routing/chat_routing.md) — whether that chokepoint runs at all is the chat's router; a chat an agent answers never reaches it, so its `pendingAnnounce` flags stay armed.
+- [Messaging](../../chat/messaging/messaging.md) — the runtime conductor bridge unions baseline/on-demand connected tools.
+- [Chat Routing](../../chat/chat_routing/chat_routing.md) — Local eligibility and synthetic tools policy determine whether a session can consume the attached tools.
 - [Mention Popups](../../chat/mention_popups/mention_popups.md) — The `@` popup gains an "MCP" section inside active chats; the new-chat agent picker is unchanged.
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — Baseline MCPs come from the active chat mode; on-demand engagements layer on top without mutating the mode.

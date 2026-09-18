@@ -6,7 +6,7 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 
 ## Core Concepts
 
-- **`[+]` Composer Menu** — The single composer entry point (`ComposerPlusMenu`). Opens a small frosted popover with up to four rows: **Attach files**, **Chat mode** (sub-menu), **Add agents / MCP** (search modal), and **Let the model coordinate** (a checkable row). Replaces the former separate chat-mode `+` button, agent dropdown, and right-side attach button.
+- **`[+]` Composer Menu** — The single composer entry point (`ComposerPlusMenu`). Opens a small frosted popover with up to four rows: **Attach files**, **Chat mode** (sub-menu), **Add agents / MCP** (search modal), and **Coordinate by <conductor>** (a one-way action). Replaces the former separate chat-mode `+` button, agent dropdown, and right-side attach button.
 - **Capability** — A polymorphic chat tool source: an **agent** or an **MCP server**. The picker treats both uniformly as selectable cards.
 - **Capability Picker** — The card modal opened by **Add agents / MCP** (`AgentPickerModal` in `activeFirst` multi-select mode): an autofocused search box over a grid of agent + MCP cards.
 - **Active-First Ordering** — On open, already-selected cards float to the top; they then hold position while the user toggles (a card never jumps under the cursor). The order snapshot re-sorts only on the next open or when the available capability set changes. Ported from the cinna-mobile picker.
@@ -45,20 +45,18 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 - **Attach files** — shown when the current target accepts attachments (`canShowAttachButton`) and no stream is in flight. Gating rules: see [File Attachments](../file_attachments/file_attachments.md) → Destination gating.
 - **Chat mode** — shown when chat modes exist AND mode selection applies here: always on the new-chat screen, and on active chats that were created with a mode. (Mode-less active chats keep their manual model + MCP controls instead.)
 - **Add agents / MCP** — shown when at least one enabled agent or MCP server exists.
-- **Let the model coordinate** — shown only in a chat that has an agent to coordinate: at least one attached agent, or a bound root, or the chat is already coordinating. A plain chat with the local model gets **no row at all**, because there it would be a toggle between two states that behave identically.
+- **Coordinate by <conductor>** — shown when coordination is available and has not already been chosen; hidden for coordinator chats.
 - The `[+]` button is hidden entirely when none of the rows apply.
 
-### Letting the model coordinate
-- The row is a `menuitemcheckbox` carrying `aria-checked`, and **the tick's slot is always reserved** (`w-3.5`) so ticking it moves no text beside it.
-- Ticking it hands the chat to the local model. Unticking it hands the chat back: to `human` when agents remain (the user addresses one per message), and to `direct` when none do.
-- **It is the only deliberate router transition in the app.** Every other one follows from a gesture that already means something else — a second agent arriving makes a chat `human`, an agent joining a chat with the model makes it coordinated — so turning coordination *off* has no such gesture and gets a row of its own.
-- While the switch is in flight the row stays visible and says so: it is `aria-disabled`, never `disabled`, because a row that disables itself while it holds focus drops focus to the page body mid-switch.
-- **A refusal reaches the user through the chat send-error banner, not the menu.** Handing the chat to the model is the one transition that needs a resolvable provider + model, so it is the one that can come back `not_configured`; the menu has closed by then.
-- See [Chat Routing](../chat_routing/chat_routing.md).
+### Choosing coordination
+- Coordinate by <conductor> is a menuitem action, also available in the routing badge's details popover.
+- It moves the chat to coordinator and disappears after success. There is no uncheck/back-to-human action.
+- The candidate is an eligible Local root/participant or Default runtime; promotion does not require an API provider merely to choose a conductor.
+- Pending/error handling uses the existing mutation and chat error surface. See [Chat Routing](../chat_routing/chat_routing.md).
 
 ### Capability selection & routing (mirrors `@`)
-- **New chat**: toggles buffer in the renderer-only pending lists (`pendingAgentIds`, `pendingMcpIds`) owned by `ChatWorkspace`; flushed onto the chat row at creation. The router is derived at send time from the whole selection — one agent with no MCPs binds it directly, several agents make a chat the user routes, agents mixed with MCPs need the model to coordinate.
-- **Active chat**: toggles hit the on-demand DB tables. Engaging an agent moves the chat onto the router that shape needs — a chat that already has an agent becomes `human` (**no model involved**), a plain chat with the model becomes coordinated — and then adds the on-demand row; engaging an MCP adds it to the on-demand set. Detaching removes the on-demand row.
+- **New chat**: toggles buffer in the renderer-only pending lists (`pendingAgentIds`, `pendingMcpIds`) owned by `ChatWorkspace`; flushed onto the chat row at creation. The router is derived at send time from the whole selection — one agent with no MCPs binds it directly, several agents follow Default multi-agent routing; agents mixed with MCPs require a Local conductor.
+- **Active chat**: toggles hit the on-demand DB tables. Engaging an agent moves the chat onto the router that shape needs — a direct agent chat becoming multi-agent follows the routing preference; a plain runtime chat can keep its root as conductor — and then adds the on-demand row; engaging an MCP adds it to the on-demand set. Detaching removes the on-demand row.
 - **Bound root agent**: in an active chat, the chat's root agent shows as selected and is non-removable from the picker — same constraint as the `@` popup.
 - **Chat-mode baseline MCPs**: shown selected and locked too (toggling is a no-op), so the picker states what the chat actually has rather than only what the user added on top. They're detached by editing the chat mode, not here. Only surfaced when `ChatControls` is hidden — a mode-less chat manages its own baseline through the model/MCP pills instead.
 - Selected state in the picker = mode-owned baseline MCPs (locked) + on-demand agents + on-demand MCPs + bound root agent (active chat), or the selected mode's MCPs (locked) + the pending buffers (new chat).
@@ -77,7 +75,7 @@ User clicks [+]  ->  ChatInput  ->  ComposerPlusMenu
    │                          -> useCapabilityPicker.toggle(id)
    │                               new chat  -> pending buffers (ChatWorkspace)
    │                               active    -> chat:on-demand-* IPC (engage/detach)
-   └─ "Let the model coordinate" -> chat:set-router 'coordinator'
+   └─ "Coordinate by <conductor>" -> chat:set-router 'coordinator'
                                     (off -> 'human' with agents, 'direct' without;
                                      a refusal lands in the send-error banner)
 ```
@@ -88,6 +86,6 @@ User clicks [+]  ->  ChatInput  ->  ComposerPlusMenu
 - [Chat Modes](../chat_modes/chat_modes.md) — the **Chat mode** sub-menu replaces the old `ChatConfigMenu` `+` button; selection applies a mode's provider/model/MCPs.
 - [Mention Popups](../mention_popups/mention_popups.md) — the `[+]` menu is the mouse-driven sibling of the `@` / `~` keyboard triggers.
 - [On-Demand MCP](../../mcp/on_demand/on_demand.md) — active-chat MCP toggles engage/detach the same on-demand set as the `@` popup.
-- [Chat Routing](../chat_routing/chat_routing.md) — the **Let the model coordinate** row is the one deliberate router switch; adding a capability through the picker moves the chat onto the router that shape needs.
+- [Chat Routing](../chat_routing/chat_routing.md) — the **Coordinate by <conductor>** row is the one deliberate router switch; adding a capability through the picker moves the chat onto the router that shape needs.
 - [Orchestrated Agents](../orchestrated_agents/orchestrated_agents.md) — what a coordinated chat does once it is on that router.
 - [Technical details](composer_menu_tech.md) — files, hook, and component references.

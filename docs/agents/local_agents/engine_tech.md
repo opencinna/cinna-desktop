@@ -275,3 +275,9 @@ Generated files, none of which is ever inside an agent folder:
 ## Resolved launcher and authored engine
 
 ResolvedRuntime.launcher describes the launcher derived while resolving the folder configuration; its previous engine output is retired. This changes no dispatch: existing production consumers use the resolution's model/credential values. The explicit driver ID selects the transport; a folder turn re-reads runtime and `launcherOfFolder` selects its launcher. `driver_config.launcher` is only the scanner cache, not execution authority. Keep manifest runtime.engine, the runtime editor, validation and Claude/Codex credential-free resolution semantics; no folder rewrite accompanies an internal output rename.
+
+## Synthetic process groups
+
+`src/main/services/syntheticRuntimePooling.ts` hashes profile, engine, credential, model, instructions and policy. `src/main/agents/drivers/acp/acpProcessPool.ts` maps synthetic owners to a shared entry, aggregates holds/activity and exposes share/peek/hasOtherOwners. Retiring one chat owner leaves other owners alive. `src/main/services/chatConductorService.ts` captures per-chat runtime and validates ownership; `src/main/agents/drivers/index.ts` supplies the synthetic runtime view and utility-session preparation.
+
+Fresh utility sessions use `src/main/services/aiFunctionRuntimeService.ts`; their addresses never enter a2a_sessions. Runtime catalogs are recorded by `src/main/services/runtimeModelCatalog.ts` from new/load/config notifications and exposed via engine:model-catalog. This read-only IPC does not discover credentials or spawn a process.

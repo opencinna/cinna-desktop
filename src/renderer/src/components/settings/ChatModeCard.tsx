@@ -1,4 +1,7 @@
-import { useCallback, useId, useState } from 'react'
+import { unwrapIpcError } from '../../utils/ipcError'
+import { useDefaultRuntime } from '../../hooks/useEngine'
+import { ChatModeRuntimeFields, type ChatModeRuntimeValue } from './ChatModeRuntimeFields'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Trash2, ChevronDown, Check, Star } from 'lucide-react'
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
@@ -19,7 +22,12 @@ interface ChatModeCardProps {
   mode: ChatModeData
 }
 
-export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
+export function ChatModeCard({ mode: persistedMode }: ChatModeCardProps): React.JSX.Element {
+  const [mode, setMode] = useState(persistedMode)
+  const latestMode = useRef(mode)
+  const { data: defaultRuntime } = useDefaultRuntime()
+  const effectiveEngine = mode.engine ?? defaultRuntime?.engine
+  const unsupportedRuntime = effectiveEngine === 'codex'
   const [expanded, setExpanded] = useState(false)
   const [nameDraft, setNameDraft] = useState(mode.name)
   /**
@@ -32,7 +40,14 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
   const { data: providers } = useProviders()
   const { data: allModels } = useModels()
   const { data: mcpProviders } = useMcpProviders()
-  const upsert = useUpsertChatMode()
+  const upsert = useUpsertChatMode(persistedMode.id)
+  useEffect(() => {
+    // Mutation success waits for the authoritative list. Earlier responses must
+    // not overwrite a later optimistic edit while its serialized save is pending.
+    if (upsert.isPending || upsert.error) return
+    latestMode.current = persistedMode
+    setMode(persistedMode)
+  }, [persistedMode, upsert.isPending, upsert.error])
   const deleteMutation = useDeleteChatMode()
 
   const enabledProviders = (providers ?? []).filter(isCredentialActive)
@@ -54,23 +69,26 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
     : null
 
   /** Why this mode cannot start a chat, or null when it can. Shared wording. */
-  const inactive = chatModeInactiveReason(mode.providerId, providers)
+  const inactive = unsupportedRuntime ? { short: 'runtime unavailable', detail: null } : effectiveEngine === 'claude' ? null : chatModeInactiveReason(mode.providerId, providers)
   const preset = getPreset(mode.colorPreset)
   const mcpIds = new Set(mode.mcpProviderIds ?? [])
 
   const save = useCallback(
-    (patch: Partial<{ name: string; providerId: string | null; modelId: string | null; mcpProviderIds: string[]; colorPreset: string; isDefault: boolean }>) => {
+    (patch: Partial<ChatModeRuntimeValue & { name: string; providerId: string | null; modelId: string | null; mcpProviderIds: string[]; colorPreset: string; isDefault: boolean }>) => {
+      if ((latestMode.current.engine ?? defaultRuntime?.engine) === 'codex' && patch.engine === undefined &&
+        ('systemPrompt' in patch || 'toolPolicy' in patch || 'modelId' in patch || 'providerId' in patch)) return
+      if (patch.engine === 'codex') return
+      const next = { ...latestMode.current, ...patch }
+      latestMode.current = next
+      setMode(next)
       upsert.mutate({
-        id: mode.id,
-        name: patch.name ?? mode.name,
-        providerId: patch.providerId !== undefined ? patch.providerId : (mode.providerId ?? null),
-        modelId: patch.modelId !== undefined ? patch.modelId : (mode.modelId ?? null),
-        mcpProviderIds: patch.mcpProviderIds ?? mode.mcpProviderIds ?? [],
-        colorPreset: patch.colorPreset ?? mode.colorPreset,
-        isDefault: patch.isDefault !== undefined ? patch.isDefault : mode.isDefault
+        id: next.id, name: next.name, engine: next.engine,
+        systemPrompt: next.systemPrompt ?? '', toolPolicy: next.toolPolicy ?? 'connectors',
+        providerId: next.providerId ?? null, modelId: next.modelId ?? null,
+        mcpProviderIds: next.mcpProviderIds ?? [], colorPreset: next.colorPreset, isDefault: next.isDefault
       })
     },
-    [upsert, mode]
+    [upsert, defaultRuntime?.engine]
   )
 
   const toggleMcp = (id: string): void => {
@@ -124,6 +142,8 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
 
         <button
           type="button"
+          disabled={upsert.isPending}
+          aria-label="Delete chat mode"
           onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(mode.id) }}
           className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
         >
@@ -169,7 +189,9 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
             </div>
           </div>
 
+          <ChatModeRuntimeFields value={mode} resolvedEngine={defaultRuntime?.engine} onChange={save} />
           {/* AI Credentials (a.k.a. LLM provider) */}
+          {effectiveEngine === 'opencode' && <>
           <div>
             <label
               htmlFor={`${fieldId}-credential`}
@@ -239,6 +261,8 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
             </div>
           )}
 
+          </>}
+
           {/* MCP Providers */}
           {(mcpProviders ?? []).length > 0 && (
             <div>
@@ -279,6 +303,7 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
             (ux_rules rules 1 and 12). 13px rather than 12px because this is
             status detail, which the settings scale sets at 13.
           */}
+          {upsert.error && <p role="alert" className="text-[13px] text-[var(--color-danger)]">{unwrapIpcError(upsert.error, 'Could not save chat mode')}</p>}
           {inactive?.detail && (
             <p className="text-[13px] text-[var(--color-warning)]">{inactive.detail}</p>
           )}

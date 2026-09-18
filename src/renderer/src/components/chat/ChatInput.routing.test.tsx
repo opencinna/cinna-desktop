@@ -311,12 +311,12 @@ describe('the coordinate toggle', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }))
   }
   const toggle = (): HTMLElement =>
-    screen.getByRole('menuitemcheckbox', { name: /Let the model coordinate/ })
+    screen.getByRole('menuitem', { name: /Coordinate by/ })
 
   it('is offered in a chat that has an agent to coordinate', async () => {
     await mount({ router: 'human', attached: ['a-1', 'a-2'] })
     openMenu()
-    expect(toggle().getAttribute('aria-checked')).toBe('false')
+    expect(toggle().textContent).toContain('Coordinate by Default runtime')
   })
 
   it('is not offered in a plain chat with the local model', async () => {
@@ -332,20 +332,13 @@ describe('the coordinate toggle', () => {
     await waitFor(() => expect(spies.setRouter).toHaveBeenCalledWith('chat-1', 'coordinator'))
   })
 
-  it('gives it back to the user, not to nobody', async () => {
-    await mount({ router: 'coordinator', attached: ['a-1', 'a-2'] })
+  it.each([['a-1', 'a-2'], []])('never offers a way back after coordination (%j)', async (...attached) => {
+    await mount({ router: 'coordinator', attached: attached.filter((item): item is string => typeof item === 'string') })
     openMenu()
-    expect(toggle().getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(toggle())
-    await waitFor(() => expect(spies.setRouter).toHaveBeenCalledWith('chat-1', 'human'))
+    expect(screen.queryByRole('menuitem', { name: /Coordinate by/ })).toBeNull()
+    expect(spies.setRouter).not.toHaveBeenCalled()
   })
 
-  it('goes back to direct when there is no agent left to route between', async () => {
-    await mount({ router: 'coordinator', attached: [] })
-    openMenu()
-    fireEvent.click(toggle())
-    await waitFor(() => expect(spies.setRouter).toHaveBeenCalledWith('chat-1', 'direct'))
-  })
 })
 
 describe('refusing a send in a human chat', () => {

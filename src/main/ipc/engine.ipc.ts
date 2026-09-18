@@ -1,3 +1,6 @@
+import { getProfileScopeUserId } from '../auth/scope'
+import { getRuntimeModelCatalog } from '../services/runtimeModelCatalog'
+import type { AgentEngine } from '../../shared/engine'
 import { userActivation } from '../auth/activation'
 import { engineBinaryService } from '../engine/engineBinaryService'
 import { getMainWindow } from '../index'
@@ -5,6 +8,7 @@ import { ipcHandle } from './_wrap'
 import { defaultEngineService } from '../services/localAgents/defaultEngineService'
 import {
   ENGINE_BINARY_CHANNEL,
+  isAgentEngine,
   type DefaultEngineDto,
   type EngineBinaryState
 } from '../../shared/engine'
@@ -33,6 +37,12 @@ import {
  *   for it. It happens at the top of a turn, or when the user asks here.
  */
 export function registerEngineHandlers(): void {
+  ipcHandle('engine:model-catalog', (_event, engine: AgentEngine) => {
+    userActivation.requireActivated()
+    if (!isAgentEngine(engine)) throw new Error('Unknown runtime')
+    return getRuntimeModelCatalog(getProfileScopeUserId(), engine)
+  })
+
   // One subscription for the app's lifetime, forwarding transitions to whatever
   // window is open. Registered here rather than in the service so the service
   // keeps no Electron dependency at all.

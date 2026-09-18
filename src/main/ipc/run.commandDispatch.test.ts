@@ -68,9 +68,6 @@ vi.mock('../db/chatAgentCursors', () => ({
 vi.mock('../db/chatOnDemandAgent', () => ({
   chatOnDemandAgentRepo: { listAgentIds: vi.fn(() => []) }
 }))
-vi.mock('../services/chatStreamingService', () => ({
-  chatStreamingService: { stream: vi.fn() }
-}))
 vi.mock('../db/agents', () => ({ agentSessionRepo: { getByChat: vi.fn() } }))
 
 vi.mock('../auth/activation', () => ({
@@ -186,7 +183,7 @@ describe('run:send — the /run: dispatch call site', () => {
     const fallback = resolveCommandRunner.mock.calls[0][4] as BoundTurn
     const io = { signal: new AbortController().signal, onEvent: vi.fn() }
     await fallback(io)
-    expect(driverRun).toHaveBeenCalledWith('owner-1', FOLDER_AGENT, {
+    expect(driverRun).toHaveBeenCalledWith('owner-1', FOLDER_AGENT, expect.objectContaining({
       chatId: 'chat-1',
       // The wire carries the turn header, because a folder agent runs in a
       // folder on this machine (`capabilities.cwd`). The `/run:` match above
@@ -206,7 +203,7 @@ describe('run:send — the /run: dispatch call site', () => {
       // The chat's scope, for a follow-up turn the agent starts after this one.
       runScope: { profileUserId: 'profile-user', settingsUserId: 'settings-user' },
       onEvent: io.onEvent
-    })
+    }))
   })
 
   it('asks with the remote agent’s capability, and streams the driver’s turn it gets back', async () => {

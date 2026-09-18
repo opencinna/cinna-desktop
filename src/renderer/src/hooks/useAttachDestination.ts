@@ -1,3 +1,4 @@
+import { useDefaultRuntime } from './useEngine'
 import { useProviders } from './useProviders'
 import { useAuthStore } from '../stores/auth.store'
 import { isCredentialActive } from '../../../shared/credentials'
@@ -17,5 +18,6 @@ import { isCredentialActive } from '../../../shared/credentials'
 export function useHasAttachDestination(): boolean {
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   const { data: providers } = useProviders()
-  return isCinnaUser || (providers ?? []).some(isCredentialActive)
+  const { data: runtime } = useDefaultRuntime()
+  return !!runtime?.engine || isCinnaUser || (providers ?? []).some(isCredentialActive)
 }

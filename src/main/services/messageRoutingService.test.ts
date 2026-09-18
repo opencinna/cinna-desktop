@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 /**
  * Which row the transcript keeps for a routed send.
  *
- * The decision is one line in each of the two prepare functions, and it is
+ * The decision is one branch in send preparation, and it is
  * load-bearing in a way a reader of that line would not guess: the origin
  * decides whether the conversation shows a **user bubble nobody typed**. A task
  * runner's prompt and a file handover's returned report are both written by the
@@ -44,7 +44,7 @@ describe('the row a send stores', () => {
     expect(saveSystem).not.toHaveBeenCalled()
   })
 
-  it.each(['runner', 'handover'] as const)('is a system row for a %s turn, and titles nothing', (origin) => {
+  it.each(['runner', 'handover', 'specialist'] as const)('is a system row for a %s turn, and titles nothing', (origin) => {
     // Mutation: route `handover` to `saveUser` and the return packet appears as
     // a message the user typed; leave the title call in and the chat is renamed
     // after another project's report.
@@ -57,10 +57,4 @@ describe('the row a send stores', () => {
     expect(autoTitle).not.toHaveBeenCalled()
   })
 
-  it('does the same on the model path, which has no agent to address', () => {
-    const llmSend = { userId: 'u', chatId: 'chat-1', userContent: 'Report' }
-    expect(messageRoutingService.prepareLlmSend({ ...llmSend, origin: 'handover' }).userMessageId).toBe('system-row')
-    expect(messageRoutingService.prepareLlmSend(llmSend).userMessageId).toBe('user-row')
-    expect(autoTitle).toHaveBeenCalledTimes(1)
-  })
 })

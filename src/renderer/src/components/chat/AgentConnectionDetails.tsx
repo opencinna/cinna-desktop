@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import type { AgentData } from '../../../../preload'
+import { canConduct } from '../../../../shared/chatRouting'
 import { DEVELOPMENT_RUNTIME_NAMES } from '../../../../shared/developmentSession'
 import { useLocalAgent } from '../../hooks/useLocalAgents'
 import { useProviders } from '../../hooks/useProviders'
@@ -8,7 +9,7 @@ import { RuntimePanel } from '../agents/local/RuntimePanel'
 
 /** Registration ownership (`source: local`) does not imply local execution. */
 export function agentLocation(agent: AgentData): 'Local' | 'Remote' {
-  return agent.source === 'folder' || (agent.driver === 'acp' && agent.acpTransport !== 'websocket')
+  return canConduct(agent)
     ? 'Local' : 'Remote'
 }
 

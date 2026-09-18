@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
 import { useEffect } from 'react'
-import { routerOf, type ChatRouter } from '../../../shared/chatRouting'
+import { type ChatRouter } from '../../../shared/chatRouting'
 
 export function useChatList() {
   const queryClient = useQueryClient()
@@ -145,8 +145,13 @@ export function useUpdateChat() {
       chatId: string
       updates: { title?: string; modelId?: string; providerId?: string; agentId?: string | null; modeId?: string | null; router?: ChatRouter }
     }) => window.api.chat.update(chatId, updates),
-    onSuccess: () => {
+    onSuccess: (_data, { chatId, updates }) => {
       queryClient.invalidateQueries({ queryKey: ['chats'] })
+      queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
+      if ('agentId' in updates || 'router' in updates || 'modeId' in updates) {
+        // Main may create or reconfigure a chat-owned runtime during this update.
+        queryClient.invalidateQueries({ queryKey: ['agents'] })
+      }
     }
   })
 }
@@ -177,10 +182,9 @@ export function useSetChatRouter() {
         queryClient.setQueryData<CachedChat>(['chat', chatId], {
           ...prev,
           router,
-          // Only the way *out* of `direct` is guessed here. Arriving at it binds
-          // a root the renderer would have to pick, and the settle below is
-          // soon enough for a transition nothing races.
-          agentId: routerOf(prev) === 'direct' ? null : prev.agentId
+          // Human routing detaches its root. Coordination keeps the current
+          // root until main returns the eligible or synthetic conductor.
+          agentId: router === 'human' ? null : prev.agentId
         })
       }
       return { prev }
@@ -189,6 +193,7 @@ export function useSetChatRouter() {
       if (ctx?.prev) queryClient.setQueryData(['chat', chatId], ctx.prev)
     },
     onSettled: (_data, _err, { chatId }) => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
       queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
       queryClient.invalidateQueries({ queryKey: ['chat-on-demand-agent', chatId] })
       queryClient.invalidateQueries({ queryKey: ['chats'] })

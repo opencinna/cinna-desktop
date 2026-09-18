@@ -111,7 +111,11 @@ test('Codex chats, approves, answers questions, stops, and resumes through the p
   await cinna.skipOnboarding()
   await cinna.page.getByText('Hello Codex', { exact: true }).first().click()
   await send('Continue after restart')
-  await expect.poll(() => requests().some((request) => request.method === 'thread/resume')).toBe(true)
+  // A restarted desktop has a new authenticated MCP endpoint. A fresh engine
+  // session receives the full transcript instead of loading the stale URL.
+  await expect.poll(() => requests().some((request) => request.method === 'turn/start' &&
+    JSON.stringify(request.params.input).includes('<prior_chat_transcript>') &&
+    JSON.stringify(request.params.input).includes('Continue after restart'))).toBe(true)
   await expect(cinna.page.getByText('Hello from Codex.', { exact: true })).toHaveCount(2)
   const turns = requests().filter((request) => request.method === 'turn/start' && request.params.threadId === 'codex-session')
   expect(turns).toHaveLength(5)

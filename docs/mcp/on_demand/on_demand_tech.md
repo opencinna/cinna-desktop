@@ -8,7 +8,7 @@
 - `src/main/db/migrations/chats.ts` — `CREATE TABLE IF NOT EXISTS chat_on_demand_mcps` alongside `chat_mcp_providers`
 - `src/main/db/chatOnDemandMcp.ts` — `chatOnDemandMcpRepo` data-access (CRUD + peek/clear)
 - `src/main/services/chatService.ts` — `listOnDemandMcps`, `addOnDemandMcp`, `removeOnDemandMcp`
-- `src/main/services/chatStreamingService.ts` — union of baseline + on-demand MCPs, prefix resolution, deferred flag flip
+- `src/main/services/conductorBridge.ts` unions baseline/on-demand connected MCP providers and refreshes the injected endpoint on chat/tool changes.
 - `src/main/ipc/chat.ipc.ts` — IPC handlers for the three on-demand channels
 - `src/main/db/chatMcp.ts` — baseline (chat-mode) MCP attachments; referenced by the union builder
 - `src/main/db/mcpProviders.ts` — provider lookup used to resolve names for the announce prefix
@@ -33,11 +33,11 @@ Table: `chat_on_demand_mcps` (see `src/main/db/migrations/chats.ts`)
 
 - `chat_id` (TEXT, FK `chats.id ON DELETE CASCADE`)
 - `mcp_provider_id` (TEXT, FK `mcp_providers.id ON DELETE CASCADE`)
-- `pending_announce` (INTEGER, boolean, default `1`) — owes the one-shot system-note hint
+- `pending_announce` remains schema/API compatibility state; ACP tool discovery does not consume it.
 - `created_at` (INTEGER, unix seconds)
 - Primary key: `(chat_id, mcp_provider_id)`
 
-Relationship: layered alongside `chat_mcp_providers` (chat-mode baseline). Both tables are unioned at stream time by `chatStreamingService`.
+- `src/main/services/conductorBridge.ts` unions baseline/on-demand connected MCP providers and refreshes the injected endpoint on chat/tool changes.
 
 ## IPC Channels
 
@@ -52,10 +52,10 @@ All three require `userActivation.requireActivated()` and use `getProfileScopeUs
 - `chatService.listOnDemandMcps(userId, chatId)` — ownership-checks the chat, returns rows from `chatOnDemandMcpRepo.list`
 - `chatService.addOnDemandMcp(userId, chatId, mcpProviderId)` — ownership-checks chat + verifies MCP exists in settings scope (`mcpProviderRepo.getOwned`), then `chatOnDemandMcpRepo.add` (upsert that re-arms `pendingAnnounce`)
 - `chatService.removeOnDemandMcp(userId, chatId, mcpProviderId)` — ownership-checks then `chatOnDemandMcpRepo.remove`
-- `chatOnDemandMcpRepo.peekPending(chatId)` — reads pending ids without mutating; called at stream setup
-- `chatOnDemandMcpRepo.clearPending(chatId, ids)` — bulk-flips `pendingAnnounce=false` for the supplied ids; called only after the adapter's first stream resolves
-- `chatStreamingService.stream(input)` — builds tool list from union of baseline (`chatMcpRepo.listProviderIds`) and on-demand (`chatOnDemandMcpRepo.listProviderIds`), resolves announce via the module-private `resolvePendingAnnounce`, threads the ids into `_runStreamLoop` for deferred flip
-- `chatStreamingService._runStreamLoop(...)` — on `round === 0` post-`adapter.stream` success, calls `chatOnDemandMcpRepo.clearPending` and logs `on-demand mcp announce consumed`
+- `pending_announce` remains schema/API compatibility state; ACP tool discovery does not consume it.
+- `pending_announce` remains schema/API compatibility state; ACP tool discovery does not consume it.
+- `src/main/services/conductorBridge.ts` unions baseline/on-demand connected MCP providers and refreshes the injected endpoint on chat/tool changes.
+- `src/main/services/conductorBridge.ts` unions baseline/on-demand connected MCP providers and refreshes the injected endpoint on chat/tool changes.
 
 ## Renderer Components
 
@@ -73,11 +73,11 @@ None. No env vars, no settings. The feature is always available inside an active
 - Renderer never sees raw provider data beyond what `mcp:list` already exposes (`McpProviderData` — no auth tokens). The on-demand IPC channels only move provider ids around.
 - Ownership: every IPC entry calls `userActivation.requireActivated()` then routes through `chatService` which always calls `requireOwnedChat` before any read or write.
 - `addOnDemandMcp` rejects unknown MCP ids via `mcpProviderRepo.getOwned(getSettingsScopeUserId(), id)` so a renderer cannot poke arbitrary ids past the FK.
-- The announce prefix only resolves provider *names* (`McpProviderRow.name`) — no credentials, URLs, or tokens reach the LLM.
+- Endpoint credentials stay in main; the runtime sees tool descriptions and its own scoped bridge descriptor.
 - Cascade deletes (chats → on-demand rows, MCP providers → on-demand rows) keep the table from leaking stale rows when either side is deleted.
 
 ## Implementation Notes
 
-- **Why peek + clear instead of a single consume**: a transactional read-and-flip would lose the one-shot announcement to any pre-flight failure (provider auth bad, network down). Splitting lets `_runStreamLoop` flip only after the LLM has actually consumed the prefix in its first round.
+- `pending_announce` remains schema/API compatibility state; ACP tool discovery does not consume it.
 - **Why a second listbox component instead of extending `MentionPopup`**: `MentionPopup<T>` is a flat single-section primitive used by four call sites (agents, prompts, commands, chat modes). Adding grouping to it would complicate every caller; `AgentMcpMentionPopup` inlines the same surface treatment with section grouping local to itself.
-- **Wire-content patching**: `_runStreamLoop` patches the most recent in-memory `user` message with the prefix-augmented `wireContent` so the LLM sees the announce prefix while the persisted `messages` row keeps the user's original text untouched.
+- `pending_announce` remains schema/API compatibility state; ACP tool discovery does not consume it.

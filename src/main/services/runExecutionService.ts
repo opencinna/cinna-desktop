@@ -1,3 +1,5 @@
+import { chatConductorService } from './chatConductorService'
+import { runNestedAgentTurn } from './nestedAgentTurn'
 import { nanoid } from 'nanoid'
 import { taskRunnersByChat } from './taskRunnerState'
 import { liveRunHub } from './liveRunHub'
@@ -13,7 +15,6 @@ import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { agentService } from './agentService'
 import { messageRoutingService } from './messageRoutingService'
 import { a2aStreamingService } from './a2aStreamingService'
-import { chatStreamingService } from './chatStreamingService'
 import { buildCatchUpPacket, buildTurnHeader, withCatchUp } from './threadContextService'
 import { driverFor } from '../agents/drivers'
 import { resolveCommandRunner } from './localAgents/commandService'
@@ -261,6 +262,8 @@ export const runExecutionService = {
     runnerTaskId?: string
     /** Internal eligibility for the current handed-off owner's completed answer. */
     handbackEligible?: boolean
+    toolCallBudget?: import('../agents/drivers/driver').RunInput['toolCallBudget']
+    nested?: { toolCallId: string }
     coordinator?: CoordinatorToolProvider
     inputOrigin?: TurnInputOrigin
   }): RunHandle {
@@ -319,7 +322,6 @@ export const runExecutionService = {
         steerFn = null
         if (requestId) {
           a2aStreamingService.cancel(requestId)
-          chatStreamingService.cancel(requestId)
         }
       },
       get agentId() {
@@ -398,7 +400,7 @@ export const runExecutionService = {
         // A runner owns the session outcome: a successful leaf may continue,
         // and its cancellation can be the controller enforcing a time limit.
         // The boot pass records a killed turn through the same function.
-        if (!options.runnerTaskId && (accepted || !options.preserveOnRefusal)) {
+        if (!options.runnerTaskId && !options.nested && (accepted || !options.preserveOnRefusal)) {
           recordTurnResult(payload.chatId, handle.id, final, { canceled: cancelRequested })
         }
         live.close()
@@ -434,6 +436,8 @@ export const runExecutionService = {
       refusal,
       agentId: options.agentId,
       coordinator: options.coordinator,
+      nested: options.nested,
+      toolCallBudget: options.toolCallBudget,
       inputOrigin: options.inputOrigin,
       runnerOwned: !!options.runnerTaskId,
       handbackEligible: options.handbackEligible
@@ -450,6 +454,8 @@ export const runExecutionService = {
 }
 
 interface RunLifecycle {
+  toolCallBudget?: import('../agents/drivers/driver').RunInput['toolCallBudget']
+  nested?: { toolCallId: string }
   handbackEligible?: boolean
   runnerOwned: boolean
   inputOrigin?: TurnInputOrigin
@@ -475,10 +481,12 @@ async function resolveAndRun(
   const { chatId, content: userContent, attachments } = payload
   const { profileUserId, settingsUserId } = scope
   lifecycle.context({ userId: profileUserId, chatId, agentId: null })
+  if (!chat.agentId && chat.router !== 'human' && !lifecycle.agentId) chat = chatConductorService.bind(profileUserId, chat)
   const routing = routingOf(chat)
   const target: RunTarget = lifecycle.agentId
     ? { kind: 'agent' as const, agentId: lifecycle.agentId }
     : answererOf(chat, payload)
+  if (target.kind !== 'agent') throw new Error('This conversation has no configured runtime.')
 
   // Every event is observed once whether or not a renderer is attached, which makes this the one place
   // that sees a `needs_input` from any driver, in any router — including one a
@@ -486,27 +494,10 @@ async function resolveAndRun(
   // was a hook in each streaming service, which is two places that would have
   // to agree about a third (the orchestrated path) forever.
   const context: RunEventContext = {
-    userId: profileUserId, chatId, agentId: target.kind === 'model' ? null : target.agentId
+    userId: profileUserId, chatId, agentId: target.agentId
   }
   lifecycle.context(context)
   const observed = observeAsks(port, context, lifecycle.observe)
-
-  if (target.kind === 'model') {
-    const { wireContent } = messageRoutingService.prepareLlmSend({
-      userId: profileUserId,
-      chatId,
-      userContent,
-      attachments,
-      origin: lifecycle.inputOrigin,
-      onPersisted: () => lifecycle.persisted(context)
-    })
-    lifecycle.accepted()
-    await handOff(observed, () =>
-      chatStreamingService.stream({ userId: profileUserId, settingsUserId, chatId, wireContent, port: observed, onFinished: lifecycle.finish, coordinator: lifecycle.coordinator, wireRole: isDesktopAuthored(lifecycle.inputOrigin) ? 'system' : 'user' }),
-      (message) => lifecycle.refusal(chatId, message)
-    )
-    return
-  }
 
   await runAgentTurn(observed, {
     chatId,
@@ -522,12 +513,15 @@ async function resolveAndRun(
     runnerOwned: lifecycle.runnerOwned,
     queueWhenBusy: lifecycle.runnerOwned,
     handbackEligible: lifecycle.handbackEligible,
+    nested: lifecycle.nested,
+    toolCallBudget: lifecycle.toolCallBudget,
+    coordinator: lifecycle.coordinator,
     agentId: target.agentId,
     userContent,
     attachments,
-    // A direct chat has one counterparty and therefore no gap to close; the
-    // packet exists for the messages *another* agent wrote.
-    catchUp: routing.router === 'human' || (!!lifecycle.agentId && chat.agentId !== lifecycle.agentId)
+    // Coordinators retain their ACP session while specialists own the chat.
+    // On return, their cursor must catch up with those specialists' messages.
+    catchUp: routing.router !== 'direct' || (!!lifecycle.agentId && chat.agentId !== lifecycle.agentId)
   })
 }
 
@@ -549,6 +543,9 @@ function observeAsks(port: StreamPort, ctx: RunEventContext, observe: RunObserve
 }
 
 interface AgentTurnInput {
+  toolCallBudget?: import('../agents/drivers/driver').RunInput['toolCallBudget']
+  nested?: { toolCallId: string }
+  coordinator?: CoordinatorToolProvider
   handbackEligible?: boolean
   /** A task runner owns this turn's outcome, and its checkpoint is the in-flight record. */
   runnerOwned?: boolean
@@ -630,6 +627,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
     packet,
     turnHeader: turnHeaderFor({ driver, agent, profileUserId, chatId }),
     fileIds,
+    attachments,
     // The user row's id is the A2A `messageId`: the Cinna backend echoes
     // it back in `tasks/get` history and deduplicates a resend by it. A
     // desktop-authored send (a runner's prompt, a handover's return packet)
@@ -637,6 +635,9 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
     messageId: isDesktopAuthored(input.inputOrigin) ? undefined : userMessageId,
     queueWhenBusy: input.queueWhenBusy,
     handbackEligible: input.handbackEligible,
+    nested: input.nested,
+        toolCallBudget: input.toolCallBudget,
+    coordinator: input.coordinator,
     registerSteer: input.registerSteer,
     runScope: { profileUserId, settingsUserId }
   })
@@ -726,6 +727,10 @@ function turnHeaderFor(input: {
 }
 
 function bindTurn(input: {
+  toolCallBudget?: import('../agents/drivers/driver').RunInput['toolCallBudget']
+  attachments?: RunSendPayload['attachments']
+  nested?: { toolCallId: string }
+  coordinator?: CoordinatorToolProvider
   driver: AgentDriver
   agent: AgentRow
   agentOwnerId: string
@@ -749,15 +754,20 @@ function bindTurn(input: {
     agentOwnerId,
     agent.id,
     (io) =>
-      driver.run(agentOwnerId, agent, {
+      (input.nested ? (owner: string, row: AgentRow, runInput: import('../agents/drivers/driver').RunInput) => runNestedAgentTurn(driver, owner, row, { ...runInput, nested: input.nested! }) : driver.run.bind(driver))(agentOwnerId, agent, {
         chatId: input.chatId,
+        nested: input.nested,
+        toolCallBudget: input.toolCallBudget,
+        coordinator: input.coordinator,
         // Header, then the catch-up packet, then what the user sent. Both
         // prefixes are wire-only by construction: the row was persisted from
         // `wireContent` alone, before this call.
         wireContent: withCatchUp(input.turnHeader ?? null, withCatchUp(input.packet, wireContent)),
         fileIds: input.fileIds,
+        attachments: input.attachments,
         ...(input.messageId ? { messageId: input.messageId } : {}),
         signal: io.signal,
+        flush: io.flush,
         ...(input.queueWhenBusy ? { queueWhenBusy: true } : {}),
         ...(input.handbackEligible ? { handbackEligible: true } : {}),
         ...(input.registerSteer ? { registerSteer: input.registerSteer } : {}),
@@ -815,7 +825,7 @@ async function resendAgentTurn(port: StreamPort, input: {
   const { row: agent, userId: agentOwnerId } = located
   let run: ReturnType<typeof bindTurn>
   try {
-    const catchUp = routingOf(chat).router === 'human' || chat.agentId !== agentId
+    const catchUp = routingOf(chat).router !== 'direct' || chat.agentId !== agentId
     const packet = catchUp
       ? buildCatchUpPacket({
           messages: messages.filter((message) => message.sortOrder < row.sortOrder),

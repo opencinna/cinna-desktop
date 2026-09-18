@@ -14,7 +14,7 @@ import type {
   PendingAttachment
 } from '../../../shared/attachments'
 import { deriveTitleFromMessage } from '../../../shared/chatTitle'
-import { newChatRouter, routingOf, type ChatRouter } from '../../../shared/chatRouting'
+import { newChatRouter, routingOf, type ChatRouter, type DefaultMultiAgentRouting } from '../../../shared/chatRouting'
 import { pickDefaultModelId } from '../../../shared/modelDefaults'
 import { unwrapIpcError } from '../utils/ipcError'
 
@@ -33,6 +33,8 @@ export interface NewChatOptions {
    * mixed with MCP servers need the local model to conduct (`coordinator`).
    */
   agentIds: string[]
+  defaultMultiAgentRouting?: DefaultMultiAgentRouting
+  coordinate?: boolean
   mode: ChatModeData | null
   providerId: string | null
   providers: ProviderData[] | undefined
@@ -66,6 +68,7 @@ export function resolveModel(
   providers: ProviderData[] | undefined,
   allModels: ModelData[] | undefined
 ): string | null {
+  if (mode?.engine === 'claude' || mode?.engine === 'codex') return mode.modelId ?? null
   if (!providerId) return null
   const providerData = (providers ?? []).find((p) => p.id === providerId)
   const providerModels = (allModels ?? []).filter((m) => m.providerId === providerId)
@@ -193,18 +196,20 @@ export function useNewChatFlow(): {
       // The one decision, taken once, in the shared helper both processes read.
       const router = newChatRouter({
         agentIds: agentSnapshot,
-        mcpIds: onDemandMcpSnapshot
+        mcpIds: [...Array.from(mcpIds), ...onDemandMcpSnapshot],
+        defaultMultiAgentRouting: opts.defaultMultiAgentRouting,
+        coordinate: opts.coordinate
       })
       // A `direct` chat with an agent is the only shape that binds a root; a
       // `human` chat's agents are all attached, none of them the root.
-      const rootAgentId = router === 'direct' ? (agentSnapshot[0] ?? null) : null
+      const rootAgentId = router !== 'human' ? (agentSnapshot[0] ?? null) : null
       // Asked of the helper, not re-derived: `router !== 'coordinator'` is not
       // the same question. A chat with **no agent at all** is `direct` — to the
       // local model — and its files belong in the local store, which is where
       // they have always gone. Sending them to the Cinna backend instead
       // breaks every attachment in the commonest chat in the app, and breaks it
       // by deleting the chat row on the way out.
-      const scope = routingOf({ router, agentId: rootAgentId }).attachmentTarget
+      let scope = routingOf({ router, agentId: rootAgentId }).attachmentTarget
 
       const originatingUserId = useAuthStore.getState().currentUser?.id
       const isSameAccount = (): boolean => useAuthStore.getState().currentUser?.id === originatingUserId
@@ -259,6 +264,21 @@ export function useNewChatFlow(): {
 
         await updateChat.mutateAsync({ chatId: chat.id, updates })
         assertCurrent()
+        const updatedChat = await window.api.chat.get(chat.id)
+        if (updatedChat) {
+          const routing = routingOf(updatedChat)
+          scope = routing.attachmentTarget
+          const target = routing.answerer({ attached: agentSnapshot })
+          if (target.kind === 'agent') {
+            const agents = await window.api.agents.list()
+            assertCurrent()
+            // The normalized root can be a newly created runtime conductor.
+            // Publish this same snapshot so the composer can name it immediately.
+            if (isSameAccount()) queryClient.setQueryData(['agents'], agents)
+            if (agents.find((agent) => agent.id === target.agentId)?.capabilities.attachments === 'local') scope = 'local'
+          }
+        }
+        assertCurrent()
 
         // Baseline MCPs = the chat mode's list, verbatim. Empty means the
         // chat starts with no baseline servers (the row has none yet, so
@@ -282,12 +302,10 @@ export function useNewChatFlow(): {
         // A `human` chat's first message goes to the first agent the user
         // picked — the order they picked them in is the only signal there is,
         // and main applies the same rule if this one is ever absent.
-        const target =
-          router === 'coordinator'
-            ? ({ kind: 'model' } as const)
-            : agentSnapshot[0]
-              ? ({ kind: 'agent', agentId: agentSnapshot[0] } as const)
-              : ({ kind: 'model' } as const)
+        const target = routingOf(updatedChat ?? { router, agentId: rootAgentId }).answerer({
+          attached: agentSnapshot,
+          addressed: router === 'human' ? agentSnapshot[0] : undefined
+        })
         startRun(chat.id, message, {
           attachments: [...resolved, ...noteAttachments],
           target

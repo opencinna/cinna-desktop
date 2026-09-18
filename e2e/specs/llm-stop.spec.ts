@@ -1,36 +1,13 @@
-import { createServer, type Server, type ServerResponse } from 'node:http'
+import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { test, expect, type CinnaApp } from '../fixtures/app'
+import { installFakeAcpEngine, type FakeAcpEngine } from '../fixtures/fakeAcpEngine'
 
 /**
- * Stop, pressed in an LLM chat while the reply is still streaming.
- *
- * Before the fix the adapter's abort made `_runStreamLoop` return having posted
- * nothing, so the chat sat in the streaming state — the composer offering only
- * Stop — until the user switched chats, and the text they had watched arrive
- * was never saved. Now the round's partial reply is saved and the port gets
- * `done {stopReason: 'canceled'}`.
- *
- * ## How the reply is held open
- *
- * An Ollama credential is keyless and keeps its host, and its chats stream
- * through the OpenAI adapter against `<host>/v1`. So the "model" is a
- * `node:http` server on a port this spec owns: `/api/tags` lists one model, and
- * `POST /v1/chat/completions` writes two SSE chunks and then **never finishes**.
- * Nothing but the client can end that response, which is what makes Stop land
- * mid-reply every time, with no timing involved — and the server seeing its
- * socket closed by the client is the witness that Stop aborted the request
- * rather than the stream happening to end. Nothing leaves the machine.
- *
- * Composer buttons use their accessible names. The sidebar's interrupt
- * action also contains a square icon, including when its spinner is showing,
- * so an icon-only locator would select both unrelated controls.
- *
- * ## What it does not cover
- *
- * A stop during a tool round (the skipped calls' `toolError` rows), an agent
- * chat's Stop, and the pre-fix behaviour — `src/` is not reverted from a spec,
- * so this was not run against the old code.
+ * Plain chats run on ACP. The scripted runtime emits two text chunks, then
+ * waits for session/cancel; its wire log proves Stop canceled the live turn.
+ * Real launcher, IPC, transcript persistence and UI; no model API or credentials.
+ * Tool-round cancellation is covered separately.
  */
 
 const MODEL = 'qwen3:8b'
@@ -39,14 +16,9 @@ const PROMPT = 'Count slowly to ten.'
 const CHUNKS = ['Counting slowly: ', 'one, two, three,']
 const PARTIAL = CHUNKS.join('')
 
-/** What the fake model has seen, for the spec to read. Reset per test. */
-const model = { streams: 0, closedByClient: 0, open: [] as ServerResponse[] }
-
 function fakeOllama(): Server {
   return createServer((req, res) => {
-    let raw = ''
-    req.setEncoding('utf8')
-    req.on('data', (chunk) => (raw += chunk))
+    req.resume()
     req.on('end', () => {
       if (req.url === '/api/tags') {
         res.setHeader('content-type', 'application/json')
@@ -60,34 +32,6 @@ function fakeOllama(): Server {
       if (req.url === '/api/version') {
         res.setHeader('content-type', 'application/json')
         res.end(JSON.stringify({ version: '0.6.2' }))
-        return
-      }
-      if (req.method === 'POST' && req.url === '/v1/chat/completions') {
-        const body = JSON.parse(raw || '{}') as { stream?: boolean }
-        if (!body.stream) {
-          // Nothing in this spec asks for one (titles are switched off); answer
-          // plainly rather than hold a request nobody will stop.
-          res.statusCode = 400
-          res.end(JSON.stringify({ error: { message: 'the fake only streams' } }))
-          return
-        }
-        model.streams += 1
-        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-        for (const content of CHUNKS) {
-          const chunk = {
-            id: 'chatcmpl-e2e',
-            object: 'chat.completion.chunk',
-            created: 1,
-            model: MODEL,
-            choices: [{ index: 0, delta: { content }, finish_reason: null }]
-          }
-          res.write(`data: ${JSON.stringify(chunk)}\n\n`)
-        }
-        model.open.push(res)
-        // `res`, not `req`: the request's own `close` fires once its body is read.
-        res.on('close', () => {
-          if (!res.writableEnded) model.closedByClient += 1
-        })
         return
       }
       res.statusCode = 404
@@ -106,17 +50,22 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  for (const res of model.open) res.destroy()
+  server.closeAllConnections()
   await new Promise<void>((resolve) => server.close(() => resolve()))
 })
 
 /**
  * A keyless credential and a default chat mode on it, then a restart —
  * credentials and modes seeded over IPC are stale in the renderer until then.
- * Titles are off so the only model call is the turn under test.
+ * Titles are off so the only runtime prompt is the turn under test.
  */
-async function arrange(cinna: CinnaApp): Promise<void> {
+async function arrange(cinna: CinnaApp): Promise<FakeAcpEngine> {
   await cinna.skipOnboarding()
+  const fake = await installFakeAcpEngine(cinna, { prompt: {
+    emit: [...CHUNKS.map((text) => ({ kind: 'update' as const,
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } })),
+      { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' }
+  } })
   await cinna.page.evaluate(
     async ({ host, modelId }) => {
       await window.api.settings.set('autoChatTitles', false)
@@ -126,12 +75,13 @@ async function arrange(cinna: CinnaApp): Promise<void> {
         baseUrl: host,
         enabled: true
       })
-      await window.api.chatModes.upsert({ name: 'Default', providerId: id, modelId, isDefault: true })
+      await window.api.chatModes.upsert({ name: 'Default', providerId: id, modelId, engine: 'opencode', toolPolicy: 'none', isDefault: true })
     },
     { host, modelId: MODEL }
   )
   await cinna.relaunch()
   await cinna.skipOnboarding()
+  return fake
 }
 
 /** The only chat's persisted rows, as role and content. */
@@ -148,9 +98,7 @@ test('Stop mid-reply ends streaming, and the part that streamed stays in the tra
   cinna
 }) => {
   test.setTimeout(90_000)
-  model.streams = 0
-  model.closedByClient = 0
-  await arrange(cinna)
+  const fake = await arrange(cinna)
   const page = cinna.page
   // By role, not placeholder: for ~260ms after the first send the chat curtain
   // (`ChatTransition`) keeps an inert, aria-hidden clone of the new-chat
@@ -167,13 +115,21 @@ test('Stop mid-reply ends streaming, and the part that streamed stays in the tra
     await expect(reply).toHaveText(PARTIAL, { timeout: 20_000 })
     await expect(stop).toBeEnabled()
     await expect(send).toHaveCount(0)
-    expect(model.streams).toBe(1)
-    expect(model.closedByClient).toBe(0)
+    expect(fake.received('session/prompt')).toHaveLength(1)
+    expect(fake.received('session/cancel')).toHaveLength(0)
+    expect(JSON.stringify(fake.received('session/prompt')[0].params?.prompt)).toContain(PROMPT)
+    const conductor = await cinna.page.evaluate(async () => {
+      const [chat] = await window.api.chat.list()
+      const detail = await window.api.chat.get(chat.id)
+      return (await window.api.agents.list()).find((agent) => agent.id === detail?.agentId)
+    })
+    expect(conductor).toMatchObject({ conductor: true, name: 'OpenCode' })
   })
 
   await test.step('Stop aborts the request, and the composer offers Send again', async () => {
     await stop.click()
-    await expect.poll(() => model.closedByClient, { message: 'the model request was aborted' }).toBe(1)
+    await expect.poll(() => fake.received('session/cancel').length, { message: 'the runtime received Stop' }).toBe(1)
+    expect(fake.received('session/cancel')[0].params?.sessionId).toBe(fake.received('session/prompt')[0].params?.sessionId)
     await expect(stop).toHaveCount(0)
     await expect(send).toBeDisabled()
     await input.fill('And the rest?')
@@ -192,7 +148,7 @@ test('Stop mid-reply ends streaming, and the part that streamed stays in the tra
     // A stop is not a failure: no error row, no banner.
     await expect(page.getByRole('alert')).toHaveCount(0)
     // No second request was made on the user's behalf.
-    expect(model.streams).toBe(1)
+    expect(fake.received('session/prompt')).toHaveLength(1)
   })
 
   await test.step('after a restart the chat reopens with the partial reply', async () => {

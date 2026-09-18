@@ -17,6 +17,13 @@ export function migrateChatModes(sqlite: Database.Database): void {
     `)
   }
 
+  if (!hasColumn(sqlite, 'chat_modes', 'engine')) {
+    sqlite.exec('ALTER TABLE chat_modes ADD COLUMN engine TEXT')
+    sqlite.exec("UPDATE chat_modes SET engine = 'opencode' WHERE provider_id IS NOT NULL")
+  }
+  if (!hasColumn(sqlite, 'chat_modes', 'system_prompt')) sqlite.exec("ALTER TABLE chat_modes ADD COLUMN system_prompt TEXT NOT NULL DEFAULT ''")
+  if (!hasColumn(sqlite, 'chat_modes', 'tool_policy')) sqlite.exec("ALTER TABLE chat_modes ADD COLUMN tool_policy TEXT NOT NULL DEFAULT 'connectors'")
+
   if (!hasColumn(sqlite, 'chat_modes', 'is_default')) {
     sqlite.exec(`ALTER TABLE chat_modes ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0`)
   }

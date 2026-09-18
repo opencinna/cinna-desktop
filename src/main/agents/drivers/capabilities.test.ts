@@ -88,10 +88,10 @@ describe('capabilitiesFor', () => {
       // `elicitation/create`, so the model asks in prose instead.
       input: { permission: true, question: false, auth: false, elicitation: false },
       inputResume: 'reply',
-      attachments: 'none',
+      attachments: 'local',
       auth: 'none',
       commands: 'catalog',
-      mcpInjection: false,
+      mcpInjection: true,
       cwd: true
     })
   })

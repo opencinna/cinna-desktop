@@ -131,3 +131,21 @@ describe('agent connection badge', () => {
     expect(screen.getByText('ACP · WebSocket')).toBeTruthy()
   })
 })
+
+describe('coordination popover', () => {
+  it('keeps the action keyboard reachable inside the badge and takes it only once', () => {
+    const onCoordinate = vi.fn()
+    const view = render(<RouterBadge router="human" coordinateAction={{ conductorName: 'Claude', onCoordinate }} />)
+    const badge = screen.getByRole('status')
+    fireEvent.focus(badge)
+    const action = screen.getByRole('button', { name: 'Coordinate by Claude' })
+    fireEvent.blur(badge, { relatedTarget: action })
+    fireEvent.focus(action)
+    expect(screen.getByRole('dialog', { name: 'Chat routing' })).toBeTruthy()
+    fireEvent.click(action)
+    expect(onCoordinate).toHaveBeenCalledOnce()
+    view.rerender(<RouterBadge router="coordinator" conductorName="Claude" coordinateAction={{ conductorName: 'Claude', onCoordinate }} />)
+    expect(screen.getByRole('status').textContent).toBe('Claude routes')
+    expect(screen.queryByRole('button', { name: 'Coordinate by Claude' })).toBeNull()
+  })
+})

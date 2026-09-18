@@ -377,6 +377,8 @@ export interface EngineAgentInput {
   modelId: string
   /** Manifest `runtime.permissions`, merged over the conversation profile. */
   permissions?: Record<string, unknown> | null
+  /** Main-owned synthetic runtimes supply a complete policy, without folder defaults. */
+  permissionMode?: 'replace'
 }
 
 export interface EngineConfigInput {
@@ -648,7 +650,9 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       // reference, and the placeholder itself is what the model receives as its
       // system prompt. See the header.
       prompt: agent.prompt,
-      permission: mergePermissions(agent.permissions)
+      permission: agent.permissionMode === 'replace'
+        ? { '*': 'deny', ...agent.permissions }
+        : mergePermissions(agent.permissions)
     }
   }
 

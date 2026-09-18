@@ -7,7 +7,7 @@ const HEALTHY = {
   showHints: false,
   prioritizeAccountDefaults: false
 }
-let settings: Record<string, boolean> | undefined = HEALTHY
+let settings: Record<string, boolean | string> | undefined = HEALTHY
 let isError = false
 let saveError: Error | null = null
 const setSetting = vi.fn()
@@ -17,6 +17,8 @@ beforeEach(() => {
   saveError = null
   setSetting.mockReset()
 })
+vi.mock('../../hooks/useProviders', () => ({ useProviders: () => ({ data: [] }) }))
+vi.mock('../../hooks/useModels', () => ({ useModels: () => ({ data: [] }) }))
 vi.mock('../../hooks/useAppSettings', () => ({
   useAppSettings: () => ({ data: settings, isLoading: false, isError }),
   useSetAppSetting: () => ({ mutate: setSetting, isPending: false, error: saveError })
@@ -111,4 +113,11 @@ describe('FeaturesSettingsSection', () => {
     // Last in its list: nothing under it to move.
     expect(errors[0].nextElementSibling).toBeNull()
   })
+})
+
+it('saves the default routing independently from existing chats', () => {
+  render(<FeaturesSettingsSection />)
+  expect(screen.getByRole('button', { name: 'You route' }).getAttribute('aria-pressed')).toBe('true')
+  fireEvent.click(screen.getByRole('button', { name: 'AI routes' }))
+  expect(setSetting).toHaveBeenCalledWith({ key: 'defaultMultiAgentRouting', value: 'coordinator' })
 })

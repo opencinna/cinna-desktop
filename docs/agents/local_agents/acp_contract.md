@@ -488,8 +488,7 @@ Three corrections from this phase, all found by the real binaries after the fake
   does not, and the desktop's capability answer says so
 - **Remote ACP transports** (Streamable HTTP, WebSocket) are an active RFD upstream, not shipped.
   `opencode acp --port` exists but is OpenCode-specific
-- **MCP servers passed in `session/new.mcpServers`.** The folder launchers send an empty list today, so
-  nothing here has exercised Cinna per-session MCP injection. Codex may still load MCP servers from its own configuration
+- **Authenticated runtime use of injected MCP tools.** Cinna now injects its session endpoint. The isolated Claude probe accepted the descriptor but made no tool-list/call request; that does not establish actual model use, live list changes or cancellation propagation. Codex may still load MCP servers from its own configuration
 - **Codex on a bare folder's native runtime.** That Codex reads a project `AGENTS.md` itself — and therefore that the desktop should hand it only its own context as `developer_instructions` — is decided from the CLI's documented behaviour, not watched. No Codex install was available for the 2026-09-17 probe
 - **OpenCode's `OPENCODE_CONFIG`: merge or replace.** Unanswered, and the reason a bare OpenCode agent still runs on the whole assembled prompt. No OpenCode install was available either
 - **The Claude adapter's own `session/load`** is covered by a fixture rather than by a live run
@@ -572,3 +571,24 @@ what replaced it. Nothing unmarked there is stale.
 ## Configured commands and startup cancellation
 
 The [custom launcher](../custom_agents/custom_agents.md) uses this same ACP connection for a user-selected local or SSH command. A standalone Test exchanges initialize and disposes the child without authentication, session creation or a prompt. Local spawn argv and cwd stay separate from the remote session cwd; stdout remains protocol-only. Turn Stop and the ceiling also cancel silent initialize/new/load/setup, retire startup processes and prevent a later prompt. User Stop now returns an explicit canceled result, including the existing folder driver; the former shared ACP abort-result exception is removed. A remote command that ignores prompt cancellation is disposed after the grace with a visible unconfirmed-remote-stop notice.
+
+## Runtime conductor evidence — 2026-09-18
+
+Exact machine-readable ledger: [runtime_conductor_probe_results.json](runtime_conductor_probe_results.json). The darwin-arm64 probe used throwaway HOME/cwd, inherited no API credential environment, copied no real profile files and sent **zero real-provider requests**. Claude received zero model prompts; the OpenCode adapter was driven against a loopback deterministic fake model.
+
+- Claude CLI 2.1.275, ACP adapter 0.76.0: auth check exited 1 with loggedIn false; ACP v1 initialize and session/new carrying the Cinna HTTP descriptor succeeded. Only available_commands_update was observed. MCP list requests: 0; tool calls: 0. This establishes descriptor acceptance, not authenticated tool execution.
+- Codex CLI 0.154.0-alpha.6.2, adapter 1.11.0: isolated version/features/schema commands ran. shell_tool and view_image were stable; apply_patch_freeform/js_repl were removed; generated ToolsV2 properties contained web_search. Adapter source sets workspaceWrite for ReadOnly and supplies it at turn/start; public rust-v0.115.0 tool source derives patch/read tools independently of shell_tool. No no-file-tools guarantee follows from disabling shell alone, so synthetic Codex chats and runtime AI Functions refuse. Folder Codex coordination remains structurally wired, not authenticated-live verified.
+- The real SDK loopback server suite recorded 8 passing tests for bearer/session isolation, Host/Origin checks, reconnect identity, list changes, parallel calls, wire cancellation and disposal. The providers were synthetic: these results do not establish engine reactions.
+- Still unverified: authenticated Claude/Codex conductor calls, their mid-session list-change adoption/cancellation, real claudecode/toolUseId metadata, concurrent paid sessions under one login, and steering during real MCP work. OpenCode adapter behavior with a local fake model is established separately below. Existing older adapter measurements elsewhere in this document remain scoped to their original conditions.
+
+Cinna persists only a descriptor/config digest. URL/token continuity holds across session load inside one app process; after restart a changed endpoint forces a fresh session with full saved transcript and attachments. It is not cross-restart endpoint continuity.
+
+### OpenCode 1.18.27 with a local fake model
+
+The real binary, ACP transport and Cinna HTTP server ran under isolated HOME/cwd with a deterministic loopback OpenAI-compatible SSE provider. The ledger contains 10 local model HTTP requests, including engine-internal requests, and zero real-provider requests. Calls probe, probe_refresh and probe_slow reached Cinna. A list-change replaced the advertised tool schema in the same session; ACP cancel reached the running MCP AbortSignal and returned cancelled.
+
+A fresh utility session completed while a chat tool was in flight on the same process. Its model request had no tools, carried utility instructions and neither chat marker. Two same-mode chat sessions received their own cwd AGENTS.md markers without cross-session marker leakage. Under the replacement deny-all native policy, advertised model tools contained only cinna tools. ACP titles were cinna_<tool>, rawInput held arguments only, and MCP metadata held progressToken rather than an ACP toolCallId.
+
+This verifies the real adapter against a fake provider, not paid login, model quality, the full app transcript/UI integration, or future binary versions. The reproduction command and exact observations remain in [runtime_conductor_probe_results.json](runtime_conductor_probe_results.json); [runtime-conductor-opencode.mjs](../../../scripts/probes/runtime-conductor-opencode.mjs) preserves the isolated probe.
+
+The tracked ledger also separates application verification from adapter probes: the initial full E2E run had 108 passes, 16 failures and 3 skips. Six failures reproduced on unchanged baseline 17c845e; the ten feature failures were corrected and checked in targeted reruns, including manifest handback and autonomous continuation. Complete unit-suite failures and focused mock repairs are recorded separately, without claiming a green complete run.

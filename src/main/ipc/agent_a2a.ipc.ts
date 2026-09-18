@@ -7,6 +7,7 @@ import { agentSessionRepo } from '../db/agents'
 import { type ProtocolResolution } from '../agents/a2a-client'
 import { agentService } from '../services/agentService'
 import { a2aStreamingService } from '../services/a2aStreamingService'
+import { nestedAgentTurns } from '../services/nestedAgentTurn'
 import { pendingRequests } from '../agents/drivers/pendingRequests'
 import { parseAnswerPayload } from '../services/askDelivery'
 import type { AskAnswerPayload, InboxAnswerResult } from '../../shared/inbox'
@@ -139,6 +140,13 @@ export function registerA2AHandlers(): void {
   })
 
   ipcHandle('agent:cancel-message', async (_event, requestId: string) => {
+    const nestedChatId = nestedAgentTurns.chatFor(requestId)
+    if (nestedChatId) {
+      userActivation.requireActivated()
+      if (!chatRepo.getOwned(getProfileScopeUserId(), nestedChatId)) throw new Error('Chat not found')
+      nestedAgentTurns.cancel(requestId)
+      return { success: true }
+    }
     a2aStreamingService.cancel(requestId)
     return { success: true }
   })

@@ -28,7 +28,7 @@
 - `src/main/services/pathGuard.ts` — TTL-based allowlist (default 1h). `record(path) / recordMany(paths) / isAllowed(path) / filterAllowed(paths)`; lazy expiry on lookup; warn-logs rejected counts + extensions (never full paths)
 - `src/main/services/cinnaFileService.ts` — Cinna backend I/O (unchanged from the v1 feature). `uploadFromPath / uploadMany / downloadToPath / downloadTaskAttachmentToPath / deleteFile`
 - `src/main/services/messageRoutingService.ts` — `prepareAgentSend({ ..., attachments })` and `prepareLlmSend({ ..., attachments })` both persist attachments on the user row
-- `src/main/services/chatStreamingService.ts` — `_runStreamLoop` reads `adapter.modelCapability(modelId)` then maps each persisted attachment to a `MediaPart` via `attachmentToMediaPart`; logs `media resolution { resolved, dropped }`
+- `src/main/services/acpAttachments.ts` — buildAcpPrompt maps owned files using negotiated ACP image/embeddedContext capabilities, with extracted text or explicit unavailable markers.
 - `src/main/services/a2aStreamingService.ts` — `streamToAgent({ ..., fileIds })` injects `metadata: { cinna_file_ids: fileIds }` into `buildSendParams`
 - `src/main/services/providerService.ts` — `getModelCapability(providerId, modelId)` wraps `getAdapter(...).modelCapability(...)`; returns `NO_FILE_SUPPORT` if the provider isn't registered
 
@@ -136,7 +136,7 @@ Index: `idx_chat_files_chat_id ON chat_files(chat_id)`. Migration is additive �
 - `src/main/services/textExtractor.ts:extractText()` — branch on `isUtf8DecodableMime / isOfficeExtractableMime`; soft cap via `capText` with truncation marker
 - `src/main/services/pathGuard.ts:filterAllowed()` — partitions into `allowed` / `rejected`; warns on rejected count + ext sample only
 - `src/main/services/providerService.ts:getModelCapability()` — pure pass-through to the adapter
-- `src/main/services/chatStreamingService.ts:_runStreamLoop()` — capability read once per turn, applied as filter when mapping persisted attachments to `MediaPart[]`
+- `src/main/services/acpAttachments.ts` — buildAcpPrompt maps owned files using negotiated ACP image/embeddedContext capabilities, with extracted text or explicit unavailable markers.
 
 ## Renderer State
 
@@ -174,3 +174,5 @@ Index: `idx_chat_files_chat_id ON chat_files(chat_id)`. Migration is additive �
 - `logger('path-guard')` — rejected-path count + extension sample only (never logs full paths)
 - `logger('LLM')` — `media resolution { resolved, dropped }` per turn
 - All errors include the operation context; no tokens, no full request bodies, no full attacker-supplied paths
+
+`src/main/services/conductorTranscript.ts` calls the same attachment converter for saved history on a fresh runtime session. `useNewChatFlow` reads the normalized root and agent capability before pending-file ingestion; `ChatInput` applies the same Local capability override to active chats. The converter uses profile ownership and a 20 MiB file limit.

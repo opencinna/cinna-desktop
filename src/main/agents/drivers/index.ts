@@ -1,3 +1,5 @@
+import { recordRuntimeModelCatalog } from '../../services/runtimeModelCatalog'
+import { chatConductorService, isChatConductor, conductorContext } from '../../services/chatConductorService'
 import { isCoordinatorHandover } from '../../../shared/kit/handovers'
 /**
  * Production wiring for the drivers, and the one resolver every caller uses.
@@ -16,7 +18,12 @@ import { isCoordinatorHandover } from '../../../shared/kit/handovers'
  */
 
 import { createRequire } from 'node:module'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { applyConductorToolPolicy } from './acp/conductorToolPolicy'
+import { AI_FUNCTION_INSTRUCTIONS, syntheticRuntimePoolKey, utilityAgentId } from '../../services/syntheticRuntimePooling'
+import type { ConductorContext } from '../../services/chatConductorService'
+import { engineAgentKey } from '../../engine/configGenerator'
 import { join } from 'node:path'
 import { engineBinaryService } from '../../engine/engineBinaryService'
 import { collectEngineConfigInput } from '../../engine/engineConfigSource'
@@ -31,7 +38,7 @@ import { createLogger } from '../../logger/logger'
 import { CodexAuthProbe } from './acp/codexAuth'
 import { buildCodexEnv } from './acp/codexEnv'
 import { createCodexLauncher } from './acp/codexLauncher'
-import { codexEffortForComplexity } from '../../../shared/engine'
+import { codexEffortForComplexity, isAgentEngine } from '../../../shared/engine'
 import { isWorkComplexity } from '../../../shared/modelFamilies'
 import { ClaudeAuthProbe } from './acp/claudeAuth'
 import { pendingRequests } from './pendingRequests'
@@ -64,6 +71,12 @@ import { sessionActivityHub } from '../../services/sessionActivityHub'
 import { installChatSessionForgetter } from '../../services/chatSessionRelease'
 import { installSessionActivityStopper } from '../../services/sessionActivityStop'
 export { acpProcessPool } from './acp/acpPool'
+acpProcessPool.onStatus((agentId, state) => {
+  if (state.state === 'stopped' || state.state === 'exited') {
+    void import('../../services/conductorBridge').then(({ conductorBridge }) => conductorBridge.abortAgent(agentId))
+      .catch((error) => logger.warn('Could not close conductor calls after runtime exit', { agentId, error: String(error) }))
+  }
+})
 import { developmentAgentContext, contextForDevelopmentAgent, restoreDevelopmentContext, isDevelopmentAgent, developmentPlanKey } from '../../localdev/developmentSessionService'
 import { localDevService } from '../../localdev/localDevService'
 import { customAgentService } from '../../services/customAgentService'
@@ -71,7 +84,8 @@ import type { AcpRuntimeView } from './acp/acpRuntime'
 import {
   createClaudeLauncher,
   createOpencodeLauncher,
-  type AcpLauncher
+  type AcpLauncher,
+  type AcpLaunchPlan
 } from './acp/acpLaunchers'
 import { resolveAccessToken, resolveEndpointIfNeeded } from './a2aConnection'
 import { driverOfRow } from './driverOf'
@@ -269,6 +283,12 @@ function folderSystemPrompt(
   engine: NativeRuntimeEngine
 ): (userId: string, agentId: string, mode: AcpRuntimeMode) => string {
   return (userId, agentId, mode) => {
+    const synthetic = syntheticRuntimeProfiles.get(agentId)
+    if (synthetic?.userId === userId) return synthetic.context.instructions
+    const utility = aiFunctionProfiles.get(agentId)
+    if (utility?.userId === userId) return AI_FUNCTION_INSTRUCTIONS
+    const conductor = agentRepo.getOwned(userId, agentId)
+    if (conductor && isChatConductor(conductor)) return conductorContext(conductor).instructions
     const development = developmentAgentContext(userId, agentId)
     if (development) return development.instructions
     const agent = localAgentService.get(userId, agentId)
@@ -294,6 +314,76 @@ export const codexAuthProbe = new CodexAuthProbe({
   env: async () => buildCodexEnv({ shellEnv: await getShellEnv() })
 })
 
+const syntheticRuntimeProfiles = new Map<string, { userId: string; context: ConductorContext }>()
+const aiFunctionProfiles = new Map<string, { userId: string; modelId: string | null; credentialId: string | null }>()
+
+/** A dedicated utility profile owns a warm process, but never owns resumable sessions. */
+export async function prepareAiFunctionRuntime(userId: string, systemPrompt: string, warmOnly: boolean): Promise<{
+  poolKey: string; plan: AcpLaunchPlan; cwd: string; instructionPrefix: string
+}> {
+  const runtime = runtimeService.resolve(undefined, providerService.listMerged())
+  if (runtime.reason) throw new Error(runtime.reason)
+  const engine = runtime.launcher
+  const digest = createHash('sha256').update(JSON.stringify([userId, engine, runtime.credentialId, runtime.modelId])).digest('hex').slice(0, 24)
+  let poolKey = `ai-function:${digest}`
+  // Claude's process configuration is independent of the per-session prompt
+  // and native tool list. A fresh sealed utility session may reuse this
+  // profile's warm chat process, without loading that chat's session/history.
+  const liveAgents = agentRepo.list(userId).filter((agent) => agent.driver === 'acp' && acpProcessPool.status(agent.id).state === 'running')
+  const compatibleCandidates = engine === 'claude' ? liveAgents.map((agent) => agent.id) : []
+  const opencodeCandidate = engine === 'opencode' ? liveAgents.find((agent) => {
+    if (!isChatConductor(agent)) return false
+    const context = conductorContext(agent)
+    return context.engine === engine && context.credentialId === runtime.credentialId && context.modelId === runtime.modelId
+  }) : undefined
+  if (warmOnly && acpProcessPool.status(poolKey).state !== 'running' && compatibleCandidates.length === 0 && !opencodeCandidate) {
+    throw new Error('AI function deferred until the default runtime is warm')
+  }
+  const cwd = join(app.getPath('userData'), 'chat-conductors', 'ai-functions', digest)
+  mkdirSync(cwd, { recursive: true, mode: 0o700 })
+  for (const name of ['CLAUDE.md', 'AGENTS.md']) writeFileSync(join(cwd, name), `${AI_FUNCTION_INSTRUCTIONS}\n`, { mode: 0o600 })
+  aiFunctionProfiles.set(poolKey, { userId, modelId: runtime.modelId, credentialId: runtime.credentialId })
+  const launcher = acpLaunchers[engine]
+  if (!launcher) throw new Error('The default runtime cannot run AI functions')
+  const opencodeContext = opencodeCandidate ? conductorContext(opencodeCandidate) : undefined
+  const candidateKey = opencodeContext ? syntheticRuntimePoolKey(userId, opencodeContext) : poolKey
+  if (opencodeContext) syntheticRuntimeProfiles.set(candidateKey, { userId, context: opencodeContext })
+  let proposed = await launcher.plan({ userId, agentId: candidateKey, folder: {
+    name: 'AI Functions', slug: 'ai-functions', description: 'One-shot AI function', path: opencodeContext?.path ?? cwd, kind: 'bare', runtimeMode: 'isolated'
+  } })
+  if ('error' in proposed) throw new Error(proposed.error)
+  let plan = applyConductorToolPolicy(proposed, engine)
+  if (opencodeCandidate) {
+    if (acpProcessPool.peek?.(candidateKey, plan.spec.key)) {
+      // Hold the process identity, not the chat alias: deleting or changing
+      // that chat while a title runs must not move the utility's ownership.
+      poolKey = candidateKey
+      plan = { ...plan, setup: { ...plan.setup, configOptions: plan.setup.configOptions?.map((option) => option.configId === 'mode'
+        ? { ...option, value: engineAgentKey(utilityAgentId(candidateKey), 'ai-function') } : option) } }
+    } else {
+      if (warmOnly) throw new Error('AI function deferred until the default runtime is warm')
+      // A credential/environment change can make a live chat process stale.
+      // Drafting is allowed to start its dedicated utility process instead.
+      proposed = await launcher.plan({ userId, agentId: poolKey, folder: {
+        name: 'AI Functions', slug: 'ai-functions', description: 'One-shot AI function', path: cwd, kind: 'bare', runtimeMode: 'isolated'
+      } })
+      if ('error' in proposed) throw new Error(proposed.error)
+      plan = applyConductorToolPolicy(proposed, engine)
+    }
+  }
+  plan = { ...plan, init: { ...plan.init, clientCapabilities: {} }, session: { ...plan.session, mcpServers: [] } }
+  if (engine === 'claude') {
+    const meta = plan.session.meta ?? {}
+    const claude = meta.claudeCode as { options?: Record<string, unknown> } | undefined
+    plan.session.meta = { ...meta, claudeCode: { ...claude, options: { ...claude?.options, systemPrompt } } }
+    const warmKey = [poolKey, ...compatibleCandidates].find((key) => acpProcessPool.peek?.(key, plan.spec.key))
+    if (warmKey) poolKey = warmKey
+  }
+  // Codex/OpenCode set their system prompt at process creation. A stable utility
+  // prompt keeps that process reusable; the particular function is user input.
+  return { poolKey, plan, cwd, instructionPrefix: engine === 'claude' ? '' : `${systemPrompt}\n\nInput:\n` }
+}
+
 const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
   codex: createCodexLauncher({
     path: async (options) => {
@@ -317,6 +407,12 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     env: async () => buildCodexEnv({ shellEnv: await getShellEnv() }),
     systemPrompt: folderSystemPrompt('codex'),
     settings: (userId, agentId) => {
+      const synthetic = syntheticRuntimeProfiles.get(agentId)
+      if (synthetic?.userId === userId) return { model: synthetic.context.modelId, effort: 'medium', approval: 'ask' }
+      const utility = aiFunctionProfiles.get(agentId)
+      if (utility?.userId === userId) return { model: utility.modelId, effort: 'medium', approval: 'ask' }
+      const conductor = agentRepo.getOwned(userId, agentId)
+      if (conductor && isChatConductor(conductor)) return { model: conductorContext(conductor).modelId, effort: 'medium', approval: 'ask' }
       const development = developmentAgentContext(userId, agentId)
       if (development) return { model: null, effort: codexEffortForComplexity(development.complexity), approval: 'ask' }
       const agent = localAgentService.get(userId, agentId)
@@ -329,6 +425,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
   }),
   custom: customAgentService.launcher,
   opencode: createOpencodeLauncher({
+    companionAgentIds: (ctx) => syntheticRuntimeProfiles.has(ctx.agentId) ? [utilityAgentId(ctx.agentId)] : [],
     // Through the service, which memoises per *configured path* and never
     // caches a failure — so a path the user has just fixed in Settings is tried
     // on the next turn rather than after a restart, and because the path feeds
@@ -341,6 +438,19 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     // between one turn and the next.
     configInput: async (userId) => {
       const input = await collectEngineConfigInput(userId, { refreshModels: false })
+      for (const [agentId, synthetic] of syntheticRuntimeProfiles) {
+        if (synthetic.userId !== userId) continue
+        const context = synthetic.context
+        input.agents.push({ agentId, slug: 'chat-runtime', description: 'Chat runtime', prompt: context.instructions, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: context.toolPolicy === 'none' ? { '*': 'deny' } : { '*': 'deny', 'cinna_*': 'allow' } })
+        input.agents.push({ agentId: utilityAgentId(agentId), slug: 'ai-function', description: 'One-shot AI function', prompt: AI_FUNCTION_INSTRUCTIONS, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
+      }
+      for (const [agentId, utility] of aiFunctionProfiles) {
+        if (utility.userId === userId) input.agents.push({ agentId, slug: 'ai-function', description: 'One-shot AI function', prompt: AI_FUNCTION_INSTRUCTIONS, providerId: utility.credentialId ?? '', modelId: utility.modelId ?? '', permissionMode: 'replace', permissions: { '*': 'deny' } })
+      }
+      for (const row of agentRepo.list(userId).filter(isChatConductor)) {
+        const context = conductorContext(row)
+        input.agents.push({ agentId: row.id, slug: `chat-${row.id}`, description: 'Chat runtime', prompt: context.instructions, providerId: context.credentialId ?? '', modelId: context.modelId ?? '', permissionMode: 'replace', permissions: context.toolPolicy === 'none' ? { '*': 'deny' } : { '*': 'deny', 'cinna_*': 'allow' } })
+      }
       for (const row of agentRepo.list(userId).filter(isDevelopmentAgent)) {
         try {
           const context = contextForDevelopmentAgent(row)
@@ -367,6 +477,12 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     // plan serves what the plan serves, and `runtimeService.resolve` returns the
     // alias for this engine. Null hands the choice to the CLI's own default.
     model: (userId, agentId) => {
+      const synthetic = syntheticRuntimeProfiles.get(agentId)
+      if (synthetic?.userId === userId) return synthetic.context.modelId
+      const utility = aiFunctionProfiles.get(agentId)
+      if (utility?.userId === userId) return utility.modelId
+      const conductor = agentRepo.getOwned(userId, agentId)
+      if (conductor && isChatConductor(conductor)) return conductorContext(conductor).modelId
       const development = developmentAgentContext(userId, agentId)
       if (development) return development.runtime.modelId
       try {
@@ -437,6 +553,7 @@ function readAcpFolder(userId: string, agentId: string): AcpFolderView | null {
 }
 
 async function readAcpRuntime(userId: string, agent: AgentRow, options?: ReadinessOptions): Promise<AcpRuntimeView | null> {
+  if (isChatConductor(agent)) return chatConductorService.runtime(userId, agent)
   if (isDevelopmentAgent(agent)) {
     const context = await restoreDevelopmentContext(agent, options)
     const state = customAgentService.runtime(userId, agent)
@@ -467,11 +584,29 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
 }
 
 export const acpDriver = createAcpDriver({
+  recordModelCatalog: (userId, launcher, metadata) => {
+    if (isAgentEngine(launcher)) recordRuntimeModelCatalog(userId, launcher, metadata)
+  },
   pool: acpProcessPool,
+  prepareConductor: async (userId, agent, input, plan, stop, wake) => {
+    const { conductorBridge } = await import('../../services/conductorBridge')
+    return conductorBridge.prepare(userId, agent, input, plan, stop, wake)
+  },
+  buildPrompt: (userId, input, connection) => import('../../services/acpAttachments').then(({ buildAcpPrompt }) => buildAcpPrompt(userId, input, connection)),
+  replayTranscript: (chatId, messageId, connection, userId) => import('../../services/conductorTranscript').then(({ replayTranscript }) => replayTranscript(chatId, messageId, connection, userId)),
   launcher: (id) => {
     const launcher = acpLaunchers[id]
     if (!launcher) return undefined
     return { ...launcher, async plan(ctx) {
+      const agent = agentRepo.getOwned(ctx.userId, ctx.agentId)
+      if (agent && isChatConductor(agent) && ctx.folder) {
+        const context = conductorContext(agent)
+        const poolKey = syntheticRuntimePoolKey(ctx.userId, context)
+        syntheticRuntimeProfiles.set(poolKey, { userId: ctx.userId, context })
+        const plan = await launcher.plan({ ...ctx, agentId: poolKey, folder: { ...ctx.folder, slug: 'chat-runtime' } })
+        if (!('error' in plan)) acpProcessPool.share?.(ctx.agentId, poolKey)
+        return plan
+      }
       const development = developmentAgentContext(ctx.userId, ctx.agentId)
       if (!development) return launcher.plan(ctx)
       const execution = await localDevService.executionContext(development.profileId)

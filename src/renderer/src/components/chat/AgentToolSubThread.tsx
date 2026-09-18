@@ -3,6 +3,7 @@ import { Bot, ChevronRight, Loader2, X } from 'lucide-react'
 import type { MessagePart } from '../../../../shared/messageParts'
 import { presetForAgentId } from '../../utils/agentColors'
 import { AgentContribution } from './AgentContribution'
+import { unwrapIpcError } from '../../utils/ipcError'
 import { TranscriptVisibleContext, useTranscriptDisclosure } from './transcriptExpansion'
 
 interface AgentToolSubThreadProps {
@@ -17,6 +18,8 @@ interface AgentToolSubThreadProps {
   isStreaming?: boolean
   errorText?: string
   verbose?: boolean
+  renderRequest?: (part: MessagePart, decision?: string) => React.JSX.Element | null
+  onStop?: () => Promise<unknown>
 }
 
 /**
@@ -35,7 +38,9 @@ export function AgentToolSubThread({
   status,
   isStreaming,
   errorText,
-  verbose
+  verbose,
+  renderRequest,
+  onStop
 }: AgentToolSubThreadProps): React.JSX.Element {
   const [expanded, setExpanded, setAutoExpanded] = useTranscriptDisclosure(
     !!isStreaming || !!verbose
@@ -49,6 +54,8 @@ export function AgentToolSubThread({
   // setter, which moves the default with the state, so the transcript's
   // "Collapse expanded" never counts an opening the user did not make.
   const [wasStreaming, setWasStreaming] = useState<boolean>(!!isStreaming)
+  const [stopping, setStopping] = useState(false)
+  const [stopError, setStopError] = useState<string | null>(null)
   useEffect(() => {
     if (isStreaming && !wasStreaming) {
       setAutoExpanded(true)
@@ -109,6 +116,21 @@ export function AgentToolSubThread({
           </>
         )}
       </button>
+      {isStreaming && onStop && (
+        <button type="button" disabled={stopping} aria-label={`Stop ${agentName}`}
+          className="ml-1.5 px-2 py-0.5 rounded border border-[var(--color-border)] text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50"
+          onClick={() => {
+            setStopping(true)
+            setStopError(null)
+            void onStop().catch((error: unknown) => {
+              setStopping(false)
+              setStopError(unwrapIpcError(error, 'Could not stop this agent.'))
+            })
+          }}>
+          {stopping ? 'Stopping…' : 'Stop'}
+        </button>
+      )}
+      {stopError && <p className="text-[11px] text-[var(--color-danger)]">{stopError}</p>}
 
       <div
         className="grid transition-[grid-template-rows] duration-150 ease-out"
@@ -131,6 +153,7 @@ export function AgentToolSubThread({
                 askMessage={askMessage}
                 isStreaming={isStreaming}
                 verbose={verbose}
+                renderRequest={renderRequest}
               />
             )}
             {errorText && (

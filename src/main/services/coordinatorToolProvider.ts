@@ -100,6 +100,7 @@ export class CoordinatorToolProvider implements ToolProvider {
         })
         // A specialist's result cannot smuggle a coordinator control through.
         return { content: result.content, parts: result.parts, isError: result.isError,
+          ...(result.budget ? { budget: true } : {}),
           ...(result.needsInput && !result.isError ? { control: { kind: 'await_input' as const } } : {}) }
       }
       case 'handoff': {

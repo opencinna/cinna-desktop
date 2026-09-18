@@ -51,6 +51,7 @@ import { readHandbackNote } from './handback'
  */
 
 import type {
+  ContentBlock,
   CreateElicitationRequest,
   CreateElicitationResponse,
   RequestPermissionRequest,
@@ -66,7 +67,7 @@ import type {
   RequestResolution
 } from '../../../../shared/localAgentRequests'
 import type { AgentCapabilities, AgentReadiness } from '../../../../shared/agentDrivers'
-import { StreamPartsAccumulator, type MessageLike } from '../../streamPartsAccumulator'
+import { StreamPartsAccumulator, TOOL_ID_METADATA_KEY, type MessageLike } from '../../streamPartsAccumulator'
 import { createLogger } from '../../../logger/logger'
 import { capabilitiesFor } from '../capabilities'
 import { launcherOfFolder } from '../driverOf'
@@ -130,7 +131,13 @@ export const ACP_CANCEL_GRACE_MS = 3_000
 /** Shown when a folder agent's folder is gone — the runners' own sentence. */
 export const ACP_FOLDER_NOT_FOUND = 'This agent’s folder could not be found on disk.'
 
+export interface ConductorOutcome { control?: import('../../../services/coordinatorToolProvider').CoordinatorControl; budget?: boolean; needsInput?: boolean }
+
 export interface AcpDriverDeps {
+  prepareConductor?(userId: string, agent: AgentRow, input: RunInput, plan: AcpLaunchPlan, stop: (outcome: ConductorOutcome) => void, wake: () => boolean): Promise<import('../../../services/conductorBridge').ConductorLease | undefined>
+  replayTranscript?(chatId: string, messageId: string | undefined, connection: AcpConnection, userId: string): Promise<string | ContentBlock[]>
+  buildPrompt?(userId: string, input: RunInput, connection: AcpConnection): Promise<ContentBlock[]>
+  recordModelCatalog?(userId: string, launcher: AcpLauncherId, metadata: unknown): void
   pool: AcpProcessPool
   /** The launcher for an engine, or undefined when this build has none. */
   launcher(id: AcpLauncherId): AcpLauncher | undefined
@@ -231,6 +238,7 @@ async function beforeStart<T>(signal: AbortSignal, operation: () => T | Promise<
  * the old agent never lands in it.
  */
 export interface SessionObservers {
+  wake(chatId: string, agentId: string): boolean
   /**
    * Stop observing a session a turn is about to take. Null when nobody
    * observed it; otherwise what the observer held for a follow-up turn that
@@ -314,6 +322,10 @@ function createSessionObservers(
     return true
   }
   return {
+    wake: (chatId, agentId) => {
+      for (const entry of byChat.get(chatId)?.keys() ?? []) if (entry.scope.agentId === agentId && entry.gate?.wake()) return true
+      return false
+    },
     suspend: (connection, sessionId) => {
       const sessions = byConnection.get(connection)
       const entry = sessions?.get(sessionId)
@@ -569,6 +581,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
 /* --------------------------------------------------------------------- turn */
 
 interface TurnContext {
+  conductorOutcome?: ConductorOutcome
   userId: string
   agent: AgentRow
   runtime: AcpRuntimeView
@@ -614,6 +627,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   const { agent, runtime, plan, input } = ctx
   const sessionCwd = runtime.type === 'folder' ? runtime.folder.path : runtime.config.cwd
   const chatId = input.chatId
+  let conductor: import('../../../services/conductorBridge').ConductorLease | undefined
+  let freshSession = false
   const stream = new AcpMessageStream({ launcher: ctx.launcherId })
   const accumulator = new StreamPartsAccumulator({
     onToolCall: ({ name, input: toolInput }) =>
@@ -628,7 +643,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   }))
   const deltaPort = { postMessage: (event: RunEvent): void => input.onEvent?.(event) }
   const emit: EmitMessage = (message) => {
-    if (message) accumulator.ingestMessage(message, deltaPort)
+    if (message) accumulator.ingestMessage({ ...message, parts: message.parts?.map((part) => {
+      const id = part.metadata?.[TOOL_ID_METADATA_KEY]
+      return typeof id === 'string' && conductor?.owns?.(id) ? { kind: 'text' as const, text: '' } : part
+    }) }, deltaPort)
   }
 
   const turn: AcpTurn = { replaying: false, open: true, parked: new Map(), stopping: false }
@@ -722,7 +740,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   /** Set once the turn stopped waiting for steers: its result no longer takes one. */
   let steeringSettled = false
   const steering = new Set<Promise<'injected' | 'late' | 'unavailable'>>()
-  const steerable = (): boolean => steerWindow === 'open' && toolsInFlight.size === 0
+  const steerable = (): boolean => steerWindow === 'open' && toolsInFlight.size === 0 && !conductor?.hasCalls()
   /** Closed for good, from whichever state; only a window that was open had anything to withdraw. */
   const closeSteering = (): void => {
     const wasOpen = steerWindow === 'open'
@@ -896,7 +914,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     turn.parked.clear()
     if (sessionId) void connection?.cancel(sessionId).catch(() => {})
     startupController.abort()
-    if (startingSession) { deps.pool.retire(agent.id); void connection?.dispose() }
+    if (startingSession) {
+      const shared = deps.pool.hasOtherOwners?.(agent.id)
+      deps.pool.retire(agent.id)
+      if (!shared) void connection?.dispose()
+    }
     requestCancel()
   }
 
@@ -927,7 +949,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
    * what lets forgetting the chat drop it too.
    */
   const listenBetweenTurns = (): void => {
-    if (!connection) return
+    if (!connection || input.nested) return
     const keep = new Set<string>()
     if (sessionId) keep.add(sessionId)
     if (suspended && !rememberedGone) keep.add(suspended)
@@ -969,6 +991,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   let rememberedGone = false
 
   try {
+    conductor = await deps.prepareConductor?.(ctx.userId, agent, { ...input, flush: () => { accumulator.breakContinuation(); input.flush?.() } }, plan, (outcome) => {
+      if (ctx.conductorOutcome) return
+      ctx.conductorOutcome = outcome
+      setTimeout(() => { if (turn.open) askAgentToStop() }, 0)
+    }, () => ctx.observers.wake(chatId, agent.id))
     /**
      * **A listener added to an already-aborted signal never fires**, and
      * everything before this point can await — planning walks the login-shell
@@ -995,6 +1022,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     const frames = new SubagentFrames((id) => ctx.activity.lookup(live, id))
     const handlers = {
       onUpdate: (notification: SessionNotification): void => {
+        deps.recordModelCatalog?.(input.runScope?.profileUserId ?? ctx.userId, ctx.launcherId, notification.update)
         // The load replay, dropped whole: see the header. Not even the mode
         // it reports is read, and that is deliberate rather than an oversight —
         // the mode a *loaded* session comes back in is the one it was left in,
@@ -1004,6 +1032,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         if (turn.replaying) return
         observeActivity(ctx.activity, live, notification, { chatId, agentId: agent.id })
         // A subagent's call the agent no longer announces is written in first.
+        conductor?.observe?.(notification)
         for (const frame of frames.expand(notification)) {
           if (frame.update.sessionUpdate === 'tool_call' || frame.update.sessionUpdate === 'tool_call_update') {
             toolCallsSeen.add(frame.update.toolCallId)
@@ -1028,7 +1057,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       }
     }
 
-    const remembered = runtime.readSession(chatId)
+    const remembered = conductor?.freshSession ? null : runtime.readSession(chatId)
     const canLoad = connection.initialized.agentCapabilities?.loadSession === true
     // Before anything that can produce traffic for it: from here the session's
     // traffic is this turn's (the load replay included), and the pen only
@@ -1055,10 +1084,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       unbind = connection.bindSession(remembered, handlers)
       try {
         runtime.validate(chatId)
-        await duringStart(connection.loadSession({
+        const loaded = await duringStart(connection.loadSession({
           sessionId: remembered,
           ...newSessionParams(plan, sessionCwd)
         }))
+        deps.recordModelCatalog?.(input.runScope?.profileUserId ?? ctx.userId, ctx.launcherId, loaded)
         runtime.validate(chatId)
         sessionId = remembered
       } catch (err) {
@@ -1085,9 +1115,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
 
     if (startupController.signal.aborted) throw new Error('The agent was stopped before its prompt started.')
     if (!sessionId) {
+      freshSession = true
       try {
         runtime.validate(chatId)
         const created = await duringStart(connection.newSession(newSessionParams(plan, sessionCwd)))
+        deps.recordModelCatalog?.(input.runScope?.profileUserId ?? ctx.userId, ctx.launcherId, created)
         runtime.validate(chatId)
         sessionId = created.sessionId
       } catch (err) {
@@ -1107,6 +1139,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       // next turn opened a fresh session and the agent remembered nothing.
       rememberSession(ctx, sessionId)
     }
+
+    conductor?.sessionReady?.()
 
     if (held) {
       const taken = held
@@ -1188,10 +1222,16 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     try {
       runtime.validate(chatId)
       startingSession = false
+      const prompt = deps.buildPrompt ? await deps.buildPrompt(ctx.userId, input, connection) : [{ type: 'text' as const, text: input.wireContent }]
+      if (freshSession && !input.nested && input.runScope && deps.replayTranscript) {
+        const transcript = await deps.replayTranscript(chatId, input.messageId, connection, input.runScope.profileUserId)
+        if (typeof transcript === 'string') { if (transcript) prompt.unshift({ type: 'text', text: transcript }) }
+        else prompt.unshift(...transcript)
+      }
       const answer = await promptWithCancelGrace(
         deps,
         connection,
-        { sessionId, prompt: [{ type: 'text', text: input.wireContent }] },
+        { sessionId, prompt },
         cancelRequested,
         agent.id,
         armSteering
@@ -1243,6 +1283,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     if (input.signal.aborted) return finish(ctx, accumulator, sessionId, undefined)
     return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : error instanceof Error ? error.message : 'The agent could not start.')
   } finally {
+    conductor?.close()
     clearTimeout(ceiling)
     startupController.abort()
     input.signal.removeEventListener('abort', onAbort)
@@ -1315,7 +1356,8 @@ export function exitListenerCount(connection: AcpConnection): number {
 }
 
 /** The observers a follow-up turn's context carries: it arms and suspends nothing. */
-const NO_OBSERVERS: SessionObservers = { suspend: () => null, arm: () => {}, giveBack: () => false, forgetChat: () => {} }
+const NO_OBSERVERS: SessionObservers = {
+  wake: () => false, suspend: () => null, arm: () => {}, giveBack: () => false, forgetChat: () => {} }
 
 /** Hand one update to the activity feed of the session it belongs to (a child's goes to its parent's). */
 function observeActivity(
@@ -1386,8 +1428,11 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     chatId,
     wireContent: '',
     signal: io.signal,
-    onEvent: io.onEvent
+    onEvent: io.onEvent,
+    flush: io.flush,
+    runScope: world.runScope
   }
+  let conductor: import('../../../services/conductorBridge').ConductorLease | undefined
   const ctx: TurnContext = {
     userId: world.userId,
     agent,
@@ -1412,7 +1457,10 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   }))
   const deltaPort = { postMessage: (event: RunEvent): void => io.onEvent(event) }
   const emit: EmitMessage = (message) => {
-    if (message) accumulator.ingestMessage(message, deltaPort)
+    if (message) accumulator.ingestMessage({ ...message, parts: message.parts?.map((part) => {
+      const id = part.metadata?.[TOOL_ID_METADATA_KEY]
+      return typeof id === 'string' && conductor?.owns?.(id) ? { kind: 'text' as const, text: '' } : part
+    }) }, deltaPort)
   }
   const turn: AcpTurn = { replaying: false, open: true, parked: new Map(), stopping: false }
   const askWorld: AskWorld = { stream, emit, turn }
@@ -1446,7 +1494,8 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
       quiet = undefined
       // A tool still running or an ask still waiting is not silence; the next
       // update (or the ask settling) starts the clock again.
-      if (toolsOpen.size === 0 && turn.parked.size === 0) end('quiet')
+      if (toolsOpen.size === 0 && turn.parked.size === 0 && !conductor?.hasCalls()) end('quiet')
+      else armQuiet()
     }, deps.followUpQuietMs ?? ACP_FOLLOW_UP_QUIET_MS)
     quiet.unref?.()
   }
@@ -1487,6 +1536,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     onUpdate: (notification) => {
       if (ended) return
       armQuiet()
+      conductor?.observe?.(notification)
       observeActivity(world.activity, connection, notification, { chatId, agentId: agent.id })
       for (const frame of frames.expand(notification)) {
         const update = frame.update
@@ -1531,6 +1581,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   const stopWatchingExit = onConnectionExit(connection, () => end('exited'))
   let leftover: HeldTraffic[] = []
   try {
+    conductor = await deps.prepareConductor?.(world.userId, agent, { ...input, flush: () => { accumulator.breakContinuation(); input.flush?.() } }, world.plan, (outcome) => { ctx.conductorOutcome = outcome; setTimeout(() => { if (!ended) askAgentToStop(false) }, 0) }, () => gate.wake())
     if (!connection.alive) {
       end('exited')
     } else if (!gate.pending) {
@@ -1561,6 +1612,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     }
     await over
   } finally {
+    conductor?.close()
     clearTimeout(ceiling)
     if (quiet) clearTimeout(quiet)
     if (grace) clearTimeout(grace)
@@ -1822,6 +1874,7 @@ async function answerPermission(
   // silently: no block, no wait. A block that appeared and answered itself
   // milliseconds later would be a widget the user cannot act on, in the middle
   // of streaming text.
+  if (typeof agent.driverConfig?.conductorChatId === 'string' && !toolName?.startsWith('mcp__cinna__')) return selected('reject')
   let granted = false
   try {
     runtime.validate(input.chatId)
@@ -2079,6 +2132,16 @@ function finish(
   canceled = ctx.input.signal.aborted
 ): RunAgentTurnResult {
   if (sessionId) rememberSession(ctx, sessionId)
+  if (ctx.conductorOutcome && !ctx.input.signal.aborted) { canceled = false; error = undefined }
+  const control = ctx.conductorOutcome?.control
+  if (control?.kind === 'finish' && !ctx.input.signal.aborted && !accumulator.answerText().trimEnd().endsWith(control.summary.trim())) {
+    // finish ends the engine immediately, so it may never produce a final
+    // assistant message. The trusted control owns that final summary.
+    accumulator.breakContinuation()
+    accumulator.ingestMessage({ messageId: 'conductor-finish', parts: [{ kind: 'text', text: control.summary }] }, {
+      postMessage: (event) => ctx.input.onEvent?.(event)
+    })
+  }
   const parts = accumulator.snapshotParts()
   const answer = accumulator.answerText()
   const note = completed && !error && !ctx.input.signal.aborted && ctx.input.handbackEligible &&
@@ -2086,6 +2149,11 @@ function finish(
   return {
     ...(canceled ? { taskState: 'canceled' as const, stopReason: 'canceled' as const } : {}),
     ...(note ? { handback: { note } } : {}),
+    ...(ctx.conductorOutcome && !ctx.input.signal.aborted ? {
+      control: ctx.conductorOutcome.control,
+      stopReason: ctx.conductorOutcome.budget ? 'budget' as const : 'end_turn' as const,
+      taskState: ctx.conductorOutcome.needsInput ? 'input-required' : 'completed'
+    } : {}),
     text: answer || parts.map((part) => part.text).join(''),
     parts,
     notices: accumulator.snapshotNotices(),

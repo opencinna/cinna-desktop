@@ -158,6 +158,7 @@ const activeRequests = new Map<string, ActiveRequest>()
 
 /** The sink and signal {@link a2aStreamingService.streamToAgent} hands a turn. */
 export interface TurnIO {
+  flush?(): void
   signal: AbortSignal
   onEvent: (event: RunEvent) => void
   /** See `RunInput.registerSnapshot`. A `/run:` command never registers. */
@@ -299,6 +300,7 @@ export interface RunAgentTurnInput {
  *    orchestrated mode).
  */
 export interface RunAgentTurnResult {
+  control?: import('./coordinatorToolProvider').CoordinatorControl
   /** A driver's explicit terminal reason; transport task states remain separate. */
   stopReason?: 'end_turn' | 'budget' | 'canceled'
   /** Constructed only by a host driver, never spread from remote metadata. */
@@ -1039,7 +1041,8 @@ export const a2aStreamingService = {
           // A turn parked on the user may sit there until the app is closed.
           if (event.type === 'needs_input' && markerId) writeDraft(true)
         },
-        registerSnapshot: (read) => { snapshot = read }
+        registerSnapshot: (read) => { snapshot = read },
+        flush: () => flush()
       })
       clearInterval(draftTimer)
 
@@ -1103,7 +1106,7 @@ export const a2aStreamingService = {
       // through the `catch`. Reporting `succeeded` for it is the same lie the
       // OpenAI adapter used to tell by resolving on abort: the run reads as a
       // job that finished, and nothing distinguishes it from one that did.
-      finish({ state, text: result.text, ...(state === 'completed' && result.handback ? { handback: result.handback } : {}) })
+      finish({ state, text: result.text, ...(result.control && !canceled ? { control: result.control } : {}), ...(state === 'completed' && result.handback ? { handback: result.handback } : {}) })
       if (!canceled && state !== 'failed') {
         try {
           input.onCompleted?.()

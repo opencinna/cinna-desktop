@@ -21,10 +21,17 @@
  *    one of them, and the others see it as thread context on their next turn.
  *    No model is involved, so a chat like this runs with no LLM provider
  *    configured at all.
- *  - `coordinator` — the local model conducts, calling each attached agent and
- *    MCP server as a tool. This is what `orchestrated` meant.
+ *  - `coordinator` — the bound Local agent conducts, or the chat model when no
+ *    root is bound, calling attached agents and MCP servers as tools.
  */
 export type ChatRouter = 'direct' | 'human' | 'coordinator'
+
+export type DefaultMultiAgentRouting = 'human' | 'coordinator'
+
+/** Same Local/Remote criterion used by the connection badge. */
+export function canConduct(agent: { source?: string | null; driver?: string | null; acpTransport?: string | null }): boolean {
+  return agent.source === 'folder' || (agent.driver === 'acp' && agent.acpTransport !== 'websocket')
+}
 
 export const CHAT_ROUTERS: readonly ChatRouter[] = ['direct', 'human', 'coordinator']
 
@@ -64,7 +71,7 @@ export interface Addressing {
 
 export interface ChatRouting {
   router: ChatRouter
-  /** The agent bound as the chat's root. `direct` only; null when the LLM is the root. */
+  /** The agent bound as the chat's root. `direct` and `coordinator`; null when the model is the root. */
   rootAgentId: string | null
   /**
    * Where a file picked in this chat's composer is stored: `cinna` when the
@@ -102,14 +109,14 @@ export function routerOf(chat: RoutableChat): ChatRouter {
  */
 export function routingOf(chat: RoutableChat): ChatRouting {
   const router = routerOf(chat)
-  const rootAgentId = router === 'direct' ? (chat.agentId ?? null) : null
+  const rootAgentId = router !== 'human' ? (chat.agentId ?? null) : null
   return {
     router,
     rootAgentId,
-    attachmentTarget: router === 'coordinator' || (router === 'direct' && !rootAgentId)
+    attachmentTarget: router !== 'human' && !rootAgentId
       ? 'local'
       : 'cinna',
-    needsModel: router === 'coordinator' || (router === 'direct' && !rootAgentId),
+    needsModel: router !== 'human' && !rootAgentId,
     answerer: (addressing) => answererOf(router, rootAgentId, addressing)
   }
 }
@@ -132,8 +139,7 @@ function answererOf(
   rootAgentId: string | null,
   addressing: Addressing | undefined
 ): RunTarget {
-  if (router === 'coordinator') return { kind: 'model' }
-  if (router === 'direct') {
+  if (router !== 'human') {
     return rootAgentId ? { kind: 'agent', agentId: rootAgentId } : { kind: 'model' }
   }
   const attached = addressing?.attached ?? []
@@ -155,18 +161,19 @@ function answererOf(
  *  - No agent at all → `direct`, to the local model. Its MCP servers are its
  *    own tools, as they are in every chat; that is not coordination.
  *  - One agent, no MCP → `direct`, bound as the chat's root.
- *  - Several agents, no MCP → `human`. No model needed.
- *  - Any agent *with* an MCP server → `coordinator`: the servers are the local
- *    model's tools and an agent cannot call them, so somebody has to conduct.
+ *  - Several agents, no MCP → the default multi-agent routing preference.
+ *  - Any agent *with* an MCP server → `coordinator`: the conductor receives
+ *    both agents and connected MCP tools.
  *  - `coordinate` — the composer's explicit toggle — wins over all of it.
  */
 export function newChatRouter(opts: {
   agentIds: readonly string[]
   mcpIds: readonly string[]
   coordinate?: boolean
+  defaultMultiAgentRouting?: DefaultMultiAgentRouting
 }): ChatRouter {
   if (opts.coordinate) return 'coordinator'
   if (opts.agentIds.length === 0) return DEFAULT_CHAT_ROUTER
   if (opts.mcpIds.length > 0) return 'coordinator'
-  return opts.agentIds.length === 1 ? 'direct' : 'human'
+  return opts.agentIds.length === 1 ? 'direct' : (opts.defaultMultiAgentRouting ?? 'human')
 }

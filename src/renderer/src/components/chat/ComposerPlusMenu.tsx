@@ -20,18 +20,11 @@ export interface PlusModeMenu {
   composeSecondary?: (mode: ChatModeData) => string | null | undefined
 }
 
-/**
- * The one router transition a user takes deliberately: handing a chat to the
- * local model, and taking it back.
- *
- * Every other transition follows from a gesture that already means something
- * else — a second agent arriving makes a chat `human`, an agent joining a chat
- * with the model makes it `coordinated`. Turning coordination *off* has no such
- * gesture, so it gets a row.
- */
+/** One-way action handing coordination to the eligible Local or Default runtime. */
 export interface PlusCoordinateToggle {
-  /** Whether the local model is conducting this chat right now. */
+  /** Whether a conductor already routes this chat; its action is then omitted. */
   coordinating: boolean
+  conductorName?: string
   /** In flight — the row stays visible and says so rather than disappearing. */
   pending?: boolean
   onToggle: (coordinating: boolean) => void
@@ -47,7 +40,7 @@ interface ComposerPlusMenuProps {
   onOpenCapabilityPicker: () => void
   /** "Chat mode" sub-menu — omitted when mode selection doesn't apply here. */
   modeMenu?: PlusModeMenu
-  /** "Let the model coordinate" — omitted where there is no agent to coordinate. */
+  /** One-way coordination action, omitted once the chat is coordinated. */
   coordinateToggle?: PlusCoordinateToggle
   autonomousRun?: { disabled: boolean; onStart(): void }
   /** Tints the [+] button border to the active chat-mode color, if any. */
@@ -201,29 +194,22 @@ export function ComposerPlusMenu({
                 onClick={() => { if (!autonomousRun.disabled) { autonomousRun.onStart(); setOpen(false) } }}>
                 <Workflow size={16} className={iconCls} /><span>Run on its own…</span>
               </button>}
-              {coordinateToggle && (
+              {coordinateToggle && !coordinateToggle.coordinating && (
                 <button
                   type="button"
-                  role="menuitemcheckbox"
-                  aria-checked={coordinateToggle.coordinating}
+                  role="menuitem"
                   // `aria-disabled`, not `disabled`: a row that disables itself
                   // while it has focus drops focus to the page body mid-switch.
                   aria-disabled={coordinateToggle.pending || undefined}
                   onClick={() => {
                     if (coordinateToggle.pending) return
-                    coordinateToggle.onToggle(!coordinateToggle.coordinating)
+                    coordinateToggle.onToggle(true)
                     setOpen(false)
                   }}
                   className={rowCls}
                 >
                   <Workflow size={16} className={iconCls} />
-                  <span className="flex-1">Let the model coordinate</span>
-                  {/* The tick's slot is always there, so ticking it moves no text. */}
-                  <span className="w-3.5 shrink-0">
-                    {coordinateToggle.coordinating && (
-                      <Check size={14} className="text-[var(--color-accent)]" />
-                    )}
-                  </span>
+                  <span className="flex-1">Coordinate by {coordinateToggle.conductorName ?? 'your local model'}</span>
                 </button>
               )}
             </>

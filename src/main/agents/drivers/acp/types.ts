@@ -255,6 +255,12 @@ export type AcpProcessState =
 
 /** One process per agent id, started lazily, reaped when idle, replaced when its spec moved. */
 export interface AcpProcessPool {
+  /** Bind a synthetic chat to a compatible process group before taking its hold. */
+  share?(agentId: string, poolKey: string): void
+  /** A direct process kill would also affect another logical session owner. */
+  hasOtherOwners?(agentId: string): boolean
+  /** Read-only warm lookup: never starts/replaces a process for a background utility. */
+  peek?(agentId: string, specKey: string): AcpConnection | undefined
   /**
    * The live connection for an agent: the running one when its spec key still
    * matches, else a fresh start. Concurrent calls for one agent share one start.

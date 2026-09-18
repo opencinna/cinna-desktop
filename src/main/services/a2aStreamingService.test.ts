@@ -85,6 +85,26 @@ function fakePort(): { posted: RunEvent[]; closed: boolean; port: { postMessage:
 }
 
 describe('a2aStreamingService.streamToAgent', () => {
+  it('keeps repeated nested ACP questions as needs_input after canceling each live park', async () => {
+    const { runNestedAgentTurn } = await import('./nestedAgentTurn')
+    const agent = { id: 'specialist' } as import('../db/agents').AgentRow
+    for (const questionId of ['first-question', 'second-question']) {
+      const p = fakePort()
+      const onFinished = vi.fn()
+      const driver = { run: async (_owner: string, _agent: unknown, input: import('../agents/drivers/driver').RunInput) => {
+        input.onEvent?.({ type: 'needs_input', requestId: questionId, resume: 'reply', request: {
+          kind: 'question', questions: [{ question: 'Which branch?', multiSelect: false, options: [] }]
+        } })
+        expect(input.signal.aborted).toBe(true)
+        return { text: '', parts: [], notices: [], taskState: 'canceled', stopReason: 'canceled' as const }
+      } } satisfies Pick<import('../agents/drivers/driver').AgentDriver, 'run'>
+      await a2aStreamingService.streamToAgent({ chatId: 'chat_1', agentId: agent.id, port: p.port, onFinished,
+        run: (io) => runNestedAgentTurn(driver, 'owner', agent, { ...io, chatId: 'chat_1', wireContent: 'Answer', nested: { toolCallId: 'original-call' } }) })
+      expect(onFinished).toHaveBeenCalledWith(expect.objectContaining({ state: 'needs_input' }))
+      expect(p.posted).toContainEqual(expect.objectContaining({ type: 'needs_input', requestId: questionId, resume: 'next_message' }))
+      expect(p.posted.at(-1)).toEqual({ type: 'done', stopReason: 'end_turn' })
+    }
+  })
   it('preserves a remote budget ending through the common turn wrapper and durable partial answer', async () => {
     const p = fakePort()
     const onFinished = vi.fn()

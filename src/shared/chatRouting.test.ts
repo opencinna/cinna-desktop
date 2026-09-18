@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { newChatRouter, routerOf, routingOf, type RoutableChat } from './chatRouting'
+import { canConduct, newChatRouter, routerOf, routingOf, type RoutableChat } from './chatRouting'
 
 /**
  * The one routing rule, which used to be five.
@@ -46,13 +46,19 @@ describe('routingOf — who answers', () => {
     expect(routing.attachmentTarget).toBe('local')
   })
 
-  it('sends a coordinated chat to the model even when a root is still on the row', () => {
-    // The switch detaches the root, but a row read mid-transition can still
-    // carry one; the router is what decides, not the leftover column.
+  it('sends a coordinated chat to its root without a model credential', () => {
     const routing = routingOf({ router: 'coordinator', agentId: 'a-1' })
-    expect(routing.rootAgentId).toBeNull()
-    expect(routing.answerer({ addressed: 'a-2', attached: ['a-2'] })).toEqual({ kind: 'model' })
+    expect(routing.rootAgentId).toBe('a-1')
+    expect(routing.answerer({ addressed: 'a-2', attached: ['a-2'] })).toEqual({ kind: 'agent', agentId: 'a-1' })
+    expect(routing.needsModel).toBe(false)
+    expect(routing.attachmentTarget).toBe('cinna')
+  })
+
+  it('keeps model coordination for a coordinator with no root', () => {
+    const routing = routingOf({ router: 'coordinator', agentId: null })
+    expect(routing.answerer()).toEqual({ kind: 'model' })
     expect(routing.needsModel).toBe(true)
+    expect(routing.attachmentTarget).toBe('local')
   })
 
   it('needs no model for a human chat — the whole point of it', () => {
@@ -136,4 +142,19 @@ describe('newChatRouter — what the new-chat selection creates', () => {
     expect(router(['a-1'], [], true)).toBe('coordinator')
     expect(router([], [], true)).toBe('coordinator')
   })
+})
+
+it('uses AI routes only for a new multi-agent selection', () => {
+  expect(newChatRouter({ agentIds: ['a', 'b'], mcpIds: [], defaultMultiAgentRouting: 'coordinator' })).toBe('coordinator')
+  expect(newChatRouter({ agentIds: ['a'], mcpIds: [], defaultMultiAgentRouting: 'coordinator' })).toBe('direct')
+  expect(newChatRouter({ agentIds: [], mcpIds: [], defaultMultiAgentRouting: 'coordinator' })).toBe('direct')
+  expect(routingOf({ router: 'human' }).router).toBe('human')
+})
+
+it('only Local agents can conduct', () => {
+  expect(canConduct({ source: 'folder' })).toBe(true)
+  expect(canConduct({ source: 'local', driver: 'acp', acpTransport: 'stdio' })).toBe(true)
+  expect(canConduct({ source: 'local', driver: 'a2a' })).toBe(false)
+  expect(canConduct({ driver: 'acp', acpTransport: 'websocket' })).toBe(false)
+  expect(canConduct({ driver: 'managed' })).toBe(false)
 })

@@ -76,6 +76,7 @@ export interface AgentDto {
    */
   acpTransport?: 'stdio' | 'websocket'
   /** Account-bound builder: configured through Local Development, never as a custom command. */
+  conductor?: boolean
   development?: boolean
   /** Runtime captured by this builder, rather than today's development default. */
   developmentEngine?: AgentEngine
@@ -142,6 +143,7 @@ function toDto(row: AgentRow): AgentDto {
     localPath: row.localPath,
     localRootId: row.localRootId,
     driver: row.driver,
+    ...(typeof row.driverConfig?.conductorChatId === 'string' ? { conductor: true } : {}),
     ...(isDevelopmentAgent(row) ? {
       development: true,
       ...(isAgentEngine(developmentEngine) ? { developmentEngine } : {})
@@ -210,6 +212,7 @@ export const agentService = {
       .list(defaultUserId)
       .filter((a) => (a.source === 'local' || a.source === 'folder') &&
         (!a.driverConfig?.developmentProfileId || a.driverConfig.developmentProfileId === profileUserId))
+    if (profileUserId !== defaultUserId) local.push(...agentRepo.list(profileUserId).filter((a) => typeof a.driverConfig?.conductorChatId === 'string'))
     const remoteRows =
       profileUserId === defaultUserId
         ? agentRepo.list(defaultUserId).filter((a) => a.source === 'remote')
@@ -227,7 +230,7 @@ export const agentService = {
     // in the background: an A2A agent's answer is a card fetch, and a list must
     // never wait on one. Each row is checked in the scope it was listed from.
     agentReadinessService.kick([
-      ...local.map((row) => ({ userId: defaultUserId, row })),
+      ...local.map((row) => ({ userId: row.userId, row })),
       ...remote.map((row) => ({ userId: profileUserId, row }))
     ])
 
@@ -251,7 +254,9 @@ export const agentService = {
     // both properties of this machine and resolve in the default scope.
     const userId = agentId.startsWith(REMOTE_ID_PREFIX) ? profileUserId : defaultUserId
     const row = agentRepo.getOwned(userId, agentId)
-    return row ? { row, userId } : null
+    if (row) return { row, userId }
+    const owned = agentRepo.getOwned(profileUserId, agentId)
+    return owned && typeof owned.driverConfig?.conductorChatId === 'string' ? { row: owned, userId: profileUserId } : null
   },
 
   /**

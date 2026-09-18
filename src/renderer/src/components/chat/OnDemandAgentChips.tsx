@@ -27,7 +27,7 @@ export const agentChipClass = 'shrink min-w-[4.5rem] max-w-[12rem]'
 type OnDemandAgentChipsProps = (
   | { chatId: string; pendingIds?: never; onRemovePending?: never }
   | { chatId?: null; pendingIds: string[]; onRemovePending: (id: string) => void }
-) & { addressing?: ChipAddressing }
+) & { addressing?: ChipAddressing; coordination?: { conductorId: string | null; conductorName: string } }
 
 /**
  * Renders the attached agent set as a strip of removable chips next to the
@@ -76,17 +76,25 @@ export function OnDemandAgentChips(
 
   return (
     <>
+      {props.coordination && !props.coordination.conductorId && (
+        <div className={`flex items-center gap-1 px-1.5 py-1 rounded-lg border ring-2 ring-[var(--color-text)] text-[var(--color-accent)] border-[var(--color-accent)] bg-[var(--color-accent)]/10 ${agentChipClass}`} title={`${props.coordination.conductorName} — Coordinator`}>
+          <Bot size={12} className="shrink-0" />
+          <span className="min-w-0 truncate text-[11px] font-medium">{props.coordination.conductorName}</span>
+          <span className="text-[9px] shrink-0">Coordinator</span>
+        </div>
+      )}
       {rows.map((a) => {
         // Per-agent hash color — the same identity color the agent uses in the
         // chat window (sub-thread header, bubbles), so the footer chip and the
         // in-transcript rendering match.
         const color = presetForAgentId(a.id)
+        const coordinator = props.coordination?.conductorId === a.id
         const addressed = props.addressing?.addressedId === a.id
         const label = props.addressing
           ? addressed
             ? `Agent “${a.name}” answers your next message`
             : `Address your next message to “${a.name}”`
-          : `Agent "${a.name}" attached — the local model will call it as a tool`
+          : props.coordination ? `${a.name} — ${coordinator ? 'Coordinator' : 'Participant'}` : `Agent "${a.name}" attached as a participant`
         return (
           <div
             key={a.id}
@@ -100,7 +108,7 @@ export function OnDemandAgentChips(
             // slightly thicker border. The theme's text colour is the one colour
             // guaranteed to contrast with every chip.
             className={`flex items-center gap-1 pl-1.5 pr-1 py-1 rounded-lg border ${agentChipClass} transition-shadow${
-              addressed ? ' ring-2 ring-[var(--color-text)]' : ''
+              addressed || coordinator ? ' ring-2 ring-[var(--color-text)]' : ''
             }`}
             style={{
               color: color.border,
@@ -130,6 +138,7 @@ export function OnDemandAgentChips(
                 <span className="min-w-0 truncate text-[11px] font-medium whitespace-nowrap" title={a.name}>{a.name}</span>
               </>
             )}
+            {props.coordination && <span className="text-[9px] shrink-0">{coordinator ? 'Coordinator' : 'Participant'}</span>}
             <button
               type="button"
               onClick={() => handleRemove(a.id)}

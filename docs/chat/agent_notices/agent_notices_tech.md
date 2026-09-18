@@ -15,7 +15,7 @@
 | `src/main/agents/streamPartsAccumulator.ts` | `StreamPartsAccumulator` recognises `'notice'` in `VALID_KINDS`. Inside `ingest()`, notice parts short-circuit before the `appendToList` call: deltas accumulate into a private `notices: Map<partKey, string>` and post to the port (`{type:'delta', kind:'notice', text}`) but never join `parts[]` or `answer`. `snapshotNotices()` returns `AccumulatedNotice[]` in insertion order. |
 | `src/main/services/a2aStreamingService.ts` | After each stream completes (both the streaming and non-streaming branches of `streamToAgent`), iterates `accumulator.snapshotNotices()` and persists each via `messageRepo.saveTransition` **before** the `messageRepo.saveAssistant` call, so `sort_order` matches wire order. Logs `noticeCount` on `Stream complete` / `Non-streaming complete`. |
 | `src/main/db/messages.ts` | `messageRepo.saveTransition({ chatId, content, sourceAgentId })` writes a row with `role: 'agent_transition'`. Returns the new row id. `SaveTransitionMessage` interface exposed alongside `SaveAssistantMessage` / `SaveErrorMessage`. |
-| `src/main/services/chatStreamingService.ts` | LLM history rebuild already filters `m.role === 'agent_transition'` — notices written by the A2A path are therefore invisible to subsequent LLM-channel (orchestrator) sends in the same chat. |
+| `src/main/services/conductorTranscript.ts` | Fresh-session replay excludes error and agent_transition rows. |
 
 ### Preload
 

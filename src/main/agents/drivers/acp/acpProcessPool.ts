@@ -1,5 +1,6 @@
 /**
- * One ACP process per agent: started on the turn that needs it, replaced when
+ * One ACP process per agent or compatible synthetic runtime group: started
+ * on the turn that needs it, replaced when
  * what it was started with changed, stopped when nobody has wanted it for a
  * while.
  *
@@ -111,11 +112,24 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
   const clearTimer =
     deps.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>))
   const idleReapMs = deps.idleReapMs ?? ACP_IDLE_REAP_MS
-  const isBusy = deps.isBusy ?? (() => false)
-  const lastActivityAt = deps.lastActivityAt ?? (() => undefined)
-
   const entries = new Map<string, Entry>()
+  const aliases = new Map<string, string>()
+  const ownerHolds = new Map<string, number>()
   const listeners = new Set<(agentId: string, state: AcpProcessState) => void>()
+  const keyFor = (agentId: string): string => aliases.get(agentId) ?? agentId
+  const owners = (key: string): string[] => [key, ...[...aliases].filter(([, target]) => target === key).map(([id]) => id)]
+  const isBusy = (key: string): boolean => owners(key).some((id) => deps.isBusy?.(id))
+  const lastActivityAt = (key: string): number | undefined => {
+    const values = owners(key).map((id) => deps.lastActivityAt?.(id)).filter((value): value is number => value !== undefined)
+    return values.length > 0 ? Math.max(...values) : undefined
+  }
+
+  const notify = (agentId: string, state: AcpProcessState): void => {
+    for (const listener of listeners) {
+      try { listener(agentId, state) }
+      catch (err) { logger.warn('process state listener threw', { agentId, error: String(err) }) }
+    }
+  }
 
   const entryFor = (agentId: string): Entry => {
     const existing = entries.get(agentId)
@@ -136,13 +150,7 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
    */
   const setState = (agentId: string, entry: Entry, state: AcpProcessState): void => {
     entry.state = state
-    for (const listener of listeners) {
-      try {
-        listener(agentId, state)
-      } catch (err) {
-        logger.warn('process state listener threw', { agentId, error: String(err) })
-      }
-    }
+    for (const owner of owners(agentId)) notify(owner, state)
   }
 
   const cancelReap = (entry: Entry): void => {
@@ -229,6 +237,8 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
     init: InitializeRequest,
     signal?: AbortSignal
   ): Promise<AcpConnection> => {
+    const shared = aliases.has(agentId)
+    agentId = keyFor(agentId)
     const entry = entryFor(agentId)
     cancelReap(entry)
     entry.retireOnRelease = false
@@ -243,13 +253,19 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
 
       if (signal?.aborted) throw new Error('The ACP start was canceled.')
       if (entry.conn && (entry.key !== spec.key || !entry.conn.alive)) {
+        if (entry.conn.alive && entry.key !== spec.key && entry.holds > 1) {
+          throw new Error('This shared runtime changed while another chat is running. Try again when its turn finishes.')
+        }
         await stopNow(agentId, entry, entry.key === spec.key ? 'not alive' : 'spec changed')
       }
       if (entry.conn) return entry.conn
 
       setState(agentId, entry, { state: 'starting' })
-      const conn = await (signal ? deps.start(spec, init, { signal }) : deps.start(spec, init))
-      if (signal?.aborted) { await conn.dispose(); throw new Error('The ACP start was canceled.') }
+      // One chat canceling a shared startup cannot cancel another chat's
+      // process. Its caller races its own signal; retirement handles the case
+      // where every owner leaves before initialization finishes.
+      const conn = await (signal && !shared ? deps.start(spec, init, { signal }) : deps.start(spec, init))
+      if (signal?.aborted && !shared) { await conn.dispose(); throw new Error('The ACP start was canceled.') }
       entry.conn = conn
       entry.key = spec.key
       watch(agentId, entry, conn)
@@ -259,7 +275,7 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
 
     entry.starting = run
     entry.startKey = spec.key
-    entry.startSignal = signal
+    entry.startSignal = shared ? undefined : signal
     const done = (): void => {
       if (entry.starting === run) {
         entry.starting = undefined
@@ -286,13 +302,19 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
   }
 
   const hold = (agentId: string): (() => void) => {
+    const ownerId = agentId
+    agentId = keyFor(agentId)
     const entry = entryFor(agentId)
+    ownerHolds.set(ownerId, (ownerHolds.get(ownerId) ?? 0) + 1)
     entry.holds += 1
     cancelReap(entry)
     let released = false
     return () => {
       if (released) return
       released = true
+      const remaining = (ownerHolds.get(ownerId) ?? 1) - 1
+      if (remaining > 0) ownerHolds.set(ownerId, remaining)
+      else ownerHolds.delete(ownerId)
       entry.holds -= 1
       if (entry.holds > 0) return
       if (entry.retireOnRelease) {
@@ -304,6 +326,15 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
   }
 
   const retire = (agentId: string): void => {
+    const sharedKey = aliases.get(agentId)
+    if (sharedKey) {
+      aliases.delete(agentId)
+      notify(agentId, { state: 'stopped' })
+      // Detach this logical owner. Its captured hold still releases the right
+      // entry, but other chat owners keep their process and session bindings.
+      if (owners(sharedKey).length > 1) return
+      agentId = sharedKey
+    }
     const entry = entries.get(agentId)
     if (!entry) return
     if (entry.holds > 0 || entry.starting) {
@@ -318,14 +349,32 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
   }
 
   return {
+    share: (agentId, poolKey) => {
+      if (keyFor(agentId) === poolKey) return
+      if ((ownerHolds.get(agentId) ?? 0) > 0) throw new Error('Cannot change a chat runtime while its turn is running')
+      if (aliases.has(agentId)) retire(agentId)
+      else if (entries.has(agentId)) retire(agentId)
+      aliases.set(agentId, poolKey)
+      const entry = entries.get(poolKey)
+      if (entry) notify(agentId, entry.state)
+    },
+    hasOtherOwners: (agentId) => {
+      const key = keyFor(agentId)
+      const entry = entries.get(key)
+      return owners(key).some((id) => id !== key && id !== agentId) || (entry?.holds ?? 0) > (ownerHolds.get(agentId) ?? 0)
+    },
+    peek: (agentId, specKey) => {
+      const entry = entries.get(keyFor(agentId))
+      return entry?.key === specKey && entry.conn?.alive && !entry.retireOnRelease ? entry.conn : undefined
+    },
     acquire,
     hold,
     retire,
     held: (agentId) => {
-      const entry = entries.get(agentId)
-      return !!entry && (entry.holds > 0 || !!entry.starting)
+      const entry = entries.get(keyFor(agentId))
+      return !!entry && ((ownerHolds.get(agentId) ?? 0) > 0 || !!entry.starting)
     },
-    status: (agentId) => entries.get(agentId)?.state ?? { state: 'stopped' },
+    status: (agentId) => entries.get(keyFor(agentId))?.state ?? { state: 'stopped' },
     onStatus: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)

@@ -9,9 +9,8 @@ import { isDesktopAuthored, type TurnInputOrigin } from '../../shared/turnOrigin
 const logger = createLogger('routing')
 
 /**
- * Fire-and-forget background chat-title autogeneration. Called from both
- * `prepareLlmSend` and `prepareAgentSend` so any first user message —
- * regardless of which channel it routes to — triggers a title attempt.
+ * Fire-and-forget background chat-title autogeneration. Every runtime send
+ * triggers an attempt after persisting the first user message.
  * The title service guards on its own toggle + first-message check, so
  * the call is safe to make after every persist. ALL failure modes are
  * logged here and swallowed; nothing reaches the streaming pipeline.
@@ -76,19 +75,8 @@ export interface PrepareAgentSendInput {
   origin?: TurnInputOrigin
 }
 
-export interface PrepareLlmSendInput {
-  userId: string
-  chatId: string
-  userContent: string
-  attachments?: MessageAttachment[]
-  /** Runs inside the user-message transaction; throwing rolls that message back. */
-  onPersisted?: () => void
-  /** As {@link PrepareAgentSendInput.origin}: not `user` means a system row. */
-  origin?: TurnInputOrigin
-}
-
 export interface PreparedSend {
-  /** What goes on the wire to the LLM / agent. */
+  /** What goes on the wire to the runtime. */
   wireContent: string
   /** Id of the user message just persisted to `messages`. */
   userMessageId: string
@@ -121,34 +109,6 @@ export const messageRoutingService = {
     logger.debug('prepared agent send', {
       chatId,
       agentId,
-      userMessageId,
-      attachmentCount: attachments?.length ?? 0
-    })
-
-    // A chat is titled after what the person said in it. A handover's return
-    // packet would title it after another project's report.
-    if (!isDesktopAuthored(input.origin)) fireTitleGenInBackground(userId, chatId)
-
-    return { wireContent: userContent, userMessageId }
-  },
-
-  prepareLlmSend(input: PrepareLlmSendInput): PreparedSend {
-    const { userId, chatId, userContent, attachments } = input
-
-    if (!chatRepo.getOwned(userId, chatId)) {
-      throw new ChatError('not_found', 'Chat not found')
-    }
-
-    const userMessageId = isDesktopAuthored(input.origin)
-      ? messageRepo.saveSystem({ chatId, content: userContent, ...( 'agentId' in input && typeof input.agentId === 'string' ? { addressedAgentId: input.agentId } : {}) }, input.onPersisted)
-      : messageRepo.saveUser({
-      chatId,
-      content: userContent,
-      attachments: attachments && attachments.length > 0 ? attachments : null
-    }, input.onPersisted)
-
-    logger.debug('prepared llm send', {
-      chatId,
       userMessageId,
       attachmentCount: attachments?.length ?? 0
     })

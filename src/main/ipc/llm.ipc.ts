@@ -1,12 +1,13 @@
 import { userActivation } from '../auth/activation'
-import { chatStreamingService } from '../services/chatStreamingService'
+import { a2aStreamingService } from '../services/a2aStreamingService'
 import { providerService } from '../services/providerService'
 import { type ModelCapability } from '../llm/types'
 import { ipcHandle } from './_wrap'
 
 export function registerLlmHandlers(): void {
   ipcHandle('llm:cancel', async (_event, requestId: string) => {
-    chatStreamingService.cancel(requestId)
+    // Compatibility alias: every chat now runs through the shared runtime path.
+    a2aStreamingService.cancel(requestId)
     return { success: true }
   })
 

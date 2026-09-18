@@ -164,7 +164,7 @@ export const chatTitleService = {
 
     let resolved
     try {
-      resolved = aiFunctions.resolveAdapterFromDefaultMode(userId)
+      resolved = aiFunctions.resolveBackend(userId)
     } catch (err) {
       if (err instanceof AiFunctionError) throw mapAiFunctionError(err)
       throw err
@@ -173,8 +173,8 @@ export const chatTitleService = {
     let raw: string
     try {
       raw = await aiFunctions.runSingleShot({
-        adapter: resolved.adapter,
-        modelId: resolved.modelId,
+        backend: resolved,
+        warmOnly: true,
         systemPrompt: TITLE_SYSTEM_PROMPT,
         userText: firstUserText,
         label: 'chat-title',
@@ -210,8 +210,7 @@ export const chatTitleService = {
     chatRepo.updateMeta(userId, chatId, { title })
     logger.info('chat title generated', {
       chatId,
-      modelId: resolved.modelId,
-      providerType: resolved.adapter.providerType,
+      backend: resolved.kind,
       titleLen: title.length
     })
     broadcastTitleUpdate(chatId, title)

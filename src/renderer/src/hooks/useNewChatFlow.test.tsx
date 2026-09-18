@@ -49,6 +49,7 @@ function namespace(methods: Record<string, unknown>): unknown {
       if (ns === 'chat') {
         return namespace({
           create: spies.createChat,
+          get: async () => ({ id: 'chat-1', ...((spies.updateChat.mock.calls.at(-1) as unknown as [string, object])?.[1] ?? {}) }),
           list: spies.listChats,
           trashList: spies.listTrash,
           update: spies.updateChat,
@@ -191,9 +192,9 @@ describe('startNewChat — where the attachments go', () => {
     expect(ingestScope()).toBe('cinna')
   })
 
-  it('ingests a coordinated chat’s files into the local store', async () => {
+  it('ingests an agent-conducted chat’s files under its answerer scope', async () => {
     await start({ agentIds: ['a-1'], onDemandMcpIds: ['mcp-1'], attachments: PENDING })
-    expect(ingestScope()).toBe('local')
+    expect(ingestScope()).toBe('cinna')
   })
 })
 
@@ -203,10 +204,10 @@ describe('startNewChat — the first message', () => {
     expect(spies.runSend.mock.calls[0][0]).toMatchObject({ addressedAgentId: 'a-2' })
   })
 
-  it('names no agent in a coordinated chat', async () => {
+  it('addresses the conductor in an agent-coordinated chat', async () => {
     await start({ agentIds: ['a-1'], onDemandMcpIds: ['mcp-1'] })
     const extras = spies.runSend.mock.calls[0][0] as { addressedAgentId?: string | null }
-    expect(extras.addressedAgentId ?? null).toBeNull()
+    expect(extras.addressedAgentId).toBe('a-1')
   })
 })
 
@@ -343,4 +344,12 @@ describe('startNewChat — guarded creation lifecycle', () => {
     expect(spies.runSend).toHaveBeenCalledTimes(1)
     expect(spies.deleteChat).not.toHaveBeenCalled()
   })
+})
+
+it('binds the first selected agent under AI routes and attaches only participants', async () => {
+  await start({ agentIds: ['a-1', 'a-2'], defaultMultiAgentRouting: 'coordinator' })
+  expect(writtenRouter()).toBe('coordinator')
+  expect(spies.updateChat).toHaveBeenCalledWith('chat-1', expect.objectContaining({ agentId: 'a-1' }))
+  expect(spies.addOnDemandAgent).toHaveBeenCalledTimes(1)
+  expect(spies.addOnDemandAgent).toHaveBeenCalledWith('chat-1', 'a-2')
 })

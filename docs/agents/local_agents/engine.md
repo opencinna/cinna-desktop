@@ -37,7 +37,7 @@ Both halves are load-bearing.
 - **Engine** — what runs a folder agent's turn: `opencode`, `claude` or `codex`, each spawned through an ACP launcher
 - **Launcher** — the engine, as the turn path sees it: what command to spawn, what environment it gets, what the client declares at `initialize`, what `session/new` carries, and what must be set on the session before the first prompt. `opencode`, `claude` and `codex` are implemented; `gemini` remains a recognized name without a launcher and is refused in words
 - **Launch spec** — one process's command, arguments, whole environment, cwd, and a `key` that moves whenever any of those do. The key is a **digest, never the values** — the environment carries API keys, and the pool logs the key
-- **Process pool** — one process per agent id: started by the first turn that needs it, held for the length of a turn, reaped after two minutes idle (later while its background work runs), replaced when its spec key moved, killed at app quit. It never restarts a process on its own
+- **Process pool** — one process per ordinary agent, or per compatible synthetic chat-runtime group: started by the first turn that needs it, held for the length of a turn, reaped after two minutes idle (later while its background work runs), replaced when its spec key moved, killed at app quit. It never restarts a process on its own
 - **Engine config** — the OpenCode configuration this app generates for **one agent**, into `<userData>/acp/opencode/<hash of agent id>/opencode.json`: the provider entry for that agent's credential, that agent's entry with its inlined system prompt, the permission profile, and a top-level `model`
 - **Generated prompt** — the per-agent system prompt assembled from the agent's own files. **Inlined into the agent's config entry**, because the engine's v2 config reader resolves no `{file:…}` reference and would hand the model the placeholder in place of the prompt
 - **Agent key** — the OpenCode agent-entry name a folder agent becomes (`<slug>-<hash of agent id>`). Selected on the session as the `mode` config option, which is what makes the turn run *that* agent rather than OpenCode's stock coding assistant
@@ -104,7 +104,7 @@ CLI engines leave the desktop credential ladder before its first lookup. Claude 
 
 [Account build sessions](../local_dev/build_sessions.md) use these same launchers and credential/model resolver, with separate installation-wide settings. Default Runtime inherits this machine engine, while build complexity is independently Complex by default (Claude Opus, Codex high effort, OpenCode Complex tier). Builder settings do not rewrite folder manifests or the local-agent default.
 
-### One process per agent, started by a turn and reaped when idle
+### Process ownership, startup and idle reaping
 
 The pool starts a process on the first turn that needs it and keeps it while turns keep coming. Both ends of that are measured rather than assumed:
 
@@ -286,7 +286,7 @@ The fallback is per-field rather than all-or-nothing:
 - A manifest naming only a credential borrows a model through the chain below, which is **not** "the default's model, always"
 - Only when neither source yields a credential (or a model) is the runtime unresolved, and the reason line says which is missing
 
-The Default runtime reads through the same effective-default resolution `aiFunctions` uses, so it honours the local/account precedence toggle and a managed mode's per-profile model override. "What drafts my prompts" and "what runs my agent" cannot disagree. See [Account-Provisioned Providers & Chat Modes](../../llm/account_provisioning/account_provisioning.md) and [Chat Modes](../../chat/chat_modes/chat_modes.md).
+The Default runtime honors the local/account mode precedence and managed per-profile model override. AI Functions has its own Features credential/model binding; drafting and execution may deliberately differ. See [Account-Provisioned Providers & Chat Modes](../../llm/account_provisioning/account_provisioning.md) and [Chat Modes](../../chat/chat_modes/chat_modes.md).
 
 **A Default runtime that cannot run says which half is wrong.** Both branches — this machine's pinned agent credential, and the user's default chat mode — once reported only a *missing key*, so an agent that declared no credential of its own said nothing at all when the default's credential was switched off: the panel claimed it was fine and the first turn failed. The sentence now names whichever setting chose the credential, so the user knows whether they are being told about a machine-wide pin or about their default chat mode, and it distinguishes "no API key" from "switched off" because the two want different remedies. A pinned credential that cannot run is still reported *as* the runtime rather than falling through to the chat mode — re-pointing an agent at another key without being asked is the billing surprise this service refuses.
 
@@ -504,10 +504,18 @@ A turn (see agent_turn.md)                     │
 - [Adapters](../../llm/adapters/adapters.md) — `listModels()` is the network call kept off the per-turn path; the registry supplies the model lists custom provider entries need
 - [Local Models & Keyless Credentials](../../llm/local_models/local_models.md) — the credential type with no key, its host, the `/v1` suffix a custom entry gets, and the local-only model refresh
 - [Switching an AI Credential Off](../../llm/adapters/credential_enablement.md) — why a disabled credential is excluded here, the shared reference resolver, and every surface that reports the consequence
-- [AI Functions](../../llm/ai_functions/ai_functions.md) — resolves its adapter from the same effective default mode, so drafting and running cannot disagree
+- [AI Functions](../../llm/ai_functions/ai_functions.md) — independent one-shot binding, with a no-tools Default runtime fallback
 - [Shell Environment Resolution](../../development/shell_environment/shell_environment.md) — the login-shell `PATH` that finds a user's own `opencode`, and `shellEnvForChild`, the same narrowing a stdio MCP server gets
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — the engine is machine-local; `localAgentsEnginePath` lives in the default scope
 - [Resource Activation](../../core/resource_activation/resource_activation.md) — every engine channel requires an activated session
 - [Main-Process Layering](../../development/main_layering/main_layering_llm.md) — thin IPC controllers; nothing a renderer could execute crosses the bridge
 
 Sub-doc: [Technical Details](engine_tech.md)
+
+## Chat-owned runtimes
+
+Plain chats bind a hidden, profile-owned ACP agent with instructions under userData/chat-conductors. Compatible synthetic profiles share a process keyed by user, engine, credential, model, instructions and tool policy, while each chat retains an independent session/cwd/tool endpoint. This avoids one idle process per identical chat without sharing conversational context. The pool accounts for all owners before reaping or retiring a process.
+
+A synthetic profile cannot read files or run shell commands through native tools. Claude restricts native tools/settings; OpenCode denies native tools and permits attached Cinna MCP tools when its policy allows them. Codex fails closed for these synthetic profiles: adapter 1.11.0's read-only label is not a no-file-tools boundary. This does not prohibit ordinary folder Codex agents from conducting. See [runtime orchestration](../../chat/orchestrated_agents/orchestrated_agents.md) and [ACP evidence](acp_contract.md).
+
+Catalogs in chat-mode CLI selectors are memory-only snapshots from real session metadata, not a new live model probe. Empty snapshots use explicit model entry and supported fallback aliases. Endpoint/config fingerprints force fresh-session transcript replay when the app restarts or the captured runtime changes.

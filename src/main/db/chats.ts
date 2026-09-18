@@ -11,8 +11,8 @@ export type { MessageRow }
 /** Fields editable via the `chat:update` IPC channel. */
 export interface ChatMetaUpdate {
   title?: string
-  modelId?: string
-  providerId?: string
+  modelId?: string | null
+  providerId?: string | null
   modeId?: string | null
   /** Nullable so a switch to `coordinator` can detach a chat's bound root agent. */
   agentId?: string | null

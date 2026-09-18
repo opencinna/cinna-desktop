@@ -173,7 +173,7 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     // `enabled` and nothing else: it is the user's own toggle for this agent.
     // The folder-agent exclusion that used to sit beside it was a capability
     // gap — no local runner — and it is gone with the runner that closed it.
-    () => (agents ?? []).filter((a) => a.enabled),
+    () => (agents ?? []).filter((a) => a.enabled && !a.conductor),
     [agents]
   )
 

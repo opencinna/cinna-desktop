@@ -137,3 +137,9 @@ Every section is rendered with a `key` equal to its tab id (the Profile Local De
 - [MCP Connections](../../mcp/connections/connections.md) — MCP settings section manages server connections
 - [User Accounts](../../auth/user_accounts/user_accounts.md) — Accounts section manages local user profiles
 - [UI Guidelines](../../development/ui_guidelines/ui_guidelines_llm.md) — The settings type scale and the settings section pattern, with the shared `SettingsLayout` primitives (`SettingsSection`, `SettingsCard`, `SettingsRows`, `SettingsLabel` and its (?) tip, `SettingsToggleRow`, `SettingsStatusRow`, `settingsInputClass`) a new tab is built from — the Default Agents, Features and Development tabs are built on them, and the older tabs match the same scale with their own markup; expandable card pattern, button layout rules, color system
+
+## Chat runtimes and AI Functions
+
+Default → Chats offers a Saved modes section with runtime, model, tools policy and instructions. CLI runtime choices use cached session-advertised models with explicit-ID fallback; OpenCode uses AI credentials. No tools and Connected tools both exclude native filesystem/shell tools for synthetic chats.
+
+Features → AI Functions contains Default multi-agent routing (You route / AI routes), its own credential/model selectors, and the current Runs on value. Routing defaults apply when a chat becomes multi-agent; existing routers remain unchanged. AI Functions defaults to a fresh no-tools session on the Default runtime when no credential is selected, independently of chat modes. An invalid explicit credential reports an error rather than falling back. See [AI Functions](../../llm/ai_functions/ai_functions.md).

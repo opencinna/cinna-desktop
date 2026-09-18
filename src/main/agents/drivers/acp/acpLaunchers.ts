@@ -183,6 +183,8 @@ export interface AcpLauncher {
 /* ------------------------------------------------------------------ OpenCode */
 
 export interface OpencodeLauncherDeps {
+  /** Trusted companion modes sharing this generated process config (utility calls only). */
+  companionAgentIds?(ctx: AcpLaunchContext): string[]
   /**
    * The resolved `opencode` binary. Memoised by the caller: on a machine with
    * no install this downloads the pinned version, and a per-turn download is
@@ -252,14 +254,15 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
         }
       }
 
-      // **One agent per config**, and the providers narrowed to the one it
-      // uses. The shared server needed every agent in one file; a process that
-      // serves one agent has no reason to be told about the others, and a
-      // config that changes whenever an unrelated agent is edited would restart
-      // this process for nothing (the spec `key` is a digest of the config).
+      // Keep only this runtime and explicitly trusted companion modes, with
+      // its provider. Unrelated agent edits must not restart the process. A
+      // synthetic chat may include a no-tools utility mode so a fresh title
+      // session can reuse the same warm process without its chat instructions.
+      const companionIds = deps.companionAgentIds?.(ctx) ?? []
       const built = buildEngineConfig({
         providers: input.providers.filter((provider) => provider.id === mine.providerId),
-        agents: [mine]
+        agents: [mine, ...input.agents.filter((agent) =>
+          agent.agentId !== mine.agentId && companionIds.includes(agent.agentId) && agent.providerId === mine.providerId)]
       })
       const skipped = built.skippedAgents.find((agent) => agent.agentId === ctx.agentId)
       if (skipped) return { error: describeEngineSkip(skipped.code) }

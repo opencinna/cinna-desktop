@@ -32,7 +32,10 @@ function complete(threadId, turn, text, status = 'completed') {
 async function runTurn(params, turn) {
   const threadId = params.threadId
   notify('turn/started', { threadId, turn })
-  const text = params.input?.filter((part) => part.type === 'text').map((part) => part.text).join('\n') ?? ''
+  // Fresh-session replay precedes the current prompt in separate ACP blocks.
+  // Fixture commands address the current message, not the replayed transcript.
+  const text = (params.input?.filter((part) => part.type === 'text').at(-1)?.text ?? '')
+    .replace(/^Turn context from Cinna Desktop, not part of the conversation:\n[\s\S]*?\n\n/, '')
   if (text === 'Wait until stopped') return
   if (text === 'Ask for permission') {
     const result = await ask('item/commandExecution/requestApproval', {

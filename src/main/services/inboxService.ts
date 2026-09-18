@@ -14,6 +14,7 @@ import { pendingRequests } from '../agents/drivers/pendingRequests'
 import { remoteInboxService } from './remoteInboxService'
 import { runExecutionService } from './runExecutionService'
 import { agentService } from './agentService'
+import { completeNestedContinuation, nestedToolCallId } from './nestedContinuationService'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
 import type { RequestResolution } from '../../shared/localAgentRequests'
@@ -247,6 +248,15 @@ export const inboxService = {
     const task =
       taskRepo.getByChatId(ctx.userId, ctx.chatId) ?? (writesRow ? taskForChat(ctx) : null)
     if (!task) return
+    // A runtime conductor has an agent identity, but its main-owned ask_user
+    // gate still belongs to the runner. Do not overwrite it as a live driver park.
+    if (event.resume === 'reply') {
+      const gate = taskInputRequestRepo.getById(event.requestId)
+      if (gate?.deliveryOwner === 'runner' && gate.taskId === task.id && gate.chatId === ctx.chatId && gate.rootRunId === ctx.rootRunId) {
+        markTask(ctx.userId, task.id, 'needs_input')
+        return
+      }
+    }
 
     // The row before the status, deliberately. The ask is the thing the user
     // has to act on; a `blocked` task whose ask was never recorded is a dead
@@ -270,11 +280,6 @@ export const inboxService = {
         resume: event.resume
       })
     } else if (event.resume === 'reply') {
-      const gate = taskInputRequestRepo.getById(event.requestId)
-      if (gate?.deliveryOwner === 'runner' && gate.taskId === task.id && gate.chatId === ctx.chatId && gate.rootRunId === ctx.rootRunId) {
-        markTask(ctx.userId, task.id, 'needs_input')
-        return
-      }
       // An address with nobody to send an answer to. The model does not park,
       // so this is a driver emitting an ask outside a turn the send path could
       // attribute — worth a warning rather than a row nothing can answer.
@@ -517,15 +522,20 @@ export const inboxService = {
       }
       const content = resolution.answers.map((answers) => answers.join(', ')).join('\n')
       try {
+        const toolCallId = nestedToolCallId(row)
         const handle = runExecutionService.start({ profileUserId: userId, settingsUserId }, {
           chatId: row.chatId, content, addressedAgentId: row.agentId
         }, {
-          observe: (ctx, event) => this.recordRunEvent(ctx, event),
+          observe: (ctx, event) => this.recordRunEvent(ctx, toolCallId
+            ? { type: 'child', toolCallId, agentId: row.agentId!, event }
+            : event),
           preserveOnRefusal: true,
           agentId: row.agentId,
+          ...(toolCallId ? { nested: { toolCallId } } : {}),
           onAccepted: (ctx) => this.resumeChat(ctx, content)
         })
         await handle.accepted
+        if (toolCallId) void completeNestedContinuation({ profileUserId: userId, settingsUserId }, row, handle, toolCallId)
         return { ok: true }
       } catch (error) {
         return { ok: false, reason: error instanceof Error ? error.message : 'The answer could not be sent.', code: 'unavailable' }

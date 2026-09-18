@@ -103,7 +103,9 @@ vi.mock('../db/chatAgentCursors', () => ({
 function agentRow(id: string, name: string): AgentRow {
   return { id, name, source: 'remote', driver: 'a2a', cardUrl: 'https://x.test/c' } as AgentRow
 }
-const AGENTS = [agentRow('a-1', 'Research'), agentRow('a-2', 'Builder')]
+const AGENTS = [agentRow('a-1', 'Research'), agentRow('a-2', 'Builder'), { ...agentRow('a-runtime', 'Chat runtime'), driver: 'acp' as const }]
+const bindRuntime = vi.fn((_userId: string, chat: Record<string, unknown>) => { chatRow = { ...chat, agentId: 'a-runtime' }; return chatRow })
+vi.mock('../services/chatConductorService', () => ({ chatConductorService: { bind: (...args: Parameters<typeof bindRuntime>) => bindRuntime(...args) } }))
 
 const findAgent = vi.fn((_s: string, _p: string, id: string) => {
   const row = AGENTS.find((a) => a.id === id)
@@ -128,10 +130,6 @@ vi.mock('../services/a2aStreamingService', () => ({
   a2aStreamingService: { streamToAgent }
 }))
 
-const llmStream = vi.fn(async (_input: unknown) => undefined)
-vi.mock('../services/chatStreamingService', () => ({
-  chatStreamingService: { stream: llmStream }
-}))
 
 const driverRun = vi.fn(async () => ({ text: '', parts: [], notices: [] }))
 /** Whether this turn's agent runs in a folder on this machine (`capabilities.cwd`). */
@@ -218,7 +216,7 @@ function routedTo(): string {
 
 /** The port the turn was actually handed — the inbox-observing wrapper, not the raw one. */
 function portGivenToTheStream(): { postMessage: (msg: RunEvent) => void; close: () => void } {
-  const call = (streamToAgent.mock.calls.at(-1) ?? llmStream.mock.calls.at(-1))![0]
+  const call = streamToAgent.mock.calls.at(-1)![0]
   return (call as { port: { postMessage: (msg: RunEvent) => void; close: () => void } }).port
 }
 
@@ -234,9 +232,6 @@ afterEach(() => {
   // Close those fake turns so the main execution owner releases the chat.
   for (const call of streamToAgent.mock.calls) {
     ;(call[0] as unknown as { port: { close(): void } }).port.close()
-  }
-  for (const call of llmStream.mock.calls) {
-    ;(call[0] as { port: { close(): void } }).port.close()
   }
 })
 
@@ -268,11 +263,28 @@ describe('run:send — who answers', () => {
     expect(routedTo()).toBe('a-1')
   })
 
-  it('sends a coordinated chat to the local model', async () => {
+  it('binds an agentless coordinated chat to its default runtime', async () => {
     chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
     await send({ chatId: 'chat-1', content: 'hello', addressedAgentId: 'a-2' })
-    expect(llmStream).toHaveBeenCalledTimes(1)
-    expect(streamToAgent).not.toHaveBeenCalled()
+    expect(prepareLlmSend).not.toHaveBeenCalled()
+    expect(routedTo()).toBe('a-runtime')
+    expect(prepareAgentSend).toHaveBeenCalled()
+  })
+
+  it('runs a plain chat through its default runtime without an SDK model or provider', async () => {
+    chatRow = { id: 'chat-1', router: 'direct', agentId: null, providerId: null, modelId: null }
+    await send({ chatId: 'chat-1', content: 'hello' })
+    expect(routedTo()).toBe('a-runtime')
+    expect(prepareLlmSend).not.toHaveBeenCalled()
+  })
+
+  it('refuses a failed runtime binding instead of falling back to the retired SDK loop', async () => {
+    chatRow = { id: 'chat-1', router: 'direct', agentId: null, providerId: 'legacy', modelId: 'legacy' }
+    bindRuntime.mockImplementationOnce((_user, chat) => chat)
+    const port = await send({ chatId: 'chat-1', content: 'hello' })
+    expect(port.postMessage).toHaveBeenCalledWith({ type: 'error', error: 'This conversation has no configured runtime.' })
+    expect(reportRunCompletion).toHaveBeenCalledWith('chat-1', 'failed', 'This conversation has no configured runtime.')
+    expect(prepareLlmSend).not.toHaveBeenCalled()
     expect(prepareAgentSend).not.toHaveBeenCalled()
   })
 
@@ -413,6 +425,18 @@ describe('run:send — the catch-up packet', () => {
     expect(listMessages).not.toHaveBeenCalled()
   })
 
+  it('gives a returning coordinator the specialist result its retained session missed', async () => {
+    chatRow = { id: 'chat-1', router: 'coordinator', agentId: 'a-2' }
+    history.unshift(message({ role: 'assistant', content: 'Earlier completed work', sourceAgentId: 'a-1' }))
+    cursorGet.mockReturnValue({ lastMessageId: history[0].id })
+    await send({ chatId: 'chat-1', content: 'Continue after handback.' })
+    const wire = await wireContent()
+    expect(routedTo()).toBe('a-2')
+    expect(wire).toContain('[Research] Three files in invoices/.')
+    expect(wire).not.toContain('Earlier completed work')
+    expect(wire.endsWith('Continue after handback.')).toBe(true)
+  })
+
   it('sends no packet when the addressed agent has seen everything', async () => {
     cursorGet.mockReturnValue({ lastMessageId: history.at(-1)!.id })
     await send({ chatId: 'chat-1', content: 'and again', addressedAgentId: 'a-1' })
@@ -480,9 +504,9 @@ describe('run:send — a throw before the turn has an owner', () => {
     expect(port.close).toHaveBeenCalledTimes(1)
   })
 
-  it('does not post over an llm stream that already owns the port either', async () => {
+  it('does not post over a runtime stream that already owns the port either', async () => {
     chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
-    llmStream.mockImplementationOnce(async (input) => {
+    streamToAgent.mockImplementationOnce(async (input) => {
       const ended = input as { onFinished: (result: { state: 'completed'; text: string }) => void; port: { postMessage(event: RunEvent): void; close(): void } }
       ended.port.postMessage({ type: 'done' })
       ended.onFinished({ state: 'completed', text: 'saved' })
@@ -517,7 +541,7 @@ describe('run:send — refusals and the channels it replaced', () => {
     const port = await send({ chatId: 'chat-9', content: 'hello' })
     expect(port.close).toHaveBeenCalled()
     expect(streamToAgent).not.toHaveBeenCalled()
-    expect(llmStream).not.toHaveBeenCalled()
+    expect(prepareLlmSend).not.toHaveBeenCalled()
   })
 
   it('records a missing agent in the transcript rather than only on the port', async () => {
@@ -601,7 +625,7 @@ describe('run:send — the inbox tap', () => {
     const port = await send({ chatId: 'chat-1', content: 'Do this twice' })
     expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', error: expect.stringContaining('pending remote handoff') }))
     expect(streamToAgent).not.toHaveBeenCalled()
-    expect(llmStream).not.toHaveBeenCalled()
+    expect(prepareLlmSend).not.toHaveBeenCalled()
   })
 
   it('mirrors an agent turn’s events into the inbox and still forwards them', async () => {
@@ -615,15 +639,14 @@ describe('run:send — the inbox tap', () => {
     expect(port.postMessage).toHaveBeenCalledWith(ASK)
   })
 
-  it('names no agent on the model’s own turn', async () => {
-    // A coordinated chat's turn belongs to the model; an ask inside it comes
-    // from a nested agent, and the `child` wrapper is what names that one.
+  it('attributes a runtime conductor’s own asks to that runtime', async () => {
+    // Root asks belong to the runtime. A child wrapper independently names a specialist.
     chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
     await send({ chatId: 'chat-1', content: 'hello' })
     portGivenToTheStream().postMessage(ASK)
 
     expect(recordRunEvent).toHaveBeenCalledWith(
-      { userId: 'profile-user', chatId: 'chat-1', agentId: null, turnId: expect.any(String), rootRunId: expect.any(String), completionOwner: 'turn' },
+      { userId: 'profile-user', chatId: 'chat-1', agentId: 'a-runtime', turnId: expect.any(String), rootRunId: expect.any(String), completionOwner: 'turn' },
       ASK
     )
   })
@@ -651,7 +674,7 @@ describe('main-owned turn lifetime', () => {
     expect(cancel).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps an early-returning model turn alive with no renderer until its stream closes', async () => {
+  it('keeps an early-returning runtime turn alive with no renderer until its stream closes', async () => {
     chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
     const observer = vi.fn()
     const handle = runExecutionService.start(scope, payload, { observe: observer })
@@ -664,18 +687,18 @@ describe('main-owned turn lifetime', () => {
     expect(() => runExecutionService.start(scope, payload, { observe: observer })).toThrow('already has a turn')
     const port = portGivenToTheStream()
     port.postMessage(ASK)
-    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ turnId: handle.id, agentId: null }), ASK)
+    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ turnId: handle.id, agentId: 'a-runtime' }), ASK)
     port.close()
     await handle.completed
     expect(runExecutionService.isRunning('chat-1')).toBe(false)
   })
 
-  it('continues the asking agent in a coordinator chat without redirecting the answer to the model', async () => {
+  it('continues the asking agent in a coordinator chat without redirecting the answer to the conductor', async () => {
     chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
     const handle = runExecutionService.start(scope, payload, { observe: vi.fn(), agentId: 'a-2' })
     await handle.accepted
     expect(routedTo()).toBe('a-2')
-    expect(llmStream).not.toHaveBeenCalled()
+    expect(prepareLlmSend).not.toHaveBeenCalled()
     expect(prepareAgentSend).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a-2', userContent: 'Continue' }))
   })
 
@@ -705,14 +728,14 @@ describe('main-owned turn lifetime', () => {
     expect(runExecutionService.isRunning('chat-1')).toBe(false)
   })
 
-  it('observes an unexpected model setup failure even if the streaming service never closed', async () => {
+  it('observes an unexpected runtime setup failure even if the streaming service never closed', async () => {
     chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
-    llmStream.mockRejectedValueOnce(new Error('setup failed'))
+    streamToAgent.mockRejectedValueOnce(new Error('setup failed'))
     const observer = vi.fn()
     const handle = runExecutionService.start(scope, payload, { observe: observer })
     await handle.accepted
     await handle.completed
-    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ agentId: null }), {
+    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a-runtime' }), {
       type: 'error', error: 'setup failed'
     })
     expect(runExecutionService.isRunning('chat-1')).toBe(false)
@@ -924,12 +947,12 @@ describe('typed main turn completion', () => {
   const scope = { profileUserId: 'profile-user', settingsUserId: 'settings-user' }
   const payload = { chatId: 'chat-1', content: 'Continue' }
   function serviceInput() {
-    return (streamToAgent.mock.calls.at(-1) ?? llmStream.mock.calls.at(-1))![0] as {
+    return streamToAgent.mock.calls.at(-1)![0] as {
       onFinished: (outcome: { state: 'completed' | 'failed' | 'canceled'; text: string }) => void
       port: { postMessage(event: RunEvent): void; close(): void }
     }
   }
-  it('waits for model persistence/close, returns final text, and reports exactly once', async () => {
+  it('waits for runtime persistence/close, returns final text, and reports exactly once', async () => {
     chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
     const handle = runExecutionService.start(scope, payload, { observe: vi.fn() })
     await handle.accepted

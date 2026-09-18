@@ -64,6 +64,7 @@ const { agentService } = await import('./agentService')
 function row(id: string, source: string, over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id,
+    userId: 'default',
     name: id,
     description: null,
     protocol: source === 'folder' ? 'local-folder' : 'a2a',
@@ -97,6 +98,16 @@ beforeEach(() => {
 })
 
 describe('agentService readiness', () => {
+  it('resolves and checks a synthetic chat runtime in its owning profile only', () => {
+    const conductor = row('conductor', 'local', { userId: 'alice', driver: 'acp', driverConfig: { launcher: 'claude', conductorChatId: 'chat' } })
+    db.rows.set('alice', [conductor])
+    db.getOwned.mockImplementation((owner: string, id: string) => owner === 'alice' && id === 'conductor' ? conductor : undefined)
+    expect(agentService.findAgent('default', 'alice', 'conductor')).toEqual({ row: conductor, userId: 'alice' })
+    expect(agentService.findAgent('default', 'bob', 'conductor')).toBeNull()
+    expect(agentService.listMerged('default', 'alice')[0]).toMatchObject({ id: 'conductor', conductor: true })
+    expect(readiness.kick).toHaveBeenCalledWith([{ userId: 'alice', row: conductor }])
+    expect(agentService.listMerged('default', 'bob')).toEqual([])
+  })
   it.each(['claude', 'codex', 'opencode'])('exposes the saved %s builder runtime in its owning profile', (developmentEngine) => {
     db.rows.set('default', [row('builder', 'local', { driver: 'acp', driverConfig: { launcher: 'custom', developmentProfileId: 'alice', developmentEngine } })])
     const dto = agentService.listMerged('default', 'alice')[0]

@@ -1,3 +1,4 @@
+import { chatModeService } from './chatModeService'
 import { taskRunnerBridge } from './taskRunnerBridge'
 import { nanoid } from 'nanoid'
 import { chatRepo, ChatRow, ChatMetaUpdate, MessageRow } from '../db/chats'
@@ -7,7 +8,7 @@ import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { messageRepo } from '../db/messages'
 import { agentService } from './agentService'
-import { aiFunctions, AiFunctionError } from './aiFunctionsService'
+import { chatConductorService, canConduct, isChatConductor } from './chatConductorService'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { ChatError, McpError, AgentError } from '../errors'
 import { routerOf, type ChatRouter } from '../../shared/chatRouting'
@@ -93,11 +94,14 @@ export const chatService = {
     taskRunnerBridge.chatRemoved(userId, chatId)
     forgetChatSessions(chatId)
     sessionActivityHub.clear(chatId)
+    chatConductorService.remove(userId, chatId)
     logger.info('chat permanently deleted', { chatId })
   },
 
   emptyTrash(userId: string): void {
+    const chats = chatRepo.listTrash(userId)
     const removed = chatRepo.emptyTrash(userId)
+    for (const chat of chats) chatConductorService.remove(userId, chat.id)
     logger.info('trash emptied', { removed })
   },
 
@@ -106,10 +110,33 @@ export const chatService = {
     if (taskRunnersByChat.has(chatId) && Object.keys(updates).some((key) => key !== 'title')) {
       throw new ChatError('not_configured', 'Stop the autonomous task before changing its model or routing.')
     }
+    if (chat.router === 'coordinator' && updates.router && updates.router !== 'coordinator') throw new ChatError('not_configured', 'AI routing cannot be turned off for this chat.')
+    const changesRuntime = updates.modeId !== undefined || updates.providerId !== undefined || updates.modelId !== undefined || updates.agentId !== undefined || updates.router !== undefined
+    if (changesRuntime && activeRunId(chatId)) throw new ChatError('run_active', 'Interrupt the session before changing its runtime.')
+    if (updates.modeId) {
+      const mode = chatModeService.findMerged(updates.modeId)
+      if (mode) updates = { ...updates, providerId: mode.providerId, modelId: mode.modelId }
+    }
+    const next = { ...chat, ...updates }
+    const bound = next.agentId ? agentService.findAgent(getSettingsScopeUserId(), userId, next.agentId) : null
+    if (bound && isChatConductor(bound.row) && bound.row.driverConfig?.conductorChatId !== chatId) throw new ChatError('not_configured', 'This runtime belongs to another chat.')
+    if (bound && isChatConductor(bound.row) && (updates.modeId !== undefined || updates.providerId !== undefined || updates.modelId !== undefined)) {
+      chatConductorService.ensure(userId, next, true)
+      releaseChatSessions(chatId, bound.row.id)
+    }
+    if (next.router === 'coordinator') {
+      const located = next.agentId ? agentService.findAgent(getSettingsScopeUserId(), userId, next.agentId) : null
+      if (!located || !canConduct(located.row)) {
+        if (next.agentId) chatOnDemandAgentRepo.add(chatId, next.agentId)
+        updates = { ...updates, agentId: chatConductorService.ensure(userId, { ...next, agentId: null }).id }
+      }
+    } else if (next.router === 'direct' && !next.agentId) {
+      updates = { ...updates, agentId: chatConductorService.ensure(userId, next).id }
+    }
     const ok = chatRepo.updateMeta(userId, chatId, updates)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
     // Who answers here changed: the old sessions are no longer this chat's.
-    if (updates.router !== undefined && updates.router !== routerOf(chat)) releaseChatSessions(chatId)
+    if (updates.router !== undefined && updates.router !== routerOf(chat) && updates.agentId !== chat.agentId && !(updates.agentId === undefined && next.agentId === chat.agentId)) releaseChatSessions(chatId)
     else if (updates.agentId !== undefined && chat.agentId && updates.agentId !== chat.agentId) releaseChatSessions(chatId, chat.agentId)
   },
 
@@ -158,12 +185,14 @@ export const chatService = {
     const mcp = mcpProviderRepo.getOwned(getSettingsScopeUserId(), mcpProviderId)
     if (!mcp) throw new McpError('not_found', 'MCP provider not found')
     chatOnDemandMcpRepo.add(chatId, mcpProviderId)
+    refreshConductor(chatId)
     logger.info('on-demand MCP added', { chatId, mcpProviderId, mcpName: mcp.name })
   },
 
   removeOnDemandMcp(userId: string, chatId: string, mcpProviderId: string): void {
     requireOwnedChat(userId, chatId)
     chatOnDemandMcpRepo.remove(chatId, mcpProviderId)
+    refreshConductor(chatId)
     logger.info('on-demand MCP removed', { chatId, mcpProviderId })
   },
 
@@ -189,6 +218,7 @@ export const chatService = {
     const located = agentService.findAgent(getSettingsScopeUserId(), userId, agentId)
     if (!located) throw new AgentError('not_found', 'Agent not found')
     chatOnDemandAgentRepo.add(chatId, agentId)
+    refreshConductor(chatId)
     logger.info('on-demand agent added', { chatId, agentId, agentName: located.row.name })
   },
 
@@ -220,31 +250,15 @@ export const chatService = {
     if (current === router) return
     if (taskRunnersByChat.has(chatId)) throw new ChatError('not_configured', 'Stop the autonomous task before changing who coordinates it.')
 
-    let providerId: string | undefined
-    let modelId: string | undefined
-
-    // Only the coordinator runs on the local model. An agent-rooted chat
-    // carries no model of its own (it talks straight to its agent), so one has
-    // to be resolved before the model can conduct.
-    if (router === 'coordinator' && !(chat.providerId && chat.modelId)) {
-      try {
-        const pair = aiFunctions.resolveProviderModelFromChatMode(userId, chatId)
-        providerId = pair.providerId
-        modelId = pair.modelId
-      } catch (err) {
-        if (err instanceof AiFunctionError && err.code === 'no_provider') {
-          throw new ChatError(
-            'not_configured',
-            'Add an LLM provider or pick a chat mode to let the model coordinate this chat.'
-          )
-        }
-        throw err
-      }
-    }
+    if (current === 'coordinator') throw new ChatError('not_configured', 'AI routing cannot be turned off for this chat.')
 
     const attached = chatOnDemandAgentRepo.listAgentIds(chatId)
     let bindRoot: string | null = null
-    if (router === 'direct') {
+    if (router === 'coordinator') {
+      const candidateId = chat.agentId ?? attached[0]
+      const candidate = candidateId ? agentService.findAgent(getSettingsScopeUserId(), userId, candidateId) : null
+      bindRoot = candidate && canConduct(candidate.row) ? candidate.row.id : chatConductorService.ensure(userId, { ...chat, agentId: null }).id
+    } else if (router === 'direct') {
       if (attached.length > 1) {
         throw new ChatError(
           'not_configured',
@@ -259,26 +273,26 @@ export const chatService = {
       // routers never have one.
       detachRoot: current === 'direct' ? chat.agentId : null,
       bindRoot,
-      providerId,
-      modelId
     })
     // Who answers here changed. The old sessions keep their context in the
     // database, but what they say between turns and what they were running
     // are no longer shown in this chat.
-    releaseChatSessions(chatId)
+    if (bindRoot !== chat.agentId) releaseChatSessions(chatId)
+    refreshConductor(chatId)
     logger.info('chat router changed', {
       chatId,
       from: current,
       to: router,
       hadRootAgent: !!chat.agentId,
       attached: attached.length,
-      resolvedModel: modelId ?? chat.modelId ?? null
+      conductor: bindRoot
     })
   },
 
   removeOnDemandAgent(userId: string, chatId: string, agentId: string): void {
     requireOwnedChat(userId, chatId)
     chatOnDemandAgentRepo.remove(chatId, agentId)
+    refreshConductor(chatId)
     releaseChatSessions(chatId, agentId)
     logger.info('on-demand agent removed', { chatId, agentId })
   },
@@ -299,10 +313,15 @@ export const chatService = {
       logger.warn('setMcpProviders:dropped-stale-ids', { chatId, dropped })
     }
     chatMcpRepo.replaceForChat(chatId, filtered)
+    refreshConductor(chatId)
   },
 
   getMcpProviders(userId: string, chatId: string): Array<{ chatId: string; mcpProviderId: string }> {
     requireOwnedChat(userId, chatId)
     return chatMcpRepo.list(chatId)
   }
+}
+
+function refreshConductor(chatId: string): void {
+  void import('./conductorBridge').then(({ conductorBridge }) => conductorBridge.refresh(chatId)).catch((error) => logger.warn('Could not refresh chat tools', { chatId, error: String(error) }))
 }

@@ -31,7 +31,7 @@ export function capabilitiesFor(agent: CapabilityRow): AgentCapabilities {
     case 'acp':
       const capabilities = acpCapabilities(launcherOfRow(agent))
       return agent.driverConfig?.transport === 'websocket'
-        ? { ...capabilities, auth: agent.accessTokenEncrypted ? 'token' : 'none' }
+        ? { ...capabilities, mcpInjection: false, attachments: 'none', auth: agent.accessTokenEncrypted ? 'token' : 'none' }
         : capabilities
     case 'a2a': {
       const synced = agent.source === 'remote'
@@ -111,10 +111,10 @@ function folderCapabilities(): Omit<AgentCapabilities, 'input' | 'auth'> {
     sessions: 'resumable',
     // Parked on the ask, answered while the turn is still open.
     inputResume: 'reply',
-    attachments: 'none',
+    attachments: 'local',
     // `docs/CLI_COMMANDS.yaml`, run on this machine as `/run:<name>`.
     commands: 'catalog',
-    mcpInjection: false,
+    mcpInjection: true,
     cwd: true
   }
 }

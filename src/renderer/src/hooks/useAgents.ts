@@ -4,6 +4,7 @@ import { createLogger } from '../stores/logger.store'
 import { useSetChatRouter } from './useChat'
 import { useChatStore } from '../stores/chat.store'
 import { unwrapIpcError } from '../utils/ipcError'
+import { useAppSettings } from './useAppSettings'
 import { routerOf } from '../../../shared/chatRouting'
 
 const onDemandLog = createLogger('on-demand-agent')
@@ -232,6 +233,7 @@ export function useAddOnDemandAgent() {
 export function useAttachAgentToChat(chatId: string | null): (agentId: string) => Promise<void> {
   const queryClient = useQueryClient()
   const setRouter = useSetChatRouter()
+  const { data: settings } = useAppSettings()
   const addAgent = useAddOnDemandAgent()
   const setSendError = useChatStore((s) => s.setSendError)
   return useCallback(
@@ -244,7 +246,7 @@ export function useAttachAgentToChat(chatId: string | null): (agentId: string) =
         if (router === 'direct') {
           await setRouter.mutateAsync({
             chatId,
-            router: chat?.agentId ? 'human' : 'coordinator'
+            router: chat?.agentId ? (settings?.defaultMultiAgentRouting ?? 'human') : 'coordinator'
           })
         }
         await addAgent.mutateAsync({ chatId, agentId })
@@ -252,7 +254,7 @@ export function useAttachAgentToChat(chatId: string | null): (agentId: string) =
         setSendError(unwrapIpcError(err, 'Could not add agent'))
       }
     },
-    [chatId, queryClient, setRouter, addAgent, setSendError]
+    [chatId, queryClient, setRouter, addAgent, setSendError, settings?.defaultMultiAgentRouting]
   )
 }
 

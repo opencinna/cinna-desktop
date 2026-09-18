@@ -72,7 +72,7 @@ Filtering field *names* is necessary but not sufficient — Gemini also rejects 
 
 ## Flow
 
-1. `chatStreamingService` aggregates `ToolDefinition[]` from every attached MCP server and agent provider, and hands them to the adapter unchanged.
+1. The retained adapter interface accepts ToolDefinition schemas when explicitly supplied. Current AI Functions calls supply no tools; runtime chat tools use the MCP bridge and the engine's own provider translation.
 2. Anthropic and OpenAI pass `inputSchema` straight through to `input_schema` / `parameters`.
 3. Gemini's adapter runs each schema through the sanitizer, collecting a per-tool report.
 4. Anything the sanitizer changed is logged as `schema sanitized` with the tool name — `translated` for constraints that survived in another shape, `dropped` for those that didn't.
@@ -84,7 +84,7 @@ Filtering field *names* is necessary but not sufficient — Gemini also rejects 
 ```
 MCP server / agent descriptor
   -> ToolDefinition.inputSchema (raw JSON Schema)
-    -> chatStreamingService (aggregates, no translation)
+    -> explicit adapter caller (retained translation contract, not current runtime chats)
       -> AnthropicAdapter -> input_schema   (verbatim)
       -> OpenAIAdapter    -> parameters     (verbatim)
       -> GeminiAdapter    -> toGeminiParameters()

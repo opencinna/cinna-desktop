@@ -17,7 +17,8 @@ import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useNewChatFlow, resolveModel } from '../../hooks/useNewChatFlow'
 import { useApplyChatMode } from '../../hooks/useApplyChatMode'
-import { newChatRouter } from '../../../../shared/chatRouting'
+import { useAppSettings } from '../../hooks/useAppSettings'
+import { canConduct, newChatRouter } from '../../../../shared/chatRouting'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
 import { CinnaLogoDraw } from '../ui/CinnaLogoDraw'
@@ -41,6 +42,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   const { data: defaultMode } = useDefaultChatMode()
   const { data: chatModes } = useChatModes()
   const hintsEnabled = useHintsEnabled()
+  const { data: appSettings } = useAppSettings()
   const { startNewChat } = useNewChatFlow()
   const applyChatMode = useApplyChatMode()
   // New-chat mode selection, modelled as intent rather than a snapshot:
@@ -59,6 +61,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   // On-demand MCP buffer for the new-chat screen — the chat row doesn't
   // exist yet, so picks are held here until `useNewChatFlow.startNewChat`
   // flushes them onto the created chat.
+  const [coordinate, setCoordinate] = useComposerDraftField(newChatDraftKey, 'coordinate')
   const [pendingMcpIds, setPendingMcpIds] = useComposerDraftField(newChatDraftKey, 'pendingMcpIds')
   // The new-chat agent set — a single ordered list. Both the `[+]` capability
   // picker and the `@` popup toggle into it; the "primary" agent (first picked)
@@ -130,8 +133,8 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   // The router this selection would create — the same call `startNewChat`
   // makes, so the badge cannot promise a shape the send does not build.
   const newRouter = useMemo(
-    () => newChatRouter({ agentIds: combinedAgentIds, mcpIds: pendingMcpIds }),
-    [combinedAgentIds, pendingMcpIds]
+    () => newChatRouter({ agentIds: combinedAgentIds, mcpIds: [...activeModeMcpIds, ...pendingMcpIds], defaultMultiAgentRouting: appSettings?.defaultMultiAgentRouting, coordinate }),
+    [combinedAgentIds, pendingMcpIds, activeModeMcpIds, appSettings?.defaultMultiAgentRouting, coordinate]
   )
 
   const routerInfo = useMemo(() => {
@@ -144,12 +147,15 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       : undefined
     return {
       router: newRouter,
+      coordinateAction: newRouter !== 'coordinator' && combinedAgentIds.length > 0 ? { conductorName: selectedAgent && canConduct(selectedAgent) ? selectedAgent.name : 'Default runtime', onCoordinate: () => setCoordinate(true) } : undefined,
+      conductorId: selectedAgent && canConduct(selectedAgent) ? selectedAgent.id : null,
+      conductorName: selectedAgent && canConduct(selectedAgent) ? selectedAgent.name : 'Default runtime',
       agentName: nameOf(combinedAgentIds[0]),
       // The first agent picked is who `startNewChat` sends the first message to.
       answererName: nameOf(combinedAgentIds[0]),
       modelName
     }
-  }, [newRouter, combinedAgentIds, pendingMcpIds, agentList, activeMode, effectiveProviderId, providers, allModels])
+  }, [newRouter, setCoordinate, selectedAgent, combinedAgentIds, pendingMcpIds, agentList, activeMode, effectiveProviderId, providers, allModels])
 
   // The refusal an example prompt would meet: the same rule the composer
   // applies to the agent a message goes straight to. Example prompts are never
@@ -212,25 +218,12 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       // A chat an agent answers — `direct` with an agent, or `human` — needs no
       // local model at all. Only a coordinated chat, or a plain chat with the
       // model itself, requires a resolvable provider + model.
-      const needsModel = newRouter === 'coordinator' || combinedAgentIds.length === 0
-      // No readiness guard here. The composer has already decided — it refuses
-      // a send to an agent that is not ready, and lets a catalog `/run:`
-      // through — and an example prompt is refused where it is clicked. A guard
-      // here once dropped a `/run:` the composer had already cleared, silently.
-      const resolvedModelId = resolveModel(activeMode, effectiveProviderId, providers, allModels)
-      const hasModel = !!effectiveProviderId && !!resolvedModelId
-      if (needsModel && !hasModel) {
-        setSendError(
-          combinedAgentIds.length > 0
-            ? 'Letting the model coordinate needs a local model — pick a chat mode or set a default in Settings. Removing the MCP servers lets the agents answer you directly instead.'
-            : "Can't send message — no agent, chat mode, or AI credentials are configured. Pick an agent or set a default chat mode in Settings."
-        )
-        return false
-      }
       setSendError(null)
       const started = await startNewChat({
         message,
         agentIds: combinedAgentIds,
+        defaultMultiAgentRouting: appSettings?.defaultMultiAgentRouting,
+        coordinate,
         mode: activeMode,
         providerId: effectiveProviderId,
         providers,
@@ -248,6 +241,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       // Navigation never consumes a draft. Successful sends reset only the
       // selections that have not been edited while preparation was in flight.
       useComposerDraftStore.getState().update(newChatDraftKey, (draft) => ({
+        ...(draft.coordinate === coordinate ? { coordinate: false } : {}),
         ...(draft.modeSelection === modeSelection ? { modeSelection: 'auto' as const } : {}),
         ...(draft.pendingMcpIds === pendingMcpIds ? { pendingMcpIds: [] } : {}),
         ...(draft.pendingAgentIds === storedPendingAgentIds ? { pendingAgentIds: null } : {})
@@ -258,6 +252,8 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       startNewChat,
       embedded,
       combinedAgentIds,
+      appSettings?.defaultMultiAgentRouting,
+      coordinate,
       activeMode,
       effectiveProviderId,
       providers,

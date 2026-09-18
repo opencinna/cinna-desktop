@@ -689,6 +689,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                         agentName={msg.toolProvider ?? msg.toolName ?? 'Agent'}
                         agentId={msg.toolAgentId}
                         parts={subParts}
+                        renderRequest={(part, decision) => renderRequestBlock(`nested-${part.toolId}`, part, false, decision)}
                         askMessage={askMessage}
                         status={msg.toolError ? 'error' : 'done'}
                         errorText={msg.toolError ? msg.content : undefined}
@@ -1332,6 +1333,8 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                     agentName={block.provider ?? block.name}
                     agentId={block.agentId}
                     parts={block.subParts ?? []}
+                    renderRequest={(part, decision) => renderRequestBlock(`nested-${part.toolId}`, part, false, decision)}
+                    onStop={() => window.api.agents.cancelMessage(`nested:${JSON.stringify([chatId, block.id])}`)}
                     askMessage={askMessage}
                     status={block.status}
                     isStreaming={block.status === 'pending'}

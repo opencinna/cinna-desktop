@@ -14,13 +14,14 @@ export interface ComposerDraft {
   modeSelection: 'auto' | 'none' | { id: string }
   pendingAgentIds: string[] | null
   pendingMcpIds: string[]
+  coordinate: boolean
 }
 
 export const EMPTY_COMPOSER_DRAFT: ComposerDraft = {
   sending: false,
   text: '', notes: [],
   files: { attachments: [], uploading: false, error: null, token: null },
-  modeSelection: 'auto', pendingAgentIds: null, pendingMcpIds: []
+  modeSelection: 'auto', pendingAgentIds: null, pendingMcpIds: [], coordinate: false
 }
 
 /** Session-only drafts. Profiles and entry surfaces never share a buffer. */

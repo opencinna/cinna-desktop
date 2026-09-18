@@ -1,3 +1,4 @@
+import { migrateConductorSessions } from './conductor-sessions'
 import type Database from 'better-sqlite3'
 import { migrateProviders } from './providers'
 import { migrateMcp } from './mcp'
@@ -76,6 +77,7 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateAccountConfig(sqlite)
   migrateAgentOverrides(sqlite)
   migrateA2aSessions(sqlite)
+  migrateConductorSessions(sqlite)
   migrateChatFiles(sqlite)
   // Jobs depend on chats + mcp_providers being present (FK references).
   migrateJobs(sqlite)

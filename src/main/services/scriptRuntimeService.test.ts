@@ -17,13 +17,17 @@ vi.mock('../mcp/manager', () => ({ mcpManager: { getConnection: () => null } }))
 vi.mock('./cinnaApiService', () => ({ getCinnaServerUrl: () => null, cinnaApiService: {} }))
 vi.mock('./syncService', () => ({ syncService: { markDirty() {} } }))
 vi.mock('./fileStore', () => ({ attachmentToMediaPart: async () => null }))
+vi.mock('./chatConductorService', () => ({ chatConductorService: { remove() {}, bind: (_user: string, chat: { id: string }) => {
+  state.database!.raw.prepare('UPDATE chats SET agent_id = ? WHERE id = ?').run('runtime', chat.id)
+  return { ...chat, agentId: 'runtime' }
+} } }))
 vi.mock('./taskFileService', () => ({ taskFileService: { exportHandoff() {}, removeHandoff() {} } }))
 vi.mock('./chatTitleService', () => ({ chatTitleService: { autoGenerateForFirstMessage: async () => {} }, ChatTitleError: class extends Error {} }))
 vi.mock('./agentService', () => ({ agentService: {
   findAgent: (_settings: string, _user: string, id: string) => { const row = state.agents.find((agent) => agent.id === id); return row ? { row, userId: '__default__' } : null },
   listMerged: () => state.agents
 } }))
-vi.mock('../agents/drivers', () => ({ driverFor: () => ({ run: driverRun, capabilities: () => ({ commands: { source: 'none' } }) }) }))
+vi.mock('../agents/drivers', () => ({ driverFor: (agent: AgentRow) => ({ run: agent.id === 'runtime' ? runConductor : driverRun, capabilities: () => ({ commands: { source: 'none' } }) }) }))
 vi.mock('./localAgents/commandService', () => ({ resolveCommandRunner: (_cap: unknown, _wire: string, _user: string, _agent: string, run: unknown) => run }))
 vi.mock('../llm/registry', () => ({ getAdapter: (): LLMAdapter => ({ providerType: 'openai', listModels: async () => [], stream,
   modelCapability: () => ({ acceptedMimeTypes: [], nativeMimeTypes: [], maxFilesPerMessage: 0, maxFileSizeBytes: 0 }),
@@ -49,6 +53,14 @@ const { activeRunsByChat } = await import('./runExecutionState')
 const { appSettingsRepo } = await import('../db/appSettings')
 const USER = '__default__'
 const scope = { profileUserId: USER, settingsUserId: USER }
+const runConductor: AgentDriver['run'] = async (_owner, _agent, input) => {
+  const scripted = await stream({ model: 'runtime', messages: [], tools: input.coordinator?.getTools(), signal: input.signal, onDelta() {} })
+  const call = scripted.toolCalls[0]
+  input.toolCallBudget?.consume()
+  const result = await input.coordinator!.callTool(call.name, call.input, { toolCallId: call.id, signal: input.signal, onEvent: input.onEvent })
+  const text = result.control?.kind === 'finish' ? result.control.summary : ''
+  return { text, parts: text ? [{ kind: 'text', text }] : [], notices: [], control: result.control }
+}
 
 beforeEach(() => {
   state.database = createTestDatabase()
@@ -60,6 +72,8 @@ beforeEach(() => {
     enabled: true, userId: USER, cardUrl: `http://localhost/${name}` } as AgentRow))
   for (const row of state.agents) state.database.raw.prepare(`INSERT INTO agents (id, user_id, name, protocol, enabled, source, driver, card_url, created_at)
     VALUES (?, ?, ?, 'a2a', 1, 'local', 'a2a', ?, 1)`).run(row.id, USER, row.name, row.cardUrl)
+  state.agents.push({ id: 'runtime', name: 'Runtime', driver: 'acp', enabled: true, userId: USER } as AgentRow)
+  state.database.raw.prepare("INSERT INTO agents (id, user_id, name, protocol, enabled, source, driver, created_at) VALUES ('runtime', ?, 'Runtime', 'acp', 1, 'local', 'acp', 1)").run(USER)
 })
 afterEach(async () => {
   for (const entry of taskRunnersByChat.values()) { try { entry.cancel() } catch { /* terminal */ } }

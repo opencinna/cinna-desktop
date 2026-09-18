@@ -19,8 +19,8 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..')
 
 const holder = vi.hoisted(() => ({ current: null as TestDatabase | null }))
 const ai = vi.hoisted(() => ({
-  /** Set per test: what `resolveAdapterFromDefaultMode` should do. */
-  resolve: null as null | (() => { adapter: unknown; modelId: string }),
+  /** Set per test: what `resolveBackend` should do. */
+  resolve: null as null | (() => { kind: 'adapter'; adapter: unknown; modelId: string } | { kind: 'runtime'; userId: string }),
   /** Set per test: one response per call, in order. */
   responses: [] as (string | (() => string))[],
   calls: [] as { label?: string; systemPrompt: string; userText: string }[]
@@ -62,7 +62,7 @@ vi.mock('../../db/client', () => ({
 vi.mock('../aiFunctionsService', () => ({
   AiFunctionError: FakeAiFunctionError,
   aiFunctions: {
-    resolveAdapterFromDefaultMode: () => {
+    resolveBackend: () => {
       if (!ai.resolve) {
         throw new FakeAiFunctionError('no_provider', 'No default chat mode with a provider')
       }
@@ -112,7 +112,7 @@ beforeEach(() => {
   clearContractCache()
   scannerService.markAllRootsDirty()
   turnLock.releaseAll()
-  ai.resolve = () => ({ adapter: {}, modelId: 'test-model' })
+  ai.resolve = () => ({ kind: 'adapter', adapter: {}, modelId: 'test-model' })
   ai.responses = []
   ai.calls = []
   workshop = mkdtempSync(join(tmpdir(), 'cinna-draft-'))
@@ -228,14 +228,14 @@ describe('draft', () => {
     expect(ai.calls[0].userText).toContain('Alpha')
   })
 
-  it('skips the draft, and changes nothing, when no AI credential is configured', async () => {
+  it('skips the draft, and changes nothing, when the configured AI Functions credential is unavailable', async () => {
     ai.resolve = null
     const before = workflowText()
 
     const result = await localAgentDraftService.draft(USER, agentId)
 
     expect(result.status).toBe('skipped')
-    expect(result.reason).toMatch(/AI credential/i)
+    expect(result.reason).toMatch(/AI Functions backend/i)
     expect(result.parts.workflowPrompt).toBe(false)
     // The folder is untouched: the scaffold does not depend on a model.
     expect(workflowText()).toBe(before)
