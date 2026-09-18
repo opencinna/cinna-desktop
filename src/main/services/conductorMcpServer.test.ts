@@ -118,6 +118,25 @@ describe('conductor MCP loopback server', () => {
     expect(await client.callTool({ name: 'self' })).toMatchObject({ isError: true })
   })
 
+  it('offers exactly the names the last tools/list served, and nothing once disposed', async () => {
+    let providers = [provider('self', 'root'), provider('probe')]
+    const { session } = await subject({ conductorAgentId: 'root', getProviders: () => providers })
+    // Nothing is offered before the engine has listed.
+    expect(session.offers('probe')).toBe(false)
+    const { client } = await connect(session)
+    await client.listTools()
+    expect(session.offers('probe')).toBe(true)
+    // The conductor's own tool is never served, so never offered.
+    expect(session.offers('self')).toBe(false)
+    expect(session.offers('x_y')).toBe(false)
+    providers = [provider('x_y')]
+    await client.listTools()
+    expect(session.offers('probe')).toBe(false)
+    expect(session.offers('x_y')).toBe(true)
+    await session.dispose()
+    expect(session.offers('x_y')).toBe(false)
+  })
+
   it('creates a between-turn run before resolving providers and forwards Claude correlation and rich MCP content', async () => {
     const tool = provider('specialist')
     let currentProviders: ToolProvider[] = []

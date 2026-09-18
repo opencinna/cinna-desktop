@@ -200,8 +200,8 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
   {
     id: 'codex.permission.mcp-call-asks', area: 'permissions & questions', surface: 'ACP method', name: 'session/request_permission',
     expectation: 'Every Cinna MCP call raises a permission request with `toolCall.kind: "execute"`, an `allow_once` option, and the `toolCallId` of the `tool_call` update that named the tool — the request itself carries no title or `rawInput`.',
-    owners: ['src/main/agents/drivers/acp/acpPermissions.ts#toAcpPermissionRequest', 'src/main/agents/drivers/acp/acpPermissions.ts#pickPermissionOption', 'src/main/agents/drivers/acp/acpMessages.ts#cinnaTool'],
-    feature: 'A conducting session allows these asks silently when the `tool_call` with the same id carried `rawInput.server: "cinna"`; if the id stops matching, every Cinna call in a chat surfaces an opaque ask again, and a folder agent’s recorded `codex:<kind>` grants stop matching anything.',
+    owners: ['src/main/agents/drivers/acp/acpPermissions.ts#toAcpPermissionRequest', 'src/main/agents/drivers/acp/acpPermissions.ts#pickPermissionOption', 'src/main/agents/drivers/acp/acpMessages.ts#cinnaTool', 'src/main/agents/drivers/acp/acpDriver.ts#offersCinnaTool'],
+    feature: 'A conducting session allows these asks silently when the `tool_call` with the same id carried `rawInput.server: "cinna"` and a `rawInput.tool` Cinna’s server listed for that session; if the id stops matching, every Cinna call in a chat surfaces an opaque ask again, and a folder agent’s recorded `codex:<kind>` grants stop matching anything.',
     flow: { steps: ['B', 'D'] }
   },
   {

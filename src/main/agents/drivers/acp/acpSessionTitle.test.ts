@@ -20,7 +20,9 @@ describe('a Codex thread title, as recorded', () => {
 describe('isPromptPlaceholder', () => {
   it('matches the prompt, whitespace-normalized, and a start of it', () => {
     expect(isPromptPlaceholder('Fix  the\nparser', ['Fix the parser'])).toBe(true)
-    expect(isPromptPlaceholder('Fix the', ['Fix the parser please'])).toBe(true)
+    // A short title the prompt starts with is Codex's name for it; a long cut is the prompt.
+    expect(isPromptPlaceholder('Fix flaky parser test', ['Fix flaky parser test and add coverage'])).toBe(false)
+    expect(isPromptPlaceholder('Refactor the parser module so that every token', ['Refactor the parser module so that every token keeps its span'])).toBe(true)
     expect(isPromptPlaceholder('Parser fix', ['Fix the parser'])).toBe(false)
   })
 })

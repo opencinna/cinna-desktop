@@ -44,6 +44,12 @@ export interface ConductorLease {
   sessionLost?(): void
   observe?(notification: import('@agentclientprotocol/sdk').SessionNotification): boolean
   owns?(id: string): boolean
+  /**
+   * Whether Cinna's MCP server offered this session the tool `toolName` (bare,
+   * as served): the last `tools/list` it answered named it. A tool another
+   * server happens to spell with a `cinna` prefix was never offered.
+   */
+  offers?(toolName: string): boolean
   close(): void
   hasCalls(): boolean
 }
@@ -154,6 +160,7 @@ export const conductorBridge = {
       sessionLost: () => conductorSessionRepo.save(input.chatId, agent.id, ''),
       observe: (notification) => entry!.correlation.observe(notification),
       owns: (id) => entry!.correlation.owns(id),
+      offers: (toolName) => entry!.session.offers(toolName),
       hasCalls: () => binding.pending > 0,
       close: () => {
         input.signal.removeEventListener('abort', abort)

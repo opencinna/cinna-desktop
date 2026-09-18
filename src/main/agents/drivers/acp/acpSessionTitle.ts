@@ -68,13 +68,24 @@ export function sessionInfoTitle(notification: SessionNotification): string | nu
 const normalize = (text: string): string => text.replace(/\s+/g, ' ').trim()
 
 /**
+ * Longer than any title Codex generates for a thread. A title this long that
+ * the prompt starts with is the prompt cut short, not a name.
+ */
+const GENERATED_TITLE_MAX = 40
+
+/**
  * Whether a title is only the prompt echoed back: equal to one of the prompts
- * sent, or the start of one (whitespace-normalized either way).
+ * sent, or a long cut of one (whitespace-normalized either way). A short title
+ * the prompt merely starts with — "Fix flaky parser test" for "Fix flaky
+ * parser test and add coverage" — is a real name.
  */
 export function isPromptPlaceholder(title: string, prompts: readonly string[]): boolean {
   const wanted = normalize(title)
   if (!wanted) return true
-  return prompts.some((prompt) => normalize(prompt).startsWith(wanted))
+  return prompts.some((prompt) => {
+    const sent = normalize(prompt)
+    return sent === wanted || (wanted.length > GENERATED_TITLE_MAX && sent.startsWith(wanted))
+  })
 }
 
 /** How many prompts per session, and sessions, are kept to recognise a placeholder by. */

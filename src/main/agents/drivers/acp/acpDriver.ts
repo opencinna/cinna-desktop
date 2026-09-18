@@ -601,11 +601,12 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
 interface TurnContext {
   conductorOutcome?: ConductorOutcome
   /**
-   * The session has a conductor lease: Cinna's MCP server is attached and
-   * answers for this chat. True for a chat-owned runtime and for a user's
-   * agent conducting a chat alike.
+   * Set when the session has a conductor lease — Cinna's MCP server is attached
+   * and answers for this chat, for a chat-owned runtime and a user's agent
+   * conducting a chat alike: whether that server offered this session a tool
+   * (the lease's `offers`). Absent without a lease.
    */
-  conducting?: boolean
+  offersCinnaTool?: (toolName: string) => boolean
   userId: string
   agent: AgentRow
   runtime: AcpRuntimeView
@@ -1027,7 +1028,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       ctx.conductorOutcome = outcome
       setTimeout(() => { if (turn.open) askAgentToStop() }, 0)
     }, () => ctx.observers.wake(chatId, agent.id))
-    ctx.conducting = conductor !== undefined
+    ctx.offersCinnaTool = conductor?.offers ? (toolName) => conductor?.offers?.(toolName) === true : undefined
     /**
      * **A listener added to an already-aborted signal never fires**, and
      * everything before this point can await — planning walks the login-shell
@@ -1632,7 +1633,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   let leftover: HeldTraffic[] = []
   try {
     conductor = await deps.prepareConductor?.(world.userId, agent, { ...input, flush: () => { accumulator.breakContinuation(); input.flush?.() } }, world.plan, (outcome) => { if (ctx.conductorOutcome) return; ctx.conductorOutcome = outcome; setTimeout(() => { if (!ended) askAgentToStop(false) }, 0) }, () => gate.wake())
-    ctx.conducting = conductor !== undefined
+    ctx.offersCinnaTool = conductor?.offers ? (toolName) => conductor?.offers?.(toolName) === true : undefined
     if (!connection.alive) {
       end('exited')
     } else if (!gate.pending) {
@@ -1940,8 +1941,13 @@ async function answerPermission(
   // call is an opaque widget with nothing to decide (Codex raises one for every
   // MCP call, `codex.permission.mcp-call-asks`). Identified from what the
   // adapter set for the call (`AcpMessageStream.cinnaTool`), never from a
-  // title; nothing is recorded, so no grant outlives the turn.
-  if ((chatOwned || ctx.conducting) && world.stream.cinnaTool(params.toolCall.toolCallId) !== null) return selected('allow')
+  // title; nothing is recorded, so no grant outlives the turn. **And only a
+  // tool Cinna's server offered this session**: OpenCode spells an MCP tool
+  // `<server>_<tool>`, so a user's own server named `cinna_x` reads as Cinna's
+  // `x_y` there. Without a lease — even on a chat-owned runtime — nothing is
+  // allowed here.
+  const cinnaTool = world.stream.cinnaTool(params.toolCall.toolCallId)
+  if (cinnaTool !== null && ctx.offersCinnaTool?.(cinnaTool) === true) return selected('allow')
   let granted = false
   try {
     runtime.validate(input.chatId)

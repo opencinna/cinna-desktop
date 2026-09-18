@@ -19,7 +19,8 @@ vi.mock('./chatConductorService', () => ({ canConduct: () => true, isChatConduct
 vi.mock('./conductorMcpServer', () => ({ ConductorMcpServer: class {
   async ensureSession(_key: string, options: ConductorMcpSessionOptions) {
     state.options = options
-    return { descriptor: { name: 'cinna', type: 'http', url: 'http://127.0.0.1:1/mcp', headers: [] }, abortCalls: state.abort, refreshTools: vi.fn(), dispose: vi.fn() }
+    return { descriptor: { name: 'cinna', type: 'http', url: 'http://127.0.0.1:1/mcp', headers: [] }, abortCalls: state.abort, refreshTools: vi.fn(), dispose: vi.fn(),
+      offers: (name: string) => state.tools.includes(name) }
   }
 } }))
 const { conductorBridge } = await import('./conductorBridge')
@@ -116,6 +117,15 @@ describe('runtime tool integration', () => {
     expect(grown).not.toBe(first)
     // Claude and OpenCode adopt `tools/list_changed` in the live session.
     expect(new Set(await digests(false)).size).toBe(1)
+  })
+
+  it('answers what its server offered from the session, synchronously', async () => {
+    state.tools = ['probe']
+    const turn = await subject()
+    expect(turn.lease.offers?.('probe')).toBe(true)
+    expect(turn.lease.offers?.('x_y')).toBe(false)
+    state.tools = []
+    turn.lease.close()
   })
 
   it('persists a canceled tool result and releases its pending call', async () => {

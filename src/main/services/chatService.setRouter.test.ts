@@ -34,31 +34,7 @@ vi.mock('../auth/scope', () => ({
   getAgentLookupScope: () => ['__default__', USER]
 }))
 
-/** What `resolveProviderModelFromChatMode` answers. Null means "no model here". */
-const resolvedModel = vi.hoisted(
-  () => ({ current: { providerId: 'p-1', modelId: 'm-1' } as { providerId: string; modelId: string } | null })
-)
 vi.mock('./chatModeService', () => ({ chatModeService: { findMerged: (id: string) => id === 'claude-mode' ? { providerId: null, modelId: 'sonnet' } : null } }))
-// The error class is declared **inside** the factory rather than imported into
-// it: a `vi.mock` factory is hoisted above the file's imports, so a reference to
-// one is still in its temporal dead zone when the factory runs, and the module
-// under test ends up doing `instanceof undefined`.
-vi.mock('./aiFunctionsService', () => {
-  class AiFunctionError extends Error {
-    constructor(readonly code: string, message: string) {
-      super(message)
-    }
-  }
-  return {
-    AiFunctionError,
-    aiFunctions: {
-      resolveProviderModelFromChatMode: () => {
-        if (!resolvedModel.current) throw new AiFunctionError('no_provider', 'none configured')
-        return resolvedModel.current
-      }
-    }
-  }
-})
 vi.mock('./agentService', async () => {
   const { agentRepo } = await import('../db/agents')
   return { agentService: { findAgent: (settings: string, profile: string, id: string) => {
@@ -174,7 +150,6 @@ function directChat(): string {
 
 beforeEach(() => {
   holder.current = createTestDatabase()
-  resolvedModel.current = { providerId: 'p-1', modelId: 'm-1' }
   seedAgent('a-1')
   seedAgent('a-2')
 })
@@ -193,7 +168,6 @@ it('clears the previous API credential and model when switching to a CLI mode', 
 
 describe('chatService.setRouter', () => {
   it('moves a direct chat to human with no model configured at all', () => {
-    resolvedModel.current = null
     const chatId = directChat()
 
     expect(() => chatService.setRouter(USER, chatId, 'human')).not.toThrow()
@@ -214,7 +188,6 @@ describe('chatService.setRouter', () => {
   })
 
   it('uses the default runtime for a remote root with no model configured', () => {
-    resolvedModel.current = null
     const chatId = directChat()
     chatService.setRouter(USER, chatId, 'coordinator')
     const chat = chatRepo.getOwned(USER, chatId)!

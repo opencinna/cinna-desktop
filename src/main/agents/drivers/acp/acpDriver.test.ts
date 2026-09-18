@@ -1764,7 +1764,10 @@ describe('a permission ask', () => {
 })
 
 describe('a Cinna tool ask on a conducting session', () => {
-  const conducting: Partial<AcpDriverDeps> = { prepareConductor: async () => ({ close() {}, hasCalls: () => false }) }
+  /** A lease whose server listed `probe` and nothing else. */
+  const offering = (...offered: string[]): Partial<AcpDriverDeps> =>
+    ({ prepareConductor: async () => ({ close() {}, hasCalls: () => false, offers: (name: string) => offered.includes(name) }) })
+  const conducting = offering('probe')
   /** Codex's shape: the ask carries only a kind and the id of the call that named the tool. */
   const codexAsk = (toolCall: Record<string, unknown>): FakeAcpScript => ({
     prompt: { emit: [
@@ -1791,6 +1794,53 @@ describe('a Cinna tool ask on a conducting session', () => {
     w.driver.respond({ requestId: asked.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission' }, { kind: 'permission', reply: 'reject' })
     await running
     expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'reject' } })
+  })
+
+  /** The shape every engine shares: a tool call opens, then the ask names it. */
+  const ask = (toolCall: Record<string, unknown>): FakeAcpScript => ({
+    prompt: { emit: [
+      { kind: 'update', update: { sessionUpdate: 'tool_call', toolCallId: 'call_1', status: 'pending', ...toolCall } },
+      { kind: 'permission', toolCall: { toolCallId: 'call_1', title: String(toolCall.title), status: 'pending' } }
+    ] }
+  })
+  const allowedSilently = async (w: World): Promise<void> => {
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(w.events.filter((event) => event.type === 'needs_input')).toEqual([])
+    expect(w.grants).toEqual([])
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'once' } })
+  }
+  const askedTheUser = async (w: World, run: () => Promise<unknown> = () => w.run()): Promise<void> => {
+    const running = run()
+    const asked = await askedFor(w)
+    w.driver.respond({ requestId: asked.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission' }, { kind: 'permission', reply: 'reject' })
+    await running
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({ outcome: { outcome: 'selected', optionId: 'reject' } })
+  }
+
+  it('allows an OpenCode ask for a tool Cinna’s server offered', async () => {
+    await allowedSilently(world({ launcher: 'opencode', script: ask({ title: 'cinna_probe', kind: 'other', rawInput: {} }), deps: conducting }))
+  })
+
+  it('asks about an OpenCode tool Cinna’s server never offered, however it is prefixed', async () => {
+    // OpenCode spells an MCP tool `<server>_<tool>`: a user's server `cinna_x`
+    // with a tool `y` reads as `cinna_x_y`.
+    await askedTheUser(world({ launcher: 'opencode', script: ask({ title: 'cinna_x_y', kind: 'other', rawInput: {} }), deps: conducting }))
+  })
+
+  it('allows a Claude ask for a tool Cinna’s server offered', async () => {
+    await allowedSilently(world({ launcher: 'claude', script: ask({ title: 'probe', kind: 'other', rawInput: {}, _meta: { claudeCode: { toolName: 'mcp__cinna__probe' } } }), deps: conducting }))
+  })
+
+  it('asks when the lease cannot say what its server offered', async () => {
+    const w = world({ launcher: 'codex', script: codexAsk(CINNA_CALL), deps: { prepareConductor: async () => ({ close() {}, hasCalls: () => false }) } })
+    await askedTheUser(w)
+  })
+
+  it('asks on a chat-owned runtime that has no lease', async () => {
+    const w = world({ launcher: 'codex', script: codexAsk(CINNA_CALL) })
+    const owned = { ...ROW, driverConfig: { ...ROW.driverConfig, conductorChatId: CHAT_ID } }
+    await askedTheUser(w, () => w.driver.run(USER_ID, owned, { chatId: CHAT_ID, wireContent: 'hello', signal: new AbortController().signal, onEvent: (event) => void w.events.push(event) }))
   })
 
   it('leaves a session that conducts nothing asking as before', async () => {

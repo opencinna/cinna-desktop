@@ -41,6 +41,12 @@ export interface ConductorMcpSession {
   /** Updates callbacks without changing the ACP creation parameters. */
   updateOptions(options: ConductorMcpSessionOptions): void
   refreshTools(): Promise<void>
+  /**
+   * Whether the last `tools/list` this session answered named `name` — the
+   * bare name, as served. Synchronous and memory-only: the permission gate asks
+   * it while the agent waits.
+   */
+  offers(name: string): boolean
   abortCalls(reason?: string): void
   dispose(): Promise<void>
 }
@@ -56,6 +62,8 @@ interface SessionState {
   options: ConductorMcpSessionOptions
   connections: Map<string, Connection>
   calls: Set<AbortController>
+  /** The names the last `tools/list` served, on any of the session's connections. */
+  offered: ReadonlySet<string>
   disposed: boolean
   handle: ConductorMcpSession
 }
@@ -111,7 +119,7 @@ export class ConductorMcpServer {
     const authorization = `Bearer ${randomBytes(32).toString('base64url')}`
     const state: SessionState = {
       path, authorization: Buffer.from(authorization), options,
-      connections: new Map(), calls: new Set(), disposed: false,
+      connections: new Map(), calls: new Set(), offered: new Set(), disposed: false,
       handle: {
         descriptor: { type: 'http', name: 'cinna', url: `${this.origin}${path}`, headers: [{ name: 'Authorization', value: authorization }] },
         updateOptions: (next) => {
@@ -124,6 +132,7 @@ export class ConductorMcpServer {
           // connections from seeing new tools. Fresh connections list on init.
           await Promise.allSettled([...state.connections.values()].map(({ server }) => server.sendToolListChanged()))
         },
+        offers: (name) => !state.disposed && state.offered.has(name),
         abortCalls: (reason = 'Conductor stopped') => {
           for (const controller of state.calls) controller.abort(new Error(reason))
         },
@@ -248,6 +257,7 @@ export class ConductorMcpServer {
     }
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       const providers = await this.providers(state)
+      state.offered = new Set(providers.keys())
       const tools = [...providers].map(([name, provider]) => {
         const tool = provider.getTools().find((entry) => entry.name === name)!
         return { name, description: tool.description, inputSchema: { ...tool.inputSchema, type: 'object' as const } }
