@@ -96,6 +96,20 @@ export const ENGINE_KEY_PREFIX = 'CINNA_ENGINE_KEY_'
  */
 export const CLIENT_APP_ENV = 'CLAUDE_AGENT_SDK_CLIENT_APP'
 
+/**
+ * Switches off Claude Code's own background updater for the processes Cinna
+ * spawns.
+ *
+ * A session can run on **the user's own install** (an exact-version PATH copy,
+ * or a Claude Path from Settings), and that install's updater replaces the
+ * binary and retargets `~/.local/bin/claude` from inside whichever process
+ * happens to be running. A desktop session must never be the thing that moves
+ * the user's `claude` to another version — nor move the version under a pooled
+ * adapter to one that never passed the gate. The user's own terminal sessions
+ * are untouched and update as they always did.
+ */
+export const AUTOUPDATER_ENV = 'DISABLE_AUTOUPDATER'
+
 export interface ClaudeEnvInput {
   /** The login-shell environment, as `resolveShellEnv` produced it. */
   shellEnv: NodeJS.ProcessEnv
@@ -140,6 +154,9 @@ export function buildClaudeEnv(input: ClaudeEnvInput): Record<string, string> {
   // Not `CLAUDE_CODE_ENTRYPOINT`: the SDK sets that itself (`sdk-ts`) and
   // overwriting it would misreport how the CLI was invoked.
   out[CLIENT_APP_ENV] = `cinna-desktop/${input.appVersion}`
+  // Set last, so nothing inherited can switch it back on. Every Cinna-spawned
+  // `claude` gets this environment — sessions and the login probe alike.
+  out[AUTOUPDATER_ENV] = '1'
   return out
 }
 

@@ -3,7 +3,11 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer, type Server, type ServerResponse } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import {
+  downloadCeilingMs,
+  downloadToFile,
   findNamedFile,
   installPinnedAsset,
   isFile,
@@ -271,5 +275,128 @@ describe('sha256File', () => {
     const path = join(root, 'file')
     writeFileSync(path, BYTES)
     expect(await sha256File(path)).toBe(SHA)
+  })
+})
+
+/**
+ * A loopback server that sends what a test tells it to, when it tells it to —
+ * the "slow link" and the "dead link" are both just a schedule of writes.
+ */
+describe('downloadToFile — time limits and progress', () => {
+  let server: Server
+  let respond: (res: ServerResponse) => void
+  const open = new Set<ServerResponse>()
+  const url = (): string => `http://127.0.0.1:${(server.address() as AddressInfo).port}/asset`
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+  beforeEach(async () => {
+    server = createServer((_req, res) => {
+      open.add(res)
+      res.on('close', () => open.delete(res))
+      respond(res)
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  })
+
+  afterEach(async () => {
+    for (const res of open) res.destroy()
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
+  })
+
+  it('lets a slow transfer finish as long as bytes keep arriving: the limit is idleness, not duration', async () => {
+    // Eight chunks 40 ms apart is ~320 ms in all — several times the 150 ms idle
+    // limit, which a whole-transfer timeout of the same length would have cut.
+    respond = async (res) => {
+      res.writeHead(200)
+      for (let i = 0; i < 8; i++) {
+        res.write('x'.repeat(10))
+        await sleep(40)
+      }
+      res.end()
+    }
+    const dest = join(root, 'slow')
+    await downloadToFile(url(), dest, undefined, undefined, { idleMs: 150 })
+    expect(readFileSync(dest, 'utf8')).toBe('x'.repeat(80))
+  })
+
+  it('gives up on a transfer that goes silent, says so, and leaves no partial file', async () => {
+    respond = (res) => {
+      res.writeHead(200)
+      res.write('half of it')
+      // …and then nothing, with the socket left open.
+    }
+    const dest = join(root, 'stalled')
+    const started = Date.now()
+    await expect(downloadToFile(url(), dest, undefined, undefined, { idleMs: 100 })).rejects.toMatchObject({
+      code: 'download_failed',
+      message: expect.stringContaining('stalled')
+    })
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect(await isFile(dest)).toBe(false)
+  })
+
+  it('gives up on a server that never answers at all', async () => {
+    respond = () => undefined
+    await expect(downloadToFile(url(), join(root, 'silent'), undefined, undefined, { idleMs: 100 })).rejects.toMatchObject({
+      code: 'download_failed',
+      message: expect.stringContaining('stalled')
+    })
+  })
+
+  it('still stops a server that trickles forever, at the absolute ceiling', async () => {
+    respond = async (res) => {
+      res.writeHead(200)
+      while (!res.destroyed) {
+        res.write('.')
+        await sleep(20)
+      }
+    }
+    const dest = join(root, 'trickle')
+    await expect(
+      downloadToFile(url(), dest, undefined, undefined, { idleMs: 1000, ceilingMs: 200 })
+    ).rejects.toMatchObject({ code: 'download_failed', message: expect.stringContaining('too long') })
+    expect(await isFile(dest)).toBe(false)
+  })
+
+  it('scales the absolute ceiling from the expected size, and never below ten minutes', () => {
+    expect(downloadCeilingMs(1024 * 1024)).toBe(10 * 60_000)
+    // Claude Code on linux-x64: what failed at a fixed ten minutes under ~3 Mbit/s.
+    expect(downloadCeilingMs(232_059_192)).toBeGreaterThan(60 * 60_000)
+  })
+
+  it('reports progress against the pin row’s size when the server declares no length', async () => {
+    respond = (res) => {
+      res.writeHead(200) // chunked: no content-length
+      res.write('12345')
+      res.end('67890')
+    }
+    const seen: Array<[number, number | null]> = []
+    await downloadToFile(url(), join(root, 'sized'), (received, total) => seen.push([received, total]), 10)
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.every(([, total]) => total === 10)).toBe(true)
+    expect(seen.at(-1)).toEqual([10, 10])
+  })
+
+  it('reports an honest null total when neither the server nor the pin row has a length', async () => {
+    respond = (res) => {
+      res.writeHead(200)
+      res.end('12345')
+    }
+    const seen: Array<[number, number | null]> = []
+    await downloadToFile(url(), join(root, 'unsized'), (received, total) => seen.push([received, total]))
+    // Every report but the closing one, which lands the bar on what arrived.
+    expect(seen.slice(0, -1).every(([, total]) => total === null)).toBe(true)
+    expect(seen.at(-1)).toEqual([5, 5])
+  })
+
+  it('keeps the size ceiling: more bytes than the pin row recorded is a failed download', async () => {
+    respond = (res) => {
+      res.writeHead(200)
+      res.end('x'.repeat(11))
+    }
+    const dest = join(root, 'big')
+    await expect(downloadToFile(url(), dest, undefined, 10)).rejects.toMatchObject({ code: 'download_failed' })
+    expect(await isFile(dest)).toBe(false)
   })
 })

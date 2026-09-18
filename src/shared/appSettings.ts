@@ -72,6 +72,14 @@ export interface AppSettingsSchema {
    */
   localAgentsCodexPath: string
   /**
+   * Absolute path to a `claude` executable, or empty. The same rule as
+   * {@link localAgentsCodexPath}: empty means every Cinna-spawned Claude
+   * session runs on the pinned Claude Code this app verifies (its own download,
+   * or the user's install when that reports exactly the pinned version); a path
+   * here overrides that, is not version-checked, and is labelled unverified.
+   */
+  localAgentsClaudePath: string
+  /**
    * The developer tool a local agent folder opens in by default — a
    * {@link LocalToolId} of a `cli-assistant` or `editor`, or empty for "ask".
    * The agent page's Open-in button launches it in one click, and picking a

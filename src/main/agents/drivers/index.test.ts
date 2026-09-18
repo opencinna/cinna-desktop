@@ -47,7 +47,11 @@ const state = vi.hoisted(() => ({
   readiness: 'ok',
   getThrows: false,
   gets: 0,
-  ran: [] as string[]
+  ran: [] as string[],
+  /** What the download-free look finds, and how often it was asked. */
+  known: null as null | { path: string; source: string; version: string | null },
+  looks: 0,
+  claudeProbeDeps: null as null | { claudePath(): Promise<string | null> }
 }))
 
 vi.mock('../../localdev/developmentSessionService', () => {
@@ -87,7 +91,15 @@ vi.mock('../../engine/binaryResolver', () => ({
   // reads these to build the Codex service and its login probe.
   configuredCodexPath: () => null,
   realCodexResolverDeps: () => ({}),
-  knownCodexBinary: async () => null,
+  // …and the pinned Claude Code's, on the same terms.
+  configuredClaudePath: () => null,
+  realClaudeResolverDeps: () => ({}),
+  binaryFingerprint: async () => null,
+  // What the binary services' own wiring reads: the download-free look, the
+  // used-stamp and the pinned asset's size.
+  knownRuntimeBinary: async () => { state.looks++; return state.known },
+  markUsed: async () => undefined,
+  pinnedAssetBytes: () => null,
   resolveEngineBinaryWith: async () => ({ path: '/bin/opencode', source: 'path', version: '1.0.0' })
 }))
 vi.mock('../../engine/engineConfigSource', () => ({
@@ -180,6 +192,7 @@ vi.mock('./acp/acpLaunchers', async (importOriginal) => {
 vi.mock('./acp/claudeAgents', () => ({ readFolderAgents: () => ({ agents: {} }) }))
 vi.mock('./acp/claudeAuth', () => ({
   ClaudeAuthProbe: class {
+    constructor(deps: { claudePath(): Promise<string | null> }) { state.claudeProbeDeps = deps }
     status = async (): Promise<{ state: string }> => ({ state: 'unknown' })
     refresh = async (): Promise<{ state: string }> => ({ state: 'unknown' })
   }
@@ -406,6 +419,20 @@ describe('driverFor', () => {
   })
 })
 
+
+describe('the login probe’s binary', () => {
+  it('is the one the Runtime row found — an exact-version PATH copy included — from one shared look', async () => {
+    // Before: the probe asked the disk without probing PATH, so this user's
+    // login read `unknown` beside a row that had probed PATH and said "ready".
+    state.known = { path: '/real/claude/versions/2.1.276', source: 'path-pinned', version: '2.1.276 (Claude Code)' }
+    state.looks = 0
+    const { claudeBinaryService } = await import('../../engine/engineBinaryService')
+    expect(await state.claudeProbeDeps?.claudePath()).toBe('/real/claude/versions/2.1.276')
+    expect(await state.claudeProbeDeps?.claudePath()).toBe('/real/claude/versions/2.1.276')
+    expect(claudeBinaryService.state()).toMatchObject({ state: 'ready', source: 'path-pinned' })
+    expect(state.looks).toBe(1)
+  })
+})
 
 describe('AI function runtime production prompt wiring', () => {
   beforeEach(() => { state.utilityPlans = true })

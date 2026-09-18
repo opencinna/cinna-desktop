@@ -30,6 +30,8 @@ export const DEFAULTS: AppSettingsSchema = {
   localAgentsEnginePath: '',
   // Empty = the pinned Codex CLI this app downloads and verifies.
   localAgentsCodexPath: '',
+  // Empty = the pinned Claude Code this app verifies (download, or an exact-version install).
+  localAgentsClaudePath: '',
   // Empty = ask which tool to open a folder with. Rewritten by the last pick.
   localAgentsDefaultTool: '',
   localAgentsDefaultCredentialId: '',

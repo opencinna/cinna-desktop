@@ -1,7 +1,8 @@
 import { Check, Download, Loader2 } from 'lucide-react'
 import type { DetectedTool, RuntimeToolId } from '../../../../shared/localTools'
-import { PINNED_CODEX_VERSION, type AgentEngine, type EngineBinaryState } from '../../../../shared/engine'
+import { PINNED_CLAUDE_VERSION, PINNED_CODEX_VERSION, type AgentEngine, type EngineBinaryState } from '../../../../shared/engine'
 import { codexVersionLabel } from './codexStatus'
+import { claudeVersionLabel } from './claudeStatus'
 import { SettingsBadge } from './SettingsLayout'
 
 /**
@@ -32,10 +33,12 @@ export interface RuntimeChoice {
 }
 
 export const RUNTIME_CHOICES: readonly RuntimeChoice[] = [
-  { id: 'claude', label: 'Claude Agent', tool: 'claude', engine: 'claude' },
-  // Managed like OpenCode below: Cinna downloads and verifies the pinned CLI on
-  // first use. `tool` stays, since the install dialog still knows Codex as a
-  // tool the user can add for "Open in…" — this picker just never asks for it.
+  // Both CLIs are managed like OpenCode below: Cinna verifies the pinned version
+  // for itself on first use (its own download, or the user's install when that
+  // is exactly the pin). `tool` stays, since the install dialog still knows each
+  // as a tool the user can add for the terminal and "Open in…" — this picker
+  // just never asks for it, and never waits on PATH detection.
+  { id: 'claude', label: 'Claude Agent', tool: 'claude', engine: 'claude', managedVersion: PINNED_CLAUDE_VERSION },
   { id: 'codex', label: 'Codex', tool: 'codex', engine: 'codex', managedVersion: PINNED_CODEX_VERSION },
   // **Always available, and that is why it is the fallback.** Cinna downloads
   // and verifies its own `opencode` the first time an agent needs one, so this
@@ -68,7 +71,10 @@ export function RuntimeChoiceButtons({
   onInstall,
   disabled = false,
   defaultChoice,
-  codexBinary
+  codexBinary,
+  claudeBinary,
+  codexPathSet = false,
+  claudePathSet = false
 }: {
   /** The stored pin. Nothing is selected while it is still being decided. */
   selected: AgentEngine | null
@@ -87,6 +93,15 @@ export function RuntimeChoiceButtons({
    * sub-line truncates inside a button whose width the label sets.
    */
   codexBinary?: EngineBinaryState
+  /** The same, for Claude Code. */
+  claudeBinary?: EngineBinaryState
+  /**
+   * Whether an explicit path is saved for each CLI. With one saved the managed
+   * pin is not what runs, so the sub-line must not claim it in *any* state —
+   * least of all after that path failed.
+   */
+  codexPathSet?: boolean
+  claudePathSet?: boolean
 }): React.JSX.Element {
   return (
     /*
@@ -118,7 +133,11 @@ export function RuntimeChoiceButtons({
               ? undefined
               : tools.some((tool) => tool.id === choice.tool && tool.available)
         const version = managed
-          ? (choice.id === 'codex' ? codexVersionLabel(codexBinary) : `${choice.managedVersion} managed`)
+          ? (choice.id === 'codex'
+              ? codexVersionLabel(codexBinary, codexPathSet)
+              : choice.id === 'claude'
+                ? claudeVersionLabel(claudeBinary, claudePathSet)
+                : `${choice.managedVersion} managed`)
           : choice.tool === null
             ? null
             : ((tools ?? []).find((tool) => tool.id === choice.tool)?.version ?? null)

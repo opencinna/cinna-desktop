@@ -18,8 +18,14 @@ boundary that leaves the user's Gmail attached.
 has watched the binary do it.** Rows marked *unverified* are untested, not weakly tested.
 
 > **The SDK no longer runs in this process.** Since phase 3 of the agent runtime plan a Claude agent's
-> turn spawns `@agentclientprotocol/claude-agent-acp` — which drives the same user-installed `claude`
-> — and speaks the Agent Client Protocol to it over stdio. The live transport contract is [The ACP
+> turn spawns `@agentclientprotocol/claude-agent-acp` and speaks the Agent Client Protocol to it over
+> stdio. **Which `claude` that adapter drives has changed since these probes**: they were run against
+> the user's own install, at whatever version it was that day; every Cinna-spawned session now runs
+> one pinned version — the user's install only when it reports exactly that version, otherwise a
+> checksum-verified download ([The Claude Engine](claude_engine.md#which-claude-runs)). The dated
+> observations below stand as what was watched on the versions they name; the interfaces the pin is
+> relied on for are re-checked against the pinned binary by the generated
+> [Claude Code Interface Contract](contracts/claude_interface.md). The live transport contract is [The ACP
 > Engine Contract](acp_contract.md). This document keeps what was measured about **Claude Code
 > itself**: the environment bisect and the corrected table (§2, §7), what the isolation options
 > actually isolate (§2), the login states (§5), the ~190 MB `claude` the SDK ships (§5a), what
@@ -71,13 +77,15 @@ not a cost.
 | **`USER` is required** | adding `USER` alone to `{PATH, HOME}` restores authentication (exit 0). `LOGNAME`, `SHELL` and `TMPDIR` each individually do **not** |
 | The SDK sets `CLAUDE_CODE_ENTRYPOINT=sdk-ts` itself | `if(!c.CLAUDE_CODE_ENTRYPOINT)c.CLAUDE_CODE_ENTRYPOINT="sdk-ts"` — we neither need nor should set it |
 | The SDK deletes `NODE_OPTIONS` from the child | `delete c.NODE_OPTIONS`, unconditionally |
+| **`DISABLE_AUTOUPDATER=1` is set on every child**, last, so nothing inherited can undo it | a session may run on the user's own install, and that install's background updater replaces the binary and retargets `~/.local/bin/claude` from inside whichever process is running. **Not observable in a bounded run** — probed 2026-09-18 on 2.1.276: `claude update` contacts `downloads.claude.ai` with or without the variable (it governs the *background* updater, not the command), and a non-interactive session never checks for an update either way. The interface entry is therefore **Live only** |
 | **`shellEnvForChild` already passes `USER`** | `DEFAULT_INHERITED_ENV_VARS` from the MCP SDK is `["HOME","LOGNAME","PATH","SHELL","TERM","USER"]`, and `CHILD_ENV_ALLOWLIST` starts from it |
 
 That last row is the good news attached to the bad. The corrected environment is
 not a special case bolted on: **build it from `shellEnvForChild` and `USER` and
 `HOME` arrive for free**, because the app's own allowlist already carries them.
 The construction rule is therefore *narrow with the existing helper, then strip
-the auth-redirecting names, then add `CLAUDE_AGENT_SDK_CLIENT_APP`* — not a
+the auth-redirecting names, then add `CLAUDE_AGENT_SDK_CLIENT_APP` and
+`DISABLE_AUTOUPDATER`* — not a
 hand-assembled dictionary that has to remember `USER` on its own. A
 hand-assembled one is exactly what the plan specified, and exactly what omitted
 it.
@@ -432,7 +440,10 @@ process-exit error with `Claude Code returned an error result: ${text}`. So:
 
 ## 5. Not installed, not logged in — and the third state
 
-- **Not installed** is answerable without spawning: `toolDetectionService` already reports it.
+- **Not installed** was answerable without spawning when this was written: `toolDetectionService`
+  reported whether a `claude` was on the PATH. It is no longer a state a user can be in — Cinna
+  fetches the pinned CLI on first use — and what replaced it is *the install failed*, answered by
+  the Claude binary service without downloading anything.
 - **Not logged in** is *not* answerable without spawning, but it is answerable without a turn.
   `claude auth status` (2.1.266; *"Show authentication status"*, `--json` by default, `--text`
   optional) logs nothing in or out, runs no turn, and reports `loggedIn` with an `authMethod`.
@@ -489,11 +500,15 @@ shipping it**: the file arrives on disk from the dependency alone, and
 electron-builder packages `node_modules` unless told otherwise. So the rule
 needs a second half with teeth:
 
-- `pathToClaudeCodeExecutable` points at `toolDetectionService`'s find — the
-  behavioural half, which the plan has.
+- `pathToClaudeCodeExecutable` — over ACP, `CLAUDE_CODE_EXECUTABLE` — names the binary the
+  Claude binary service resolved: a Claude Path, the user's install at exactly the pinned version,
+  or Cinna's verified download. It was `toolDetectionService`'s find when this was measured.
 - **The optional platform packages must be excluded from the packaged app**, or
-  every installer grows by ~190 MB and ships a Claude Code the user did not
-  install and cannot update.
+  every installer grows by ~190 MB and ships a Claude Code nobody chose: whatever version the
+  dependency happened to nest, verified by nothing and visible nowhere. That — not the existence
+  of a second copy — is what separates it from the managed download, which is one version named
+  in one manifest, checked against a recorded SHA-256, shown with its path in Settings, and
+  moved by app releases.
 
 ### The SDK also drags the Anthropic API SDK forward
 
@@ -553,6 +568,7 @@ Supersedes the table the feature was planned around; the rule as it now stands i
 | `HOME` | the CLI's credentials live under it |
 | **`USER`** | **without it the CLI cannot authenticate** (§2). The plan omitted this |
 | `CLAUDE_AGENT_SDK_CLIENT_APP` | `cinna-desktop/<version>`; identifies this app in the User-Agent |
+| `DISABLE_AUTOUPDATER` | `1`, set last: a desktop session must never move the user's own `claude` to another version, nor move the version under a pooled adapter past the pin gate (§2) |
 | the rest of `shellEnvForChild` | unchanged from the engine's rule |
 
 | Excluded | Status |

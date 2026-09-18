@@ -86,6 +86,14 @@ function launchEnv(sandbox: Sandbox, extra: Readonly<Record<string, string>>): R
   // one that forgot to fails in words instead. Applied after `extra`, like
   // `HOME`, so no spec can switch it back on.
   env.CINNA_CODEX_DOWNLOAD = 'off'
+  // The same for Claude Code, at ~215 MB a sandbox. One difference a spec
+  // author must know: Cinna reuses a `claude` on PATH that reports *exactly*
+  // the pinned version, and the sandbox carries the developer's real PATH — so
+  // on a machine whose Claude Code happens to be the pin a Claude session
+  // resolves to it, and on any other machine it fails here in words. A spec
+  // that needs a Claude binary therefore sets `localAgentsClaudePath` itself
+  // and depends on neither.
+  env.CINNA_CLAUDE_DOWNLOAD = 'off'
   // Reuse the developer's tool caches so `uv run` in a test does not
   // re-provision an interpreter per sandbox.
   env.UV_CACHE_DIR ??= join(realHome, '.cache', 'uv')

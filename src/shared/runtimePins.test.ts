@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RUNTIME_PINS } from './runtimePins'
-import { PINNED_ENGINE_VERSION } from './engine'
+import { PINNED_CLAUDE_VERSION, PINNED_CODEX_VERSION, PINNED_ENGINE_VERSION } from './engine'
 
 /**
  * The manifest is the only place a runtime version lives — except for the two
@@ -38,7 +38,7 @@ describe('runtime pins', () => {
   })
 
   it('every asset row is a well-formed pin', () => {
-    for (const [tool, pin] of Object.entries({ codex: RUNTIME_PINS.codex, opencode: RUNTIME_PINS.opencode })) {
+    for (const [tool, pin] of Object.entries({ claude: RUNTIME_PINS.claude, codex: RUNTIME_PINS.codex, opencode: RUNTIME_PINS.opencode })) {
       expect(Object.keys(pin.assets).length, tool).toBeGreaterThan(0)
       for (const [platform, asset] of Object.entries(pin.assets)) {
         expect(asset.sha256, `${tool} ${platform}`).toMatch(/^[0-9a-f]{64}$/)
@@ -55,5 +55,23 @@ describe('runtime pins', () => {
       expect(asset.executable, platform).toMatch(/^codex-[a-z0-9_]+-[a-z0-9-]+$/)
     }
     expect(RUNTIME_PINS.codex.versionOutput).toBe(`codex-cli ${RUNTIME_PINS.codex.cli}`)
+  })
+
+  it('every Claude asset is the executable itself, of the pinned release, from the vendor bucket, with its size', () => {
+    const release = 'https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases'
+    for (const [platform, asset] of Object.entries(RUNTIME_PINS.claude.assets)) {
+      expect(asset.url, platform).toBe(`${release}/${RUNTIME_PINS.claude.cli}/${platform}/claude`)
+      // This is what stops the installer running tar on an executable.
+      expect(asset.format, platform).toBe('executable')
+      // The size is the download's ceiling: absent, a ~215 MB file is refused
+      // by a guard sized for archives.
+      expect(asset.size, platform).toBeGreaterThan(200 * 1024 * 1024)
+    }
+    expect(RUNTIME_PINS.claude.versionOutput).toBe(`${RUNTIME_PINS.claude.cli} (Claude Code)`)
+  })
+
+  it('the versions the renderer shows are the manifest’s', () => {
+    expect(PINNED_CLAUDE_VERSION).toBe(RUNTIME_PINS.claude.cli)
+    expect(PINNED_CODEX_VERSION).toBe(RUNTIME_PINS.codex.cli)
   })
 })

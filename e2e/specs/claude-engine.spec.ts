@@ -1,11 +1,10 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { readFileSync } from 'node:fs'
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
-import type { DetectedTool } from '../../src/shared/localTools'
 
 /**
  * Putting a folder agent on the **Claude engine** from the "Runs with" panel:
@@ -41,13 +40,16 @@ import type { DetectedTool } from '../../src/shared/localTools'
  * both the default width and the 800px minimum, because the panel is a
  * container query and lays itself out differently at each.
  *
- * ## Detection is real
+ * ## The Claude Code here is the spec's own, named through Settings
  *
- * The option is offered only where `claude` is on the PATH, and nothing here
- * fakes that: the fixture writes the real `PATH` into the sandbox's rc files
- * and the app's own detection answers. On a machine without Claude Code the
- * test skips rather than asserting on an option that must not exist there —
- * the absent case is `RuntimePanel.test.tsx`'s, which can fake detection.
+ * The option no longer depends on a `claude` on the PATH: Cinna runs every
+ * Claude session on the pinned CLI it verifies, or on the explicit Claude Path.
+ * The fixture switches that download off, so this spec points
+ * `localAgentsClaudePath` at a scripted executable that answers `--version` and
+ * nothing else — the seam `codex-engine.spec.ts` uses. That makes the Engine
+ * cell one value on every machine (`unverified`, the explicit path's label)
+ * instead of whatever the developer happens to have installed, and the spec no
+ * longer skips on a machine without Claude Code.
  *
  * The model catalogue is stubbed for the *credential* half only, so that branch
  * is healthy rather than "could not load the model list": the Claude branch —
@@ -113,7 +115,9 @@ const MACHINE_GROUP = 'On this machine'
 const CREDENTIAL_GROUP = 'AI credentials'
 
 /** The reserved status line on each branch. */
-const ON_CLAUDE = 'Claude Agent runs on your own Claude Code install, on sonnet.'
+const ON_CLAUDE = 'Claude Agent runs on Claude Code, on sonnet.'
+/** What the scripted CLI answers to `--version`; deliberately not the pin. */
+const FAKE_CLAUDE_VERSION = '9.9.9'
 const ON_CREDENTIAL = `Medium — the balanced default, on ${TAGS.medium}.`
 
 /**
@@ -227,17 +231,13 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
 }) => {
   await cinna.skipOnboarding()
 
-  // Real detection, over the same IPC the panel's query uses. The option below
-  // exists because of what this answers, not because the spec arranged it.
-  const tools = await cinna.page.evaluate(() => window.api.localTools.list())
-  const claude = tools.find(
-    (tool: DetectedTool) => tool.id === 'claude' && tool.available
-  )
-  test.skip(
-    claude === undefined,
-    'no `claude` on this machine: the Runs-on select would offer no Claude Agent option, ' +
-      'which is RuntimePanel.test.tsx’s case rather than this one'
-  )
+  // The Claude Code this profile runs: a scripted CLI, through the product's
+  // own override. Saved before the relaunch below — the setting lives in the
+  // profile database — and resolved by main the moment it is saved.
+  const claudePath = join(cinna.sandbox.home, 'scripted-claude')
+  writeFileSync(claudePath, `#!/bin/sh\necho '${FAKE_CLAUDE_VERSION} (Claude Code)'\n`)
+  chmodSync(claudePath, 0o755)
+  await cinna.page.evaluate((path) => window.api.settings.set('localAgentsClaudePath', path), claudePath)
 
   // Keyless, so the row keeps the host — see the header. A keyed row silently
   // loses its `baseUrl` here and would talk to the real vendor API with a fake
@@ -292,11 +292,10 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
   await cinna.page.evaluate(() => window.api.localAgents.rescan())
 
   // **After the relaunch**, because handlers are registered per app process and
-  // the fresh one carries the product's own. Replacing it — rather than faking
-  // detection — keeps everything this spec asserts real: the option is offered
-  // because a `claude` was found on the PATH, and only the sentence about
-  // whether that install can answer is pinned. It also means no `claude` child
-  // is spawned by this file at all.
+  // the fresh one carries the product's own. Only the sentence about whether
+  // that Claude Code can answer is pinned; which binary runs is decided by the
+  // product, from the Claude Path saved above. The scripted CLI is only ever
+  // asked for `--version`.
   await cinna.electronApp.evaluate(({ ipcMain }, status) => {
     ipcMain.removeHandler('local-tools:claude-auth')
     ipcMain.handle('local-tools:claude-auth', () => status)
@@ -324,9 +323,8 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
 
   await test.step('the engine is offered under its own heading, beside the credentials', async () => {
     // The select is disabled until `provider:list-models` lands on this branch,
-    // and the Claude option only exists once `useLocalTools` answers — a first
-    // visit's detection is a real PATH walk. Waiting on the option is what
-    // covers both; reading the list straight away reads it mid-flight.
+    // and the Claude option waits for its binary-state query. Waiting on the
+    // option is what covers both; reading the list straight away reads it mid-flight.
     await expect(runsOn).toBeEnabled()
     await expect(group(MACHINE_GROUP)).toHaveText(['Claude Agent'])
     // Two honest lists, not one flat one: an engine has no key, no `enabled`
@@ -337,7 +335,9 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
         groups.map((entry) => (entry as HTMLOptGroupElement).label)
       )
     ).resolves.toEqual([
-      ...(tools.some((tool) => tool.id === 'codex' && tool.available) ? ['Codex CLI'] : []),
+      // Always: both CLIs are Cinna-managed, so neither group waits on PATH
+      // detection — only a *failed* install withdraws one.
+      'Codex CLI',
       MACHINE_GROUP,
       CREDENTIAL_GROUP
     ])
@@ -371,13 +371,15 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
     await expect(runsOn).toHaveValue(CLAUDE_VALUE)
   })
 
-  await test.step('the panel reports the install it found, and offers no model list', async () => {
+  await test.step('the panel reports the Claude Code that runs, and offers no model list', async () => {
     // Both names in one sentence, because both are on the screen: the option
-    // says "Claude Agent" and the column beside it names the user's install.
+    // says "Claude Agent" and the column beside it names the CLI.
     await expect(status(ON_CLAUDE)).toHaveText(ON_CLAUDE)
-    // What detection actually found on this machine, rendered — not a fixture.
-    const expected = claude!.version ? `Claude Code ${claude!.version}` : 'Claude Code'
-    await expect(panel.getByTitle(claude!.path!)).toHaveText(expected)
+    // The binary that will run — the saved path, labelled as what an explicit
+    // path is — not the developer's own install on PATH. No version: this app
+    // process has resolved nothing since the relaunch, and reading the state
+    // never spawns a configured path just to ask (it is asked at first use).
+    await expect(panel.getByTitle(claudePath)).toHaveText('Claude Code unverified')
     // Absent, not disabled-and-empty: there is no catalogue to pick a model
     // from, and a checkbox that can never do anything invites a click.
     await expect(advanced).toHaveCount(0)

@@ -52,8 +52,29 @@ import { createLogger } from '../logger/logger'
 
 const logger = createLogger('managed-asset')
 
-/** Ceiling on the whole download. Generous — assets here run to tens of MB. */
-const DOWNLOAD_TIMEOUT_MS = 10 * 60_000
+/**
+ * A download is abandoned after this long **without a byte**, not after a fixed
+ * time for the whole transfer. The timer restarts on every chunk, so a slow
+ * link that is still delivering is never cut off — a whole-transfer limit sized
+ * for tens of MB could not be met by a ~215 MB Claude Code on anything under
+ * ~3 Mbit/s, and since a failed download keeps nothing, every retry started
+ * from zero and failed the same way.
+ */
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000
+
+/**
+ * The absolute ceiling, which only catches a server that trickles forever: the
+ * time the expected bytes would take at {@link SLOWEST_BYTES_PER_SECOND}, and
+ * never less than {@link DOWNLOAD_MIN_CEILING_MS}. ~215 MB comes to just under
+ * two hours.
+ */
+const DOWNLOAD_MIN_CEILING_MS = 10 * 60_000
+const SLOWEST_BYTES_PER_SECOND = 32 * 1024
+
+/** The whole-transfer ceiling for a download expected to be `bytes` long. */
+export function downloadCeilingMs(bytes: number): number {
+  return Math.max(DOWNLOAD_MIN_CEILING_MS, Math.ceil((bytes / SLOWEST_BYTES_PER_SECOND) * 1000))
+}
 
 /** Ceiling on the unpack. bsdtar on 50 MB is seconds; this only catches a hang. */
 const EXTRACT_TIMEOUT_MS = 5 * 60_000
@@ -341,10 +362,42 @@ const PROGRESS_INTERVAL_MS = 150
 export async function downloadToFile(
   url: string,
   dest: string,
-  onProgress?: DownloadProgress
+  onProgress?: DownloadProgress,
+  /**
+   * The pinned asset's recorded byte length, when its pin row has one. Three
+   * things follow from it: it is the **size ceiling** (exact for a pinned file,
+   * and what lets the ~215–232 MB Claude Code executable past a guard sized for
+   * archives without loosening it for everybody); it is the **progress
+   * denominator** when the server declares no length; and the absolute time
+   * ceiling is scaled from it. Absent means {@link MAX_ARCHIVE_BYTES} and an
+   * honest `null` total.
+   */
+  expectedBytes?: number,
+  /** Test seam: the two time limits. Production never passes it. */
+  timing: { idleMs?: number; ceilingMs?: number } = {}
 ): Promise<void> {
+  const maxBytes = expectedBytes ?? MAX_ARCHIVE_BYTES
+  const idleMs = timing.idleMs ?? DOWNLOAD_IDLE_TIMEOUT_MS
+  const ceilingMs = timing.ceilingMs ?? downloadCeilingMs(maxBytes)
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS)
+  /** Why the download was aborted — the sentence the user reads. */
+  let abortedBecause: string | null = null
+  const abort = (why: string): void => {
+    abortedBecause ??= why
+    controller.abort()
+  }
+  const ceiling = setTimeout(() => abort('The download took too long and was stopped. Try again.'), ceilingMs)
+  let idle: ReturnType<typeof setTimeout> | undefined
+  // Armed before the request, so a server that never answers is caught by the
+  // same rule as one that stops half way, and re-armed by every chunk.
+  const heard = (): void => {
+    clearTimeout(idle)
+    idle = setTimeout(
+      () => abort('The download stalled: no data arrived for a while. Check your connection and try again.'),
+      idleMs
+    )
+  }
+  heard()
   try {
     const response = await fetch(url, { redirect: 'follow', signal: controller.signal })
     if (!response.ok || !response.body) {
@@ -353,10 +406,14 @@ export async function downloadToFile(
         `Could not download ${url} (HTTP ${response.status}).`
       )
     }
+    heard()
     const declared = Number(response.headers.get('content-length') ?? '0')
-    if (declared > MAX_ARCHIVE_BYTES) {
+    if (declared > maxBytes) {
       throw new ManagedAssetError('download_failed', 'The download was unexpectedly large.')
     }
+    // The server's own length when it gives one; else the pin row's, which is
+    // exact; else nothing — never a guess.
+    const denominator = declared > 0 ? declared : (expectedBytes ?? null)
     const sink = createWriteStream(dest)
     let total = 0
     let lastReport = 0
@@ -365,27 +422,34 @@ export async function downloadToFile(
     // disagree with the limit that is actually enforced.
     const counted = new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
+        heard()
         total += chunk.byteLength
-        if (total > MAX_ARCHIVE_BYTES) {
+        if (total > maxBytes) {
           throw new ManagedAssetError('download_failed', 'The download was unexpectedly large.')
         }
         const now = Date.now()
         if (onProgress && now - lastReport >= PROGRESS_INTERVAL_MS) {
           lastReport = now
-          onProgress(total, declared > 0 ? declared : null)
+          onProgress(total, denominator)
         }
         controller.enqueue(chunk)
       }
     })
-    await pipeline(Readable.fromWeb(response.body.pipeThrough(counted) as never), sink)
+    await pipeline(Readable.fromWeb(response.body.pipeThrough(counted) as never), sink, {
+      signal: controller.signal
+    })
     // A final report, so a bar that was throttled mid-chunk lands on 100%
     // rather than stopping at whatever the last tick happened to be.
-    onProgress?.(total, declared > 0 ? declared : total)
+    onProgress?.(total, denominator ?? total)
   } catch (err) {
     await rm(dest, { force: true }).catch(() => undefined)
+    // An abort surfaces as an `AbortError` from wherever it happened to land;
+    // the user gets the reason it was aborted instead.
+    if (abortedBecause !== null) throw new ManagedAssetError('download_failed', abortedBecause)
     throw err
   } finally {
-    clearTimeout(timer)
+    clearTimeout(ceiling)
+    clearTimeout(idle)
   }
 }
 

@@ -23,22 +23,27 @@ import { isLocalToolId, type RuntimeToolId } from '../../../../shared/localTools
 import {
   DEFAULT_AGENT_ENGINE,
   isAgentEngine,
-  type AgentEngine
+  type AgentEngine,
+  type EngineBinaryState
 } from '../../../../shared/engine'
 import { useProviders } from '../../hooks/useProviders'
 import { useDefaultChatMode } from '../../hooks/useChatModes'
 import { ManageRootAgentsDialog } from './ManageRootAgentsDialog'
 import { RootRepositoryDialog } from './RootRepositoryDialog'
 import { codexStatusText } from './codexStatus'
+import { claudeStatusText } from './claudeStatus'
 import {
+  useClaudeBinary,
   useCodexBinary,
   useEngineBinary,
+  useResolveClaudeBinary,
   useResolveCodexBinary,
   useResolveEngineBinary
 } from '../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { useAgentsHomeStore } from '../../stores/agentsHome.store'
+import { useUIStore } from '../../stores/ui.store'
 import { ForgetAgentRootDialog } from './ForgetAgentRootDialog'
 import { InstallRuntimeDialog } from './InstallRuntimeDialog'
 import {
@@ -104,10 +109,12 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const { data: binary } = useEngineBinary()
   const resolveBinary = useResolveEngineBinary()
   const { data: codexBinary } = useCodexBinary()
+  const { data: claudeBinary } = useClaudeBinary()
   // Owned here, not by the text action that fires it: pressing it moves the
   // state to `resolving`, which changes that action, and a mutation owned by a
   // control that re-renders away loses its callbacks (ux_rules rule 5).
   const resolveCodex = useResolveCodexBinary()
+  const resolveClaude = useResolveClaudeBinary()
   const { data: appSettings } = useAppSettings()
   const setAppSetting = useSetAppSetting()
   const { tool: defaultTool, launchable } = useDefaultTool()
@@ -176,7 +183,8 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
     ? (appSettings?.localAgentsDefaultEngine as AgentEngine)
     : null
   const onOpenCode = selectedRuntime === DEFAULT_AGENT_ENGINE
-  const claudeTool = (tools ?? []).find((tool) => tool.id === 'claude' && tool.available)
+  const codexPathSet = (appSettings?.localAgentsCodexPath ?? '').trim() !== ''
+  const claudePathSet = (appSettings?.localAgentsClaudePath ?? '').trim() !== ''
   const installingPlan =
     installing !== null
       ? ((installPlans ?? []).find((plan) => plan.id === installing) ?? null)
@@ -279,27 +287,20 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
        * tones as the OpenCode branch above — only `failed` is not muted.
        */
       return {
-        text: codexStatusText(codexBinary, (appSettings?.localAgentsCodexPath ?? '').trim() !== ''),
+        text: codexStatusText(codexBinary, codexPathSet),
         tone: codexBinary?.state === 'failed' ? 'danger' : 'muted'
       }
     }
-    // Detection in flight is not "not installed": saying so would put the full
-    // warning on screen for half a second on a machine that has Claude Code.
-    if (tools === undefined) return { text: '', tone: 'muted' }
-    if (!claudeTool) {
-      return {
-        // "Agents on it": the ones that name no runtime of their own, which is
-        // what the tip beside this control says the setting governs. Installing
-        // it is the button above, so the line does not repeat the remedy.
-        text: 'Claude Code not found — agents on it cannot run.',
-        tone: 'warning'
-      }
-    }
+    /**
+     * Claude Code, on the Codex branch's terms and for its reason: every Claude
+     * session runs on the pinned CLI Cinna verifies (or the explicit path), so
+     * whether a `claude` is on PATH stopped being a fact about whether agents
+     * can run — and "Claude Code not found" over a runtime Cinna would simply
+     * install was a false alarm (ux_rules rule 9).
+     */
     return {
-      // The version, because it is the fact that makes the line diagnosable, and
-      // "no API key", because that is the reason a user chose this runtime.
-      text: `Claude Code ${claudeTool.version ?? 'installed'} — your Claude login, no API key spent.`,
-      tone: 'muted'
+      text: claudeStatusText(claudeBinary, claudePathSet),
+      tone: claudeBinary?.state === 'failed' ? 'danger' : 'muted'
     }
   })()
 
@@ -611,8 +612,8 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
             <p>
               A folder agent runs on a <strong>runtime</strong>: a program on this machine that
               drives the model, calls the tools and asks you for permission. Cinna knows three —
-              your own Claude Code, and Codex and OpenCode, which it downloads and verifies for
-              itself at the version it was tested against.
+              Claude Code, Codex and OpenCode — and runs each at the version it was tested against,
+              downloading and verifying its own copy unless yours is already exactly that version.
             </p>
             <p>
               An agent whose folder names a runtime always gets that one. Everything on this
@@ -659,6 +660,9 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               selected={selectedRuntime}
               tools={tools}
               codexBinary={codexBinary}
+              claudeBinary={claudeBinary}
+              codexPathSet={codexPathSet}
+              claudePathSet={claudePathSet}
               installing={install.isPending ? (install.variables ?? null) : null}
               onSelect={(engine) =>
                 setAppSetting.mutate({ key: 'localAgentsDefaultEngine', value: engine })
@@ -723,29 +727,26 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               )}
               {/*
                 The managed Codex CLI's action, in the same slot and the same
-                shape. Two states a user can act on: a failed install (*Try
-                again*), and nothing fetched yet (*Install now*) — the download
-                is ~90 MB, and the alternative is paying for it at the top of
-                the first Codex message. `|| isPending` for the reason above:
-                pressing it leaves both of those states.
+                shape — and Claude Code's, from the one component, so the twins
+                cannot drift (the Codex row offered "Install now" beside a line
+                about the user's own file while the Claude row hid it).
               */}
-              {selectedRuntime === 'codex' &&
-                (codexBinary?.state === 'failed' ||
-                  codexBinary?.state === 'unresolved' ||
-                  resolveCodex.isPending) && (
-                  <button
-                    type="button"
-                    onClick={() => resolveCodex.mutate()}
-                    disabled={resolveCodex.isPending}
-                    className="shrink-0 text-[13px] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline"
-                  >
-                    {resolveCodex.isPending
-                      ? 'Installing…'
-                      : codexBinary?.state === 'failed'
-                        ? 'Try again'
-                        : 'Install now'}
-                  </button>
-                )}
+              {selectedRuntime === 'codex' && (
+                <ManagedCliAction
+                  binary={codexBinary}
+                  pathSet={codexPathSet}
+                  pending={resolveCodex.isPending}
+                  onResolve={() => resolveCodex.mutate()}
+                />
+              )}
+              {selectedRuntime === 'claude' && (
+                <ManagedCliAction
+                  binary={claudeBinary}
+                  pathSet={claudePathSet}
+                  pending={resolveClaude.isPending}
+                  onResolve={() => resolveClaude.mutate()}
+                />
+              )}
             </div>
           </SettingsRow>
           <SettingsRow>
@@ -906,5 +907,50 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
         </SettingsRows>
       </SettingsSection>
     </div>
+  )
+}
+
+const statusActionClass =
+  'shrink-0 text-[13px] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline'
+
+/**
+ * The one action beside a managed CLI's status line (Codex, Claude Code).
+ *
+ * Two states a user can act on here: a failed install (*Try again*), and nothing
+ * fetched yet (*Install now*) — the download is large, and the alternative is
+ * paying for it at the top of the first message. `|| pending` because pressing
+ * either leaves both of those states, and a condition naming only them would
+ * unmount the control on click.
+ *
+ * **With a path saved, neither is true.** Nothing installs, and *Try again*
+ * re-checks the same bad path; what resolves that state is the field, which is
+ * on another tab, so the action goes there (ux_rules rule 12: give the status
+ * the control that resolves it).
+ */
+function ManagedCliAction({
+  binary,
+  pathSet,
+  pending,
+  onResolve
+}: {
+  binary: EngineBinaryState | undefined
+  pathSet: boolean
+  pending: boolean
+  onResolve: () => void
+}): React.JSX.Element | null {
+  const setSettingsMenu = useUIStore((state) => state.setSettingsMenu)
+  if (pathSet) {
+    if (binary?.state !== 'failed') return null
+    return (
+      <button type="button" onClick={() => setSettingsMenu('local-dev')} className={statusActionClass}>
+        Fix path
+      </button>
+    )
+  }
+  if (binary?.state !== 'failed' && binary?.state !== 'unresolved' && !pending) return null
+  return (
+    <button type="button" onClick={onResolve} disabled={pending} className={statusActionClass}>
+      {pending ? 'Installing…' : binary?.state === 'failed' ? 'Try again' : 'Install now'}
+    </button>
   )
 }

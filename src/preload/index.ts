@@ -56,7 +56,7 @@ import type {
   EngineBinaryState,
   LocalAgentRuntimeInput
 } from '../shared/engine'
-import { CODEX_BINARY_CHANNEL, ENGINE_BINARY_CHANNEL } from '../shared/engine'
+import { CLAUDE_BINARY_CHANNEL, CODEX_BINARY_CHANNEL, ENGINE_BINARY_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
 import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } from '../shared/localDevState'
@@ -1667,6 +1667,21 @@ const api = {
       const listener = (_event: IpcRendererEvent, state: EngineBinaryState): void => handler(state)
       ipcRenderer.on(CODEX_BINARY_CHANNEL, listener)
       return () => ipcRenderer.off(CODEX_BINARY_CHANNEL, listener)
+    },
+    /**
+     * The **pinned Claude Code CLI**, on the same terms as `codexBinary`: the
+     * copy Cinna verifies (its own download, or the user's install when that is
+     * exactly the pinned version), or the explicit path from Settings. A path
+     * as text, never a handle; reading it downloads nothing.
+     */
+    claudeBinary: (): Promise<EngineBinaryState> => ipcRenderer.invoke('engine:claude-binary'),
+    /** Install or re-check it now. Resolves with the state, a failed install included. */
+    resolveClaude: (): Promise<EngineBinaryState> => ipcRenderer.invoke('engine:claude-resolve'),
+    /** Fires on every transition, download progress included. Returns an unsubscribe. */
+    onClaudeState: (handler: (state: EngineBinaryState) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, state: EngineBinaryState): void => handler(state)
+      ipcRenderer.on(CLAUDE_BINARY_CHANNEL, listener)
+      return () => ipcRenderer.off(CLAUDE_BINARY_CHANNEL, listener)
     }
   },
 

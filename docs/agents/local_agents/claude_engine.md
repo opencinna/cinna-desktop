@@ -1,12 +1,12 @@
-# The Claude Engine — a folder agent on the user's own Claude Code
+# The Claude Engine — a folder agent on Claude Code, under the user's own login
 
 > **What this engine actually does is recorded in [The ACP Engine Contract](acp_contract.md) — the live one — and, for everything measured about Claude Code itself, in [The Claude Engine Contract](claude_contract.md).** The latter is what was watched against `claude` 2.1.266 and `@anthropic-ai/claude-agent-sdk` 0.3.266 — what is verified, what is only assumed, and what was believed and proved false. This document does not restate it. Eight of its findings shape rules below and none of them is visible in the SDK's types: `USER` must be in the child environment or the CLI reports *"Not logged in"* on a logged-in machine; `settingSources: []` does **not** detach the user's MCP connectors, so `strictMcpConfig` and an empty `mcpServers` travel with it — and it **does** hide the folder's own `.claude/agents/`, which are handed back through `options.agents` (all three are the **isolated** branch: kit folders and Cinna's own build session — an adopted bare folder is deliberately run on the folder's own setup instead); a bare tool name in `allowedTools` shadows `canUseTool` entirely, so none is passed; SDK failures arrive as **thrown exceptions**, not as messages; read-only tools never reach the permission callback at all; a string `prompt` **closes the CLI's stdin at the first `result`**, under a background subagent that has not finished, so the prompt is an iterable the runner holds open; and in the CLI's **auto** permission mode the ask-callback was **never reached** across seven probes that included a force push, so the desktop's permission block is a backstop there and every surface that describes the setting says so. Where this document and the contract disagree, the contract is right — it was watched, and this was written.
 
 ## Purpose
 
-Let a folder agent run on **Claude Code**, driving the `claude` binary already installed on this machine under that install's own login, instead of on `opencode`.
+Let a folder agent run on **Claude Code** instead of on `opencode`: one pinned version of the `claude` CLI, verified before it runs, under the login the user already has.
 
-Since phase 3 of the agent runtime plan the Agent SDK is no longer embedded in this process: the turn spawns `@agentclientprotocol/claude-agent-acp`, which runs the SDK in a child process and speaks the [Agent Client Protocol](acp_contract.md) back. The launcher names the user's `claude` through `CLAUDE_CODE_EXECUTABLE`, so the binary and the login are the same as before, and so is the isolation for a kit folder. What changed with the transport is that the SDK's stdin belongs to a process of its own, which is what fixed the background-subagent bug below.
+Since phase 3 of the agent runtime plan the Agent SDK is no longer embedded in this process: the turn spawns `@agentclientprotocol/claude-agent-acp`, which runs the SDK in a child process and speaks the [Agent Client Protocol](acp_contract.md) back. The launcher names the pinned `claude` through `CLAUDE_CODE_EXECUTABLE` — see [Which `claude` runs](#which-claude-runs) — and the login is the user's whichever file that is, because the login follows the home directory and not the binary. The isolation for a kit folder is unchanged. What changed with the transport is that the SDK's stdin belongs to a process of its own, which is what fixed the background-subagent bug below.
 
 What it buys the user: the Claude Code harness — its tools, subagents and context management — for agents whose work OpenCode's loop does poorly, and inference paid for by their own Claude plan rather than by an API key this app holds.
 
@@ -18,7 +18,8 @@ Same convention as [The Local Engine](engine.md) and [The Agent Turn Runner](age
 |---|---|
 | `src/...`, `docs/...` | A file in **this repository** |
 | `Local/<slug>/...`, `cinna-agent.json`, `app-data/desktop.json` | Inside an **agent folder** |
-| `~/.claude/...` | The user's **own** Claude Code installation |
+| `~/.claude/...` | The user's **own** Claude Code configuration and login |
+| `<userData>/runtimes/claude-<version>/` | The Claude Code **Cinna downloaded and verified** for itself |
 
 The third row is a rule, not a formatting habit: **the desktop reads nothing and writes nothing under `~/.claude/`.** Everything it wants from the user's Claude Code it gets by spawning the binary and reading what that process reports.
 
@@ -26,7 +27,7 @@ The third row is a rule, not a formatting habit: **the desktop reads nothing and
 
 **The desktop is an orchestrator. It never becomes an authentication provider.**
 
-Cinna spawns the `claude` the user installed, unmodified, in an environment where that binary resolves the credentials it already has. It implements no login, stores no token, brokers no session and resells no capacity. That is the whole basis on which the feature is permitted, and it is one environment variable away from being false **in either direction**:
+Cinna spawns an unmodified `claude` — the vendor's own bytes, the user's install or a verified download of the same release — in an environment where that binary resolves the credentials the user already has. Supplying the executable is not supplying the login: the file is fetched from the vendor's release bucket and checked, and everything about who is authenticated stays under the user's home directory, untouched. It implements no login, stores no token, brokers no session and resells no capacity. That is the whole basis on which the feature is permitted, and it is one environment variable away from being false **in either direction**:
 
 - put an auth variable in, and the turn silently bills the user's **API account** while the panel says it ran on their Claude plan — no error, no failed turn, a bill at the end of the month; or
 - leave the wrong one out, and the CLI reports *"Not logged in"* on a machine whose `claude` is perfectly logged in, sending the user to re-authenticate a tool that was already fine with nothing pointing at this app as the cause.
@@ -37,6 +38,10 @@ Both were live hazards and the second is the one that actually bit. The child en
 
 - **Engine** — what actually runs an agent's turn. OpenCode, Claude Code and [Codex](codex_engine.md) share the ACP driver. An explicit engine wins; otherwise a declared credential/model retains OpenCode, or the machine default applies. Each is a child process speaking ACP; the engine is a field on the runtime, and in the row it is the ACP driver's **launcher**
 - **Engine axis** — the second dimension dispatch gains. It is `source` **then** `engine`: a folder agent on Claude and a folder agent on OpenCode are the same `source`, and since phase 3 the same **driver** — the engine decides only which launcher starts the process
+- **Pinned Claude Code** — the one version of the `claude` CLI every Cinna-spawned Claude session runs on: folder agents, chat runtimes, AI Functions, the build session and the login probe alike. The version lives in `src/shared/runtimePins.ts` and is the one the [interface contract](contracts/claude_interface.md) was run against, which is the point — the CLI that was tested is the CLI that runs
+- **Managed copy** — that version as Cinna fetched it: the vendor's bare executable (about 215–232 MB, by platform) downloaded from Anthropic's own release bucket into `<userData>/runtimes/`, compared with a recorded SHA-256, and made to report the pinned version before its directory is published
+- **Your install** (`path-pinned`) — the `claude` on the user's PATH, used **only when it reports exactly the pinned version**. It saves the download and nothing else: any other version on PATH is ignored for spawned sessions and stays what **Open in Claude Code** launches
+- **Claude Path** — an explicit executable in **Settings → Local Development → Developer Tools**. It replaces both of the above, is run as-is with no version gate, and every surface labels it **unverified**. It exists for a platform Cinna has no pinned build for (Windows today), and for trying a newer Claude Code before it becomes the pin
 - **Native auth** — the credential the spawned `claude` resolves for itself. The desktop never sees it, never names it and never stores it
 - **Reported login** — what the agent *says* it authenticated with: `authStatus.kind` on the adapter's `_auth/status_update`, `'account'` for a subscription case. This is a fact read off the running process, not a belief derived from the config we generated
 - **Engine credential** — for `engine: 'claude'` there is not one. The runtime carries an engine and a tier, and no credential row and no API key at all
@@ -51,17 +56,17 @@ Both were live hazards and the second is the one that actually bit. The child en
 ## User Stories / Flows
 
 ### Putting an agent on Claude
-1. Open the agent and select **Settings**. The **Runs with** panel's first control is **Runs on**: it offers this machine's Claude Code above a separator, and the AI credentials below it
-2. The Claude option is offered **only where a `claude` was actually detected** — an absent install means an absent option, never an option that fails after the click. An agent whose manifest already names the engine keeps its option regardless, or the select would render blank over a file that plainly says what it runs on
+1. Open the agent and select **Settings**. The **Runs with** panel's first control is **Runs on**: it offers Claude Agent and Codex under their own headings, and the AI credentials below them
+2. The Claude option is **always listed**. Whether a `claude` is on the PATH stopped being a fact about whether an agent can run — Cinna fetches its own — so the only state with nothing to run is an install that *failed*, and there the option stays and says why: *Claude Agent (install failed)*, or *(path not usable)* when a Claude Path is saved. It used to vanish, which made this select and the Settings picker — which keeps its button and reads *Unavailable* — disagree about whether the runtime exists
 3. Choosing it writes `runtime.engine: "claude"` and **clears the credential**, because that path spends none. A concrete model is dropped too, and the status line says which model went and why: an id from a provider's catalogue means nothing to a plan addressed by alias
 4. The **work complexity** survives the move in both directions. `medium` means the same thing on either engine, so a change of runtime must not silently discard the user's answer to "how hard is this work"
 5. The **Advanced** raw-model picker is not shown on this engine — there is no catalogue to list. It is removed from inside a fixed-height row rather than disabled, so the panel keeps its footprint and the page's tab strip does not move out from under the pointer that just used the select
-6. The third column stops reporting the OpenCode engine and reports the detected install instead — `Claude Code 2.1.266`, or `Not installed` — **with no Start button**, because this app starts nothing there
+6. The third column stops reporting the OpenCode engine and reports the Claude Code that will run instead — `Claude Code <pin> managed`, `<pin> (your install)`, `<version> unverified` for a Claude Path, or `Install failed` / `Path not usable` — **with no Start button**, because this app starts nothing there. The cell's tooltip is the binary's path
 
 ### Chatting with an agent on Claude
 1. The user sends a message in a chat bound to the agent. Everything up to the driver is the shared path: same composer, same persistence, same transcript, same cancel button
 2. The ACP driver reads the folder, sees `claude`, and asks that launcher to plan the turn
-3. Readiness is answered **before** the turn, on both rungs and for free: no `claude` on this machine, and a `claude` that is not logged in, are each a sentence naming the remedy rather than a turn that fails with the CLI's own words
+3. Readiness is answered **before** the turn, on both rungs and for free: a Claude Code that could not be installed, and one that is not logged in, are each a sentence naming the remedy rather than a turn that fails with the CLI's own words. A Claude Code that simply has not been fetched yet refuses nothing — the first turn fetches it, and waits for it
 4. The per-agent turn lock is taken, so "this agent is busy in another chat" behaves exactly as it does on the other engine
 5. The adapter is spawned in the agent's folder, a session is created or loaded — a kit folder's with its whole assembled system prompt, an adopted bare folder's with the engine's own preset and the desktop's context appended — the **Approvals** setting is applied with `session/set_mode`, and the answer streams into the transcript token by token — text, thinking, tool calls and their results, as the same part kinds every other agent produces
 6. The session id the CLI reports is remembered for this (chat, agent), so tomorrow's message continues the same conversation
@@ -79,7 +84,7 @@ Both were live hazards and the second is the one that actually bit. The child en
 8. **When the model has no reviewer, the CLI asks every time anyway and says so nowhere the user looks.** Asked for *Automatic* on `haiku`, the CLI ran *Ask every time* and reported it only on its init message. The transcript therefore carries a notice — *"Automatic approvals are not available on `<model>`, so this turn asked before each action instead."* — on every exit the turn can take, because a user whose setting says Automatic and who was just asked about `ls` has no other way to tell the setting from a bug. A CLI that reports no mode at all is read as no fallback, not as one
 
 ### Claude Code is there but not logged in
-1. Detection finds the binary, so the option is offered. Whether that install is *logged in* is asked separately, and **for free**: `claude auth status` runs no turn and bills nothing
+1. Whether the user is *logged in* is a separate question from whether there is a binary, and it is asked **for free**: `claude auth status` runs no turn and bills nothing. It is asked of the binary the sessions run on, never of whichever `claude` happens to be on the PATH
 2. The panel's status line says so before anything is spent — *"Run `claude` in a terminal: that Claude Code install is not logged in."* The remedy leads, because that line is measured to clip at the 800 px minimum window and the half that survives has to be the half naming the action
 3. A turn asked for anyway is **refused before the SDK is called**: *"This agent runs on Claude, and that Claude Code install is not logged in. Run `claude` in a terminal."* Nothing is spawned and nothing is billed
    - The second half is **word for word the panel's**, because a user meets this condition on two surfaces and two paraphrases of one instruction read as two instructions. The panel's wording is what the skip reason moved to match, not the other way round — that line is measured to the pixel and cannot afford *installation*. The opening clause stays only because a turn error in a transcript has nothing around it naming the engine, while the panel says so two rows up
@@ -87,7 +92,7 @@ Both were live hazards and the second is the one that actually bit. The child en
 5. The user goes and does it — which is the reason the panel keeps asking while the answer is *logged out*. Coming back to a red alarm about a machine that is now fine is the failure that rule exists to prevent
 
 ### Choosing who approves
-1. On a Claude agent's **Settings → Permissions** tab, the paragraph describing the OpenCode profile is not shown — it describes rules that are not in force on this engine. In its place: a sentence that reading and searching never ask, then one paragraph describing **both** settings before the control rather than whichever is chosen under it, so the card does not resize on every toggle and a user choosing reads both anyway
+1. On a Claude agent's **Settings → Permissions** tab, the paragraph describing the OpenCode profile is not shown — it describes rules that are not in force on this engine. In its place: a sentence that the agent runs on Claude Code **under the user's own login** — not "on your own Claude Code install", which the card can no longer promise — and that reading and searching never ask, then one paragraph describing **both** settings before the control rather than whichever is chosen under it, so the card does not resize on every toggle and a user choosing reads both anyway
 2. The description of *Automatic* is deliberately blunt — that in testing it approved everything it was shown, including a force push and a change to the global git config, so treat it as running the agent without a gate and give it work you would run yourself. *Ask every time* is described as bringing every command, edit and fetch to a permission block in the chat, where **Always allow** remembers it in the list below
 3. An **Approvals** select offers *Automatic* and *Ask every time*. No choice made reads as *Automatic*, never as a blank option. A change saves at once and the control holds the picked value for the whole round trip — main re-scans the folder before it answers, and rendering the stored value alone snapped the select back to the old setting until the answer landed, then flipped it
 4. A refused save — the agent is mid-turn in another chat — leaves the control on the stored value and puts one line under it: *"Nothing was changed — that agent is busy in a chat."* One line, truncated with the full text on hover, in a slot that is always rendered, because the turn-lock sentence wrapped at the 800 px minimum and moved the grants list down by a line
@@ -142,16 +147,40 @@ Most of the excluded names would not survive the narrowing anyway. They are stri
 
 The built environment is then **audited before it is handed over**, and a leak is logged loudly by name — never by value, since logging the value of a key to explain that it leaked recreates the leak in the log. It is checked on the value actually being passed rather than trusted to the function that produced it, because the environment is the one input here whose corruption is invisible in the result: a turn billed to the wrong account looks exactly like a turn billed to the right one.
 
+### Which `claude` runs
+
+Every `claude` Cinna spawns — a folder agent's session, a chat runtime, an AI Function, the build session, the login probe — is resolved the same way, in this order:
+
+1. **The Claude Path**, when one is saved. Run as-is: no version gate, no checksum, labelled *unverified* everywhere. A saved path that is not a runnable file is an **error, never a silent fall back** to the pinned copy — the user named something specific, and quietly running a different Claude Code than the one they named is worse than saying the path is wrong
+2. **The user's own install, when it reports exactly the pinned version.** Consulted only while Cinna has no managed copy of its own — once there is one, that is a single `stat` and it cannot change under a running app the way a self-updating install can. It is **version-gated, not checksummed**: what was compared is the `--version` line, and the surfaces that name it say *your own install, the tested version* and no more
+3. **The managed copy**, downloaded on first use. The vendor ships a bare executable rather than an archive, so nothing is unpacked: the downloaded file is compared with its recorded SHA-256, moved into place under the tool's name, and must then report exactly the pinned version before its directory is renamed into `<userData>/runtimes/`. The digest proves these are the pinned bytes; the version proves the pinned bytes are what the manifest says they are. Either failure leaves nothing on disk a later run could mistake for an install
+
+This engine used to run whatever `claude` the PATH held. That made the version under every agent something nobody had tested and nobody chose on purpose: it moved whenever the vendor's updater ran, and an adapter release verified against one CLI silently drove another. The contract this engine rests on is now checked against one version, and that version is the one that runs.
+
+**The user's install is run from its real path, not from the PATH entry.** `~/.local/bin/claude` is a symlink the vendor's updater retargets, and a pooled adapter process keeps the path it was handed for every later spawn — handed the symlink, its next spawn after an update would run a version that never passed the gate. The file that was probed is the file that is named, its identity (real path, size, modification time) is remembered, and each turn re-checks that identity for the cost of two syscalls. An install that has updated itself is "gone" in the way that matters: the next turn resolves again, and downloads if the version moved.
+
+**A Cinna-spawned `claude` never updates anything.** `DISABLE_AUTOUPDATER=1` is set on every one of them — sessions and the login probe alike — because a session may be running on the user's own install, and that install's background updater replaces the binary and retargets the symlink from inside whichever process happens to be running. A desktop session must never be the thing that moves the user's `claude` to another version, nor move the version under a pooled adapter to one that was never gated. The user's own terminal sessions are untouched and update as they always did; Cinna's copy moves only when an app release moves the pin.
+
+**The login is the user's whichever file runs.** It follows the home directory, not the binary: a second Claude Code binary under the user's real `HOME` and `USER` reported the same subscription login as their own install, with no Keychain prompt (verified by hand, 2026-09-18). Nothing needs logging into twice, and nothing about the managed copy is an authentication step.
+
+**Windows has no managed build.** The launcher's child-environment rules and the login probe are POSIX-verified only, so there is no pinned row for it and a Windows user sets a Claude Path — the answer any unlisted platform gets. Linux rows are the glibc builds.
+
+How the resolver, the download and the sweep of superseded versions work is shared with Codex and OpenCode and lives in [The Local Engine](engine.md#binary-resolution-and-what-verified-means); what is specific here is only the precedence above and the updater switch.
+
 ### Readiness is answered before the turn, and the login is free to ask
 
 Two facts decide whether this engine can run an agent, and **both are knowable without spending anything**:
 
-- **Is there a `claude` on this machine** — `toolDetectionService`, which spawns nothing at all
-- **Is that install logged in** — `claude auth status`, which spawns the binary but runs no turn and bills nothing
+- **Is there a Claude Code to run** — the binary service's look, which never downloads: the Claude Path, a managed copy from an earlier run, or an exact-version install of the user's own. It costs at most one `--version`, shared with the settings row and the login probe
+- **Is the user logged in** — `claude auth status`, asked of that binary, which runs no turn and bills nothing
 
 The second used to cost a turn. The runner learned *Not logged in* from a **thrown turn error** and told it apart from other failures by matching the CLI's own words. That works, and it is the wrong shape: the user asks a question, waits a turn's worth of latency, and gets back an error about authentication.
 
-The two are asked **in that order**, and both **before the per-agent turn lock** — there is nothing to ask about a login when there is no binary, `claude_not_installed` outranks the login everywhere it is read, and "there is no Claude Code here" must not queue behind another chat's turn.
+The two are asked **in that order**, and both **before the per-agent turn lock** — there is nothing to ask about a login when there is no binary, and a failed install must not queue behind another chat's turn.
+
+**"Not here yet" refuses nothing; only a failed install does.** The pinned CLI is fetched by the first turn that needs it, so readiness that refused while the CLI was merely on its way would block the one action that fetches it. The turn itself resolves the binary first — the step that may download — and asks the login *of that binary* afterwards. A failure there is a sentence (*Claude Code could not be installed. Try again in Settings → Agents → Runtime.*) and is not remembered: the next turn simply tries again.
+
+**"There was nothing to ask" is not an answer worth keeping.** Before the first install the probe has no binary and answers `unknown` — and does not cache it. Held for the whole cache window, an `unknown` taken a moment before the install would let the turn that installed the CLI skip the logged-out refusal. For the same reason saving or clearing the Claude Path drops the remembered login verdict without asking again: the answer belonged to the previous binary, and the new one may still be resolving.
 
 **Only a definite `logged_out` refuses a turn.** `unknown` is a first-class answer and never blocks: a probe that timed out, could not spawn, or met an output shape it did not recognise is not evidence of a logged-out install, and the thrown-error fallback is still there as the second line. A readiness check that can refuse a working engine on its own uncertainty is worse than no readiness check.
 
@@ -159,7 +188,7 @@ The two are asked **in that order**, and both **before the per-agent turn lock**
 
 **Settings → Agents → Developer Tools → Refresh re-asks the login too, and nothing on that screen says so.** That table has two columns, Tool and Version, so the one control in the app that deliberately re-checks the login sits on a screen that never displays it. It is recorded here as a decision rather than left to be found as a bug: the button means *"go and look at this machine again"*, and after it a stale login answer beside fresh detection would be the inconsistency — most of all on the machine the button exists for, where Claude Code has just been installed and is about to be logged into. A **login column is deliberately not added** to that table. It would be a second surface for a fact the agent page already carries, and it is not needed as a recovery path: the panel's own poll clears a stale alarm within about ten seconds, without the user going to Settings at all.
 
-The answer is **cached for a short window, not for the app's lifetime** the way detection is. Whether a binary exists barely changes while the app is open; whether it is logged in changes precisely *because* the app has just told the user to go and log in. A permanently cached "no" would leave them staring at the alarm they had already fixed. One probe is shared by the turn path and the panel, so a render and a turn starting together spawn one child rather than two.
+The answer is **cached for a short window, not for the app's lifetime**. Whether a binary exists barely changes while the app is open; whether it is logged in changes precisely *because* the app has just told the user to go and log in. A permanently cached "no" would leave them staring at the alarm they had already fixed. One probe is shared by the turn path and the panel, so a render and a turn starting together spawn one child rather than two.
 
 ### The account behind that login is never read
 
@@ -345,7 +374,7 @@ Three guards keep that retry from becoming a second billed turn:
 - **never once the turn has already streamed something.** The retry reuses this turn's accumulator, so a second pass arrives under fresh message ids and is *appended* rather than replacing — the user reads the answer twice, for two billed turns. A turn that streamed had no forgotten session to blame anyway
 - never after a cancel, and never when there was no remembered session to blame in the first place
 
-### A turn that did not run on the install's own login says so, where the user is
+### A turn that did not run on the user's own login says so, where the user is
 
 The **observed** fact is what the agent reports it authenticated with — over ACP the adapter's `_auth/status_update`, whose `authStatus.kind` is `'account'` for a subscription login (the in-process SDK called the same thing `apiKeySource`, where the subscription case was `'none'`). Anything else means something reached the child that the environment construction intended to strip, and the person is being billed on an account they did not pick in the Runs-with panel.
 
@@ -359,18 +388,20 @@ A notice and not a panel line, because notices are the existing channel for agen
 
 ### What the panel says, and what it still will not claim
 
-The panel now reports the login, because the login became free to ask. The reserved status line names it in one of three shapes: *runs on your own Claude Code login*, with the plan in brackets when the CLI reported one; the weaker *runs on your own Claude Code install* when the probe answered `unknown`; and the logged-out remedy, which **leads with the action** — *"Run `claude` in a terminal: …"* — because at the 800 px minimum window this line is measured to clip, and the surviving half has to be the half the user can act on.
+The panel now reports the login, because the login became free to ask. The reserved status line names it in one of three shapes: *runs on your own Claude Code login*, with the plan in brackets when the CLI reported one; the weaker *runs on Claude Code* when the probe answered `unknown` — it used to say *your own Claude Code install*, which stopped being a thing this app can assert once the file may be Cinna's copy; and the logged-out remedy, which **leads with the action** — *"Run `claude` in a terminal: …"* — because at the 800 px minimum window this line is measured to clip, and the surviving half has to be the half the user can act on.
 
 What is still never asserted is a **subscription the CLI did not name**. The plan is passed through, capitalised and no further; a lookup table here would blank out a plan this app had not heard of on the one line meant to say who pays, and inferring one because an environment variable was stripped would be a claim about an environment this app does not fully control.
 
 Two states are silence rather than reassurance, and they are different states:
 
-- **Detection has not answered.** The full red not-installed alarm appeared for half a second on machines that *do* have Claude Code — the default first visit for every agent on this engine — naming a remedy the user would satisfy by installing what they already had
-- **The login probe has not answered.** Filling the slot with the reassuring install sentence meant a logged-out machine read healthy in muted grey and was contradicted in red about a tenth of a second later (measured at t=891 ms and t=996 ms). Nothing moves either way — the line is reserved — so what a retraction costs is that the *next* reassuring sentence here is worth less. An answer of `unknown` is not this case: it is an answer, and the install sentence is the true thing to say about it
+- **The binary state has not answered.** Claiming an install before main has said what it found is the same false claim in the other direction, and the slot is reserved, so saying nothing costs no movement. (When the panel still asked PATH detection, the full red not-installed alarm appeared for half a second on machines that *did* have Claude Code — the default first visit for every agent on this engine)
+- **The login probe has not answered.** Filling the slot with the reassuring install sentence meant a logged-out machine read healthy in muted grey and was contradicted in red about a tenth of a second later (measured at t=891 ms and t=996 ms). Nothing moves either way — the line is reserved — so what a retraction costs is that the *next* reassuring sentence here is worth less. An answer of `unknown` is not this case: it is an answer, and the plain *runs on Claude Code* sentence is the true thing to say about it
 
-The **Engine column still names the install and never the login** — it is fixed at 219 px and does not widen with the window, so it holds the shortest true thing and the line that can grow carries the meaning. Its **dot** does move, once: `--color-warning` for a definite `logged_out`, which is the type scale's *"Awaiting auth"* case, and warning rather than danger because the install is fine and one command fixes it. The reserved line below was turning red while the one glanceable indicator in the row stayed neutral about a state the app had just gone and found out.
+The **Engine column names the binary and never the login** — it is fixed at 219 px and does not widen with the window, so it holds the shortest true thing and the line that can grow carries the meaning. Its **dot** does move, once: `--color-warning` for a definite `logged_out`, which is the type scale's *"Awaiting auth"* case, and warning rather than danger because the install is fine and one command fixes it. The reserved line below was turning red while the one glanceable indicator in the row stayed neutral about a state the app had just gone and found out.
 
-Everything else about that dot is unchanged, and one rule in particular: it is **never the success colour**. One option away in that exact slot a green dot means *the process is running*, so a green here would be one indicator, in one position, meaning two things — and the weaker claim read as the stronger. `unknown`, in-flight and `logged_in` all stay muted; only "no install at all" is danger.
+Everything else about that dot is unchanged, and one rule in particular: it is **never the success colour**. One option away in that exact slot a green dot means *the process is running*, so a green here would be one indicator, in one position, meaning two things — and the weaker claim read as the stronger. `unknown`, in-flight and `logged_in` all stay muted; only a failed install or an unusable Claude Path is danger.
+
+**A failure is one of two different failures, and the copy branches on which.** With a Claude Path saved nothing was installing — main only stats that file and runs its `--version` — so *Install failed… could not be installed* described something that never happened and sent the user to a *Try again* that re-checks the same path. There the badge reads *Path not usable* and the line names Settings → Local Development; *not usable* rather than *not found*, because the file may exist and refuse to run. Without a path it is *Install failed*, and the line names Settings → Agents → Runtime, where **Try again** lives. The retry is not offered on this panel: it is a viewer over one agent's runtime, and a machine-wide install button on it would be a second place one fact is acted on.
 
 The panel says nothing about which account paid for a turn either, and **that is a choice of channel rather than silence** — the observation goes into the transcript instead. See below.
 
@@ -383,8 +414,9 @@ The panel says nothing about which account paid for a turn either, and **that is
 - **It never writes into `~/.claude/`** — no settings, no rules, no credentials, no `apiKeyHelper`
 - **It offers no way to run without the callback.** `bypassPermissions` and `dontAsk` are not on the Approvals select, not accepted by the setter and not read from the state file. Either would take the desktop's grants and the transcript's record out of the decision, and a turn that ran that way would look identical to one that did not
 - **It does not hand the reviewer the user's own environment context.** The `autoMode.environment` lines in `~/.claude/settings.json` are what `settingSources: []` withholds, nothing in the SDK's options carries that block on its own, and the reviewer was seen running with `repoVisibility: unknown` and nothing else. The desktop does not try to pass it: doing so would mean reading a file under `~/.claude/`, which this engine never does
-- **It ships no Claude Code of its own.** The SDK pulls a bundled ~190 MB binary per platform, and the ACP adapter pins its own nested copy of the same thing; the installer excludes both, and `CLAUDE_CODE_EXECUTABLE` is what makes the exclusion safe. Not executing a bundled binary is not the same as not shipping it, and shipping it would put a second Claude Code in the app that the user never chose, cannot see and cannot update
-- **It makes no claim about Windows.** Detection, `PATH` resolution and credential storage all differ there and none of it was considered
+- **It ships no Claude Code inside the app, and never runs the adapter's.** The SDK pulls a bundled ~190 MB binary per platform, and the ACP adapter pins its own nested copy of the same thing; the installer excludes both, and `CLAUDE_CODE_EXECUTABLE` is what makes the exclusion safe. The objection to that copy was never that it is a second Claude Code — Cinna's managed copy is one too — but that it was an *accidental* one: at whatever version a dependency happened to nest, checked by nobody, named on no screen. The managed copy is chosen in one manifest, verified before it runs, shown with its path in Settings, replaceable by a Claude Path, and moved by app releases
+- **It never updates the user's Claude Code, and never lets a session do so.** See [Which `claude` runs](#which-claude-runs)
+- **It makes no claim about Windows.** `PATH` resolution and credential storage differ there and none of it was verified, which is why there is no pinned Windows build: a Windows user sets a Claude Path and runs unverified
 - **The engine axis is two-valued on purpose.** Nothing here is built to accommodate a third engine and it should not be until there is one — the abstraction that fits two is not reliably the one that fits three
 
 ## Known gaps, carried honestly
@@ -394,21 +426,21 @@ These are open:
 - **The Keychain question is largely closed, and it was the wrong question.** This entry used to say the path had never been exercised. It had been all along: the probe machine's credentials *file* had been expired for a month while every probe succeeded, so the live credential was the Keychain item throughout — see [the contract, §1](claude_contract.md). The remaining half was then measured directly: a Developer ID-signed `node` under `--options runtime` carrying **this app's own entitlements**, none of them Keychain-related, spawned `claude auth status` with the credentials file moved aside and got a logged-in answer with **no consent prompt**. What that does not cover is written out in [§8 item 1](claude_contract.md#8-still-unverified--and-one-of-these-can-still-kill-the-feature) and must not be read as covered: the parent was a signed `node`, not the packaged `.app` with its `entitlementsInherit` chain; nothing was notarized, quarantined or launched past Gatekeeper; only the native installer's `claude` was the accessing binary; and "no prompt" is on a machine where `claude` has been run interactively many times
 - **A real spawn against a genuinely logged-out install is still untested.** The readiness probe is verified against a logged-out *environment* rather than a logged-out *machine* (`USER` withheld, and an empty `HOME`), and the thrown-error fallback below it is still driven by matching the CLI's error text
 - **Whether an API key in the environment actually shadows an OAuth login is not proven.** The stripping rule rests on the SDK documenting the two as distinct credential sources, which is strong but is not observation
-- **Only one install shape was tested** — the native installer. The SDK branches on the executable path's extension, so an npm shim and a Homebrew wrapper take different code paths — and they are also *different binaries* to the Keychain, so the item's ACL is evaluated afresh for each and the no-prompt result above does not carry over
+- **Only one install shape was tested** — the native installer, whose bytes are the same bare executable the managed copy is. That matters less than it did, since a PATH copy now runs only at the pinned version and everything else runs Cinna's download; it still applies to a Claude Path. The SDK branches on the executable path's extension, so an npm shim and a Homebrew wrapper take different code paths — and they are also *different binaries* to the Keychain, so the item's ACL is evaluated afresh for each and the no-prompt result above does not carry over
 - **The installer exclusion is verified on `darwin-arm64` only.** The other seven platform packages are not built here
 - **The Anthropic API SDK moved 0.89 → 0.93** to satisfy the Agent SDK's peer requirement, and the bump lands on the ordinary Anthropic chat adapter, `src/main/llm/anthropic.ts`, not on anything here. That adapter is covered — `src/main/llm/anthropic.test.ts` runs the SDK's real client against a stubbed wire — but nothing in this feature exercises it, so a further bump forced from here is verified there, not here; see [LLM Adapters — Technical Details](../../llm/adapters/adapters_tech.md#sdk-versions-and-one-that-moved-for-a-reason-outside-this-domain)
 - **Out-of-plan usage has no good surface.** It arrives mid-turn as an error from the CLI and its message is passed through, which is honest but not helpful. We do not know the user's limits and inventing a sentence about them would be worse than the CLI's own
 - **Background work has been watched in single probes, not over time.** One run each, on `haiku`: a background subagent, a synchronous one, a background shell, and a stopped task ([the contract](acp_contract.md#between-turn-traffic)). A shell left running when the model answers was measured there: the prompt returned 24 s before the shell ended, and the turn Claude started afterwards ended on a costed `usage_update`. A failed task, a subagent that fails or disconnects, and an ask raised between turns have not been watched
 - **Automatic mode may refuse a `haiku` turn under `claude` 2.1.273.** On that CLI, `session/set_mode auto` itself fails on `haiku`, and the driver refuses a turn whose setup failed. This is read from the code and was not run in the app ([the contract](acp_contract.md#on-automatic-the-clis-own-reviewer-answers-first--and-it-declined-nothing))
 - **The reviewer handing an ask on to the desktop was never observed.** The SDK's own documentation implies it can; seven probes, chosen to be declined, were all approved. Everything the block does on *Automatic* is therefore verified only on *Ask every time*, and the description of *Automatic* is written from what was watched rather than from what the SDK says. Which models carry a reviewer is not the desktop's to know either — `haiku` is the one observed to fall back, and the notice is driven by what the CLI reports, not by a list
-- **No automated test ever runs a turn on it.** The E2E scenarios drive the *choice* — the option, the manifest rewritten in both directions, the panel's geometry — and the readiness ladder, which is reachable there because the probe is free and the sandbox `HOME` makes a real install read as logged out. They stop there, because spawning a `claude` **turn** bills a real person's subscription on every developer's machine and in CI. Everything past the picker is covered by unit tests against an injected SDK
+- **No automated test runs a turn on a real login.** The E2E scenarios drive the *choice* — the option, the manifest rewritten in both directions, the panel's geometry — and the readiness ladder, which is reachable there because the probe is free and the sandbox `HOME` makes a real binary read as logged out; they name their binary through the Claude Path, because the fixture switches the managed download off. They stop there, because spawning a `claude` **turn** bills a real person's subscription on every developer's machine and in CI. What does run real turns is the [interface contract](contracts/claude_interface.md): the pinned binary and the real adapter against a loopback fake Anthropic endpoint, in a scratch `HOME`, with every connection the CLI routes through its proxy settings recorded and refused. That covers the interfaces, not the login — the entries that need a real subscription (the login following `HOME`, a subscription usage limit, the background updater) are marked **Live only** and skipped rather than faked
 
 ## Architecture Overview
 
 ```
 Agent page → Settings → "Runs with" panel
    │  Runs on: [ On this machine: Claude Agent | AI credentials: … ]
-   │  tier picker, status line, detected-install column
+   │  tier picker, status line, Engine column (the binary that will run)
    ▼
 local-agent:update-field  (kit, stamped)  /  local-agent:set-runtime  (bare)
    │  runtime.engine written to cinna-agent.json or to Desktop State
@@ -427,17 +459,20 @@ driverFor(agent) ──► the ACP driver          dispatch: agents.driver = 'ac
 launcherOfFolder(runtime) = 'claude' ──► ClaudeLauncher.plan()
    │
    readiness — before the lock, before any turn:
-     toolDetectionService → no `claude`  ──► refused, nothing spawned
+     claudeBinaryService.peek → install `failed` ──► refused, nothing spawned
+       (not fetched yet is NOT a refusal: plan() runs ensure(), which may download)
      claudeAuthProbe      → `logged_out` ──► refused, nothing billed
-       `claude auth status`, cached, in the same constructed environment
-       the turn will use; `unknown` never blocks
+       `claude auth status` asked of the binary the sessions run on, cached,
+       in the same constructed environment the turn will use; `unknown` never blocks
      the panel asks the same probe: useClaudeAuth → local-tools:claude-auth
    │
    ▼
 spawn: <this app, ELECTRON_RUN_AS_NODE=1> <claude-agent-acp>/dist/index.js
    cwd  = the agent folder
    env  = buildClaudeEnv (constructed, stripped, audited)
-          + CLAUDE_CODE_EXECUTABLE = the user's own `claude`
+          + DISABLE_AUTOUPDATER=1
+          + CLAUDE_CODE_EXECUTABLE = Claude Path │ the user's install at exactly the pin
+                                     (its real path) │ <userData>/runtimes/claude-<pin>/claude
    │
    ├─ initialize   clientCapabilities = { elicitation: { form: {} },
    │                   _meta.jetbrains.air: [asyncTasks, nativeSubagentSessions] }
@@ -486,7 +521,9 @@ parts accumulator → message repository → renderer   (all unchanged)
 - [Local Agent Permissions](permissions.md) — the standing grants the permission callback consults, the Approvals setting that decides whether the CLI's reviewer stands in front of them, and why *Always* is never written into a tool's own store
 - [Kit Contract & Manifest Layer](kit_contract.md) — `runtime.engine` as an additive 1.2.0 field, and the tolerant-read rule that keeps a newer folder running
 - [Agents Tab & Agent Page](agents_tab.md) — the "Runs with" panel and its one reserved status line
-- [Open in… (Local Agent Tools)](open_in_tools.md) — the tool detection that already found `claude` for a menu item and is now load-bearing for whether an agent can run at all. The login probe is its sibling and rides the same `local-tools:*` surface (`local-tools:claude-auth`), so pressing **Refresh** in Settings → Agents re-asks both
+- [Open in… (Local Agent Tools)](open_in_tools.md) — the tool detection that finds the `claude` on the PATH. That copy is what **Open in Claude Code** launches and a first-launch hint for the Default runtime; it no longer decides whether an agent can run. The login probe still rides the same `local-tools:*` surface (`local-tools:claude-auth`), so pressing **Refresh** in Settings re-asks it
+- [Claude Code Interface Contract](contracts/claude_interface.md) — the generated index of every CLI and adapter interface relied on, each tested against the real pinned binary
+- [Runtime Pins](../../development/runtime_pins/runtime_pins_llm.md) — where the pinned version and its checksums live, and how to move them
 - [Shell Environment Resolution](../../development/shell_environment/shell_environment.md) — the login-shell environment and the child allowlist the constructed environment starts from
 - [UX Rules](../../development/ui_guidelines/ux_rules.md) — rule 1 in particular, for a picker that changes which controls exist beneath it
 - Technical details: [The Claude Engine (tech)](claude_engine_tech.md)

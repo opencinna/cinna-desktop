@@ -193,7 +193,10 @@ export async function probeClaudeAuth(input: ClaudeAuthProbeInput): Promise<Clau
 }
 
 export interface ClaudeAuthProbeDeps {
-  /** The `claude` this machine has, or null. `toolDetectionService`'s answer. */
+  /**
+   * The `claude` the sessions run on, or null when there is none *yet*: the
+   * Settings path, else the pinned Claude Code. Never downloads.
+   */
   claudePath(): Promise<string | null>
   /** The child environment the turn would use. */
   env(): Promise<Record<string, string>>
@@ -217,6 +220,8 @@ export interface ClaudeAuthProbeDeps {
 export class ClaudeAuthProbe {
   private cached: { at: number; value: ClaudeAuthStatus } | null = null
   private inFlight: Promise<ClaudeAuthStatus> | null = null
+  /** Bumped by {@link invalidate}: an answer asked of an earlier binary is neither shared nor kept. */
+  private generation = 0
 
   constructor(private readonly deps: ClaudeAuthProbeDeps) {}
 
@@ -231,10 +236,23 @@ export class ClaudeAuthProbe {
   async status(): Promise<ClaudeAuthStatus> {
     if (this.cached && this.clock - this.cached.at < this.ttl) return this.cached.value
     if (this.inFlight) return this.inFlight
-    this.inFlight = this.run().finally(() => {
-      this.inFlight = null
+    const run: Promise<ClaudeAuthStatus> = this.run().finally(() => {
+      if (this.inFlight === run) this.inFlight = null
     })
-    return this.inFlight
+    this.inFlight = run
+    return run
+  }
+
+  /**
+   * Forget the answer **without asking again** — the binary it was asked of is
+   * no longer the one in use (the Claude Path in Settings changed). Not
+   * `refresh`: the new path may still be resolving. A probe already in flight
+   * finishes for its own caller and is dropped. `CodexAuthProbe.invalidate`'s twin.
+   */
+  invalidate(): void {
+    this.generation++
+    this.cached = null
+    this.inFlight = null
   }
 
   /**
@@ -252,8 +270,9 @@ export class ClaudeAuthProbe {
   }
 
   private async run(): Promise<ClaudeAuthStatus> {
+    const generation = this.generation
     try {
-      return await this.ask()
+      return await this.ask(generation)
     } catch {
       // **Never rejects.** `probeClaudeAuth` already cannot, but `claudePath()`
       // and `env()` are injected and both do real work — detection walks the
@@ -265,18 +284,19 @@ export class ClaudeAuthProbe {
     }
   }
 
-  private async ask(): Promise<ClaudeAuthStatus> {
+  private async ask(generation: number): Promise<ClaudeAuthStatus> {
     const claudePath = await this.deps.claudePath()
-    // No install is not "unknown login", but it is not this module's sentence
-    // either: `claude_not_installed` outranks it everywhere it is read, and
-    // caching an `unknown` here keeps that ordering the caller's decision.
-    if (!claudePath) return this.remember(UNKNOWN)
+    // **"There was nothing to ask" is not an answer worth keeping.** The pinned
+    // CLI is fetched by the first turn that needs it, so an `unknown` taken a
+    // moment before that install and held for the whole window would let the
+    // launcher skip the logged-out refusal on the very turn that installed it.
+    if (!claudePath) return UNKNOWN
     const probe = this.deps.probe ?? probeClaudeAuth
-    return this.remember(await probe({ claudePath, env: await this.deps.env() }))
+    return this.remember(await probe({ claudePath, env: await this.deps.env() }), generation)
   }
 
-  private remember(value: ClaudeAuthStatus): ClaudeAuthStatus {
-    this.cached = { at: this.clock, value }
+  private remember(value: ClaudeAuthStatus, generation = this.generation): ClaudeAuthStatus {
+    if (generation === this.generation) this.cached = { at: this.clock, value }
     return value
   }
 }

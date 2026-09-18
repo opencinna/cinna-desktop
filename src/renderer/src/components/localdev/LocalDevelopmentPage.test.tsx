@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => {
 })
 vi.mock('../../hooks/useNewChatFlow', () => ({ useNewChatFlow: () => ({ startNewChat: mocks.start }) }))
 vi.mock('../../hooks/useAppSettings', () => ({ useSetAppSetting: () => ({ mutate: vi.fn() }), useAppSettings: () => { mocks.settings(); return { data: { localAgentsDefaultEngine: 'claude' } } } }))
-vi.mock('../../hooks/useEngine', () => ({ useDefaultRuntime: () => ({ data: { engine: 'claude' } }), useCodexBinary: () => ({ data: { state: 'unresolved' } }) }))
+vi.mock('../../hooks/useEngine', () => ({ useDefaultRuntime: () => ({ data: { engine: 'claude' } }), useCodexBinary: () => ({ data: { state: 'unresolved' } }), useClaudeBinary: () => ({ data: { state: 'unresolved' } }) }))
 vi.mock('../../hooks/useLocalTools', () => ({ useClaudeAuth: () => ({ data: { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max' } }), useLocalTools: () => ({ data: [] }), useInstallRuntimeTool: () => ({}), useToolInstallPlan: () => null }))
 vi.mock('react-markdown', async (importOriginal) => {
   const original = await importOriginal<typeof import('react-markdown')>()

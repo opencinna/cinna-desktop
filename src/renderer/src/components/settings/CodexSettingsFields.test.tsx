@@ -28,10 +28,22 @@ describe('CodexSettingsFields', () => {
     expect(card.querySelectorAll('p')).toHaveLength(0)
     expect(screen.queryByText(/old path|next Codex run/)).toBeNull()
 
-    // …and none after a failed install either: the field is how the user gets out of it.
-    binary = { state: 'failed', error: 'Codex could not be downloaded.' }
-    view.rerender(<CodexSettingsFields />)
-    expect(card.querySelectorAll('p')).toHaveLength(0)
+  })
+
+  it('says a failed Codex under its own field, in one line that moves nothing above it', () => {
+    // It used to be a red paragraph above all three fields, so pressing Enter on
+    // a bad path moved the field being edited. Mutation: render it before the
+    // input, or drop `truncate`, and a long failure is three lines again.
+    appSettings = { localAgentsCodexPath: '/opt/codex' }
+    binary = { state: 'failed', error: 'Codex path is not a file — fix it in Local Development.' }
+    const view = render(<CodexSettingsFields />)
+    const input = screen.getByLabelText('Codex Path', { exact: true })
+    const reason = screen.getByText('Codex path is not a file — fix it in Local Development.')
+    expect(input.compareDocumentPosition(reason) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(reason.className).toContain('truncate')
+    expect(reason.className).toContain('text-[var(--color-danger)]')
+    expect(reason.getAttribute('title')).toBe('Codex path is not a file — fix it in Local Development.')
+    expect(view.container.querySelectorAll('p')).toHaveLength(1)
   })
 
   it('saves on blur, and shows a refused path below the field with the draft kept', () => {

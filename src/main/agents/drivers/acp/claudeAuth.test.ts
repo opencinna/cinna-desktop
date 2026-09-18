@@ -285,4 +285,40 @@ describe('ClaudeAuthProbe', () => {
     expect((await probe.status()).state).toBe('unknown')
     expect(calls()).toBe(0)
   })
+
+  it('does not keep "nothing to ask": the turn that installs the CLI is asked about its login', async () => {
+    let path: string | null = null
+    let asked = 0
+    const probe = new ClaudeAuthProbe({
+      claudePath: async () => path, env: async () => ({}), ttlMs: 30_000, now: () => 1,
+      probe: async () => { asked++; return { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null } }
+    })
+    expect((await probe.status()).state).toBe('unknown')
+    path = '/runtimes/claude-2.1.276/claude' // the first turn's install landed
+    expect((await probe.status()).state).toBe('logged_out')
+    expect(asked).toBe(1)
+  })
+
+  it('`invalidate` forgets an answer asked of another binary, and drops one still in flight', async () => {
+    let release = (): void => {}
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const answers: ClaudeAuthStatus[] = [
+      { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max', email: 'old@example.com' },
+      { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
+    ]
+    let n = 0
+    const probe = new ClaudeAuthProbe({
+      claudePath: async () => '/a/claude', env: async () => ({}), ttlMs: 30_000, now: () => 1,
+      probe: async () => { const answer = answers[n++]; if (n === 1) await held; return answer }
+    })
+    const stale = probe.status()
+    probe.invalidate() // the Claude Path changed while the old binary was being asked
+    const current = probe.status()
+    release()
+    expect((await stale).state).toBe('logged_in') // its own caller still hears it
+    expect((await current).state).toBe('logged_out')
+    // …and the late, stale answer was not written over the current one.
+    expect((await probe.status()).state).toBe('logged_out')
+    expect(n).toBe(2)
+  })
 })

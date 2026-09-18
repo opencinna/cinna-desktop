@@ -4,8 +4,8 @@ import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { SettingsInfoTip, SettingsLabel, settingsControlRowClass, settingsInputClass } from './SettingsLayout'
 
-/** The two settings that name an executable a runtime is run from. */
-type RuntimePathKey = 'localAgentsEnginePath' | 'localAgentsCodexPath'
+/** The settings that name an executable a runtime is run from. */
+type RuntimePathKey = 'localAgentsEnginePath' | 'localAgentsCodexPath' | 'localAgentsClaudePath'
 
 /**
  * An "explicit executable path" field for one runtime.
@@ -150,8 +150,8 @@ export function RuntimePathField({
             className={`${settingsInputClass} font-mono`}
           />
         </div>
-        {/* Every message this field can produce, below it and last in the
-            card, rendered only while it exists: both are consequences of an
+        {/* Every message this field can produce, below it and last in its
+            block, rendered only while it exists: each is a consequence of an
             action, so their arrival lengthens the card under the control and
             moves nothing above it. An always-present slot was empty in the
             healthy state, which is padding, not a reservation (ux_rules
@@ -160,6 +160,15 @@ export function RuntimePathField({
           <p className="mt-1.5 text-[13px] text-[var(--color-danger)]">{pathError}</p>
         ) : pathPending ? (
           <p className="mt-1.5 text-[13px] text-[var(--color-warning)]">{pendingMessage}</p>
+        ) : binary?.state === 'failed' ? (
+          // This runtime's failure, under the field that is the way out of it.
+          // The three used to be stacked as unlabelled red paragraphs *above*
+          // all three fields, where pressing Enter on a bad path moved the field
+          // being edited down a line. One line, the whole sentence in `title`:
+          // main's copy names the tool itself, so nothing here labels it again.
+          <p className="mt-1.5 truncate text-[13px] text-[var(--color-danger)]" title={binary.error}>
+            {binary.error}
+          </p>
         ) : null}
       </div>
     </div>

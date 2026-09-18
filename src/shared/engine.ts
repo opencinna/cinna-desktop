@@ -29,8 +29,12 @@ import { RUNTIME_PINS } from './runtimePins'
  *   their own auth and their own updates.
  * - `managed` — the pinned version this app downloaded into its data directory,
  *   verified against a recorded SHA-256.
+ * - `path-pinned` — Claude Code and Codex only: the user's own install on PATH,
+ *   used **because it reports exactly the pinned version**. As verified as a
+ *   managed copy by version, and it saves the download; any other version on
+ *   PATH is ignored for spawned sessions.
  */
-export type EngineBinarySource = 'configured' | 'path' | 'managed'
+export type EngineBinarySource = 'configured' | 'path' | 'managed' | 'path-pinned'
 
 /** What the engine is doing right now. */
 /**
@@ -54,7 +58,7 @@ export type EngineBinarySource = 'configured' | 'path' | 'managed'
  */
 export type EngineBinaryState =
   /** Nobody has looked yet. The first turn, or Settings' *Check again*, looks. */
-  | { state: 'unresolved' }
+  | { state: 'unresolved'; assetBytes?: number }
   /**
    * Looking now — which may be a download, once, of about a minute.
    *
@@ -62,8 +66,14 @@ export type EngineBinaryState =
    * only for a resolution that reports them (the managed Codex CLI, at ~90 MB).
    * `total` is null when the server declared no length. Absent means "looking",
    * not "0%": a configured path resolves without downloading anything.
+   *
+   * `assetBytes`, here and on `unresolved`: the exact byte length of **this
+   * platform's** pinned asset, when its pin row records one — what "about N MB"
+   * is said from before any byte has arrived. It differs by platform (Claude
+   * Code is 215 MB on darwin-arm64 and 232 MB on linux-x64), so it comes from
+   * main, which knows the host, and is absent for a tool with no recorded size.
    */
-  | { state: 'resolving'; received?: number; total?: number | null }
+  | { state: 'resolving'; received?: number; total?: number | null; assetBytes?: number }
   | {
       state: 'ready'
       /** Absolute path — shown in Settings, never fetched. */
@@ -85,6 +95,9 @@ export const ENGINE_BINARY_CHANNEL = 'engine:binary-state'
  */
 export const CODEX_BINARY_CHANNEL = 'engine:codex-binary-state'
 
+/** The same, for the **managed Claude Code CLI**. */
+export const CLAUDE_BINARY_CHANNEL = 'engine:claude-binary-state'
+
 /**
  * The pinned engine version this build downloads when it must manage one.
  * Read from the pin manifest, which is the only place the number lives.
@@ -93,6 +106,9 @@ export const PINNED_ENGINE_VERSION: string = RUNTIME_PINS.opencode.cli
 
 /** The Codex CLI version every Cinna-spawned Codex session runs on. */
 export const PINNED_CODEX_VERSION: string = RUNTIME_PINS.codex.cli
+
+/** The Claude Code version every Cinna-spawned Claude session runs on. */
+export const PINNED_CLAUDE_VERSION: string = RUNTIME_PINS.claude.cli
 
 /**
  * What actually runs an agent's turn.

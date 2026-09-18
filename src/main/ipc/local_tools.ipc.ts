@@ -80,8 +80,8 @@ export function registerLocalToolsHandlers(): void {
     userActivation.requireActivated()
     const tools = await toolDetectionService.refresh()
     // **After the await, and the order is the whole point.** The login probe
-    // resolves its path through `toolDetectionService.get`, which reads the
-    // memoized `detection` promise *synchronously*. Started first, it would
+    // resolves its binary through the engine binary service, whose exact-version
+    // PATH reuse rests on the same detection this line refreshes. Started first, it would
     // therefore answer from the cache this line is about to throw away — so a
     // user who had just installed Claude Code and pressed this button would get
     // fresh detection beside a login answer of `unknown`, held for the probe's

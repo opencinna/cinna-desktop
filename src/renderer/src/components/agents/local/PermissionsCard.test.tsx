@@ -337,6 +337,10 @@ describe('PermissionsCard — an agent on Claude', () => {
     // The blunt sentence. It was watched: the classifier approved a force push
     // and a global git config rewrite, and the callback never fired.
     expect(screen.getByText(/approved everything it was shown/)).toBeTruthy()
+    // True for all three sources of the binary. "Your own Claude Code install"
+    // was false for the copy Cinna manages (ux_rules rule 9).
+    expect(screen.getByText(/This agent runs on Claude Code under your own login\./)).toBeTruthy()
+    expect(screen.queryByText(/your own Claude Code install/)).toBeNull()
     const select = screen.getByLabelText('Approvals') as HTMLSelectElement
     // No choice made reads as the default, not as a blank option.
     expect(select.value).toBe('auto')

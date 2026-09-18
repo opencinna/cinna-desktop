@@ -1,14 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { realpathSync } from 'node:fs'
 import {
+  binaryFingerprint,
+  CLAUDE_ASSETS,
+  CLAUDE_SPEC,
   CODEX_ASSETS,
   CODEX_SPEC,
   ENGINE_ASSETS,
   EngineBinaryError,
+  knownRuntimeBinary,
   managedBinaryPath,
+  pinnedAssetBytes,
+  realClaudeResolverDeps,
   realCodexResolverDeps,
   resolveEngineBinaryWith,
   sha256File,
@@ -36,8 +43,9 @@ import {
  */
 
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent' } }))
+const logInfo = vi.hoisted(() => vi.fn())
 vi.mock('../logger/logger', () => ({
-  createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
+  createLogger: () => ({ debug: () => {}, info: logInfo, warn: () => {}, error: () => {} })
 }))
 
 const ARCHIVE_BYTES = 'pretend this is a 46 MB zip'
@@ -76,14 +84,23 @@ function published(): string[] {
   return readdirSync(root).filter((name) => !name.startsWith('.staging-')).sort()
 }
 
+/** Backdate a directory's mtime — the resolver's "last used" stamp — by whole days. */
+function idleFor(path: string, days: number): void {
+  const then = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+  utimesSync(path, then, then)
+}
+
 /** Everything in the engine root, staging included. */
 function everything(): string[] {
   return readdirSync(root).sort()
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'cinna-engine-'))
+  // Real, because macOS's tmpdir is itself behind a symlink and the reuse path
+  // now answers with real paths.
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'cinna-engine-')))
   downloads = []
+  logInfo.mockClear()
 })
 
 afterEach(() => {
@@ -213,6 +230,7 @@ describe('resolveEngineBinaryWith — the managed install', () => {
     for (const dir of ['opencode-1.0.0', 'opencode-9.9.8', '.staging-123-456-1', 'opencode-notes', 'codex-0.1.0', 'prompts']) {
       mkdirSync(join(root, dir))
       writeFileSync(join(root, dir, 'file'), 'x')
+      idleFor(join(root, dir), 8)
     }
     writeFileSync(join(root, 'opencode.json'), '{}')
     await resolveEngineBinaryWith(harness())
@@ -221,9 +239,39 @@ describe('resolveEngineBinaryWith — the managed install', () => {
     expect(everything()).toEqual(['codex-0.1.0', 'opencode-9.9.9', 'opencode-notes', 'opencode.json', 'prompts'])
   })
 
+  it('keeps another version that was used this week: two builds sharing userData must not delete each other', async () => {
+    // A dev build and a release build with different pins, one profile. Each
+    // install used to remove the other's copy, which the other then downloaded
+    // again on its next launch — for ever. Mutation: drop the age check in
+    // `sweepSuperseded` and `opencode-9.9.8` is gone.
+    mkdirSync(join(root, 'opencode-9.9.8'))
+    idleFor(join(root, 'opencode-9.9.8'), 6)
+    mkdirSync(join(root, 'opencode-1.0.0'))
+    idleFor(join(root, 'opencode-1.0.0'), 8)
+    await resolveEngineBinaryWith(harness())
+    expect(published()).toEqual(['opencode-9.9.8', 'opencode-9.9.9'])
+  })
+
+  it('stamps a managed copy as used every time it is resolved, which is what "this week" is measured from', async () => {
+    await resolveEngineBinaryWith(harness())
+    const dir = join(root, 'opencode-9.9.9')
+    idleFor(dir, 30)
+    await resolveEngineBinaryWith(harness())
+    expect(Date.now() - statSync(dir).mtimeMs).toBeLessThan(60_000)
+    expect(downloads).toHaveLength(1)
+  })
+
+  it('does not sweep when the fresh install will not answer --version: the old version may be the one that works', async () => {
+    mkdirSync(join(root, 'opencode-1.0.0'))
+    idleFor(join(root, 'opencode-1.0.0'), 8)
+    await resolveEngineBinaryWith(harness({ probeVersion: async () => null }))
+    expect(published()).toEqual(['opencode-1.0.0', 'opencode-9.9.9'])
+  })
+
   it('sweeps nothing when the install is already there, or when the install fails', async () => {
     await resolveEngineBinaryWith(harness())
     mkdirSync(join(root, 'opencode-1.0.0'))
+    idleFor(join(root, 'opencode-1.0.0'), 8)
     await resolveEngineBinaryWith(harness())
     expect(published()).toEqual(['opencode-1.0.0', 'opencode-9.9.9'])
     // A failed newer install must not cost the user the version that works.
@@ -337,14 +385,39 @@ describe('resolveEngineBinaryWith — the managed Codex CLI', () => {
     })
   }
 
-  it('never uses a codex on PATH: the version under test is the version that runs', async () => {
-    // Mutation: flip `CODEX_SPEC.searchPath` and this returns the PATH copy
-    // with `source: 'path'` and downloads nothing.
-    const onPath = vi.fn(async () => '/opt/homebrew/bin/codex')
-    const resolved = await resolveEngineBinaryWith(codex({ which: onPath }))
-    expect(onPath).not.toHaveBeenCalled()
+  it('never uses a codex on PATH at another version: the version under test is the version that runs', async () => {
+    // Mutation: flip `CODEX_SPEC.searchPath`, or drop the `acceptsVersion` gate
+    // in `pinnedOnPath`, and this returns the PATH copy and downloads nothing.
+    const resolved = await resolveEngineBinaryWith(codex({
+      which: async () => '/opt/homebrew/bin/codex',
+      probeVersion: async (path) => path === '/opt/homebrew/bin/codex' ? 'codex-cli 0.156.0' : 'codex-cli 0.155.0'
+    }))
     expect(resolved).toMatchObject({ source: 'managed', version: 'codex-cli 0.155.0' })
     expect(downloads).toHaveLength(1)
+  })
+
+  it('reuses a PATH copy that reports exactly the pinned version, and downloads nothing', async () => {
+    const resolved = await resolveEngineBinaryWith(codex({ which: async () => '/opt/homebrew/bin/codex' }))
+    expect(resolved).toMatchObject({ path: '/opt/homebrew/bin/codex', source: 'path-pinned', version: 'codex-cli 0.155.0' })
+    expect(downloads).toEqual([])
+    expect(everything()).toEqual([])
+  })
+
+  it('prefers a managed copy that is already installed over probing PATH again', async () => {
+    await resolveEngineBinaryWith(codex())
+    const onPath = vi.fn(async () => '/opt/homebrew/bin/codex')
+    const resolved = await resolveEngineBinaryWith(codex({ which: onPath }))
+    expect(resolved.source).toBe('managed')
+    expect(onPath).not.toHaveBeenCalled()
+  })
+
+  it('an explicit path still outranks an exact-version PATH copy', async () => {
+    const configured = join(root, 'candidate-codex')
+    writeFileSync(configured, '#!/bin/sh\n')
+    const onPath = vi.fn(async () => '/opt/homebrew/bin/codex')
+    const resolved = await resolveEngineBinaryWith(codex({ configuredPath: () => configured, which: onPath }))
+    expect(resolved.source).toBe('configured')
+    expect(onPath).not.toHaveBeenCalled()
   })
 
   it('publishes the archive’s triple-named executable as codex, at one path per version', async () => {
@@ -404,7 +477,7 @@ describe('resolveEngineBinaryWith — the managed Codex CLI', () => {
   it('names the Codex path, not the engine path, when the configured file is wrong', async () => {
     await expect(
       resolveEngineBinaryWith(codex({ configuredPath: () => join(root, 'not-there') }))
-    ).rejects.toThrow(/Fix the Codex path in Settings.*does not point at a file/i)
+    ).rejects.toThrow(/^Codex path is not a file — fix it in Local Development\.$/)
     expect(downloads).toEqual([])
   })
 
@@ -449,6 +522,187 @@ describe('resolveEngineBinaryWith — the managed Codex CLI', () => {
         fetchSpy.mockRestore()
       }
     })
+  })
+})
+
+/**
+ * The same resolver under the Claude spec. What differs from Codex is the asset:
+ * **the executable itself, not an archive**, and one larger than the default guard.
+ */
+describe('resolveEngineBinaryWith — the pinned Claude Code CLI', () => {
+  const VERSION_OUTPUT = '2.1.276 (Claude Code)'
+  function claude(overrides: Partial<BinaryResolverDeps> = {}): BinaryResolverDeps {
+    return harness({
+      spec: CLAUDE_SPEC,
+      version: '2.1.276',
+      assets: { 'test-arch': { file: 'claude', sha256: ARCHIVE_SHA, url: 'https://example.test/claude', format: 'executable', size: 215_643_408 } },
+      extract: async () => { throw new Error('an executable asset must never be unpacked') },
+      probeVersion: async () => VERSION_OUTPUT,
+      ...overrides
+    })
+  }
+
+  it('publishes the verified file itself as claude, without unpacking anything', async () => {
+    // Mutation: drop the `format === 'executable'` branch in `runInstall` and the
+    // harness's `extract` throws — tar would have been run on an executable.
+    const deps = claude()
+    const resolved = await resolveEngineBinaryWith(deps)
+    expect(resolved).toEqual({ path: join(root, 'claude-2.1.276', 'claude'), source: 'managed', version: VERSION_OUTPUT })
+    expect(resolved.path).toBe(managedBinaryPath(deps))
+    expect(readFileSync(resolved.path, 'utf8')).toBe(ARCHIVE_BYTES)
+    if (process.platform !== 'win32') expect(statSync(resolved.path).mode & 0o111).not.toBe(0)
+    expect(everything()).toEqual(['claude-2.1.276'])
+  })
+
+  it('hands the download the asset’s own size as its ceiling — 215 MB is over the default guard', async () => {
+    const ceilings: (number | undefined)[] = []
+    await resolveEngineBinaryWith(claude({
+      download: async (_url, dest, _onProgress, maxBytes) => { ceilings.push(maxBytes); writeFileSync(dest, ARCHIVE_BYTES) }
+    }))
+    expect(ceilings).toEqual([215_643_408])
+  })
+
+  it('discards substituted bytes before they are ever made executable or probed', async () => {
+    const probeVersion = vi.fn(async () => VERSION_OUTPUT)
+    await expect(resolveEngineBinaryWith(claude({
+      probeVersion, download: async (_url, dest) => writeFileSync(dest, 'substituted bytes')
+    }))).rejects.toThrow(/checksum/i)
+    expect(probeVersion).not.toHaveBeenCalled()
+    expect(everything()).toEqual([])
+  })
+
+  it('discards verified bytes that report another version', async () => {
+    const attempt = resolveEngineBinaryWith(claude({ probeVersion: async () => '2.1.277 (Claude Code)' }))
+    await expect(attempt).rejects.toMatchObject({ code: 'version_mismatch' })
+    expect(everything()).toEqual([])
+  })
+
+  it('reuses the user’s install only at exactly the pinned version, and remembers which file that was', async () => {
+    const real = join(root, 'versions-2.1.276')
+    writeFileSync(real, 'the vendor installer’s file')
+    const link = join(root, 'claude-on-path')
+    symlinkSync(real, link)
+    const probed: string[] = []
+    const resolved = await resolveEngineBinaryWith(claude({
+      which: async () => link,
+      probeVersion: async (path) => { probed.push(path); return VERSION_OUTPUT }
+    }))
+    // The file, not the PATH entry: a pooled adapter keeps this path for every
+    // later spawn, and the symlink is what the vendor's updater retargets.
+    expect(resolved).toMatchObject({ path: real, source: 'path-pinned', version: VERSION_OUTPUT })
+    expect(probed).toEqual([real])
+    expect(resolved.fingerprint).toBe(await binaryFingerprint(link))
+    expect(downloads).toEqual([])
+
+    // The vendor's updater retargets the symlink: same path, another file.
+    const next = join(root, 'versions-2.1.277')
+    writeFileSync(next, 'a newer release, a different length')
+    rmSync(link)
+    symlinkSync(next, link)
+    expect(await binaryFingerprint(link)).not.toBe(resolved.fingerprint)
+
+    const other = await resolveEngineBinaryWith(claude({
+      which: async () => link,
+      probeVersion: async (path) => path === next ? '2.1.277 (Claude Code)' : VERSION_OUTPUT
+    }))
+    expect(other.source).toBe('managed')
+    expect(downloads).toHaveLength(1)
+  })
+
+  it('the managed Codex CLI answers with the real file behind a PATH symlink too', async () => {
+    const real = join(root, 'Cellar-codex-0.155.0')
+    writeFileSync(real, 'a package manager’s file')
+    const link = join(root, 'codex-on-path')
+    symlinkSync(real, link)
+    const resolved = await resolveEngineBinaryWith(harness({
+      spec: CODEX_SPEC, version: '0.155.0', which: async () => link, probeVersion: async () => 'codex-cli 0.155.0'
+    }))
+    expect(resolved).toMatchObject({ path: real, source: 'path-pinned' })
+    expect((await knownRuntimeBinary(harness({
+      spec: CODEX_SPEC, version: '0.155.0', which: async () => link, probeVersion: async () => 'codex-cli 0.155.0'
+    }), { probePath: true }))?.path).toBe(real)
+  })
+
+  it('logs which binary it chose — tool, source, version, path — once per resolution, whatever the source', async () => {
+    const configured = join(root, 'my-claude')
+    writeFileSync(configured, '')
+    const chosen = (): unknown[] => logInfo.mock.calls.filter(([message]) => message === 'runtime binary resolved').map(([, fields]) => fields)
+
+    await resolveEngineBinaryWith(claude({ configuredPath: () => configured }))
+    expect(chosen()).toEqual([{ tool: 'claude', source: 'configured', version: VERSION_OUTPUT, path: configured }])
+
+    logInfo.mockClear()
+    const onPath = join(root, 'claude-on-path')
+    writeFileSync(onPath, '')
+    await resolveEngineBinaryWith(claude({ which: async () => onPath }))
+    expect(chosen()).toEqual([{ tool: 'claude', source: 'path-pinned', version: VERSION_OUTPUT, path: onPath }])
+
+    logInfo.mockClear()
+    await resolveEngineBinaryWith(claude())
+    expect(chosen()).toEqual([{ tool: 'claude', source: 'managed', version: VERSION_OUTPUT, path: join(root, 'claude-2.1.276', 'claude') }])
+
+    // …and OpenCode's PATH copy, the one source only it has.
+    logInfo.mockClear()
+    await resolveEngineBinaryWith(harness({ which: async () => '/usr/local/bin/opencode' }))
+    expect(chosen()).toEqual([{ tool: 'opencode', source: 'path', version: '1.2.3', path: '/usr/local/bin/opencode' }])
+  })
+
+  it('says how big this platform’s pinned asset is, and null where no size is recorded', () => {
+    expect(pinnedAssetBytes(claude())).toBe(215_643_408)
+    expect(pinnedAssetBytes(claude({ platformKey: () => 'plan9-mips' }))).toBeNull()
+    expect(pinnedAssetBytes(harness())).toBeNull()
+    // The real tables: every Claude and Codex row has one, and they differ by platform.
+    for (const assets of [CLAUDE_ASSETS, CODEX_ASSETS]) {
+      const sizes = Object.keys(assets).map((key) => pinnedAssetBytes({ assets, platformKey: () => key }))
+      expect(sizes.every((size) => typeof size === 'number' && size > 50_000_000)).toBe(true)
+      expect(new Set(sizes).size).toBe(sizes.length)
+    }
+  })
+
+  it('knownRuntimeBinary never downloads, and probes PATH only when asked to', async () => {
+    const which = vi.fn(async () => '/Users/x/.local/bin/claude')
+    expect(await knownRuntimeBinary(claude({ which }))).toBeNull()
+    expect(which).not.toHaveBeenCalled()
+    expect(await knownRuntimeBinary(claude({ which }), { probePath: true })).toMatchObject({ source: 'path-pinned' })
+    expect(await knownRuntimeBinary(claude({ which, probeVersion: async () => '2.1.200 (Claude Code)' }), { probePath: true })).toBeNull()
+    await resolveEngineBinaryWith(claude())
+    expect(await knownRuntimeBinary(claude({ which }))).toMatchObject({ source: 'managed', path: join(root, 'claude-2.1.276', 'claude') })
+    expect(downloads).toHaveLength(1)
+    // A configured path that is not a file is "nothing here", not a fallback to another binary.
+    expect(await knownRuntimeBinary(claude({ configuredPath: () => join(root, 'nope') }), { probePath: true })).toBeNull()
+  })
+
+  it('names the Claude path when the configured file is wrong, and for a platform with no build', async () => {
+    await expect(resolveEngineBinaryWith(claude({ configuredPath: () => join(root, 'not-there') })))
+      .rejects.toThrow(/^Claude path is not a file — fix it in Local Development\.$/)
+    await expect(resolveEngineBinaryWith(claude({ platformKey: () => 'win32-x64' })))
+      .rejects.toThrow(/Set a Claude path in Settings.*no verified Claude Code build for win32-x64/i)
+    expect(downloads).toEqual([])
+  })
+
+  it('pins four POSIX rows, each a single executable from the vendor bucket with its size', () => {
+    expect(Object.keys(CLAUDE_ASSETS).sort()).toEqual(['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'])
+    for (const [key, asset] of Object.entries(CLAUDE_ASSETS)) {
+      expect(asset.url, key).toBe(`https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.276/${key}/claude`)
+      expect(asset.format, key).toBe('executable')
+      expect(asset.size, key).toBeGreaterThan(200 * 1024 * 1024)
+    }
+  })
+
+  it('refuses with a remedy instead of reaching the network when downloads are off (the E2E sandbox)', async () => {
+    const before = process.env['CINNA_CLAUDE_DOWNLOAD']
+    process.env['CINNA_CLAUDE_DOWNLOAD'] = 'off'
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    try {
+      await expect(resolveEngineBinaryWith(claude({ download: realClaudeResolverDeps(() => null).download })))
+        .rejects.toThrow(/Set a Claude path in Settings.*switched off/i)
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(everything()).toEqual([])
+    } finally {
+      fetchSpy.mockRestore()
+      if (before === undefined) delete process.env['CINNA_CLAUDE_DOWNLOAD']
+      else process.env['CINNA_CLAUDE_DOWNLOAD'] = before
+    }
   })
 })
 

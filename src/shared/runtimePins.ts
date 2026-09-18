@@ -38,27 +38,70 @@ export interface RuntimePinAsset {
    * it is installed under. Codex archives hold `codex-<target triple>`.
    */
   executable?: string
+  /**
+   * `executable` — the asset **is** the executable, not an archive holding it,
+   * so nothing is unpacked: the verified file is moved into place under the
+   * tool's binary name. Claude Code ships this way. Absent means an archive.
+   *
+   * `format`, not `kind`, and not the word "bare": both already mean something
+   * else here — an agent folder's kind — and `kindBranches.test.ts` counts
+   * every `.kind ===` in the tree.
+   */
+  format?: 'archive' | 'executable'
+  /**
+   * Exact byte length — the vendor's published one, or the count of the bytes
+   * that were hashed for `sha256`. It is the download's size
+   * ceiling for an asset larger than the default guard, and the denominator of
+   * a progress line when the server declares no length.
+   */
+  size?: number
+}
+
+const CLAUDE_CLI = '2.1.276'
+const CLAUDE_RELEASE =
+  `https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/${CLAUDE_CLI}`
+
+function claudeAsset(platform: string, sha256: string, size: number): RuntimePinAsset {
+  return { file: 'claude', sha256, url: `${CLAUDE_RELEASE}/${platform}/claude`, format: 'executable', size }
 }
 
 const CODEX_CLI = '0.155.0'
 const CODEX_RELEASE = `https://github.com/openai/codex/releases/download/rust-v${CODEX_CLI}`
 
-function codexAsset(triple: string, archive: 'tar.gz' | 'zip', sha256: string): RuntimePinAsset {
+function codexAsset(triple: string, archive: 'tar.gz' | 'zip', sha256: string, size: number): RuntimePinAsset {
   const windows = triple.endsWith('windows-msvc')
   const executable = `codex-${triple}${windows ? '.exe' : ''}`
   const file = `${executable}.${archive}`
-  return { file, sha256, url: `${CODEX_RELEASE}/${file}`, executable }
+  return { file, sha256, url: `${CODEX_RELEASE}/${file}`, executable, size }
 }
 
 export const RUNTIME_PINS = {
-  /**
-   * Versions only. Claude's managed install is a later phase; until then the
-   * user's own `claude` runs, and this records what the adapter was verified
-   * against.
-   */
   claude: {
-    cli: '2.1.276',
-    adapter: '0.76.0'
+    cli: CLAUDE_CLI,
+    /** Exactly what `claude --version` prints for the pin. */
+    versionOutput: `${CLAUDE_CLI} (Claude Code)`,
+    adapter: '0.76.0',
+    /**
+     * Anthropic's own release bucket — the one `claude`'s installer and updater
+     * read. `<release>/manifest.json` lists `platforms.<key>.{binary, checksum,
+     * size}`; the executable is `<release>/<key>/<binary>`, a single file, not an archive.
+     *
+     * Every row was hashed from real bytes on 2026-09-18 and then compared with
+     * the manifest's `checksum` and `size`, which agreed: darwin-x64, linux-x64
+     * and linux-arm64 were downloaded from the bucket; darwin-arm64 is the hash
+     * of the vendor installer's own `~/.local/share/claude/versions/2.1.276`.
+     *
+     * Linux rows are the glibc builds (the manifest also has `-musl` keys; see
+     * `engine/binaryResolver.ts` for why libc is not detected). **Windows is
+     * absent**: the launcher's child-environment rules and the login probe are
+     * POSIX-verified only, so a Windows user sets a Claude Path in Settings.
+     */
+    assets: {
+      'darwin-arm64': claudeAsset('darwin-arm64', '9de364db11a410d53cbbb0f6b1f18c66c90053efc9a63370072856d10db66329', 215643408),
+      'darwin-x64': claudeAsset('darwin-x64', 'cf0b4af7bce5d991a577d1150e86d45b7b83ef57cdb0384044ca54661ded24c6', 224441440),
+      'linux-x64': claudeAsset('linux-x64', '8a56c8a14bd3cb246e2bdb7e60aefe0f609bff78c8bbcc5ea6b1817c111c6145', 232059192),
+      'linux-arm64': claudeAsset('linux-arm64', 'e9ac3df956083645578a382ad64ec304468666e362c33bfdefd803cd6ff596b0', 231989488)
+    } as Readonly<Record<string, RuntimePinAsset>>
   },
   codex: {
     cli: CODEX_CLI,
@@ -71,7 +114,9 @@ export const RUNTIME_PINS = {
     adapterPatchedSha256: 'bf3f889fbad28a1304b0e358a3d4cb099cf95ffe317e80b529ceecf7bd76fc95',
     /**
      * The vendor's unmodified GitHub release archives for `rust-v0.155.0`, each
-     * a single self-contained executable. Downloaded and hashed 2026-09-18.
+     * a single self-contained executable. Downloaded and hashed 2026-09-18;
+     * each `size` is the byte count of that same download (`scripts/pin-assets.mjs`
+     * prints it), so it is exact for the digest beside it.
      * Linux is the musl build — the only one the release ships.
      *
      * **Windows is absent deliberately.** Its release zip is not one
@@ -85,22 +130,26 @@ export const RUNTIME_PINS = {
       'darwin-arm64': codexAsset(
         'aarch64-apple-darwin',
         'tar.gz',
-        '5a584b7cddc2a97083cada53f10f5bc4231526b7f64105f6a5bb82d01ccdba49'
+        '5a584b7cddc2a97083cada53f10f5bc4231526b7f64105f6a5bb82d01ccdba49',
+        90573064
       ),
       'darwin-x64': codexAsset(
         'x86_64-apple-darwin',
         'tar.gz',
-        'cc84081b15284eea10c8b8d428818d1c8debdce5a7f0f4f5c04dfc7c72518174'
+        'cc84081b15284eea10c8b8d428818d1c8debdce5a7f0f4f5c04dfc7c72518174',
+        98661335
       ),
       'linux-x64': codexAsset(
         'x86_64-unknown-linux-musl',
         'tar.gz',
-        'e415cc3adb94ade16e8d44b4dd58a9201cc34b2ee51a5d6eddf2a3a00aecb6c0'
+        'e415cc3adb94ade16e8d44b4dd58a9201cc34b2ee51a5d6eddf2a3a00aecb6c0',
+        101573733
       ),
       'linux-arm64': codexAsset(
         'aarch64-unknown-linux-musl',
         'tar.gz',
-        '8b4a9c356916c515f7c93f918a01b8fa1371bcc9758addbfa723b85fbec5694b'
+        '8b4a9c356916c515f7c93f918a01b8fa1371bcc9758addbfa723b85fbec5694b',
+        94309776
       )
     } as Readonly<Record<string, RuntimePinAsset>>
   },

@@ -89,6 +89,7 @@ import {
   type AcpRuntimeMode
 } from './types'
 import { airClientMeta } from './acpActivity'
+import type { CodexBinaryKnown } from './codexLauncher'
 
 const logger = createLogger('acp-launcher')
 
@@ -388,9 +389,24 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
 
 /* -------------------------------------------------------------------- Claude */
 
+/**
+ * Only ever a **failed install**, for the reason `CODEX_NOT_INSTALLED` gives:
+ * Cinna verifies its own pinned Claude Code, so the CLI is here, on its way (the
+ * turn waits for it), or could not be fetched — and only the last one refuses.
+ */
+export const CLAUDE_NOT_INSTALLED = 'Claude Code could not be installed. Try again in Settings → Agents → Runtime.'
+
 export interface ClaudeLauncherDeps {
-  /** Absolute path of the `claude` this machine has, or null. */
-  claudePath(options?: ReadinessOptions): Promise<string | null>
+  /**
+   * The binary this session runs on: the explicit path from Settings
+   * (unpinned), else the pinned Claude Code — the user's own install when it
+   * reports exactly the pinned version, otherwise Cinna's managed copy,
+   * **downloaded and verified if this machine has none**. A failure is returned
+   * as its user-facing sentence rather than thrown.
+   */
+  binary(): Promise<{ path: string } | { error: string }>
+  /** Free, and never starts a download. `fresh` retries a failed install. */
+  binaryKnown(options?: ReadinessOptions): Promise<CodexBinaryKnown>
   /** Whether that install is logged in. Only a definite `logged_out` refuses. */
   claudeAuth(options?: ReadinessOptions): Promise<{ state: string }>
   /** Absolute path of the ACP adapter's entry point. Throws when it is not there. */
@@ -430,9 +446,12 @@ export interface ClaudeLauncherDeps {
  */
 export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
   const readiness = async (options?: ReadinessOptions): Promise<AgentReadiness> => {
-    const claudePath = await deps.claudePath(options).catch(() => null)
-    if (!claudePath) {
-      return { state: 'not_installed', reason: describeEngineSkip('claude_not_installed') }
+    const known = await deps.binaryKnown(options).catch((): CodexBinaryKnown => ({ state: 'pending' }))
+    // Only a *failed* install refuses. `pending` stays `ok` on purpose: a send
+    // joins the install at the top of its turn, and refusing while the CLI was
+    // merely on its way would block the one action that fetches it.
+    if (known.state === 'failed') {
+      return { state: 'not_installed', reason: CLAUDE_NOT_INSTALLED, detail: known.error }
     }
     // Only a definite `logged_out` is not ready. A probe that could not answer
     // is `unknown`, which never blocks — the same rule the runner applied, for
@@ -452,10 +471,14 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
 
     async plan(ctx) {
       if (!ctx.folder) return { error: 'This launcher requires a local agent folder.' }
-      const ready = await readiness()
-      if (ready.state !== 'ok') return { error: ready.reason ?? 'This agent cannot run right now.' }
-      const claudePath = await deps.claudePath()
-      if (!claudePath) return { error: describeEngineSkip('claude_not_installed') }
+      // The binary first — this is the step that may download — and the login
+      // after it, because the login is asked *of that binary*. A failure here is
+      // not remembered: the next turn simply tries again.
+      const binary = await deps.binary().catch((): { error: string } => ({ error: CLAUDE_NOT_INSTALLED }))
+      if ('error' in binary) return { error: binary.error }
+      const claudePath = binary.path
+      const auth = await deps.claudeAuth().catch(() => null)
+      if (auth?.state === 'logged_out') return { error: describeEngineSkip('claude_not_logged_in') }
 
       let adapter: string
       try {
@@ -473,11 +496,12 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
       const env: Record<string, string> = {
         ...(await deps.claudeEnv()),
         ...runtime.env,
-        // **The user's binary, never the adapter's bundled one.** Left unset,
-        // the adapter runs a `claude` it ships itself (2.1.257 in the probe,
-        // against the user's 2.1.267) — a second Claude Code the user never
-        // chose and cannot update. `electron-builder.yml` also refuses to ship
-        // that copy; this is the half that makes the refusal safe.
+        // **The pinned binary, never the adapter's bundled one.** Left unset,
+        // the adapter runs a `claude` it ships itself (2.1.257 in the probe) —
+        // an accidental, invisible second Claude Code at a version nobody
+        // checked. `electron-builder.yml` also refuses to ship that copy; this
+        // is the half that makes the refusal safe. The login is unaffected by
+        // which file this is: it follows HOME, not the binary.
         CLAUDE_CODE_EXECUTABLE: claudePath
       }
 

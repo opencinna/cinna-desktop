@@ -11,11 +11,15 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RUNTIME_PINS } from '../src/shared/runtimePins.ts'
 import { CODEX_CONTRACT, CODEX_CONTRACT_AREAS } from '../src/main/agents/drivers/acp/contracts/codex.contract.ts'
-import { CODEX_INTERFACE_DOC, codexContractDocInput, renderContractDoc } from '../src/main/agents/drivers/acp/contracts/contractDocs.ts'
+import { CLAUDE_CONTRACT, CLAUDE_CONTRACT_AREAS } from '../src/main/agents/drivers/acp/contracts/claude.contract.ts'
+import { CLAUDE_INTERFACE_DOC, CODEX_INTERFACE_DOC, claudeContractDocInput, codexContractDocInput, renderContractDoc } from '../src/main/agents/drivers/acp/contracts/contractDocs.ts'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const check = process.argv.includes('--check')
-const docs = [[CODEX_INTERFACE_DOC, renderContractDoc(codexContractDocInput(RUNTIME_PINS, CODEX_CONTRACT, CODEX_CONTRACT_AREAS))]]
+const docs = [
+  [CODEX_INTERFACE_DOC, renderContractDoc(codexContractDocInput(RUNTIME_PINS, CODEX_CONTRACT, CODEX_CONTRACT_AREAS))],
+  [CLAUDE_INTERFACE_DOC, renderContractDoc(claudeContractDocInput(RUNTIME_PINS, CLAUDE_CONTRACT, CLAUDE_CONTRACT_AREAS))]
+]
 
 let stale = false
 for (const [path, content] of docs) {

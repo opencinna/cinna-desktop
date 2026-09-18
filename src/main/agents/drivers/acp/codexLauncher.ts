@@ -45,7 +45,7 @@ export async function codexBinaryKnownFrom(deps: {
   state(): { state: 'unresolved' | 'resolving' | 'ready' } | { state: 'failed'; error: string }
   /** Starts a new resolution. Its promise is deliberately not awaited here. */
   refresh(): Promise<unknown>
-  /** One stat: the configured path or the managed copy, if it is on disk. */
+  /** What would run without downloading — the binary service's memoised `peek`. */
   known(): Promise<string | null>
 }, options?: ReadinessOptions): Promise<CodexBinaryKnown> {
   const state = deps.state()

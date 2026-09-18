@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useUIStore } from '../../stores/ui.store'
 
 /**
  * Settings → Local Agents, the shape of its cards: under every control there
@@ -32,13 +33,18 @@ let providers: Array<Record<string, unknown>> = []
 /** The managed Codex CLI's state, and the section-owned mutation that installs or retries it. */
 let codexBinary: Record<string, unknown> | undefined = { state: 'unresolved' }
 let resolveCodex = mutation()
+let claudeBinary: Record<string, unknown> | undefined = { state: 'unresolved' }
+let resolveClaude = mutation()
 beforeEach(() => {
   appSettings = HEALTHY_SETTINGS
   binary = READY_BINARY
   codexBinary = { state: 'unresolved' }
   resolveCodex = mutation()
+  claudeBinary = { state: 'unresolved' }
+  resolveClaude = mutation()
   providers = []
   setAppSetting.mockReset()
+  useUIStore.setState({ settingsTab: 'local-agents' })
 })
 
 vi.mock('../../hooks/useLocalAgents', () => ({
@@ -65,7 +71,9 @@ vi.mock('../../hooks/useEngine', () => ({
   useEngineBinary: () => ({ data: binary }),
   useResolveEngineBinary: mutation,
   useCodexBinary: () => ({ data: codexBinary }),
-  useResolveCodexBinary: () => resolveCodex
+  useResolveCodexBinary: () => resolveCodex,
+  useClaudeBinary: () => ({ data: claudeBinary }),
+  useResolveClaudeBinary: () => resolveClaude
 }))
 const setAppSetting = vi.fn()
 vi.mock('../../hooks/useAppSettings', () => ({
@@ -170,6 +178,7 @@ describe('LocalAgentsSettingsSection', () => {
     })
 
     it('offers Install now while nothing is fetched, without an alarm, and installs on the click', () => {
+      codexBinary = { state: 'unresolved', assetBytes: 90 * 1024 * 1024 + 700_000 }
       render(<LocalAgentsSettingsSection />)
 
       const status = screen.getByText('Codex 0.155.0 installs on first use, about 90 MB.')
@@ -221,6 +230,108 @@ describe('LocalAgentsSettingsSection', () => {
       fireEvent.click(codex)
       expect(setAppSetting).toHaveBeenCalledWith({ key: 'localAgentsDefaultEngine', value: 'codex' })
     })
+  })
+
+  describe('with Claude Agent as the default runtime', () => {
+    const MANAGED = { state: 'ready', path: '/data/runtimes/claude-2.1.276/claude', source: 'managed', version: '2.1.276 (Claude Code)' }
+    beforeEach(() => {
+      appSettings = { ...HEALTHY_SETTINGS, localAgentsDefaultEngine: 'claude' }
+    })
+
+    it('reports the pinned CLI, not PATH detection: no "not found" alarm on a machine with no claude', () => {
+      // Mutation: read `useLocalTools` for this line again and a machine Cinna
+      // would simply install Claude Code on is told its agents cannot run.
+      claudeBinary = { state: 'unresolved', assetBytes: 215_643_408 }
+      render(<LocalAgentsSettingsSection />)
+      const status = screen.getByText('Claude Code 2.1.276 installs on first use, about 215 MB.')
+      expect(status.className).toContain('text-[var(--color-text-muted)]')
+      expect(status.parentElement!.className).toContain('min-h-[1lh]')
+      expect(screen.queryByText(/not found/i)).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Install now' }))
+      expect(resolveClaude.mutate).toHaveBeenCalledTimes(1)
+    })
+
+    it.each([
+      ['a managed copy', MANAGED, 'Claude Code 2.1.276 (managed) — runs on your Claude login.', 'Claude Agent2.1.276 managed'],
+      ['the user’s install at exactly the pin', { ...MANAGED, source: 'path-pinned', path: '/Users/x/.local/bin/claude' },
+        'Claude Code 2.1.276 — your own install, the tested version.', 'Claude Agent2.1.276 (your install)']
+    ])('says the same on the button as in the line under it: %s', (_label, state, line, button) => {
+      claudeBinary = state
+      render(<LocalAgentsSettingsSection />)
+      expect(screen.getByText(line).className).toContain('text-[var(--color-text-muted)]')
+      expect(screen.getByRole('button', { name: /^Claude Agent/ }).textContent).toBe(button)
+      // Healthy: nothing to press.
+      expect(screen.queryByRole('button', { name: /Try again|Install now/ })).toBeNull()
+    })
+
+    it('shows the 215 MB download in the same one line, with the action held while it runs', () => {
+      claudeBinary = { state: 'resolving', received: 107_821_704, total: 215_643_408, assetBytes: 215_643_408 }
+      resolveClaude = { ...mutation(), isPending: true }
+      render(<LocalAgentsSettingsSection />)
+      const status = screen.getByText('Downloading Claude Code 2.1.276 — 107 of 215 MB.')
+      expect(status.parentElement!.className).toContain('min-h-[1lh]')
+      expect((screen.getByRole('button', { name: 'Installing…' }) as HTMLButtonElement).disabled).toBe(true)
+    })
+
+    it('a failed Claude Path reads Unavailable on the button — never "<pin> managed" above a red line about the user’s own file', () => {
+      appSettings = { ...appSettings, localAgentsClaudePath: '/opt/claude' }
+      claudeBinary = { state: 'failed', error: 'Claude path will not run — fix it in Local Development.' }
+      render(<LocalAgentsSettingsSection />)
+      const status = screen.getByText('Claude path will not run — fix it in Local Development.')
+      expect(status.className).toContain('text-[var(--color-danger)]')
+      expect(screen.getByRole('button', { name: /^Claude Agent/ }).textContent).toBe('Claude AgentUnavailable')
+      // Not *Try again*: it would re-check the same bad path. The field is on
+      // another tab, so the action goes there.
+      expect(screen.queryByRole('button', { name: /Try again|Install now/ })).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Fix path' }))
+      expect(useUIStore.getState().settingsTab).toBe('local-dev')
+      expect(resolveClaude.mutate).not.toHaveBeenCalled()
+      // Closes nothing: another runtime is still one click away (rule 6).
+      expect(screen.getByRole('button', { name: /Custom OpenCode/ })).toBeTruthy()
+    })
+
+    it('does not offer Install now beside a saved path that simply has not been checked yet', () => {
+      appSettings = { ...appSettings, localAgentsClaudePath: '/opt/claude' }
+      claudeBinary = { state: 'unresolved' }
+      render(<LocalAgentsSettingsSection />)
+      expect(screen.getByText('Your configured Claude path is checked on first use.')).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Install now' })).toBeNull()
+      expect(screen.getByRole('button', { name: /^Claude Agent/ }).textContent).toBe('Claude Agentunverified')
+    })
+
+    it('says nothing while the state is still being read', () => {
+      claudeBinary = undefined
+      render(<LocalAgentsSettingsSection />)
+      expect(screen.queryByText(/Claude Code 2\.1\.276/)).toBeNull()
+    })
+  })
+
+  it('the Codex button too reads Unavailable when a saved Codex Path failed', () => {
+    appSettings = { ...HEALTHY_SETTINGS, localAgentsDefaultEngine: 'codex', localAgentsCodexPath: '/opt/codex' }
+    codexBinary = { state: 'failed', error: 'Codex path will not run — fix it in Local Development.' }
+    render(<LocalAgentsSettingsSection />)
+    expect(screen.getByRole('button', { name: /^Codex/ }).textContent).toBe('CodexUnavailable')
+    expect(screen.queryByRole('button', { name: /Try again|Install now/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Fix path' }))
+    expect(useUIStore.getState().settingsTab).toBe('local-dev')
+  })
+
+  it('the Codex row agrees with the Claude row: no Install now beside a saved, unchecked path', () => {
+    // Mutation: drop `pathSet` from ManagedCliAction and "Install now" sits
+    // beside "Your configured Codex path is checked on first use."
+    appSettings = { ...HEALTHY_SETTINGS, localAgentsDefaultEngine: 'codex', localAgentsCodexPath: '/opt/codex' }
+    codexBinary = { state: 'unresolved' }
+    render(<LocalAgentsSettingsSection />)
+    expect(screen.getByText('Your configured Codex path is checked on first use.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Install now' })).toBeNull()
+  })
+
+  it('a failed managed install still offers Try again', () => {
+    appSettings = { ...HEALTHY_SETTINGS, localAgentsDefaultEngine: 'codex' }
+    codexBinary = { state: 'failed', error: 'offline' }
+    render(<LocalAgentsSettingsSection />)
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(resolveCodex.mutate).toHaveBeenCalledTimes(1)
   })
 
   it('says a vanished pin falls through to the chat mode, and only then', () => {

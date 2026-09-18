@@ -70,6 +70,8 @@ const setSetting = vi.fn()
 const openCredentials = vi.fn()
 let advanced = false
 let settingsLoaded = true
+/** Saved runtime paths (`localAgentsClaudePath`, `localAgentsCodexPath`). */
+let runtimePaths: Record<string, string> = {}
 let providers = PROVIDERS
 let models: typeof MODELS | undefined = MODELS
 let modelsFailed = false
@@ -131,7 +133,7 @@ vi.mock('../../../hooks/useLocalTools', () => ({
 }))
 vi.mock('../../../hooks/useAppSettings', () => ({
   useAppSettings: () => ({
-    data: settingsLoaded ? { localAgentsModelAdvanced: advanced } : undefined
+    data: settingsLoaded ? { localAgentsModelAdvanced: advanced, ...runtimePaths } : undefined
   }),
   useSetAppSetting: () => ({ mutate: setSetting })
 }))
@@ -159,9 +161,12 @@ let binary: { state: string; version?: string | null; path?: string; error?: str
 let defaultRuntime: { engine: string } | undefined = { engine: 'opencode' }
 /** The managed Codex CLI's state — what decides whether Codex can run, not PATH detection. */
 let codexBinary: Record<string, unknown> | undefined = { state: 'unresolved' }
+/** Ready by default: the pinned CLI is what every Claude case here runs on; PATH detection no longer decides it. */
+let claudeBinary: Record<string, unknown> | undefined = { state: 'ready', path: '/data/runtimes/claude-2.1.276/claude', source: 'managed', version: '2.1.276 (Claude Code)' }
 vi.mock('../../../hooks/useEngine', () => ({
   useEngineBinary: () => ({ data: binary }),
   useCodexBinary: () => ({ data: codexBinary }),
+  useClaudeBinary: () => ({ data: claudeBinary }),
   useDefaultRuntime: () => ({ data: defaultRuntime })
 }))
 
@@ -195,6 +200,7 @@ function bareAgent(runtime: Record<string, string> | null): LocalAgentDto {
 
 beforeEach(() => {
   codexBinary = { state: 'unresolved' }
+  claudeBinary = { state: 'ready', path: '/data/runtimes/claude-2.1.276/claude', source: 'managed', version: '2.1.276 (Claude Code)' }
   codexInstalled = false
   codexAuth = { state: 'logged_in' }
   claudeInstalled = true
@@ -206,6 +212,7 @@ beforeEach(() => {
   openCredentials.mockReset()
   advanced = false
   settingsLoaded = true
+  runtimePaths = {}
   writeFails = false
   binary = { state: 'ready', version: '1.0.0', path: '/usr/local/bin/opencode' }
   providers = PROVIDERS
@@ -922,25 +929,56 @@ describe('RuntimePanel', () => {
       expect(vars.runtime.complexity).toBe('simple')
     })
 
-    it('offers Claude Agent only where Claude Code is installed', () => {
-      // An absent tool means an absent option, never one that fails after the
-      // click (ux_rules rule 4).
+    it('offers Claude Agent with no claude on PATH: Cinna verifies its own, so detection does not gate it', () => {
+      // Mutation: derive `claudeTool` from `useLocalTools` again and the option
+      // disappears on every machine without a PATH install.
+      claudeInstalled = false
+      claudeBinary = { state: 'unresolved' }
       render(<RuntimePanel agent={agent(null)} />)
       expect(screen.getByRole('option', { name: 'Claude Agent' })).toBeTruthy()
+    })
 
-      claudeInstalled = false
-      cleanup()
+    it('keeps the option after a failure, marked with why — as Settings keeps its button', () => {
+      // The option used to vanish here while Settings → Agents kept the button
+      // reading "Unavailable": two surfaces disagreeing about whether the
+      // runtime exists. Mutation: gate the option on `claudeTool` again.
+      claudeBinary = { state: 'failed', error: 'The downloaded Claude Code did not match its expected checksum.' }
+      const view = render(<RuntimePanel agent={agent(null)} />)
+      const option = screen.getByRole('option', { name: 'Claude Agent (install failed)' }) as HTMLOptionElement
+      // The mark is the label; the value is what is written to the file.
+      expect(option.value).toBe('engine:claude')
+      view.unmount()
+
+      codexBinary = { state: 'failed', error: 'offline' }
       render(<RuntimePanel agent={agent(null)} />)
-      expect(screen.queryByRole('option', { name: 'Claude Agent' })).toBeNull()
+      expect((screen.getByRole('option', { name: 'Codex (install failed)' }) as HTMLOptionElement).value).toBe('engine:codex')
+    })
+
+    it.each([
+      ['Claude Code', 'claude', 'localAgentsClaudePath', 'Claude', 'Claude Agent (path not usable)'],
+      ['Codex', 'codex', 'localAgentsCodexPath', 'Codex', 'Codex (path not usable)']
+    ])('a bad configured %s path is a path problem, not a failed install', (_label, engine, key, noun, option) => {
+      // Nothing was installing: main stats the saved file and downloads nothing.
+      // Mutation: ignore the saved path and every surface says "Install failed…
+      // Try again in Settings → Agents → Runtime", which re-checks the same path.
+      runtimePaths = { [key]: '/opt/nope' }
+      const failed = { state: 'failed', error: `${noun} path is not a file — fix it in Local Development.` }
+      if (engine === 'claude') claudeBinary = failed
+      else codexBinary = failed
+      render(<RuntimePanel agent={agent({ engine })} />)
+      expect(screen.getByText(`Fix the ${noun} path in Settings → Local Development: it could not be run.`)).toBeTruthy()
+      expect(screen.getAllByText('Path not usable').length).toBeGreaterThan(0)
+      expect(screen.getByRole('option', { name: option })).toBeTruthy()
+      expect(screen.queryByText(/Install failed|could not be installed/)).toBeNull()
     })
 
     it('keeps the option for an agent already on it, with nothing installed', () => {
       // Otherwise the select renders blank over a manifest that plainly says
       // what the agent runs on — the same rule the credential list follows for
       // a credential that is configured but keyless.
-      claudeInstalled = false
+      claudeBinary = { state: 'failed', error: 'The downloaded Claude Code did not match its expected checksum.' }
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
-      expect(screen.getByRole('option', { name: 'Claude Agent' })).toBeTruthy()
+      expect(screen.getByRole('option', { name: 'Claude Agent (install failed)' })).toBeTruthy()
       expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('engine:claude')
     })
 
@@ -983,7 +1021,7 @@ describe('RuntimePanel', () => {
       expect(screen.getByLabelText('Work complexity')).toBeTruthy()
     })
 
-    it('says what it runs on, and what is missing when nothing is installed', () => {
+    it('says what it runs on, and that the install failed when it did', () => {
       // `unknown` rather than the default `undefined`: this assertion is about
       // the install sentence, and the panel is deliberately silent until the
       // probe has answered something.
@@ -992,16 +1030,33 @@ describe('RuntimePanel', () => {
       // Both names in one sentence: the select says "Claude Agent", the column
       // beside it says "Claude Code", and nothing else ties them together.
       expect(
-        screen.getByText(/Claude Agent runs on your own Claude Code install, on opus/)
+        // Not "your own … install": for the copy Cinna manages that names an
+        // install the user does not have (ux_rules rule 9).
+        screen.getByText(/Claude Agent runs on Claude Code, on opus/)
       ).toBeTruthy()
+      expect(screen.queryByText(/your own Claude Code install/)).toBeNull()
 
-      claudeInstalled = false
+      claudeBinary = { state: 'failed', error: 'The downloaded Claude Code did not match its expected checksum.' }
       cleanup()
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
-      // The full sentence lives in the reserved line; the Engine column only
-      // names the state, because that column is fixed-width and cannot grow.
-      expect(screen.getByText(/Claude Agent needs Claude Code\. Install it in Settings/)).toBeTruthy()
-      expect(screen.getByText('Not installed')).toBeTruthy()
+      // The full sentence lives in the reserved line, remedy first; the Engine
+      // column only names the state, because it is fixed-width and cannot grow.
+      expect(screen.getByText(/^Try again in Settings → Agents → Runtime: Claude Code could not be installed\./)).toBeTruthy()
+      // Twice: the Engine cell and the summary badge say the same two words.
+      expect(screen.getAllByText('Install failed').length).toBeGreaterThan(0)
+      expect(screen.queryByText('Not installed')).toBeNull()
+    })
+
+    it.each([
+      ['a managed copy', { source: 'managed', path: '/data/runtimes/claude-2.1.276/claude', version: '2.1.276 (Claude Code)' }, 'Claude Code 2.1.276 managed'],
+      ['the user’s install at exactly the pin', { source: 'path-pinned', path: '/Users/x/.local/bin/claude', version: '2.1.276 (Claude Code)' }, 'Claude Code 2.1.276 (your install)'],
+      ['an explicit path', { source: 'configured', path: '/opt/claude', version: '2.1.300 (Claude Code)' }, 'Claude Code 2.1.300 unverified']
+    ])('names in the Engine cell which Claude Code runs: %s', (_label, ready, text) => {
+      claudeInstalled = false // the PATH copy's 2.1.266 must never be what is reported
+      claudeBinary = { state: 'ready', ...ready }
+      render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.getByText(text)).toBeTruthy()
+      expect(screen.queryByText(/2\.1\.266/)).toBeNull()
     })
 
     it('names the account and the plan that pays for it, once the probe has answered', () => {
@@ -1049,9 +1104,9 @@ describe('RuntimePanel', () => {
       const line = screen.getByText(/not logged in/)
       expect(line.textContent).toMatch(/^Run `claude` in a terminal/)
       expect(line.textContent).toContain('that Claude Code install is not logged in')
-      // The Engine column still reports what was *detected* — the install and
-      // its version are facts, and the reserved line carries what they mean.
-      expect(screen.getByText(/Claude Code 2\.1\.266/)).toBeTruthy()
+      // The Engine column still reports which binary runs — that and its
+      // version are facts, and the reserved line carries what they mean.
+      expect(screen.getByText(/Claude Code 2\.1\.276 managed/)).toBeTruthy()
     })
 
     it('marks the Engine dot as awaiting auth when the login is the thing missing', () => {
@@ -1062,7 +1117,7 @@ describe('RuntimePanel', () => {
       // this same slot green means *the process is running*.
       claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
-      const row = screen.getByText(/Claude Code 2\.1\.266/).closest('div')
+      const row = screen.getByText(/Claude Code 2\.1\.276 managed/).closest('div')
       expect(row?.parentElement?.innerHTML).toContain('--color-warning')
     })
 
@@ -1075,7 +1130,7 @@ describe('RuntimePanel', () => {
       // not go green here for the reason above.
       claudeAuth = answer as typeof claudeAuth
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
-      const row = screen.getByText(/Claude Code 2\.1\.266/).closest('div')
+      const row = screen.getByText(/Claude Code 2\.1\.276 managed/).closest('div')
       const html = row?.parentElement?.innerHTML ?? ''
       expect(html).toContain('--color-text-muted')
       expect(html).not.toContain('--color-warning')
@@ -1097,12 +1152,12 @@ describe('RuntimePanel', () => {
     it('an answer of `unknown` is an answer: it gets the install sentence, not silence', () => {
       // Distinct from the state above, and the distinction is the point. The
       // probe ran and could not tell — a timeout, output this build cannot
-      // read — and "runs on your own Claude Code install" is the true thing to
+      // read — and "Claude Agent runs on Claude Code" is the true thing to
       // say about that machine. Blanking here would lose the only line that
       // says what the agent runs on.
       claudeAuth = { state: 'unknown', authMethod: null, subscriptionType: null, email: null }
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
-      expect(screen.getByText(/runs on your own Claude Code install, on sonnet/)).toBeTruthy()
+      expect(screen.getByText(/Claude Agent runs on Claude Code, on sonnet/)).toBeTruthy()
       expect(screen.queryByText(/logged in/)).toBeNull()
     })
 
@@ -1130,7 +1185,7 @@ describe('RuntimePanel', () => {
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
       expect(screen.queryByText(/opencode/)).toBeNull()
       expect(screen.queryByRole('button', { name: 'Start' })).toBeNull()
-      expect(screen.getByText(/Claude Code 2\.1\.266/)).toBeTruthy()
+      expect(screen.getByText(/Claude Code 2\.1\.276 managed/)).toBeTruthy()
     })
 
     it('does not wait for the model registry it will never consult', () => {
@@ -1168,7 +1223,7 @@ describe('RuntimePanel', () => {
       })
     })
 
-    it('claims nothing about the machine before detection has answered', () => {
+    it('claims nothing about the machine before its binary state has answered', () => {
       // **"The query has not answered" and "the answer is no" are not the same
       // fact**, and collapsing them put the full red not-installed alarm on
       // screen for half a second on a machine that *has* Claude Code — the
@@ -1176,10 +1231,12 @@ describe('RuntimePanel', () => {
       // Worse, the sentence names a remedy the user would satisfy by installing
       // something they already have (ux_rules rule 9, and rule 2's warning
       // about teaching people to skip alarms).
-      toolsLoaded = false
+      // The state query, not PATH detection — which this engine stopped reading.
+      claudeBinary = undefined
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
       expect(screen.queryByText(/not installed/i)).toBeNull()
-      expect(screen.queryByText(/needs Claude Code/)).toBeNull()
+      expect(screen.queryByText(/install failed/i)).toBeNull()
+      expect(screen.queryByText(/could not be installed/)).toBeNull()
       // The row keeps its place and says only that it is still looking.
       expect(screen.getByText('Checking…')).toBeTruthy()
     })
@@ -1187,9 +1244,12 @@ describe('RuntimePanel', () => {
     it('says nothing in the reserved line while detection is unanswered', () => {
       // Rather than the healthy sentence, which would assert an install just as
       // wrongly as the alarm denies one.
-      toolsLoaded = false
+      // `unknown` on purpose: with the login probe unanswered the line is silent
+      // for *that* reason, and this test would pass without checking anything.
+      claudeAuth = { state: 'unknown', authMethod: null, subscriptionType: null, email: null }
+      claudeBinary = undefined
       render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'complex' })} />)
-      expect(screen.queryByText(/Claude Agent runs on your own Claude Code install/)).toBeNull()
+      expect(screen.queryByText(/Claude Agent runs on Claude Code/)).toBeNull()
     })
 
     it('does not write back an engine value it does not recognise', () => {
@@ -1327,7 +1387,17 @@ describe('Codex runtime', () => {
   it('names an explicit Codex path by its own version, not the pin', () => {
     codexBinary = { state: 'ready', path: '/opt/codex', source: 'configured', version: 'codex-cli 0.156.0' }
     render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
-    expect(screen.getByText('Codex 0.156.0')).toBeTruthy()
+    // `codexVersionLabel`, the Settings picker's words — Claude's twin already
+    // read "2.1.300 unverified" here.
+    expect(screen.getByText('Codex 0.156.0 unverified')).toBeTruthy()
+    expect(screen.queryByText(/managed/)).toBeNull()
+  })
+  it('does not call a saved, unchecked Codex path "managed"', () => {
+    // Mutation: build the label inline again and this reads `0.155.0 managed`.
+    runtimePaths = { localAgentsCodexPath: '/opt/codex' }
+    codexBinary = { state: 'unresolved' }
+    render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
+    expect(screen.getByText('Codex unverified')).toBeTruthy()
     expect(screen.queryByText(/managed/)).toBeNull()
   })
 })

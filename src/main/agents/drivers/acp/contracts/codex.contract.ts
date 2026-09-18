@@ -28,7 +28,7 @@ export type ContractArea =
   | 'provider traffic'
   | 'limits'
 
-export type ContractSurface = 'CLI' | 'provider request' | 'env var' | 'app-server RPC' | 'ACP method' | 'ACP field' | '_meta key' | 'file' | 'adapter patch'
+export type ContractSurface = 'CLI' | 'provider request' | 'env var' | 'app-server RPC' | 'ACP method' | 'ACP field' | '_meta key' | 'file' | 'adapter patch' | 'MCP request' | 'network'
 
 export interface ContractEntry {
   /** `codex.<area>.<what>` — stable, and quoted verbatim in its test's title. */
@@ -45,6 +45,14 @@ export interface ContractEntry {
   feature: string
   /** Which whole-flow (Level 2) step exercises it. Free text until that spec exists. */
   flow: string
+  /**
+   * Set when the entry **cannot be exercised against a fake provider** — it
+   * needs a real login, a paid model or the vendor's own servers — and says
+   * why. Its contract test is `it.skip`, never a faked pass; the ratchet holds
+   * both directions, and the generated doc marks it. It is checked by the live
+   * flow (Level 2) instead.
+   */
+  live?: string
 }
 
 /** Area order for the generated doc. */

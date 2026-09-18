@@ -77,7 +77,7 @@ const LOGGED_OUT = 'Run `claude` in a terminal: that Claude Code install is not 
  * The rung one step weaker — what a probe that could not answer produces. Must
  * not be on screen: it is the sentence that reads as "everything is fine".
  */
-const ON_INSTALL = 'Claude Agent runs on your own Claude Code install, on sonnet.'
+const ON_INSTALL = 'Claude Agent runs on Claude Code, on sonnet.'
 
 /**
  * What `var(--color-<token>)` resolves to in the running app.
@@ -102,19 +102,28 @@ test('a Claude agent on a logged-out install is told to log in, and still names 
 }) => {
   await cinna.skipOnboarding()
 
-  // Real detection, over the same IPC the panel's query uses — the sandbox's rc
-  // files carry the machine's own PATH. On a machine with no Claude Code there
-  // is nothing to be logged out of, and the panel's sentence there is the
-  // *other* danger rung, which `RuntimePanel.test.tsx` can fake.
+  // Real detection — the sandbox's rc files carry the machine's own PATH — used
+  // here only to *find* a real `claude` to point the Claude Path at. On a
+  // machine with none there is nothing to ask, and the fixture forbids the
+  // download that would otherwise supply one.
   const claude = (await cinna.page.evaluate(() => window.api.localTools.list())).find(
     (tool: DetectedTool) => tool.id === 'claude' && tool.available
   )
   test.skip(
     claude === undefined,
-    'no `claude` on this machine: the panel would read "Claude Agent needs Claude Code, which ' +
-      'is not installed on this machine." — a different rung of the same ladder, and ' +
-      'RuntimePanel.test.tsx’s case rather than this one'
+    'no `claude` on this machine to name through the Claude Path: this spec needs a real ' +
+      'binary to answer "logged out" under the sandbox HOME, and the fixture switches the ' +
+      'managed download off'
   )
+
+  // **That real binary, named through the Claude Path.** Cinna no longer runs
+  // — or asks the login of — whatever `claude` is on PATH: sessions run on the
+  // pinned CLI it verifies, and the fixture switches that download off. The
+  // explicit path is the product's own way to say "run this one", so the probe
+  // below is still the real `claude auth status` under the sandbox `HOME`,
+  // whatever version this machine has. Saved before the relaunch; it lives in
+  // the profile database.
+  await cinna.page.evaluate((path) => window.api.settings.set('localAgentsClaudePath', path), claude!.path!)
 
   const root = await addAgentRoot(cinna)
   // Description equal to the name so the sidebar row reads as the name alone.
@@ -198,15 +207,17 @@ test('a Claude agent on a logged-out install is told to log in, and still names 
     await expect(line).toHaveCSS('color', await themeColour(page, 'danger'))
   })
 
-  await test.step('the Engine column still names the install it found', async () => {
+  await test.step('the Engine column still names the Claude Code that runs', async () => {
     // Logged out is a fact about the login, not about the machine's binary.
-    // This cell reports what detection found — the absolute path is its
+    // This cell reports the binary sessions run on — the absolute path is its
     // `title`, which is what makes it findable — and it is the only thing on
-    // the panel that tells "logged out" apart from "not installed".
+    // the panel that tells "logged out" apart from "could not be installed".
+    // `unverified` is what an explicit path is labelled; no version, because
+    // nothing has resolved in this app process and reading the state never
+    // spawns a configured path to ask.
     const cell = panel.getByTitle(claude!.path!)
-    const expected = claude!.version ? `Claude Code ${claude!.version}` : 'Claude Code'
-    await expect(cell).toHaveText(expected)
-    await expect(panel.getByText('Not installed')).toHaveCount(0)
+    await expect(cell).toHaveText('Claude Code unverified')
+    await expect(panel.getByText('Install failed')).toHaveCount(0)
 
     // The dot is the row's only glanceable indicator, and here it is the
     // difference between "go and log in" and "go and install it". Warning, not

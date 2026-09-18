@@ -48,7 +48,7 @@ const CLAUDE_AGENT = 'Release Notes'
 const OPENCODE_AGENT = 'Ledger Watcher'
 
 /** The card's own words on each engine — one must be present, the other absent. */
-const CLAUDE_SENTENCE = 'This agent runs on your own Claude Code install.'
+const CLAUDE_SENTENCE = 'This agent runs on Claude Code under your own login.'
 const OPENCODE_SENTENCE = 'runs commands inside its own folder without asking'
 
 /** The login probe pinned to "not answered", so no `claude` child is spawned. */

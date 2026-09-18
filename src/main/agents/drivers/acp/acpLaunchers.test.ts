@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EngineConfigInput } from '../../../engine/configGenerator'
 import type { AcpRuntimeMode } from './types'
 import {
+  CLAUDE_NOT_INSTALLED,
   createClaudeLauncher,
   createOpencodeLauncher,
   isRefusal,
@@ -271,7 +272,8 @@ describe('the OpenCode launcher', () => {
 
 describe('the Claude launcher', () => {
   const deps = {
-    claudePath: async () => '/opt/homebrew/bin/claude',
+    binary: async () => ({ path: '/opt/homebrew/bin/claude' }),
+    binaryKnown: async () => ({ state: 'ready' as const }),
     claudeAuth: async () => ({ state: 'logged_in' }),
     adapterEntry: () => '/app/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js',
     nodeRuntime: () => ({
@@ -421,9 +423,32 @@ describe('the Claude launcher', () => {
     expect(auto.setup.modeId).toBe('auto')
   })
 
-  it('refuses when there is no Claude Code on this machine', async () => {
-    const result = await createClaudeLauncher({ ...deps, claudePath: async () => null }).plan(CTX)
-    expect(isRefusal(result) && result.error).toMatch(/no Claude Code installation was found/)
+  it('refuses with the resolver’s own sentence when the pinned Claude Code could not be had', async () => {
+    const result = await createClaudeLauncher({
+      ...deps,
+      binary: async () => ({ error: 'Claude path will not run — fix it in Local Development.' })
+    }).plan(CTX)
+    expect(isRefusal(result) && result.error).toMatch(/^Claude path will not run — fix it in Local Development\.$/)
+  })
+
+  it('is ready while the CLI is merely on its way, and not installed only after a failed install', async () => {
+    const ready = (known: { state: 'pending' } | { state: 'failed'; error: string }) =>
+      createClaudeLauncher({ ...deps, binaryKnown: async () => known }).readiness!()
+    // A readiness that refused `pending` would block the send that fetches it.
+    expect(await ready({ state: 'pending' })).toEqual({ state: 'ok', reason: null })
+    expect(await ready({ state: 'failed', error: 'offline' })).toEqual({
+      state: 'not_installed', reason: CLAUDE_NOT_INSTALLED, detail: 'offline'
+    })
+  })
+
+  it('asks the login of the binary it resolved, not before it', async () => {
+    const order: string[] = []
+    await createClaudeLauncher({
+      ...deps,
+      binary: async () => { order.push('binary'); return { path: '/opt/homebrew/bin/claude' } },
+      claudeAuth: async () => { order.push('auth'); return { state: 'logged_in' } }
+    }).plan(CTX)
+    expect(order).toEqual(['binary', 'auth'])
   })
 
   it('refuses a definite logged-out install', async () => {
@@ -480,7 +505,7 @@ describe('the Claude launcher', () => {
     const same = plan(await createClaudeLauncher(deps).plan(CTX))
     expect(same.spec.key).toBe(first.spec.key)
     const otherBinary = plan(
-      await createClaudeLauncher({ ...deps, claudePath: async () => '/usr/bin/claude' }).plan(CTX)
+      await createClaudeLauncher({ ...deps, binary: async () => ({ path: '/usr/bin/claude' }) }).plan(CTX)
     )
     expect(otherBinary.spec.key).not.toBe(first.spec.key)
   })

@@ -1,0 +1,307 @@
+{
+  "acp": {
+    "cancel": {
+      "mcpCallAborted": true,
+      "stopReason": "cancelled"
+    },
+    "elicitation": {
+      "mode": "form",
+      "paramKeys": [
+        "message",
+        "mode",
+        "requestedSchema",
+        "sessionId",
+        "toolCallId"
+      ],
+      "schemaProperties": [
+        "question_0",
+        "question_0_custom"
+      ]
+    },
+    "folderSessionOfferedTools": [
+      "Agent",
+      "AskUserQuestion",
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "DesignSync",
+      "Edit",
+      "EnterPlanMode",
+      "EnterWorktree",
+      "ExitPlanMode",
+      "ExitWorktree",
+      "ListAgents",
+      "NotebookEdit",
+      "Read",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "TaskOutput",
+      "TaskStop",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write"
+    ],
+    "initialize": {
+      "agentCapabilities": {
+        "_meta": {
+          "authStatus": {},
+          "claudeCode": {
+            "promptQueueing": true
+          }
+        },
+        "auth": {
+          "logout": {}
+        },
+        "loadSession": true,
+        "mcpCapabilities": {
+          "http": true,
+          "sse": true
+        },
+        "promptCapabilities": {
+          "embeddedContext": true,
+          "image": true
+        },
+        "providers": {},
+        "sessionCapabilities": {
+          "additionalDirectories": {},
+          "close": {},
+          "delete": {},
+          "fork": {},
+          "list": {},
+          "resume": {},
+          "subagents": {}
+        }
+      },
+      "agentInfo": {
+        "name": "@agentclientprotocol/claude-agent-acp",
+        "title": "Claude Agent",
+        "version": "0.76.0"
+      },
+      "authMethodIds": [],
+      "meta": {
+        "goal": {
+          "actions": [
+            "set",
+            "clear"
+          ],
+          "controlMethod": "_session/goal",
+          "version": 1
+        },
+        "jetbrains": {
+          "air": {
+            "capabilities": [
+              "sessionFailure",
+              "agentFileChangeReport",
+              "nativeSubagentSessions",
+              "asyncTasks",
+              "recommendedValue"
+            ],
+            "version": 1
+          }
+        },
+        "steering": {
+          "supported": true
+        }
+      },
+      "protocolVersion": 1,
+      "resultKeys": [
+        "_meta",
+        "agentCapabilities",
+        "agentInfo",
+        "authMethods",
+        "protocolVersion"
+      ]
+    },
+    "listChangedAdopted": true,
+    "load": {
+      "mode": "default",
+      "ok": true,
+      "replayedKinds": [
+        "agent_message_chunk",
+        "tool_call",
+        "tool_call_update",
+        "user_message_chunk"
+      ]
+    },
+    "permissionModeInMeta": {
+      "sent": "bypassPermissions",
+      "sessionStartedIn": "default"
+    },
+    "permissionRequest": {
+      "metaKeys": [
+        "permission"
+      ],
+      "options": [
+        "allow_always:allow-with-updates",
+        "allow_once:allow-once",
+        "reject_once:reject"
+      ],
+      "paramKeys": [
+        "_meta",
+        "options",
+        "sessionId",
+        "toolCall"
+      ],
+      "toolCallKeys": [
+        "content",
+        "kind",
+        "name",
+        "rawInput",
+        "status",
+        "title",
+        "toolCallId"
+      ],
+      "toolCallKind": "other",
+      "toolCallTitle": "mcp__cinna__probe"
+    },
+    "rateLimit": {
+      "dataKeys": [
+        "errorKind"
+      ],
+      "errorCode": -32603,
+      "errorKind": "rate_limit",
+      "stopReason": null
+    },
+    "sessionNew": {
+      "configOptionIds": [
+        "agent",
+        "effort",
+        "fast",
+        "mode",
+        "model"
+      ],
+      "currentModeId": "default",
+      "modeIds": [
+        "acceptEdits",
+        "auto",
+        "bypassPermissions",
+        "default",
+        "plan"
+      ],
+      "resultKeys": [
+        "configOptions",
+        "modes",
+        "sessionId"
+      ]
+    },
+    "toolCall": {
+      "claudeCodeMetaKeys": [
+        "toolName"
+      ],
+      "kind": "other",
+      "metaKeys": [
+        "claudeCode"
+      ],
+      "title": "mcp__cinna__probe",
+      "updateKeys": [
+        "_meta",
+        "content",
+        "kind",
+        "rawInput",
+        "sessionUpdate",
+        "status",
+        "title",
+        "toolCallId"
+      ]
+    },
+    "updateKindsFirstPrompt": [
+      "agent_message_chunk",
+      "available_commands_update",
+      "config_option_update",
+      "session_info_update",
+      "usage_update"
+    ]
+  },
+  "adapter": "0.76.0",
+  "cli": {
+    "authStatusApiKey": {
+      "exitCode": 0,
+      "keys": [
+        "analyticsDisabled",
+        "apiKeySource",
+        "apiProvider",
+        "authMethod",
+        "configDirectory",
+        "loggedIn",
+        "projectsDirectory"
+      ],
+      "verdict": "logged_in"
+    },
+    "authStatusLoggedOut": {
+      "exitCode": 1,
+      "keys": [
+        "analyticsDisabled",
+        "apiProvider",
+        "authMethod",
+        "configDirectory",
+        "loggedIn",
+        "projectsDirectory"
+      ],
+      "verdict": "logged_out"
+    }
+  },
+  "providerTraffic": {
+    "apiKeys": [
+      "dummy"
+    ],
+    "conversationModels": [
+      "claude-opus-5"
+    ],
+    "otherRequests": [],
+    "paths": [
+      "/v1/messages"
+    ],
+    "refusedEgressHosts": [
+      "api.anthropic.com:443"
+    ],
+    "title": {
+      "folderSession": {
+        "maxTokens": [
+          64000
+        ],
+        "models": [
+          "claude-opus-5"
+        ],
+        "sentMoreThanOnce": true,
+        "stream": [
+          true
+        ],
+        "tools": []
+      },
+      "restrictedChat": {
+        "maxTokens": [
+          64000
+        ],
+        "models": [
+          "claude-opus-5"
+        ],
+        "sentMoreThanOnce": true,
+        "stream": [
+          true
+        ],
+        "tools": []
+      }
+    }
+  },
+  "restrictedPolicy": {
+    "offeredTools": [
+      "mcp__cinna__probe",
+      "mcp__cinna__probe_added"
+    ],
+    "options": {
+      "agents": {},
+      "mcpServers": {},
+      "permissionMode": "bypassPermissions",
+      "settingSources": [],
+      "strictMcpConfig": true,
+      "systemPrompt": "<marker>",
+      "tools": []
+    }
+  },
+  "tool": "claude",
+  "version": "2.1.276 (Claude Code)"
+}

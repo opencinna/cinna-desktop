@@ -43,9 +43,13 @@ export function useEngineWatch(): void {
     const offCodex = window.api.engine.onCodexState((state) => {
       queryClient.setQueryData(CODEX_BINARY_KEY, state)
     })
+    const offClaude = window.api.engine.onClaudeState((state) => {
+      queryClient.setQueryData(CLAUDE_BINARY_KEY, state)
+    })
     return () => {
       offEngine()
       offCodex()
+      offClaude()
     }
   }, [queryClient])
 }
@@ -79,6 +83,25 @@ export function useResolveCodexBinary() {
   return useMutation<EngineBinaryState>({
     mutationFn: () => window.api.engine.resolveCodex(),
     onSuccess: (state) => queryClient.setQueryData(CODEX_BINARY_KEY, state)
+  })
+}
+
+export const CLAUDE_BINARY_KEY = ['claude-binary'] as const
+
+/** The pinned Claude Code CLI, as Settings sees it. {@link useCodexBinary}'s twin. */
+export function useClaudeBinary() {
+  return useQuery<EngineBinaryState>({
+    queryKey: CLAUDE_BINARY_KEY,
+    queryFn: () => window.api.engine.claudeBinary()
+  })
+}
+
+/** Install or re-check Claude Code now. Owned by the section, for the reason {@link useResolveCodexBinary} gives. */
+export function useResolveClaudeBinary() {
+  const queryClient = useQueryClient()
+  return useMutation<EngineBinaryState>({
+    mutationFn: () => window.api.engine.resolveClaude(),
+    onSuccess: (state) => queryClient.setQueryData(CLAUDE_BINARY_KEY, state)
   })
 }
 

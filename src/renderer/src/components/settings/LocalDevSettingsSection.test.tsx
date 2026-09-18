@@ -19,7 +19,8 @@ vi.mock('../../hooks/useAppSettings', () => ({
 }))
 vi.mock('../../hooks/useEngine', () => ({
   useEngineBinary: () => ({ data: { state: 'unresolved' } }),
-  useCodexBinary: () => ({ data: { state: 'unresolved' } })
+  useCodexBinary: () => ({ data: { state: 'unresolved' } }),
+  useClaudeBinary: () => ({ data: { state: 'unresolved' } })
 }))
 
 const addToPath = vi.fn()

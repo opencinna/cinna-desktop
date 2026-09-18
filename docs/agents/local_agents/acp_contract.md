@@ -246,13 +246,64 @@ write raised a `session/request_permission` that `allow_once` answered. This is 
 call refuses the turn instead of warning, and why "simplifying" the call into the session options
 would be a silent regression rather than a tidy-up.
 
-### The adapter runs its own `claude` unless told otherwise
+### The adapter runs its own `claude` unless told otherwise — so it is always told
 
 Left unset, `CLAUDE_CODE_EXECUTABLE` makes the adapter run a `claude` it ships itself — 2.1.257 in
-the probe, against the user's 2.1.267. That is a second Claude Code the user never chose and cannot
-update. The launcher always names the user's binary, and `electron-builder.yml` excludes the
-adapter's nested platform packages so the shipped copy carries no second CLI; the two together are
-what make the exclusion safe.
+the probe, against the 2.1.267 the machine had. The objection to that copy is that it is
+**accidental and invisible**: its version is whatever a dependency happened to nest, nobody
+verified it, no screen names it, and a finding in this document would then be true of some other
+CLI than the one running. The launcher therefore always names a binary, and `electron-builder.yml`
+excludes the adapter's nested platform packages so the shipped app carries no such copy; the two
+together are what make the exclusion safe.
+
+**The binary it names is the pinned Claude Code, not whatever the user has.** In order: an explicit
+Claude Path from Settings, run as-is and labelled unverified; the `claude` on the user's PATH **when
+it reports exactly the pinned version** — version-gated, not checksummed, run from its real path and
+re-identified before each turn, because the PATH entry is a symlink the vendor's updater retargets;
+otherwise a copy Cinna downloads from Anthropic's release bucket into `<userData>/runtimes/` and
+checks against a recorded SHA-256 and the version it reports. That last one *is* a second Claude
+Code on the machine, and it is the opposite of the adapter's: chosen in one manifest
+(`src/shared/runtimePins.ts`), verified before it runs, shown with its path in Settings,
+replaceable by the user, and moved only by an app release. `DISABLE_AUTOUPDATER=1` is set on every
+child, so a session never moves the user's own install either. The login is unaffected by which
+file runs: it follows `HOME`, not the binary (checked by hand 2026-09-18 — a second binary reported
+the same subscription login with no Keychain prompt).
+
+The reason is the one this document exists for: a finding is true of the version it was watched
+on. While the CLI was whatever the user had installed, nothing here could be said of the CLI a given
+user was actually running, and an adapter verified against one `claude` silently drove another
+after every vendor update. **The probes recorded in this document were run before the pin**, against
+the user's install at the versions each section names, and keep those conditions; what the pin is
+relied on for is re-checked against the pinned binary by the [Claude Code Interface
+Contract](contracts/claude_interface.md).
+
+**Watched by that contract, on the pinned CLI, and worth knowing before changing anything near it:**
+
+- **`tools/list_changed` is adopted mid-session** — the opposite of Codex. A tool added to a
+  connected server and announced is offered to the model on the next request of the same session,
+  which is why the Claude launcher has no `sessionToolsFixed` and a Claude conductor keeps its
+  session when its tools change. Pinned in both directions: a release that stops adopting it makes a
+  specialist attached mid-chat never callable
+- **A provider 429 fails the prompt with `error.data.errorKind: "rate_limit"`.** This is the shape
+  the driver pauses a rate-limited conductor on. A *subscription* usage limit is expected to arrive
+  the same way and cannot be produced by a fake endpoint, so that entry is **Live only**
+- **The CLI's only request of its own is a session title.** The first is sent beside the first
+  prompt, before the conversation's own request, and carries the user's first message; more follow
+  after turns. Each is on the conversation's model, with no tools, and without Cinna's system prompt.
+  No compaction or other request appears in a short session. Characterised, not depended on: a
+  user's first message is sent a second time, on their subscription, for a title Cinna does not show
+- **With `ANTHROPIC_BASE_URL` set the CLI still tries `api.anthropic.com` on its own.** The harness
+  routes every child through a loopback proxy that records the host and refuses the connection;
+  every recorded attempt was to that one host and was refused before TLS, and the dummy key never
+  left the loopback endpoint. The trap sees proxy-honouring traffic only — it is a record of what
+  the CLI sends through its HTTP stack, not a firewall
+- **`permissionMode` in the session options is still ignored**, and `session/set_mode` is still the
+  only mechanism — the finding above, now held by a test rather than by a probe transcript
+
+Entries that need a real login — the login following `HOME`, a subscription limit, the background
+updater — are tagged `live` in the registry: their tests are skipped, never faked, and the generated
+doc says why.
+
 ### What the Claude launcher inherits, unchanged, from the in-process runner
 
 Four rules were established against the SDK and are unchanged by the transport. Each is stated here
@@ -332,7 +383,7 @@ from the decision, and with it the grants and the transcript's record.
 
 The pinned adapter is **1.11.0**, with an upstream Codex dependency range **^0.153.4**. It bridges ACP to a `codex app-server`, selected explicitly by `CODEX_PATH`; Cinna excludes the dependency's bundled CLI from its packaged app. That range is compatibility evidence from the package, not a version gate enforced by Cinna.
 
-**Which `codex` that is, is no longer the user's.** `CODEX_PATH` names the pinned CLI Cinna downloads and verifies — the version in `src/shared/runtimePins.ts` — or an explicit Codex Path from Settings, labelled unverified. A `codex` on the user's PATH is never what a spawned session runs. The reason is the one this document exists for: a finding is true of the version it was watched on, and when the CLI was whatever the user had installed, nothing here could be said of the CLI a given user was actually running. Pinning makes the version under test the version that runs. This is a statement about Codex only; Claude still drives the user's own `claude`, and every Claude finding in this document keeps its original conditions.
+**Which `codex` that is, is no longer the user's.** `CODEX_PATH` names the pinned CLI Cinna downloads and verifies — the version in `src/shared/runtimePins.ts` — or an explicit Codex Path from Settings, labelled unverified. A `codex` on the user's PATH at any other version is never what a spawned session runs. The reason is the one this document exists for: a finding is true of the version it was watched on, and when the CLI was whatever the user had installed, nothing here could be said of the CLI a given user was actually running. Pinning makes the version under test the version that runs. A `codex` on PATH that reports **exactly** the pinned version is the one exception, and not an exception to the point: it passes the same version gate and only saves the download. Claude is pinned the same way ([above](#the-adapter-runs-its-own-claude-unless-told-otherwise--so-it-is-always-told)); every Claude finding recorded before that keeps its original conditions.
 
 **Watched through the actual adapter, with a scripted app-server peer:** `src/main/agents/drivers/acp/codexAdapter.test.ts` runs an isolated copy over real stdio and observes text streaming, native approval and question round trips, cancellation, thread creation and resume. `CODEX_CONFIG` reaches both thread paths with the assembled developer instructions, optional model and reasoning effort. The test observes turn arguments for `on-request`, reviewer `user`, workspace-write and network disabled. The built-Electron `e2e/specs/codex-engine.spec.ts` also covers this production launcher path, persistent settings and resume after restart. Neither test calls a real model.
 
@@ -343,6 +394,8 @@ The pinned adapter is **1.11.0**, with an upstream Codex dependency range **^0.1
 **Questions:** the declared `elicitation.form` capability bridges native `requestUserInput`. Companion fields marked `_meta.codex.isOtherAnswer` are excluded from the visible questions; the original field ID receives either a chosen label or custom text. URL elicitation is not advertised. Of the AIR capabilities, Codex is sent `asyncTasks` only, never `nativeSubagentSessions`, and its subagents are read off the root session's tool calls ([why](#session-activity-over-the-air-extension)).
 
 **Checked against the real binary:** the [Codex Interface Contract](contracts/codex_interface.md) lists every CLI and adapter interface Cinna relies on, each with one test run against the pinned CLI and the patched adapter over a loopback fake provider. It is generated from the registry; this section keeps the reasoning.
+
+The Claude half has the same: the [Claude Code Interface Contract](contracts/claude_interface.md), checked against the pinned Claude Code and the adapter over a loopback fake Anthropic endpoint; what it watched is listed [with the Claude launcher](#the-adapter-runs-its-own-claude-unless-told-otherwise--so-it-is-always-told).
 
 **Watched by that contract, on the pinned CLI, and worth knowing before changing anything near it:**
 

@@ -2,17 +2,16 @@ import { getProfileScopeUserId } from '../auth/scope'
 import { getRuntimeModelCatalog } from '../services/runtimeModelCatalog'
 import type { AgentEngine } from '../../shared/engine'
 import { userActivation } from '../auth/activation'
-import { codexBinaryService, engineBinaryService } from '../engine/engineBinaryService'
-import { configuredCodexPath, knownCodexBinary } from '../engine/binaryResolver'
+import { claudeBinaryService, codexBinaryService, engineBinaryService } from '../engine/engineBinaryService'
 import { getMainWindow } from '../index'
-import { codexAuthProbe } from '../agents/drivers'
+import { claudeAuthProbe, codexAuthProbe } from '../agents/drivers'
 import { appSettingsService } from '../services/appSettingsService'
 import { ipcHandle } from './_wrap'
 import { defaultEngineService } from '../services/localAgents/defaultEngineService'
 import {
+  CLAUDE_BINARY_CHANNEL,
   CODEX_BINARY_CHANNEL,
   ENGINE_BINARY_CHANNEL,
-  PINNED_CODEX_VERSION,
   isAgentEngine,
   type DefaultEngineDto,
   type EngineBinaryState
@@ -95,29 +94,44 @@ export function registerEngineHandlers(): void {
     void codexBinaryService.refresh()
   })
 
-  ipcHandle('engine:codex-binary', async (): Promise<EngineBinaryState> => {
+  /**
+   * **Unresolved in this run is not "not installed"** — so both pinned-CLI rows
+   * are read through {@link EngineBinaryService.peek}, which looks once without
+   * downloading (a managed copy from an earlier run, an exact-version install
+   * of the user's own) and remembers what it found. The login probe reads the
+   * same answer, so a row cannot say "ready" beside a login that says "unknown".
+   */
+  ipcHandle('engine:codex-binary', (): Promise<EngineBinaryState> => {
     userActivation.requireActivated()
-    const state = codexBinaryService.state()
-    if (state.state !== 'unresolved') return state
-    /**
-     * **Unresolved in this run is not "not installed".** The service only knows
-     * what it resolved since launch, but a managed copy from an earlier run is
-     * on disk — and a row reading "not downloaded yet" above a CLI that is
-     * sitting right there is a false claim (ux_rules rule 9). One stat, no
-     * download, and no version probe: the install directory's presence is the
-     * proof its bytes were verified, and its name carries the version.
-     */
-    const known = await knownCodexBinary()
-    if (!known) return state
-    const configured = configuredCodexPath()
-    return configured
-      ? { state: 'ready', path: known, source: 'configured', version: null }
-      : { state: 'ready', path: known, source: 'managed', version: `codex-cli ${PINNED_CODEX_VERSION}` }
+    return codexBinaryService.peek()
   })
 
   ipcHandle('engine:codex-resolve', (): Promise<EngineBinaryState> => {
     userActivation.requireActivated()
     return codexBinaryService.refresh()
+  })
+
+  /**
+   * The **pinned Claude Code CLI**: the Codex trio again — state, resolve, and
+   * a saved path taking effect when it is saved — over the Claude service.
+   */
+  claudeBinaryService.onChange((next) => {
+    getMainWindow()?.webContents.send(CLAUDE_BINARY_CHANNEL, next)
+  })
+
+  appSettingsService.onSaved('localAgentsClaudePath', () => {
+    claudeAuthProbe.invalidate()
+    void claudeBinaryService.refresh()
+  })
+
+  ipcHandle('engine:claude-binary', (): Promise<EngineBinaryState> => {
+    userActivation.requireActivated()
+    return claudeBinaryService.peek()
+  })
+
+  ipcHandle('engine:claude-resolve', (): Promise<EngineBinaryState> => {
+    userActivation.requireActivated()
+    return claudeBinaryService.refresh()
   })
 
   /**

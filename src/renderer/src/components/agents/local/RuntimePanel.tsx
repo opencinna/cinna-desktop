@@ -9,8 +9,10 @@ import { unwrapIpcError } from '../../../utils/ipcError'
 import { useDefaultChatMode } from '../../../hooks/useChatModes'
 import { useModels } from '../../../hooks/useModels'
 import { useProviders } from '../../../hooks/useProviders'
-import { useClaudeAuth, useCodexAuth, useLocalTools } from '../../../hooks/useLocalTools'
-import { useCodexBinary, useDefaultRuntime, useEngineBinary } from '../../../hooks/useEngine'
+import { useClaudeAuth, useCodexAuth } from '../../../hooks/useLocalTools'
+import { useClaudeBinary, useCodexBinary, useDefaultRuntime, useEngineBinary } from '../../../hooks/useEngine'
+import { claudeVersionLabel } from '../../settings/claudeStatus'
+import { codexVersionLabel } from '../../settings/codexStatus'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
 import { credentialOptionLabel } from '../../../utils/credentialLabel'
 import { findCredentialByReference, isCredentialUsable } from '../../../../../shared/credentials'
@@ -21,6 +23,7 @@ import {
   DEFAULT_AGENT_ENGINE,
   effectiveEngine,
   isAgentEngine,
+  PINNED_CLAUDE_VERSION,
   PINNED_CODEX_VERSION,
   type AgentEngine,
   type ClaudeAuthState
@@ -246,6 +249,40 @@ function EngineStatus(): React.JSX.Element {
       title={title}
     />
   )
+}
+
+
+/**
+ * A pinned CLI that is not here, in each surface's words: the summary badge and
+ * Engine cell (`badge`), the Runs-on option (`option`), the reserved line
+ * (`line`) and the Engine cell's tooltip (`hint`).
+ *
+ * **Two different failures.** With a path saved in Local Development nothing
+ * was installing — main only stats that file and runs its `--version` — so
+ * "Install failed… could not be installed" described something that never
+ * happened, and sent the user to a *Try again* that re-checks the same path.
+ * A saved path is the whole test: main never downloads over one. "Not usable"
+ * rather than "not found", because the file may exist and refuse to run.
+ * Remedy first in `line`: it is measured to clip (ux_rules rule 7).
+ */
+function cliFailureCopy(
+  name: string,
+  pathNoun: string,
+  pathSet: boolean
+): { badge: string; option: string; line: string; hint: string } {
+  return pathSet
+    ? {
+        badge: 'Path not usable',
+        option: 'path not usable',
+        line: `Fix the ${pathNoun} path in Settings → Local Development: it could not be run.`,
+        hint: `The ${pathNoun} path you set could not be run. Fix or clear it in Settings → Local Development.`
+      }
+    : {
+        badge: 'Install failed',
+        option: 'install failed',
+        line: `Try again in Settings → Agents → Runtime: ${name} could not be installed.`,
+        hint: `${name} could not be installed. Try again in Settings → Agents → Runtime.`
+      }
 }
 
 /**
@@ -536,11 +573,11 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
     wrote: NoteState
   } | null>(null)
 
-  const { data: tools } = useLocalTools()
   const { data: claudeAuth } = useClaudeAuth()
   const { data: codexAuth } = useCodexAuth()
   const { data: binary } = useEngineBinary()
   const { data: codexBinary } = useCodexBinary()
+  const { data: claudeBinary } = useClaudeBinary()
   const declaredCredential = agent.runtime?.credential ?? null
   const declaredModel = agent.runtime?.model ?? null
   /**
@@ -616,16 +653,22 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
   const onClaude =
     effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'claude'
   /**
-   * The `claude` this machine has, or undefined.
-   *
-   * Detection is what decides whether the option is *offered at all*: an
-   * absent Claude Code means an absent option, never an option that fails after
-   * the click (ux_rules rule 4). An agent whose manifest already names the
-   * engine keeps its option regardless, or the select would render blank over a
-   * file that plainly says what it runs on — the same rule the credential list
-   * follows for a keyless credential.
+   * The Claude Code this agent would run on, or undefined — **the pinned CLI's
+   * state, not PATH detection**, on exactly `codexTool`'s terms below: Cinna
+   * verifies its own Claude Code (or runs the explicit path), so it is *here* in
+   * every state but a failed install, and the option is always offered. A
+   * `claude` on PATH is only what "Open in…" launches.
    */
-  const claudeTool = (tools ?? []).find((tool) => tool.id === 'claude' && tool.available)
+  const claudePathSet = (settings?.localAgentsClaudePath ?? '').trim() !== ''
+  const claudeTool =
+    claudeBinary?.state === 'failed'
+      ? undefined
+      : {
+          path: claudeBinary?.state === 'ready' ? claudeBinary.path : null,
+          version: claudeVersionLabel(claudeBinary, claudePathSet)
+        }
+  /** Why Claude Code is not here, in every surface's words — see {@link cliFailureCopy}. */
+  const claudeFailure = claudeTool ? null : cliFailureCopy('Claude Code', 'Claude', claudePathSet)
   const onCodex = effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'codex'
   const onCli = onClaude || onCodex
   /**
@@ -640,32 +683,17 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
    * reserved line, the summary badge, whether the option is offered, and the
    * engine cell — keep asking one question.
    */
+  const codexPathSet = (settings?.localAgentsCodexPath ?? '').trim() !== ''
   const codexTool =
     codexBinary?.state === 'failed'
       ? undefined
       : {
           path: codexBinary?.state === 'ready' ? codexBinary.path : null,
-          version:
-            codexBinary?.state === 'ready' && codexBinary.source === 'configured'
-              ? (codexBinary.version?.replace(/^codex-cli\s+/i, '') ?? null)
-              : `${PINNED_CODEX_VERSION} managed`
+          // The Settings picker's label, from its function: built inline here it
+          // said `<pin> managed` over a saved path that had not been checked.
+          version: codexVersionLabel(codexBinary, codexPathSet)
         }
-  /**
-   * Detection has not answered yet.
-   *
-   * **A third state, and the panel is wrong without it.** `claudeTool` is
-   * `undefined` both while the query is in flight and when the answer is
-   * genuinely "no", and collapsing the two put the full red not-installed
-   * alarm on screen for half a second on a machine that *has* Claude Code —
-   * the default first visit for every agent on this engine. The sentence even
-   * named a remedy the user would satisfy by installing what they already had.
-   *
-   * The panel already has this pattern: `pickerUnknown` refuses to claim which
-   * model picker an agent gets until something can answer. Unknown is cheaper
-   * here than there, because nothing is disabled by it — the control stays
-   * usable, only the *claim* waits.
-   */
-  const toolsUnknown = tools === undefined
+  const codexFailure = codexTool ? null : cliFailureCopy('Codex', 'Codex', codexPathSet)
   const declaredComplexity = isWorkComplexity(agent.runtime?.complexity)
     ? agent.runtime.complexity
     : null
@@ -1046,40 +1074,35 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
     if (onCodex) {
       // Its own state query, not PATH detection: see `codexTool`.
       if (codexBinary === undefined) return null
-      // Only a failed install reaches here. Remedy first: the line is measured
-      // to clip, and "try again" is the half the user needs (ux_rules rule 7).
-      if (!codexTool) return { text: 'Try again in Settings → Agents → Runtime: Codex could not be installed.', tone: DANGER }
+      // Only a failure reaches here — an install, or a saved path; the copy
+      // branches on which (`cliFailureCopy`).
+      if (codexFailure) return { text: codexFailure.line, tone: DANGER }
       if (codexAuth?.state === 'logged_out') return { text: 'Run `codex login` in a terminal, then check again.', tone: DANGER }
       return { text: `Codex uses your CLI login and configuration, on ${declaredModel ?? 'its configured default model'}, with ${codexEffortForComplexity(declaredComplexity)} reasoning effort.`, tone: NOTE }
     }
     if (onClaude) {
-      // Silent until detection answers. The healthy sentence would assert an
-      // install just as wrongly as the alarm denies one, and this slot is
-      // reserved, so saying nothing costs no movement.
-      if (toolsUnknown) return null
-      if (!claudeTool) {
+      // Silent until its own state query answers — not PATH detection, which
+      // this engine no longer depends on. The slot is reserved, so saying
+      // nothing costs no movement.
+      if (claudeBinary === undefined) return null
+      if (claudeFailure) {
         return {
           /*
-            Names the remedy and where it is. Settings → Agents → Runtime
-            now installs Claude Code — the vendor's own installer, behind a
-            confirm that shows the command — so the sentence that used to stop
-            at "not installed" can say what to do about it. It does not offer
-            the install *here*: this panel is a viewer over one agent's runtime,
-            and a machine-wide install button on it would be the second place a
-            single fact is acted on.
-
-            This is still the only place the full explanation lives, since the
-            Engine column was cut to "Not installed" to stop it truncating.
+            As on the Codex rung above. The retry is not offered *here*: this
+            panel is a viewer over one agent's runtime, and a machine-wide
+            install button on it would be the second place a single fact is
+            acted on. This is the only place the full sentence lives — the
+            Engine column says the two words.
           */
-          text: 'Claude Agent needs Claude Code. Install it in Settings → Agents → Runtime.',
+          text: claudeFailure.line,
           tone: DANGER
         }
       }
       // **The login, now that it is knowable before a turn** — `claude auth
       // status` answers it for free, so the panel is no longer guessing.
       //
-      // **Silent until the probe answers**, for the same reason `toolsUnknown`
-      // is silent one rung up. `undefined` is the query in flight, and filling
+      // **Silent until the probe answers**, for the same reason the binary
+      // state is silent one rung up. `undefined` is the query in flight, and filling
       // the slot with the reassuring install sentence meant a logged-out
       // machine read healthy in muted grey and was then contradicted in red
       // about a tenth of a second later — measured at t=891ms and t=996ms on a
@@ -1121,7 +1144,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
         text:
           claudeAuth.state === 'logged_in'
             ? `Claude Agent runs on your own Claude Code login${accountSuffix(claudeAuth.email, claudeAuth.subscriptionType)}, on ${claudeModelForComplexity(declaredComplexity)}.`
-            : `Claude Agent runs on your own Claude Code install, on ${claudeModelForComplexity(declaredComplexity)}.`,
+            : `Claude Agent runs on Claude Code, on ${claudeModelForComplexity(declaredComplexity)}.`,
         tone: NOTE
       }
     }
@@ -1547,8 +1570,8 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
       : !credentialMissing && modelsLoaded ? nameOf(choice.modelId) : null
     const issue = unsupportedEngine ? 'Update required'
       : engineUnknown ? null
-      : onCodex ? (!codexTool ? 'Install failed' : codexAuth?.state === 'logged_out' ? 'Sign-in required' : null)
-      : onClaude ? (claudeAuth?.state === 'logged_out' ? 'Sign-in required' : null)
+      : onCodex ? (codexFailure ? codexFailure.badge : codexAuth?.state === 'logged_out' ? 'Sign-in required' : null)
+      : onClaude ? (claudeFailure ? claudeFailure.badge : claudeAuth?.state === 'logged_out' ? 'Sign-in required' : null)
       : credentialMissing || (providers !== undefined && !effectiveProvider) ? 'AI credential needed'
       : status?.tone === DANGER || status?.tone === WARN ? 'Setup needed' : null
     const badge = 'max-w-full truncate rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)]'
@@ -1656,14 +1679,21 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
               a second entry for it on a machine with no `claude` would be an
               option that fails after the click (ux_rules rule 4).
             */}
-            {(codexTool || declaredEngine === 'codex') && (
-              <optgroup label="Codex CLI"><option value={CODEX_OPTION}>Codex</option></optgroup>
-            )}
-            {(claudeTool || declaredEngine === 'claude') && (
-              <optgroup label="On this machine">
-                <option value={CLAUDE_OPTION}>Claude Agent</option>
-              </optgroup>
-            )}
+            {/*
+              **Kept when it failed, and marked with why** — Settings keeps the
+              button and reads "Unavailable", and an option that vanished here
+              made the two surfaces disagree about whether the runtime exists.
+              The mark is the label, not the value: the file is written from
+              the value.
+            */}
+            <optgroup label="Codex CLI">
+              <option value={CODEX_OPTION}>{codexFailure ? `Codex (${codexFailure.option})` : 'Codex'}</option>
+            </optgroup>
+            <optgroup label="On this machine">
+              <option value={CLAUDE_OPTION}>
+                {claudeFailure ? `Claude Agent (${claudeFailure.option})` : 'Claude Agent'}
+              </option>
+            </optgroup>
             {/*
               A credential the manifest names that is not offered — configured
               but keyless — still needs an option, or the select would render
@@ -1854,19 +1884,29 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
             <ClaudeStatus
               label="Codex"
               tool={codexTool}
-              // Not `toolsUnknown`: that is PATH detection, which this engine
+              // Not PATH detection, which this engine
               // no longer depends on. Only its own state query can be unknown.
               unknown={codexBinary === undefined}
               auth={codexAuth?.state}
-              missingText="Install failed"
+              missingText={codexFailure?.badge ?? 'Install failed'}
               hint={
-                codexTool
-                  ? `Cinna downloads and verifies Codex ${PINNED_CODEX_VERSION} the first time a Codex agent runs.`
-                  : 'Codex could not be installed. Try again in Settings → Agents → Runtime.'
+                codexFailure
+                  ? codexFailure.hint
+                  : `Cinna downloads and verifies Codex ${PINNED_CODEX_VERSION} the first time a Codex agent runs.`
               }
             />
           ) : onClaude ? (
-            <ClaudeStatus tool={claudeTool} unknown={toolsUnknown} auth={claudeAuth?.state} />
+            <ClaudeStatus
+              tool={claudeTool}
+              unknown={claudeBinary === undefined}
+              auth={claudeAuth?.state}
+              missingText={claudeFailure?.badge ?? 'Install failed'}
+              hint={
+                claudeFailure
+                  ? claudeFailure.hint
+                  : `Cinna verifies Claude Code ${PINNED_CLAUDE_VERSION} the first time a Claude agent runs.`
+              }
+            />
           ) : (
             <EngineStatus />
           )}

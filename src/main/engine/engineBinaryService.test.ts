@@ -106,6 +106,33 @@ describe('createEngineBinaryService', () => {
     expect(resolve).toHaveBeenCalledTimes(2)
   })
 
+  it('resolves again when a reused PATH copy is no longer the file that passed the version gate', async () => {
+    // `~/.local/bin/claude` is a symlink its own updater retargets: the path
+    // still exists, and what it runs is now another version. Mutation: drop the
+    // fingerprint comparison in `ensure` and the third call answers from memory.
+    configured = null
+    let onDisk = 'versions/2.1.276:215643408:1'
+    resolve.mockImplementation(async () => ({ path: '/Users/x/.local/bin/claude', source: 'path-pinned', version: '2.1.276 (Claude Code)', fingerprint: onDisk }))
+    const engine = createEngineBinaryService({
+      resolve: (path) => resolve(path) as Promise<ResolvedEngineBinary>, configuredPath: () => configured,
+      exists: async () => true, fingerprint: async () => onDisk
+    })
+    await engine.ensure()
+    await engine.ensure()
+    expect(resolve).toHaveBeenCalledTimes(1)
+    onDisk = 'versions/2.1.277:216000000:2'
+    await engine.ensure()
+    expect(resolve).toHaveBeenCalledTimes(2)
+    // A managed or configured binary carries no fingerprint and is never asked for one.
+    const fingerprint = vi.fn(async () => 'anything')
+    const managed = createEngineBinaryService({
+      resolve: async () => binary('/managed/claude'), configuredPath: () => null, exists: async () => true, fingerprint
+    })
+    await managed.ensure()
+    await managed.ensure()
+    expect(fingerprint).not.toHaveBeenCalled()
+  })
+
   it('does not stat while the first resolution is still running, and hands its failure through uncached', async () => {
     const exists = vi.fn(async () => true)
     resolve.mockRejectedValueOnce(new Error('no network'))
@@ -172,6 +199,134 @@ describe('createEngineBinaryService', () => {
     // The memo the refresh installed is still the one that answers.
     await engine.ensure()
     expect(resolve).toHaveBeenCalledTimes(2)
+  })
+
+  describe('peek — what would run without downloading', () => {
+    const pinned: ResolvedEngineBinary = { path: '/real/claude/2.1.276', source: 'path-pinned', version: '2.1.276 (Claude Code)' }
+
+    it('looks once, and the answer becomes the state every other reader sees', async () => {
+      configured = null
+      const known = vi.fn(async () => pinned)
+      const engine = createEngineBinaryService({ resolve: (path) => resolve(path), configuredPath: () => configured, known })
+      const pushed: string[] = []
+      engine.onChange((next) => pushed.push(next.state))
+
+      // A settings row, readiness and the login probe asking together, then again.
+      const answers = await Promise.all([engine.peek(), engine.peek(), engine.peek()])
+      await engine.peek()
+      expect(known).toHaveBeenCalledTimes(1)
+      expect(answers[0]).toEqual({ state: 'ready', path: pinned.path, source: 'path-pinned', version: pinned.version })
+      expect(engine.state()).toEqual(answers[0])
+      expect(pushed).toEqual(['ready'])
+      expect(resolve).not.toHaveBeenCalled()
+    })
+
+    it('seeds the state, not the memo: the first turn still resolves properly', async () => {
+      configured = null
+      const engine = createEngineBinaryService({ resolve: (path) => resolve(path), configuredPath: () => configured, known: async () => pinned })
+      await engine.peek()
+      await engine.ensure()
+      expect(resolve).toHaveBeenCalledTimes(1)
+    })
+
+    it('believes "nothing installed" for a minute rather than probing PATH on every call, and asks again after', async () => {
+      configured = null
+      let clock = 1_000_000
+      const known = vi.fn(async (): Promise<ResolvedEngineBinary | null> => null)
+      const engine = createEngineBinaryService({ resolve: (path) => resolve(path), configuredPath: () => configured, known, now: () => clock })
+      expect((await engine.peek()).state).toBe('unresolved')
+      await engine.peek()
+      expect(known).toHaveBeenCalledTimes(1)
+
+      clock += 61_000
+      known.mockResolvedValue(pinned)
+      expect((await engine.peek()).state).toBe('ready')
+      expect(known).toHaveBeenCalledTimes(2)
+    })
+
+    it('asks again at once when the configured path changes, and passes it along', async () => {
+      configured = null
+      const known = vi.fn(async (): Promise<ResolvedEngineBinary | null> => null)
+      const engine = createEngineBinaryService({ resolve: (path) => resolve(path), configuredPath: () => configured, known })
+      await engine.peek()
+      configured = '/opt/two/claude'
+      await engine.peek()
+      expect(known.mock.calls).toEqual([[null], ['/opt/two/claude']])
+    })
+
+    it('never overrides a resolution: a look that finishes after one started says nothing', async () => {
+      configured = null
+      let release!: (value: ResolvedEngineBinary | null) => void
+      const engine = createEngineBinaryService({
+        resolve: (path) => resolve(path),
+        configuredPath: () => configured,
+        known: () => new Promise((r) => (release = r))
+      })
+      const looking = engine.peek()
+      await engine.ensure()
+      release(pinned)
+      expect(await looking).toMatchObject({ state: 'ready', path: '/managed/opencode' })
+    })
+
+    it('returns a failure as it stands, and is inert for a service with nothing to look with', async () => {
+      resolve.mockRejectedValue(new Error('no network'))
+      const known = vi.fn(async () => pinned)
+      const failing = createEngineBinaryService({ resolve: (path) => resolve(path), configuredPath: () => configured, known })
+      await failing.refresh()
+      expect(await failing.peek()).toEqual({ state: 'failed', error: 'no network' })
+      expect(known).not.toHaveBeenCalled()
+      expect(await service().peek()).toEqual({ state: 'unresolved' })
+    })
+  })
+
+  it('stamps a remembered managed binary as used, at most once an hour: a week-long run must not lose its version to another build’s sweep', async () => {
+    configured = null
+    let clock = 10 * 60 * 60 * 1000
+    const markUsed = vi.fn(async () => undefined)
+    resolve.mockResolvedValue({ path: '/data/runtimes/claude-2.1.276/claude', source: 'managed', version: 'v' })
+    const engine = createEngineBinaryService({
+      resolve: (path) => resolve(path), configuredPath: () => configured, exists: async () => true, markUsed, now: () => clock
+    })
+    await engine.ensure() // resolves: the resolver stamps that one itself
+    expect(markUsed).not.toHaveBeenCalled()
+    await engine.ensure()
+    await engine.ensure()
+    expect(markUsed.mock.calls).toEqual([['/data/runtimes/claude-2.1.276']])
+    clock += 61 * 60 * 1000
+    await engine.ensure()
+    expect(markUsed).toHaveBeenCalledTimes(2)
+    expect(resolve).toHaveBeenCalledTimes(1)
+  })
+
+  it('never stamps a binary that is not Cinna’s own', async () => {
+    const markUsed = vi.fn(async () => undefined)
+    const engine = createEngineBinaryService({
+      resolve: (path) => resolve(path), configuredPath: () => configured, exists: async () => true, markUsed
+    })
+    await engine.ensure()
+    await engine.ensure()
+    expect(markUsed).not.toHaveBeenCalled()
+  })
+
+  it('says how big the pinned asset is while nothing is installed, and stops once something is', async () => {
+    const engine = createEngineBinaryService({
+      resolve: async (path, onProgress) => {
+        await Promise.resolve()
+        onProgress?.(5, null)
+        return resolve(path) as Promise<ResolvedEngineBinary>
+      },
+      configuredPath: () => configured,
+      assetBytes: () => 232_059_192
+    })
+    expect(engine.state()).toEqual({ state: 'unresolved', assetBytes: 232_059_192 })
+    const seen: unknown[] = []
+    engine.onChange((next) => seen.push(next))
+    await engine.ensure()
+    expect(seen).toEqual([
+      { state: 'resolving', assetBytes: 232_059_192 },
+      { state: 'resolving', received: 5, total: null, assetBytes: 232_059_192 },
+      { state: 'ready', path: '/opt/one/opencode', source: 'configured', version: '1.18.27' }
+    ])
   })
 
   it('stops telling a listener that has unsubscribed', async () => {

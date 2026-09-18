@@ -457,7 +457,7 @@ function ClaudeApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element
   return (
     <>
       <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
-        This agent runs on your own Claude Code install. Reading files and searching never ask.
+        This agent runs on Claude Code under your own login. Reading files and searching never ask.
         The setting below decides who approves a command, an edit or a fetch.
       </p>
       <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">

@@ -295,8 +295,8 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   {
     file: 'src/renderer/src/components/agents/local/RuntimePanel.tsx',
     category: 'engine',
-    count: 2,
-    why: "the editor for that field: the panel offering the choice has to name the values it writes, and both reads are of what the *file* declares — which option is selected, and whether the Claude option is offered at all. What the agent effectively *runs* on is no longer a comparison here: it comes from `effectiveEngine`, the shared rule the launcher applies, because this machine's Default Runtime can now decide it"
+    count: 1,
+    why: "the editor for that field: the panel offering the choice has to name the values it writes, and the one read is of what the *file* declares — which option is selected. (Whether the Claude option is offered at all was a second read; the option is now always offered, marked unavailable when its CLI failed, so that branch is gone.) What the agent effectively *runs* on is no longer a comparison here: it comes from `effectiveEngine`, the shared rule the launcher applies, because this machine's Default Runtime can now decide it"
   },
   // **Gone, and not into a driver**: the approvals control still exists on one
   // engine only, but the card no longer asks which engine the *manifest* names.
@@ -351,6 +351,18 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
     category: 'source',
     count: 1,
     why: '"Set up" opens the settings tab that owns the dependency'
+  },
+  {
+    file: 'src/renderer/src/components/tasks/TaskView.tsx',
+    category: 'source',
+    count: 3,
+    why: 'presents the assignee and the handover origin as a link or as plain text: a server-owned row hidden from the desktop has a name and no page (twice), and a folder id opens the local page where any other opens the external one — the sidebar’s own split; nothing is run or sent'
+  },
+  {
+    file: 'src/renderer/src/components/agents/local/OpenInMenu.tsx',
+    category: 'kind',
+    count: 1,
+    why: 'offers "Open credentials/.env" only where the folder format has that file: a bare folder declares no credential slots and the desktop never seeds one — the same format fact that hides the Folder tab’s Credentials card'
   }
 ]
 

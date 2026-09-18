@@ -67,6 +67,18 @@ describe('buildClaudeEnv — what must reach the child', () => {
     expect(build().CLAUDE_AGENT_SDK_CLIENT_APP).toBe('cinna-desktop/9.9.9')
   })
 
+  it('switches the CLI’s own updater off, whatever the shell said: a desktop session never moves the user’s install', () => {
+    expect(build().DISABLE_AUTOUPDATER).toBe('1')
+    // Even past an allowlist that would let the shell's own value through.
+    const inherited = buildClaudeEnv({
+      shellEnv: { PATH: '/usr/bin', DISABLE_AUTOUPDATER: '0' },
+      appVersion: '9.9.9',
+      processEnv: {},
+      allowlist: ['PATH', 'DISABLE_AUTOUPDATER']
+    })
+    expect(inherited.DISABLE_AUTOUPDATER).toBe('1')
+  })
+
   it('does not set CLAUDE_CODE_ENTRYPOINT, which the SDK owns', () => {
     // The SDK writes `sdk-ts` itself. Setting it here would misreport how the
     // CLI was invoked, to no benefit.

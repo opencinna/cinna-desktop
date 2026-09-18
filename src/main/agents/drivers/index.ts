@@ -27,8 +27,7 @@ import { TITLE_SYSTEM_PROMPT } from '../../services/aiFunctionPrompts'
 import type { ConductorContext } from '../../services/chatConductorService'
 import { engineAgentKey } from '../../engine/configGenerator'
 import { join } from 'node:path'
-import { codexBinaryService, engineBinaryService } from '../../engine/engineBinaryService'
-import { knownCodexBinary } from '../../engine/binaryResolver'
+import { claudeBinaryService, codexBinaryService, engineBinaryService, type EngineBinaryService } from '../../engine/engineBinaryService'
 import { ManagedAssetError } from '../../managed/managedAsset'
 import { collectEngineConfigInput } from '../../engine/engineConfigSource'
 import { agentRepo, agentSessionRepo, type AgentRow } from '../../db/agents'
@@ -46,7 +45,6 @@ import { codexEffortForComplexity, isAgentEngine } from '../../../shared/engine'
 import { isWorkComplexity } from '../../../shared/modelFamilies'
 import { ClaudeAuthProbe } from './acp/claudeAuth'
 import { pendingRequests } from './pendingRequests'
-import { toolDetectionService } from '../../services/localAgents/toolDetectionService'
 import { runtimeService } from '../../services/localAgents/runtimeService'
 import { defaultEngineService } from '../../services/localAgents/defaultEngineService'
 import { providerService } from '../../services/providerService'
@@ -86,6 +84,7 @@ import { localDevService } from '../../localdev/localDevService'
 import { customAgentService } from '../../services/customAgentService'
 import type { AcpRuntimeView } from './acp/acpRuntime'
 import {
+  CLAUDE_NOT_INSTALLED,
   createClaudeLauncher,
   createOpencodeLauncher,
   type AcpLauncher,
@@ -191,8 +190,31 @@ function resolveRequest(
  * cannot authenticate. Readiness would be answering about a different process
  * than the one the turn spawns.
  */
+/**
+ * The binary a tool's sessions run on, **without downloading**: what the
+ * service resolved in this run, else what its one shared look finds — the
+ * configured path, the managed copy, or an exact-version install of the user's
+ * own (`path-pinned`).
+ *
+ * Through the service's `peek`, not a `stat` of its own, for two reasons. Nothing
+ * on disk says "the user's install passed the gate", so a disk-only answer left
+ * that user's login `unknown` until their first turn, beside a Runtime row that
+ * had probed PATH and said all was well. And the look is memoised there, so the
+ * row, readiness and this probe cost one `--version` between them, not one each.
+ */
+function runningBinary(service: EngineBinaryService): () => Promise<string | null> {
+  return async () => {
+    const state = await service.peek()
+    return state.state === 'ready' ? state.path : null
+  }
+}
+
 export const claudeAuthProbe = new ClaudeAuthProbe({
-  claudePath: async () => (await toolDetectionService.get('claude'))?.path ?? null,
+  // **The binary the sessions run on** — the Settings path, else the pinned
+  // Claude Code — not the PATH copy `toolDetectionService` reports for "Open
+  // in…". The login follows HOME, not the binary (verified 2026-09-18: a second
+  // binary reported the same Max login with no Keychain prompt).
+  claudePath: runningBinary(claudeBinaryService),
   env: async () => buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: app.getVersion() })
 })
 
@@ -247,16 +269,6 @@ function claudeAdapterEntry(): string {
   // from `process.cwd()`: the resolution follows npm's own layout, hoisted or
   // not, which is the same question `require` answers for every other import.
   return createRequire(import.meta.url).resolve(`${ADAPTER_PACKAGE}/${ADAPTER_ENTRY}`)
-}
-
-/** The `claude` this machine has. A fresh check detects again when there is none. */
-async function claudePath(options?: { fresh?: boolean }): Promise<string | null> {
-  const path = (await toolDetectionService.get('claude'))?.path ?? null
-  if (path || !options?.fresh) return path
-  // Detection is memoized for the life of the app, so *Check again* after
-  // installing Claude Code would never see it.
-  await toolDetectionService.refresh()
-  return (await toolDetectionService.get('claude'))?.path ?? null
 }
 
 /**
@@ -321,11 +333,11 @@ function folderSystemPrompt(
  *
  * The login follows `HOME`, not the binary (verified against 0.153.4 and
  * 0.154), so the managed CLI under the same child environment reports the
- * user's own login. `knownCodexBinary` never downloads: before the first
+ * user's own login. The service's `peek` never downloads: before the first
  * install there is simply nothing to ask, and the probe answers `unknown`.
  */
 export const codexAuthProbe = new CodexAuthProbe({
-  path: knownCodexBinary,
+  path: runningBinary(codexBinaryService),
   env: async () => buildCodexEnv({ shellEnv: await getShellEnv() })
 })
 
@@ -432,7 +444,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     binaryKnown: (options) => codexBinaryKnownFrom({
       state: () => codexBinaryService.state(),
       refresh: () => codexBinaryService.refresh(),
-      known: knownCodexBinary
+      known: runningBinary(codexBinaryService)
     }, options),
     auth: (options) => options?.fresh ? codexAuthProbe.refresh() : codexAuthProbe.status(),
     adapterEntry: () => {
@@ -504,7 +516,19 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     childEnv: async () => shellEnvForChild(await getShellEnv())
   }),
   claude: createClaudeLauncher({
-    claudePath,
+    // Through the service, exactly like Codex above.
+    binary: async () => {
+      try {
+        return { path: (await claudeBinaryService.ensure()).path }
+      } catch (error) {
+        return { error: error instanceof ManagedAssetError ? error.message : CLAUDE_NOT_INSTALLED }
+      }
+    },
+    binaryKnown: (options) => codexBinaryKnownFrom({
+      state: () => claudeBinaryService.state(),
+      refresh: () => claudeBinaryService.refresh(),
+      known: runningBinary(claudeBinaryService)
+    }, options),
     // The login probe holds its answer for a short window; a fresh check asks
     // the binary now, so a `claude login` the user just ran counts.
     claudeAuth: (options) => (options?.fresh ? claudeAuthProbe.refresh() : claudeAuthProbe.status()),

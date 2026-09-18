@@ -46,7 +46,7 @@
 
 import { spawn } from 'node:child_process'
 import type { Dirent } from 'node:fs'
-import { chmod, readdir, rename, rm } from 'node:fs/promises'
+import { chmod, readdir, realpath, rename, rm, stat, utimes } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { app } from 'electron'
 import { appSettingsRepo } from '../db/appSettings'
@@ -96,6 +96,17 @@ export interface RuntimeBinarySpec {
    * user's PATH copy stays what "Open in…" launches and nothing else.
    */
   searchPath: boolean
+  /**
+   * Whether a copy on the login-shell PATH that reports **exactly the pinned
+   * version** is used instead of downloading (source `path-pinned`).
+   *
+   * Not {@link searchPath}, which takes any runnable version. This one passes
+   * the same {@link acceptsVersion} gate a managed install passes, so the
+   * version under test is still the version that runs — it only saves an
+   * up-to-date user a ~90 MB (Codex) or ~215 MB (Claude) download. Any other
+   * version on PATH is ignored, exactly as before.
+   */
+  reusePinnedPath?: boolean
   url(version: string, asset: EngineAsset): string
   /**
    * The installed binary's `--version` output must satisfy this, or the install
@@ -139,6 +150,7 @@ export const CODEX_SPEC: RuntimeBinarySpec = {
   label: 'Codex',
   binaryName: `codex${EXE}`,
   searchPath: false,
+  reusePinnedPath: true,
   url: (_version, asset) => {
     // Codex rows always carry their URL; a row without one is a manifest bug,
     // and guessing a URL for bytes whose digest is pinned helps nobody.
@@ -149,10 +161,31 @@ export const CODEX_SPEC: RuntimeBinarySpec = {
   messages: {
     unsupportedPlatform: (key) =>
       `Set a Codex path in Settings → Local Development: Cinna has no verified Codex build for ${key}.`,
-    configuredMissing: 'Fix the Codex path in Settings, or clear it: it does not point at a file.',
-    configuredUnusable: 'Fix the Codex path in Settings, or clear it: that file will not run.',
+    configuredMissing: 'Codex path is not a file — fix it in Local Development.',
+    configuredUnusable: 'Codex path will not run — fix it in Local Development.',
     archiveMissingBinary: 'The downloaded Codex archive did not contain a codex executable.',
     versionMismatch: (version) => `The downloaded Codex was not version ${version}, so it was discarded. Try again.`
+  }
+}
+
+export const CLAUDE_SPEC: RuntimeBinarySpec = {
+  tool: 'claude',
+  label: 'Claude Code',
+  binaryName: `claude${EXE}`,
+  searchPath: false,
+  reusePinnedPath: true,
+  url: (_version, asset) => {
+    if (!asset.url) throw new EngineBinaryError('unsupported_platform', 'The Claude Code pin has no download URL for this platform.')
+    return asset.url
+  },
+  acceptsVersion: (probed, version) => probed === `${version} (Claude Code)`,
+  messages: {
+    unsupportedPlatform: (key) =>
+      `Set a Claude path in Settings → Local Development: Cinna has no verified Claude Code build for ${key}.`,
+    configuredMissing: 'Claude path is not a file — fix it in Local Development.',
+    configuredUnusable: 'Claude path will not run — fix it in Local Development.',
+    archiveMissingBinary: 'The Claude Code download did not contain a claude executable.',
+    versionMismatch: (version) => `The downloaded Claude Code was not version ${version}, so it was discarded. Try again.`
   }
 }
 
@@ -173,7 +206,7 @@ export { downloadToFile, extractArchive, sha256File }
  * is not the name the binary is installed under (Codex ships
  * `codex-<target triple>`).
  */
-export type EngineAsset = PinnedAsset & { url?: string; executable?: string }
+export type EngineAsset = PinnedAsset & { url?: string; executable?: string; format?: 'archive' | 'executable'; size?: number }
 
 /**
  * The pinned release assets, keyed `${process.platform}-${process.arch}`.
@@ -206,6 +239,28 @@ export interface ResolvedEngineBinary {
   source: EngineBinarySource
   /** `opencode --version`, or null when the probe failed but the file runs. */
   version: string | null
+  /**
+   * `path-pinned` only: the identity of the file that passed the version gate
+   * (real path, size, mtime). A PATH copy is the user's and updates itself —
+   * `~/.local/bin/claude` is a symlink its updater retargets — so a remembered
+   * answer is only good while this still matches; see {@link binaryFingerprint}.
+   */
+  fingerprint?: string
+}
+
+/**
+ * The identity of the file behind `path`, or null when it cannot be read.
+ * Cheap (two syscalls, no spawn), which is what lets the binary service ask it
+ * once per turn where re-running `--version` would cost a process each time.
+ */
+export async function binaryFingerprint(path: string): Promise<string | null> {
+  try {
+    const real = await realpath(path)
+    const info = await stat(real)
+    return `${real}:${info.size}:${info.mtimeMs}`
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -229,8 +284,12 @@ export interface BinaryResolverDeps {
    * The third parameter is what {@link installPinnedAsset} has always passed;
    * it was simply not declared here while nothing in this module had anywhere
    * to put a byte count. Local development's pre-fetch row does.
+   *
+   * The fourth is the pin row's recorded `size`, when it has one: the download's
+   * size ceiling, its progress denominator when the server declares no length,
+   * and what its time ceiling is scaled from.
    */
-  download: (url: string, dest: string, onProgress?: DownloadProgress) => Promise<void>
+  download: (url: string, dest: string, onProgress?: DownloadProgress, expectedBytes?: number) => Promise<void>
   /** Unpack `archive` into the (already created) directory `dest`. */
   extract: (archive: string, dest: string) => Promise<void>
   /** `<binary> --version`, or null when it will not run. */
@@ -337,9 +396,22 @@ export function managedBinaryPath(deps: Pick<BinaryResolverDeps, 'engineRoot' | 
   return join(deps.engineRoot(), `${spec.tool}-${deps.version}`, spec.binaryName)
 }
 
+/** A version directory used this recently is never swept. */
+const SWEEP_KEEP_MS = 7 * 24 * 60 * 60 * 1000
+
 /**
- * After a **successful** install: remove this tool's other version directories
- * and any `.staging-*` no install in this process is using.
+ * After a **successful** install *and* a successful `--version` probe of it:
+ * remove this tool's other version directories that nothing has used for
+ * {@link SWEEP_KEEP_MS}, and any `.staging-*` no install in this process is using.
+ *
+ * **"Used" is the directory's mtime**, which every successful managed
+ * resolution refreshes ({@link markUsed}). Two builds with different pins
+ * sharing one `userData` — a dev build beside a release — used to delete each
+ * other's copy on every install and re-download it on the next launch; now a
+ * version somebody ran this week survives. The cost is that a genuinely
+ * superseded tree lingers until the first fresh install after it has been idle
+ * a week — at most one stale generation on disk, which is the cheap side of
+ * that trade.
  *
  * Nothing else ever did. A pin bump left the previous ~90 MB (Codex) or ~46 MB
  * (OpenCode) tree in `userData` for good, and a download killed by a quit left
@@ -356,15 +428,25 @@ export function managedBinaryPath(deps: Pick<BinaryResolverDeps, 'engineRoot' | 
  */
 async function sweepSuperseded(root: string, tool: string, keep: string): Promise<void> {
   const entries: Dirent[] = await readdir(root, { withFileTypes: true }).catch((): Dirent[] => [])
+  const cutoff = Date.now() - SWEEP_KEEP_MS
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name === keep) continue
     if (!entry.name.startsWith(`${tool}-`) || !/^\d/.test(entry.name.slice(tool.length + 1))) continue
+    // Unreadable counts as recent: when in doubt, the disk pays, not the user.
+    const usedAt = await stat(join(root, entry.name)).then((info) => info.mtimeMs, () => Date.now())
+    if (usedAt > cutoff) continue
     await rm(join(root, entry.name), { recursive: true, force: true }).then(
       () => logger.info('removed a superseded runtime', { tool, directory: entry.name }),
       () => undefined
     )
   }
   await sweepStaging(root)
+}
+
+/** Stamp a managed install as used now, so another pin's sweep leaves it alone. Best-effort. */
+export async function markUsed(installDir: string): Promise<void> {
+  const now = new Date()
+  await utimes(installDir, now, now).catch(() => undefined)
 }
 
 async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinary> {
@@ -380,9 +462,10 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
   const installDir = dirname(installed)
   /** Set by `locate` when the version gate is what rejected the archive. */
   let rejectedVersion = false
+  let didInstall = false
 
   try {
-    const { installed: didInstall } = await installPinnedAsset({
+    ;({ installed: didInstall } = await installPinnedAsset({
       root,
       installDir,
       label: spec.label,
@@ -414,14 +497,19 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
       },
       isInstalled: () => isFile(installed),
       onDownloadProgress: (received, total) => installReports.get(spec.tool)?.(received, total),
-      download: deps.download,
-      extract: deps.extract,
+      // The asset's recorded size is its ceiling: exact for a pinned file, and
+      // what lets a ~215 MB executable past a guard sized for archives.
+      download: (url, dest, onProgress) => deps.download(url, dest, onProgress, asset.size),
+      // An `executable` asset is the binary itself, not an archive. The
+      // verified file is moved into the unpack directory under the tool's name,
+      // and everything after it — locate, the version gate, the publishing
+      // rename — is unchanged.
+      extract: asset.format === 'executable'
+        ? (archive, dest) => rename(archive, join(dest, spec.binaryName))
+        : deps.extract,
       notFoundMessage: spec.messages.archiveMissingBinary
-    })
-    if (didInstall) {
-      logger.info('runtime installed', { tool: spec.tool, version: deps.version, platform: key })
-      await sweepSuperseded(root, spec.tool, basename(installDir))
-    }
+    }))
+    if (didInstall) logger.info('runtime installed', { tool: spec.tool, version: deps.version, platform: key })
   } catch (err) {
     if (rejectedVersion) {
       throw new EngineBinaryError('version_mismatch', spec.messages.versionMismatch(deps.version))
@@ -429,7 +517,14 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
     throw err
   }
 
-  return { path: installed, source: 'managed', version: await deps.probeVersion(installed) }
+  const version = await deps.probeVersion(installed)
+  if (version !== null) {
+    await markUsed(installDir)
+    // Only after the new copy has answered: a fresh install that will not run
+    // must not cost the user the older version that does.
+    if (didInstall) await sweepSuperseded(root, spec.tool, basename(installDir))
+  }
+  return { path: installed, source: 'managed', version }
 }
 
 /**
@@ -447,6 +542,23 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
  * "the user already has one".
  */
 export async function resolveEngineBinaryWith(
+  deps: BinaryResolverDeps,
+  onDownloadProgress?: DownloadProgress
+): Promise<ResolvedEngineBinary> {
+  const resolved = await resolveFromSources(deps, onDownloadProgress)
+  // Once per resolution, for every tool and every source. The reuse paths
+  // (`configured`, `path`, `path-pinned`) used to leave no trace at all, so a
+  // log could not say which file a session had actually run.
+  logger.info('runtime binary resolved', {
+    tool: (deps.spec ?? OPENCODE_SPEC).tool,
+    source: resolved.source,
+    version: resolved.version,
+    path: resolved.path
+  })
+  return resolved
+}
+
+async function resolveFromSources(
   deps: BinaryResolverDeps,
   onDownloadProgress?: DownloadProgress
 ): Promise<ResolvedEngineBinary> {
@@ -478,7 +590,69 @@ export async function resolveEngineBinaryWith(
     }
   }
 
+  // An exact-version PATH copy, but only when there is no managed copy yet:
+  // once Cinna has its own verified file that is one `stat`, and it cannot
+  // change under a running app the way a self-updating install can.
+  if (spec.reusePinnedPath && spec.acceptsVersion && !(await isFile(managedBinaryPath(deps)))) {
+    const pinned = await pinnedOnPath(deps, spec)
+    if (pinned) return pinned
+  }
+
   return installPinned(deps, onDownloadProgress)
+}
+
+/**
+ * The PATH copy, when it reports exactly the pinned version; else null. Never downloads.
+ *
+ * **The path returned is the real file, not the PATH entry.** `~/.local/bin/claude`
+ * is a symlink the vendor's updater retargets, and a pooled adapter process
+ * keeps the path it was given (`CLAUDE_CODE_EXECUTABLE`) for every later spawn:
+ * handed the symlink, its next spawn after an update would run a version that
+ * never passed the gate. The real path is the file that was probed and
+ * fingerprinted, so what runs is what was gated — and when the updater removes
+ * it, the service's existence check resolves again.
+ */
+async function pinnedOnPath(deps: BinaryResolverDeps, spec: RuntimeBinarySpec): Promise<ResolvedEngineBinary | null> {
+  const onPath = await deps.which(spec.tool).catch(() => null)
+  if (!onPath) return null
+  // Unresolvable stays as it was found; the probe below then decides.
+  const path = await realpath(onPath).catch(() => onPath)
+  const version = await deps.probeVersion(path)
+  if (!spec.acceptsVersion?.(version, deps.version)) return null
+  const fingerprint = await binaryFingerprint(path)
+  return { path, source: 'path-pinned', version, ...(fingerprint ? { fingerprint } : {}) }
+}
+
+/**
+ * The byte length of this platform's pinned asset, when its pin row records
+ * one — what "installs on first use, about N MB" is said from. Null for a
+ * platform with no row, or a row with no size (OpenCode's).
+ */
+export function pinnedAssetBytes(deps: Pick<BinaryResolverDeps, 'assets' | 'platformKey'>): number | null {
+  return deps.assets[deps.platformKey()]?.size ?? null
+}
+
+/**
+ * What a session would run **if nothing had to be downloaded**, or null: the
+ * configured path when it is a file, else the managed copy when it is on disk,
+ * else — only when `probePath` — an exact-version PATH copy.
+ *
+ * For the callers that must never start a download: readiness, which runs for a
+ * list, and the login probe, which runs on window focus. `probePath` spawns one
+ * `--version`, so it is for the caller that paints a row (rule 9: "installs on
+ * first use" above an install that would be reused is a false claim), not for
+ * the ones that run per list item.
+ */
+export async function knownRuntimeBinary(
+  deps: BinaryResolverDeps,
+  options: { probePath?: boolean } = {}
+): Promise<ResolvedEngineBinary | null> {
+  const spec = deps.spec ?? OPENCODE_SPEC
+  const configured = deps.configuredPath()?.trim()
+  if (configured) return (await isFile(configured)) ? { path: configured, source: 'configured', version: null } : null
+  const managed = managedBinaryPath(deps)
+  if (await isFile(managed)) return { path: managed, source: 'managed', version: null }
+  return options.probePath && spec.reusePinnedPath ? pinnedOnPath(deps, spec) : null
 }
 
 /** `<binary> --version`, or null when the file will not run. */
@@ -610,7 +784,7 @@ export function configuredCodexPath(): string | null {
  * point: a spec that forgot to would otherwise pull 90 MB from the network
  * into a throwaway profile and then run the *real* CLI under a test's name.
  */
-const codexDownload: BinaryResolverDeps['download'] = (url, dest, onProgress) => {
+const codexDownload: BinaryResolverDeps['download'] = (url, dest, onProgress, expectedBytes) => {
   if (process.env['CINNA_CODEX_DOWNLOAD'] === 'off') {
     return Promise.reject(
       new EngineBinaryError(
@@ -619,7 +793,7 @@ const codexDownload: BinaryResolverDeps['download'] = (url, dest, onProgress) =>
       )
     )
   }
-  return downloadToFile(url, dest, onProgress)
+  return downloadToFile(url, dest, onProgress, expectedBytes)
 }
 
 export function realCodexResolverDeps(configuredPath: () => string | null): BinaryResolverDeps {
@@ -639,18 +813,46 @@ export function realCodexResolverDeps(configuredPath: () => string | null): Bina
   }
 }
 
+/* ----------------------------------------------------------------- Claude */
+
+/** The pinned Claude Code assets — single executables, not archives, from Anthropic's release bucket. */
+export const CLAUDE_ASSETS: Readonly<Record<string, EngineAsset>> = RUNTIME_PINS.claude.assets
+
+/** The Claude path a user set in Settings, or null. Unpinned, shown as unverified. */
+export function configuredClaudePath(): string | null {
+  const value = appSettingsRepo.get('localAgentsClaudePath')
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+}
+
 /**
- * The Codex binary a session would run **if nothing had to be downloaded**, or
- * null: the configured path when it is a file, else the managed copy when it is
- * already installed.
- *
- * For the callers that must never start a download — readiness, which runs for
- * a list, and the login probe, which runs on window focus. "Not here yet" is an
- * ordinary answer for them; fetching 90 MB to give a better one is not.
+ * `CINNA_CLAUDE_DOWNLOAD=off`, for the reason {@link codexDownload} gives — at
+ * ~215 MB per throwaway profile, more so.
  */
-export async function knownCodexBinary(): Promise<string | null> {
-  const configured = configuredCodexPath()
-  if (configured) return (await isFile(configured)) ? configured : null
-  const managed = managedBinaryPath(realCodexResolverDeps(() => null))
-  return (await isFile(managed)) ? managed : null
+const claudeDownload: BinaryResolverDeps['download'] = (url, dest, onProgress, expectedBytes) => {
+  if (process.env['CINNA_CLAUDE_DOWNLOAD'] === 'off') {
+    return Promise.reject(
+      new EngineBinaryError(
+        'download_failed',
+        'Set a Claude path in Settings: downloading Claude Code is switched off in this environment.'
+      )
+    )
+  }
+  return downloadToFile(url, dest, onProgress, expectedBytes)
+}
+
+export function realClaudeResolverDeps(configuredPath: () => string | null): BinaryResolverDeps {
+  return {
+    configuredPath,
+    which,
+    engineRoot: runtimesRootDir,
+    download: claudeDownload,
+    // Never reached: every Claude row is `format: 'executable'`. Wired for the same
+    // honesty as Codex's unused `which` was.
+    extract: extractArchive,
+    probeVersion: probeEngineVersion,
+    platformKey: () => `${process.platform}-${process.arch}`,
+    assets: CLAUDE_ASSETS,
+    version: RUNTIME_PINS.claude.cli,
+    spec: CLAUDE_SPEC
+  }
 }

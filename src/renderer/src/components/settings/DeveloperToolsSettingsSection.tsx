@@ -2,10 +2,13 @@ import { RefreshCw } from 'lucide-react'
 import { useIsMutating } from '@tanstack/react-query'
 import { OpenCodeSettingsFields } from './OpenCodeSettingsFields'
 import { CodexSettingsFields } from './CodexSettingsFields'
+import { ClaudeSettingsFields } from './ClaudeSettingsFields'
 import { isRuntimeToolId } from '../../../../shared/localTools'
 import { useLocalAgents } from '../../hooks/useLocalAgents'
-import { useCodexBinary, useEngineBinary } from '../../hooks/useEngine'
+import { useClaudeBinary, useCodexBinary, useEngineBinary } from '../../hooks/useEngine'
 import { codexToolCell } from './codexStatus'
+import { claudeToolCell } from './claudeStatus'
+import { useAppSettings } from '../../hooks/useAppSettings'
 import { useLocalTools, useRefreshLocalTools } from '../../hooks/useLocalTools'
 import { SettingsButton, SettingsCard, SettingsLabel, SettingsSection } from './SettingsLayout'
 import { useCinnaCliUpdate, useLocalDev, useManagedLocalDevCli, useUpdateCinnaCli } from '../../hooks/useLocalDev'
@@ -17,7 +20,10 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
   const { data: agents } = useLocalAgents()
   const { data: binary } = useEngineBinary()
   const { data: codexBinary } = useCodexBinary()
-  const codexCell = codexToolCell(codexBinary)
+  const { data: claudeBinary } = useClaudeBinary()
+  const { data: appSettings } = useAppSettings()
+  const codexCell = codexToolCell(codexBinary, (appSettings?.localAgentsCodexPath ?? '').trim() !== '')
+  const claudeCell = claudeToolCell(claudeBinary, (appSettings?.localAgentsClaudePath ?? '').trim() !== '')
   const refreshTools = useRefreshLocalTools()
   const managedCli = useManagedLocalDevCli()
   const cliUpdate = useCinnaCliUpdate()
@@ -169,6 +175,25 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
                   </span>
                 </td>
               </tr>
+              {/* The Claude Code **Cinna runs** — the Codex row's twin, for its reason. */}
+              <tr className="border-t border-[var(--color-border)]">
+                <td
+                  className="truncate px-2.5 py-1.5 text-[var(--color-text)]"
+                  title={claudeBinary?.state === 'ready' ? claudeBinary.path : undefined}
+                >
+                  Claude Code
+                </td>
+                <td
+                  className="truncate px-2.5 py-1.5"
+                  title={claudeBinary?.state === 'failed' ? claudeBinary.error : claudeCell.text || undefined}
+                >
+                  <span className={claudeCell.mono
+                    ? 'font-mono text-[12px] text-[var(--color-text-secondary)]'
+                    : 'text-[var(--color-text-muted)]'}>
+                    {claudeCell.text}
+                  </span>
+                </td>
+              </tr>
               {otherTools.length === 0 && (
                 <tr>
                   <td colSpan={2} className="px-2.5 py-2 text-[var(--color-text-muted)]">
@@ -182,14 +207,12 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
         {updating && <p role="status" className="mt-2 text-[13px] text-[var(--color-text-secondary)]">{localDev.phase === 'installing' ? localDev.step : 'Updating Cinna CLI…'}</p>}
         {updateCli.isSuccess && !updating && <p role="status" className="mt-2 text-[13px] text-[var(--color-success)]">Cinna CLI updated.</p>}
         {(updateCli.error || cliUpdate.error) && <p role="alert" className="mt-2 text-[13px] text-[var(--color-danger)]">{unwrapIpcError(updateCli.error ?? cliUpdate.error, 'Could not check for Cinna CLI updates. Try Refresh.')}</p>}
-        {binary?.state === 'failed' && (
-          <p className="mt-1.5 text-[13px] text-[var(--color-danger)]">{binary.error}</p>
-        )}
-        {codexBinary?.state === 'failed' && (
-          <p className="mt-1.5 text-[13px] text-[var(--color-danger)]">{codexBinary.error}</p>
-        )}
+        {/* A runtime's failure is said under its own path field
+            (`RuntimePathField`), not here: above the fields it moved the one
+            being edited (ux_rules rule 1). */}
         <OpenCodeSettingsFields />
         <CodexSettingsFields />
+        <ClaudeSettingsFields />
         <div className="border-t border-[var(--color-border)] pt-2.5 text-[12px] text-[var(--color-text-muted)]">
           Kit contract {contractVersion ?? 'unknown'} · bundled with this app
         </div>
