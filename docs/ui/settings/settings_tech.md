@@ -25,8 +25,10 @@
 - `src/renderer/src/components/settings/RootRepositoryDialog.tsx` — The Repository dialog opened from an Agent Folders row: remote, branches, head commit, Check and Update; see [Agents Folder Updates](../../agents/local_agents/folder_updates.md)
 - `src/renderer/src/components/settings/LocalDevSettingsSection.tsx` — Shared managed CLI readout and Add to PATH; see [Local Development](../../agents/local_dev/local_dev.md)
 - `src/renderer/src/components/settings/ProfileLocalDevSettingsSection.tsx` — Every account phase, workspace setup/repair/opening and shared server consent; keyed by account ID
-- `src/renderer/src/components/settings/DeveloperToolsSettingsSection.tsx` — Shared tools table with managed Cinna precedence and Update, resolved engine OpenCode row, contract version and `OpenCodeSettingsFields`
-- `src/renderer/src/components/settings/OpenCodeSettingsFields.tsx` — Installation-wide executable override; independent dirty/empty draft, inline failure, Escape discard
+- `src/renderer/src/components/settings/DeveloperToolsSettingsSection.tsx` — Shared tools table with managed Cinna precedence and Update, resolved engine OpenCode row, managed Codex row (`useCodexBinary` through `codexToolCell`, never PATH detection), contract version, `OpenCodeSettingsFields` and `CodexSettingsFields`
+- `src/renderer/src/components/settings/RuntimePathField.tsx` — The one "explicit executable path" field, for `localAgentsEnginePath` and `localAgentsCodexPath`: independent dirty/empty draft, inline failure, Escape discard, optional `pendingMessage`, and `stacked` for a field directly under another
+- `src/renderer/src/components/settings/OpenCodeSettingsFields.tsx` and `CodexSettingsFields.tsx` in the same directory — Installation-wide executable overrides over that field. Codex's tip states that the override is unverified; it passes no `pendingMessage`, because main re-resolves when its path is saved
+- `src/renderer/src/components/settings/codexStatus.ts` — Pure text for the managed Codex CLI: the Runtime status line, the picker sub-line and the Developer Tools cell, one module so the three cannot disagree about a configured path
 - `src/renderer/src/components/settings/TaskConcurrencySetting.tsx` — Default → Agents → Tasks row; device-wide admission limit
 - `src/renderer/src/components/settings/ProfileChatModesSection.tsx` — Account-provisioned chat modes (Profile scope), off the same `useChatModes` hook as the Default tab
 - `src/renderer/src/components/settings/ProfileLLMSection.tsx` — Account-provisioned (managed) providers (Profile scope)

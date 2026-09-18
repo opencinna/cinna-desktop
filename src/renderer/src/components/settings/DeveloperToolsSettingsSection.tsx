@@ -1,9 +1,11 @@
 import { RefreshCw } from 'lucide-react'
 import { useIsMutating } from '@tanstack/react-query'
 import { OpenCodeSettingsFields } from './OpenCodeSettingsFields'
+import { CodexSettingsFields } from './CodexSettingsFields'
 import { isRuntimeToolId } from '../../../../shared/localTools'
 import { useLocalAgents } from '../../hooks/useLocalAgents'
-import { useEngineBinary } from '../../hooks/useEngine'
+import { useCodexBinary, useEngineBinary } from '../../hooks/useEngine'
+import { codexToolCell } from './codexStatus'
 import { useLocalTools, useRefreshLocalTools } from '../../hooks/useLocalTools'
 import { SettingsButton, SettingsCard, SettingsLabel, SettingsSection } from './SettingsLayout'
 import { useCinnaCliUpdate, useLocalDev, useManagedLocalDevCli, useUpdateCinnaCli } from '../../hooks/useLocalDev'
@@ -14,6 +16,8 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
   const { data: tools } = useLocalTools()
   const { data: agents } = useLocalAgents()
   const { data: binary } = useEngineBinary()
+  const { data: codexBinary } = useCodexBinary()
+  const codexCell = codexToolCell(codexBinary)
   const refreshTools = useRefreshLocalTools()
   const managedCli = useManagedLocalDevCli()
   const cliUpdate = useCinnaCliUpdate()
@@ -139,6 +143,32 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
                   </span>
                 </td>
               </tr>
+              {/*
+                The Codex **Cinna runs**, above the Codex Path field that replaces
+                it — the OpenCode row's counterpart, built the same. Not the
+                `codex` on PATH: that one is only what "Open in Codex" launches,
+                and reporting it here would describe a binary no session uses
+                (ux_rules rule 9). `unverified` is the configured path's label
+                everywhere it appears.
+              */}
+              <tr className="border-t border-[var(--color-border)]">
+                <td
+                  className="truncate px-2.5 py-1.5 text-[var(--color-text)]"
+                  title={codexBinary?.state === 'ready' ? codexBinary.path : undefined}
+                >
+                  Codex
+                </td>
+                <td
+                  className="truncate px-2.5 py-1.5"
+                  title={codexBinary?.state === 'failed' ? codexBinary.error : codexCell.text || undefined}
+                >
+                  <span className={codexCell.mono
+                    ? 'font-mono text-[12px] text-[var(--color-text-secondary)]'
+                    : 'text-[var(--color-text-muted)]'}>
+                    {codexCell.text}
+                  </span>
+                </td>
+              </tr>
               {otherTools.length === 0 && (
                 <tr>
                   <td colSpan={2} className="px-2.5 py-2 text-[var(--color-text-muted)]">
@@ -155,7 +185,11 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
         {binary?.state === 'failed' && (
           <p className="mt-1.5 text-[13px] text-[var(--color-danger)]">{binary.error}</p>
         )}
+        {codexBinary?.state === 'failed' && (
+          <p className="mt-1.5 text-[13px] text-[var(--color-danger)]">{codexBinary.error}</p>
+        )}
         <OpenCodeSettingsFields />
+        <CodexSettingsFields />
         <div className="border-t border-[var(--color-border)] pt-2.5 text-[12px] text-[var(--color-text-muted)]">
           Kit contract {contractVersion ?? 'unknown'} · bundled with this app
         </div>

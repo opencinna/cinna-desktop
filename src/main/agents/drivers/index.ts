@@ -27,7 +27,9 @@ import { TITLE_SYSTEM_PROMPT } from '../../services/aiFunctionPrompts'
 import type { ConductorContext } from '../../services/chatConductorService'
 import { engineAgentKey } from '../../engine/configGenerator'
 import { join } from 'node:path'
-import { engineBinaryService } from '../../engine/engineBinaryService'
+import { codexBinaryService, engineBinaryService } from '../../engine/engineBinaryService'
+import { knownCodexBinary } from '../../engine/binaryResolver'
+import { ManagedAssetError } from '../../managed/managedAsset'
 import { collectEngineConfigInput } from '../../engine/engineConfigSource'
 import { agentRepo, agentSessionRepo, type AgentRow } from '../../db/agents'
 import { CinnaReauthRequired } from '../../auth/cinna-oauth'
@@ -39,7 +41,7 @@ import { runAgentTurn } from '../../services/a2aStreamingService'
 import { createLogger } from '../../logger/logger'
 import { CodexAuthProbe } from './acp/codexAuth'
 import { buildCodexEnv } from './acp/codexEnv'
-import { createCodexLauncher } from './acp/codexLauncher'
+import { CODEX_NOT_INSTALLED, codexBinaryKnownFrom, createCodexLauncher } from './acp/codexLauncher'
 import { codexEffortForComplexity, isAgentEngine } from '../../../shared/engine'
 import { isWorkComplexity } from '../../../shared/modelFamilies'
 import { ClaudeAuthProbe } from './acp/claudeAuth'
@@ -311,8 +313,19 @@ function folderSystemPrompt(
   }
 }
 
+/**
+ * Whether Codex is logged in — asked of **the binary the sessions run on**: the
+ * explicit Settings path, else the managed pinned copy. Never the PATH copy,
+ * which `toolDetectionService` still reports for "Open in…" and which no
+ * spawned session uses any more.
+ *
+ * The login follows `HOME`, not the binary (verified against 0.153.4 and
+ * 0.154), so the managed CLI under the same child environment reports the
+ * user's own login. `knownCodexBinary` never downloads: before the first
+ * install there is simply nothing to ask, and the probe answers `unknown`.
+ */
 export const codexAuthProbe = new CodexAuthProbe({
-  path: async () => (await toolDetectionService.get('codex'))?.path ?? null,
+  path: knownCodexBinary,
   env: async () => buildCodexEnv({ shellEnv: await getShellEnv() })
 })
 
@@ -404,14 +417,23 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
 
 const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
   codex: createCodexLauncher({
-    path: async (options) => {
-      let tool = await toolDetectionService.get('codex')
-      if (!tool?.path && options?.fresh) {
-        await toolDetectionService.refresh()
-        tool = await toolDetectionService.get('codex')
+    // Through the service, like OpenCode's `binary` below: memoised per
+    // configured path, concurrent turns share one download, and a failure is
+    // never cached. The resolver's messages are this app's own remedy-first
+    // sentences, so they are safe to show; anything else (a raw `fetch failed`)
+    // becomes the generic one.
+    binary: async () => {
+      try {
+        return { path: (await codexBinaryService.ensure()).path }
+      } catch (error) {
+        return { error: error instanceof ManagedAssetError ? error.message : CODEX_NOT_INSTALLED }
       }
-      return tool?.path ?? null
     },
+    binaryKnown: (options) => codexBinaryKnownFrom({
+      state: () => codexBinaryService.state(),
+      refresh: () => codexBinaryService.refresh(),
+      known: knownCodexBinary
+    }, options),
     auth: (options) => options?.fresh ? codexAuthProbe.refresh() : codexAuthProbe.status(),
     adapterEntry: () => {
       const entry = '@agentclientprotocol/codex-acp/dist/index.js'
@@ -747,8 +769,11 @@ export function respondToOrphanedAsk(
 /** The same runtime gates used by the turn, before presenting the build composer. */
 export async function developmentRuntimeBlocker(engine: import('../../../shared/engine').AgentEngine): Promise<{ blocker: string | null; installTool?: 'claude' | 'codex' | null }> {
   const ready = await acpLaunchers[engine]?.readiness?.({ fresh: true })
+  // Only Claude is a CLI the user installs. OpenCode and Codex are fetched by
+  // Cinna, so offering to install a PATH copy of either would install a tool no
+  // spawned session uses — a failed managed download is retried in Settings.
   if (ready && ready.state !== 'ok') return { blocker: ready.reason ?? 'Check your default runtime in Settings.',
-    installTool: ready.state === 'not_installed' && engine !== 'opencode' ? engine : null }
+    installTool: ready.state === 'not_installed' && engine === 'claude' ? engine : null }
   if (engine === 'opencode') {
     try { await engineBinaryService.ensure() } catch (error) {
       return { blocker: error instanceof Error ? error.message : 'OpenCode could not be installed. Check Runtime settings.' }

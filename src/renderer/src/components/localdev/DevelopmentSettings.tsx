@@ -5,7 +5,7 @@ import { codexEffortForComplexity, isAgentEngine, type AgentEngine } from '../..
 import { isWorkComplexity, WORK_COMPLEXITIES, WORK_COMPLEXITY_LABELS } from '../../../../shared/modelFamilies'
 import type { RuntimeToolId } from '../../../../shared/localTools'
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
-import { useDefaultRuntime } from '../../hooks/useEngine'
+import { useCodexBinary, useDefaultRuntime } from '../../hooks/useEngine'
 import { useInstallRuntimeTool, useLocalTools, useToolInstallPlan } from '../../hooks/useLocalTools'
 import { useProviders } from '../../hooks/useProviders'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -25,6 +25,7 @@ export function DevelopmentSettings({ data, onOpenWorkspace, onSetup, onCheck, c
   const { data: settings } = useAppSettings()
   const save = useSetAppSetting()
   const { data: defaultRuntime } = useDefaultRuntime()
+  const { data: codexBinary } = useCodexBinary()
   const { data: tools } = useLocalTools()
   const [installing, setInstalling] = useState<RuntimeToolId | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
@@ -44,7 +45,7 @@ export function DevelopmentSettings({ data, onOpenWorkspace, onSetup, onCheck, c
   return <div className="mx-auto max-w-4xl space-y-6 px-6 py-8">
     <SettingsSection title="Local Development Runtime">
       <SettingsCard>
-        <RuntimeChoiceButtons selected={selected} tools={tools} installing={install.isPending ? installing : null} disabled={!settings || save.isPending || install.isPending}
+        <RuntimeChoiceButtons selected={selected} tools={tools} codexBinary={codexBinary} installing={install.isPending ? installing : null} disabled={!settings || save.isPending || install.isPending}
           defaultChoice={{ description: inheritedName, onSelect: () => select('') }}
           onSelect={select} onInstall={(tool) => { setFailure(null); setInstalling(tool) }} />
         <p className="mt-3 text-[13px] text-[var(--color-text-secondary)]">{selected ? 'Used for local build sessions on this computer.' : `Uses the local-agent default${defaultRuntime ? `: ${inheritedName}` : ''}. Changes to that default apply here too.`}</p>

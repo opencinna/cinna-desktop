@@ -1,6 +1,7 @@
 import { Check, Download, Loader2 } from 'lucide-react'
 import type { DetectedTool, RuntimeToolId } from '../../../../shared/localTools'
-import type { AgentEngine } from '../../../../shared/engine'
+import { PINNED_CODEX_VERSION, type AgentEngine, type EngineBinaryState } from '../../../../shared/engine'
+import { codexVersionLabel } from './codexStatus'
 import { SettingsBadge } from './SettingsLayout'
 
 /**
@@ -21,11 +22,21 @@ export interface RuntimeChoice {
   tool: RuntimeToolId | null
   /** What selecting it writes, or null when this build cannot run agents on it. */
   engine: AgentEngine | null
+  /**
+   * The pinned version Cinna installs for itself, when it does. Such a runtime
+   * is **always available** — detection is not consulted, nothing is offered
+   * for install — and the sub-line names this version rather than whatever is
+   * on the user's PATH, because the PATH copy is not what its sessions run on.
+   */
+  managedVersion?: string
 }
 
 export const RUNTIME_CHOICES: readonly RuntimeChoice[] = [
   { id: 'claude', label: 'Claude Agent', tool: 'claude', engine: 'claude' },
-  { id: 'codex', label: 'Codex', tool: 'codex', engine: 'codex' },
+  // Managed like OpenCode below: Cinna downloads and verifies the pinned CLI on
+  // first use. `tool` stays, since the install dialog still knows Codex as a
+  // tool the user can add for "Open in…" — this picker just never asks for it.
+  { id: 'codex', label: 'Codex', tool: 'codex', engine: 'codex', managedVersion: PINNED_CODEX_VERSION },
   // **Always available, and that is why it is the fallback.** Cinna downloads
   // and verifies its own `opencode` the first time an agent needs one, so this
   // is the only choice that is true on a machine with no developer tooling at
@@ -56,7 +67,8 @@ export function RuntimeChoiceButtons({
   onSelect,
   onInstall,
   disabled = false,
-  defaultChoice
+  defaultChoice,
+  codexBinary
 }: {
   /** The stored pin. Nothing is selected while it is still being decided. */
   selected: AgentEngine | null
@@ -68,6 +80,13 @@ export function RuntimeChoiceButtons({
   onInstall: (tool: RuntimeToolId) => void
   disabled?: boolean
   defaultChoice?: { description: string; onSelect: () => void }
+  /**
+   * The Codex binary as resolved. With an explicit Codex Path in use the button
+   * must not go on reading `<pin> managed` above a status line that says
+   * "Unverified Codex … — your configured path". Same width either way: the
+   * sub-line truncates inside a button whose width the label sets.
+   */
+  codexBinary?: EngineBinaryState
 }): React.JSX.Element {
   return (
     /*
@@ -91,14 +110,16 @@ export function RuntimeChoiceButtons({
          * a Download icon on a runtime the machine has — then takes it away
          * (ux_rules rule 1).
          */
+        const managed = choice.managedVersion !== undefined
         const detected =
-          choice.tool === null
+          choice.tool === null || managed
             ? true
             : tools === undefined
               ? undefined
               : tools.some((tool) => tool.id === choice.tool && tool.available)
-        const version =
-          choice.tool === null
+        const version = managed
+          ? (choice.id === 'codex' ? codexVersionLabel(codexBinary) : `${choice.managedVersion} managed`)
+          : choice.tool === null
             ? null
             : ((tools ?? []).find((tool) => tool.id === choice.tool)?.version ?? null)
         const isSelected = choice.engine !== null && choice.engine === selected

@@ -187,6 +187,7 @@ Sidebar tabs `Chats` `Jobs` `Notes` `Agents` (use `exact: true`) · onboarding `
 
 ## Debugging a failure
 
+- **No test downloads the Codex CLI.** The app installs its own pinned Codex on first use (~90 MB); `e2e/fixtures/app.ts` sets `CINNA_CODEX_DOWNLOAD=off` on every launch, after a spec's own variables, so no spec can switch it back on. A spec that drives Codex must set `localAgentsCodexPath` to its scripted CLI (`window.api.settings.set`). Putting the fake first on the sandbox PATH is **not** enough: no spawned session runs the PATH copy, which only detection and "Open in…" see. A spec that forgets fails with a sentence instead of fetching the real CLI and running it under a test's name. A fake that must pass the restricted chat policy advertises `RUNTIME_PINS.codex.versionOutput`, never a literal version.
 - **Codex can create its own ephemeral title thread.** The adapter may emit `thread/start` with `ephemeral: true` even when Cinna's `autoChatTitles` is false. Assert conversational continuity using non-ephemeral thread starts and that conversation's `threadId`; do not count auxiliary turns as another chat. `codex-engine.spec.ts` uses a supported-version scripted CLI only for the synthetic policy case, while the installed ACP adapter and policy helper remain real.
 
 1. `e2e/test-results/<test>/error-context.md` — the aria snapshot at failure, with the failing locator. Read this first; it usually answers "what did the screen actually show".

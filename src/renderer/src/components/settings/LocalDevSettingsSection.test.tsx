@@ -18,7 +18,8 @@ vi.mock('../../hooks/useAppSettings', () => ({
   useSetAppSetting: () => ({ mutate: vi.fn() })
 }))
 vi.mock('../../hooks/useEngine', () => ({
-  useEngineBinary: () => ({ data: { state: 'unresolved' } })
+  useEngineBinary: () => ({ data: { state: 'unresolved' } }),
+  useCodexBinary: () => ({ data: { state: 'unresolved' } })
 }))
 
 const addToPath = vi.fn()

@@ -2,12 +2,17 @@ import { getProfileScopeUserId } from '../auth/scope'
 import { getRuntimeModelCatalog } from '../services/runtimeModelCatalog'
 import type { AgentEngine } from '../../shared/engine'
 import { userActivation } from '../auth/activation'
-import { engineBinaryService } from '../engine/engineBinaryService'
+import { codexBinaryService, engineBinaryService } from '../engine/engineBinaryService'
+import { configuredCodexPath, knownCodexBinary } from '../engine/binaryResolver'
 import { getMainWindow } from '../index'
+import { codexAuthProbe } from '../agents/drivers'
+import { appSettingsService } from '../services/appSettingsService'
 import { ipcHandle } from './_wrap'
 import { defaultEngineService } from '../services/localAgents/defaultEngineService'
 import {
+  CODEX_BINARY_CHANNEL,
   ENGINE_BINARY_CHANNEL,
+  PINNED_CODEX_VERSION,
   isAgentEngine,
   type DefaultEngineDto,
   type EngineBinaryState
@@ -58,6 +63,61 @@ export function registerEngineHandlers(): void {
   ipcHandle('engine:resolve', (): Promise<EngineBinaryState> => {
     userActivation.requireActivated()
     return engineBinaryService.refresh()
+  })
+
+  /**
+   * The **managed Codex CLI**, on the same three rules and the same state shape
+   * as the OpenCode binary above — deliberately, so Settings renders both rows
+   * from one vocabulary. Its own push channel, so neither row can be painted
+   * with the other's state; it also carries download progress, which at ~90 MB
+   * is a wait somebody watches.
+   *
+   * `:codex-resolve` returns a failed install **as state**: the renderer
+   * branches on it (the row's sentence and its *Try again*), and a rejection
+   * would arrive as `Error invoking remote method…` with the code gone.
+   */
+  codexBinaryService.onChange((next) => {
+    getMainWindow()?.webContents.send(CODEX_BINARY_CHANNEL, next)
+  })
+
+  /**
+   * **A saved Codex Path takes effect when it is saved.** The service memoises
+   * per configured path, but only a *turn* asked it — so until one ran, the
+   * Runtime row, the picker and the login state went on describing the old
+   * binary, and a row left red by a failed install stayed red above a path that
+   * would have fixed it. Started, never awaited: clearing the path starts a
+   * ~90 MB download, and `settings:set` must not hold the field's save for it.
+   * Transitions reach the renderer over {@link CODEX_BINARY_CHANNEL} as always.
+   * The login cache goes too: it is kept thirty seconds whatever binary it asked.
+   */
+  appSettingsService.onSaved('localAgentsCodexPath', () => {
+    codexAuthProbe.invalidate()
+    void codexBinaryService.refresh()
+  })
+
+  ipcHandle('engine:codex-binary', async (): Promise<EngineBinaryState> => {
+    userActivation.requireActivated()
+    const state = codexBinaryService.state()
+    if (state.state !== 'unresolved') return state
+    /**
+     * **Unresolved in this run is not "not installed".** The service only knows
+     * what it resolved since launch, but a managed copy from an earlier run is
+     * on disk — and a row reading "not downloaded yet" above a CLI that is
+     * sitting right there is a false claim (ux_rules rule 9). One stat, no
+     * download, and no version probe: the install directory's presence is the
+     * proof its bytes were verified, and its name carries the version.
+     */
+    const known = await knownCodexBinary()
+    if (!known) return state
+    const configured = configuredCodexPath()
+    return configured
+      ? { state: 'ready', path: known, source: 'configured', version: null }
+      : { state: 'ready', path: known, source: 'managed', version: `codex-cli ${PINNED_CODEX_VERSION}` }
+  })
+
+  ipcHandle('engine:codex-resolve', (): Promise<EngineBinaryState> => {
+    userActivation.requireActivated()
+    return codexBinaryService.refresh()
   })
 
   /**

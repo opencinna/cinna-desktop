@@ -81,6 +81,43 @@ describe('createEngineBinaryService', () => {
     expect(resolve).toHaveBeenCalledTimes(1)
   })
 
+  it('resolves again when the remembered binary has been deleted, once for callers that notice together', async () => {
+    // `<userData>/runtimes/codex-*` removed mid-run. Mutation: return the memo
+    // without the stat and every turn until a restart spawns a missing file.
+    configured = null
+    const onDisk = new Set<string>()
+    resolve.mockImplementation(async () => { onDisk.add('/managed/opencode'); return binary('/managed/opencode') })
+    const exists = vi.fn(async (path: string) => onDisk.has(path))
+    const engine = createEngineBinaryService({
+      resolve: (path) => resolve(path) as Promise<ResolvedEngineBinary>, configuredPath: () => configured, exists
+    })
+    await engine.ensure()
+    await engine.ensure()
+    expect(resolve).toHaveBeenCalledTimes(1)
+
+    onDisk.clear()
+    const seen: string[] = []
+    engine.onChange((next) => seen.push(next.state))
+    const [first, second] = await Promise.all([engine.ensure(), engine.ensure()])
+    expect(resolve).toHaveBeenCalledTimes(2)
+    expect(first).toBe(second)
+    expect(seen).toEqual(['resolving', 'ready'])
+    await engine.ensure()
+    expect(resolve).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not stat while the first resolution is still running, and hands its failure through uncached', async () => {
+    const exists = vi.fn(async () => true)
+    resolve.mockRejectedValueOnce(new Error('no network'))
+    const engine = createEngineBinaryService({
+      resolve: (path) => resolve(path) as Promise<ResolvedEngineBinary>, configuredPath: () => configured, exists
+    })
+    const [a, b] = await Promise.allSettled([engine.ensure(), engine.ensure()])
+    expect([a.status, b.status]).toEqual(['rejected', 'rejected'])
+    expect(exists).not.toHaveBeenCalled()
+    await expect(engine.ensure()).resolves.toMatchObject({ path: '/opt/one/opencode' })
+  })
+
   it('resolves again when the configured path moves', async () => {
     const engine = service()
     await engine.ensure()

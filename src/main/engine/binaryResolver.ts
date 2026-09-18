@@ -45,7 +45,9 @@
  */
 
 import { spawn } from 'node:child_process'
-import { join } from 'node:path'
+import type { Dirent } from 'node:fs'
+import { chmod, readdir, rename, rm } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { app } from 'electron'
 import { appSettingsRepo } from '../db/appSettings'
 import { createLogger } from '../logger/logger'
@@ -57,17 +59,102 @@ import {
   isFile,
   ManagedAssetError,
   sha256File,
+  sweepStaging,
   type DownloadProgress,
   type ManagedAssetErrorCode,
   type PinnedAsset
 } from '../managed/managedAsset'
 import { which } from '../shell/env'
 import { PINNED_ENGINE_VERSION, type EngineBinarySource } from '../../shared/engine'
+import { RUNTIME_PINS } from '../../shared/runtimePins'
 
 const logger = createLogger('engine-binary')
 
-/** Executable name, per platform. */
-const BINARY_NAME = process.platform === 'win32' ? 'opencode.exe' : 'opencode'
+const EXE = process.platform === 'win32' ? '.exe' : ''
+
+/**
+ * Everything that differs between the runtimes this module installs.
+ *
+ * The three sources, the staging, the digest check and the single-flight are
+ * the same for every tool; what differs is a name, a URL, whether the user's
+ * PATH counts, and the sentences a user reads when it fails. Those live here so
+ * a second runtime is a second *spec*, not a second resolver — the invariant
+ * worth having exactly one copy of is "nothing unverified is ever published".
+ */
+export interface RuntimeBinarySpec {
+  /** Install directory prefix and single-flight key: `<root>/<tool>-<version>/`. */
+  tool: string
+  /** Log label, and the noun in {@link installPinnedAsset}'s own messages. */
+  label: string
+  /** The executable's name once installed. */
+  binaryName: string
+  /**
+   * Whether a copy on the login-shell PATH is used before downloading.
+   *
+   * True for OpenCode: a developer's own install is a fine engine. False for
+   * Codex, where the version under test has to be the version that runs — the
+   * user's PATH copy stays what "Open in…" launches and nothing else.
+   */
+  searchPath: boolean
+  url(version: string, asset: EngineAsset): string
+  /**
+   * The installed binary's `--version` output must satisfy this, or the install
+   * is discarded before it is published. Absent means "any runnable version".
+   */
+  acceptsVersion?(probed: string | null, version: string): boolean
+  messages: {
+    unsupportedPlatform(key: string): string
+    configuredMissing: string
+    configuredUnusable: string
+    archiveMissingBinary: string
+    versionMismatch(version: string): string
+  }
+}
+
+export const OPENCODE_SPEC: RuntimeBinarySpec = {
+  tool: 'opencode',
+  label: 'engine',
+  binaryName: `opencode${EXE}`,
+  searchPath: true,
+  url: (version, asset) => asset.url ?? assetUrl(version, asset.file),
+  messages: {
+    // Remedy first, and short: this is the longest of the three and measured
+    // 1039px problem-first, which clips at every window width.
+    unsupportedPlatform: (key) =>
+      `Install opencode yourself, or set the engine path in Settings: Cinna has no verified build for ${key}.`,
+    // **Remedy first, because this sentence is measured to clip.** It lands
+    // in the Runs-with panel's reserved line, which is 414px at the 800px
+    // minimum; problem-first it needed 667px and lost the half that says
+    // what to do (ux_rules rule 7). The Claude rung beside it leads with its
+    // remedy for the same reason.
+    configuredMissing: 'Fix the engine path in Settings, or clear it: it does not point at a file.',
+    configuredUnusable: 'Fix the engine path in Settings, or clear it: that file will not run.',
+    archiveMissingBinary: 'The downloaded engine archive did not contain an opencode executable.',
+    versionMismatch: (version) => `The downloaded engine was not opencode ${version}, so it was discarded.`
+  }
+}
+
+export const CODEX_SPEC: RuntimeBinarySpec = {
+  tool: 'codex',
+  label: 'Codex',
+  binaryName: `codex${EXE}`,
+  searchPath: false,
+  url: (_version, asset) => {
+    // Codex rows always carry their URL; a row without one is a manifest bug,
+    // and guessing a URL for bytes whose digest is pinned helps nobody.
+    if (!asset.url) throw new EngineBinaryError('unsupported_platform', 'The Codex pin has no download URL for this platform.')
+    return asset.url
+  },
+  acceptsVersion: (probed, version) => probed === `codex-cli ${version}`,
+  messages: {
+    unsupportedPlatform: (key) =>
+      `Set a Codex path in Settings → Local Development: Cinna has no verified Codex build for ${key}.`,
+    configuredMissing: 'Fix the Codex path in Settings, or clear it: it does not point at a file.',
+    configuredUnusable: 'Fix the Codex path in Settings, or clear it: that file will not run.',
+    archiveMissingBinary: 'The downloaded Codex archive did not contain a codex executable.',
+    versionMismatch: (version) => `The downloaded Codex was not version ${version}, so it was discarded. Try again.`
+  }
+}
 
 /** Ceiling on the `--version` probe. A wedged binary must not wedge a start. */
 const VERSION_TIMEOUT_MS = 10_000
@@ -78,8 +165,15 @@ const VERSION_TIMEOUT_MS = 10_000
  */
 export { downloadToFile, extractArchive, sha256File }
 
-/** The engine's name for {@link PinnedAsset}; kept so callers read naturally. */
-export type EngineAsset = PinnedAsset
+/**
+ * The engine's name for {@link PinnedAsset}; kept so callers read naturally.
+ *
+ * Widened with the two optional fields a pin-manifest row may carry: an
+ * explicit download `url`, and the `executable` name inside the archive when it
+ * is not the name the binary is installed under (Codex ships
+ * `codex-<target triple>`).
+ */
+export type EngineAsset = PinnedAsset & { url?: string; executable?: string }
 
 /**
  * The pinned release assets, keyed `${process.platform}-${process.arch}`.
@@ -94,32 +188,13 @@ export type EngineAsset = PinnedAsset
  * is its own small project, and Alpine is not a target this desktop app builds
  * for today. Such a user installs `opencode` themselves and source 2 finds it.
  */
-export const ENGINE_ASSETS: Readonly<Record<string, EngineAsset>> = {
-  'darwin-arm64': {
-    file: 'opencode-darwin-arm64.zip',
-    sha256: '149b0c6d272d0059b8b5ffcd18c84b24f1d6cbf585942b10e60c601211992eb1'
-  },
-  'darwin-x64': {
-    file: 'opencode-darwin-x64.zip',
-    sha256: 'e182eab3a6bf095ff773d303bbc7938d3551a636eab00625b599ad6383fabd88'
-  },
-  'linux-x64': {
-    file: 'opencode-linux-x64.tar.gz',
-    sha256: '4af5494f9433f59db8c1e344198f0ee72a50c06ec009fb4a8aeab4c2d4abd702'
-  },
-  'linux-arm64': {
-    file: 'opencode-linux-arm64.tar.gz',
-    sha256: '8cbc134eb5e100baf61ee7196150f503e352056e703276e2d8637c38bafd2c39'
-  },
-  'win32-x64': {
-    file: 'opencode-windows-x64.zip',
-    sha256: 'ac26bb6f0309e9a6de279b64dc7bec5e69ab9b79c1a4e2d947d68d213b7eb575'
-  },
-  'win32-arm64': {
-    file: 'opencode-windows-arm64.zip',
-    sha256: '59174ffeb6ce327bd2c534bf5147d0005e8db3b5889414de10490d00e640c908'
-  }
-}
+export const ENGINE_ASSETS: Readonly<Record<string, EngineAsset>> = RUNTIME_PINS.opencode.assets
+
+/**
+ * The pinned Codex CLI assets, from the same manifest. POSIX only — see
+ * `shared/runtimePins.ts` for why the Windows release is not listed.
+ */
+export const CODEX_ASSETS: Readonly<Record<string, EngineAsset>> = RUNTIME_PINS.codex.assets
 
 /** Release download root for the pinned version. */
 export function assetUrl(version: string, file: string): string {
@@ -169,16 +244,23 @@ export interface BinaryResolverDeps {
    */
   assets: Readonly<Record<string, EngineAsset>>
   version: string
+  /**
+   * Which runtime this is. Optional, and OpenCode when absent, so the engine's
+   * existing callers and tests are unchanged by the generalisation.
+   */
+  spec?: RuntimeBinarySpec
 }
 
 /**
- * Two failure codes on top of {@link ManagedAssetErrorCode}, both about the
- * path a user typed into Settings rather than about a download.
+ * Failure codes on top of {@link ManagedAssetErrorCode}: two about the path a
+ * user typed into Settings rather than about a download, and one for a verified
+ * archive whose binary then reported a version other than the pin.
  */
 export type EngineBinaryErrorCode =
   | ManagedAssetErrorCode
   | 'configured_missing'
   | 'configured_unusable'
+  | 'version_mismatch'
 
 /**
  * Errors this module raises itself.
@@ -216,7 +298,7 @@ export class EngineBinaryError extends ManagedAssetError<EngineBinaryErrorCode> 
  * reason the toolchain drops its own: a remembered "already installed" would
  * make the app confidently wrong about a directory the user has since deleted.
  */
-let installInFlight: Promise<ResolvedEngineBinary> | null = null
+const installsInFlight = new Map<string, Promise<ResolvedEngineBinary>>()
 
 /**
  * Where the running install reports its bytes. The most recent caller to ask
@@ -224,60 +306,129 @@ let installInFlight: Promise<ResolvedEngineBinary> | null = null
  * the closure that is running — and a row stuck at 0% for a download that is
  * visibly happening is worse than no row. Same reasoning as the toolchain's
  * reporter slot.
+ *
+ * Keyed by tool, like the single-flight above: an OpenCode install and a Codex
+ * install are different downloads and must neither join nor report for each
+ * other.
  */
-let installReport: DownloadProgress | undefined
+const installReports = new Map<string, DownloadProgress>()
 
 function installPinned(
   deps: BinaryResolverDeps,
   onDownloadProgress?: DownloadProgress
 ): Promise<ResolvedEngineBinary> {
-  if (onDownloadProgress) installReport = onDownloadProgress
-  if (installInFlight) return installInFlight
+  const tool = (deps.spec ?? OPENCODE_SPEC).tool
+  if (onDownloadProgress) installReports.set(tool, onDownloadProgress)
+  const running = installsInFlight.get(tool)
+  if (running) return running
   const run = runInstall(deps).finally(() => {
-    if (installInFlight === run) {
-      installInFlight = null
-      installReport = undefined
+    if (installsInFlight.get(tool) === run) {
+      installsInFlight.delete(tool)
+      installReports.delete(tool)
     }
   })
-  installInFlight = run
+  installsInFlight.set(tool, run)
   return run
 }
 
+/** `<root>/<tool>-<version>/<binary>` — where a managed install is, or will be. */
+export function managedBinaryPath(deps: Pick<BinaryResolverDeps, 'engineRoot' | 'version' | 'spec'>): string {
+  const spec = deps.spec ?? OPENCODE_SPEC
+  return join(deps.engineRoot(), `${spec.tool}-${deps.version}`, spec.binaryName)
+}
+
+/**
+ * After a **successful** install: remove this tool's other version directories
+ * and any `.staging-*` no install in this process is using.
+ *
+ * Nothing else ever did. A pin bump left the previous ~90 MB (Codex) or ~46 MB
+ * (OpenCode) tree in `userData` for good, and a download killed by a quit left
+ * its staging directory beside it; only the toolchain's root was ever swept.
+ *
+ * Only on a fresh install, never on "already there": that is the one moment a
+ * newer version is known to be good, and it keeps the everyday resolution at
+ * one `stat`. Only **directories** named `<tool>-<digit>…`, so the OpenCode
+ * root's own `opencode.json` and `prompts/` are not candidates. Best-effort
+ * throughout: a tree that will not delete costs disk, while failing the
+ * install over it would cost the user their runtime. A child still running the
+ * old binary keeps its open file on POSIX; where that is refused (Windows) the
+ * directory simply survives until the next install.
+ */
+async function sweepSuperseded(root: string, tool: string, keep: string): Promise<void> {
+  const entries: Dirent[] = await readdir(root, { withFileTypes: true }).catch((): Dirent[] => [])
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === keep) continue
+    if (!entry.name.startsWith(`${tool}-`) || !/^\d/.test(entry.name.slice(tool.length + 1))) continue
+    await rm(join(root, entry.name), { recursive: true, force: true }).then(
+      () => logger.info('removed a superseded runtime', { tool, directory: entry.name }),
+      () => undefined
+    )
+  }
+  await sweepStaging(root)
+}
+
 async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinary> {
+  const spec = deps.spec ?? OPENCODE_SPEC
   const key = deps.platformKey()
   const asset = deps.assets[key]
   if (!asset) {
-    throw new EngineBinaryError(
-      'unsupported_platform',
-      // Remedy first, and short: this is the longest of the three and measured
-      // 1039px problem-first, which clips at every window width.
-      `Install opencode yourself, or set the engine path in Settings: Cinna has no verified build for ${key}.`
-    )
+    throw new EngineBinaryError('unsupported_platform', spec.messages.unsupportedPlatform(key))
   }
 
   const root = deps.engineRoot()
-  const installDir = join(root, `opencode-${deps.version}`)
-  const installed = join(installDir, BINARY_NAME)
+  const installed = managedBinaryPath(deps)
+  const installDir = dirname(installed)
+  /** Set by `locate` when the version gate is what rejected the archive. */
+  let rejectedVersion = false
 
-  const { installed: didInstall } = await installPinnedAsset({
-    root,
-    installDir,
-    label: 'engine',
-    archiveName: asset.file,
-    url: assetUrl(deps.version, asset.file),
-    sha256: asset.sha256,
-    // The published directory is whichever one holds the binary, so
-    // `<root>/opencode-<version>/opencode` is the path no matter how the
-    // archive nested it — which keeps "is it installed" one `stat`, not a walk.
-    locate: (dir) => findNamedFile(dir, BINARY_NAME),
-    isInstalled: () => isFile(installed),
-    onDownloadProgress: (received, total) => installReport?.(received, total),
-    download: deps.download,
-    extract: deps.extract,
-    notFoundMessage: 'The downloaded engine archive did not contain an opencode executable.'
-  })
+  try {
+    const { installed: didInstall } = await installPinnedAsset({
+      root,
+      installDir,
+      label: spec.label,
+      archiveName: asset.file,
+      url: spec.url(deps.version, asset),
+      sha256: asset.sha256,
+      // The published directory is whichever one holds the binary, so
+      // `<root>/<tool>-<version>/<binary>` is the path no matter how the
+      // archive nested it — which keeps "is it installed" one `stat`, not a walk.
+      locate: async (dir) => {
+        const found = await findNamedFile(dir, asset.executable ?? spec.binaryName)
+        if (!found) return null
+        // An archive may name its executable after its target triple. It is
+        // renamed *inside staging*, so what gets published has one name on
+        // every platform and the install path never depends on the asset row.
+        const target = join(dirname(found), spec.binaryName)
+        if (found !== target) await rename(found, target)
+        if (spec.acceptsVersion) {
+          // Probed before the publishing rename: the digest proves these are
+          // the pinned bytes, and this proves the pinned bytes are the version
+          // the manifest says they are. A wrong answer publishes nothing.
+          if (process.platform !== 'win32') await chmod(target, 0o755)
+          if (!spec.acceptsVersion(await deps.probeVersion(target), deps.version)) {
+            rejectedVersion = true
+            return null
+          }
+        }
+        return target
+      },
+      isInstalled: () => isFile(installed),
+      onDownloadProgress: (received, total) => installReports.get(spec.tool)?.(received, total),
+      download: deps.download,
+      extract: deps.extract,
+      notFoundMessage: spec.messages.archiveMissingBinary
+    })
+    if (didInstall) {
+      logger.info('runtime installed', { tool: spec.tool, version: deps.version, platform: key })
+      await sweepSuperseded(root, spec.tool, basename(installDir))
+    }
+  } catch (err) {
+    if (rejectedVersion) {
+      throw new EngineBinaryError('version_mismatch', spec.messages.versionMismatch(deps.version))
+    }
+    throw err
+  }
 
-  if (didInstall) logger.info('engine installed', { version: deps.version, platform: key })
   return { path: installed, source: 'managed', version: await deps.probeVersion(installed) }
 }
 
@@ -299,36 +450,32 @@ export async function resolveEngineBinaryWith(
   deps: BinaryResolverDeps,
   onDownloadProgress?: DownloadProgress
 ): Promise<ResolvedEngineBinary> {
+  const spec = deps.spec ?? OPENCODE_SPEC
   const configured = deps.configuredPath()?.trim()
   if (configured) {
+    // The sentences are the spec's (remedy first — see OPENCODE_SPEC for why).
     if (!(await isFile(configured))) {
-      throw new EngineBinaryError(
-        'configured_missing',
-        // **Remedy first, because this sentence is measured to clip.** It lands
-        // in the Runs-with panel's reserved line, which is 414px at the 800px
-        // minimum; problem-first it needed 667px and lost the half that says
-        // what to do (ux_rules rule 7). The Claude rung beside it leads with its
-        // remedy for the same reason.
-        'Fix the engine path in Settings, or clear it: it does not point at a file.'
-      )
+      throw new EngineBinaryError('configured_missing', spec.messages.configuredMissing)
     }
     const version = await deps.probeVersion(configured)
     if (version === null) {
-      throw new EngineBinaryError(
-        'configured_unusable',
-        'Fix the engine path in Settings, or clear it: that file will not run.'
-      )
+      throw new EngineBinaryError('configured_unusable', spec.messages.configuredUnusable)
     }
+    // No version gate on a configured path, for either tool: "run the one I
+    // told you to" is the whole point of the override, and the UI labels it
+    // unverified rather than refusing it.
     return { path: configured, source: 'configured', version }
   }
 
-  const onPath = await deps.which('opencode')
-  if (onPath) {
-    const version = await deps.probeVersion(onPath)
-    // A `which` hit that will not run is not fatal — fall through to the
-    // managed copy rather than stranding the user on a broken install.
-    if (version !== null) return { path: onPath, source: 'path', version }
-    logger.warn('an opencode on PATH would not run; falling back to the managed engine')
+  if (spec.searchPath) {
+    const onPath = await deps.which(spec.tool)
+    if (onPath) {
+      const version = await deps.probeVersion(onPath)
+      // A `which` hit that will not run is not fatal — fall through to the
+      // managed copy rather than stranding the user on a broken install.
+      if (version !== null) return { path: onPath, source: 'path', version }
+      logger.warn('a runtime on PATH would not run; falling back to the managed copy', { tool: spec.tool })
+    }
   }
 
   return installPinned(deps, onDownloadProgress)
@@ -434,4 +581,76 @@ export function realBinaryResolverDeps(configuredPath: () => string | null): Bin
     assets: ENGINE_ASSETS,
     version: PINNED_ENGINE_VERSION
   }
+}
+
+/* ------------------------------------------------------------------ Codex */
+
+/**
+ * Where managed CLI runtimes live: `<userData>/runtimes/<tool>-<version>/`.
+ *
+ * Not `engine/`, which stays OpenCode's: that directory's layout is what the
+ * E2E engine cache copies in and out, and a second tool landing beside it would
+ * change what "the engine directory" means to code that lists it.
+ */
+export function runtimesRootDir(): string {
+  return join(app.getPath('userData'), 'runtimes')
+}
+
+/** The Codex path a user set in Settings, or null. Unpinned, shown as unverified. */
+export function configuredCodexPath(): string | null {
+  const value = appSettingsRepo.get('localAgentsCodexPath')
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+}
+
+/**
+ * `CINNA_CODEX_DOWNLOAD=off` turns the download into a failure with a sentence.
+ *
+ * The E2E fixture sets it on every launch. A sandboxed test points the Codex
+ * path at its scripted CLI, so nothing should ever reach this — and that is the
+ * point: a spec that forgot to would otherwise pull 90 MB from the network
+ * into a throwaway profile and then run the *real* CLI under a test's name.
+ */
+const codexDownload: BinaryResolverDeps['download'] = (url, dest, onProgress) => {
+  if (process.env['CINNA_CODEX_DOWNLOAD'] === 'off') {
+    return Promise.reject(
+      new EngineBinaryError(
+        'download_failed',
+        'Set a Codex path in Settings: downloading the Codex CLI is switched off in this environment.'
+      )
+    )
+  }
+  return downloadToFile(url, dest, onProgress)
+}
+
+export function realCodexResolverDeps(configuredPath: () => string | null): BinaryResolverDeps {
+  return {
+    configuredPath,
+    // Never consulted — `CODEX_SPEC.searchPath` is false — but the dep is not
+    // optional, and wiring the real one keeps this object honest if that flips.
+    which,
+    engineRoot: runtimesRootDir,
+    download: codexDownload,
+    extract: extractArchive,
+    probeVersion: probeEngineVersion,
+    platformKey: () => `${process.platform}-${process.arch}`,
+    assets: CODEX_ASSETS,
+    version: RUNTIME_PINS.codex.cli,
+    spec: CODEX_SPEC
+  }
+}
+
+/**
+ * The Codex binary a session would run **if nothing had to be downloaded**, or
+ * null: the configured path when it is a file, else the managed copy when it is
+ * already installed.
+ *
+ * For the callers that must never start a download — readiness, which runs for
+ * a list, and the login probe, which runs on window focus. "Not here yet" is an
+ * ordinary answer for them; fetching 90 MB to give a better one is not.
+ */
+export async function knownCodexBinary(): Promise<string | null> {
+  const configured = configuredCodexPath()
+  if (configured) return (await isFile(configured)) ? configured : null
+  const managed = managedBinaryPath(realCodexResolverDeps(() => null))
+  return (await isFile(managed)) ? managed : null
 }

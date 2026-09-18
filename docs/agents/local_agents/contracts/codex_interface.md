@@ -1,0 +1,86 @@
+# Codex Interface Contract
+
+<!-- GENERATED from src/main/agents/drivers/acp/contracts/codex.contract.ts by scripts/generate-contract-docs.mjs — do not edit. Run `npm run contract:docs`. -->
+
+Every external interface of Codex that Cinna relies on, one entry each: what the tool must do, which Cinna code depends on it, and what the user loses when it stops. **Verified against Codex CLI 0.155.0 with `@agentclientprotocol/codex-acp` 1.11.0** — the versions pinned in `src/shared/runtimePins.ts`.
+
+Each entry has exactly one test, titled with its id, in [`codex.contract.test.ts`](../../../../src/main/agents/drivers/acp/contracts/codex.contract.test.ts). They run the real pinned binary and the real patched adapter over stdio against a loopback fake provider — no login, no provider request — with `npm run test:contract` (`make contract ENGINE=codex` installs the binary first). They are not part of `npm test`.
+
+The raw shapes a run observes are compared with the committed [`codex-0.155.0.json`](../../../../src/main/agents/drivers/acp/contracts/snapshots/codex-0.155.0.json), and a difference fails the run; `make contract-snapshot ENGINE=codex` rewrites it once a change is understood. To evaluate a new release, `make contract-next ENGINE=codex VERSION=<x.y.z>` runs the same tests against that version without changing the pin; red entries name their owners below, and the run prints the diff between the pinned snapshot and the candidate's (written to a temp path, never into the tree) — that diff is what changed.
+
+Hand-written evidence and reasoning stay in [The ACP Engine Contract](../acp_contract.md) and [The Codex Engine — Technical Details](../codex_engine_tech.md); this file is only the index of what is checked.
+
+## Launch & env
+
+| Id | Surface | Expectation | Owners | Feature at risk | Flow step |
+|---|---|---|---|---|---|
+| `codex.launch.version-output` | CLI: `--version` | Prints exactly `codex-cli <version>` on stdout and exits 0. | [`binaryResolver.ts`](../../../../src/main/engine/binaryResolver.ts) `CODEX_SPEC`<br>[`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `SUPPORTED_VERSION` | The managed install is discarded as the wrong version, and restricted chats refuse to start. | first Codex turn (install) |
+| `codex.launch.codex-path` | env var: `CODEX_PATH` | The adapter starts the app-server from the executable this variable names, not from its bundled dependency. | [`codexLauncher.ts`](../../../../src/main/agents/drivers/acp/codexLauncher.ts) `createCodexLauncher`<br>[`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `prepareCodexConductorPolicy` | Sessions run on an unpinned CLI (or none: the bundled one is excluded from the packaged app), and the restricted-chat wrapper is bypassed. | plain chat |
+| `codex.launch.codex-config` | env var: `CODEX_CONFIG` | Its JSON is applied at thread start: `model`, `model_reasoning_effort` and `developer_instructions` reach the model request. | [`codexLauncher.ts`](../../../../src/main/agents/drivers/acp/codexLauncher.ts) `createCodexLauncher` | A folder agent loses its instructions, its chosen model and its work-complexity effort. | folder agent turn |
+| `codex.launch.initial-agent-mode` | env var: `INITIAL_AGENT_MODE` | A new session starts in the mode this variable names (`read-only`). | [`codexLauncher.ts`](../../../../src/main/agents/drivers/acp/codexLauncher.ts) `createCodexLauncher` | A session could begin in a wider approval mode than the agent’s Approvals setting before `session/set_mode` lands. | folder agent turn |
+
+## Auth
+
+| Id | Surface | Expectation | Owners | Feature at risk | Flow step |
+|---|---|---|---|---|---|
+| `codex.auth.login-status` | CLI: `login status` | With no login under `HOME`/`CODEX_HOME` it prints a line `Not logged in` and exits non-zero; the login follows the home directory, not the binary. | [`codexAuth.ts`](../../../../src/main/agents/drivers/acp/codexAuth.ts) `parseCodexAuthStatus`<br>[`codexEnv.ts`](../../../../src/main/agents/drivers/acp/codexEnv.ts) `buildCodexEnv` | Readiness cannot tell a logged-out machine, so a turn fails mid-chat instead of being refused with the `codex login` remedy. | readiness before a turn |
+
+## Session lifecycle
+
+| Id | Surface | Expectation | Owners | Feature at risk | Flow step |
+|---|---|---|---|---|---|
+| `codex.session.initialize` | ACP method: `initialize` | Answers protocol version 1 and advertises `agentCapabilities.loadSession: true`. | [`codexLauncher.ts`](../../../../src/main/agents/drivers/acp/codexLauncher.ts) `ACP_PROTOCOL_VERSION`<br>[`acpDriver.ts`](../../../../src/main/agents/drivers/acp/acpDriver.ts) `loadSession` | No Codex session starts, or every turn after the first loses the conversation. | plain chat |
+| `codex.session.modes` | ACP method: `session/set_mode` | A session offers the mode ids `read-only` and `agent`, and `session/set_mode` to either succeeds. | [`codexLauncher.ts`](../../../../src/main/agents/drivers/acp/codexLauncher.ts) `modeId` | The Approvals setting (Ask for approval / Automatic) cannot be applied; the turn is refused at setup. | folder agent turn |
+| `codex.session.load` | ACP method: `session/load` | Loading a session in the same process succeeds and **keeps the collaboration mode it was left in**, so setup must be re-applied after every load. | [`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `collaboration_mode`<br>[`acpDriver.ts`](../../../../src/main/agents/drivers/acp/acpDriver.ts) `session/load` | A resumed restricted chat would silently run in Plan mode, where `request_user_input` is a usable native tool. | continuity (second turn) |
+| `codex.session.system-prompt-meta` | adapter patch: `_meta.cinna.systemPrompt` | The patched adapter passes it as `developerInstructions` on thread start, so it reaches the model as developer/system text and never as user input. | [`patch-codex-acp.cjs`](../../../../scripts/patch-codex-acp.cjs) `patchCodexAcp`<br>[`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `systemPrompt` | Chat-mode instructions and AI-function prompts are lost, or leak between sessions sharing one warm process. | plain chat |
+
+## Tools & MCP
+
+| Id | Surface | Expectation | Owners | Feature at risk | Flow step |
+|---|---|---|---|---|---|
+| `codex.mcp.session-injection` | ACP field: `session/new mcpServers` | An HTTP descriptor named `cinna` is connected with its headers, and its tools are offered to the model as `mcp__cinna.<tool>`. | [`conductorBridge.ts`](../../../../src/main/services/conductorBridge.ts) `prepare`<br>[`conductorMcpServer.ts`](../../../../src/main/services/conductorMcpServer.ts) `ConductorMcpServer` | A Codex chat cannot call attached agents or MCP servers at all. | specialist attached |
+| `codex.mcp.tool-call-naming` | ACP field: `tool_call title / rawInput` | A Cinna tool call is reported with `title: "mcp.cinna.<tool>"` and `rawInput: { server: "cinna", tool: "<tool>" }`. | [`conductorToolPolicy.ts`](../../../../src/main/agents/drivers/acp/conductorToolPolicy.ts) `cinnaToolName`<br>[`conductorToolCorrelation.ts`](../../../../src/main/services/conductorToolCorrelation.ts) `ConductorToolCorrelation` | Tool calls are not recognised as Cinna’s: no agent sub-thread in the transcript, and the permission gate treats them as native actions. | tool call |
+| `codex.mcp.list-changed-not-adopted` | ACP field: `notifications/tools/list_changed` | A tool added mid-session is **not** offered to the model on the next turn; the tool list is fixed at session creation. | [`codexLauncher.ts`](../../../../src/main/agents/drivers/acp/codexLauncher.ts) `sessionToolsFixed`<br>[`conductorBridge.ts`](../../../../src/main/services/conductorBridge.ts) `sessionToolsFixed` | If this ever flips, the new-session-on-tool-change workaround is dead weight; while it holds, removing the workaround makes a specialist attached mid-chat never callable. | specialist attached |
+| `codex.mcp.inherited-disable-preserved` | adapter patch: `mcp_servers merge` | With the patched adapter, a personal MCP server disabled by the policy stays disabled when a session injects `cinna`; its tools are never offered. | [`patch-codex-acp.cjs`](../../../../scripts/patch-codex-acp.cjs) `patchCodexAcp`<br>[`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `mcp_servers`<br>[`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `DISABLE_MCP_CONFIG_FILTERING` | A plain chat with "no tools" exposes the user’s personal MCP servers to the model. | plain chat |
+
+## Permissions & questions
+
+| Id | Surface | Expectation | Owners | Feature at risk | Flow step |
+|---|---|---|---|---|---|
+| `codex.permission.mcp-call-asks` | ACP method: `session/request_permission` | Every Cinna MCP call raises a permission request with `toolCall.kind: "execute"`, an `allow_once` option, and the `toolCallId` of the `tool_call` update that named the tool — the request itself carries no title or `rawInput`. | [`acpPermissions.ts`](../../../../src/main/agents/drivers/acp/acpPermissions.ts) `toAcpPermissionRequest`<br>[`acpPermissions.ts`](../../../../src/main/agents/drivers/acp/acpPermissions.ts) `pickPermissionOption` | Either tool calls stall with no ask to answer, or (if the ask disappears) the recorded `codex:<kind>` grants stop matching anything. | tool call |
+| `codex.question.unavailable-in-default-mode` | ACP field: `request_user_input` | In Default collaboration mode a `request_user_input` call is answered "unavailable in Default mode" and no client request is made. | [`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `default_mode_request_user_input`<br>[`acpQuestions.ts`](../../../../src/main/agents/drivers/acp/acpQuestions.ts) `toInputQuestions` | A no-tools chat or AI function could block on a question nobody is shown. | plain chat |
+
+## Cancellation
+
+| Id | Surface | Expectation | Owners | Feature at risk | Flow step |
+|---|---|---|---|---|---|
+| `codex.cancel.session-cancel` | ACP method: `session/cancel` | A cancel notification during a model request ends `session/prompt` with `stopReason: "cancelled"` within seconds. | [`acpDriver.ts`](../../../../src/main/agents/drivers/acp/acpDriver.ts) `session/cancel` | Stop leaves the turn running until the eighty-minute ceiling, holding the agent’s turn lock. | stop mid-turn |
+
+## Models & config
+
+| Id | Surface | Expectation | Owners | Feature at risk | Flow step |
+|---|---|---|---|---|---|
+| `codex.config.app-server-read` | app-server RPC: `initialize + config/read` | `config/read` with `includeLayers: false` returns `config.model` and `config.mcp_servers` without starting a thread. | [`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `discover` | Restricted chats refuse: the policy cannot learn the effective model or which personal MCP servers to disable. | plain chat (policy preparation) |
+| `codex.config.model-list-default` | app-server RPC: `model/list` | `model/list` with `includeHidden: true` returns `data[]` with string `id`s and exactly one `isDefault: true`. | [`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `discover` | A chat mode that names no model cannot resolve one and refuses. | plain chat (policy preparation) |
+| `codex.config.model-option` | ACP method: `session/set_config_option model` | Setting the `model` config option changes the model of the next request. | [`runtimeModelCatalog.ts`](../../../../src/main/services/runtimeModelCatalog.ts) `recordRuntimeModelCatalog` | Switching a chat’s model has no effect until the process is replaced. | model switch |
+
+## Restricted chat policy
+
+| Id | Surface | Expectation | Owners | Feature at risk | Flow step |
+|---|---|---|---|---|---|
+| `codex.policy.feature-flags` | CLI: `features list` | Every feature flag the policy disables is a flag this CLI recognises. | [`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `FEATURES_DISABLED` | A renamed flag is silently ignored and its native tool (shell, patch, browser, sub-agents) comes back into "no tools" chats. | plain chat |
+| `codex.policy.catalog-fields` | CLI: `debug models --bundled` | Prints `{ models: [...] }`; every model has string `slug`, `display_name` and `shell_type`, and every field the policy overwrites is still a field of the catalog. | [`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `CATALOG_POLICY` | Restricted chats refuse ("catalog malformed"), or a new tool-selecting field is left at its native value. | plain chat (policy preparation) |
+| `codex.policy.no-native-tools` | CLI: `-c overrides + model_catalog_json` | Under the production policy the model is offered Cinna tools, MCP resource readers and `request_user_input` only — no shell, patch, image or delegation tool. | [`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `prepareCodexConductorPolicy`<br>[`conductorToolPolicy.ts`](../../../../src/main/agents/drivers/acp/conductorToolPolicy.ts) `applyConductorToolPolicy` | A plain chat can run commands and edit files on the user’s machine. | plain chat |
+| `codex.policy.collaboration-mode` | ACP method: `session/set_config_option collaboration_mode` | Sessions expose a `collaboration_mode` config option and accept the value `default`. | [`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `collaboration_mode` | Restricted sessions cannot be pinned to Default mode and are refused at setup. | plain chat |
+
+## Provider traffic
+
+| Id | Surface | Expectation | Owners | Feature at risk | Flow step |
+|---|---|---|---|---|---|
+| `codex.provider.auxiliary-request` | provider request: `POST /v1/responses (thread title, compaction)` | Beyond the conversation the CLI sends exactly two kinds of request of its own. **Thread title**: once per session beside its first turn (folder, restricted chat and utility sessions alike, never again), on `gpt-5.6-luna` whatever model the session uses, strict `json_schema` output `{ title }`, carrying the user’s first message verbatim but not Cinna’s session instructions, offered no tool a restricted session is not allowed; a thread still untitled after `session/load` (the provider answered with something other than `{ title }`) is asked for again on its next turn. **Compaction**: once after a model change, on the *previous* model, with no tools, carrying the conversation so far and not the new turn’s prompt. No other request is made. | [`codexConductorPolicy.ts`](../../../../src/main/agents/drivers/acp/codexConductorPolicy.ts) `prepareCodexConductorPolicy` | Extra provider calls on the user’s login that Cinna never asked for: the first message of every session — AI-function inputs included — also goes to a second model, and a model switch costs a full-context call on the old one. If either starts carrying native tools, the "no tools" guarantee of a restricted chat is broken through a request nobody scripted. | plain chat (first turn); model switch |
+
+## Limits
+
+| Id | Surface | Expectation | Owners | Feature at risk | Flow step |
+|---|---|---|---|---|---|
+| `codex.limits.rate-limit-kind` | _meta key: `_meta.codex.threadStatus` | A provider 429 ends `session/prompt` normally (`end_turn`, no error, no `errorKind`, no AIR session failure); it shows only as `_meta.codex.threadStatus.type: "systemError"` and as assistant text naming the 429. | [`acpDriver.ts`](../../../../src/main/agents/drivers/acp/acpDriver.ts) `errorKind` | KNOWN GAP: the driver pauses a rate-limited chat on `error.data.errorKind === "rate_limit"`, the Claude adapter’s shape, which Codex never sends — so on Codex a rate limit reads as an ordinary finished turn whose "answer" is the retry error. This entry pins what Codex does send, for whoever closes the gap. | rate limit |

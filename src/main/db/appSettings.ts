@@ -28,6 +28,8 @@ export const DEFAULTS: AppSettingsSchema = {
   localAgentsHome: '',
   // Empty = resolve one (PATH first, then the pinned managed download).
   localAgentsEnginePath: '',
+  // Empty = the pinned Codex CLI this app downloads and verifies.
+  localAgentsCodexPath: '',
   // Empty = ask which tool to open a folder with. Rewritten by the last pick.
   localAgentsDefaultTool: '',
   localAgentsDefaultCredentialId: '',

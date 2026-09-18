@@ -7,6 +7,10 @@ import { join } from 'node:path'
 import { prepareCodexConductorPolicy, type CodexConductorPolicyDeps } from './codexConductorPolicy'
 import type { AcpLaunchPlan } from './acpLaunchers'
 import adapterPatch from './codexAdapterPatch.json'
+import { RUNTIME_PINS } from '../../../../shared/runtimePins'
+
+/** What the pinned CLI prints for `--version`; the policy accepts exactly this. */
+const PINNED = RUNTIME_PINS.codex.versionOutput
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))) })
@@ -34,7 +38,7 @@ async function subject() {
   }
   const deps: CodexConductorPolicyDeps = {
     platform: 'darwin', adapterDigest: vi.fn(async () => adapterPatch.patchedSha256),
-    run: vi.fn(async (_input, args) => args[0] === '--version' ? 'codex-cli 0.154.0-alpha.6.2\n' : JSON.stringify({ models: [model()] })),
+    run: vi.fn(async (_input, args) => args[0] === '--version' ? `${PINNED}\n` : JSON.stringify({ models: [model()] })),
     discover: vi.fn(async () => ({ model: 'effective-model', mcpNames: ['cinna', 'mail.with.dots', "quote'\nname"], defaultModel: null }))
   }
   return { root, configuration, personal, plan, deps,
@@ -113,7 +117,7 @@ describe('sealed Codex conductor policy', () => {
     const firstBytes = await readFile(first.spec.env.CODEX_PATH, 'utf8')
     expect((await s.prepare()).spec).toEqual(first.spec)
     vi.mocked(s.deps.run).mockImplementation(async (_input, args) => args[0] === '--version'
-      ? 'codex-cli 0.154.0-alpha.6.2' : JSON.stringify({ models: [model(), model('another')] }))
+      ? PINNED : JSON.stringify({ models: [model(), model('another')] }))
     s.plan.spec.env.CODEX_CONFIG = JSON.stringify({ model: 'another', developer_instructions: 'Keep my instructions' })
     const changed = await s.prepare()
     expect(changed.spec.key).not.toBe(first.spec.key)
@@ -133,7 +137,7 @@ describe('sealed Codex conductor policy', () => {
     const s = await subject()
     if (kind === 'version') vi.mocked(s.deps.run).mockResolvedValue('codex-cli 99.0.0')
     if (kind === 'model') s.plan.spec.env.CODEX_CONFIG = '{"model":"unknown"}'
-    if (kind === 'catalog') vi.mocked(s.deps.run).mockImplementation(async (_input, args) => args[0] === '--version' ? 'codex-cli 0.154.0-alpha.6.2' : '{"models":[{"slug":"verified-model"}]}')
+    if (kind === 'catalog') vi.mocked(s.deps.run).mockImplementation(async (_input, args) => args[0] === '--version' ? PINNED : '{"models":[{"slug":"verified-model"}]}')
     if (kind === 'adapter') vi.mocked(s.deps.adapterDigest).mockResolvedValue('unpatched')
     if (kind === 'windows') s.deps.platform = 'win32'
     if (kind === 'cinna-stdio') vi.mocked(s.deps.discover).mockResolvedValue({ model: null, mcpNames: ['cinna'], defaultModel: null, cinnaStdio: true })
@@ -164,7 +168,7 @@ describe('sealed Codex conductor policy', () => {
     await writeFile(program, `
 const fs = require('node:fs');
 const args = process.argv.slice(2);
-if (args[0] === '--version') console.log('codex-cli 0.154.0-alpha.6.2');
+if (args[0] === '--version') console.log(${JSON.stringify(PINNED)});
 else if (args[0] === 'debug') console.log(${JSON.stringify(JSON.stringify({ models: [model()] }))});
 else {
   require('node:readline').createInterface({ input: process.stdin }).on('line', line => {

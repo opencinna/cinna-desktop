@@ -9,17 +9,19 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
 import { ConductorMcpServer } from '../../src/main/services/conductorMcpServer.ts'
 import { TITLE_SYSTEM_PROMPT } from '../../src/main/services/aiFunctionPrompts.ts'
+// Shared with the contract tests (src/main/agents/drivers/acp/contracts/): one
+// copy of the isolated environment, the tool-name flattening and the way the
+// production policy helper is loaded outside the app's bundler.
+import { baseEnv as isolatedEnv, loadProductionPolicy, providerRequestKind, toolNames } from '../../src/main/agents/drivers/acp/contracts/codexHarness.ts'
 
 const binary = process.argv[2]
 if (!binary) throw new Error('Pass an absolute path to the Codex executable.')
 assert(binary.startsWith('/'), 'This probe supports macOS/Linux absolute executable paths.')
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const adapter = join(repo, 'node_modules/@agentclientprotocol/codex-acp/dist/index.js')
-const baseEnv = Object.fromEntries(['PATH', 'USER', 'LOGNAME', 'SHELL']
-  .filter(key => process.env[key]).map(key => [key, process.env[key]]))
+const baseEnv = isolatedEnv()
 const featuresDisabled = [
   'shell_tool', 'unified_exec', 'view_image', 'multi_agent', 'multi_agent_v2',
   'apps', 'plugins', 'remote_plugin', 'image_generation', 'browser_use',
@@ -42,8 +44,6 @@ const promptPatchInsertion = '\n      ...(typeof request._meta?.cinna?.systemPro
 const installedAdapterSource = readFileSync(adapter, 'utf8')
 const baselineAdapterSource = installedAdapterSource.replace(adapterPatch, adapterPatchAnchor).replaceAll(promptPatchInsertion, '')
 assert.equal(baselineAdapterSource.split(adapterPatchAnchor).length, 2, 'Pinned adapter patch anchor changed')
-const toolNames = tools => tools.flatMap(tool => tool.type === 'namespace'
-  ? tool.tools.map(child => `${tool.name}.${child.name}`) : [tool.name ?? tool.type])
 
 const discoveryHome = mkdtempSync(join(tmpdir(), 'cinna-codex-catalog-'))
 let catalog, binaryVersion
@@ -87,7 +87,7 @@ async function runCase(spec) {
         const systemText = [body.instructions ?? '', ...(body.input ?? [])
           .filter(item => item.role === 'developer' || item.role === 'system').map(item => textOf(item.content))].join('\n')
         const userText = (body.input ?? []).filter(item => item.role === 'user').map(item => textOf(item.content)).join('\n')
-        evidence.requests.push({ model: body.model, tools: toolNames(body.tools ?? []),
+        evidence.requests.push({ model: body.model, kind: providerRequestKind(body), tools: toolNames(body.tools ?? []),
           outputs: outputs.map(item => item.output), ...(spec.promptMeta ? {
             chatPromptInSystem: systemText.includes('SESSION_CHAT_ONLY_PROMPT'),
             titlePromptInSystem: systemText.includes(TITLE_SYSTEM_PROMPT),
@@ -183,16 +183,9 @@ async function runCase(spec) {
       INITIAL_AGENT_MODE: 'read-only', MODEL_PROVIDER: 'probe', CODEX_CONFIG: JSON.stringify(threadConfig) }
     let productionMeta, prepareProduction, productionPlan, preparedProduction
     if (spec.production) {
-      const require = createRequire(import.meta.url)
-      const ts = require('typescript')
-      const source = readFileSync(join(repo, 'src/main/agents/drivers/acp/codexConductorPolicy.ts'), 'utf8')
-      const compiled = ts.transpileModule(source, { compilerOptions: {
-        module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true
-      } }).outputText
-      const helperPath = join(home, 'codexConductorPolicy.cjs')
-      writeFileSync(helperPath, compiled)
-      writeFileSync(join(home, 'codexAdapterPatch.json'), readFileSync(join(repo, 'src/main/agents/drivers/acp/codexAdapterPatch.json')))
-      const { prepareCodexConductorPolicy } = require(helperPath)
+      // The helper reads its version and adapter digest from the pin manifest,
+      // so both are transpiled side by side (see loadProductionPolicy).
+      const prepareCodexConductorPolicy = loadProductionPolicy(repo, home)
       const plan = { spec: { command: process.execPath, args: [adapter], env, cwd, key: 'probe' },
         init: { protocolVersion: 1 }, session: { mcpServers: [] }, setup: { modeId: 'read-only' } }
       prepareProduction = candidate => prepareCodexConductorPolicy(candidate, join(home, 'policy-artifacts'))
@@ -284,8 +277,20 @@ async function runCase(spec) {
       const changed = await rpc('session/set_config_option', { sessionId, configId: 'model', value: 'gpt-6-astra' })
       assert(!changed.error, 'Model-change fixture setup failed')
       evidence.modelChangedTo = 'gpt-6-astra'
+      const requestsBeforeChange = evidence.requests.length
       prompt = await sendPrompt()
-      assert.equal(evidence.requests.at(-1)?.model, 'gpt-6-astra')
+      // Not `requests.at(-1)`, and not `some(...)` either — that still passes
+      // with the conversation left on the old model. 0.155.0 sends requests of
+      // its own around this turn (a thread title on gpt-5.6-luna; a compaction
+      // on the model being LEFT), told apart by content in `providerRequestKind`
+      // and pinned by the contract entry `codex.provider.auxiliary-request`.
+      // Every conversation request from here on must be on the new model, and
+      // there must be one; the tool-set check further down still covers every
+      // request, the CLI's own included.
+      const conversation = evidence.requests.slice(requestsBeforeChange).filter(request => request.kind === 'conversation')
+      assert(conversation.length > 0, 'No conversation request followed the model change')
+      assert.deepEqual(conversation.map(request => request.model), conversation.map(() => 'gpt-6-astra'),
+        'A conversation request after the model change stayed on the old model')
     }
     if (spec.promptMeta) {
       const utilityCwd = join(home, 'utility'); mkdirSync(utilityCwd)

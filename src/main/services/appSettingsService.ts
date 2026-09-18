@@ -173,6 +173,17 @@ const VALUE_CHECKS: {
     }
   },
 
+  localAgentsCodexPath: (value) => {
+    const trimmed = value.trim()
+    if (trimmed === '') return
+    if (!isAbsolute(trimmed)) {
+      throw new AppSettingsError(
+        'invalid_value',
+        'The Codex path must be an absolute path to the codex executable.'
+      )
+    }
+  },
+
   /**
    * A known tool id or empty. Known, not *installed*: the value is read back
    * against the detected list every time, so a tool that was uninstalled after
@@ -220,6 +231,14 @@ function runValueCheck<K extends AppSettingKey>(key: K, value: AppSettingsSchema
   check?.(value)
 }
 
+/**
+ * Who wants to know a setting was saved. Registered by the layer that owns the
+ * consequence (`engine.ipc.ts` re-resolves the Codex binary when its path
+ * changes), so this service keeps validating and persisting and imports nothing
+ * that spawns or downloads — the same arrangement as `engineBinaryService.onChange`.
+ */
+const savedListeners = new Map<AppSettingKey, Set<() => void>>()
+
 export const appSettingsService = {
   getAll(): AppSettingsSchema {
     return appSettingsRepo.getAll()
@@ -229,8 +248,28 @@ export const appSettingsService = {
     assertKnownKey(key)
     assertValueShape(key, value)
     runValueCheck(key, value)
+    const previous = appSettingsRepo.get(key)
     appSettingsRepo.set(key, value)
     if (key === 'aiFunctionsCredentialId') appSettingsRepo.set('aiFunctionsModelId', '')
     logger.info('app setting updated', { key, valueType: typeof value })
+    // Only a real change: re-saving the same Codex path must not restart a
+    // download that is already running for it.
+    if (previous === value) return
+    for (const listener of savedListeners.get(key) ?? []) {
+      try {
+        listener()
+      } catch (err) {
+        // The setting is saved; a consequence that failed must not turn the save into an error.
+        logger.warn('an app setting listener threw', { key, error: String(err) })
+      }
+    }
+  },
+
+  /** Called after `key` was saved with a **different** value. Returns unsubscribe. */
+  onSaved(key: AppSettingKey, listener: () => void): () => void {
+    const listeners = savedListeners.get(key) ?? new Set()
+    savedListeners.set(key, listeners)
+    listeners.add(listener)
+    return () => listeners.delete(listener)
   }
 }

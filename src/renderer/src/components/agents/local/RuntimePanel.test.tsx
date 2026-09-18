@@ -157,8 +157,11 @@ let binary: { state: string; version?: string | null; path?: string; error?: str
  * claim neither.
  */
 let defaultRuntime: { engine: string } | undefined = { engine: 'opencode' }
+/** The managed Codex CLI's state — what decides whether Codex can run, not PATH detection. */
+let codexBinary: Record<string, unknown> | undefined = { state: 'unresolved' }
 vi.mock('../../../hooks/useEngine', () => ({
   useEngineBinary: () => ({ data: binary }),
+  useCodexBinary: () => ({ data: codexBinary }),
   useDefaultRuntime: () => ({ data: defaultRuntime })
 }))
 
@@ -191,6 +194,7 @@ function bareAgent(runtime: Record<string, string> | null): LocalAgentDto {
 }
 
 beforeEach(() => {
+  codexBinary = { state: 'unresolved' }
   codexInstalled = false
   codexAuth = { state: 'logged_in' }
   claudeInstalled = true
@@ -1290,15 +1294,41 @@ describe('Codex runtime', () => {
     expect(screen.queryByText('Advanced')).toBeNull()
     expect((screen.getByLabelText('Work complexity') as HTMLSelectElement).disabled).toBe(false)
   })
-  it('shows the login remedy and keeps an explicitly selected missing install visible', () => {
-    codexInstalled = true
+  it('shows the login remedy, and keeps an explicitly selected Codex visible when its install failed', () => {
+    codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.155.0/codex', source: 'managed', version: 'codex-cli 0.155.0' }
     codexAuth = { state: 'logged_out' }
     const view = render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
     expect(screen.getByText(/Run `codex login`/)).toBeTruthy()
-    codexInstalled = false
+    codexBinary = { state: 'failed', error: 'The downloaded Codex did not match its expected checksum.' }
     view.rerender(<RuntimePanel agent={agent({ engine: 'codex' })} />)
     expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('engine:codex')
-    expect(screen.getByText(/Codex CLI is needed/)).toBeTruthy()
+    // The remedy is Cinna's own retry. 'Install it' would send the user to put
+    // a codex on their PATH, which no spawned session runs on.
+    expect(screen.getByText(/Try again in Settings → Agents → Runtime: Codex could not be installed/)).toBeTruthy()
+    expect(screen.queryByText(/Codex CLI is needed/)).toBeNull()
+    // The Engine cell agrees with the sentence beside it: Cinna installs this
+    // CLI, so "Not installed" would name a step the user never had.
+    expect(screen.getByText('Install failed')).toBeTruthy()
+    expect(screen.queryByText('Not installed')).toBeNull()
+  })
+  it('raises no alarm on a machine with no codex on PATH: the managed CLI is what runs', () => {
+    // Mutation: read PATH detection again and this machine — no `codex`
+    // installed, nothing fetched yet — is told in red to install a CLI, and the
+    // Codex option disappears from the picker for every agent not already on it.
+    codexInstalled = false
+    codexBinary = { state: 'unresolved' }
+    const view = render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
+    expect(screen.queryByText(/is needed|could not be installed|Not installed/)).toBeNull()
+    expect(screen.getByText('Codex 0.155.0 managed')).toBeTruthy()
+    view.unmount()
+    render(<RuntimePanel agent={agent({ credential: 'Anthropic' })} />)
+    expect(screen.getByLabelText('Runs on').querySelector('option[value="engine:codex"]')).not.toBeNull()
+  })
+  it('names an explicit Codex path by its own version, not the pin', () => {
+    codexBinary = { state: 'ready', path: '/opt/codex', source: 'configured', version: 'codex-cli 0.156.0' }
+    render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
+    expect(screen.getByText('Codex 0.156.0')).toBeTruthy()
+    expect(screen.queryByText(/managed/)).toBeNull()
   })
 })
 

@@ -52,6 +52,8 @@ export function probeCodexAuth(input: {
 export class CodexAuthProbe {
   private cached: { at: number; value: CodexAuthStatus } | null = null
   private inFlight: Promise<CodexAuthStatus> | null = null
+  /** Bumped by {@link invalidate}: an answer asked of an earlier binary is neither shared nor kept. */
+  private generation = 0
 
   constructor(private readonly deps: {
     path(): Promise<string | null>
@@ -64,14 +66,35 @@ export class CodexAuthProbe {
     if (this.inFlight) return this.inFlight
     const now = (this.deps.now ?? Date.now)()
     if (this.cached && now - this.cached.at < 30_000) return Promise.resolve(this.cached.value)
-    this.inFlight = this.ask().catch(() => {
+    const generation = this.generation
+    const run: Promise<CodexAuthStatus> = this.ask().catch(() => {
       logger.warn('Codex login probe inputs could not be prepared')
-      return UNKNOWN
-    }).then((value) => {
-      this.cached = { at: (this.deps.now ?? Date.now)(), value }
+      return { value: UNKNOWN, asked: false }
+    }).then(({ value, asked }) => {
+      // **"There was nothing to ask" is not an answer worth keeping.** The
+      // managed CLI is downloaded by the first turn that needs it, so a probe
+      // taken a moment before that install would otherwise hold `unknown` for
+      // thirty seconds — long enough for the launcher to skip the logged-out
+      // refusal on the very turn that installed the binary.
+      if (asked && generation === this.generation) this.cached = { at: (this.deps.now ?? Date.now)(), value }
       return value
-    }).finally(() => { this.inFlight = null })
-    return this.inFlight
+    }).finally(() => { if (this.inFlight === run) this.inFlight = null })
+    this.inFlight = run
+    return run
+  }
+
+  /**
+   * Forget the answer **without asking again** — the binary it was asked of is
+   * no longer the one in use (the Codex Path in Settings changed). The cache
+   * holds for thirty seconds whatever the path, so without this the Runtime row
+   * and the picker go on describing the old CLI's login. Not `refresh`: the new
+   * path may still be resolving, and "nothing to ask" is answered on demand.
+   * A probe already in flight finishes for its own caller and is dropped.
+   */
+  invalidate(): void {
+    this.generation++
+    this.cached = null
+    this.inFlight = null
   }
 
   refresh(): Promise<CodexAuthStatus> {
@@ -79,8 +102,9 @@ export class CodexAuthProbe {
     return this.status()
   }
 
-  private async ask(): Promise<CodexAuthStatus> {
+  private async ask(): Promise<{ value: CodexAuthStatus; asked: boolean }> {
     const path = await this.deps.path()
-    return path ? (this.deps.probe ?? probeCodexAuth)({ path, env: await this.deps.env() }) : UNKNOWN
+    if (!path) return { value: UNKNOWN, asked: false }
+    return { value: await (this.deps.probe ?? probeCodexAuth)({ path, env: await this.deps.env() }), asked: true }
   }
 }

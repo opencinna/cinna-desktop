@@ -3,9 +3,18 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import type { AcpLaunchPlan } from './acpLaunchers'
-import adapterPatch from './codexAdapterPatch.json'
+import { RUNTIME_PINS } from '../../../../shared/runtimePins'
 
-const SUPPORTED_VERSION = 'codex-cli 0.154.0-alpha.6.2'
+/**
+ * The one CLI version this policy has been verified against — the pin, read
+ * from the manifest so the version that is *installed* and the version that is
+ * *accepted* cannot drift apart. An explicit Codex path in Settings running any
+ * other version is refused here by design: that override is unverified, and a
+ * restricted chat is exactly where unverified is not good enough.
+ */
+const SUPPORTED_VERSION = RUNTIME_PINS.codex.versionOutput
+/** The patched adapter's digest. `codexAdapterPatch.json` repeats it for the CommonJS install hooks. */
+const adapterPatch = { patchedSha256: RUNTIME_PINS.codex.adapterPatchedSha256 }
 const MAX_OUTPUT = 8 * 1024 * 1024
 const FEATURES_DISABLED = [
   'shell_tool', 'unified_exec', 'view_image', 'multi_agent', 'multi_agent_v2',

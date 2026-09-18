@@ -1,0 +1,555 @@
+{
+  "acp": {
+    "cancel": {
+      "stopReason": "cancelled"
+    },
+    "folderSessionOfferedTools": [
+      "apply_patch",
+      "create_goal",
+      "exec_command",
+      "get_goal",
+      "request_user_input",
+      "tool_search",
+      "update_goal",
+      "view_image",
+      "web_search",
+      "write_stdin"
+    ],
+    "initialize": {
+      "agentCapabilities": {
+        "_meta": {
+          "authStatus": {}
+        },
+        "auth": {
+          "logout": {}
+        },
+        "loadSession": true,
+        "mcpCapabilities": {
+          "acp": false,
+          "http": true,
+          "sse": false
+        },
+        "promptCapabilities": {
+          "embeddedContext": true,
+          "image": true
+        },
+        "providers": {},
+        "sessionCapabilities": {
+          "additionalDirectories": {},
+          "close": {},
+          "delete": {},
+          "fork": {},
+          "list": {},
+          "resume": {},
+          "subagents": {}
+        }
+      },
+      "authMethodIds": [
+        "api-key",
+        "chat-gpt"
+      ],
+      "protocolVersion": 1,
+      "resultKeys": [
+        "_meta",
+        "agentCapabilities",
+        "agentInfo",
+        "authMethods",
+        "protocolVersion"
+      ]
+    },
+    "listChangedAdopted": false,
+    "loadKeepsCollaborationMode": {
+      "after": "plan",
+      "before": "plan"
+    },
+    "permissionRequest": {
+      "optionKinds": [
+        "allow_always",
+        "allow_always",
+        "allow_once",
+        "reject_once"
+      ],
+      "paramKeys": [
+        "_meta",
+        "options",
+        "sessionId",
+        "toolCall"
+      ],
+      "perMcpCall": true,
+      "rawInputKeys": [],
+      "toolCallKeys": [
+        "kind",
+        "status",
+        "toolCallId"
+      ],
+      "toolCallKind": "execute",
+      "toolCallTitle": null
+    },
+    "rateLimit": {
+      "assistantTextNamesStatus": true,
+      "dataKeys": [],
+      "errorCode": null,
+      "errorKind": null,
+      "sessionFailureKinds": [],
+      "stopReason": "end_turn",
+      "threadStatusTypes": [
+        "active",
+        "systemError"
+      ],
+      "updateKinds": [
+        "agent_message_chunk",
+        "session_info_update"
+      ]
+    },
+    "sessionNew": {
+      "configOptionIds": [
+        "collaboration_mode",
+        "fast-mode",
+        "mode",
+        "model",
+        "reasoning_effort"
+      ],
+      "currentModeId": "read-only",
+      "modeIds": [
+        "agent",
+        "agent-full-access",
+        "read-only"
+      ],
+      "resultKeys": [
+        "configOptions",
+        "models",
+        "modes",
+        "sessionId"
+      ]
+    },
+    "toolCall": {
+      "kind": "execute",
+      "metaKeys": [
+        "is_mcp_tool_call"
+      ],
+      "rawInput": {
+        "arguments": {},
+        "server": "cinna",
+        "tool": "probe"
+      },
+      "title": "mcp.cinna.probe",
+      "updateKeys": [
+        "_meta",
+        "kind",
+        "rawInput",
+        "sessionUpdate",
+        "status",
+        "title",
+        "toolCallId"
+      ]
+    }
+  },
+  "adapter": "1.11.0",
+  "appServer": {
+    "configReadKeys": [
+      "agents",
+      "allow_login_shell",
+      "allow_symlinked_codex_home",
+      "analytics",
+      "approval_policy",
+      "approvals_reviewer",
+      "apps",
+      "apps_mcp_product_sku",
+      "audio",
+      "auto_review",
+      "background_terminal_max_timeout",
+      "browser_use",
+      "chatgpt_base_url",
+      "check_for_update_on_startup",
+      "cli_auth_credentials_store",
+      "compact_prompt",
+      "computer_use",
+      "default_permissions",
+      "desktop",
+      "developer_instructions",
+      "disable_paste_burst",
+      "experimental_compact_prompt_file",
+      "experimental_realtime_start_instructions",
+      "experimental_realtime_webrtc_call_base_url",
+      "experimental_realtime_ws_backend_prompt",
+      "experimental_realtime_ws_base_url",
+      "experimental_realtime_ws_model",
+      "experimental_realtime_ws_startup_context",
+      "experimental_thread_store",
+      "experimental_thread_store_endpoint",
+      "experimental_use_unified_exec_tool",
+      "features",
+      "feedback",
+      "file_opener",
+      "forced_chatgpt_workspace_id",
+      "forced_login_method",
+      "ghost_snapshot",
+      "goals",
+      "hide_agent_reasoning",
+      "history",
+      "hooks",
+      "include_apps_instructions",
+      "include_collaboration_mode_instructions",
+      "include_environment_context",
+      "include_permissions_instructions",
+      "instructions",
+      "js_repl_node_module_dirs",
+      "js_repl_node_path",
+      "log_dir",
+      "marketplaces",
+      "mcp_oauth_callback_port",
+      "mcp_oauth_callback_url",
+      "mcp_oauth_credentials_store",
+      "mcp_optional_startup_grace_ms",
+      "mcp_servers",
+      "memories",
+      "model",
+      "model_auto_compact_token_limit",
+      "model_auto_compact_token_limit_scope",
+      "model_catalog_json",
+      "model_context_window",
+      "model_instructions_file",
+      "model_provider",
+      "model_providers",
+      "model_reasoning_effort",
+      "model_reasoning_summary",
+      "model_verbosity",
+      "notice",
+      "notify",
+      "openai_base_url",
+      "orchestrator",
+      "oss_provider",
+      "otel",
+      "permissions",
+      "personality",
+      "plan_mode_reasoning_effort",
+      "plugins",
+      "profile",
+      "profiles",
+      "project_doc_fallback_filenames",
+      "project_doc_max_bytes",
+      "project_root_markers",
+      "projects",
+      "realtime",
+      "responses_api_metadata",
+      "review_model",
+      "sandbox_mode",
+      "sandbox_workspace_write",
+      "service_tier",
+      "shell_environment_policy",
+      "show_raw_agent_reasoning",
+      "skills",
+      "sqlite_home",
+      "suppress_unstable_features_warning",
+      "thread_unload_delay_secs",
+      "tool_output_token_limit",
+      "tool_suggest",
+      "tools",
+      "tui",
+      "web_search",
+      "windows"
+    ],
+    "defaultModels": [
+      "gpt-6-astra"
+    ],
+    "initializeResultKeys": [
+      "codexHome",
+      "platformFamily",
+      "platformOs",
+      "userAgent"
+    ],
+    "modelListFields": [
+      "additionalSpeedTiers",
+      "availabilityNux",
+      "defaultReasoningEffort",
+      "defaultServiceTier",
+      "description",
+      "displayName",
+      "hidden",
+      "id",
+      "inputModalities",
+      "isDefault",
+      "model",
+      "modelSpecialty",
+      "multiAgentVersion",
+      "serviceTiers",
+      "supportedReasoningEfforts",
+      "supportsPersonality",
+      "upgrade",
+      "upgradeInfo"
+    ]
+  },
+  "cli": {
+    "catalogModelFields": [
+      "additional_speed_tiers",
+      "apply_patch_tool_type",
+      "availability_nux",
+      "base_instructions",
+      "comp_hash",
+      "context_window",
+      "default_reasoning_level",
+      "default_reasoning_summary",
+      "default_verbosity",
+      "description",
+      "display_name",
+      "effective_context_window_percent",
+      "experimental_supported_tools",
+      "include_apps_usage_instructions",
+      "include_plugin_usage_instructions",
+      "include_skills_usage_instructions",
+      "input_modalities",
+      "max_context_window",
+      "model_messages",
+      "model_specialty",
+      "multi_agent_reasoning_effort",
+      "multi_agent_version",
+      "node_repl_auto_review_required",
+      "node_repl_disabled",
+      "priority",
+      "service_tiers",
+      "shell_type",
+      "slug",
+      "support_verbosity",
+      "supported_in_api",
+      "supported_reasoning_levels",
+      "supports_experimental_context",
+      "supports_image_detail_original",
+      "supports_search_tool",
+      "tool_mode",
+      "truncation_policy",
+      "upgrade",
+      "use_responses_lite",
+      "visibility",
+      "web_search_tool_type"
+    ],
+    "catalogSlugs": [
+      "codex-auto-review",
+      "gpt-5.4",
+      "gpt-5.5",
+      "gpt-5.6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-6-astra",
+      "gpt-daybreak-blue-latest",
+      "gpt-daybreak-red-latest"
+    ],
+    "featureFlags": [
+      "api_key_model_discovery",
+      "apply_patch_freeform",
+      "apply_patch_preserve_line_endings",
+      "apply_patch_streaming_events",
+      "apps",
+      "apps_mcp_path_override",
+      "artifact",
+      "auth_elicitation",
+      "background_paginated_rollout_migration",
+      "bedrock_setup_wizard",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "chronicle",
+      "code_mode",
+      "code_mode_buffered_exec",
+      "code_mode_host",
+      "code_mode_interrupt",
+      "code_mode_only",
+      "code_mode_prewarm",
+      "codex_apps_mcp_2026_07_28",
+      "codex_git_commit",
+      "collaboration_modes",
+      "compaction_image_budget",
+      "computer_use",
+      "concurrent_reasoning_summaries",
+      "content_item_kinds",
+      "context_management",
+      "current_time_reminder",
+      "cwd_relative_turn_diffs",
+      "default_mode_request_user_input",
+      "deferred_executor",
+      "deferred_tool_world_state",
+      "elevated_windows_sandbox",
+      "enable_fanout",
+      "enable_mcp_apps",
+      "enable_request_compression",
+      "exec_permission_approvals",
+      "executed_tool_call_metadata",
+      "executor_capability_discovery",
+      "experimental_windows_sandbox",
+      "external_agent_memory_import",
+      "external_migration",
+      "fast_mode",
+      "goals",
+      "guardian_approval",
+      "guardian_enhanced_node_repl_transcripts",
+      "guardian_ext",
+      "guardian_node_repl_transcript_images",
+      "guardian_reuse_parent_compaction",
+      "guardianv2",
+      "hooks",
+      "image_detail_original",
+      "image_generation",
+      "image_resize_notice",
+      "in_app_browser",
+      "in_app_chat",
+      "in_app_dictation",
+      "in_app_local_automation",
+      "in_app_updates",
+      "item_ids",
+      "js_repl",
+      "js_repl_tools_only",
+      "local_thread_store_compression",
+      "local_thread_store_shared_compression",
+      "mcp_2026_07_28",
+      "mcp_oauth_refresh_coordination",
+      "memories",
+      "mentions_v2",
+      "multi_agent",
+      "multi_agent_mode",
+      "multi_agent_v2",
+      "network_proxy",
+      "non_prefixed_mcp_tool_names",
+      "omit_app_server_notification_media",
+      "personality",
+      "plugin_hooks",
+      "plugin_sharing",
+      "plugins",
+      "powershell_shell_version",
+      "prevent_idle_sleep",
+      "psp",
+      "realtime_conversation",
+      "reasoning_effort_override",
+      "recommended_plugins",
+      "remote_compaction_v2",
+      "remote_control",
+      "remote_models",
+      "remote_plugin",
+      "request_permissions_tool",
+      "request_rule",
+      "resize_all_images",
+      "respect_system_proxy",
+      "responses_websockets",
+      "responses_websockets_v2",
+      "retain_client_developer_messages",
+      "rollout_budget",
+      "runtime_metrics",
+      "search_tool",
+      "secret_auth_storage",
+      "send_async_message",
+      "shell_snapshot",
+      "shell_snapshot_v2",
+      "shell_tool",
+      "shell_zsh_fork",
+      "skill_env_var_dependency_prompt",
+      "skill_mcp_dependency_install",
+      "skill_search",
+      "skip_host_skill_discovery",
+      "sleep_tool",
+      "sqlite",
+      "standalone_web_search",
+      "steer",
+      "step_model_switching",
+      "terminal_resize_reflow",
+      "terminal_visualization_instructions",
+      "token_budget",
+      "tool_call_mcp_elicitation",
+      "tool_search",
+      "tool_search_always_defer_mcp_tools",
+      "tool_suggest",
+      "transcript_v2",
+      "tui_app_server",
+      "unavailable_dummy_tools",
+      "unbounded_connection_retries",
+      "undo",
+      "unified_exec",
+      "unified_exec_tty",
+      "unified_exec_zsh_fork",
+      "unified_image_budget",
+      "use_agent_identity",
+      "use_legacy_landlock",
+      "use_linux_sandbox_bwrap",
+      "view_image",
+      "web_search_cached",
+      "web_search_request",
+      "windows_sandbox_service",
+      "workspace_dependencies",
+      "workspace_owner_usage_nudge",
+      "worktrees",
+      "write_stdin_approval"
+    ],
+    "loginStatusLoggedOut": {
+      "exitCode": 1,
+      "verdict": "logged_out"
+    }
+  },
+  "providerTraffic": {
+    "compaction": {
+      "folderSession": {
+        "count": 1,
+        "models": [
+          "gpt-5.5"
+        ],
+        "tools": []
+      },
+      "restrictedChat": {
+        "count": 0,
+        "models": [],
+        "tools": []
+      },
+      "utilitySession": {
+        "count": 0,
+        "models": [],
+        "tools": []
+      }
+    },
+    "paths": [
+      "/v1/responses"
+    ],
+    "title": {
+      "folderSession": {
+        "count": 1,
+        "models": [
+          "gpt-5.6-luna"
+        ],
+        "tools": []
+      },
+      "restrictedChat": {
+        "count": 1,
+        "models": [
+          "gpt-5.6-luna"
+        ],
+        "tools": [
+          "request_user_input"
+        ]
+      },
+      "utilitySession": {
+        "count": 1,
+        "models": [
+          "gpt-5.6-luna"
+        ],
+        "tools": [
+          "request_user_input"
+        ]
+      }
+    }
+  },
+  "restrictedPolicy": {
+    "collaborationModeValues": [
+      "default",
+      "plan"
+    ],
+    "marker": "no-native-tools",
+    "offeredTools": [
+      "list_mcp_resource_templates",
+      "list_mcp_resources",
+      "mcp__cinna.probe",
+      "read_mcp_resource",
+      "request_user_input"
+    ],
+    "questionClientRequests": [],
+    "questionInDefaultMode": [
+      "request_user_input is unavailable in Default mode"
+    ]
+  },
+  "tool": "codex",
+  "version": "codex-cli 0.155.0"
+}

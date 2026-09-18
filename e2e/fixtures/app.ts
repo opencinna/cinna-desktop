@@ -78,6 +78,14 @@ function launchEnv(sandbox: Sandbox, extra: Readonly<Record<string, string>>): R
   // never needs it, so the app is told to stay in the background and the
   // machine stays usable while the tests run.
   env.CINNA_BACKGROUND_WINDOW = '1'
+  // **No test ever downloads the Codex CLI.** Cinna installs its own pinned
+  // copy on first use (~90 MB), and a spec that reached that path would both
+  // hit the network and then run the *real* CLI under a test's name. A spec
+  // that drives Codex points the explicit `localAgentsCodexPath` setting at its
+  // scripted CLI — the same seam the OpenCode fakes use — and with this set,
+  // one that forgot to fails in words instead. Applied after `extra`, like
+  // `HOME`, so no spec can switch it back on.
+  env.CINNA_CODEX_DOWNLOAD = 'off'
   // Reuse the developer's tool caches so `uv run` in a test does not
   // re-provision an interpreter per sandbox.
   env.UV_CACHE_DIR ??= join(realHome, '.cache', 'uv')

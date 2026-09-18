@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettingsSchema } from '../../../../shared/appSettings'
 
 vi.hoisted(() => { Object.assign(window, { api: { app: { setTheme: async () => {} } } }) })
-vi.mock('../../hooks/useEngine', () => ({ DEFAULT_RUNTIME_KEY: ['default-runtime'], useDefaultRuntime: () => ({ data: { engine: 'claude' } }) }))
+vi.mock('../../hooks/useEngine', () => ({ DEFAULT_RUNTIME_KEY: ['default-runtime'], useDefaultRuntime: () => ({ data: { engine: 'claude' } }), useCodexBinary: () => ({ data: { state: 'unresolved' } }) }))
 vi.mock('../../hooks/useLocalTools', () => ({
   useLocalTools: () => ({ data: [{ id: 'claude', available: true }, { id: 'codex', available: true }] }),
   useToolInstallPlan: () => null,

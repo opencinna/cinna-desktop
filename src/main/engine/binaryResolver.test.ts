@@ -4,7 +4,12 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  CODEX_ASSETS,
+  CODEX_SPEC,
   ENGINE_ASSETS,
+  EngineBinaryError,
+  managedBinaryPath,
+  realCodexResolverDeps,
   resolveEngineBinaryWith,
   sha256File,
   type BinaryResolverDeps,
@@ -203,6 +208,29 @@ describe('resolveEngineBinaryWith — the managed install', () => {
     expect(downloads).toHaveLength(1)
   })
 
+  it('removes superseded versions and abandoned staging after a successful install, and nothing else', async () => {
+    // A pin bump used to leave the previous tree in userData for good.
+    for (const dir of ['opencode-1.0.0', 'opencode-9.9.8', '.staging-123-456-1', 'opencode-notes', 'codex-0.1.0', 'prompts']) {
+      mkdirSync(join(root, dir))
+      writeFileSync(join(root, dir, 'file'), 'x')
+    }
+    writeFileSync(join(root, 'opencode.json'), '{}')
+    await resolveEngineBinaryWith(harness())
+    // Its own old versions and the dead staging go; another tool's install, a
+    // directory that merely shares the prefix, and the root's own files stay.
+    expect(everything()).toEqual(['codex-0.1.0', 'opencode-9.9.9', 'opencode-notes', 'opencode.json', 'prompts'])
+  })
+
+  it('sweeps nothing when the install is already there, or when the install fails', async () => {
+    await resolveEngineBinaryWith(harness())
+    mkdirSync(join(root, 'opencode-1.0.0'))
+    await resolveEngineBinaryWith(harness())
+    expect(published()).toEqual(['opencode-1.0.0', 'opencode-9.9.9'])
+    // A failed newer install must not cost the user the version that works.
+    await expect(resolveEngineBinaryWith(harness({ version: '10.0.0', download: async () => { throw new Error('offline') } }))).rejects.toThrow()
+    expect(published()).toEqual(['opencode-1.0.0', 'opencode-9.9.9'])
+  })
+
   it('discards a download whose checksum does not match, leaving nothing behind', async () => {
     const deps = harness({
       download: async (_url, dest) => {
@@ -276,6 +304,151 @@ describe('resolveEngineBinaryWith — the managed install', () => {
       // what to do (ux_rules rule 7).
     ).rejects.toThrow(/Install opencode yourself.*no verified build for sunos-sparc/i)
     expect(downloads).toEqual([])
+  })
+})
+
+/**
+ * The same resolver under the Codex spec.
+ *
+ * What differs from OpenCode is exactly what these cases pin: the user's PATH
+ * copy is never the answer, the archive's triple-named executable is published
+ * under one name, and a verified archive whose binary reports another version
+ * is discarded like a bad digest — nothing published, nothing left behind.
+ */
+describe('resolveEngineBinaryWith — the managed Codex CLI', () => {
+  const TRIPLE = 'codex-aarch64-apple-darwin'
+  function codex(overrides: Partial<BinaryResolverDeps> = {}): BinaryResolverDeps {
+    return harness({
+      spec: CODEX_SPEC,
+      version: '0.155.0',
+      assets: {
+        'test-arch': {
+          file: `${TRIPLE}.tar.gz`,
+          sha256: ARCHIVE_SHA,
+          url: 'https://example.test/codex.tar.gz',
+          executable: TRIPLE
+        }
+      },
+      extract: async (_archive, dest) => {
+        writeFileSync(join(dest, TRIPLE), '#!/bin/sh\necho codex-cli 0.155.0\n')
+      },
+      probeVersion: async () => 'codex-cli 0.155.0',
+      ...overrides
+    })
+  }
+
+  it('never uses a codex on PATH: the version under test is the version that runs', async () => {
+    // Mutation: flip `CODEX_SPEC.searchPath` and this returns the PATH copy
+    // with `source: 'path'` and downloads nothing.
+    const onPath = vi.fn(async () => '/opt/homebrew/bin/codex')
+    const resolved = await resolveEngineBinaryWith(codex({ which: onPath }))
+    expect(onPath).not.toHaveBeenCalled()
+    expect(resolved).toMatchObject({ source: 'managed', version: 'codex-cli 0.155.0' })
+    expect(downloads).toHaveLength(1)
+  })
+
+  it('publishes the archive’s triple-named executable as codex, at one path per version', async () => {
+    const deps = codex()
+    const resolved = await resolveEngineBinaryWith(deps)
+    expect(resolved.path).toBe(join(root, 'codex-0.155.0', 'codex'))
+    expect(resolved.path).toBe(managedBinaryPath(deps))
+    // The triple name must not survive into the install: the path a launcher
+    // is handed cannot depend on which asset row this platform matched.
+    expect(readdirSync(join(root, 'codex-0.155.0'))).toEqual(['codex'])
+    expect(published()).toEqual(['codex-0.155.0'])
+  })
+
+  it('downloads from the URL the pin row names', async () => {
+    const urls: string[] = []
+    await resolveEngineBinaryWith(
+      codex({
+        download: async (url, dest) => {
+          urls.push(url)
+          writeFileSync(dest, ARCHIVE_BYTES)
+        }
+      })
+    )
+    expect(urls).toEqual(['https://example.test/codex.tar.gz'])
+  })
+
+  it('discards a verified archive whose binary is not the pinned version', async () => {
+    // The digest matched, so these are the pinned bytes — and they still
+    // reported something else. Publishing them would make "the directory is
+    // there" stop meaning "this is the version the contract was run against".
+    const attempt = resolveEngineBinaryWith(codex({ probeVersion: async () => 'codex-cli 0.154.0' }))
+    await expect(attempt).rejects.toBeInstanceOf(EngineBinaryError)
+    await expect(attempt).rejects.toMatchObject({ code: 'version_mismatch' })
+    await expect(attempt).rejects.toThrow(/was not version 0\.155\.0/)
+    expect(everything()).toEqual([])
+  })
+
+  it('reuses a good install without downloading again', async () => {
+    await resolveEngineBinaryWith(codex())
+    await resolveEngineBinaryWith(codex())
+    expect(downloads).toHaveLength(1)
+  })
+
+  it('runs a configured path ahead of the managed copy, and does not version-gate it', async () => {
+    const configured = join(root, 'candidate-codex')
+    writeFileSync(configured, '#!/bin/sh\n')
+    chmodSync(configured, 0o755)
+    const resolved = await resolveEngineBinaryWith(
+      codex({ configuredPath: () => configured, probeVersion: async () => 'codex-cli 0.156.0' })
+    )
+    // A candidate version is exactly what this override is for; the UI labels
+    // it unverified instead of the resolver refusing it.
+    expect(resolved).toEqual({ path: configured, source: 'configured', version: 'codex-cli 0.156.0' })
+    expect(downloads).toEqual([])
+  })
+
+  it('names the Codex path, not the engine path, when the configured file is wrong', async () => {
+    await expect(
+      resolveEngineBinaryWith(codex({ configuredPath: () => join(root, 'not-there') }))
+    ).rejects.toThrow(/Fix the Codex path in Settings.*does not point at a file/i)
+    expect(downloads).toEqual([])
+  })
+
+  it('points a platform with no pinned build at the Codex path setting', async () => {
+    await expect(
+      resolveEngineBinaryWith(codex({ platformKey: () => 'win32-x64' }))
+    ).rejects.toThrow(/Set a Codex path in Settings.*no verified Codex build for win32-x64/i)
+    expect(downloads).toEqual([])
+  })
+
+  it('pins POSIX platforms only, each with a URL and an executable name', () => {
+    expect(Object.keys(CODEX_ASSETS).sort()).toEqual(['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'])
+    for (const [key, asset] of Object.entries(CODEX_ASSETS)) {
+      expect(asset.url, key).toMatch(/^https:\/\/github\.com\/openai\/codex\/releases\/download\/rust-v/)
+      expect(asset.executable, key).toMatch(/^codex-/)
+    }
+  })
+
+  describe('with downloads switched off (the E2E sandbox)', () => {
+    const before = process.env['CINNA_CODEX_DOWNLOAD']
+    beforeEach(() => {
+      process.env['CINNA_CODEX_DOWNLOAD'] = 'off'
+    })
+    afterEach(() => {
+      if (before === undefined) delete process.env['CINNA_CODEX_DOWNLOAD']
+      else process.env['CINNA_CODEX_DOWNLOAD'] = before
+    })
+
+    it('refuses with a remedy instead of reaching the network', async () => {
+      // The production download dep, so the guard under test is the real one.
+      // A spec that forgot to point the Codex path at its scripted CLI must
+      // fail here, in words, rather than pull 90 MB and run the real binary.
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      try {
+        const real = realCodexResolverDeps(() => null)
+        await expect(
+          resolveEngineBinaryWith(codex({ download: real.download }))
+        ).rejects.toThrow(/Set a Codex path in Settings.*switched off/i)
+        expect(fetchSpy).not.toHaveBeenCalled()
+        expect(everything()).toEqual([])
+      } finally {
+        fetchSpy.mockRestore()
+      }
+    })
   })
 })
 

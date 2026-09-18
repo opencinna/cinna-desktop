@@ -83,6 +83,11 @@ vi.mock('electron', () => ({ app: { getVersion: () => '0.0.0', getPath: () => '/
 vi.mock('../../engine/binaryResolver', () => ({
   configuredEnginePath: () => null,
   realBinaryResolverDeps: () => ({}),
+  // The managed Codex CLI's half of the same module: the wiring under test
+  // reads these to build the Codex service and its login probe.
+  configuredCodexPath: () => null,
+  realCodexResolverDeps: () => ({}),
+  knownCodexBinary: async () => null,
   resolveEngineBinaryWith: async () => ({ path: '/bin/opencode', source: 'path', version: '1.0.0' })
 }))
 vi.mock('../../engine/engineConfigSource', () => ({

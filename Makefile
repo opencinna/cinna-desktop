@@ -7,7 +7,7 @@
 
 PW := npx playwright test -c e2e/playwright.config.ts
 
-.PHONY: help test typecheck build demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine live-ctl live-help
+.PHONY: help test typecheck build contract contract-next contract-snapshot demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine live-ctl live-help
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -20,6 +20,34 @@ typecheck: ## Type-check main, preload, renderer and e2e
 
 build: ## Production build into out/ (what the E2E suite launches)
 	npx electron-vite build
+
+# The interface contract: every external CLI interface Cinna relies on, checked
+# against the REAL pinned binary with a loopback fake provider. No login, no
+# provider request. Not part of `make test`. Registry, tests and snapshots:
+# src/main/agents/drivers/acp/contracts/ — generated doc:
+# docs/agents/local_agents/contracts/codex_interface.md
+STRIP := node --experimental-strip-types
+SNAPSHOTS := src/main/agents/drivers/acp/contracts/snapshots
+
+contract: ## Level 1 contract against the pinned CLI (installs it, checksum-verified, on first use): make contract ENGINE=codex
+	@test "$(ENGINE)" = "codex" || (echo "usage: make contract ENGINE=codex"; exit 2)
+	$(STRIP) scripts/install-runtime.mjs $(ENGINE)
+	npm run test:contract
+
+contract-next: ## Same contract against a CANDIDATE version, pin untouched: make contract-next ENGINE=codex VERSION=0.156.0
+	@test "$(ENGINE)" = "codex" -a -n "$(VERSION)" || (echo "usage: make contract-next ENGINE=codex VERSION=<x.y.z>"; exit 2)
+	@DIR=$$(mktemp -d "$${TMPDIR:-/tmp}/cinna-contract-next.XXXXXX"); \
+	BIN=$$($(STRIP) scripts/install-runtime.mjs $(ENGINE) --version $(VERSION) --dir "$$DIR/$(ENGINE)-$(VERSION)" | tail -1); \
+	test -x "$$BIN" || { echo "could not install $(ENGINE) $(VERSION)"; rm -rf "$$DIR"; exit 1; }; \
+	CINNA_CONTRACT_CODEX="$$BIN" npm run test:contract; STATUS=$$?; \
+	rm -rf "$$DIR"; exit $$STATUS
+# The run itself prints the snapshot diff (pinned -> candidate); the candidate's
+# snapshot goes to a temp path, never into $(SNAPSHOTS).
+
+contract-snapshot: ## Rewrite the committed snapshot from the pinned CLI, once a change is understood: make contract-snapshot ENGINE=codex
+	@test "$(ENGINE)" = "codex" || (echo "usage: make contract-snapshot ENGINE=codex"; exit 2)
+	$(STRIP) scripts/install-runtime.mjs $(ENGINE)
+	CINNA_CONTRACT_WRITE_SNAPSHOT=1 npm run test:contract
 
 demo-localdev: ## Drive one-click onboarding by hand in a throwaway profile: make demo-localdev SERVER=http://localhost:8000
 	npx electron-vite build

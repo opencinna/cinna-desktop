@@ -29,9 +29,14 @@ const READY_BINARY = {
 let appSettings: Record<string, unknown> = HEALTHY_SETTINGS
 let binary: Record<string, unknown> = READY_BINARY
 let providers: Array<Record<string, unknown>> = []
+/** The managed Codex CLI's state, and the section-owned mutation that installs or retries it. */
+let codexBinary: Record<string, unknown> | undefined = { state: 'unresolved' }
+let resolveCodex = mutation()
 beforeEach(() => {
   appSettings = HEALTHY_SETTINGS
   binary = READY_BINARY
+  codexBinary = { state: 'unresolved' }
+  resolveCodex = mutation()
   providers = []
   setAppSetting.mockReset()
 })
@@ -58,7 +63,9 @@ vi.mock('../../hooks/useChatModes', () => ({
 }))
 vi.mock('../../hooks/useEngine', () => ({
   useEngineBinary: () => ({ data: binary }),
-  useResolveEngineBinary: mutation
+  useResolveEngineBinary: mutation,
+  useCodexBinary: () => ({ data: codexBinary }),
+  useResolveCodexBinary: () => resolveCodex
 }))
 const setAppSetting = vi.fn()
 vi.mock('../../hooks/useAppSettings', () => ({
@@ -98,6 +105,122 @@ describe('LocalAgentsSettingsSection', () => {
     const status = screen.getByText('opencode could not be downloaded.')
     expect(status.className).toContain('text-[var(--color-danger)]')
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+  })
+
+  describe('with Codex as the default runtime', () => {
+    beforeEach(() => {
+      appSettings = { ...HEALTHY_SETTINGS, localAgentsDefaultEngine: 'codex' }
+    })
+
+    it('names the managed pinned version once it is installed, muted and with no action', () => {
+      codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.155.0/codex', source: 'managed', version: 'codex-cli 0.155.0' }
+      render(<LocalAgentsSettingsSection />)
+
+      const status = screen.getByText('Codex 0.155.0 (managed) — runs on your Codex login.')
+      expect(status.className).toContain('text-[var(--color-text-muted)]')
+      expect(screen.queryByRole('button', { name: /Try again|Install now|Installing/ })).toBeNull()
+      // The OpenCode binary is not a fact about a machine running Codex (rule 9).
+      expect(screen.queryByText(/opencode 1\.2\.3/)).toBeNull()
+    })
+
+    it('labels an explicit Codex path unverified, by its own version', () => {
+      codexBinary = { state: 'ready', path: '/opt/codex', source: 'configured', version: 'codex-cli 0.156.0' }
+      render(<LocalAgentsSettingsSection />)
+
+      expect(screen.getByText('Unverified Codex 0.156.0 — your configured path.')).toBeTruthy()
+      expect(screen.queryByText(/managed\)/)).toBeNull()
+    })
+
+    it('says the same on the Codex button as in the line under it', () => {
+      // Mutation: drop `codexBinary` from the picker and the button reads
+      // `0.155.0 managed` directly above "Unverified Codex 0.156.0".
+      codexBinary = { state: 'ready', path: '/opt/codex', source: 'configured', version: 'codex-cli 0.156.0' }
+      const view = render(<LocalAgentsSettingsSection />)
+      const button = screen.getByRole('button', { name: /^Codex/ })
+      expect(button.textContent).toBe('Codex0.156.0 unverified')
+
+      codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.155.0/codex', source: 'managed', version: 'codex-cli 0.155.0' }
+      view.rerender(<LocalAgentsSettingsSection />)
+      expect(screen.getByRole('button', { name: /^Codex/ }).textContent).toBe('Codex0.155.0 managed')
+    })
+
+    it('leaves a failed install by itself when a saved Codex Path resolves, in the same one-line slot', () => {
+      // Main re-resolves on save and pushes each state; nothing here is clicked.
+      codexBinary = { state: 'failed', error: 'Codex could not be downloaded. Check your connection and try again.' }
+      const view = render(<LocalAgentsSettingsSection />)
+      const slot = screen.getByText(/could not be downloaded/).parentElement!
+      expect(slot.className).toContain('min-h-[1lh]')
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+
+      appSettings = { ...appSettings, localAgentsCodexPath: '/opt/codex' }
+      codexBinary = { state: 'resolving' }
+      view.rerender(<LocalAgentsSettingsSection />)
+      // Checking the user's file is not a 90 MB install, and must not say so.
+      const checking = screen.getByText('Checking your configured Codex path…')
+      expect(checking.parentElement).toBe(slot)
+      expect(checking.className).toContain('text-[var(--color-text-muted)]')
+      expect(screen.queryByText(/about 90 MB/)).toBeNull()
+
+      codexBinary = { state: 'ready', path: '/opt/codex', source: 'configured', version: 'codex-cli 0.156.0' }
+      view.rerender(<LocalAgentsSettingsSection />)
+      const ready = screen.getByText('Unverified Codex 0.156.0 — your configured path.')
+      expect(ready.parentElement).toBe(slot)
+      expect(ready.className).not.toContain('text-[var(--color-danger)]')
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+    })
+
+    it('offers Install now while nothing is fetched, without an alarm, and installs on the click', () => {
+      render(<LocalAgentsSettingsSection />)
+
+      const status = screen.getByText('Codex 0.155.0 installs on first use, about 90 MB.')
+      expect(status.className).toContain('text-[var(--color-text-muted)]')
+      fireEvent.click(screen.getByRole('button', { name: 'Install now' }))
+      expect(resolveCodex.mutate).toHaveBeenCalledTimes(1)
+    })
+
+    it('shows download progress in the same one line, with the action held while it runs', () => {
+      codexBinary = { state: 'resolving', received: 45 * 1024 * 1024, total: 90 * 1024 * 1024 }
+      resolveCodex = { ...mutation(), isPending: true }
+      render(<LocalAgentsSettingsSection />)
+
+      const status = screen.getByText('Downloading Codex 0.155.0 — 45 of 90 MB.')
+      // The slot that holds every other state, so a moving number moves nothing.
+      expect(status.className).toContain('truncate')
+      expect(status.parentElement?.className).toContain('min-h-[1lh]')
+      const action = screen.getByRole('button', { name: 'Installing…' }) as HTMLButtonElement
+      expect(action.disabled).toBe(true)
+    })
+
+    it('reports a failed install in the danger tone with Try again, and closes nothing', () => {
+      codexBinary = { state: 'failed', error: 'The downloaded Codex did not match its expected checksum, so it was discarded.' }
+      render(<LocalAgentsSettingsSection />)
+
+      const status = screen.getByText(/did not match its expected checksum/)
+      expect(status.className).toContain('text-[var(--color-danger)]')
+      expect(status.getAttribute('title')).toContain('did not match its expected checksum')
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+      expect(resolveCodex.mutate).toHaveBeenCalledTimes(1)
+      // The picker is still there to choose another runtime from (rule 6).
+      expect(screen.getByRole('button', { name: /Custom OpenCode/ })).toBeTruthy()
+    })
+
+    it('says nothing while the state is still being read', () => {
+      codexBinary = undefined
+      render(<LocalAgentsSettingsSection />)
+
+      expect(screen.queryByText(/Codex 0\.155\.0 (downloads|\(managed)/)).toBeNull()
+    })
+
+    it('never offers to install a PATH copy: Codex is selectable with no codex detected', () => {
+      appSettings = HEALTHY_SETTINGS
+      render(<LocalAgentsSettingsSection />)
+
+      const codex = screen.getByRole('button', { name: /^Codex/ })
+      expect(codex.textContent).toContain('0.155.0 managed')
+      expect(codex.textContent).not.toContain('Not installed')
+      fireEvent.click(codex)
+      expect(setAppSetting).toHaveBeenCalledWith({ key: 'localAgentsDefaultEngine', value: 'codex' })
+    })
   })
 
   it('says a vanished pin falls through to the chat mode, and only then', () => {

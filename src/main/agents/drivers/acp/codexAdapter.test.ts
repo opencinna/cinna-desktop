@@ -21,7 +21,8 @@ describe('pinned Codex adapter over real stdio', () => {
     const adapter = join(dir, 'adapter.mjs')
     writeFileSync(adapter, readFileSync(createRequire(import.meta.url).resolve('@agentclientprotocol/codex-acp/dist/index.js')))
     const launcher = createCodexLauncher({
-      path: async () => executable, auth: async () => ({ state: 'logged_in' }),
+      binary: async () => ({ path: executable }), binaryKnown: async () => ({ state: 'ready' }),
+      auth: async () => ({ state: 'logged_in' }),
       adapterEntry: () => adapter,
       nodeRuntime: () => ({ command: process.execPath, args: [], env: {} }),
       env: async () => ({ HOME: dir, CODEX_HOME: dir, FAKE_CODEX_LOG: log }),

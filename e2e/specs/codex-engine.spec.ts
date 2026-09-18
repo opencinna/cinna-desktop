@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { DESKTOP_STATE_FILE, MANIFEST_FILE } from '../../src/shared/kit/manifest'
+import { RUNTIME_PINS } from '../../src/shared/runtimePins'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
@@ -54,8 +55,12 @@ test('Codex runtime and approvals persist across an app restart', async ({ cinna
 
 test('Codex chats, approves, answers questions, stops, and resumes through the production launcher', async ({ cinna }) => {
   test.setTimeout(90_000)
-  // Put a scripted CLI first in this disposable home's shell PATH. The app's
-  // detector, login probe, Electron launcher, adapter, driver and UI are real.
+  // A scripted CLI, named by the explicit Codex path setting — the top of the
+  // production precedence, and the only way a sandbox runs Codex at all: the
+  // fixture switches the managed download off, and the PATH copy is never what
+  // a spawned session runs. It is also put first on this disposable home's
+  // shell PATH, because detection still reports that copy for "Open in…".
+  // The resolver, login probe, Electron launcher, adapter, driver and UI are real.
   const bin = join(cinna.sandbox.home, 'bin')
   mkdirSync(bin)
   const executable = join(bin, 'codex')
@@ -68,9 +73,13 @@ test('Codex chats, approves, answers questions, stops, and resumes through the p
   await cinna.relaunch()
   await cinna.skipOnboarding()
   await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
+  await cinna.page.evaluate((path) => window.api.settings.set('localAgentsCodexPath', path), executable)
   const tools = await cinna.page.evaluate(() => window.api.localTools.list())
   expect(tools.find((tool) => tool.id === 'codex')?.path).toBe(executable)
+  // Asked of the configured binary, not of the PATH copy.
   expect(await cinna.page.evaluate(() => window.api.localTools.codexAuth())).toEqual({ state: 'logged_in' })
+  // The explicit path is reported as what it is: configured, never "managed".
+  expect(await cinna.page.evaluate(() => window.api.engine.resolveCodex())).toMatchObject({ state: 'ready', path: executable, source: 'configured' })
   const root = await addAgentRoot(cinna)
   const agent = await createFolderAgent(cinna, root, 'Codex Runner', 'Codex Runner')
   const result = await cinna.page.evaluate((input) => window.api.localAgents.updateField({
@@ -131,7 +140,7 @@ test('a plain Codex chat applies its runtime policy and keeps the session for a 
   mkdirSync(bin)
   const executable = join(bin, 'codex')
   const fixture = readFileSync(resolve('src/main/agents/drivers/acp/testSupport/fakeCodexAppServer.mjs'), 'utf8')
-    .replace('codex-cli 0.153.4', 'codex-cli 0.154.0-alpha.6.2')
+    .replace('codex-cli 0.153.4', RUNTIME_PINS.codex.versionOutput)
   // Only this fixture advertises the policy-verified CLI version/catalog. The
   // real installed ACP adapter, policy preparation and launcher remain in use.
   const prelude = `
@@ -150,6 +159,7 @@ if (process.argv.slice(2).join(' ') === 'debug models --bundled') {
   await cinna.relaunch()
   await cinna.skipOnboarding()
   expect((await cinna.page.evaluate(() => window.api.localTools.list())).find((tool) => tool.id === 'codex')?.path).toBe(executable)
+  await cinna.page.evaluate((path) => window.api.settings.set('localAgentsCodexPath', path), executable)
   await cinna.page.evaluate(async (systemPrompt) => {
     await window.api.settings.set('autoChatTitles', false)
     await window.api.chatModes.upsert({ name: 'Plain Codex', engine: 'codex', providerId: null,

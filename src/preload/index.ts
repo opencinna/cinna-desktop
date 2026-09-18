@@ -56,7 +56,7 @@ import type {
   EngineBinaryState,
   LocalAgentRuntimeInput
 } from '../shared/engine'
-import { ENGINE_BINARY_CHANNEL } from '../shared/engine'
+import { CODEX_BINARY_CHANNEL, ENGINE_BINARY_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
 import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } from '../shared/localDevState'
@@ -1649,6 +1649,24 @@ const api = {
       const listener = (_event: IpcRendererEvent, state: EngineBinaryState): void => handler(state)
       ipcRenderer.on(ENGINE_BINARY_CHANNEL, listener)
       return () => ipcRenderer.off(ENGINE_BINARY_CHANNEL, listener)
+    },
+    /**
+     * The **managed Codex CLI** — the pinned copy Cinna downloads and verifies,
+     * or the explicit path from Settings. The same state shape as `binary`, a
+     * path as text and never a handle. A copy already on disk reads `ready`
+     * without anything being downloaded to find out.
+     */
+    codexBinary: (): Promise<EngineBinaryState> => ipcRenderer.invoke('engine:codex-binary'),
+    /**
+     * Install or re-check it now. Resolves with the resulting state — a failed
+     * install included — rather than rejecting, for the reason `resolve` does.
+     */
+    resolveCodex: (): Promise<EngineBinaryState> => ipcRenderer.invoke('engine:codex-resolve'),
+    /** Fires on every transition, download progress included. Returns an unsubscribe. */
+    onCodexState: (handler: (state: EngineBinaryState) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, state: EngineBinaryState): void => handler(state)
+      ipcRenderer.on(CODEX_BINARY_CHANNEL, listener)
+      return () => ipcRenderer.off(CODEX_BINARY_CHANNEL, listener)
     }
   },
 

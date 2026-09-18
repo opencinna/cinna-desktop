@@ -35,10 +35,51 @@ export function useEngineBinary() {
 export function useEngineWatch(): void {
   const queryClient = useQueryClient()
   useEffect(() => {
-    return window.api.engine.onState((state) => {
+    const offEngine = window.api.engine.onState((state) => {
       queryClient.setQueryData(ENGINE_BINARY_KEY, state)
     })
+    // The managed Codex CLI pushes on its own channel, download progress
+    // included — one subscription beside the engine's, for the same lifetime.
+    const offCodex = window.api.engine.onCodexState((state) => {
+      queryClient.setQueryData(CODEX_BINARY_KEY, state)
+    })
+    return () => {
+      offEngine()
+      offCodex()
+    }
   }, [queryClient])
+}
+
+export const CODEX_BINARY_KEY = ['codex-binary'] as const
+
+/**
+ * The managed Codex CLI, as Settings sees it: the pinned copy Cinna installs,
+ * or the explicit path the user set. Seeded once and then written from main's
+ * pushes, like {@link useEngineBinary} — the interesting transition is a ~90 MB
+ * download that the user who triggered it (by sending a message) is not
+ * watching from here.
+ */
+export function useCodexBinary() {
+  return useQuery<EngineBinaryState>({
+    queryKey: CODEX_BINARY_KEY,
+    queryFn: () => window.api.engine.codexBinary()
+  })
+}
+
+/**
+ * Install or re-check the Codex CLI now — the row's *Install now* / *Try again*.
+ *
+ * Owned by the settings section, not by the text action that fires it: pressing
+ * it moves the state to `resolving`, which unmounts that action, and a
+ * mutate-level callback would be dropped with it. Resolves with a `failed`
+ * state rather than rejecting, so the caller renders `data.error`.
+ */
+export function useResolveCodexBinary() {
+  const queryClient = useQueryClient()
+  return useMutation<EngineBinaryState>({
+    mutationFn: () => window.api.engine.resolveCodex(),
+    onSuccess: (state) => queryClient.setQueryData(CODEX_BINARY_KEY, state)
+  })
 }
 
 /**

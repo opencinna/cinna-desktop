@@ -17,6 +17,7 @@
 
 import type { ModelOrigin } from './runtimeDefaults'
 import type { WorkComplexity } from './modelFamilies'
+import { RUNTIME_PINS } from './runtimePins'
 
 /**
  * Where the running `opencode` binary came from.
@@ -54,8 +55,15 @@ export type EngineBinarySource = 'configured' | 'path' | 'managed'
 export type EngineBinaryState =
   /** Nobody has looked yet. The first turn, or Settings' *Check again*, looks. */
   | { state: 'unresolved' }
-  /** Looking now — which may be a download, once, of about a minute. */
-  | { state: 'resolving' }
+  /**
+   * Looking now — which may be a download, once, of about a minute.
+   *
+   * `received` / `total` are present only while bytes are actually arriving and
+   * only for a resolution that reports them (the managed Codex CLI, at ~90 MB).
+   * `total` is null when the server declared no length. Absent means "looking",
+   * not "0%": a configured path resolves without downloading anything.
+   */
+  | { state: 'resolving'; received?: number; total?: number | null }
   | {
       state: 'ready'
       /** Absolute path — shown in Settings, never fetched. */
@@ -70,8 +78,21 @@ export type EngineBinaryState =
 /** Main → renderer push whenever {@link EngineBinaryState} changes. */
 export const ENGINE_BINARY_CHANNEL = 'engine:binary-state'
 
-/** The pinned engine version this build downloads when it must manage one. */
-export const PINNED_ENGINE_VERSION = '1.18.27'
+/**
+ * Main → renderer push for the **managed Codex CLI**'s state. The same
+ * {@link EngineBinaryState} shape as the OpenCode binary, on its own channel so
+ * neither row can be written with the other's state.
+ */
+export const CODEX_BINARY_CHANNEL = 'engine:codex-binary-state'
+
+/**
+ * The pinned engine version this build downloads when it must manage one.
+ * Read from the pin manifest, which is the only place the number lives.
+ */
+export const PINNED_ENGINE_VERSION: string = RUNTIME_PINS.opencode.cli
+
+/** The Codex CLI version every Cinna-spawned Codex session runs on. */
+export const PINNED_CODEX_VERSION: string = RUNTIME_PINS.codex.cli
 
 /**
  * What actually runs an agent's turn.

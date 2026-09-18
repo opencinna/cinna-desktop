@@ -104,6 +104,32 @@ describe('app settings', () => {
     expect(appSettingsService.getAll().localAgentsEnginePath).toBe('')
   })
 
+  it('tells a listener a Codex path was saved — once per real change, after it is stored, and never as a failed save', () => {
+    // The binary service re-resolves from this. Mutation: drop the
+    // `previous === value` guard and re-saving the same path restarts a
+    // download already running for it; notify before `repo.set` and the
+    // re-resolution reads the OLD path.
+    const seenAtCall: string[] = []
+    const off = appSettingsService.onSaved('localAgentsCodexPath', () => {
+      seenAtCall.push(appSettingsService.getAll().localAgentsCodexPath)
+    })
+    const throwing = appSettingsService.onSaved('localAgentsCodexPath', () => { throw new Error('consequence failed') })
+    try {
+      expect(() => appSettingsService.set('localAgentsCodexPath', '/opt/codex')).not.toThrow()
+      appSettingsService.set('localAgentsCodexPath', '/opt/codex')
+      expect(() => appSettingsService.set('localAgentsCodexPath', 'relative/codex')).toThrow(/absolute path/i)
+      appSettingsService.set('localAgentsEnginePath', '/usr/local/bin/opencode')
+      appSettingsService.set('localAgentsCodexPath', '')
+      expect(seenAtCall).toEqual(['/opt/codex', ''])
+      off()
+      appSettingsService.set('localAgentsCodexPath', '/opt/other')
+      expect(seenAtCall).toHaveLength(2)
+    } finally {
+      off()
+      throwing()
+    }
+  })
+
   it('accepts empty, which means "resolve an engine for me"', () => {
     appSettingsService.set('localAgentsEnginePath', '/usr/local/bin/opencode')
     appSettingsService.set('localAgentsEnginePath', '')

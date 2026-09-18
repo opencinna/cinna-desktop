@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createCodexLauncher, type CodexLauncherDeps } from './codexLauncher'
+import { CODEX_NOT_INSTALLED, codexBinaryKnownFrom, createCodexLauncher, type CodexLauncherDeps } from './codexLauncher'
 import { isRefusal, type AcpLaunchContext } from './acpLaunchers'
 import type { AcpRuntimeMode } from './types'
 import { buildCodexEnv } from './codexEnv'
@@ -19,7 +19,9 @@ const kitContext: AcpLaunchContext = {
 }
 function deps(over: Partial<CodexLauncherDeps> = {}): CodexLauncherDeps {
   return {
-    path: async () => '/usr/local/bin/codex', auth: async () => ({ state: 'logged_in' }),
+    binary: async () => ({ path: '/usr/local/bin/codex' }),
+    binaryKnown: async () => ({ state: 'ready' }),
+    auth: async () => ({ state: 'logged_in' }),
     adapterEntry: () => '/app/codex-acp/dist/index.js',
     nodeRuntime: () => ({ command: '/app/Electron', args: [], env: { ELECTRON_RUN_AS_NODE: '1' } }),
     env: async () => ({ HOME: '/home/test', PATH: '/usr/bin' }),
@@ -79,7 +81,7 @@ describe('Codex ACP launcher', () => {
     if (isRefusal(baseline)) throw new Error(baseline.error)
     for (const over of [
       { systemPrompt: () => 'New instructions' },
-      { path: async () => '/other/codex' },
+      { binary: async () => ({ path: '/other/codex' }) },
       { settings: () => ({ model: 'chosen-model', effort: 'medium', approval: 'ask' as const }) },
       { settings: () => ({ model: null, effort: 'high', approval: 'ask' as const }) },
       { settings: () => ({ model: null, effort: 'medium', approval: 'auto' as const }) }
@@ -97,9 +99,12 @@ describe('Codex ACP launcher', () => {
     expect(plan.setup.modeId).toBe('agent')
   })
 
-  it('refuses missing installs and known logged-out installs before spawning', async () => {
+  it('refuses a failed install and a known logged-out install before spawning', async () => {
     const adapterEntry = vi.fn(() => '/adapter')
-    for (const over of [{ path: async () => null }, { auth: async () => ({ state: 'logged_out' as const }) }]) {
+    for (const over of [
+      { binaryKnown: async () => ({ state: 'failed' as const, error: 'no network' }), binary: async () => ({ error: 'no network' }) },
+      { auth: async () => ({ state: 'logged_out' as const }) }
+    ]) {
       const launcher = createCodexLauncher(deps({ ...over, adapterEntry }))
       expect((await launcher.readiness!()).state).not.toBe('ok')
       expect(isRefusal(await launcher.plan(context))).toBe(true)
@@ -107,12 +112,86 @@ describe('Codex ACP launcher', () => {
     expect(adapterEntry).not.toHaveBeenCalled()
   })
 
+  it('reports a failed install as not installed, with the remedy and the resolver’s sentence', async () => {
+    const launcher = createCodexLauncher(deps({
+      binaryKnown: async () => ({ state: 'failed', error: 'The downloaded Codex did not match its expected checksum.' })
+    }))
+    expect(await launcher.readiness!()).toEqual({
+      state: 'not_installed',
+      reason: CODEX_NOT_INSTALLED,
+      detail: 'The downloaded Codex did not match its expected checksum.'
+    })
+    // The remedy is Cinna's own retry, never "install it in a terminal": a PATH
+    // copy is not what spawned sessions run on.
+    expect(CODEX_NOT_INSTALLED).toMatch(/Try again in Settings/)
+    expect(CODEX_NOT_INSTALLED).not.toMatch(/terminal|npm|install it/i)
+  })
+
+  it('does not refuse while the managed CLI is merely not fetched yet, and never downloads to find out', async () => {
+    // Mutation: refuse on `pending` and no agent on a fresh machine can ever
+    // send the message that would fetch the CLI.
+    const binary = vi.fn(async () => ({ path: '/managed/codex' }))
+    const launcher = createCodexLauncher(deps({ binary, binaryKnown: async () => ({ state: 'pending' }) }))
+    expect(await launcher.readiness!()).toEqual({ state: 'ok', reason: null })
+    expect(binary).not.toHaveBeenCalled()
+  })
+
+  it('Check again on a failed install starts the retry and answers pending without waiting for the download', async () => {
+    // Mutation: `await deps.refresh()` — the agent card's Check again and the
+    // build composer then sit on a ~90 MB download with a ten-minute ceiling.
+    const refresh = vi.fn(() => new Promise<never>(() => undefined))
+    const failed = { state: () => ({ state: 'failed' as const, error: 'no network' }), refresh, known: async () => null }
+    const answer = await Promise.race([
+      codexBinaryKnownFrom(failed, { fresh: true }),
+      new Promise((resolve) => setTimeout(() => resolve('waited for the download'), 50))
+    ])
+    expect(answer).toEqual({ state: 'pending' })
+    expect(refresh).toHaveBeenCalledTimes(1)
+    // Without `fresh` nothing is started and the failure is reported as it stands.
+    expect(await codexBinaryKnownFrom(failed)).toEqual({ state: 'failed', error: 'no network' })
+    expect(refresh).toHaveBeenCalledTimes(1)
+    // A retry that rejects must not surface as an unhandled rejection.
+    expect(await codexBinaryKnownFrom({ ...failed, refresh: async () => { throw new Error('boom') } }, { fresh: true })).toEqual({ state: 'pending' })
+  })
+
+  it('reports a copy from an earlier run as ready with one stat, and never refreshes to find out', async () => {
+    const refresh = vi.fn(async () => undefined)
+    expect(await codexBinaryKnownFrom({ state: () => ({ state: 'unresolved' }), refresh, known: async () => '/managed/codex' }, { fresh: true })).toEqual({ state: 'ready' })
+    expect(await codexBinaryKnownFrom({ state: () => ({ state: 'resolving' }), refresh, known: async () => null })).toEqual({ state: 'pending' })
+    expect(await codexBinaryKnownFrom({ state: () => ({ state: 'ready' }), refresh, known: async () => null })).toEqual({ state: 'ready' })
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it('resolves the binary at the top of the turn and hands a download failure back in words', async () => {
+    const sentence = 'The downloaded Codex did not match its expected checksum, so it was discarded. Check your connection and try again.'
+    const auth = vi.fn(async () => ({ state: 'logged_in' as const }))
+    // `binaryKnown` says pending, so only `binary()` can produce this refusal.
+    const launcher = createCodexLauncher(deps({
+      binaryKnown: async () => ({ state: 'pending' }), binary: async () => ({ error: sentence }), auth
+    }))
+    expect(await launcher.plan(context)).toEqual({ error: sentence })
+    // The login is a question for the binary; with none, it is not asked.
+    expect(auth).not.toHaveBeenCalled()
+  })
+
+  it('asks the login only after the binary is resolved', async () => {
+    const order: string[] = []
+    const launcher = createCodexLauncher(deps({
+      binary: async () => { order.push('binary'); return { path: '/managed/codex' } },
+      auth: async () => { order.push('auth'); return { state: 'logged_in' } }
+    }))
+    const plan = await launcher.plan(context)
+    if (isRefusal(plan)) throw new Error(plan.error)
+    expect(order).toEqual(['binary', 'auth'])
+    expect(plan.spec.env.CODEX_PATH).toBe('/managed/codex')
+  })
+
   it('allows unknown auth, refreshes readiness, and explains a packaging failure', async () => {
-    const path = vi.fn(async () => '/bin/codex')
+    const binaryKnown = vi.fn(async () => ({ state: 'ready' as const }))
     const auth = vi.fn(async () => ({ state: 'unknown' as const }))
-    const launcher = createCodexLauncher(deps({ path, auth }))
+    const launcher = createCodexLauncher(deps({ binaryKnown, auth }))
     expect(await launcher.readiness!({ fresh: true })).toEqual({ state: 'ok', reason: null })
-    expect(path).toHaveBeenCalledWith({ fresh: true })
+    expect(binaryKnown).toHaveBeenCalledWith({ fresh: true })
     expect(auth).toHaveBeenCalledWith({ fresh: true })
     expect(isRefusal(await launcher.plan(context))).toBe(false)
     expect(await createCodexLauncher(deps({ adapterEntry: () => { throw Error() } })).plan(context)).toEqual({ error: expect.stringContaining('adapter is missing') })
@@ -171,6 +250,42 @@ describe('Codex CLI authentication', () => {
     await auth.refresh()
     expect(probe).toHaveBeenCalledTimes(2)
     expect(await new CodexAuthProbe({ path: async () => { throw Error() }, env: async () => ({}) }).status()).toEqual({ state: 'unknown' })
+  })
+
+  it('does not cache "there was no binary to ask", so the turn that installs it still checks the login', async () => {
+    // The managed CLI arrives with the first turn. Mutation: cache the pathless
+    // `unknown` and a logged-out install sails past the launcher for 30 seconds.
+    let path: string | null = null
+    const probe = vi.fn(async () => ({ state: 'logged_out' as const }))
+    const auth = new CodexAuthProbe({ path: async () => path, env: async () => ({}), probe })
+    expect(await auth.status()).toEqual({ state: 'unknown' })
+    expect(probe).not.toHaveBeenCalled()
+    path = '/managed/codex'
+    expect(await auth.status()).toEqual({ state: 'logged_out' })
+    expect(probe).toHaveBeenCalledWith(expect.objectContaining({ path: '/managed/codex' }))
+  })
+
+  it('forgets the answer when the binary changes, without asking, and drops a probe still in flight', async () => {
+    // Mutation: make `invalidate` a no-op — a new Codex Path keeps reporting
+    // the old CLI's login for thirty seconds.
+    let path = '/old/codex'
+    let release: (value: { state: 'logged_in' }) => void = () => undefined
+    const probe = vi.fn(async (input: { path: string }) => input.path === '/old/codex'
+      ? new Promise<{ state: 'logged_in' }>((resolve) => { release = resolve })
+      : { state: 'logged_out' as const })
+    const auth = new CodexAuthProbe({ path: async () => path, env: async () => ({}), probe })
+    const stale = auth.status()
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1))
+    path = '/new/codex'
+    auth.invalidate()
+    expect(probe).toHaveBeenCalledTimes(1)
+    // Not the stale in-flight promise: a new question, of the new binary.
+    expect(await auth.status()).toEqual({ state: 'logged_out' })
+    release({ state: 'logged_in' })
+    expect(await stale).toEqual({ state: 'logged_in' })
+    // The old binary's late answer was not kept over the new one's.
+    expect(await auth.status()).toEqual({ state: 'logged_out' })
+    expect(probe).toHaveBeenCalledTimes(2)
   })
 
   it('preserves the selected CLI profile and strips shell billing and adapter overrides', () => {

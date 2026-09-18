@@ -21,7 +21,7 @@ These are the original OpenCode/Claude probe conditions. Their live-model measur
 | | |
 |---|---|
 | Protocol | ACP **v1** (`protocolVersion: 1`), `@agentclientprotocol/sdk` 1.4.0. v2 is a draft that removes client-side `fs/*` and `terminal/*`; this client declares neither and is forward-compatible |
-| OpenCode | `1.18.27` — the version pinned in `src/shared/engine.ts` — launched as `opencode acp` (stdio). Same binary, same SHA-256 and same archive layout as the pinned download the desktop verifies |
+| OpenCode | `1.18.27` — the version pinned in `src/shared/runtimePins.ts` — launched as `opencode acp` (stdio). Same binary, same SHA-256 and same archive layout as the pinned download the desktop verifies |
 | Claude | `@agentclientprotocol/claude-agent-acp` **0.76.0**, running on this build's Node (`ELECTRON_RUN_AS_NODE=1`), driving the user's own `claude` **2.1.267** through `CLAUDE_CODE_EXECUTABLE` |
 | Platform | `darwin-arm64` |
 | Credential | OpenCode: a real key, reaching the process only as the `CINNA_ENGINE_KEY_…` variable its config names. Claude: the user's own claude.ai login, held in the login Keychain, with **no API key anywhere in the environment** |
@@ -41,7 +41,8 @@ remained inside the adjacent archive. The installed peer tree also differed from
 what electron-builder shipped: the Claude SDK's `@modelcontextprotocol/sdk` peer
 needed an explicit production dependency. Both adapters' dependency trees are now
 discovered before packing and the shipped required manifest tree is checked after
-packing, including cross-builds. The user's Claude/Codex executables remain external.
+packing, including cross-builds. Neither CLI is packaged: Claude's is the user's own, and Codex's is
+the pinned copy Cinna downloads at run time (or the user's configured path).
 
 Verified on the signed macOS arm64 package: both adapters completed ACP v1 `initialize` using
 the packaged Electron executable and isolated copies outside the checkout. Codex's
@@ -329,7 +330,9 @@ from the decision, and with it the grants and the transcript's record.
 
 ## Codex over `@agentclientprotocol/codex-acp`
 
-The pinned adapter is **1.11.0**, with an upstream Codex dependency range **^0.153.4**. It bridges ACP to the user's installed `codex app-server`, selected explicitly by `CODEX_PATH`; Cinna excludes the dependency's bundled CLI from its packaged app. This range is compatibility evidence from the package, not a version gate enforced by Cinna.
+The pinned adapter is **1.11.0**, with an upstream Codex dependency range **^0.153.4**. It bridges ACP to a `codex app-server`, selected explicitly by `CODEX_PATH`; Cinna excludes the dependency's bundled CLI from its packaged app. That range is compatibility evidence from the package, not a version gate enforced by Cinna.
+
+**Which `codex` that is, is no longer the user's.** `CODEX_PATH` names the pinned CLI Cinna downloads and verifies — the version in `src/shared/runtimePins.ts` — or an explicit Codex Path from Settings, labelled unverified. A `codex` on the user's PATH is never what a spawned session runs. The reason is the one this document exists for: a finding is true of the version it was watched on, and when the CLI was whatever the user had installed, nothing here could be said of the CLI a given user was actually running. Pinning makes the version under test the version that runs. This is a statement about Codex only; Claude still drives the user's own `claude`, and every Claude finding in this document keeps its original conditions.
 
 **Watched through the actual adapter, with a scripted app-server peer:** `src/main/agents/drivers/acp/codexAdapter.test.ts` runs an isolated copy over real stdio and observes text streaming, native approval and question round trips, cancellation, thread creation and resume. `CODEX_CONFIG` reaches both thread paths with the assembled developer instructions, optional model and reasoning effort. The test observes turn arguments for `on-request`, reviewer `user`, workspace-write and network disabled. The built-Electron `e2e/specs/codex-engine.spec.ts` also covers this production launcher path, persistent settings and resume after restart. Neither test calls a real model.
 
@@ -339,7 +342,17 @@ The pinned adapter is **1.11.0**, with an upstream Codex dependency range **^0.1
 
 **Questions:** the declared `elicitation.form` capability bridges native `requestUserInput`. Companion fields marked `_meta.codex.isOtherAnswer` are excluded from the visible questions; the original field ID receives either a chosen label or custom text. URL elicitation is not advertised. Of the AIR capabilities, Codex is sent `asyncTasks` only, never `nativeSubagentSessions`, and its subagents are read off the root session's tool calls ([why](#session-activity-over-the-air-extension)).
 
-The [Codex technical reference](codex_engine_tech.md) owns the exact configuration, diagnostics and test inventory. Native CLI sandbox behavior, real reviewer decisions, login/provider variants and version compatibility remain separate live validation work; the original OpenCode/Claude measurements above are not claims about Codex.
+**Checked against the real binary:** the [Codex Interface Contract](contracts/codex_interface.md) lists every CLI and adapter interface Cinna relies on, each with one test run against the pinned CLI and the patched adapter over a loopback fake provider. It is generated from the registry; this section keeps the reasoning.
+
+**Watched by that contract, on the pinned CLI, and worth knowing before changing anything near it:**
+
+- **`tools/list_changed` is ignored mid-session.** A tool added after `session/new` is not offered to the model on the next turn; the list is fixed at session creation. This is why a Codex conductor whose tools change is given a new session. The entry pins the *ignoring*, in both directions: if a release starts adopting the notification the workaround is dead weight, and while it holds, removing the workaround makes a specialist attached mid-chat never callable
+- **Every Cinna MCP call raises `session/request_permission`**, `kind: "execute"`, with an `allow_once` option and the `toolCallId` of the `tool_call` update that named the tool. The request itself carries no title and no `rawInput`, so it is recognised as Cinna's only through that earlier update
+- **A provider 429 is not an error.** `session/prompt` ends `end_turn` with no error, no `errorKind` and no AIR session failure; the limit shows only as `_meta.codex.threadStatus.type: "systemError"` and as assistant text naming the 429. **This is a known gap, not a design**: the driver pauses a rate-limited chat on `error.data.errorKind === "rate_limit"`, which is the Claude adapter's shape and one Codex never sends, so on Codex a rate limit reads as a finished turn
+- **The CLI sends provider requests nobody scripted.** A thread-title request once per session beside its first turn — on `gpt-5.6-luna` whatever model the session uses, strict `json_schema` output, carrying the user's first message verbatim but not Cinna's session instructions — and one compaction request after a model change, on the model being *left*, with no tools. A thread still untitled after `session/load` is asked for again on its next turn. No other request is made, and neither is offered a tool a restricted session is not allowed; that last clause is what keeps the no-native-tools guarantee from being broken through a request Cinna never wrote
+- **`session/load` keeps the collaboration mode the session was left in**, which is why setup is re-applied after every load rather than only after `session/new`
+
+The [Codex technical reference](codex_engine_tech.md) owns the exact configuration, diagnostics and test inventory. Native CLI sandbox behavior, real reviewer decisions and login/provider variants remain separate live validation work, and the contract's provider is a fake — it establishes what the CLI sends and accepts, not what a paid model does; the original OpenCode/Claude measurements above are not claims about Codex.
 
 ## The steering extension
 
@@ -483,7 +496,7 @@ Three corrections from this phase, all found by the real binaries after the fake
 ## 6. Still unverified
 
 - **Gemini CLI (`gemini --acp`).** No launcher exists and no question capability is claimed.
-- **Codex native execution.** The implemented pinned adapter is tested against a scripted native app server. A real paid-model turn, live account login, automatic-review decisions, native sandbox enforcement and a CLI-version/platform matrix are not established by those tests
+- **Codex native execution.** The pinned adapter is tested against a scripted native app server, and the pinned CLI against a loopback fake provider. A real paid-model turn, live account login, automatic-review decisions and native sandbox enforcement are not established by either. There is no CLI-version matrix and none is needed for the managed copy, which is one version; a configured Codex Path is outside every claim here
 - **Whether OpenCode will bridge a question to `elicitation/create`** in a later version. Today it
   does not, and the desktop's capability answer says so
 - **Remote ACP transports** (Streamable HTTP, WebSocket) are an active RFD upstream, not shipped.

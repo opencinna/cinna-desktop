@@ -60,6 +60,18 @@ export interface AppSettingsSchema {
    */
   localAgentsEnginePath: string
   /**
+   * Absolute path to a `codex` executable, or empty. Empty is the normal case:
+   * every Cinna-spawned Codex session runs on the pinned CLI this app downloads
+   * and verifies. A path here overrides that and is **not** version-checked, so
+   * Settings labels it unverified — it is the escape hatch for a platform with
+   * no pinned build, and for trying a candidate version before it becomes the
+   * pin. The user's PATH copy is never used for a spawned session either way.
+   *
+   * Absolute-only, like the engine path, and for the same reason: whether it
+   * runs is answered by the resolver and reported as state.
+   */
+  localAgentsCodexPath: string
+  /**
    * The developer tool a local agent folder opens in by default — a
    * {@link LocalToolId} of a `cli-assistant` or `editor`, or empty for "ask".
    * The agent page's Open-in button launches it in one click, and picking a

@@ -32,7 +32,10 @@ export default defineConfig({
           environment: 'node',
           include: ['src/**/*.test.ts'],
           // Replaces vitest's default exclude list, hence node_modules here.
-          exclude: ['**/node_modules/**', 'src/renderer/**']
+          // The interface-contract tests need a real managed CLI and run from
+          // `vitest.contract.config.ts` (`npm run test:contract`). Only that folder:
+          // `customLauncher.contract.test.ts` is an ordinary unit test and stays.
+          exclude: ['**/node_modules/**', 'src/renderer/**', 'src/main/agents/drivers/acp/contracts/*.contract.test.ts']
         }
       },
       {

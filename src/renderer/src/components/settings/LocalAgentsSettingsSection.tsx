@@ -29,7 +29,13 @@ import { useProviders } from '../../hooks/useProviders'
 import { useDefaultChatMode } from '../../hooks/useChatModes'
 import { ManageRootAgentsDialog } from './ManageRootAgentsDialog'
 import { RootRepositoryDialog } from './RootRepositoryDialog'
-import { useEngineBinary, useResolveEngineBinary } from '../../hooks/useEngine'
+import { codexStatusText } from './codexStatus'
+import {
+  useCodexBinary,
+  useEngineBinary,
+  useResolveCodexBinary,
+  useResolveEngineBinary
+} from '../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { useAgentsHomeStore } from '../../stores/agentsHome.store'
@@ -97,6 +103,11 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const openIn = useOpenIn()
   const { data: binary } = useEngineBinary()
   const resolveBinary = useResolveEngineBinary()
+  const { data: codexBinary } = useCodexBinary()
+  // Owned here, not by the text action that fires it: pressing it moves the
+  // state to `resolving`, which changes that action, and a mutation owned by a
+  // control that re-renders away loses its callbacks (ux_rules rule 5).
+  const resolveCodex = useResolveCodexBinary()
   const { data: appSettings } = useAppSettings()
   const setAppSetting = useSetAppSetting()
   const { tool: defaultTool, launchable } = useDefaultTool()
@@ -259,13 +270,22 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
         tone: binary?.state === 'failed' ? 'danger' : 'muted'
       }
     }
+    if (selectedRuntime === 'codex') {
+      /**
+       * The **managed** CLI's state, not PATH detection: every Codex session
+       * runs on the pinned copy Cinna installs (or the explicit path), so
+       * whether a `codex` is on the user's PATH is no longer a fact about
+       * whether their agents can run. Same vocabulary, same one line and same
+       * tones as the OpenCode branch above — only `failed` is not muted.
+       */
+      return {
+        text: codexStatusText(codexBinary, (appSettings?.localAgentsCodexPath ?? '').trim() !== ''),
+        tone: codexBinary?.state === 'failed' ? 'danger' : 'muted'
+      }
+    }
     // Detection in flight is not "not installed": saying so would put the full
     // warning on screen for half a second on a machine that has Claude Code.
     if (tools === undefined) return { text: '', tone: 'muted' }
-    if (selectedRuntime === 'codex') {
-      const codex = tools.find((tool) => tool.id === 'codex' && tool.available)
-      return { text: codex ? `Codex ${codex.version ?? 'installed'} — uses your CLI login and configuration.` : 'Codex CLI not found — agents on it cannot run.', tone: codex ? 'muted' : 'warning' }
-    }
     if (!claudeTool) {
       return {
         // "Agents on it": the ones that name no runtime of their own, which is
@@ -590,8 +610,9 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
           <SettingsInfoTip label="About the Runtime section">
             <p>
               A folder agent runs on a <strong>runtime</strong>: a program on this machine that
-              drives the model, calls the tools and asks you for permission. Cinna knows two —
-              your own Claude Code, and OpenCode, which it downloads and verifies for itself.
+              drives the model, calls the tools and asks you for permission. Cinna knows three —
+              your own Claude Code, and Codex and OpenCode, which it downloads and verifies for
+              itself at the version it was tested against.
             </p>
             <p>
               An agent whose folder names a runtime always gets that one. Everything on this
@@ -637,6 +658,7 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
             <RuntimeChoiceButtons
               selected={selectedRuntime}
               tools={tools}
+              codexBinary={codexBinary}
               installing={install.isPending ? (install.variables ?? null) : null}
               onSelect={(engine) =>
                 setAppSetting.mutate({ key: 'localAgentsDefaultEngine', value: engine })
@@ -699,6 +721,31 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
                   {resolveBinary.isPending ? 'Looking…' : 'Try again'}
                 </button>
               )}
+              {/*
+                The managed Codex CLI's action, in the same slot and the same
+                shape. Two states a user can act on: a failed install (*Try
+                again*), and nothing fetched yet (*Install now*) — the download
+                is ~90 MB, and the alternative is paying for it at the top of
+                the first Codex message. `|| isPending` for the reason above:
+                pressing it leaves both of those states.
+              */}
+              {selectedRuntime === 'codex' &&
+                (codexBinary?.state === 'failed' ||
+                  codexBinary?.state === 'unresolved' ||
+                  resolveCodex.isPending) && (
+                  <button
+                    type="button"
+                    onClick={() => resolveCodex.mutate()}
+                    disabled={resolveCodex.isPending}
+                    className="shrink-0 text-[13px] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline"
+                  >
+                    {resolveCodex.isPending
+                      ? 'Installing…'
+                      : codexBinary?.state === 'failed'
+                        ? 'Try again'
+                        : 'Install now'}
+                  </button>
+                )}
             </div>
           </SettingsRow>
           <SettingsRow>

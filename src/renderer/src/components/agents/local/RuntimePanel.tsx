@@ -10,7 +10,7 @@ import { useDefaultChatMode } from '../../../hooks/useChatModes'
 import { useModels } from '../../../hooks/useModels'
 import { useProviders } from '../../../hooks/useProviders'
 import { useClaudeAuth, useCodexAuth, useLocalTools } from '../../../hooks/useLocalTools'
-import { useDefaultRuntime, useEngineBinary } from '../../../hooks/useEngine'
+import { useCodexBinary, useDefaultRuntime, useEngineBinary } from '../../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
 import { credentialOptionLabel } from '../../../utils/credentialLabel'
 import { findCredentialByReference, isCredentialUsable } from '../../../../../shared/credentials'
@@ -21,6 +21,7 @@ import {
   DEFAULT_AGENT_ENGINE,
   effectiveEngine,
   isAgentEngine,
+  PINNED_CODEX_VERSION,
   type AgentEngine,
   type ClaudeAuthState
 } from '../../../../../shared/engine'
@@ -299,10 +300,25 @@ function ClaudeStatus({
   label = 'Claude Code',
   tool,
   unknown,
-  auth
+  auth,
+  hint,
+  missingText = 'Not installed'
 }: {
   label?: string
   tool?: { path: string | null; version: string | null }
+  /**
+   * What the cell says when there is no tool. "Not installed" is a statement
+   * about a CLI the user installs; for one Cinna manages the only tool-less
+   * state is an install that failed, and the sentence beside the cell and the
+   * summary badge both already say *Install failed*.
+   */
+  missingText?: string
+  /**
+   * The tooltip when there is no path to show. Without it the fallback is "none
+   * was found on this machine" — true for a CLI the user installs, false for
+   * one Cinna manages and simply has not fetched yet.
+   */
+  hint?: string
   /** Detection is still in flight — say so rather than denying an install. */
   unknown?: boolean
   /** What the login probe found, or undefined while it is still asking. */
@@ -326,7 +342,7 @@ function ClaudeStatus({
   // needs 232px and was therefore permanently truncated at every width from
   // 1200px up, which is where a default-sized window sits (ux_rules rule 7).
   // The reserved line below carries the explanation; this cell names the state.
-  const text = tool ? `${label}${tool.version ? ` ${tool.version}` : ''}` : 'Not installed'
+  const text = tool ? `${label}${tool.version ? ` ${tool.version}` : ''}` : missingText
   /**
    * **Warning for a login this app knows is missing, and only for that.**
    *
@@ -360,7 +376,7 @@ function ClaudeStatus({
       dot={dot}
       tone={tool ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-danger)]'}
       text={text}
-      title={tool?.path ?? `No ${label} was found on this machine.`}
+      title={tool?.path ?? hint ?? `No ${label} was found on this machine.`}
     />
   )
 }
@@ -524,6 +540,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
   const { data: claudeAuth } = useClaudeAuth()
   const { data: codexAuth } = useCodexAuth()
   const { data: binary } = useEngineBinary()
+  const { data: codexBinary } = useCodexBinary()
   const declaredCredential = agent.runtime?.credential ?? null
   const declaredModel = agent.runtime?.model ?? null
   /**
@@ -611,7 +628,28 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
   const claudeTool = (tools ?? []).find((tool) => tool.id === 'claude' && tool.available)
   const onCodex = effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'codex'
   const onCli = onClaude || onCodex
-  const codexTool = (tools ?? []).find((tool) => tool.id === 'codex' && tool.available)
+  /**
+   * **The managed CLI's state, not PATH detection.** Every Codex session runs on
+   * the pinned copy Cinna installs — or the explicit path from Settings — so a
+   * `codex` on the user's PATH says nothing about whether this agent can run.
+   * Codex is therefore *here* in every state but one: an install that failed.
+   * "Not fetched yet" is not a problem to report; the first Codex turn fetches
+   * it, exactly as OpenCode's binary arrives.
+   *
+   * Shaped like a detected tool on purpose, so the four reads below — the
+   * reserved line, the summary badge, whether the option is offered, and the
+   * engine cell — keep asking one question.
+   */
+  const codexTool =
+    codexBinary?.state === 'failed'
+      ? undefined
+      : {
+          path: codexBinary?.state === 'ready' ? codexBinary.path : null,
+          version:
+            codexBinary?.state === 'ready' && codexBinary.source === 'configured'
+              ? (codexBinary.version?.replace(/^codex-cli\s+/i, '') ?? null)
+              : `${PINNED_CODEX_VERSION} managed`
+        }
   /**
    * Detection has not answered yet.
    *
@@ -1006,8 +1044,11 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
      * does not fully control.
      */
     if (onCodex) {
-      if (toolsUnknown) return null
-      if (!codexTool) return { text: 'Codex CLI is needed. Install it in Settings → Agents → Runtime.', tone: DANGER }
+      // Its own state query, not PATH detection: see `codexTool`.
+      if (codexBinary === undefined) return null
+      // Only a failed install reaches here. Remedy first: the line is measured
+      // to clip, and "try again" is the half the user needs (ux_rules rule 7).
+      if (!codexTool) return { text: 'Try again in Settings → Agents → Runtime: Codex could not be installed.', tone: DANGER }
       if (codexAuth?.state === 'logged_out') return { text: 'Run `codex login` in a terminal, then check again.', tone: DANGER }
       return { text: `Codex uses your CLI login and configuration, on ${declaredModel ?? 'its configured default model'}, with ${codexEffortForComplexity(declaredComplexity)} reasoning effort.`, tone: NOTE }
     }
@@ -1506,7 +1547,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
       : !credentialMissing && modelsLoaded ? nameOf(choice.modelId) : null
     const issue = unsupportedEngine ? 'Update required'
       : engineUnknown ? null
-      : onCodex ? (!codexTool && !toolsUnknown ? 'Install required' : codexAuth?.state === 'logged_out' ? 'Sign-in required' : null)
+      : onCodex ? (!codexTool ? 'Install failed' : codexAuth?.state === 'logged_out' ? 'Sign-in required' : null)
       : onClaude ? (claudeAuth?.state === 'logged_out' ? 'Sign-in required' : null)
       : credentialMissing || (providers !== undefined && !effectiveProvider) ? 'AI credential needed'
       : status?.tone === DANGER || status?.tone === WARN ? 'Setup needed' : null
@@ -1810,7 +1851,20 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
             does not reflow; only what it reports changes.
           */}
           {onCodex ? (
-            <ClaudeStatus label="Codex" tool={codexTool} unknown={toolsUnknown} auth={codexAuth?.state} />
+            <ClaudeStatus
+              label="Codex"
+              tool={codexTool}
+              // Not `toolsUnknown`: that is PATH detection, which this engine
+              // no longer depends on. Only its own state query can be unknown.
+              unknown={codexBinary === undefined}
+              auth={codexAuth?.state}
+              missingText="Install failed"
+              hint={
+                codexTool
+                  ? `Cinna downloads and verifies Codex ${PINNED_CODEX_VERSION} the first time a Codex agent runs.`
+                  : 'Codex could not be installed. Try again in Settings → Agents → Runtime.'
+              }
+            />
           ) : onClaude ? (
             <ClaudeStatus tool={claudeTool} unknown={toolsUnknown} auth={claudeAuth?.state} />
           ) : (
