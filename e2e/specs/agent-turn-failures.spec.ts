@@ -5,6 +5,7 @@ import { test, expect } from '../fixtures/app'
 const AGENT = 'Failure Reporting Agent'
 const PROMPT = 'Validate the quarterly briefing before publication.'
 const FAILED_TASK_ERROR = 'The quarterly briefing failed validation: cedar-7632.'
+const TASK_FAILED = 'The agent reported that its task failed.'
 const RPC_ERROR = 'The briefing service could not execute this request: maple-5291.'
 
 interface Request { method: string; text: string }
@@ -78,6 +79,7 @@ for (const streaming of [true, false]) {
       await cinna.page.getByText(title, { exact: true }).click()
       await cinna.page.getByRole('button', { name: 'Run', exact: true }).click()
       await expect(cinna.page.getByText(error, { exact: true })).toBeVisible()
+      if (streaming) await expect(cinna.page.getByText(TASK_FAILED, { exact: true })).toBeVisible()
       await expect(cinna.page.getByRole('button', { name: 'Send', exact: true })).toBeVisible()
       await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
       await expect.poll(() => cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId))
@@ -88,9 +90,12 @@ for (const streaming of [true, false]) {
       const task = await cinna.page.evaluate((id) => window.api.tasks.get(id), run.taskId!)
       expect(task).toMatchObject({ status: 'error', chatId: run.localChatId, jobId })
       const chat = await cinna.page.evaluate((id) => window.api.chat.get(id), run.localChatId!)
-      expect(chat?.messages.map((message) => message.role)).toEqual(['user', 'error'])
+      // A failed task's own answer is kept as a row above the error, which then
+      // says only that it failed, so the agent's words appear once.
+      expect(chat?.messages.map((message) => message.role)).toEqual(streaming ? ['user', 'assistant', 'error'] : ['user', 'error'])
       expect(chat?.messages[0].content).toBe(PROMPT)
-      expect(JSON.parse(chat!.messages[1].content)).toMatchObject({ short: error })
+      if (streaming) expect(chat?.messages[1].content).toBe(error)
+      expect(JSON.parse(chat!.messages.at(-1)!.content)).toMatchObject({ short: streaming ? TASK_FAILED : error })
       await expect(cinna.page.getByText(error, { exact: true })).toHaveCount(1)
       await cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true }).fill('I can retry after fixing the report.')
       await expect(cinna.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
