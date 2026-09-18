@@ -159,6 +159,7 @@ Defines message presentation, transcript text actions and unsent composer state.
 
   A nested snippet's outer closer is usually the last bare fence so far, and unclosed, so a typical nested reply shows as written while it streams and is repaired when the turn finalizes. The rule is local, not a proof. In a chain, the closer is itself a broken snippet that a later fence repairs. There the repair shown while streaming gives way to that later one, as soon as the later block's closing fence arrives, which can be before the turn finalizes. The layout moves once, and a fence that had been widened goes back.
 - **One text for everything that reads a message.** The bubble's rendered Markdown, its source for Copy text and Save to Notes, and the text file references resolve over are the same repaired string. A copied snippet would otherwise keep the broken nesting or the zero-width escapes, and a path in prose that a broken fence swallowed would never be offered for resolution.
+- **A message that opens with YAML frontmatter shows it as a key/value card above the text**, user and assistant alike. `react-markdown` would render the block as a rule over one bold setext heading, which is what a reply quoting a spec file whole looked like. The card is display only: Copy text and Save to Notes still take the message as written, frontmatter included. The card and its rules are described in [File Preview](../file_preview/file_preview.md#frontmatter).
 - **The repair is for text bubbles; the box is for every Markdown body.** User and assistant text bubbles, live and saved, go through the repair. Thinking, tool narration, command results, notes and file previews render their text as written. The code-block border, light fill and light palette are Markdown-body rules, so they reach all of those surfaces too.
 
 ## Architecture Overview
@@ -169,7 +170,7 @@ Transcript right-click on a selection → captured text → clipboard, or Notes 
 
 MainArea chat selection → stationary-layout curtain; [Appearance](../../ui/appearance/appearance.md) owns the animation, not transcript scrolling.
 
-Message text → attachment tags stripped (assistant) → nested code fences repaired → rendered Markdown and Copy/Save source. File reference resolution repairs the same text the same way before scanning it.
+Message text → attachment tags stripped (assistant) → nested code fences repaired → Copy/Save source, and, with any leading frontmatter split off into a card, the rendered Markdown. File reference resolution repairs the same text the same way before scanning it.
 
 ```
 MessageStream

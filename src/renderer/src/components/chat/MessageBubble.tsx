@@ -7,6 +7,7 @@ import rehypeHighlight from 'rehype-highlight'
 import { MetaPopup } from './MetaPopup'
 import { FileRefContext, chatMarkdownComponents } from './fileRefs'
 import { repairNestedFences } from '../../utils/nestedFences'
+import { useFrontmatter } from '../ui/FrontmatterTable'
 
 const REMARK_PLUGINS = [remarkGfm]
 const USER_REMARK_PLUGINS = [remarkGfm, remarkBreaks]
@@ -34,14 +35,20 @@ const MarkdownContent = memo(function MarkdownContent({
   highlight: boolean
   breaks?: boolean
 }): React.JSX.Element {
+  // A reply that quotes a file whole, or a pasted spec, opens with its
+  // frontmatter; shown as a card rather than a rule over one bold heading.
+  const { card, body } = useFrontmatter(content, 'mb-3')
   return (
-    <Markdown
-      remarkPlugins={breaks ? USER_REMARK_PLUGINS : REMARK_PLUGINS}
-      rehypePlugins={highlight ? [rehypeHighlight] : []}
-      components={chatMarkdownComponents}
-    >
-      {content}
-    </Markdown>
+    <>
+      {card}
+      <Markdown
+        remarkPlugins={breaks ? USER_REMARK_PLUGINS : REMARK_PLUGINS}
+        rehypePlugins={highlight ? [rehypeHighlight] : []}
+        components={chatMarkdownComponents}
+      >
+        {body}
+      </Markdown>
+    </>
   )
 })
 import { presetForAgentId } from '../../utils/agentColors'

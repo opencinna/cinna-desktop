@@ -113,13 +113,35 @@
       - Mouse leave or blur clears `hovered` and `suppressed`.
       - The hint shows while `result` is set, or while `hovered` and not `suppressed`.
     - The hint is a `role="status"`, `aria-live="polite"` span: `absolute left-0 top-full`, `pointer-events-none`, shown and hidden by opacity with a 200 ms transition. A `shownHint` ref keeps the last visible text, so the words do not change while it fades.
-  - **Also in this file:** `PreviewBody`, `JsonPreview` (pretty-print with a raw fallback), `CsvPreview` (filter/sort), the `parseDelimited` / `compareCells` helpers, and the `MAX_PREVIEW_ROWS = 500` render cap.
+  - **Also in this file:** `PreviewBody`, `MarkdownPreview` (`useFrontmatter(text)`, then the card above the `file-preview-markdown markdown-body` wrapper, whose `react-markdown` gets only `body`), `JsonPreview` (`useParsedJson(text)`, then `<JsonTreeBoundary key={text} fallback={raw}><JsonTree/></JsonTreeBoundary>`, or the raw text in a `<pre>` when it is `null`), `CsvPreview` (filter/sort), the `parseDelimited` / `compareCells` helpers, and the `MAX_PREVIEW_ROWS = 500` render cap.
+- `src/renderer/src/components/chat/JsonTree.tsx`:
+  - `JsonTree({ value })`, a `data-testid="json-tree"` block of plain rows with disclosure buttons (`aria-expanded` on each chevron) — deliberately not an ARIA `tree`, which needs focusable items and arrow-key navigation, and whose rows here hold buttons and links of their own. Fold state is a `Set` of container paths (`""` is the root, then `/` + each URI-encoded key or index), seeded once by `defaultCollapsed`; `JsonPreview` keys it by the file text, so new text remounts it with a fresh default instead of reusing stale paths.
+  - `defaultCollapsed`: `countValues` (capped walk) above `EXPAND_ALL_LIMIT` (2000) → every container path at depth ≥ `FOLDED_DEPTH` (1); otherwise only those at depth ≥ `MAX_OPEN_DEPTH` (32). `containerPaths` and `countValues` are iterative: `JSON.parse` accepts nesting (5000 levels) that overflowed the first, recursive walk.
+  - A container shows `CHILD_PAGE` (200) children, then a "Show N more of M" row; `shown` (`Map<path, count>`) grows it a page at a time. Folding alone cannot bound a huge root such as a 512 KB array of numbers.
+  - `JsonTreeBoundary` (error boundary) shows the raw text if the tree throws — Alt-unfolding thousands of levels builds a component tree React's commit recurses through, and the renderer has no boundary of its own.
+  - `JsonNode`: the chevron (and, when folded, the `{ … }` / `[ … ]` button) calls `toggle(path, node, e.altKey, row)`, where `row` is the node's `[data-json-row]` element (it survives the toggle; the `{ … }` button does not). Before the state change `JsonTree` records the row's top, the tree's height and the scroller's slack below the viewport; a `useLayoutEffect` on the fold state then sets the tree's `min-height` to `height − slack` when the folded tree would be shorter (so the scroller never clamps), and scrolls the nearest `overflow-y: auto` ancestor by any remaining shift of the row. The floor is recomputed on every toggle. Alt applies the fold or unfold to every container path in the branch (`containerPaths`). Folded rows show the `N keys` / `N items` count; empty containers get no chevron. The chevron is the only tab stop; the `{ … }` button is `tabIndex={-1}` + `aria-hidden`. Chevrons are named `Expand|Collapse <key>`, `… item <index>` for array items, `… root` for the root. Leaf rows use a `2ch` hanging indent.
+  - Colours are the `main.css` classes: `hljs-name` keys, `hljs-string`, `hljs-number`, `hljs-literal`; punctuation and the fold count `--color-text-secondary` (muted read at about 2.6:1 in the light theme). Strings go through `linkifySegments` into `<a target="_blank" rel="noreferrer noopener">`.
+  - `parseJsonForTree(text)` → `{ value }` or `null` on a parse error; `useParsedJson` memoises it.
+- `src/renderer/src/components/ui/FrontmatterTable.tsx`: shared with chat bubbles (`MarkdownContent` in `MessageBubble.tsx`) and notes (`NoteDetail.tsx`, `NotePreviewModal.tsx`).
+  - `useFrontmatter(text, className?)` → `{ card, body }`: `splitFrontmatter` memoised on `text`; `card` is a `FrontmatterTable` or `null`, `body` is what to hand to `<Markdown>`. `className` sets the card's bottom margin (default `mb-5`; bubbles pass `mb-3`, notes `mb-4`), dropped when the body is empty so a frontmatter-only message has no trailing gap). The fill is `--color-text` at 5% so it tints the user bubble's colour instead of laying a grey slab on it; chips are outlined, not filled, so they do not read as clickable file-reference pills.
+  - `FrontmatterTable({ frontmatter, className })`, the `data-testid="frontmatter"` card. Here it renders outside `.markdown-body` / `.file-preview-markdown`; in bubbles and notes it renders inside `.markdown-body`, so it is a `<dl>` grid (`grid-cols-[max-content_minmax(0,1fr)]`, each `dt`/`dd` pair in a `contents` wrapper), which no `.markdown-body` table, `pre` or `code` rule matches. `.markdown-body a` still colours its links there.
+  - `entries` → the `<dl>`, keys in monospace `dt`; no entries → `null`.
+  - Each value: `raw` → preformatted text; `list`, or `text` that `commaSeparatedItems` splits → chips; otherwise `whitespace-pre-wrap` text.
+  - `Linkified` wraps every `linkifySegments` URL in `<a target="_blank" rel="noreferrer noopener">`, which reaches `setWindowOpenHandler` in `src/main/index.ts` and opens only `http(s)` externally.
 - `src/renderer/src/components/chat/MessageBubble.tsx`: user-message badges use `AttachmentList onClick={(a) => openAttachment(a)}`.
 - `src/renderer/src/components/chat/AgentAttachment.tsx`: agent-attachment badges use the same `openAttachment` routing.
 - `src/renderer/src/App.tsx`: mounts `<FilePreviewModal />` once at the app root, beside the other global overlays and modals.
 
+### Renderer — utils
+- `src/renderer/src/utils/frontmatter.ts`:
+  - `splitFrontmatter(text)` → `{ frontmatter: { entries } | null, body }`. Requires `---` on the first line (after an optional BOM), a closing `---` or `...`, a `KEY_LINE` as the first non-blank line inside (a `#` comment there fails it), and every later top-level line a `KEY_LINE`, blank or `#` comment (`parseEntries` returns `null` otherwise). `KEY_LINE` keys are identifiers — letters, digits, `_ $ @ . / -`, `:`-joined parts like `og:title` — or quoted; no spaces, no `*`. On any failure `frontmatter` is `null` and `body` is the untouched `text`, rendered as ordinary markdown. CRLF is accepted.
+  - `entries` is `FrontmatterEntry[]` (`{ key, value }`, `value` of kind `text`, `list` or `raw`).
+  - Handled: scalars (quoted, with `#` comments that follow whitespace stripped), `|`/`>` block scalars, multi-line plain scalars (folded), `[a, b]` flow lists, `- item` block lists (also at column 0 under the key). Anything nested stays `raw` as dedented source.
+  - `commaSeparatedItems(text)`: a spaceless `a,b,c` with two or more non-empty parts → items, else `null`.
+  - `linkifySegments(text)`: splits out `http(s)` URLs, leaving trailing sentence punctuation, a `*` (a URL in `**bold**`) and an unbalanced closing `)`/`]` to the prose. A comma followed by another `http(s)://` ends the URL, so `https://a,https://b` is two links.
+
 ### Renderer — styles
-- `src/renderer/src/assets/main.css` (`@layer base`): the zebra rows, `.file-preview-table tbody tr:nth-child(odd) td` and `.file-preview-markdown tbody tr:nth-child(odd) td`. `CsvPreview` puts `file-preview-table` on its `<table>`, and `PreviewBody` puts `file-preview-markdown` on the markdown wrapper, beside `markdown-body`.
+- `src/renderer/src/assets/main.css` (`@layer base`): the zebra rows, `.file-preview-table tbody tr:nth-child(odd) td` and `.file-preview-markdown tbody tr:nth-child(odd) td`. `CsvPreview` puts `file-preview-table` on its `<table>`, and `MarkdownPreview` puts `file-preview-markdown` on the markdown wrapper, beside `markdown-body`.
 
 ### Reused, unchanged
 - `src/renderer/src/components/chat/AttachmentBadge.tsx`: `AttachmentList` / `AttachmentBadge`. Still source-agnostic, with the tooltip still "Download". Preview routing lives entirely in the `onClick` callers, not in the badge.
@@ -131,6 +153,11 @@
   - focus moving in and back out;
   - the press guard;
   - the agent-file header and error states.
+  - markdown frontmatter: the card sits outside `.markdown-body`, a URL value is a `_blank` link, and the body renders without a stray rule or setext heading.
+- `src/renderer/src/components/chat/JsonTree.test.tsx`: the palette classes, chevron fold with count, Alt-click branch fold, a large document opening with only its top level unfolded, the exact 2000-value boundary, paging a huge container, 5000-level nesting (fails against a recursive walk), a small deep document folded at depth 32, the scroll shift and the `min-height` floor after a fold, array labels and the braces out of the tab order, and `parseJsonForTree` declining non-JSON. `FilePreviewModal.test.tsx` covers the tree for parsed text and the raw `<pre>` for truncated JSON.
+- `src/renderer/src/components/chat/MessageBubble.frontmatter.test.tsx`: user and assistant bubbles show the card and a link, no stray rule, and keep the unsplit text as `data-message-markdown`; a leading rule alone makes no card.
+- `src/renderer/src/utils/frontmatter.test.ts`: `splitFrontmatter` value shapes, nested values kept as source, CRLF/BOM/empty blocks; documents that are not frontmatter (prose or `**Summary**:` between rules, a `#` comment first, a non-key line after a key, no closing rule) left untouched; `commaSeparatedItems`; `linkifySegments`, including `**url**` and comma-joined URLs.
+- `src/renderer/src/components/notes/NoteDetail.test.tsx` and `src/renderer/src/components/agents/local/InlineFileEditor.test.tsx`: the card renders above the document, a click on a link in it does not start editing, and the textarea a click elsewhere opens holds the raw text, frontmatter included.
 - `src/renderer/src/stores/filePreview.store.test.ts`: agent-file opens, header actions, error copy and attachment previews.
 
 ## IPC Channels
@@ -205,8 +232,9 @@
 - **Agent files** are gated by containment or consent and by the credential rule. See [File References — Technical Details](../file_references/file_references_tech.md#security).
 - **Bytes stay in main.** File bytes are read only in the main process. For attachments, the renderer receives decoded text over IPC, never a path or a raw handle.
 - **No injection surface.**
-  - `text` and `json` render inside `<pre>{text}</pre>`, and CSV cells render as `{cell}`, both escaped by React.
+  - `text` and unparseable `json` render inside `<pre>{text}</pre>`, the JSON tree renders keys and values as React text, and CSV cells render as `{cell}`, all escaped by React. Links in the tree are `http(s)` only, like frontmatter's.
   - Markdown uses the existing `react-markdown` stack without `rehype-raw`, the same trust boundary chat bubbles already use.
+  - Frontmatter values render as React text; the only links it makes are `http(s)` URLs, and the main process's window-open handler refuses any other scheme anyway.
 
 ## Observability
 

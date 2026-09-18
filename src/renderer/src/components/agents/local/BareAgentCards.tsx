@@ -15,6 +15,7 @@ import {
   documentMarkdownComponents,
   remarkStripHtml
 } from '../../../utils/markdownComponents'
+import { useFrontmatter } from '../../ui/FrontmatterTable'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { AgentCard } from './AgentCard'
 
@@ -124,6 +125,7 @@ export function BareNameCard({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
 export function BareReadmeCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element | null {
   const { data: doc } = useLocalAgentDoc(agent.id, 'bare_readme')
   const openPath = useOpenAgentPath()
+  const rendered = useFrontmatter(doc?.text ?? '', 'mb-3')
 
   // `stamp === null` is main's "this file is not there" — distinct from a
   // README that exists and is empty, which is just as little use here.
@@ -142,11 +144,12 @@ export function BareReadmeCard({ agent }: { agent: LocalAgentDto }): React.JSX.E
         press something before they can read what they came to read.
       */}
       <div className="markdown-body text-xs leading-relaxed text-[var(--color-text)]">
+        {rendered.card}
         <Markdown
           remarkPlugins={[remarkGfm, remarkStripHtml]}
           components={documentMarkdownComponents}
         >
-          {doc.text}
+          {rendered.body}
         </Markdown>
       </div>
       <div className="mt-3 text-[10px] text-[var(--color-text-muted)]">

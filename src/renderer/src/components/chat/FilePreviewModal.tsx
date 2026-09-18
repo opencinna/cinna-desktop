@@ -17,6 +17,8 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { markdownComponents } from '../../utils/markdownComponents'
+import { useFrontmatter } from '../ui/FrontmatterTable'
+import { JsonTree, JsonTreeBoundary, useParsedJson } from './JsonTree'
 import {
   actionErrorRepeatsBody,
   actionErrorText,
@@ -567,17 +569,7 @@ function PreviewBody({
   filtersEnabled: boolean
 }): React.JSX.Element {
   if (kind === 'markdown') {
-    return (
-      <div className="file-preview-markdown markdown-body text-sm text-[var(--color-text)] leading-relaxed">
-        <Markdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeHighlight]}
-          components={markdownComponents}
-        >
-          {text}
-        </Markdown>
-      </div>
-    )
+    return <MarkdownPreview text={text} />
   }
 
   if (kind === 'json') {
@@ -598,23 +590,41 @@ function PreviewBody({
   )
 }
 
-function JsonPreview({ text }: { text: string }): React.JSX.Element {
-  // Pretty-print when it parses; fall back to the raw text otherwise so a
-  // malformed file still shows something instead of erroring.
-  const pretty = useMemo(() => {
-    try {
-      return JSON.stringify(JSON.parse(text), null, 2)
-    } catch {
-      return text
-    }
-  }, [text])
+function MarkdownPreview({ text }: { text: string }): React.JSX.Element {
+  const { card, body } = useFrontmatter(text)
   return (
+    <>
+      {card}
+      <div className="file-preview-markdown markdown-body text-sm text-[var(--color-text)] leading-relaxed">
+        <Markdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeHighlight]}
+          components={markdownComponents}
+        >
+          {body}
+        </Markdown>
+      </div>
+    </>
+  )
+}
+
+function JsonPreview({ text }: { text: string }): React.JSX.Element {
+  // A tree when it parses; the raw text otherwise, so a malformed or
+  // truncated file still shows something instead of erroring.
+  const parsed = useParsedJson(text)
+  const raw = (
     <pre
       className="text-xs font-mono whitespace-pre-wrap break-words
         text-[var(--color-text)]"
     >
-      {pretty}
+      {text}
     </pre>
+  )
+  if (!parsed) return raw
+  return (
+    <JsonTreeBoundary key={text} fallback={raw}>
+      <JsonTree value={parsed.value} />
+    </JsonTreeBoundary>
   )
 }
 

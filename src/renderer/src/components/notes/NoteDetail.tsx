@@ -5,6 +5,7 @@ import rehypeHighlight from 'rehype-highlight'
 import { useUIStore } from '../../stores/ui.store'
 import { FALLBACK_TITLE, useAutosaveNote, useNote } from '../../hooks/useNotes'
 import { markdownComponents } from '../../utils/markdownComponents'
+import { useFrontmatter } from '../ui/FrontmatterTable'
 
 /**
  * Inline editor — no edit-mode toggle, no Save button. Title is an always-on
@@ -19,6 +20,7 @@ export function NoteDetail(): React.JSX.Element {
   const { title, body, setTitle, setBody, flushNow } = useAutosaveNote(note)
   const [editingBody, setEditingBody] = useState(false)
   const bodyTextareaRef = useRef<HTMLTextAreaElement>(null)
+  const rendered = useFrontmatter(body, 'mb-4')
   // Visually blank the title input on first focus when it still holds the
   // placeholder default, so the user can type their title without first
   // deleting "Untitled note". Tracked per-note: reset when the active note
@@ -44,7 +46,9 @@ export function NoteDetail(): React.JSX.Element {
     )
   }
 
-  const handleBodyClick = (): void => {
+  const handleBodyClick = (e: React.MouseEvent): void => {
+    // A link opens externally; it is not also a request to edit the note.
+    if ((e.target as HTMLElement).closest('a')) return
     setEditingBody(true)
     requestAnimationFrame(() => {
       const el = bodyTextareaRef.current
@@ -100,12 +104,13 @@ export function NoteDetail(): React.JSX.Element {
             className="markdown-body text-sm text-[var(--color-text)] leading-relaxed
               cursor-text min-h-[12rem]"
           >
+            {rendered.card}
             <Markdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeHighlight]}
               components={markdownComponents}
             >
-              {body}
+              {rendered.body}
             </Markdown>
           </div>
         ) : (

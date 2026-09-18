@@ -6,6 +6,7 @@ import {
   documentMarkdownComponents,
   remarkStripHtml
 } from '../../../utils/markdownComponents'
+import { useFrontmatter } from '../../ui/FrontmatterTable'
 import type { AgentFileEditor } from '../../../hooks/useLocalAgents'
 
 interface InlineFileEditorProps {
@@ -57,8 +58,11 @@ export function InlineFileEditor({
    */
   const renderedRef = useRef<HTMLDivElement>(null)
   const [floor, setFloor] = useState<number | undefined>(undefined)
+  const rendered = useFrontmatter(editor.text, 'mb-3')
 
-  const startEditing = (): void => {
+  const startEditing = (e?: React.MouseEvent): void => {
+    // A link opens externally; it is not also a request to edit the file.
+    if (e && (e.target as HTMLElement).closest('a')) return
     if (!editor.canSave) return
     const rendered = renderedRef.current
     setFloor(rendered ? rendered.getBoundingClientRect().height : undefined)
@@ -178,11 +182,12 @@ export function InlineFileEditor({
             these files drops it — and the click that starts editing puts the
             file's own bytes, comments and all, in the textarea.
           */}
+          {rendered.card}
           <Markdown
             remarkPlugins={[remarkGfm, remarkStripHtml]}
             components={documentMarkdownComponents}
           >
-            {editor.text}
+            {rendered.body}
           </Markdown>
         </div>
       ) : (

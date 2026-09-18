@@ -32,7 +32,8 @@ One read-only modal for looking at a text file **in place**, reached two ways.
   - `openSeq` changes on every open, so the entrance plays again.
 - **Render kinds**:
   - `markdown` renders through the shared `react-markdown` stack, the same one used by chat bubbles and the note preview.
-  - `json` is pretty-printed, falling back to raw text if it does not parse.
+    A leading YAML frontmatter block is lifted out and shown as a key/value card above the body; see [Frontmatter](#frontmatter).
+  - `json` is a collapsible tree, falling back to raw text if it does not parse; see [JSON tree](#json-tree).
   - `csv`/`tsv` renders as a table: quoted fields are honoured (loosely following RFC 4180) and the first 500 rows are shown.
   - `text` (including yaml) is a wrapped `<pre>`.
 - **Notice**: a body that is a sentence rather than content. For agent files it is either "Preview is off for credential files." or "No preview for this file type."
@@ -68,6 +69,11 @@ One read-only modal for looking at a text file **in place**, reached two ways.
 2. Typing in a column's input keeps only rows whose cell contains that text, ignoring case. Several column filters combine with AND.
 3. Clicking a column header cycles its sort: none → ascending → descending. A column whose cells are all numbers sorts numerically; otherwise it sorts as locale strings.
 4. Toggling the Filter icon off restores the raw row order. The controls reset when a different file is previewed.
+
+### Reading a JSON preview
+1. The user opens a `json` badge or agent file. The modal shows a coloured tree, fully unfolded, or with only the top level unfolded when the file is large.
+2. Clicking a chevron folds that object or array to `{ … }` / `[ … ]` with its size beside it ("3 keys", "12 items"); clicking the chevron or the braces unfolds it. Alt-click folds or unfolds the whole branch under it.
+3. A URL inside a string opens in the browser.
 
 ### Clicking a non-previewable attachment
 1. The user clicks a `png` / `pdf` / `zip` / … badge.
@@ -167,6 +173,26 @@ One read-only modal for looking at a text file **in place**, reached two ways.
 - **Preview tables have zebra rows.** A CSV table, and any table inside a previewed markdown file, shade every other body row a step darker than the card, starting with the first row. Chat tables are not striped.
 - **The stripes follow the rows on screen**, not their order in the file, so filtering or sorting a CSV keeps them alternating.
 - **Header rows are not striped**, the CSV filter row included.
+
+### Frontmatter
+- **A markdown file's frontmatter is a key/value card above the body, not part of it.** `react-markdown` knows nothing about frontmatter: the opening `---` became a rule and the closing one turned every `key: value` line into one setext heading, so a spec file opened as a paragraph of bold run-on text.
+- **The card is its own bordered, tinted box**, so it reads as the file's metadata rather than the document's first table. In this modal it sits outside the markdown body and is not zebra-striped.
+- **The same card renders frontmatter in chat messages and notes.** A reply that quotes a file whole, or a pasted spec, would otherwise open with the same rule-and-bold-heading. There it sits inside the Markdown body, which is why it is a definition list and not a table: the body's table, `pre` and `code` rules would restyle a table. See [Conversation UI](../conversation_ui/conversation_ui.md) and [Notes](../../notes/notes/notes.md).
+- **Only a block made of `key:` lines counts.** It starts on the first line, closes with `---`/`...`, its first non-blank line is a `key:` line (a `#` comment first does not count), and every other top-level line is one too; keys are identifiers (`name`, `multi_company`, `og:title`), never prose like `**Summary**:`. Anything else is not frontmatter and renders as the document's own markdown. The rule is strict because chat replies open with a `---` separator often enough: a looser match turned a reply's first section into a monospace block.
+- **Values are shown by shape:** plain text; a list (`- item`, `[a, b]`, or a spaceless `a,b,c` scalar) as chips; `http(s)` URLs as links that open in the browser, like markdown links.
+- **It is a reader, not a YAML parser, and it never drops content.** A nested map or list of maps is shown as its source text inside the card. An empty block renders no card.
+
+### JSON tree
+- **A JSON file is a tree the user folds, not a wall of pretty-printed text.** An export or API dump is read by finding one branch; folding the rest away is how.
+- **It uses the code-block palette** (`.hljs-*`, both themes): keys in the red of an XML tag, strings green, numbers and `true`/`false`/`null` orange, punctuation in the secondary text colour. It is deliberately not the chat code block's JSON colouring, which paints keys the same orange as numbers: keys stand apart from values here, the way tag names do in XML.
+- **A fold never moves the row that was clicked.** Folding near the end of a scrolled preview would shorten the content past the scroll position, and the browser would pull every row above it — the clicked chevron included — down under the pointer. The tree keeps just enough height for the scroll position to survive and scrolls any remaining shift away before paint.
+- **A long string wraps with a hanging indent**, so its continuation lines sit inside the row instead of at the key's edge, where they read as more rows.
+- **A folded node keeps its size in view** ("N keys" / "N items"), so the user knows what is behind it before opening it.
+- **A huge object or array shows 200 members at a time**, with a "Show N more of M" row, so a file that is one enormous list stays usable. Anything nested deeper than 32 levels also starts folded, whatever the file's size.
+- **A large file opens with only the root unfolded.** Above 2,000 values every object and array below the top level starts folded: one row per top-level member. Fully expanded, a 500 KB export is tens of thousands of rows to scroll past. Folding from the second level instead is not enough, because a top-level array of records would still show every record unfolded.
+- **URLs in strings are links**, `http(s)` only, like frontmatter and markdown links.
+- **Text that does not parse shows as plain text.** That includes a file cut at the 512 KB cap, so a large JSON file previews as its raw first 512 KB rather than an error.
+- **Another file starts from its own fold state.** Fold state is keyed by path; carried over, it would fold paths that mean something else in the new file.
 
 ## Architecture Overview
 

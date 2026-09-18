@@ -6,7 +6,7 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 
 ## Core Concepts
 
-- **Note** — A profile-scoped markdown document with a title, a body, optional folder placement, and a sort position. Storage is raw markdown; the UI renders it via the same `react-markdown` stack chat bubbles use (GFM, syntax highlighting, clickable links open externally).
+- **Note** — A profile-scoped markdown document with a title, a body, optional folder placement, and a sort position. Storage is raw markdown; the UI renders it via the same `react-markdown` stack chat bubbles use (GFM, syntax highlighting, clickable links open externally). A leading YAML frontmatter block shows as a key/value card above the body, in the detail view and the composer's note preview alike; the stored body and the textarea keep it as written. See [File Preview](../../chat/file_preview/file_preview.md#frontmatter).
 - **Note Folder** — A user-defined sidebar grouping (profile-scoped, name + collapsed-state + sort position). Thin collapsible separator — owns ordering, not content. A note lives in exactly one folder or at the root.
 - **Group** — A bucket the sidebar can address by drag-drop: either the root (`folderId = null`) or a specific folder. Each group keeps its own note ordering.
 - **Inline Edit** — There is no edit-mode toggle and no Save button. The title is always an editable heading-styled input; the body shows rendered markdown by default and swaps to a textarea on click, returning to rendered mode on blur. Autosave fires on a 500ms debounce while typing and immediately on blur.

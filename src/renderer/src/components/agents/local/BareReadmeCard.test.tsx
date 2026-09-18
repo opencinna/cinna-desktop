@@ -64,6 +64,15 @@ describe('BareReadmeCard', () => {
     expect(screen.getByRole('heading', { level: 3, name: 'Alpha' })).toBeTruthy()
   })
 
+  it('shows a README’s frontmatter as a card, not as a rule over one bold heading', async () => {
+    readDoc.mockResolvedValue(doc({ text: '---\nname: alpha\nrepo: https://example.com/alpha\n---\n# Alpha\n' }))
+    renderCard()
+    await screen.findByRole('heading', { name: 'Alpha' })
+    expect(screen.getByTestId('frontmatter').querySelector('dt')?.textContent).toBe('name')
+    expect(screen.getByRole('link', { name: 'https://example.com/alpha' })).toBeTruthy()
+    expect(document.querySelector('.markdown-body hr')).toBeNull()
+  })
+
   it('hides raw HTML instead of printing it as prose', async () => {
     // react-markdown escapes what it will not run, so an unfiltered README
     // showed its badge block and its comments as visible markup — at the top of

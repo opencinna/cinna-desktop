@@ -486,6 +486,47 @@ describe('zebra rows', () => {
   })
 })
 
+describe('markdown frontmatter', () => {
+  it('shows it as a key/value card above the body, with URLs as links, instead of a heading', () => {
+    render(<FilePreviewModal />)
+    const text = [
+      '---',
+      'name: global-forecast',
+      'models: pipeline-(A),res.partner-(M)',
+      'ticket: https://example.com/T-1',
+      '---',
+      '',
+      '# Spec'
+    ].join('\n')
+    open({ target: agentTarget(), kind: 'markdown', text })
+
+    const card = screen.getByTestId('frontmatter')
+    expect(card.closest('.markdown-body')).toBeNull()
+    expect(card.querySelector('dt')?.textContent).toBe('name')
+    expect(screen.getByText('res.partner-(M)')).toBeTruthy()
+    const link = screen.getByRole('link', { name: 'https://example.com/T-1' })
+    expect(link.getAttribute('href')).toBe('https://example.com/T-1')
+    expect(link.getAttribute('target')).toBe('_blank')
+    // The body starts at the document, not at a rule and a setext heading.
+    expect(screen.getByRole('heading', { name: 'Spec' })).toBeTruthy()
+    expect(document.querySelector('.markdown-body hr')).toBeNull()
+  })
+})
+
+describe('json', () => {
+  it('shows a parsed file as a tree, and text that does not parse as itself', () => {
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(), kind: 'json', text: '{"a": [1, 2]}' })
+    expect(screen.getByTestId('json-tree')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Collapse a' })).toBeTruthy()
+
+    // A file cut at the preview cap is not valid JSON.
+    open({ target: agentTarget(), kind: 'json', text: '{"a": [1, 2' })
+    expect(screen.queryByTestId('json-tree')).toBeNull()
+    expect(document.querySelector('pre')?.textContent).toBe('{"a": [1, 2')
+  })
+})
+
 describe('a press outside the card straight after an open', () => {
   it('is ignored for the guard after each open, and closes once it has passed', () => {
     vi.useFakeTimers()

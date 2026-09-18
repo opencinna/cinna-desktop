@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { useNote } from '../../hooks/useNotes'
 import { markdownComponents } from '../../utils/markdownComponents'
+import { useFrontmatter } from '../ui/FrontmatterTable'
 
 interface NotePreviewModalProps {
   noteId: string
@@ -44,6 +45,7 @@ export function NotePreviewModal({
 
   const title = note?.title || fallbackTitle || 'Untitled note'
   const body = note?.body ?? ''
+  const rendered = useFrontmatter(body, 'mb-4')
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 px-4">
@@ -77,12 +79,13 @@ export function NotePreviewModal({
             <div className="text-xs text-[var(--color-text-muted)]">Loading…</div>
           ) : body.trim() ? (
             <div className="markdown-body text-sm text-[var(--color-text)] leading-relaxed">
+              {rendered.card}
               <Markdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeHighlight]}
                 components={markdownComponents}
               >
-                {body}
+                {rendered.body}
               </Markdown>
             </div>
           ) : (
