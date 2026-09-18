@@ -341,7 +341,13 @@ test('reattaching during a model tool loop shows saved rounds and live replay on
     await expect(cinna.page.getByText(ROUND_TWO, { exact: true })).toHaveCount(1)
     const saved = () => cinna.page.evaluate(async (id) => (await window.api.chat.get(id))?.messages
       .map((message) => ({ role: message.role, content: message.content })), chatId)
-    await expect.poll(saved).toEqual([
+    // The open round may already be saved as an in-flight draft (every 2s,
+    // DRAFT_INTERVAL_MS); it is updated in place when the round ends.
+    await expect.poll(async () => {
+      const rows = await saved()
+      const last = rows?.at(-1)
+      return last?.role === 'assistant' && last.content === ROUND_TWO ? rows!.slice(0, -1) : rows
+    }).toEqual([
       { role: 'user', content: MODEL_PROMPT },
       { role: 'assistant', content: ROUND_ONE },
       { role: 'tool_call', content: TOOL_RESULT }
