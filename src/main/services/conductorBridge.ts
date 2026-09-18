@@ -99,6 +99,9 @@ export const conductorBridge = {
       beforeCall: async (context: import('./conductorMcpServer').ConductorMcpCallContext) => {
         await openBetweenTurns(entry!, context.signal)
         context.toolCallId = entry!.correlation.claim(context.name, context.toolCallId, typeof context.meta?.['claudecode/toolUseId'] === 'string')
+        // The call can outrun the text the engine streamed before it (a separate channel):
+        // publishing its block now would put it above that text and run the text on past it.
+        await entry!.correlation.sighted(context.toolCallId, undefined, context.signal)
       },
       executeTool: async (provider: ToolProvider, name: string, args: Record<string, unknown>, opts: import('../llm/toolProvider').ToolCallOptions): Promise<ToolExecutionResult> => {
         const turn = entry!.binding
