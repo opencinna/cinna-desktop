@@ -4,6 +4,7 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { scriptAcpEngine, SCRIPT_MODEL } from '../fixtures/scriptAcpEngine'
 import { jobRemoteService, linkSandboxAccount, TITLE, GOAL, NOTE, LOCAL_AGENT, REMOTE_AGENT,
   AGENT_ID, REMOTE_ID, REMOTE_KEY, RECEIPT } from '../fixtures/jobRemoteService'
+import { splitTurnHeader } from '../fixtures/turnHeader'
 import type { TaskScript } from '../../src/shared/taskScript'
 
 async function restart(cinna: CinnaApp): Promise<void> {
@@ -118,7 +119,7 @@ test('an accepted main-owned Job starts one ACP step without a renderer model pr
     await openJob(cinna, title)
     await cinna.page.getByRole('button', { name: 'Run', exact: true }).click()
     await expect.poll(() => fake.calls.length).toBe(1)
-    expect(fake.calls[0].text).toBe(`VERIFY ${goal}`)
+    expect(splitTurnHeader(fake.calls[0].text).prompt).toBe(`VERIFY ${goal}`)
     expect(fake.calls[0].released).toBe(false)
     expect(fake.unexpected).toEqual([])
     const [run] = await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), job.id)

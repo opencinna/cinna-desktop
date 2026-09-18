@@ -225,11 +225,15 @@ test('a detected Ollama is added in one click, keeps its host across the boundar
     await expect(page.getByRole('heading', { name: 'Chat Modes' })).toBeVisible()
     await page.getByRole('button', { name: 'Add Chat Mode' }).click()
     const form = modeForm(page)
+    // AI credentials are what the OpenCode runtime runs on, so the picker is
+    // there only for it; the machine's default runtime is not the spec's to assume.
+    await form.getByLabel('Runtime', { exact: true }).selectOption({ label: 'OpenCode' })
     const credential = form.getByLabel('AI Credentials')
     await expect(credential.locator('option')).toHaveText(['None (use default)', OLLAMA])
 
     await credential.selectOption({ label: OLLAMA })
-    const model = form.getByLabel('Model')
+    await form.getByText('More options', { exact: true }).click()
+    const model = form.getByLabel('Model', { exact: true })
     // The tags verbatim, which is what the user typed into `ollama pull`, and
     // in the order `/api/tags` was read in.
     await expect(model.locator('option')).toHaveText([

@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine } from '../fixtures/scriptAcpEngine'
+import { splitTurnHeader } from '../fixtures/turnHeader'
 import type { TaskScript } from '../../src/shared/taskScript'
 
 /**
@@ -21,6 +22,8 @@ const REVIEW = 'Review cedar-4197'
 const ANSWER = 'Publish to leadership'
 const FINAL = 'Approved report quartz-5723'
 const QUESTION = `Approve ${ANALYSIS} and ${REVIEW}?`
+/** The step prompt a call carried, after the turn-context header every folder-agent turn opens with. */
+const prompt = (call: { text: string }): string => splitTurnHeader(call.text).prompt
 
 async function arrange(cinna: CinnaApp, fake: ScriptAcpEngine, gate: boolean) {
   await cinna.skipOnboarding()
@@ -67,7 +70,7 @@ async function start(cinna: CinnaApp, fake: ScriptAcpEngine, jobId: string) {
   await cinna.page.getByRole('button', { name: 'Run', exact: true }).click()
   await expect.poll(() => fake.calls.length).toBe(2)
   expect(fake.calls.every((call) => !call.closed && !call.released)).toBe(true)
-  expect(fake.calls.map((call) => call.text).sort()).toEqual([`ANALYSE ${GOAL}`, `REVIEW ${GOAL}`].sort())
+  expect(fake.calls.map(prompt).sort()).toEqual([`ANALYSE ${GOAL}`, `REVIEW ${GOAL}`].sort())
   // Both actual session/prompt requests arrived before either response was released.
   expect(new Set(fake.calls.map((call) => call.sessionId)).size).toBe(2)
   const runs = await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId)
@@ -124,8 +127,8 @@ test('a Jobs script runs parallel folder agents, survives its Inbox gate and fin
     const finish = firstChildren.find((child) => child.title === 'finish')!
     expect(analyse.assignee).toMatchObject({ kind: 'agent', agentId: analyst.id })
     expect(review.assignee).toMatchObject({ kind: 'agent', agentId: reviewer.id })
-    const analyseCall = fake.calls.find((call) => call.text.startsWith('ANALYSE'))!
-    const reviewCall = fake.calls.find((call) => call.text.startsWith('REVIEW'))!
+    const analyseCall = fake.calls.find((call) => prompt(call).startsWith('ANALYSE'))!
+    const reviewCall = fake.calls.find((call) => prompt(call).startsWith('REVIEW'))!
     expect(realpathSync(analyseCall.cwd)).toBe(realpathSync(analyst.path))
     expect(realpathSync(reviewCall.cwd)).toBe(realpathSync(reviewer.path))
     analyseCall.release(ANALYSIS)
@@ -156,7 +159,7 @@ test('a Jobs script runs parallel folder agents, survives its Inbox gate and fin
     await cinna.page.getByRole('button', { name: 'Send answer', exact: true }).click()
     await expect(cinna.page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
     await expect.poll(() => fake.calls.length).toBe(3)
-    expect(fake.calls[2].text).toBe(`FINISH ${GOAL} / ${ANALYSIS} / ${REVIEW} / ${ANSWER}`)
+    expect(prompt(fake.calls[2])).toBe(`FINISH ${GOAL} / ${ANALYSIS} / ${REVIEW} / ${ANSWER}`)
     expect(realpathSync(fake.calls[2].cwd)).toBe(realpathSync(analyst.path))
     expect(await cinna.page.evaluate((id) => window.api.tasks.get(id), taskId)).toMatchObject({ status: 'in_progress' })
     fake.calls[2].release(FINAL)
@@ -188,9 +191,9 @@ test('an interrupted parallel script resumes only its unfinished step after expl
     const before = await children(cinna, taskId)
     const analyse = before.find((child) => child.title === 'analyse')!
     const review = before.find((child) => child.title === 'review')!
-    fake.calls.find((call) => call.text.startsWith('ANALYSE'))!.release(ANALYSIS)
+    fake.calls.find((call) => prompt(call).startsWith('ANALYSE'))!.release(ANALYSIS)
     await expect.poll(() => cinna.page.evaluate((id) => window.api.tasks.get(id), analyse.id)).toMatchObject({ status: 'completed' })
-    const held = fake.calls.find((call) => call.text.startsWith('REVIEW'))!
+    const held = fake.calls.find((call) => prompt(call).startsWith('REVIEW'))!
     expect(held.closed).toBe(false)
     await cinna.relaunch()
     await cinna.skipOnboarding()
@@ -210,7 +213,9 @@ test('an interrupted parallel script resumes only its unfinished step after expl
     expect(recovery.text).toContain(`Step intent:\nREVIEW ${GOAL}`)
     expect(recovery.text).not.toBe(held.text)
     expect(recovery.cwd).toBe(held.cwd)
-    expect(fake.calls.filter((call) => call.text === `ANALYSE ${GOAL}`)).toHaveLength(1)
+    // By its ending: the recovery turn opens with a resumed transcript, not the
+    // header, and any wire that re-sent the step ends in exactly this block.
+    expect(fake.calls.filter((call) => call.text.endsWith(`\n\nANALYSE ${GOAL}`))).toHaveLength(1)
     recovery.release(REVIEW)
     const summary = `Script completed.\n\nanalyse:\n${ANALYSIS}\n\nreview:\n${REVIEW}`
     await verifyCompleted(cinna, fake, jobId, taskId, chatId, summary, 3)

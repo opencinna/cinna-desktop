@@ -153,6 +153,10 @@ test('switching a credential off asks first, names the chat mode it stops, and e
 
     const form = modeForm(page)
     await form.getByPlaceholder('e.g. Development, Writing, Research...').fill(MODE)
+    // The credential picker belongs to the OpenCode runtime, the one that
+    // spends AI credentials; which runtime is the default depends on the CLIs
+    // this machine has, so the spec picks it, as a user pinning a credential would.
+    await form.getByLabel('Runtime', { exact: true }).selectOption({ label: 'OpenCode' })
     const credential = form.getByLabel('AI Credentials', { exact: true })
     // Both credentials are offered: `enabledProviders` is the "may be picked"
     // list, and at this point both may be.
@@ -162,8 +166,9 @@ test('switching a credential off asks first, names the chat mode it stops, and e
       LONELY
     ])
     await credential.selectOption({ label: KEYED })
-    // The Model select only exists once a credential is chosen, and it is the
-    // second of the form's two labelled selects.
+    // The Model select only exists once a credential is chosen, and it lives
+    // under the collapsed More options.
+    await form.getByText('More options', { exact: true }).click()
     await expect(form.getByLabel('Model', { exact: true })).toBeVisible()
 
     await page.getByRole('button', { name: 'Create Mode' }).click()

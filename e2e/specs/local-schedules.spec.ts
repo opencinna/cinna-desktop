@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import { installFakeAcpEngine } from '../fixtures/fakeAcpEngine'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
+import { splitTurnHeader } from '../fixtures/turnHeader'
 import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
 
 /**
@@ -125,7 +126,7 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
       await expect.poll(() => acp.received('session/prompt').length, { timeout: MINUTE_TIMEOUT, intervals: [250, 500] }).toBe(1)
     })
     const wire = acp.received('session/prompt')[0].params?.prompt as { type: string; text: string }[]
-    expect(wire.map((part) => part.text).join('')).toBe(PROMPT)
+    expect(splitTurnHeader(wire.map((part) => part.text).join('')).prompt).toBe(PROMPT)
     const runs = await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId)
     expect(runs).toHaveLength(1)
     const run = runs[0]
