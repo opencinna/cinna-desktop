@@ -5,15 +5,15 @@ import type { RunEvent } from '../../shared/runEvents'
 import type { AgentRow } from '../db/agents'
 import type { AcpLaunchPlan } from '../agents/drivers/acp/acpLaunchers'
 
-const state = vi.hoisted(() => ({ options: null as ConductorMcpSessionOptions | null, save: vi.fn(), abort: vi.fn() }))
+const state = vi.hoisted(() => ({ options: null as ConductorMcpSessionOptions | null, save: vi.fn(), abort: vi.fn(), digest: vi.fn(), tools: [] as string[] }))
 vi.mock('../db/chats', () => ({ chatRepo: { getOwned: () => ({ agentId: 'root', router: 'coordinator' }) } }))
 vi.mock('../db/chatMcp', () => ({ chatMcpRepo: { listProviderIds: () => [] } }))
 vi.mock('../db/chatOnDemandMcp', () => ({ chatOnDemandMcpRepo: { listProviderIds: () => [] } }))
 vi.mock('../db/messages', () => ({ messageRepo: { saveToolCall: state.save } }))
-vi.mock('../db/conductorSessions', () => ({ conductorSessionRepo: { get: vi.fn(), save: vi.fn() } }))
+vi.mock('../db/conductorSessions', () => ({ conductorSessionRepo: { get: vi.fn(), save: state.digest } }))
 vi.mock('../mcp/manager', () => ({ mcpManager: {} }))
 vi.mock('../mcp/toolChanges', () => ({ onMcpToolsChanged: vi.fn() }))
-vi.mock('./a2aAsMcpProvider', () => ({ buildAgentToolProviders: () => [] }))
+vi.mock('./a2aAsMcpProvider', () => ({ buildAgentToolProviders: () => [{ providerType: 'agent', displayName: 'Agents', getTools: () => state.tools.map((name) => ({ name })) }] }))
 vi.mock('./chatSessionRelease', () => ({ installChatSessionForgetter: vi.fn() }))
 vi.mock('./chatConductorService', () => ({ canConduct: () => true, isChatConductor: () => false, conductorContext: vi.fn() }))
 vi.mock('./conductorMcpServer', () => ({ ConductorMcpServer: class {
@@ -94,6 +94,28 @@ describe('runtime tool integration', () => {
     const waiting = state.options!.beforeCall!({ toolCallId: 'call-2', requestId: 'request', name: 'tool', signal: new AbortController().signal })
     conductorBridge.abandonWaiters(chatId, 'root', 'the chat stayed busy')
     await expect(waiting).rejects.toThrow('the chat stayed busy')
+  })
+
+  it('gives an engine that never re-reads its tools a new session when the tool list changes', async () => {
+    const digests = async (fixed: boolean): Promise<string[]> => {
+      state.digest.mockClear()
+      const chatId = `bridge-${++counter}`
+      for (const tools of [['writer'], ['writer'], ['writer', 'reviewer']]) {
+        state.tools = tools
+        const lease = await conductorBridge.prepare('owner', { id: 'root', driver: 'acp' } as AgentRow,
+          { chatId, wireContent: 'Task', signal: new AbortController().signal, runScope: { profileUserId: 'user', settingsUserId: 'settings' } },
+          { spec: { remote: false }, session: { mcpServers: [] }, sessionToolsFixed: fixed } as unknown as AcpLaunchPlan, vi.fn(), () => true)
+        lease!.sessionReady!()
+        lease!.close()
+      }
+      state.tools = []
+      return state.digest.mock.calls.map((call) => call[2] as string)
+    }
+    const [first, same, grown] = await digests(true)
+    expect(same).toBe(first)
+    expect(grown).not.toBe(first)
+    // Claude and OpenCode adopt `tools/list_changed` in the live session.
+    expect(new Set(await digests(false)).size).toBe(1)
   })
 
   it('persists a canceled tool result and releases its pending call', async () => {

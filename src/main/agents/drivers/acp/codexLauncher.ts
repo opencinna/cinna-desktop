@@ -98,6 +98,7 @@ export function createCodexLauncher(deps: CodexLauncherDeps): AcpLauncher {
             clientCapabilities: { elicitation: { form: {} }, _meta: airClientMeta(['asyncTasks']) },
             clientInfo: { name: 'cinna-desktop', version: '1' } },
           session: { mcpServers: [] },
+          sessionToolsFixed: true,
           // Enforce on both new and loaded sessions, before any prompt.
           setup: { modeId }
         }

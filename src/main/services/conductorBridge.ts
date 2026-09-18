@@ -31,10 +31,10 @@ interface Entry {
   wake(): boolean
   waiters: Set<{resolve(): void; reject(error: Error): void}>
 }
-const server = new ConductorMcpServer()
+const logger = createLogger('conductor-bridge')
+const server = new ConductorMcpServer((error) => logger.warn('Conductor MCP listener error', { error: String(error) }))
 const entries = new Map<string, Entry>()
 const MAX_CALLS = 100
-const logger = createLogger('conductor-bridge')
 
 export interface ConductorLease {
   freshSession?: boolean
@@ -140,7 +140,9 @@ export const conductorBridge = {
     plan.session = { ...plan.session, mcpServers: [...plan.session.mcpServers.filter((mcp) => mcp.name !== 'cinna'), session.descriptor] }
     const abort = (): void => session.abortCalls('The conductor stopped')
     input.signal.addEventListener('abort', abort, { once: true })
-    const hash = createHash('sha256').update(JSON.stringify([session.descriptor, isChatConductor(agent) ? conductorContext(agent) : null])).digest('hex')
+    // An engine that never re-reads its tools can only meet a new one in a new session.
+    const fixedTools = plan.sessionToolsFixed ? (await providers(entry)).flatMap((provider) => provider.getTools().map((tool) => tool.name)).sort() : null
+    const hash = createHash('sha256').update(JSON.stringify([session.descriptor, isChatConductor(agent) ? conductorContext(agent) : null, ...(fixedTools ? [fixedTools] : [])])).digest('hex')
     return {
       freshSession: conductorSessionRepo.get(input.chatId, agent.id) !== hash,
       sessionReady: () => conductorSessionRepo.save(input.chatId, agent.id, hash),

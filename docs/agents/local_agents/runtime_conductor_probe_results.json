@@ -62,7 +62,7 @@
     "decision": "The exact verified CLI, maintained adapter, and production policy helper passed the isolated loopback-provider matrix. Startup and per-session tool restrictions are both required. A same-name native stdio MCP entry is refused before a model request.",
     "notEstablished": [
       "Authenticated native Codex login or real-provider model behavior",
-      "Mid-session tools/list_changed adoption and cancellation propagation",
+      "Cancellation propagation (mid-session tools/list_changed was observed NOT adopted on an authenticated 0.154.0-alpha.6.2 conductor chat on 2026-09-18; the bridge now starts a new session when the tool list changes)",
       "Cross-process restart/session-load under the restricted policy",
       "Future Codex versions/platforms or model catalogs"
     ],

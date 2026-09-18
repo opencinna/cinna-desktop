@@ -133,6 +133,14 @@ export interface AcpSessionSetup {
 export interface AcpLaunchPlan {
   /** Main-only seal, set after verifying the native runtime's restricted launch. */
   conductorPolicy?: 'no-native-tools'
+  /**
+   * The engine reads a session's MCP tools once, when the session starts, and
+   * ignores `tools/list_changed` (observed on an authenticated Codex
+   * 0.154.0-alpha.6.2: a specialist attached mid-chat never became callable).
+   * A conductor on such an engine gets a new session, with the transcript
+   * replayed, when its tool list changes.
+   */
+  sessionToolsFixed?: boolean
   spec: AcpLaunchSpec
   init: InitializeRequest
   /** Merged into `session/new` and `session/load` — `_meta`, `mcpServers`. */

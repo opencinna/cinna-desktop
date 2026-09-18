@@ -3,10 +3,7 @@ import { createServer, type IncomingMessage, type Server as HttpServer, type Ser
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { CallToolRequestSchema, CallToolResultSchema, ListToolsRequestSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
-import { createLogger } from '../logger/logger'
 import type { ToolCallOptions, ToolExecutionResult, ToolProvider } from '../llm/toolProvider'
-
-const logger = createLogger('conductor-mcp')
 
 /** Main-only ACP descriptor. Its bearer credential must never cross IPC. */
 export interface ConductorMcpDescriptor {
@@ -86,6 +83,14 @@ function toolResult(result: ToolExecutionResult): CallToolResult {
  * transport connections are independent from that durable in-process identity.
  */
 export class ConductorMcpServer {
+  /**
+   * Told about a listener error after startup. Injected rather than logged
+   * here: the engine probes import this module under plain Node, where the
+   * app's logger does not load.
+   */
+  private readonly onListenerError: (error: Error) => void
+  // No parameter property: the probes load this file with Node's type stripping.
+  constructor(onListenerError: (error: Error) => void = () => {}) { this.onListenerError = onListenerError }
   private listener?: HttpServer
   private starting?: Promise<void>
   private origin = ''
@@ -175,7 +180,7 @@ export class ConductorMcpServer {
         this.origin = `http://127.0.0.1:${address.port}`
         listener.unref()
         // A later socket-level error must not surface as an uncaught exception.
-        listener.on('error', (error) => logger.warn('Conductor MCP listener error', { error: String(error) }))
+        listener.on('error', (error) => this.onListenerError(error))
         resolve()
       })
     })
