@@ -79,7 +79,7 @@ function world(options: {
       type: 'folder',
       folder: {
         name: 'Activity', slug: 'activity', description: '', path: '/tmp/agents/activity', kind: 'kit',
-        enabled: true, readiness: 'ok', readinessReason: null, runtime: { engine: 'claude' }
+        runtimeMode: 'isolated', enabled: true, readiness: 'ok', readinessReason: null, runtime: { engine: 'claude' }
       },
       validate() {},
       readSession: (chatId) => sessions.get(chatId) ?? null,

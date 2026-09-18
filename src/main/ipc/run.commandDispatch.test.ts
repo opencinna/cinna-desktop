@@ -1,5 +1,8 @@
 vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: { listOpenForRun: () => [] } }))
 vi.mock('../db/taskHandoffs', () => ({ taskHandoffRepo: { unresolvedForChat: () => false } }))
+// The turn header's two lookups: this chat belongs to no task, so it is depth 0.
+vi.mock('../db/tasks', () => ({ taskRepo: { getById: () => undefined, getByChatId: () => undefined } }))
+vi.mock('../db/handovers', () => ({ handoverRepo: { byTaskId: () => undefined } }))
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AgentRow } from '../db/agents'
 import { capabilitiesFor } from '../agents/drivers/capabilities'
@@ -185,7 +188,18 @@ describe('run:send — the /run: dispatch call site', () => {
     await fallback(io)
     expect(driverRun).toHaveBeenCalledWith('owner-1', FOLDER_AGENT, {
       chatId: 'chat-1',
-      wireContent: '/run:check',
+      // The wire carries the turn header, because a folder agent runs in a
+      // folder on this machine (`capabilities.cwd`). The `/run:` match above
+      // was made on the *typed* text, which is the property that matters here:
+      // a command prefixed by wire-only context is still the command.
+      wireContent: [
+        'Turn context from Cinna Desktop, not part of the conversation:',
+        '- chat id: `chat-1`',
+        '- task id: none',
+        '- handover depth: 0',
+        '',
+        '/run:check'
+      ].join('\n'),
       fileIds: [],
       signal: io.signal,
       registerSteer: expect.any(Function),

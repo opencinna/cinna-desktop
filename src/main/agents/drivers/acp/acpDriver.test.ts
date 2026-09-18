@@ -65,6 +65,7 @@ const FOLDER: AcpFolderView = {
   description: 'The fake agent.',
   path: '/tmp/agents/pineapple',
   kind: 'kit' as LocalAgentKind,
+  runtimeMode: 'isolated',
   enabled: true,
   readiness: 'ok',
   readinessReason: null,

@@ -3,6 +3,7 @@ import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { taskService, type TaskFieldPatch } from '../services/taskService'
 import { inboxService } from '../services/inboxService'
+import { handoverService } from '../services/handoverService'
 import { syncService } from '../services/syncService'
 import { taskSyncService } from '../services/taskSyncService'
 import { taskExecutionService } from '../services/taskExecutionService'
@@ -13,6 +14,7 @@ import { TaskError } from '../errors'
 import type { TaskHandoffTarget, TaskHandoffOutcome } from '../../shared/taskHandoff'
 import { ipcHandle } from './_wrap'
 import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot } from '../../shared/inbox'
+import type { HandoverDto } from '../../shared/handovers'
 import type { DesktopTaskTarget, TaskDto, TaskListQuery } from '../../shared/tasks'
 import type { TaskStatus } from '../../shared/taskStatus'
 
@@ -140,10 +142,14 @@ export function registerTaskHandlers(): void {
   ipcHandle('task:start', async (_event, taskId: string, target: DesktopTaskTarget) => {
     userActivation.requireActivated()
     const profileUserId = getProfileScopeUserId()
-    const result = await taskExecutionService.start(
+    // `completed` is dropped rather than forwarded: it is a Promise, which
+    // `ipcMain.handle`'s structured clone cannot carry, and returning the whole
+    // object would fail the call outright. Main-side callers that need the
+    // turn's outcome call the service directly.
+    const { task, chatId, runId } = await taskExecutionService.start(
       { profileUserId, settingsUserId: getSettingsScopeUserId() }, taskId, target)
     syncService.markDirty(profileUserId)
-    return result
+    return { task, chatId, runId }
   })
 
   /** Title, description, priority, router — writable whoever is running the task. */
@@ -229,6 +235,21 @@ export function registerTaskHandlers(): void {
   ipcHandle('inbox:list', async (): Promise<InboxSnapshot> => {
     userActivation.requireActivated()
     return inboxService.list(getProfileScopeUserId())
+  })
+
+  /**
+   * The file handover a task came from, or null for an ordinary task.
+   *
+   * Profile scope, like the task itself. Keyed by the task rather than by the
+   * handover id because that is what the task page has, and because
+   * `tasks.origin` is a closed `local | remote` union that cannot say
+   * "handover" — the row *is* the link.
+   */
+  ipcHandle('handover:for-task', async (_event, input: { taskId: string }): Promise<HandoverDto | null> => {
+    userActivation.requireActivated()
+    const taskId = typeof input?.taskId === 'string' ? input.taskId : ''
+    if (!taskId) return null
+    return handoverService.forTask(getProfileScopeUserId(), taskId)
   })
 
   /**

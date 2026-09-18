@@ -129,6 +129,10 @@ describe('InboxView — the blocks it renders', () => {
       interactive: false,
       chatId: 'c2',
       liveRequestId: 'que_1',
+      decision: undefined,
+      // A driver's question: an agent is asking, so the card names one and the
+      // free-text option stays (`ux_rules.md` §10).
+      askedByDesktop: false,
       onAnswerLocal: expect.any(Function)
     })
   })

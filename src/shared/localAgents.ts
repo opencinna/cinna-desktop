@@ -23,6 +23,7 @@ import type {
 import { MANIFEST_FILE, SLUG_PATTERN } from './kit/manifest'
 import type { ContractCompatibilityStatus } from './kit/contractVersion'
 import type { ClaudeApproval, LocalAgentRuntimeInput } from './engine'
+import type { HandoverSetting } from './handovers'
 
 /** Id prefix of a folder agent's `agents` row: `folder:<manifest id>`. */
 export const FOLDER_AGENT_ID_PREFIX = 'folder:'
@@ -309,6 +310,14 @@ export interface LocalAgentDesktopSummary {
    */
   claudeApproval: ClaudeApproval | null
   codexApproval?: ClaudeApproval | null
+  /**
+   * Bare agents only: whether a brief dropped into this folder's
+   * `.cinna/handovers/` runs without asking. Null is "no choice made", read as
+   * `DEFAULT_HANDOVER_SETTING`; `auto` is refused while git tracks the
+   * directory, so a surface offering it asks
+   * `window.api.localAgents.handoversCheck` first.
+   */
+  handovers?: HandoverSetting | null
 }
 
 /**

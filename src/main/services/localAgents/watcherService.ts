@@ -75,6 +75,7 @@ import { discoverBareAgents, KIT_WORKSHOP_DIR } from './externalScan'
 import { isWithin } from './pathRules'
 import { getMainWindow } from '../../index'
 import { turnLock } from './turnLock'
+import { HANDOVERS_DIR } from '../../../shared/handovers'
 
 const logger = createLogger('local-agent-watch')
 
@@ -103,12 +104,26 @@ const IGNORED_SEGMENT = 'app-data'
  */
 const WATCHED_SUBDIRS = ['docs', 'credentials'] as const
 
+/**
+ * The two path segments that make a dot-directory ours. `.cinna/handovers/` is
+ * the folder's inbox (`drafts/file_handovers` §3.2) and the one thing under a
+ * dot-entry this watcher acts on; `.cinna/` alone is not enough, because
+ * `localDevService` writes an unrelated `.cinna/account.json` in a workspace.
+ */
+const [CINNA_DIR, HANDOVERS_SUBDIR] = HANDOVERS_DIR.split('/')
+
 interface RootWatch {
   root: AgentRootRow
   watchers: FSWatcher[]
   /** Agent directories with a rescan pending, or `null` for "the whole root". */
   pending: Set<string>
   pendingWholeRoot: boolean
+  /**
+   * Agent directories whose handovers need a look. A set of its own because
+   * these are not rescans and must not be collapsed into one: a whole-root
+   * rescan answers every `pending` entry, and it answers none of these.
+   */
+  pendingHandovers: Set<string>
   timer: NodeJS.Timeout | null
   /**
    * True when one recursive handle covers the whole root. The per-directory
@@ -140,6 +155,11 @@ export interface WatcherDeps {
    * configure the watcher without a database.
    */
   keepBareAgent?: (root: AgentRootRow) => (absPath: string) => boolean
+  /**
+   * Something changed under `<agentDir>/.cinna/handovers/`. Optional: a test
+   * (and the kit-only path) can configure the watcher without it.
+   */
+  onHandover?: (root: AgentRootRow, agentDir: string) => void
 }
 
 const watches = new Map<string, RootWatch>()
@@ -168,6 +188,13 @@ export type WatchTarget =
   | { kind: 'root' }
   /** One agent's definition may have changed. */
   | { kind: 'agent'; dir: string }
+  /**
+   * Something happened under a bare agent's `.cinna/handovers/` — a brief
+   * arrived, or a report was written. Not a change to what the agent *is*, so
+   * it rescans nothing; it asks `handoverService` to look at that one folder
+   * now instead of waiting for the minute scan.
+   */
+  | { kind: 'handover'; agentDir: string }
 
 /**
  * Classify an event path. Exported because it is the rule that decides what a
@@ -221,6 +248,22 @@ const EXTERNAL_ROOT_FILES: ReadonlySet<string> = new Set<string>(
 )
 
 /**
+ * The agent-relative segments before `.cinna/handovers`, or null when this path
+ * is not inside one.
+ *
+ * Matched on the *pair* rather than on `.cinna` alone: `.cinna/account.json` in
+ * a local-dev workspace is not a handover, and neither is anything else that
+ * might land in that directory later. Returns the (possibly empty) prefix, so
+ * an empty array means the root is itself the agent.
+ */
+function handoverSegments(segments: string[]): string[] | null {
+  const index = segments.findIndex(
+    (segment, at) => segment === CINNA_DIR && segments[at + 1] === HANDOVERS_SUBDIR
+  )
+  return index === -1 ? null : segments.slice(0, index)
+}
+
+/**
  * Classify an event under an **external** root.
  *
  * A separate rule because an external root is not kit-shaped: there is no
@@ -255,6 +298,14 @@ export function classifyExternalEvent(rootPath: string, filename: string | null)
   // and `CLAUDE.md` count, so it is the one dot-entry acted on — and only as
   // the last segment, never for what is written inside it.
   if (last === KIT_WORKSHOP_DIR) return { kind: 'root' }
+
+  // **Before the dot-segment rule**, which would otherwise drop every handover
+  // path: `.cinna/handovers/` is the one dot-directory in a project folder that
+  // is ours, and its whole purpose is to be written into from outside. The
+  // agent folder is whatever comes before `.cinna`, which is the root itself
+  // when the root *is* the agent (`segments` starting at `.cinna`).
+  const handover = handoverSegments(segments)
+  if (handover) return { kind: 'handover', agentDir: join(rootPath, ...handover) }
   // A dot-entry anywhere on the path: `.git` writing an index, `.venv`, an
   // editor's bookkeeping. `.git` alone would otherwise fire on every command
   // the update check runs.
@@ -296,8 +347,27 @@ function flush(state: RootWatch): void {
 
   const whole = state.pendingWholeRoot
   const dirs = [...state.pending]
+  const handoverDirs = [...state.pendingHandovers]
   state.pendingWholeRoot = false
   state.pending.clear()
+  state.pendingHandovers.clear()
+
+  // **Not deferred through `turnLock.whenFree`, and not skipped when a whole-
+  // root rescan is pending either.** The turn holding the lock is very often
+  // the thing that just wrote `report.md`; waiting for it to finish would delay
+  // exactly the event that says how it is going. Nothing here reads the agent's
+  // definition, so there is no half-written folder to misread — the scan parses
+  // two files and reconciles a table row.
+  for (const agentDir of handoverDirs) {
+    try {
+      deps.onHandover?.(state.root, agentDir)
+    } catch (err) {
+      logger.error('a handover scan after a watch event failed', {
+        rootId: state.root.id,
+        error: err
+      })
+    }
+  }
 
   if (whole) {
     runWholeRootRescan(state)
@@ -374,6 +444,7 @@ function runWholeRootRescan(state: RootWatch): void {
 function schedule(state: RootWatch, target: WatchTarget): void {
   if (state.closed || target.kind === 'ignore') return
   if (target.kind === 'root') state.pendingWholeRoot = true
+  else if (target.kind === 'handover') state.pendingHandovers.add(target.agentDir)
   else state.pending.add(target.dir)
   if (state.timer) clearTimeout(state.timer)
   state.timer = setTimeout(() => flush(state), DEBOUNCE_MS)
@@ -564,6 +635,7 @@ export const watcherService = {
       watchers: [],
       pending: new Set(),
       pendingWholeRoot: false,
+      pendingHandovers: new Set(),
       timer: null,
       recursive: false,
       rearmed: false,

@@ -14,8 +14,9 @@
 import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EngineConfigInput } from '../../../engine/configGenerator'
+import type { AcpRuntimeMode } from './types'
 import {
   createClaudeLauncher,
   createOpencodeLauncher,
@@ -31,7 +32,8 @@ const FOLDER = {
   slug: 'pineapple',
   description: 'The spike agent.',
   path: '/tmp/agents/pineapple',
-  kind: 'kit' as const
+  kind: 'kit' as const,
+  runtimeMode: 'isolated' as const
 }
 const CTX: AcpLaunchContext = { userId: 'user-1', agentId: AGENT_ID, folder: FOLDER }
 
@@ -254,11 +256,24 @@ describe('the Claude launcher', () => {
       env: { ELECTRON_RUN_AS_NODE: '1' }
     }),
     claudeEnv: async () => ({ PATH: '/usr/bin', HOME: '/Users/x' }),
-    systemPrompt: () => 'You are the pineapple agent.',
+    // The wiring hands each mode its own document: an isolated session's whole
+    // assembled prompt, a native one's desktop context alone.
+    systemPrompt: (_userId: string, _agentId: string, mode: AcpRuntimeMode) =>
+      mode === 'native' ? 'How you are running now: in this folder.' : 'You are the pineapple agent.',
     model: () => 'sonnet',
     approval: () => 'ask' as const,
     folderAgents: () => ({})
   }
+
+  /** The same agent, adopted for its instructions file rather than scaffolded. */
+  const BARE_CTX: AcpLaunchContext = {
+    userId: 'user-1',
+    agentId: AGENT_ID,
+    folder: { ...FOLDER, kind: 'bare', runtimeMode: 'native' }
+  }
+
+  const claudeOptions = (p: AcpLaunchPlan): Record<string, unknown> =>
+    (p.session.meta?.claudeCode as { options: Record<string, unknown> }).options
 
   it('ends every turn with a usage update that carries a cost, so its follow-ups need no quiet spell', () => {
     expect(createClaudeLauncher(deps).endsTurnsWithCostedUsage).toBe(true)
@@ -288,9 +303,9 @@ describe('the Claude launcher', () => {
     })
   })
 
-  it('carries the folder’s prompt and the isolation pair as SDK options', async () => {
+  it('carries a kit folder’s prompt and the isolation pair as SDK options', async () => {
     const p = plan(await createClaudeLauncher(deps).plan(CTX))
-    const options = (p.session.meta?.claudeCode as { options: Record<string, unknown> }).options
+    const options = claudeOptions(p)
     expect(options.systemPrompt).toBe('You are the pineapple agent.')
     expect(options.model).toBe('sonnet')
     // `settingSources: []` alone leaves the user's own MCP connectors attached.
@@ -300,6 +315,66 @@ describe('the Claude launcher', () => {
     // Omitted rather than passed empty, so a folder without subagents hands the
     // adapter what it was handed before the option existed.
     expect('agents' in options).toBe(false)
+  })
+
+  it('gives a native folder the runtime a terminal session in it has', async () => {
+    // The whole of phase 1, on the wire: the folder's own `CLAUDE.md`, hooks,
+    // skills, plugins, `.claude/agents` and `.mcp.json` reach the session
+    // because these three settings scopes load and nothing overrides the MCP
+    // config. Mutation: put either `strictMcpConfig` or `mcpServers` back and
+    // the folder's own MCP servers silently stop attaching.
+    const folderAgents = vi.fn(() => ({ reviewer: { description: 'reviews', prompt: 'review' } }))
+    const p = plan(await createClaudeLauncher({ ...deps, folderAgents }).plan(BARE_CTX))
+    const options = claudeOptions(p)
+    expect(options.settingSources).toEqual(['user', 'project', 'local'])
+    expect('strictMcpConfig' in options).toBe(false)
+    expect('mcpServers' in options).toBe(false)
+    // Not shimmed and not even read: settings load the folder's subagents, and
+    // passing them as well would hand the adapter every definition twice.
+    expect('agents' in options).toBe(false)
+    expect(folderAgents).not.toHaveBeenCalled()
+    // The preset is the engine's own coding prompt; the desktop appends only
+    // what the folder cannot know about this turn.
+    expect(options.systemPrompt).toEqual({
+      type: 'preset',
+      preset: 'claude_code',
+      append: 'How you are running now: in this folder.'
+    })
+    expect(options.model).toBe('sonnet')
+  })
+
+  it('keeps the isolated folder’s session exactly as it was, beside the native branch', async () => {
+    const kit = claudeOptions(plan(await createClaudeLauncher(deps).plan(CTX)))
+    expect(kit.settingSources).toEqual([])
+    expect(kit.strictMcpConfig).toBe(true)
+    expect(kit.mcpServers).toEqual({})
+    expect(typeof kit.systemPrompt).toBe('string')
+  })
+
+  it('sets the session mode on a native folder too, where the folder’s own defaultMode would otherwise win', async () => {
+    // `_meta.claudeCode.options.permissionMode` was watched being ignored — a
+    // session sent `default` came up in the project's `acceptEdits` — so
+    // `session/set_mode` is the only thing that enforces the desktop's choice,
+    // and a bare folder is exactly where the folder's `settings.local.json`
+    // now loads. Mutation: drop `setup` for the native branch and a bare
+    // folder runs in whatever mode its own settings file names.
+    expect(plan(await createClaudeLauncher(deps).plan(BARE_CTX)).setup.modeId).toBe('default')
+    const auto = plan(
+      await createClaudeLauncher({ ...deps, approval: () => 'auto' as const }).plan(BARE_CTX)
+    )
+    expect(auto.setup.modeId).toBe('auto')
+  })
+
+  it('still plans a native turn when the prompt cannot be read, on the preset alone', async () => {
+    const p = plan(
+      await createClaudeLauncher({
+        ...deps,
+        systemPrompt: () => {
+          throw new Error('the folder moved')
+        }
+      }).plan(BARE_CTX)
+    )
+    expect(claudeOptions(p).systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' })
   })
 
   it('offers the folder’s own subagents when it has some', async () => {

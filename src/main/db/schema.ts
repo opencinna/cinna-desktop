@@ -10,6 +10,7 @@ import type { JobDepDescriptor, JobSyncManifest } from '../../shared/sync'
 import type { ChatRouter } from '../../shared/chatRouting'
 import type { ChatRunResultStatus } from '../../shared/chatRunResult'
 import type { InputRequest, InputResumeMode } from '../../shared/runEvents'
+import type { HandoverExecution, HandoverReportStatus, HandoverState } from '../../shared/handovers'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { TaskStatus } from '../../shared/taskStatus'
 import type { TaskHandoffReceipt } from '../../shared/taskHandoff'
@@ -789,7 +790,17 @@ export const taskInputRequests = sqliteTable('task_input_requests', {
     .references(() => tasks.id, { onDelete: 'cascade' }),
   chatId: text('chat_id').notNull(),
   agentId: text('agent_id'),
-  deliveryOwner: text('delivery_owner').$type<'driver' | 'runner'>().notNull().default('driver'),
+  /**
+   * Who answers this ask when the user does.
+   *
+   * `driver` — a live engine park, addressed by `askDelivery`. `runner` — a
+   * durable coordinator gate, resumed by its runner. `handover` — the file
+   * handover gate (`handoverService`), which has no turn behind it at all: the
+   * answer is what *decides* whether a turn starts. Like a runner row it names
+   * no agent and resumes by `reply`; unlike one it is reached through
+   * `taskRunnerBridge` before the `runner` arm can claim it.
+   */
+  deliveryOwner: text('delivery_owner').$type<'driver' | 'runner' | 'handover'>().notNull().default('driver'),
   rootRunId: text('root_run_id'),
   invocationId: text('invocation_id'),
   /** The `InputRequest` from `shared/runEvents.ts`, verbatim — not a second union. */
@@ -880,4 +891,91 @@ export const appSettings = sqliteTable('app_settings', {
   updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())
+})
+
+/**
+ * `handovers` — one `.cinna/handovers/<id>/` folder, as the desktop sees it.
+ *
+ * The requester writes `brief.md`, the executor writes `report.md`, and Cinna
+ * writes neither (`drafts/file_handovers` §3.2). This table is where every
+ * desktop-side fact about that exchange lives instead: which task the brief
+ * became, whether the gate was answered, what the report last said.
+ *
+ * See `migrations/handovers.ts` for why `agent_id` carries no foreign key and
+ * why `task_id` is `SET NULL`.
+ */
+export const handovers = sqliteTable('handovers', {
+  id: text('id').primaryKey(),
+  /** Profile scope: tasks, chats and asks are written under the same id. */
+  userId: text('user_id').notNull(),
+  /** The executor agent's `agents` row id. Positional; no FK — see the migration. */
+  agentId: text('agent_id').notNull(),
+  folderPath: text('folder_path').notNull(),
+  /** The requester's own id for this handover. Unique per folder, not globally. */
+  handoverId: text('handover_id').notNull(),
+  taskId: text('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+  /** Origin as *validated* at intake, never as the brief claimed it (§3.5). */
+  originAgentId: text('origin_agent_id'),
+  originChatId: text('origin_chat_id'),
+  originTaskId: text('origin_task_id'),
+  depth: integer('depth').notNull().default(1),
+  groupId: text('group_id'),
+  execution: text('execution').$type<HandoverExecution>().notNull().default('ask'),
+  state: text('state').$type<HandoverState>().notNull().default('seen'),
+  refusalReason: text('refusal_reason'),
+  /** {@link HandoverWarning} — acted on anyway, with something to say about it. */
+  warning: text('warning'),
+  /** sha256 of the brief bytes. What makes a rescan of an unchanged folder free. */
+  briefDigest: text('brief_digest').notNull(),
+  /**
+   * `mtimeNs:size` of `brief.md` as the last scan found it — the cheap half of
+   * the digest above.
+   *
+   * The scan walks every handover of every bare agent once a minute, and
+   * hashing a brief nobody has touched since last week is work that grows with
+   * the number of projects and buys nothing. A stamp that matches skips the
+   * read; a stamp that does not, or cannot be taken, falls through to it, so
+   * the digest is still what decides anything.
+   */
+  briefStat: text('brief_stat'),
+  reportDigest: text('report_digest'),
+  /** The same stamp for `report.md`. See {@link handovers.briefStat}. */
+  reportStat: text('report_stat'),
+  reportStatus: text('report_status').$type<HandoverReportStatus>(),
+  /** The executor's last one-liner, so a group packet reads off the rows alone. */
+  summary: text('summary'),
+  /**
+   * Which `revisions/NNN.md` have been sent on this handover's chat, as a JSON
+   * array of file names. A revision is delivered once and never again; this is
+   * the whole of its state, which is why it is a column and not a table.
+   */
+  revisionsDelivered: text('revisions_delivered'),
+  /** The Inbox address of the gate, so a later scan can withdraw it. */
+  gateRequestId: text('gate_request_id'),
+  /**
+   * The chat created *for* the gate and not yet used.
+   *
+   * `task_input_requests.chat_id` is NOT NULL and the task has no chat until it
+   * starts, so the gate has to bring one. It is handed to
+   * `taskExecutionService.start` as `reuseChatId` on Run and deleted on Skip;
+   * `tasks.chat_id` stays null until a turn actually begins.
+   */
+  gateChatId: text('gate_chat_id'),
+  runId: text('run_id'),
+  /**
+   * When the origin was woken with the return packet, and the turn that carried
+   * it. Set once: the report digest is what stops a rescan waking twice, and
+   * this is the record that makes a missed wake visible rather than silent.
+   */
+  wokeAt: integer('woke_at', { mode: 'timestamp' }),
+  wakeRunId: text('wake_run_id'),
+  /**
+   * When the brief stopped being on disk — the requester withdrew it, or the
+   * folder was tidied after the work was done. The row and its task stay; the
+   * surfaces that name `.cinna/handovers/<id>` stop claiming it is there.
+   */
+  briefMissingAt: integer('brief_missing_at', { mode: 'timestamp' }),
+  lastScannedAt: integer('last_scanned_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull()
 })

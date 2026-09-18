@@ -41,6 +41,19 @@ import type { MessageLike } from '../../streamPartsAccumulator'
 export type { AcpLauncherId } from '../../../../shared/agentDrivers'
 export { ACP_LAUNCHER_IDS } from '../../../../shared/agentDrivers'
 
+/**
+ * How a folder's session is set up: sealed by the desktop, or the folder's own.
+ *
+ * **Derived once, where the folder view is built** (`drivers/index.ts`), never
+ * re-derived from a kind inside a launcher. A kit folder is `isolated` because
+ * the kit *is* its harness; a bare folder is `native` because it is somebody's
+ * own repository and a turn in it should be the turn a terminal session there
+ * would get. Cinna's own local-development build session runs in a workspace
+ * the desktop synced and is `isolated` too, though its folder view says `bare`
+ * — which is exactly why this is a field and not a comparison.
+ */
+export type AcpRuntimeMode = 'isolated' | 'native'
+
 /** ACP protocol version this build speaks. Declares no `fs` and no `terminal` (v2-forward). */
 export const ACP_PROTOCOL_VERSION = 1
 

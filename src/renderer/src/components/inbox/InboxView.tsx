@@ -529,6 +529,10 @@ function AskBody({
         chatId={entry.chatId}
         liveRequestId={settledAs === null ? entry.requestId : undefined}
         decision={settledAs ?? undefined}
+        // The handover gate is the desktop's own question about a brief no
+        // agent has been handed yet: it says who is asking, and it drops the
+        // free-text option main would refuse (§10, §6).
+        askedByDesktop={entry.deliveryOwner === 'handover'}
         onAnswerLocal={(requestId, answers) => onDeliver({ requestId, answers })}
       />
     )

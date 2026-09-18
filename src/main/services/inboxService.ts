@@ -422,7 +422,12 @@ export const inboxService = {
     const local = taskInputRequestRepo
       .listOpen(userId)
       .filter(({ row }) => {
-        if (row.resume === 'reply' && row.deliveryOwner !== 'runner') return true
+        // An allowlist, not `!== 'runner'`: a reply address the user can answer
+        // with the chat closed. A runner gate is resumed by its runner and is
+        // listed through the task branch below instead — and the next owner
+        // added to the union must be classified here deliberately rather than
+        // inheriting "everything that is not a runner".
+        if (row.resume === 'reply' && ['driver', 'handover'].includes(row.deliveryOwner)) return true
         const task = taskService.getById(userId, row.taskId)
         return task.executor === 'desktop' && task.runsHere && ['blocked', 'in_progress'].includes(task.status)
       })

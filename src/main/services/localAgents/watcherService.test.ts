@@ -185,6 +185,55 @@ describe('watching a real directory', () => {
     }
   })
 
+  /**
+   * The one target that is **not** deferred on the turn lock, and the reason it
+   * is not: the turn holding that lock is very often the thing that just wrote
+   * `report.md`. Waiting for it would delay exactly the event that says how it
+   * is going, and a lock held for a twenty-minute turn would delay it by twenty
+   * minutes.
+   *
+   * Positive assertion over a real watcher, so it is written the way the
+   * per-agent one above is: write repeatedly until the platform delivers, and
+   * do not assert a timing guarantee `fs.watch` never made.
+   */
+  it('scans handovers while a turn holds the agent, instead of deferring them', async () => {
+    const project = mkdtempSync(join(tmpdir(), 'cinna-handover-watch-'))
+    const handoverDir = join(project, '.cinna', 'handovers', '20260917-1200-retry')
+    const onHandover = vi.fn()
+    const rescanAgent = vi.fn()
+    const rescanRoot = vi.fn()
+    watcherService.configure({
+      rescanAgent,
+      rescanRoot,
+      agentIdForPath: () => 'folder:external:r2:.',
+      agentIdsForRoot: () => ['folder:external:r2:.'],
+      onHandover
+    })
+    const handle = turnLock.acquire('folder:external:r2:.', 'turn')
+    try {
+      watcherService.watchRoot({ ...root(project), id: 'r2', kind: 'external' })
+      let lastWrite = 0
+      const fired = await waitFor(() => {
+        if (Date.now() - lastWrite > 1_500) {
+          mkdirSync(handoverDir, { recursive: true })
+          writeFileSync(join(handoverDir, 'report.md'), `mid-turn ${Date.now()}\n`)
+          lastWrite = Date.now()
+        }
+        return onHandover.mock.calls.length > 0
+      }, 12_000)
+
+      expect(fired).toBe(true)
+      expect(onHandover).toHaveBeenCalledWith(expect.objectContaining({ id: 'r2' }), project)
+      // And it is still not a change to what the agent *is*.
+      expect(rescanAgent).not.toHaveBeenCalled()
+      expect(rescanRoot).not.toHaveBeenCalled()
+    } finally {
+      handle.release()
+      watcherService.stopAll()
+      rmSync(project, { recursive: true, force: true })
+    }
+  })
+
   it('runs the deferred root rescan once the last turn releases', async () => {
     const { workshop } = workshopWithAgent()
     const rescanRoot = vi.fn()
@@ -339,6 +388,35 @@ describe('classifyExternalEvent', () => {
     // What is written inside it is still a dot-entry.
     file('.cinna-kit/kit.json')
     expect(classifyExternalEvent(root, '.cinna-kit/kit.json')).toEqual({ kind: 'ignore' })
+  })
+
+  /**
+   * `.cinna/handovers/` is the one dot-directory in a project folder that is
+   * ours, and the dot-segment rule above it would drop every path in it. These
+   * pin the exemption, and pin how narrow it is: `.cinna/` alone is not enough,
+   * because `localDevService` writes an unrelated `.cinna/account.json`.
+   */
+  it('names the agent folder behind a handover path, at the root and nested', () => {
+    expect(classifyExternalEvent(root, '.cinna/handovers/20260917-1200-retry/brief.md')).toEqual({
+      kind: 'handover',
+      agentDir: root
+    })
+    expect(
+      classifyExternalEvent(root, 'projects/uploader/.cinna/handovers/20260917-1200-retry/report.md')
+    ).toEqual({ kind: 'handover', agentDir: join(root, 'projects', 'uploader') })
+    // The directory itself appearing is the event macOS delivers for a new
+    // handover, and it has to mean the same thing as a file inside it.
+    expect(classifyExternalEvent(root, '.cinna/handovers/20260917-1200-retry')).toEqual({
+      kind: 'handover',
+      agentDir: root
+    })
+  })
+
+  it('still ignores everything else under a dot-directory', () => {
+    expect(classifyExternalEvent(root, '.cinna/account.json')).toEqual({ kind: 'ignore' })
+    expect(classifyExternalEvent(root, '.cinna/other/thing.md')).toEqual({ kind: 'ignore' })
+    expect(classifyExternalEvent(root, '.git/index')).toEqual({ kind: 'ignore' })
+    expect(classifyExternalEvent(root, 'handovers/brief.md')).not.toMatchObject({ kind: 'handover' })
   })
 
   it('ignores an ordinary file an agent writes, at any depth in reach', () => {

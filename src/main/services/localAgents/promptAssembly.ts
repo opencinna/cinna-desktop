@@ -1,4 +1,5 @@
 import { isCoordinatorHandover } from '../../../shared/kit/handovers'
+import { handoverRequesterSection } from '../../../shared/handovers'
 /**
  * The system prompt a folder agent runs on.
  *
@@ -54,6 +55,20 @@ export interface DesktopPromptContext {
   locale: string
   /** IANA zone from the OS, e.g. `Europe/Berlin`. */
   timeZone: string
+  /**
+   * The agent's own Cinna id, when the producer knows it.
+   *
+   * **Stable per agent**, which is the whole reason it may live in a system
+   * prompt at all: Codex keys its pooled process on the prompt bytes, so a
+   * per-turn value here would start a new process every turn. The per-turn ids
+   * — chat and task — travel in the wire-only turn header instead
+   * (`threadContextService.buildTurnHeader`).
+   *
+   * Optional because two callers assemble prompts for something that has no
+   * agent row (a preview, a development session); without it the identity line
+   * and the handover protocol are left out rather than written blank.
+   */
+  agentId?: string
 }
 
 /** True when `path` is a regular file. */
@@ -153,6 +168,32 @@ function handoverSection(manifest: CinnaAgentManifest): string | null {
 }
 
 /**
+ * The agent's own id, as one bullet of "How you are running now".
+ *
+ * An agent that does not know its id cannot fill in `origin.agent` of a
+ * handover brief, and cannot answer another agent that asks who it is. Left
+ * out entirely when the producer did not pass one: a bullet saying the id is
+ * `undefined` is worse than no bullet.
+ */
+function agentIdBullets(context: DesktopPromptContext): string[] {
+  return context.agentId
+    ? [`- Your Cinna agent id is \`${context.agentId}\`; use it when another agent or a file protocol asks who you are.`]
+    : []
+}
+
+/**
+ * The handover protocol as its own section, or nothing.
+ *
+ * Both folder kinds get it, on every engine: a kit agent is not a handover
+ * *target* (§8) but it is very much a requester (§3.8). It needs the agent id
+ * to state `origin.agent`, so a context without one gets no section — the same
+ * rule as {@link agentIdBullets}, for the same reason.
+ */
+function handoverSections(context: DesktopPromptContext): string[] {
+  return context.agentId ? [handoverRequesterSection(context.agentId)] : []
+}
+
+/**
  * Building mode: the person asked to change the agent, so this conversation
  * becomes the build session.
  *
@@ -179,7 +220,18 @@ function handoverSection(manifest: CinnaAgentManifest): string | null {
  * builder document only when the folder has one: a rule that points at a
  * missing file is how a model ends up refusing the work.
  */
-function buildingModeSection(guide: string, editable: string): string[] {
+function buildingModeSection(
+  guide: string,
+  editable: string,
+  /**
+   * How the agent's own instructions reached it, for the last bullet. The
+   * default is true of every assembled prompt: the document the model is
+   * reading *is* the pre-edit copy. A bare folder on its native runtime has no
+   * instructions "above" — the engine loaded the file itself — so that path
+   * says so instead of pointing at text that is not there.
+   */
+  memoryNote = 'the instructions above were read before your edits'
+): string[] {
   return [
     '## Building mode',
     '',
@@ -188,7 +240,7 @@ function buildingModeSection(guide: string, editable: string): string[] {
     '- Only a person\'s request switches you. Never switch on your own initiative, and never for an unattended or handed-over task.',
     `- Say in one line that you are switching to building mode, then ${guide}`,
     `- In building mode you may edit ${editable}. Say which files you changed.`,
-    '- Stay in building mode for the rest of this conversation: the person may keep refining you and trying the result. When they ask for your actual job, do it the way your edited files now say — the instructions above were read before your edits.'
+    `- Stay in building mode for the rest of this conversation: the person may keep refining you and trying the result. When they ask for your actual job, do it the way your edited files now say — ${memoryNote}.`
   ]
 }
 
@@ -216,6 +268,7 @@ function desktopContextSection(agentDir: string, context: DesktopPromptContext):
     '- Never print, echo or log a credential value, and never read `credentials/.env` yourself — the scripts do that.',
     `- The user's locale is ${context.locale} and their time zone is ${context.timeZone}. Format dates, times and numbers the way they would expect, and read a bare date as being in that zone.`,
     '- Long output goes to a file under `app-data/storage/` with a short summary in your reply, not into the reply itself.',
+    ...agentIdBullets(context),
     '',
     ...buildingModeSection(
       guide,
@@ -299,6 +352,7 @@ export function assembleAgentPrompt(
   if (handovers) sections.push(handovers)
 
   sections.push(desktopContextSection(agentDir, context))
+  sections.push(...handoverSections(context))
 
   return `${sections.join('\n\n---\n\n')}\n`
 }
@@ -327,7 +381,6 @@ function bareDesktopContextSection(
   instructionsFile: BareInstructionsFile,
   context: DesktopPromptContext
 ): string {
-  const hasReadme = isFile(join(agentDir, BARE_AGENT_README_FILE))
   return [
     '## How you are running now',
     '',
@@ -338,21 +391,62 @@ function bareDesktopContextSection(
     '- Never print, echo or log a credential value, and never read a `.env` file or any other secret file to answer a question about it.',
     `- The user's locale is ${context.locale} and their time zone is ${context.timeZone}. Format dates, times and numbers the way they would expect, and read a bare date as being in that zone.`,
     '- Long output goes to a file in this folder with a short summary in your reply, not into the reply itself.',
+    ...agentIdBullets(context),
     '',
-    ...buildingModeSection(
-      hasReadme
-        // "Read it for", not "follow it": a repository README is setup steps as
-        // much as guidance, and a model told to follow it runs `make install`
-        // before making a one-line change to its instructions file.
-        ? `read \`${BARE_AGENT_README_FILE}\` in this folder for how this agent is organised and developed — as background, not as setup steps to run.`
-        : `work from \`${instructionsFile}\`, which is your whole definition.`,
-      `\`${instructionsFile}\`${hasReadme ? ` and \`${BARE_AGENT_README_FILE}\`` : ''}, and anything else in this folder the change needs`
-    )
+    ...buildingModeSection(...bareBuildingModeWording(agentDir, instructionsFile))
   ].join('\n')
 }
 
 /**
- * The system prompt a **bare** agent runs on: its instructions file — the first
+ * Building mode's two moving parts for a bare folder: which document the agent
+ * should read to understand how it is built, and what it may edit.
+ *
+ * Shared by the assembled prompt and the native one so the wording cannot drift
+ * between them — the folder shape the sentences describe is the same either way.
+ */
+function bareBuildingModeWording(
+  agentDir: string,
+  instructionsFile: BareInstructionsFile
+): [guide: string, editable: string] {
+  const hasReadme = isFile(join(agentDir, BARE_AGENT_README_FILE))
+  return [
+    hasReadme
+      // "Read it for", not "follow it": a repository README is setup steps as
+      // much as guidance, and a model told to follow it runs `make install`
+      // before making a one-line change to its instructions file.
+      ? `read \`${BARE_AGENT_README_FILE}\` in this folder for how this agent is organised and developed — as background, not as setup steps to run.`
+      : `work from \`${instructionsFile}\`, which is your whole definition.`,
+    `\`${instructionsFile}\`${hasReadme ? ` and \`${BARE_AGENT_README_FILE}\`` : ''}, and anything else in this folder the change needs`
+  ]
+}
+
+/**
+ * What a bare agent says instead of nothing when its instructions file is
+ * missing or empty.
+ *
+ * Never silently produce a promptless agent: without this the model gets only
+ * the context block and answers as a generic assistant, which reads as "the
+ * agent is broken" rather than as "the file is empty".
+ */
+function bareInstructionsStub(name: string, instructionsFile: BareInstructionsFile | null): string {
+  const absence =
+    instructionsFile === null
+      ? `This folder has no ${bareInstructionsFileList((file) => `\`${file}\``)}, so you have no instructions yet.`
+      : `\`${instructionsFile}\` in this folder is empty, so you have no instructions yet.`
+  return [
+    `# ${name}`,
+    '',
+    `You are ${name}.`,
+    '',
+    `${absence} Say that plainly when asked to do work, and suggest that the person tell you what you should do, so you can write it in building mode.`
+  ].join('\n')
+}
+
+/**
+ * The system prompt a bare agent runs on **when the engine does not load the
+ * folder itself** — today that is OpenCode alone, through the generated engine
+ * config; Claude and Codex bare folders run on
+ * {@link assembleBareNativePrompt}. Its instructions file — the first
  * of `AGENT.md`, `AGENTS.md` or `CLAUDE.md` the folder has, resolved the way the
  * scan resolves it — and nothing else the folder contains.
  *
@@ -388,23 +482,7 @@ export function assembleBareAgentPrompt(
   if (instructions !== '') {
     sections.push(instructions)
   } else {
-    // Same rule as the kit path: never silently produce a promptless agent.
-    // Without this the model gets only the context block and answers as a
-    // generic assistant, which reads as "the agent is broken" rather than as
-    // "the file is empty".
-    const absence =
-      instructionsFile === null
-        ? `This folder has no ${bareInstructionsFileList((file) => `\`${file}\``)}, so you have no instructions yet.`
-        : `\`${instructionsFile}\` in this folder is empty, so you have no instructions yet.`
-    sections.push(
-      [
-        `# ${name}`,
-        '',
-        `You are ${name}.`,
-        '',
-        `${absence} Say that plainly when asked to do work, and suggest that the person tell you what you should do, so you can write it in building mode.`
-      ].join('\n')
-    )
+    sections.push(bareInstructionsStub(name, instructionsFile))
   }
 
   sections.push(
@@ -414,6 +492,154 @@ export function assembleBareAgentPrompt(
       context
     )
   )
+  sections.push(...handoverSections(context))
+  return `${sections.join('\n\n---\n\n')}\n`
+}
+
+/**
+ * The engines a bare folder can run **natively** on, and the instructions file
+ * each of them reads by itself.
+ *
+ * This is the whole reason {@link assembleBareNativePrompt} takes an engine:
+ * Claude Code loads `CLAUDE.md` as memory, Codex loads `AGENTS.md`, and neither
+ * loads the other's. A folder adopted through `AGENTS.md` therefore still needs
+ * its instructions pasted in for Claude, and a `CLAUDE.md`-only folder needs
+ * them pasted in for Codex — while pasting the file the engine has already read
+ * would state the same instructions twice, once as memory and once as a system
+ * prompt the folder never wrote.
+ *
+ * Claude's half was **watched on 2026-09-17 against claude 2.1.274** under
+ * `settingSources: ['user','project','local']`: `CLAUDE.md` came back in the
+ * first answer with no tool call, while `AGENTS.md` and `AGENT.md` reached the
+ * model only after it ran `ls`/`cat` itself — so they are not memory, and this
+ * map must keep pasting them. Codex reading `AGENTS.md` is decided but
+ * unwatched (no Codex install on that machine).
+ */
+const NATIVE_INSTRUCTIONS_FILE = {
+  claude: 'CLAUDE.md',
+  codex: 'AGENTS.md'
+} as const satisfies Record<string, BareInstructionsFile>
+
+/** An engine that can run a bare folder on the folder's own setup. */
+export type NativeRuntimeEngine = keyof typeof NATIVE_INSTRUCTIONS_FILE
+
+/**
+ * What "the folder's own setup" actually means, per engine — and it is not the
+ * same list twice.
+ *
+ * Claude's four scopes were watched loading on the wire (its memory file, its
+ * hooks, its `.claude/agents` and its `.mcp.json`, under
+ * `settingSources: ['user','project','local']`). Codex has no hooks and no
+ * skills to load, so naming them there would describe machinery the engine
+ * does not have; what it does read is the folder's `AGENTS.md`, the user's
+ * `~/.codex/config.toml` and this project's trust decision. Telling an agent
+ * it has a capability it has not is how a turn ends in a tool that never runs.
+ */
+const NATIVE_RUNTIME_SENTENCE = {
+  claude:
+    "this folder's settings, its hooks, its skills and its MCP servers are loaded, and so are the user's own.",
+  codex:
+    "this folder's `AGENTS.md`, the user's `~/.codex/config.toml` and this project's trust decision all apply."
+} as const satisfies Record<NativeRuntimeEngine, string>
+
+/**
+ * The desktop context block for a bare agent on its **native** runtime.
+ *
+ * Shorter than {@link bareDesktopContextSection} by design: everything the
+ * folder already says — its instructions, its tools, its conventions — reaches
+ * the engine through the engine's own loading, so this block is only what the
+ * desktop knows and the folder cannot: that this is a Cinna conversation or an
+ * unattended task, where human input comes from, this machine's locale, and
+ * where long output belongs.
+ *
+ * The one thing it does say about the runtime is that it *is* the folder's own,
+ * because an agent that assumes a sandbox behaves differently from one that
+ * knows its hooks and MCP servers are live.
+ */
+function bareNativeContextSection(
+  agentDir: string,
+  instructionsFile: BareInstructionsFile,
+  context: DesktopPromptContext,
+  engine: NativeRuntimeEngine
+): string {
+  return [
+    '## How you are running now',
+    '',
+    `You are running locally, inside Cinna Desktop, in this folder, on **your own runtime** — the same setup a terminal session in this folder has: ${NATIVE_RUNTIME_SENTENCE[engine]}`,
+    '',
+    'You start in **conversation mode**. Reply to the current request. It may come from a person or an unattended task; request human input through the available question or permission mechanism when needed, and do not assume a person is watching.',
+    '',
+    '- Your working directory is this agent folder. It may be open in an editor right now, so in conversation mode prefer reading over rewriting, and say what you changed.',
+    '- Never print, echo or log a credential value, and never read a `.env` file or any other secret file to answer a question about it.',
+    `- The user's locale is ${context.locale} and their time zone is ${context.timeZone}. Format dates, times and numbers the way they would expect, and read a bare date as being in that zone.`,
+    '- Long output goes to a file in this folder with a short summary in your reply, not into the reply itself.',
+    ...agentIdBullets(context),
+    '',
+    ...buildingModeSection(
+      ...bareBuildingModeWording(agentDir, instructionsFile),
+      'your instructions were loaded when this session started, before your edits'
+    )
+  ].join('\n')
+}
+
+/**
+ * The system prompt for a bare agent running on the folder's **own** setup.
+ *
+ * The counterpart of {@link assembleBareAgentPrompt}, and the difference is
+ * what the engine has already done for itself. On the native runtime the engine
+ * loads the folder's instructions file, its settings, its hooks, its skills and
+ * its MCP servers exactly as a terminal session in that folder would, so this
+ * prompt is appended to the engine's own preset rather than replacing it, and
+ * it carries only the part the desktop knows.
+ *
+ * The instructions file is pasted in for one case alone: the engine running
+ * this turn would not read *that* file (see {@link NATIVE_INSTRUCTIONS_FILE}).
+ * Nothing here says "the instructions above", because on the engine's own
+ * native file there is nothing above.
+ *
+ * `trailingSections` is the seam for text that belongs after the context block —
+ * a handover protocol, an agent identifier — so adding one does not reshape
+ * this function. Empty sections are dropped rather than left as stray rules.
+ */
+export function assembleBareNativePrompt(
+  agentDir: string,
+  name: string,
+  context: DesktopPromptContext,
+  engine: NativeRuntimeEngine,
+  trailingSections: string[] = []
+): string {
+  const sections: string[] = []
+  const instructionsFile = resolveBareInstructionsFile(agentDir)
+
+  if (instructionsFile !== NATIVE_INSTRUCTIONS_FILE[engine]) {
+    const raw = instructionsFile === null ? null : readTextFile(join(agentDir, instructionsFile))
+    const instructions = raw ? stripHtmlComments(raw) : ''
+    if (instructions !== '') {
+      sections.push(['## Your instructions', '', instructions].join('\n'))
+    } else if (!isFile(join(agentDir, NATIVE_INSTRUCTIONS_FILE[engine]))) {
+      // Nothing anywhere: say so, rather than answer as a generic assistant.
+      sections.push(bareInstructionsStub(name, instructionsFile))
+    }
+    // Otherwise the file the folder was *adopted* for is empty while the file
+    // this engine reads itself is not — an empty `AGENT.md` beside a real
+    // `CLAUDE.md`, which `resolveBareInstructionsFile` short-circuits on. The
+    // engine has the instructions; claiming the agent has none would make it
+    // deny work it can plainly do.
+  }
+
+  sections.push(
+    bareNativeContextSection(
+      agentDir,
+      instructionsFile ?? BARE_AGENT_INSTRUCTION_FILES[0],
+      context,
+      engine
+    )
+  )
+  // Through the same seam phase 1 left for it, so the protocol and anything a
+  // later phase appends land in one place, after the desktop's context.
+  for (const section of [...handoverSections(context), ...trailingSections]) {
+    if (section.trim() !== '') sections.push(section.trim())
+  }
   return `${sections.join('\n\n---\n\n')}\n`
 }
 

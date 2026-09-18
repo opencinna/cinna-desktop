@@ -25,6 +25,16 @@ interface AnswerQuestionsModalProps {
   onClose: () => void
   pending?: boolean
   error?: string | null
+  /**
+   * Whether the synthetic "Other (enter custom answer)" option is offered.
+   *
+   * False where the caller knows free text will be refused — the handover gate,
+   * whose answer main matches against `HANDOVER_GATE_OPTIONS`. Offering a reply
+   * that comes back as an error is worse than not offering it (`ux_rules.md`
+   * §6), and it is the same reasoning that drops the third gate option where
+   * git forbids `auto`.
+   */
+  allowCustomAnswer?: boolean
 }
 
 /**
@@ -40,7 +50,8 @@ export function AnswerQuestionsModal({
   onSubmit,
   onClose,
   pending = false,
-  error = null
+  error = null,
+  allowCustomAnswer = true
 }: AnswerQuestionsModalProps): React.JSX.Element {
   const cardRef = useRef<HTMLDivElement>(null)
   const [answers, setAnswers] = useState<Record<number, CollectedAnswer>>({})
@@ -228,38 +239,41 @@ export function AnswerQuestionsModal({
                     )
                   })}
 
-                  {/* Synthetic free-text "Other" option, always available. */}
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => setSelected(i, q, CUSTOM_ANSWER_VALUE)}
-                    className={
-                      'w-full text-left flex items-start gap-2 px-3 py-2 rounded-lg border transition-colors ' +
-                      (customSelected
-                        ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10'
-                        : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] opacity-90')
-                    }
-                  >
-                    {q.multiSelect ? (
-                      customSelected ? (
-                        <CheckCircle2 size={15} className="shrink-0 mt-0.5 text-[var(--color-accent)]" />
+                  {/* Synthetic free-text "Other" option, unless the caller
+                      knows the answer would be refused. */}
+                  {allowCustomAnswer && (
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => setSelected(i, q, CUSTOM_ANSWER_VALUE)}
+                      className={
+                        'w-full text-left flex items-start gap-2 px-3 py-2 rounded-lg border transition-colors ' +
+                        (customSelected
+                          ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10'
+                          : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] opacity-90')
+                      }
+                    >
+                      {q.multiSelect ? (
+                        customSelected ? (
+                          <CheckCircle2 size={15} className="shrink-0 mt-0.5 text-[var(--color-accent)]" />
+                        ) : (
+                          <Circle size={15} className="shrink-0 mt-0.5 text-[var(--color-text-muted)]" />
+                        )
                       ) : (
-                        <Circle size={15} className="shrink-0 mt-0.5 text-[var(--color-text-muted)]" />
-                      )
-                    ) : (
-                      <span
-                        className={
-                          'shrink-0 mt-1 w-3.5 h-3.5 rounded-full border ' +
-                          (customSelected
-                            ? 'border-[var(--color-accent)] bg-[var(--color-accent)] ring-2 ring-inset ring-[var(--color-bg-secondary)]'
-                            : 'border-[var(--color-text-muted)]')
-                        }
-                      />
-                    )}
-                    <span className="text-[13px] text-[var(--color-text)]">Other (enter custom answer)</span>
-                  </button>
+                        <span
+                          className={
+                            'shrink-0 mt-1 w-3.5 h-3.5 rounded-full border ' +
+                            (customSelected
+                              ? 'border-[var(--color-accent)] bg-[var(--color-accent)] ring-2 ring-inset ring-[var(--color-bg-secondary)]'
+                              : 'border-[var(--color-text-muted)]')
+                          }
+                        />
+                      )}
+                      <span className="text-[13px] text-[var(--color-text)]">Other (enter custom answer)</span>
+                    </button>
+                  )}
 
-                  {customSelected && (
+                  {allowCustomAnswer && customSelected && (
                     <input
                       type="text"
                       autoFocus

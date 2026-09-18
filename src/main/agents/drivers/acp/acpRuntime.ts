@@ -3,6 +3,7 @@ import type { CustomAgentConfig } from '../../../../shared/customAgents'
 import type { LocalAgentKind } from '../../../../shared/localAgents'
 import type { LocalPermissionRequest } from '../../../../shared/localAgentRequests'
 import type { ReadinessOptions } from '../driver'
+import type { AcpRuntimeMode } from './types'
 
 export interface AcpFolderView {
   coordinatorHandback?: boolean
@@ -11,6 +12,8 @@ export interface AcpFolderView {
   description: string
   path: string
   kind: LocalAgentKind
+  /** Whether this turn's session is sealed by the desktop or the folder's own. */
+  runtimeMode: AcpRuntimeMode
   enabled: boolean
   readiness: string
   readinessReason: string | null

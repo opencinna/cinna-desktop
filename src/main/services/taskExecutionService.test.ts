@@ -200,3 +200,69 @@ describe('desktop task start', () => {
     expect(taskContinuationPrompt({ goal: 'Ship it', description: 'Ship it', handoffNote: null })).toBe('Continue this task.\n\nGoal:\nShip it')
   })
 })
+
+/**
+ * `reuseChatId` — a caller *inside* main handing over a chat it created for
+ * this very start. Today that is the handover gate, whose Inbox row needs a
+ * `chat_id` before the task has one (`task_input_requests.chat_id` is NOT NULL).
+ *
+ * Every refusal below is a way the option could point a task at somebody else's
+ * conversation, which is exactly why it is not on the IPC payload.
+ */
+describe('starting in a chat somebody else created', () => {
+  const emptyChat = () => chatRepo.create('profile', { title: 'Gate', router: 'direct', agentId: 'agent-one' })
+
+  it('adopts the chat instead of creating a second one', async () => {
+    const task = makeTask()
+    const chat = emptyChat()
+    const before = chatRepo.list('profile').length
+
+    const result = await taskExecutionService.start(SCOPE, task.id, TARGET, { reuseChatId: chat.id })
+
+    expect(result.chatId).toBe(chat.id)
+    expect(chatRepo.list('profile').length).toBe(before)
+    expect(taskService.getById('profile', task.id).chatId).toBe(chat.id)
+  })
+
+  it('refuses a chat that has already been used', async () => {
+    const task = makeTask()
+    const chat = emptyChat()
+    messageRepo.saveUser({ chatId: chat.id, content: 'Somebody else’s conversation' })
+
+    await expect(taskExecutionService.start(SCOPE, task.id, TARGET, { reuseChatId: chat.id }))
+      .rejects.toThrow('already been used')
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('refuses a chat bound to another agent', async () => {
+    const task = makeTask()
+    const other = chatRepo.create('profile', { title: 'Gate', router: 'direct' as const, agentId: 'agent-two' })
+
+    await expect(taskExecutionService.start(SCOPE, task.id, TARGET, { reuseChatId: other.id }))
+      .rejects.toThrow('belongs to another agent')
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('refuses a chat this profile does not own, and one that is in the trash', async () => {
+    const task = makeTask()
+    const foreign = chatRepo.create('someone-else', { title: 'Gate', router: 'direct', agentId: 'agent-one' })
+    await expect(taskExecutionService.start(SCOPE, task.id, TARGET, { reuseChatId: foreign.id }))
+      .rejects.toThrow('no longer available')
+
+    const trashed = emptyChat()
+    chatRepo.softDelete('profile', trashed.id)
+    await expect(taskExecutionService.start(SCOPE, task.id, TARGET, { reuseChatId: trashed.id }))
+      .rejects.toThrow('no longer available')
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('keeps the reused chat when the start is refused — it belongs to its caller', async () => {
+    const task = makeTask()
+    const chat = emptyChat()
+    state.enabled = false
+
+    await expect(taskExecutionService.start(SCOPE, task.id, TARGET, { reuseChatId: chat.id }))
+      .rejects.toThrow('That agent is unavailable')
+    expect(chatRepo.getOwned('profile', chat.id)).toBeDefined()
+  })
+})

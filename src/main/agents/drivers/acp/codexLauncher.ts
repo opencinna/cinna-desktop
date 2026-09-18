@@ -3,7 +3,7 @@ import type { AgentReadiness } from '../../../../shared/agentDrivers'
 import type { ClaudeApproval, CodexAuthStatus } from '../../../../shared/engine'
 import type { ReadinessOptions } from '../driver'
 import type { AcpLauncher } from './acpLaunchers'
-import { ACP_PROTOCOL_VERSION } from './types'
+import { ACP_PROTOCOL_VERSION, type AcpRuntimeMode } from './types'
 import { airClientMeta } from './acpActivity'
 import { createLogger } from '../../../logger/logger'
 
@@ -18,7 +18,14 @@ export interface CodexLauncherDeps {
   adapterEntry(): string
   nodeRuntime(): { command: string; args: string[]; env: Record<string, string> }
   env(): Promise<Record<string, string>>
-  systemPrompt(userId: string, agentId: string): string
+  /**
+   * The system prompt for this turn, chosen by the folder's runtime mode: an
+   * **isolated** folder's whole assembled document, or a **native** folder's
+   * desktop context alone, because Codex reads that folder's `AGENTS.md`
+   * itself. Read on every plan, so an edited folder takes effect on the next
+   * turn.
+   */
+  systemPrompt(userId: string, agentId: string, mode: AcpRuntimeMode): string
   settings(userId: string, agentId: string): {
     model: string | null; effort: string; approval: ClaudeApproval
   }
@@ -62,7 +69,11 @@ export function createCodexLauncher(deps: CodexLauncherDeps): AcpLauncher {
         const modeId = settings.approval === 'auto' ? 'agent' : 'read-only'
         phase = 'instructions'
         const config = {
-          developer_instructions: deps.systemPrompt(ctx.userId, ctx.agentId),
+          // An isolated folder's whole assembled prompt; on the native branch
+          // the desktop's context only, since Codex loads that folder's
+          // `AGENTS.md` and the user's `~/.codex/config.toml` by itself,
+          // exactly as it does for a terminal session there.
+          developer_instructions: deps.systemPrompt(ctx.userId, ctx.agentId, ctx.folder.runtimeMode),
           ...(settings.model ? { model: settings.model } : {}),
           model_reasoning_effort: settings.effort
         }

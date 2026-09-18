@@ -1,12 +1,12 @@
 # The Claude Engine — a folder agent on the user's own Claude Code
 
-> **What this engine actually does is recorded in [The ACP Engine Contract](acp_contract.md) — the live one — and, for everything measured about Claude Code itself, in [The Claude Engine Contract](claude_contract.md).** The latter is what was watched against `claude` 2.1.266 and `@anthropic-ai/claude-agent-sdk` 0.3.266 — what is verified, what is only assumed, and what was believed and proved false. This document does not restate it. Eight of its findings shape rules below and none of them is visible in the SDK's types: `USER` must be in the child environment or the CLI reports *"Not logged in"* on a logged-in machine; `settingSources: []` does **not** detach the user's MCP connectors, so `strictMcpConfig` and an empty `mcpServers` travel with it — and it **does** hide the folder's own `.claude/agents/`, which are handed back through `options.agents`; a bare tool name in `allowedTools` shadows `canUseTool` entirely, so none is passed; SDK failures arrive as **thrown exceptions**, not as messages; read-only tools never reach the permission callback at all; a string `prompt` **closes the CLI's stdin at the first `result`**, under a background subagent that has not finished, so the prompt is an iterable the runner holds open; and in the CLI's **auto** permission mode the ask-callback was **never reached** across seven probes that included a force push, so the desktop's permission block is a backstop there and every surface that describes the setting says so. Where this document and the contract disagree, the contract is right — it was watched, and this was written.
+> **What this engine actually does is recorded in [The ACP Engine Contract](acp_contract.md) — the live one — and, for everything measured about Claude Code itself, in [The Claude Engine Contract](claude_contract.md).** The latter is what was watched against `claude` 2.1.266 and `@anthropic-ai/claude-agent-sdk` 0.3.266 — what is verified, what is only assumed, and what was believed and proved false. This document does not restate it. Eight of its findings shape rules below and none of them is visible in the SDK's types: `USER` must be in the child environment or the CLI reports *"Not logged in"* on a logged-in machine; `settingSources: []` does **not** detach the user's MCP connectors, so `strictMcpConfig` and an empty `mcpServers` travel with it — and it **does** hide the folder's own `.claude/agents/`, which are handed back through `options.agents` (all three are the **isolated** branch: kit folders and Cinna's own build session — an adopted bare folder is deliberately run on the folder's own setup instead); a bare tool name in `allowedTools` shadows `canUseTool` entirely, so none is passed; SDK failures arrive as **thrown exceptions**, not as messages; read-only tools never reach the permission callback at all; a string `prompt` **closes the CLI's stdin at the first `result`**, under a background subagent that has not finished, so the prompt is an iterable the runner holds open; and in the CLI's **auto** permission mode the ask-callback was **never reached** across seven probes that included a force push, so the desktop's permission block is a backstop there and every surface that describes the setting says so. Where this document and the contract disagree, the contract is right — it was watched, and this was written.
 
 ## Purpose
 
 Let a folder agent run on **Claude Code**, driving the `claude` binary already installed on this machine under that install's own login, instead of on `opencode`.
 
-Since phase 3 of the agent runtime plan the Agent SDK is no longer embedded in this process: the turn spawns `@agentclientprotocol/claude-agent-acp`, which runs the SDK in a child process and speaks the [Agent Client Protocol](acp_contract.md) back. The launcher names the user's `claude` through `CLAUDE_CODE_EXECUTABLE`, so the binary, the login and the isolation are the same as before — what changed is that the SDK's stdin belongs to a process of its own, which is what fixed the background-subagent bug below.
+Since phase 3 of the agent runtime plan the Agent SDK is no longer embedded in this process: the turn spawns `@agentclientprotocol/claude-agent-acp`, which runs the SDK in a child process and speaks the [Agent Client Protocol](acp_contract.md) back. The launcher names the user's `claude` through `CLAUDE_CODE_EXECUTABLE`, so the binary and the login are the same as before, and so is the isolation for a kit folder. What changed with the transport is that the SDK's stdin belongs to a process of its own, which is what fixed the background-subagent bug below.
 
 What it buys the user: the Claude Code harness — its tools, subagents and context management — for agents whose work OpenCode's loop does poorly, and inference paid for by their own Claude plan rather than by an API key this app holds.
 
@@ -63,7 +63,7 @@ Both were live hazards and the second is the one that actually bit. The child en
 2. The ACP driver reads the folder, sees `claude`, and asks that launcher to plan the turn
 3. Readiness is answered **before** the turn, on both rungs and for free: no `claude` on this machine, and a `claude` that is not logged in, are each a sentence naming the remedy rather than a turn that fails with the CLI's own words
 4. The per-agent turn lock is taken, so "this agent is busy in another chat" behaves exactly as it does on the other engine
-5. The adapter is spawned in the agent's folder, a session is created or loaded with the folder's assembled system prompt, the **Approvals** setting is applied with `session/set_mode`, and the answer streams into the transcript token by token — text, thinking, tool calls and their results, as the same part kinds every other agent produces
+5. The adapter is spawned in the agent's folder, a session is created or loaded — a kit folder's with its whole assembled system prompt, an adopted bare folder's with the engine's own preset and the desktop's context appended — the **Approvals** setting is applied with `session/set_mode`, and the answer streams into the transcript token by token — text, thinking, tool calls and their results, as the same part kinds every other agent produces
 6. The session id the CLI reports is remembered for this (chat, agent), so tomorrow's message continues the same conversation
 7. When the agent hands work to a subagent in the background and answers "I'll report back", the turn does not end there. The adapter keeps the CLI running in its own process, the subagent's tool calls and permission asks keep arriving in the same turn, and the agent's follow-up report streams in before `session/prompt` returns. The subagent's work stays **inline**, under the agent's `Agent` call, and a **Subagents** badge under the composer names what is running. That badge is what explains a long silence with the streaming indicator on, which the in-process runner used to explain with a notice
 8. When the agent leaves a **shell** running in the background, the turn *does* end: `session/prompt` returns while the shell runs, and a **Background** badge shows it, with a Stop control. When the shell finishes, Claude starts a turn of its own to read the output and act on it. That turn streams into the chat as a new assistant message and is saved like any other ([follow-up turns](agent_turn.md#a-turn-the-agent-starts-on-its-own-is-a-follow-up-turn)). Until the desktop listened between turns, that whole turn was dropped. An agent that said "I'll merge once CI passes" merged, and the chat never showed it
@@ -167,7 +167,33 @@ The answer is **cached for a short window, not for the app's lifetime** the way 
 
 **That is the defence, and it is deliberately not a rule about logging.** A field that is never read cannot leak from a debug line somebody adds six months from now; a rule saying "do not log the account" is one careless edit from being untrue. What survives is who *pays* rather than who they are: the authentication method as the CLI words it, and the plan tier when it names one. Same reasoning as the engine config's Invariant 4, applied to somebody else's login.
 
+### A kit folder is sealed; a bare folder runs on its own setup
+
+**The session options fork on one field, `runtimeMode`, and everything below about isolation is the sealed half of that fork.** A kit folder is a harness the desktop scaffolded, so its session stays sealed. A bare folder is somebody's own repository, adopted for its instructions file alone, and it gets what a terminal `claude` in that folder gets.
+
+| | **Isolated** — kit folders, and Cinna's own build session | **Native** — adopted bare folders |
+|---|---|---|
+| `settingSources` | `[]` | `['user', 'project', 'local']` |
+| `strictMcpConfig` / `mcpServers` | `true` / `{}` | not sent — either would take the folder's servers back out |
+| System prompt | the assembled document, **replacing** the `claude_code` preset | the preset, with the desktop's context **appended** |
+| `.claude/agents` | read by the desktop and handed back through `options.agents` | loaded from settings; the shim is not even asked for |
+| Approvals | `session/set_mode` after every `new` and `load` | the same, unchanged |
+
+**The mode is derived once, where the folder view is built, and a launcher never asks what kind of folder it has.** That is not tidiness: Cinna's own local-development build session presents as a bare folder because its synced workspace has no manifest, and a rule written as `kind === 'bare'` would have handed the desktop's own build session whatever `.claude/settings.json` that workspace happened to carry. One field, decided in one place, is what makes the folder whose kind lies harmless.
+
+**What the folder now brings with it was watched on the wire** on 2026-09-17, against `claude` 2.1.274 and adapter 0.76.0: the folder's `CLAUDE.md` answered from memory with no tool call, a `SessionStart` and a `PreToolUse` hook both fired, a project `.mcp.json` server was attached, and a `.claude/agents/` definition appeared as a `subagent_type` with no shim passed. On the isolated branch, in the same folder, the `CLAUDE.md` was not in context and the hook did not fire.
+
+**The trade-off, stated plainly rather than discovered.** On a bare folder the user's own MCP connectors attach — Gmail, Drive, Calendar, whatever they have — and so does the folder's `.mcp.json` and the folder's `defaultMode`. Three consequences follow, and the third is the one to design against:
+
+- **A bare folder's `.claude/settings*.json` `defaultMode` decides the mode the session opens in.** `session/set_mode` is what corrects it, and that is the *only* thing that does — see [the mode is set, never requested](#the-mode-is-set-never-requested-and-permissionmode-is-inert).
+- **A bare folder's `.mcp.json` starts with no trust step.** The interactive CLI asks before enabling a project MCP server; the SDK path this adapter uses does not. The server's command runs on **any** turn in that folder, including a user-typed one — not only an unattended one. Anything that can land a commit in that repository can therefore choose a process that starts the next time the user chats with that agent.
+- **So a handover that runs unattended in a bare folder is a security boundary, not a convenience.** The per-agent auto-run setting, and its refusal while `.cinna/handovers` is tracked by git, exist because of the two rules above and not in spite of them.
+
+If a per-agent opt-out is wanted later — a bare folder the user wants sealed — it is a desktop-state setting beside the runtime, not a change to this default.
+
 ### The desktop's boundary must not be redefined by files it did not write
+
+**This rule is the isolated branch.** It governs kit folders and Cinna's own build session; a bare folder is the case above.
 
 `settingSources: []` keeps the user's own settings files, `CLAUDE.md`, project skills and plugins from redefining what a Cinna agent may do — a stray `CLAUDE.md` two directories up rewriting an agent's behaviour is invisible in every surface the user reads.
 
@@ -181,7 +207,9 @@ The system prompt is that assembled prompt as a plain string, never the SDK's co
 
 ### The folder's own subagents are handed over, and the boundary stays the desktop's
 
-A terminal `claude` discovers `.claude/agents/*.md` in its working directory and offers each as a `subagent_type`. Under `settingSources: []` it does not, so the desktop **reads the files itself** and passes what a terminal would have found through the SDK's `agents` option — the programmatic route to the same registry, which does not reopen the settings boundary. Read fresh each time a turn is planned, like the system prompt, and with the same limit: both travel in the session's `_meta`, which the adapter ignores when it reuses a session still live in its process. An edit reaches a new chat at once, and an existing chat once its idle process is reaped — see [The Local Engine](engine.md#the-desktop-context-block-and-building-mode). A folder without the directory passes no option at all, so it hands the SDK exactly what it did before the option existed.
+**This rule is the isolated branch too.** A native session loads `.claude/agents/` from the settings it keeps enabled — watched, 2026-09-17 — so the launcher does not read them and does not pass the option; handing them over as well would state every definition twice.
+
+A terminal `claude` discovers `.claude/agents/*.md` in its working directory and offers each as a `subagent_type`. Under `settingSources: []` it does not, so on that branch the desktop **reads the files itself** and passes what a terminal would have found through the SDK's `agents` option — the programmatic route to the same registry, which does not reopen the settings boundary. Read fresh each time a turn is planned, like the system prompt, and with the same limit: both travel in the session's `_meta`, which the adapter ignores when it reuses a session still live in its process. An edit reaches a new chat at once, and an existing chat once its idle process is reaped — see [The Local Engine](engine.md#the-desktop-context-block-and-building-mode). A folder without the directory passes no option at all, so it hands the SDK exactly what it did before the option existed.
 
 **Read, not trusted.** The fields carried across are the ones that *describe* a subagent — description, prompt, tools, disallowed tools, model, max turns, skills, effort, whether it runs in the background. The ones that would move a permission decision away from the desktop are dropped whatever the file says:
 
@@ -254,6 +282,14 @@ A bare tool name in `allowedTools` auto-approves that tool *before* the permissi
 A Claude agent that has not been told otherwise runs with the CLI's own reviewer in front of the desktop — the session mode `auto`. Before the setting existed every agent ran `default`, which asks for every `Bash`, `Edit` and `Write`; a user whose terminal `claude` runs in auto mode never saw those prompts there, `settingSources: []` keeps their `~/.claude/settings.json` out of the desktop's turns, and an agent that was quiet in the terminal asked for `ls` in the desktop. It read as a bug in the desktop, and it was one.
 
 The default is *Automatic* and not *Ask every time* for that reason, and the cost is said out loud rather than softened: on *Automatic* the desktop was never asked across seven probes, so the grants and the block are the backstop for whatever the reviewer declines, and the reviewer was not seen to decline. `canUseTool` is passed on **both** settings — *Automatic* is a classifier in front of the desktop, not instead of it.
+
+### The mode is set, never requested, and `permissionMode` is inert
+
+`session/set_mode` after every `session/new` **and** every `session/load` is not belt-and-braces. It is the entire mechanism, on both branches of the fork, and the SDK option that looks like it should do the same job does nothing at all.
+
+**Watched on 2026-09-17, `claude` 2.1.274 / adapter 0.76.0:** `_meta.claudeCode.options.permissionMode` was sent as `default` and the session came up in `acceptEdits`, taken from the project's `.claude/settings.local.json`. The same folder reported `acceptEdits` under `settingSources: []` as well — the setting sources do not govern `defaultMode` either. After `session/set_mode {modeId: 'default'}` the session reported `default` and the next file write raised a `session/request_permission`.
+
+So a change that "simplified" the setup call into the `session/new` options would hand every bare folder its own permission mode, silently, with the desktop's approval setting still displayed in the panel. A failed setup call refuses the turn rather than warning, for the same reason.
 
 ### The choice is two-valued, and the other modes are unreachable
 
@@ -408,13 +444,19 @@ spawn: <this app, ELECTRON_RUN_AS_NODE=1> <claude-agent-acp>/dist/index.js
    │                 └ elicitation enables the adapter's AskUserQuestion tool;
    │                   AIR makes it report background work and subagents
    ├─ session/new | session/load
-   │    _meta.claudeCode.options = { systemPrompt (the folder's own),
+   │    _meta.claudeCode.options, forked on folder.runtimeMode:
+   │      isolated (kit, build session) = { systemPrompt (the folder's own),
    │                                 model (a plan alias), settingSources: [],
    │                                 strictMcpConfig, mcpServers: {},
    │                                 agents (the folder's .claude/agents/*.md) }
+   │      native (adopted bare folder) = { systemPrompt: {type:'preset',
+   │                                 preset:'claude_code', append: desktop context},
+   │                                 model, settingSources:['user','project','local'] }
+   │                                 — no MCP override, no agents shim
    │    NO allowedTools — a bare name there shadows the permission request
    ├─ session/set_mode  auto | default, from the Approvals setting
-   │    after EVERY new and load, because a user's own defaultMode wins otherwise
+   │    after EVERY new and load, on BOTH branches: a user's or a folder's
+   │    defaultMode wins otherwise, and options.permissionMode is ignored
    └─ session/prompt
         session/update ─────────► acpMessages ──► parts
         session/request_permission ──► standing grants

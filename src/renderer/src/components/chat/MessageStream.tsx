@@ -28,6 +28,7 @@ import { CommandToolFrame } from './CommandToolFrame'
 import { CinnaCliBlock } from './CinnaCliBlock'
 import { pairCinnaCliTools } from '../../utils/cinnaCli'
 import { NoticeBlock } from './NoticeBlock'
+import { SystemTurnBlock } from './SystemTurnBlock'
 import { AskUserQuestionBlock } from './AskUserQuestionBlock'
 import { isAskUserQuestionTool, parseAskQuestions } from '../../utils/askUserQuestion'
 import {
@@ -761,7 +762,11 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               sourceAgentId && sourceAgentId !== rootAgentId
                 ? agentNameById.get(sourceAgentId) ?? null
                 : null
-            const addressedAgentId = msg.role === 'user' ? msg.addressedAgentId ?? null : null
+            // A system row carries the agent it was addressed to as well — a
+            // handover's report is addressed to the agent that asked for it —
+            // and that is the scope its file references resolve in.
+            const addressedAgentId =
+              msg.role === 'user' || msg.role === 'system' ? msg.addressedAgentId ?? null : null
             const addressedAgentName =
               addressedAgentId && addressedAgentId !== rootAgentId
                 ? agentNameById.get(addressedAgentId) ?? null
@@ -983,6 +988,25 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                   }
                 })
               }
+              continue
+            }
+            // A `system` row is the desktop's own turn in the conversation — a
+            // task runner's prompt, a handover's returned report. Without this
+            // branch it reaches the tail below and is drawn as an assistant
+            // bubble, which puts words in the agent's mouth.
+            if (msg.role === 'system') {
+              renderNodes.push({
+                slot: 'plain',
+                key: msg.id,
+                node: (
+                  <>
+                    <FileRefContext.Provider value={fileRefScopeFor(addressedAgentId ?? rootAgentId)}>
+                      <SystemTurnBlock content={msg.content} animate={shouldAnimate} />
+                    </FileRefContext.Provider>
+                    {footer}
+                  </>
+                )
+              })
               continue
             }
             renderNodes.push({

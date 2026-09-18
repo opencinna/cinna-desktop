@@ -107,6 +107,7 @@ import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
 import type { TaskDto, TaskListQuery } from '../shared/tasks'
 import type { TaskStatus } from '../shared/taskStatus'
 import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot } from '../shared/inbox'
+import type { HandoverDto, HandoverIgnoreCheck, HandoverSetting } from '../shared/handovers'
 import type {
   CatalogEntryDto,
   CatalogInstallResultDto,
@@ -1200,6 +1201,16 @@ const api = {
       ipcRenderer.invoke('inbox:answer', data)
   },
 
+  /**
+   * File handovers — a `.cinna/handovers/<id>/` folder in a project, as the
+   * desktop recorded it. Read-only from here: the requester owns `brief.md`,
+   * the executor owns `report.md`, and Cinna writes neither.
+   */
+  handovers: {
+    forTask: (taskId: string): Promise<HandoverDto | null> =>
+      ipcRenderer.invoke('handover:for-task', { taskId })
+  },
+
   cinna: {
     listAgents: (): Promise<
       Array<{ id: string; name: string; description: string | null }>
@@ -1554,6 +1565,19 @@ const api = {
       approval: ClaudeApproval | null
     ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
       ipcRenderer.invoke('local-agent:set-codex-approval', { agentId, approval }),
+    /**
+     * Whether briefs dropped into this folder's `.cinna/handovers/` run without
+     * asking. `auto` may come back refused (`handovers_not_ignored`) when git
+     * tracks that directory — ask {@link handoversCheck} first to say so before
+     * the click rather than after it.
+     */
+    setHandovers: (
+      agentId: string,
+      handovers: HandoverSetting | null
+    ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
+      ipcRenderer.invoke('local-agent:set-handovers', { agentId, handovers }),
+    handoversCheck: (agentId: string): Promise<LocalAgentOutcome<HandoverIgnoreCheck>> =>
+      ipcRenderer.invoke('local-agent:handovers-check', { agentId }),
     /**
      * The agent list of a root that is **already registered**, so its selection
      * can be changed without sending the user back through the OS picker. Only

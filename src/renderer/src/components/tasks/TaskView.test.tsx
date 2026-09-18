@@ -3,6 +3,7 @@ import { act, within, cleanup, fireEvent, render, screen, waitFor } from '@testi
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InboxEntry, InboxSnapshot, InboxUnreadableSource } from '../../../../shared/inbox'
+import type { HandoverDto } from '../../../../shared/handovers'
 import type { TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
 
@@ -33,6 +34,7 @@ const remoteLive = vi.fn<(taskId: string) => Promise<boolean | null>>()
 const runSend = vi.fn().mockResolvedValue('run-1')
 const startTask = vi.fn()
 const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: string }>>()
+const forTask = vi.fn<(taskId: string) => Promise<HandoverDto | null>>()
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
@@ -56,6 +58,7 @@ const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: 
     checkReadiness: async () => undefined
   },
   jobs: { get: (jobId: string) => getJob(jobId) },
+  handovers: { forTask: (taskId: string) => forTask(taskId) },
   chat: { get: (chatId: string) => getChat(chatId) },
   run: {
     start: runSend
@@ -142,6 +145,7 @@ beforeEach(() => {
   takeOver.mockResolvedValue({ ...BASE, runsHere: true, executorDevice: null })
   remoteLive.mockResolvedValue(false)
   openExternal.mockResolvedValue({ success: true })
+  forTask.mockResolvedValue(null)
   useUIStore.setState({ activeView: 'task', activeTaskId: 't1', activeJobId: null } as never)
   useChatStore.setState({ activeChatId: null } as never)
 })
@@ -993,4 +997,210 @@ it('sends a task whose job was deleted back to the Inbox, with no Job row', asyn
   expect(within(details).queryByText('Job')).toBeNull()
   await act(async () => { back.click() })
   expect(useUIStore.getState().activeView).toBe('inbox')
+})
+
+/**
+ * A task that came from a file handover.
+ *
+ * The page's other rows describe a task the user created. These three describe
+ * work that arrived from *somewhere else* — a brief dropped into a folder by an
+ * agent, a script or a person — and the question they answer is the one no
+ * other surface can: who asked, how far it has got, and where the files are.
+ * They are rows in the panel that already exists, never a banner
+ * (`ux_rules.md` §2), and an ordinary task must grow none of them.
+ */
+const HANDOVER: HandoverDto = {
+  id: 'hov_1',
+  agentId: 'folder:m1',
+  folderPath: '/Users/dev/projects/uploader',
+  handoverId: '20260917-2000-add-retry',
+  taskId: 't1',
+  originAgentId: 'a1',
+  originChatId: 'c9',
+  originTaskId: null,
+  depth: 1,
+  groupId: null,
+  execution: 'ask',
+  state: 'running',
+  refusalReason: null,
+  warning: null,
+  reportStatus: 'in_progress',
+  runId: 'run_1',
+  wokeAt: null,
+  briefMissingAt: null,
+  lastScannedAt: Date.now(),
+  createdAt: Date.now(),
+  updatedAt: Date.now()
+}
+
+/** The value of the Details row with this label, or null when there is no such row. */
+function detail(label: string): string | null {
+  const dt = [...document.querySelectorAll('dt')].find((node) => node.textContent === label)
+  return dt?.parentElement?.querySelector('dd')?.textContent ?? null
+}
+
+describe('a task that came from a handover', () => {
+  it('adds no handover rows to an ordinary task', async () => {
+    await renderTask()
+    await waitFor(() => expect(forTask).toHaveBeenCalledWith('t1'))
+    expect(detail('Requested by')).toBeNull()
+    expect(detail('Handover')).toBeNull()
+    expect(detail('Folder')).toBeNull()
+  })
+
+  it('names the agent that asked, where the work is, and the folder it is in', async () => {
+    forTask.mockResolvedValue(HANDOVER)
+    await renderTask()
+    // The name alone under a label that says what it is: "Handover from
+    // Planner" sat directly above a row labelled Handover (§7).
+    await waitFor(() => expect(detail('Requested by')).toBe('Invoice Checker'))
+    expect(detail('Handover')).toBe('Running')
+    // One line, the handover id intact, the whole path on hover: `break-all`
+    // put it on five lines and made the row beside it as tall (§1).
+    expect(detail('Folder')).toBe('20260917-2000-add-retry')
+    const path = [...document.querySelectorAll('dd span')].find((node) =>
+      node.getAttribute('title')?.includes('.cinna/handovers')
+    )
+    expect(path?.getAttribute('title')).toBe(
+      '/Users/dev/projects/uploader/.cinna/handovers/20260917-2000-add-retry'
+    )
+  })
+
+  it('opens the requester’s page from the row that names it', async () => {
+    /*
+      The Assignee row above it is a link to the same kind of page, and a
+      requester rendered as prose is a control the user never finds (§11).
+      Mutation: render `originName` as text and there is no button to press.
+    */
+    forTask.mockResolvedValue(HANDOVER)
+    await renderTask()
+    await waitFor(() => expect(detail('Requested by')).toBe('Invoice Checker'))
+    const dt = [...document.querySelectorAll('dt')].find(
+      (node) => node.textContent === 'Requested by'
+    )
+    const button = dt?.parentElement?.querySelector('dd button')
+    expect(button?.textContent).toBe('Invoice Checker')
+    // The Assignee row's colour, not the muted grey of the labels beside it.
+    expect(button?.className).toContain('--color-accent')
+  })
+
+  it('says a brief nobody signed came from outside the app', async () => {
+    forTask.mockResolvedValue({ ...HANDOVER, originAgentId: null })
+    await renderTask()
+    await waitFor(() => expect(detail('Requested by')).toBe('Outside the app'))
+    // Plain text: there is no page for a person with a text editor.
+    expect(screen.queryByRole('button', { name: 'Outside the app' })).toBeNull()
+  })
+
+  it('stops naming a folder the requester has deleted', async () => {
+    /*
+      §9: a row that prints `.cinna/handovers/<id>` is asserting that directory
+      is there. Withdrawing a handover is deleting the brief, and the row went
+      on naming the folder afterwards. Mutation: drop the `briefMissingAt`
+      guard and the Folder row comes back over a directory that is gone.
+    */
+    forTask.mockResolvedValue({ ...HANDOVER, state: 'skipped', briefMissingAt: Date.now() })
+    await renderTask()
+    await waitFor(() => expect(detail('Handover')).toBe('Withdrawn'))
+    expect(detail('Folder')).toBeNull()
+    expect(detail('Note')).toBe(
+      'The requester removed the brief, so the handover was withdrawn'
+    )
+  })
+
+  it('keeps a plain Skip plain', async () => {
+    // The user answered Skip in the Inbox: nothing was withdrawn, and the
+    // brief is still on disk.
+    forTask.mockResolvedValue({ ...HANDOVER, state: 'skipped' })
+    await renderTask()
+    await waitFor(() => expect(detail('Handover')).toBe('Skipped'))
+    expect(detail('Folder')).toBe('20260917-2000-add-retry')
+    expect(detail('Note')).toBeNull()
+  })
+
+  it('never says "outside the app" while it is still finding out who asked', async () => {
+    /*
+      The trap the assignee row already documents, from the other side: an
+      origin that *is* named must not read as anonymous for the round trip it
+      takes to resolve the name. Mutation: drop the `agentsPending` guard and
+      the row renders "Outside the app" first and the agent's
+      name a moment later — a retraction on the one row that says who is
+      accountable for the work.
+    */
+    let release: (value: unknown) => void = () => {}
+    const held = new Promise((resolve) => {
+      release = resolve
+    })
+    const api = (window as unknown as { api: { agents: { list: () => Promise<unknown> } } }).api
+    const listed = api.agents.list
+    api.agents.list = async () => {
+      await held
+      return listed()
+    }
+    try {
+      forTask.mockResolvedValue(HANDOVER)
+      await renderTask()
+      await waitFor(() => expect(detail('Handover')).toBe('Running'))
+      expect(detail('Requested by')).not.toBe('Outside the app')
+      await act(async () => {
+        release(undefined)
+        await held
+      })
+      await waitFor(() => expect(detail('Requested by')).toBe('Invoice Checker'))
+    } finally {
+      api.agents.list = listed
+    }
+  })
+
+  it('says a handover being run by somebody else is running outside the app', async () => {
+    // §3.9: a terminal session claimed the brief by writing `in_progress`
+    // before Cinna could start one. Nothing is wrong, and nothing is ours.
+    forTask.mockResolvedValue({ ...HANDOVER, state: 'waiting_external' })
+    await renderTask()
+    // Short enough for one line of a 13rem column, whatever the state (§1).
+    await waitFor(() => expect(detail('Handover')).toBe('Outside the app'))
+  })
+
+  it('gives a refusal its reason in the same row', async () => {
+    forTask.mockResolvedValue({
+      ...HANDOVER,
+      state: 'refused',
+      refusalReason: 'depth_exceeded'
+    })
+    await renderTask()
+    // "Refused" alone sends the user looking for a cause this page would then
+    // not show (§6).
+    await waitFor(() => expect(detail('Handover')).toBe('Refused: too deep'))
+  })
+
+  it('reports a warning as a note, last, in the user’s words', async () => {
+    forTask.mockResolvedValue({ ...HANDOVER, state: 'done', warning: 'brief_edited' })
+    await renderTask()
+    await waitFor(() =>
+      expect(detail('Note')).toBe(
+        'The brief was edited after it was picked up; the task keeps the original'
+      )
+    )
+    // Last in the panel: a note about work that already happened may lengthen
+    // the list, never move a row above it (§1).
+    const labels = [...document.querySelectorAll('dt')].map((node) => node.textContent)
+    expect(labels[labels.length - 1]).toBe('Note')
+  })
+
+  it('spells out a refused automatic run, reason and all', async () => {
+    forTask.mockResolvedValue({ ...HANDOVER, warning: 'auto_not_allowed:tracked' })
+    await renderTask()
+    await waitFor(() =>
+      expect(detail('Note')).toBe(
+        'Automatic run was not allowed: .cinna/handovers is tracked by git'
+      )
+    )
+  })
+
+  it('shows no note when there is nothing to warn about', async () => {
+    forTask.mockResolvedValue(HANDOVER)
+    await renderTask()
+    await waitFor(() => expect(detail('Handover')).toBe('Running'))
+    expect(detail('Note')).toBeNull()
+  })
 })

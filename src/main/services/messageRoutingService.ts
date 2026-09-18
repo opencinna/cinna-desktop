@@ -4,6 +4,7 @@ import { chatTitleService, ChatTitleError } from './chatTitleService'
 import { ChatError } from '../errors'
 import { createLogger } from '../logger/logger'
 import type { MessageAttachment } from '../../shared/attachments'
+import { isDesktopAuthored, type TurnInputOrigin } from '../../shared/turnOrigin'
 
 const logger = createLogger('routing')
 
@@ -67,8 +68,12 @@ export interface PrepareAgentSendInput {
   attachments?: MessageAttachment[]
   /** Runs inside the user-message transaction; throwing rolls that message back. */
   onPersisted?: () => void
-  /** Internal runner notices are recorded as system messages. */
-  origin?: 'user' | 'runner'
+  /**
+   * Who authored the message. Everything the desktop wrote itself — a runner's
+   * prompt, a handover's return packet — is recorded as a **system** row, so
+   * the transcript never shows a user bubble nobody typed.
+   */
+  origin?: TurnInputOrigin
 }
 
 export interface PrepareLlmSendInput {
@@ -78,8 +83,8 @@ export interface PrepareLlmSendInput {
   attachments?: MessageAttachment[]
   /** Runs inside the user-message transaction; throwing rolls that message back. */
   onPersisted?: () => void
-  /** Internal runner notices are recorded as system messages. */
-  origin?: 'user' | 'runner'
+  /** As {@link PrepareAgentSendInput.origin}: not `user` means a system row. */
+  origin?: TurnInputOrigin
 }
 
 export interface PreparedSend {
@@ -104,7 +109,7 @@ export const messageRoutingService = {
       throw new ChatError('not_found', 'Chat not found')
     }
 
-    const userMessageId = input.origin === 'runner'
+    const userMessageId = isDesktopAuthored(input.origin)
       ? messageRepo.saveSystem({ chatId, content: userContent, ...( 'agentId' in input && typeof input.agentId === 'string' ? { addressedAgentId: input.agentId } : {}) }, input.onPersisted)
       : messageRepo.saveUser({
       chatId,
@@ -120,7 +125,9 @@ export const messageRoutingService = {
       attachmentCount: attachments?.length ?? 0
     })
 
-    if (input.origin !== 'runner') fireTitleGenInBackground(userId, chatId)
+    // A chat is titled after what the person said in it. A handover's return
+    // packet would title it after another project's report.
+    if (!isDesktopAuthored(input.origin)) fireTitleGenInBackground(userId, chatId)
 
     return { wireContent: userContent, userMessageId }
   },
@@ -132,7 +139,7 @@ export const messageRoutingService = {
       throw new ChatError('not_found', 'Chat not found')
     }
 
-    const userMessageId = input.origin === 'runner'
+    const userMessageId = isDesktopAuthored(input.origin)
       ? messageRepo.saveSystem({ chatId, content: userContent, ...( 'agentId' in input && typeof input.agentId === 'string' ? { addressedAgentId: input.agentId } : {}) }, input.onPersisted)
       : messageRepo.saveUser({
       chatId,
@@ -146,7 +153,9 @@ export const messageRoutingService = {
       attachmentCount: attachments?.length ?? 0
     })
 
-    if (input.origin !== 'runner') fireTitleGenInBackground(userId, chatId)
+    // A chat is titled after what the person said in it. A handover's return
+    // packet would title it after another project's report.
+    if (!isDesktopAuthored(input.origin)) fireTitleGenInBackground(userId, chatId)
 
     return { wireContent: userContent, userMessageId }
   }

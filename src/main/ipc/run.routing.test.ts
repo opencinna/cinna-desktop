@@ -4,7 +4,10 @@ import type { MessageRow } from '../db/messages'
 import type { RunEvent } from '../../shared/runEvents'
 const runnerTask = vi.hoisted(() => vi.fn())
 const openRunRequests = vi.hoisted(() => vi.fn(() => [] as { id: string; resume: 'reply' | 'next_message' }[]))
-vi.mock('../db/tasks', () => ({ taskRepo: { getById: runnerTask } }))
+const chatTask = vi.hoisted(() => vi.fn((): { id: string } | undefined => undefined))
+vi.mock('../db/tasks', () => ({ taskRepo: { getById: runnerTask, getByChatId: chatTask } }))
+const handoverOfTask = vi.hoisted(() => vi.fn((): { depth: number } | undefined => undefined))
+vi.mock('../db/handovers', () => ({ handoverRepo: { byTaskId: handoverOfTask } }))
 vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: { listOpenForRun: openRunRequests } }))
 vi.mock('../db/sync', () => ({ syncRepo: { getState: () => null } }))
 const handoffPending = vi.hoisted(() => vi.fn(() => false))
@@ -131,10 +134,12 @@ vi.mock('../services/chatStreamingService', () => ({
 }))
 
 const driverRun = vi.fn(async () => ({ text: '', parts: [], notices: [] }))
+/** Whether this turn's agent runs in a folder on this machine (`capabilities.cwd`). */
+const caps = vi.hoisted(() => ({ cwd: false }))
 vi.mock('../agents/drivers', () => ({
   driverFor: () => ({
     id: 'a2a',
-    capabilities: () => ({ commands: 'card' }),
+    capabilities: () => ({ commands: 'card', cwd: caps.cwd }),
     run: driverRun,
     readiness: vi.fn(),
     respond: vi.fn()
@@ -246,6 +251,9 @@ beforeEach(() => {
   lastId.mockReturnValue('m-last')
   lastAddressedAgentId.mockReturnValue(null)
   cursorGet.mockReturnValue(undefined)
+  chatTask.mockReturnValue(undefined)
+  handoverOfTask.mockReturnValue(undefined)
+  caps.cwd = false
   history = []
   attached = []
   chatRow = { id: 'chat-1', router: 'direct', agentId: 'a-1' }
@@ -790,6 +798,124 @@ describe('the A2A messageId', () => {
     await handle.accepted
     const input = await driverInput()
     expect(input).not.toHaveProperty('messageId')
+    ;(streamToAgent.mock.calls.at(-1)![0] as unknown as { port: { close(): void } }).port.close()
+  })
+})
+
+describe('the wire-only turn header', () => {
+  it('tells a folder agent its chat, task and handover depth, and stores none of it', async () => {
+    // A handover brief has to state `origin.chat`, `origin.task` and its own
+    // `depth`, and none of the three can live in a system prompt: they change
+    // per turn, and a chat id there would start one pooled Codex process per
+    // chat. Mutation: drop the header and an agent asked to hand work on has
+    // nothing to put in `origin`.
+    caps.cwd = true
+    chatTask.mockReturnValue({ id: 'task-9' })
+    handoverOfTask.mockReturnValue({ depth: 1 })
+    await send({ chatId: 'chat-1', content: 'hello' })
+    const { wireContent } = await driverInput()
+    expect(wireContent).toBe(
+      [
+        'Turn context from Cinna Desktop, not part of the conversation:',
+        '- chat id: `chat-1`',
+        '- task id: `task-9`',
+        '- handover depth: 1',
+        '',
+        'hello'
+      ].join('\n')
+    )
+    // **Never stored.** The row is written from the user's text alone, before
+    // the header is ever built.
+    expect(prepareAgentSend).toHaveBeenCalledWith(expect.objectContaining({ userContent: 'hello' }))
+  })
+
+  it('says none and zero for a chat with no task, and nothing at all to a remote agent', async () => {
+    caps.cwd = true
+    await send({ chatId: 'chat-1', content: 'hello' })
+    expect((await driverInput()).wireContent).toContain('- task id: none\n- handover depth: 0')
+    // The chat is busy until this turn's port closes; a second send on it would
+    // be refused and read back as the first turn's own input.
+    portGivenToTheStream().close()
+    // A remote agent has no path on this disk to write a brief in, so the
+    // header would be noise it cannot act on.
+    caps.cwd = false
+    await send({ chatId: 'chat-1', content: 'hello again' })
+    expect((await driverInput()).wireContent).toBe('hello again')
+  })
+
+  it('goes in front of the catch-up packet, so the missed thread reads as one block', async () => {
+    caps.cwd = true
+    chatRow = { id: 'chat-1', router: 'human', agentId: null }
+    attached = ['a-1', 'a-2']
+    lastAddressedAgentId.mockReturnValue('a-1')
+    history = [message({ role: 'assistant', content: 'earlier answer', sourceAgentId: 'a-2' })]
+    await send({ chatId: 'chat-1', content: 'and now?' })
+    const { wireContent } = await driverInput()
+    expect(wireContent.indexOf('Turn context from Cinna Desktop')).toBe(0)
+    expect(wireContent.indexOf('earlier answer')).toBeGreaterThan(0)
+    expect(wireContent.endsWith('and now?')).toBe(true)
+  })
+
+  it('still runs the turn when the task lookup throws', async () => {
+    caps.cwd = true
+    chatTask.mockImplementation(() => {
+      throw new Error('the database is locked')
+    })
+    await send({ chatId: 'chat-1', content: 'hello' })
+    expect((await driverInput()).wireContent).toContain('- handover depth: 0')
+    chatTask.mockReset()
+  })
+})
+
+describe('inputOrigin: handover', () => {
+  const scope = { profileUserId: 'profile-user', settingsUserId: 'settings-user' }
+
+  it('needs no owning task runner, while a runner turn still does', async () => {
+    // A handover's return packet is written into the chat that *asked* for the
+    // work: it owns no task runner, so the runner guard would refuse every one
+    // of them. Mutation: add `handover` to that guard and the return never
+    // reaches the chat.
+    const handle = runExecutionService.start(
+      scope,
+      { chatId: 'chat-1', content: 'Report from the uploader project' },
+      { observe: vi.fn(), inputOrigin: 'handover' }
+    )
+    await handle.accepted
+    expect(prepareAgentSend).toHaveBeenCalledWith(expect.objectContaining({ origin: 'handover' }))
+    ;(streamToAgent.mock.calls.at(-1)![0] as unknown as { port: { close(): void } }).port.close()
+    expect(() =>
+      runExecutionService.start(scope, { chatId: 'chat-2', content: 'Continue' }, {
+        observe: vi.fn(), inputOrigin: 'runner'
+      })
+    ).toThrow(/owning task runner/)
+  })
+
+  it('leaves the in-flight marker without a user message id', async () => {
+    // The marker is what recovery offers to send again, and it is matched
+    // against a **user** row. Mutation: name the system row here and the next
+    // launch tells the user the app closed while *their* message was being
+    // answered, about a report another project wrote.
+    prepareAgentSend.mockImplementationOnce((input) => ({ wireContent: input.userContent, userMessageId: 'system-row-3' }))
+    const handle = runExecutionService.start(
+      scope,
+      { chatId: 'chat-1', content: 'Report from the uploader project' },
+      { observe: vi.fn(), inputOrigin: 'handover' }
+    )
+    await handle.accepted
+    expect((streamToAgent.mock.calls.at(-1)![0] as { marker?: { userMessageId: string | null } }).marker)
+      .toEqual({ profileId: 'profile-user', userMessageId: null, driver: 'a2a' })
+    ;(streamToAgent.mock.calls.at(-1)![0] as unknown as { port: { close(): void } }).port.close()
+  })
+
+  it('sends no A2A messageId, because its stored row is a system row', async () => {
+    prepareAgentSend.mockImplementationOnce((input) => ({ wireContent: input.userContent, userMessageId: 'system-row-2' }))
+    const handle = runExecutionService.start(
+      scope,
+      { chatId: 'chat-1', content: 'Report from the uploader project' },
+      { observe: vi.fn(), inputOrigin: 'handover' }
+    )
+    await handle.accepted
+    expect(await driverInput()).not.toHaveProperty('messageId')
     ;(streamToAgent.mock.calls.at(-1)![0] as unknown as { port: { close(): void } }).port.close()
   })
 })

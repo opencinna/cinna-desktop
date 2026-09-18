@@ -355,6 +355,43 @@ yield a `result`.
 
 ---
 
+## 2a. Addendum, 2026-09-17 — the other side of the same options
+
+Nothing above is retracted. Section 2's table answers *"what does `settingSources: []` take away?"*,
+and its answers still hold. A later probe asked the opposite question — *"what does
+`settingSources: ['user','project','local']` give back?"* — because a bare folder is now run that way
+([The Claude Engine](claude_engine.md#a-kit-folder-is-sealed-a-bare-folder-runs-on-its-own-setup)).
+
+**Conditions:** `claude` **2.1.274**, adapter `@agentclientprotocol/claude-agent-acp` **0.76.0**,
+2026-09-17, raw ACP over stdio with the wire logged in both directions, the user's real `HOME` and a
+throwaway project. Full results and frames: `drafts/file_handovers/probe_results.md` (a draft, not a
+committed document).
+
+Three findings are new rather than a mirror of section 2, and each one shapes a rule:
+
+- **`AGENTS.md` and `AGENT.md` are not memory to Claude Code.** With the three scopes enabled, a
+  folder holding only `CLAUDE.md` had its fact quoted in the first answer with **no tool call**; a
+  folder holding only `AGENTS.md`, and one holding only `AGENT.md`, did not — the model ran `ls`,
+  `cat` and `grep` to find the same fact. Going native therefore removes the pasted instructions file
+  for `CLAUDE.md` folders only, and the other two names are still pasted in
+- **A project `.mcp.json` server attaches with no trust step.** No `enableAllProjectMcpServers`, no
+  prompt, no elicitation. The interactive CLI asks before enabling a project MCP server; this path
+  does not
+- **`_meta.claudeCode.options.permissionMode` is inert.** Sent as `default`, the session came up in
+  the project `settings.local.json`'s `acceptEdits` — on the isolated branch as well as the native
+  one. `session/set_mode` is the only thing that moves the mode
+
+Two corrections to how the older evidence should be read, both discovered by the same probe:
+
+- **Read-only shell commands are auto-approved in every mode.** `ls`, `cat`, `grep` and `echo` ran
+  with no `session/request_permission` in mode `default` on a profile with an empty allow list. Any
+  future probe that wants to *see* a permission request must use a command that writes
+- **Hooks are a settings-file source**, so they follow the same branch as everything else in section
+  2's table: a `SessionStart` hook fired under the three scopes and did not fire at all under
+  `settingSources: []`, in the same folder
+
+**Codex and OpenCode were not probed** — neither CLI is installed on that machine.
+
 ## 3. Disproven — believed by the plan, and false
 
 | The plan says | What happens |

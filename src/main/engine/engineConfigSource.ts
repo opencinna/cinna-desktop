@@ -250,10 +250,12 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
       // A bare folder has no manifest, so nothing in the kit assembler applies
       // to it — see `assembleBareAgentPrompt` for why its `README.md` is
       // deliberately left out of what the model is told.
+      // Per agent, not per collection: the context carries this agent's own id,
+      // which is what its handover briefs have to state as `origin.agent`.
       prompt:
         agent.kind === 'bare'
-          ? assembleBareAgentPrompt(agent.path, agent.name, context)
-          : assembleAgentPrompt(agent.path, agent.manifest, context),
+          ? assembleBareAgentPrompt(agent.path, agent.name, { ...context, agentId: agent.id })
+          : assembleAgentPrompt(agent.path, agent.manifest, { ...context, agentId: agent.id }),
       providerId: runtime.credentialId ?? '',
       modelId: runtime.modelId ?? '',
       permissions:

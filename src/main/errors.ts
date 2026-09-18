@@ -257,6 +257,14 @@ export type LocalAgentErrorCode =
   | 'home_access_denied'
   /** Creating the home, copying a template, or writing a file failed. */
   | 'write_failed'
+  /**
+   * `handovers: 'auto'` was refused because git tracks — or does not ignore —
+   * this folder's `.cinna/handovers`. A standing permission to run arbitrary
+   * code from a directory that travels in a commit is one a `git pull` could
+   * hand to somebody else, so the answer is a refusal with a fix in it, not a
+   * warning beside a switch that already flipped.
+   */
+  | 'handovers_not_ignored'
 
 /**
  * The local developer tooling around an agent folder: detecting installed

@@ -14,19 +14,21 @@ import { agentService } from './agentService'
 import { messageRoutingService } from './messageRoutingService'
 import { a2aStreamingService } from './a2aStreamingService'
 import { chatStreamingService } from './chatStreamingService'
-import { buildCatchUpPacket, withCatchUp } from './threadContextService'
+import { buildCatchUpPacket, buildTurnHeader, withCatchUp } from './threadContextService'
 import { driverFor } from '../agents/drivers'
 import { resolveCommandRunner } from './localAgents/commandService'
 import { routingOf, type RoutableChat, type RunTarget } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
 import type { StreamPort } from './a2aStreamingService'
 import type { RunSendPayload } from '../../shared/ipcPayloads'
+import { isDesktopAuthored, type TurnInputOrigin } from '../../shared/turnOrigin'
 
 import type { RunEvent } from '../../shared/runEvents'
 import type { RunEventContext } from './inboxService'
 import { activeRunsByChat as activeChats } from './runExecutionState'
 import { handingOffChats } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
+import { handoverRepo } from '../db/handovers'
 import type { CoordinatorToolProvider } from './coordinatorToolProvider'
 import type { AgentDriver, FollowUpScope, SteerFn } from '../agents/drivers/driver'
 import type { AgentRow } from '../db/agents'
@@ -260,11 +262,14 @@ export const runExecutionService = {
     /** Internal eligibility for the current handed-off owner's completed answer. */
     handbackEligible?: boolean
     coordinator?: CoordinatorToolProvider
-    inputOrigin?: 'user' | 'runner'
+    inputOrigin?: TurnInputOrigin
   }): RunHandle {
     if (options.handbackEligible && (!options.runnerTaskId || !options.agentId || options.coordinator)) {
       throw new Error('Handback requires a handed-off agent owned by a task runner.')
     }
+    // **`runner` only.** A `handover` turn is a report coming back from another
+    // project: it writes into the chat the requester was talking in and owns no
+    // task runner, so requiring one here would refuse every return packet.
     if ((options.coordinator || options.inputOrigin === 'runner') && !options.runnerTaskId) {
       throw new Error('Coordinator tools require an owning task runner.')
     }
@@ -447,7 +452,7 @@ export const runExecutionService = {
 interface RunLifecycle {
   handbackEligible?: boolean
   runnerOwned: boolean
-  inputOrigin?: 'user' | 'runner'
+  inputOrigin?: TurnInputOrigin
   observe: RunObserver
   finish: TurnCompletion
   agentId?: string
@@ -497,7 +502,7 @@ async function resolveAndRun(
     })
     lifecycle.accepted()
     await handOff(observed, () =>
-      chatStreamingService.stream({ userId: profileUserId, settingsUserId, chatId, wireContent, port: observed, onFinished: lifecycle.finish, coordinator: lifecycle.coordinator, wireRole: lifecycle.inputOrigin === 'runner' ? 'system' : 'user' }),
+      chatStreamingService.stream({ userId: profileUserId, settingsUserId, chatId, wireContent, port: observed, onFinished: lifecycle.finish, coordinator: lifecycle.coordinator, wireRole: isDesktopAuthored(lifecycle.inputOrigin) ? 'system' : 'user' }),
       (message) => lifecycle.refusal(chatId, message)
     )
     return
@@ -549,7 +554,7 @@ interface AgentTurnInput {
   runnerOwned?: boolean
   queueWhenBusy?: boolean
   includeToolResults?: boolean
-  inputOrigin?: 'user' | 'runner'
+  inputOrigin?: TurnInputOrigin
   chatId: string
   profileUserId: string
   settingsUserId: string
@@ -623,11 +628,13 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
     chatId,
     wireContent,
     packet,
+    turnHeader: turnHeaderFor({ driver, agent, profileUserId, chatId }),
     fileIds,
     // The user row's id is the A2A `messageId`: the Cinna backend echoes
     // it back in `tasks/get` history and deduplicates a resend by it. A
-    // runner-originated send stores a system row instead, so it sends none.
-    messageId: input.inputOrigin !== 'runner' ? userMessageId : undefined,
+    // desktop-authored send (a runner's prompt, a handover's return packet)
+    // stores a system row instead, so it sends none.
+    messageId: isDesktopAuthored(input.inputOrigin) ? undefined : userMessageId,
     queueWhenBusy: input.queueWhenBusy,
     handbackEligible: input.handbackEligible,
     registerSteer: input.registerSteer,
@@ -642,7 +649,19 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
       port,
       onFinished: input.finish,
       ...(input.runnerOwned ? {} : {
-        marker: { profileId: profileUserId, userMessageId: userMessageId ?? null, driver: driver.id }
+        // **Null for anything the desktop authored.** The marker's id is what
+        // recovery offers to send again, and `interruptedTurnService` matches
+        // it against a **user** row: a handover's return packet stored a system
+        // row, so naming it here would greet the user on relaunch with "the app
+        // closed while your message was being answered" about a message nobody
+        // typed, and a remote resend would carry an id `resendAgentTurn`
+        // refuses. Not `runnerOwned`, which also decides `includeToolResults`
+        // and `queueWhenBusy`.
+        marker: {
+          profileId: profileUserId,
+          userMessageId: isDesktopAuthored(input.inputOrigin) ? null : userMessageId ?? null,
+          driver: driver.id
+        }
       }),
       // Only a turn that finished moves the cursor. A failed or stopped one
       // leaves the gap for the retry to carry.
@@ -669,6 +688,43 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
  * typed, and a packet is never built for one anyway (a command runs a script
  * on this machine, so there is nothing to catch it up on).
  */
+/**
+ * The wire-only turn header for this turn, or null.
+ *
+ * `capabilities.cwd` is the question being asked: only an agent running in a
+ * folder on this machine can act on a chat id or a handover depth, because
+ * acting on them means writing `.cinna/handovers/<id>/brief.md` somewhere. A
+ * remote A2A or Managed agent has no path on this disk, so it is told nothing
+ * — the header is free of tokens, but it is still noise in a prompt that
+ * cannot use it.
+ *
+ * Depth comes from the chain this chat is already in: the chat's task, and the
+ * handover row that task belongs to. No task, or a task nobody handed over, is
+ * depth 0 — which is what makes a brief written from this turn depth 1.
+ */
+function turnHeaderFor(input: {
+  driver: AgentDriver
+  agent: AgentRow
+  profileUserId: string
+  chatId: string
+}): string | null {
+  if (!input.driver.capabilities(input.agent).cwd) return null
+  let taskId: string | null = null
+  let depth = 0
+  try {
+    const task = taskRepo.getByChatId(input.profileUserId, input.chatId)
+    taskId = task?.id ?? null
+    if (task) depth = handoverRepo.byTaskId(input.profileUserId, task.id)?.depth ?? 0
+  } catch (error) {
+    // A header is context, never a precondition: a turn still runs without it.
+    logger.warn('the turn header could not be built', {
+      chatId: input.chatId,
+      error: error instanceof Error ? error.message : String(error)
+    })
+  }
+  return buildTurnHeader({ chatId: input.chatId, taskId, depth })
+}
+
 function bindTurn(input: {
   driver: AgentDriver
   agent: AgentRow
@@ -681,6 +737,8 @@ function bindTurn(input: {
   queueWhenBusy?: boolean
   handbackEligible?: boolean
   registerSteer?: (steer: SteerFn | null) => void
+  /** Wire-only turn context, in front of everything else. */
+  turnHeader?: string | null
   /** The chat's scope, for a follow-up turn the agent starts after this one. */
   runScope?: FollowUpScope
 }): TurnRun {
@@ -693,7 +751,10 @@ function bindTurn(input: {
     (io) =>
       driver.run(agentOwnerId, agent, {
         chatId: input.chatId,
-        wireContent: withCatchUp(input.packet, wireContent),
+        // Header, then the catch-up packet, then what the user sent. Both
+        // prefixes are wire-only by construction: the row was persisted from
+        // `wireContent` alone, before this call.
+        wireContent: withCatchUp(input.turnHeader ?? null, withCatchUp(input.packet, wireContent)),
         fileIds: input.fileIds,
         ...(input.messageId ? { messageId: input.messageId } : {}),
         signal: io.signal,
@@ -763,13 +824,15 @@ async function resendAgentTurn(port: StreamPort, input: {
           names: agentNames(settingsUserId, profileUserId)
         })
       : null
+    const driver = driverFor(agent)
     run = bindTurn({
-      driver: driverFor(agent),
+      driver,
       agent,
       agentOwnerId,
       chatId,
       wireContent: row.content,
       packet,
+      turnHeader: turnHeaderFor({ driver, agent, profileUserId, chatId }),
       fileIds: row.attachments?.map((attachment) => attachment.id),
       messageId: userMessageId,
       runScope: { profileUserId, settingsUserId }

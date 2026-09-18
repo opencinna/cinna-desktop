@@ -15,6 +15,14 @@ import {
   Server
 } from 'lucide-react'
 import { useAgents } from '../../hooks/useAgents'
+import { useHandoverForTask } from '../../hooks/useHandovers'
+import {
+  handoverFolderPath,
+  handoverFolderPathShort,
+  handoverNoteText,
+  handoverStateLabel,
+  handoverStateTitle
+} from '../../utils/handoverText'
 import { useInboxList } from '../../hooks/useInbox'
 import { useJob, useOpenChatFromRun } from '../../hooks/useJobs'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
@@ -170,6 +178,13 @@ function TaskPage({
   */
   const jobGone = !!task.jobId && !jobQuery.isPending && !job
   const { data: agents, isPending: agentsPending } = useAgents()
+  /**
+   * The file handover this task was born of, if it was. `null` for every
+   * ordinary task, which is nearly all of them — the three rows below are the
+   * only part of this page that changes, and they are rows in the panel that
+   * already exists rather than a banner (`ux_rules.md` §2).
+   */
+  const handover = useHandoverForTask(task.id).data ?? null
   const inbox = useInboxList()
   const openChat = useOpenChatFromRun()
   const openTask = useOpenTask()
@@ -264,6 +279,33 @@ function TaskPage({
     return task.assignee.name
   })()
 
+  /**
+   * Who asked for this handover.
+   *
+   * The same trap as the assignee row above, and the same answer: "outside the
+   * app" is what a brief written by a person or a script means, so it must not
+   * also be what "the agent list has not arrived yet" looks like. While the
+   * list is pending the row waits, the way the Job row does.
+   *
+   * The row is labelled **Requested by** and carries the name alone: it used to
+   * say "Handover from Planner" directly above a row labelled Handover, so the
+   * label and the value were the same word twice (`ux_rules.md` §7).
+   */
+  const originFound =
+    handover?.originAgentId && !agentsPending
+      ? (agents ?? []).find((a) => a.id === handover.originAgentId) ?? null
+      : null
+  /* Openable on the same terms as the assignee: a remote agent hidden from the
+     desktop has a name and no page, so it stays plain text. */
+  const originAgent =
+    originFound && (originFound.source !== 'remote' || originFound.enabled) ? originFound : null
+  const originName = ((): string | null => {
+    if (!handover) return null
+    if (!handover.originAgentId) return 'Outside the app'
+    if (agentsPending) return null
+    return originFound ? originFound.name : 'Outside the app'
+  })()
+
   /*
     The agent's own page, when the assignee is an agent this app still lists —
     a folder agent opens its local page, anything else its external page, the
@@ -278,15 +320,14 @@ function TaskPage({
   const setSidebarTab = useUIStore((s) => s.setSidebarTab)
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const setActiveExternalAgentId = useUIStore((s) => s.setActiveExternalAgentId)
-  const openAssignee = (): void => {
-    if (!assigneeAgent) return
+  const openAgentPage = (agent: { id: string }): void => {
     setAgentPageMode('chat')
     setSidebarTab('agents')
-    if (isFolderAgentId(assigneeAgent.id)) {
-      setActiveLocalAgentId(assigneeAgent.id)
+    if (isFolderAgentId(agent.id)) {
+      setActiveLocalAgentId(agent.id)
       setActiveView('local-agent')
     } else {
-      setActiveExternalAgentId(assigneeAgent.id)
+      setActiveExternalAgentId(agent.id)
       setActiveView('external-agent')
     }
   }
@@ -475,7 +516,7 @@ function TaskPage({
                 {assigneeAgent ? (
                   <button
                     type="button"
-                    onClick={openAssignee}
+                    onClick={() => openAgentPage(assigneeAgent)}
                     title={assigneeAgent.name}
                     className="block max-w-full truncate text-right font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
                   >
@@ -486,6 +527,60 @@ function TaskPage({
               <Detail label="Priority">{capitalize(task.priority)}</Detail>
               {task.executor === 'remote' && (
                 <Detail label="Running">In the connected service</Detail>
+              )}
+              {handover && (
+                <Detail label="Requested by">
+                  {/*
+                    A requester this app still lists is a page one click away,
+                    and it is styled as the Assignee row above it: an action
+                    that reads like the prose around it is not an action (§11).
+                  */}
+                  {originAgent ? (
+                    <button
+                      type="button"
+                      onClick={() => openAgentPage(originAgent)}
+                      title={originAgent.name}
+                      className="block max-w-full truncate text-right font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
+                    >
+                      {originName}
+                    </button>
+                  ) : (
+                    originName ?? <span className="text-[var(--color-text-muted)]">…</span>
+                  )}
+                </Detail>
+              )}
+              {handover && (
+                <Detail label="Handover">
+                  {/* One line in every state, so a five-second poll cannot
+                      move the rows under it (§1); the long form is on hover. */}
+                  <span title={handoverStateTitle(handover) ?? undefined}>
+                    {handoverStateLabel(handover)}
+                  </span>
+                </Detail>
+              )}
+              {/*
+                Only while the brief is there: this row names a directory, and
+                naming one the requester has deleted is a claim about a file
+                that is gone (§9). The Handover row above says "Withdrawn" and
+                the Note row says who took it back.
+              */}
+              {handover && !handover.briefMissingAt && (
+                <Detail label="Folder">
+                  {/*
+                    Text, not a button: Finder hides dotfiles, so revealing a
+                    `.cinna/…` directory selects nothing the user can see — the
+                    same reason the Folder tab opens `credentials/.env` rather
+                    than revealing it. One line, middle-elided around the
+                    handover id, with the whole path on hover — `break-all` put
+                    it on five lines and made the row beside it as tall (§1).
+                  */}
+                  <span
+                    className="block truncate font-mono text-[10px]"
+                    title={handoverFolderPath(handover)}
+                  >
+                    {handoverFolderPathShort(handover)}
+                  </span>
+                </Detail>
               )}
               {task.remote?.key && (
                 <Detail label="Key">
@@ -521,6 +616,16 @@ function TaskPage({
                 <Detail label="Subtasks">
                   {`${task.subtaskCompletedCount} of ${task.subtaskCount} done`}
                 </Detail>
+              )}
+              {/*
+                Last, and only when there is one: a handover that carried on
+                with something worth saying (the brief was edited, `auto` was
+                not allowed, the requester could not be found). It lengthens
+                the panel and moves nothing above it — a warning about work
+                that already happened is not a banner (§1, §2).
+              */}
+              {handover && handoverNoteText(handover) && (
+                <Detail label="Note">{handoverNoteText(handover)}</Detail>
               )}
             </dl>
           </aside>

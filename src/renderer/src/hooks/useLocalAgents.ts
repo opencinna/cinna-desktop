@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+  type UseQueryResult
+} from '@tanstack/react-query'
 import type {
   AddAgentFolderInput,
   AddAgentFolderResult,
@@ -20,6 +26,7 @@ import type {
   UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
 import type { ClaudeApproval, LocalAgentRuntimeInput } from '../../../shared/engine'
+import type { HandoverIgnoreCheck, HandoverSetting } from '../../../shared/handovers'
 import type { GitDetail, GitStatus, GitUpdateResult } from '../../../shared/agentGit'
 import type { StoredPermissionGrant } from '../../../shared/localAgentRequests'
 import {
@@ -499,6 +506,60 @@ export function useSetCodexApproval() {
   return useMutation<LocalAgentDto, Error, { agentId: string; approval: ClaudeApproval | null }>({
     mutationFn: async ({ agentId, approval }) =>
       unwrapLocalAgentOutcome(await window.api.localAgents.setCodexApproval(agentId, approval)),
+    onSuccess: (agent) => {
+      queryClient.setQueryData(localAgentKey(agent.id), agent)
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+    }
+  })
+}
+
+/** What git says about one folder's handovers directory. */
+export function handoversCheckKey(agentId: string): readonly unknown[] {
+  return ['local-agent-handovers-check', agentId] as const
+}
+
+/**
+ * Whether `.cinna/handovers` is out of git's way (`drafts/file_handovers` §3.4).
+ *
+ * Read on the card rather than carried on the DTO: it shells out to git, the
+ * agent list is read on every folder change, and the answer is only ever needed
+ * by the one card that offers the `auto` option. It is the evidence behind that
+ * option, so the card can explain a refusal **before** the click instead of
+ * after it — which is the whole reason this channel exists separately from the
+ * setter.
+ *
+ * A failure is not retried into a spinner that never ends: the card treats an
+ * absent answer as "could not check", which is itself a state that forbids
+ * `auto`, so a refusal is never hidden by a failed read.
+ */
+export function useHandoversCheck(agentId: string | null): UseQueryResult<HandoverIgnoreCheck> {
+  return useQuery({
+    queryKey: handoversCheckKey(agentId ?? ''),
+    queryFn: async () =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.handoversCheck(agentId as string)),
+    enabled: !!agentId,
+    retry: false,
+    // Git does not change while the card is open, and the answer costs a
+    // process. Re-read when the page is returned to, not on every focus.
+    staleTime: 30_000
+  })
+}
+
+/**
+ * Save whether briefs in this folder run without asking.
+ *
+ * Shaped like the approval setters — `setQueryData` on the agent's own query so
+ * the select keeps the picked value across the round trip (ux_rules §1) — with
+ * one difference that matters: `auto` can come back **refused**
+ * (`handovers_not_ignored`) because main checks git before granting it. The
+ * refusal arrives as a thrown error carrying its code, so the card can say why
+ * and let the select fall back to what is still stored (§6).
+ */
+export function useSetHandovers() {
+  const queryClient = useQueryClient()
+  return useMutation<LocalAgentDto, Error, { agentId: string; handovers: HandoverSetting | null }>({
+    mutationFn: async ({ agentId, handovers }) =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.setHandovers(agentId, handovers)),
     onSuccess: (agent) => {
       queryClient.setQueryData(localAgentKey(agent.id), agent)
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })

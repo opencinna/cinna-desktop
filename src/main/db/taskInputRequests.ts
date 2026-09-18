@@ -24,7 +24,7 @@ export interface OpenInputRequestInput {
   taskId: string
   chatId: string
   agentId: string | null
-  deliveryOwner?: 'driver' | 'runner'
+  deliveryOwner?: 'driver' | 'runner' | 'handover'
   rootRunId?: string
   invocationId?: string
   request: InputRequest
@@ -57,8 +57,17 @@ export const taskInputRequestRepo = {
    * currently parked on.
    */
   open(input: OpenInputRequestInput): TaskInputRequestRow {
-    if (input.deliveryOwner === 'runner' ? input.agentId !== null || input.resume !== 'reply' : !input.agentId) {
-      throw new Error('The request needs a valid driver or runner delivery owner.')
+    // `handover` sits on the runner side of this invariant, and for the same
+    // reason: there is no engine parked on it. A driver row names the agent its
+    // answer is delivered to; a runner gate and a handover gate are answered by
+    // a service that looks the task up itself, so naming an agent there would be
+    // a claim nothing checks. A handover gate goes one step further — at the
+    // moment it is opened no turn exists at all — which is why `reply` is
+    // required too: `next_message` means "the answer is the next thing typed in
+    // the chat", and the gate's chat has never been used.
+    const ownerless = input.deliveryOwner === 'runner' || input.deliveryOwner === 'handover'
+    if (ownerless ? input.agentId !== null || input.resume !== 'reply' : !input.agentId) {
+      throw new Error('The request needs a valid driver, runner or handover delivery owner.')
     }
     const row: TaskInputRequestRow = {
       id: input.requestId,
@@ -172,7 +181,11 @@ export const taskInputRequestRepo = {
   expireNextMessageForTask(taskId: string): void {
     getDb().update(taskInputRequests).set({ status: 'expired', resolvedAt: new Date() })
       .where(and(eq(taskInputRequests.taskId, taskId), eq(taskInputRequests.status, 'open'),
-        or(eq(taskInputRequests.resume, 'next_message'), eq(taskInputRequests.deliveryOwner, 'runner')))).run()
+        or(eq(taskInputRequests.resume, 'next_message'), eq(taskInputRequests.deliveryOwner, 'runner'),
+          // A handover gate asks whether to *start* the task. Once the task is
+          // settled the question has no answer left that means anything, and an
+          // unexpired row would keep offering Run for work that is over.
+          eq(taskInputRequests.deliveryOwner, 'handover')))).run()
   },
 
   listOpenForChat(chatId: string): TaskInputRequestRow[] {

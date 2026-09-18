@@ -28,7 +28,7 @@ describe('pinned Codex adapter over real stdio', () => {
       systemPrompt: () => 'You are the Cinna folder agent.',
       settings: () => ({ model: 'test-model', effort: 'high', approval: 'ask' })
     })
-    const plan = await launcher.plan({ userId: 'u', agentId: 'a', folder: { path: dir, name: 'A', slug: 'a', description: '', kind: 'bare' } })
+    const plan = await launcher.plan({ userId: 'u', agentId: 'a', folder: { path: dir, name: 'A', slug: 'a', description: '', kind: 'bare', runtimeMode: 'native' } })
     if (isRefusal(plan)) throw new Error(plan.error)
     let connection: Awaited<ReturnType<typeof startAcpConnection>> | undefined
     try {

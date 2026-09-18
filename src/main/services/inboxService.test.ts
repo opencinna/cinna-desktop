@@ -543,6 +543,38 @@ describe('the list', () => {
     inboxService.recordRunEvent(ctx(), permission)
     expect((await listEntries('someone-else'))).toEqual([])
   })
+
+  /**
+   * A file-handover gate asks whether to *start* a task, so its task is still
+   * `new` and has no chat of its own — neither of the two things the list's
+   * second branch looks for (`executor: 'desktop'` **and** a status of `blocked`
+   * or `in_progress`). It reaches the Inbox only through the first branch:
+   * `resume: 'reply'` and a `deliveryOwner` that is not `runner`.
+   *
+   * Pinned because that is a coincidence of two conditions, either of which a
+   * later change to either side could break — and the symptom would be a card
+   * that never appears, which nothing else in the suite would notice.
+   */
+  it('shows a handover gate whose task has not started', async () => {
+    const task = taskService.create(USER, { title: 'Add retry', goal: 'Add retry to the uploader' })
+    expect(task.status).toBe('new')
+    expect(task.chatId).toBeNull()
+
+    taskInputRequestRepo.open({
+      requestId: 'handover:row-1',
+      taskId: task.id,
+      chatId: 'gate-chat',
+      agentId: null,
+      deliveryOwner: 'handover',
+      request: { kind: 'question', questions: [{ question: 'Run it?', multiSelect: false, options: [{ label: 'Run' }] }] },
+      resume: 'reply'
+    })
+
+    const entries = await listEntries(USER)
+    expect(entries).toEqual([
+      expect.objectContaining({ requestId: 'handover:row-1', deliveryOwner: 'handover', agentId: null, taskId: task.id })
+    ])
+  })
 })
 
 describe('answering from the inbox', () => {

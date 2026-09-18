@@ -1,14 +1,22 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createCodexLauncher, type CodexLauncherDeps } from './codexLauncher'
 import { isRefusal, type AcpLaunchContext } from './acpLaunchers'
+import type { AcpRuntimeMode } from './types'
 import { buildCodexEnv } from './codexEnv'
 import { CodexAuthProbe, parseCodexAuthStatus, probeCodexAuth } from './codexAuth'
 import type { execFile } from 'node:child_process'
 import { getLogEntries, clearLogEntries } from '../../../logger/logger'
 
-const context: AcpLaunchContext = { userId: 'u', agentId: 'folder:a', folder: {
-  name: 'Agent', slug: 'agent', description: '', path: '/tmp/agent', kind: 'bare'
-} }
+const folder = {
+  name: 'Agent', slug: 'agent', description: '', path: '/tmp/agent',
+  kind: 'bare' as const, runtimeMode: 'native' as const
+}
+const context: AcpLaunchContext = { userId: 'u', agentId: 'folder:a', folder }
+/** The same agent scaffolded from the kit, whose session the desktop seals. */
+const kitContext: AcpLaunchContext = {
+  ...context,
+  folder: { ...folder, kind: 'kit', runtimeMode: 'isolated' }
+}
 function deps(over: Partial<CodexLauncherDeps> = {}): CodexLauncherDeps {
   return {
     path: async () => '/usr/local/bin/codex', auth: async () => ({ state: 'logged_in' }),
@@ -30,6 +38,31 @@ describe('Codex ACP launcher', () => {
     expect(JSON.parse(plan.spec.env.CODEX_CONFIG)).toEqual({ developer_instructions: 'You are the folder agent.', model_reasoning_effort: 'medium' })
     expect(plan.setup).toEqual({ modeId: 'read-only' })
     expect(plan.init.clientCapabilities?.elicitation).toEqual({ form: {} })
+  })
+
+  it('sends a native folder the desktop context alone, and an isolated one the whole assembled prompt', async () => {
+    // Codex loads the folder's own `AGENTS.md` and the user's
+    // `~/.codex/config.toml` by itself, exactly as it does for a terminal
+    // session there, so repeating the folder's instructions in
+    // `developer_instructions` would state them twice. A kit folder has no
+    // such loading of its own and still needs the whole document.
+    // Mutation: drop the mode argument and a bare folder is handed the kit
+    // document — every instruction the engine has already read, again.
+    const systemPrompt = vi.fn((_userId: string, _agentId: string, mode: AcpRuntimeMode) =>
+      mode === 'native' ? 'How you are running now: in this folder.' : 'You are the folder agent.')
+    const bare = await createCodexLauncher(deps({ systemPrompt })).plan(context)
+    if (isRefusal(bare)) throw new Error(bare.error)
+    expect(JSON.parse(bare.spec.env.CODEX_CONFIG).developer_instructions)
+      .toBe('How you are running now: in this folder.')
+    expect(systemPrompt).toHaveBeenCalledWith('u', 'folder:a', 'native')
+
+    const kit = await createCodexLauncher(deps({ systemPrompt })).plan(kitContext)
+    if (isRefusal(kit)) throw new Error(kit.error)
+    expect(JSON.parse(kit.spec.env.CODEX_CONFIG).developer_instructions).toBe('You are the folder agent.')
+    expect(systemPrompt).toHaveBeenCalledWith('u', 'folder:a', 'isolated')
+    // The instructions travel in the environment, so the two kinds cannot
+    // share a pooled process.
+    expect(kit.spec.key).not.toBe(bare.spec.key)
   })
 
   it('asks for background tasks only: native subagent sessions would hide the spawn call', async () => {

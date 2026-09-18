@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildCatchUpPacket, withCatchUp, CATCH_UP_CAP } from './threadContextService'
+import { buildCatchUpPacket, buildTurnHeader, withCatchUp, CATCH_UP_CAP } from './threadContextService'
 import type { MessageRow } from '../db/messages'
 
 /**
@@ -236,5 +236,42 @@ describe('buildCatchUpPacket', () => {
 describe('withCatchUp', () => {
   it('puts the packet in front of the user’s text', () => {
     expect(withCatchUp('CONTEXT', 'do the thing')).toBe('CONTEXT\n\ndo the thing')
+  })
+})
+
+/**
+ * The turn's own identifiers, for an agent that can act on them.
+ *
+ * Every field is here for one reason: a handover brief's `origin` block has to
+ * name the chat and the task, and its `depth` has to be this turn's depth plus
+ * one. So the failures worth catching are a missing field and a wrong shape —
+ * an agent cannot repair either, and a brief with a blank `origin` is a
+ * handover nobody can return.
+ */
+describe('buildTurnHeader', () => {
+  it('names the chat, the task and the depth, in three labelled lines', () => {
+    expect(buildTurnHeader({ chatId: 'chat-1', taskId: 'task-9', depth: 2 })).toBe(
+      [
+        'Turn context from Cinna Desktop, not part of the conversation:',
+        '- chat id: `chat-1`',
+        '- task id: `task-9`',
+        '- handover depth: 2'
+      ].join('\n')
+    )
+  })
+
+  it('says `none` and `0` rather than dropping the lines', () => {
+    // A missing line reads as a field the agent may invent; `none` is a fact.
+    // Mutation: omit the task line when there is no task and a brief written
+    // from this turn claims the wrong origin.
+    const header = buildTurnHeader({ chatId: 'chat-1' })
+    expect(header).toContain('- task id: none')
+    expect(header).toContain('- handover depth: 0')
+  })
+
+  it('reads as a block in front of the message, never as part of it', () => {
+    const wire = withCatchUp(buildTurnHeader({ chatId: 'chat-1' }), 'do the thing')
+    expect(wire.startsWith('Turn context from Cinna Desktop')).toBe(true)
+    expect(wire.endsWith('\n\ndo the thing')).toBe(true)
   })
 })

@@ -24,6 +24,7 @@ import { app } from 'electron'
 import { DESKTOP_STATE_FILE } from '../../../shared/kit/manifest'
 import type { AgentRuntimeRef } from '../../../shared/kit/manifest'
 import { isClaudeApproval, type ClaudeApproval } from '../../../shared/engine'
+import type { HandoverSetting } from '../../../shared/handovers'
 import type { LocalAgentDesktopSummary, LocalAgentKind } from '../../../shared/localAgents'
 import type { LocalPermissionGrant } from '../../../shared/localAgentRequests'
 import { LocalAgentError } from '../../errors'
@@ -121,6 +122,24 @@ export interface DesktopState {
    */
   claudeApproval: ClaudeApproval | null
   codexApproval?: ClaudeApproval | null
+  /**
+   * Bare agents only: whether a `brief.md` dropped into this folder's
+   * `.cinna/handovers/` may run without asking (`drafts/file_handovers` §3.4).
+   *
+   * **This field is the security boundary, and the brief's own `execution:
+   * auto` is not.** A brief is a file in a project folder: anything that can
+   * write there can plant one, `git pull` included, and running it is arbitrary
+   * code execution under that folder's own permission settings — which a bare
+   * folder's `.claude/settings.json` can set to bypass. So the permission lives
+   * here, under `userData`, beside the rest of what *this machine* decided about
+   * this folder, where the folder itself cannot reach it.
+   *
+   * Null is "no choice made" and reads as `DEFAULT_HANDOVER_SETTING`, so a
+   * future change of default reaches every agent that never chose. `auto` is
+   * additionally refused while git tracks or fails to ignore `.cinna/handovers`
+   * (`localAgentService.setHandovers`).
+   */
+  handovers: HandoverSetting | null
 }
 
 const EMPTY_STATE: DesktopState = {
@@ -133,7 +152,8 @@ const EMPTY_STATE: DesktopState = {
   hidden: false,
   runtime: null,
   claudeApproval: null,
-  codexApproval: null
+  codexApproval: null,
+  handovers: null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -213,7 +233,12 @@ function coerce(raw: unknown): DesktopState {
     // Anything but the two known values reads as no choice — the default —
     // never as the more permissive of the two by accident.
     claudeApproval: isClaudeApproval(raw.claudeApproval) ? raw.claudeApproval : null,
-    codexApproval: isClaudeApproval(raw.codexApproval) ? raw.codexApproval : null
+    codexApproval: isClaudeApproval(raw.codexApproval) ? raw.codexApproval : null,
+    // The same reading, and here it matters most: anything but the literal
+    // `'auto'` is no choice at all. A file another build wrote, or a hand edit,
+    // must not be able to grant a standing permission to run code by writing
+    // something that merely looks affirmative.
+    handovers: raw.handovers === 'auto' || raw.handovers === 'ask' ? raw.handovers : null
   }
 }
 
@@ -448,7 +473,8 @@ export const desktopStateService = {
       sessionCount: Object.keys(state.sessions).length,
       lastStatusAt: state.lastStatus?.at ?? null,
       claudeApproval: state.claudeApproval,
-      codexApproval: state.codexApproval ?? null
+      codexApproval: state.codexApproval ?? null,
+      handovers: state.handovers ?? null
     }
   }
 }

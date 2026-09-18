@@ -134,6 +134,7 @@ playwright test -> fixtures/app.ts -> electron.launch(repoRoot, HOME=sandbox, CI
 - `e2e/specs/connect-intent.spec.ts` — connect intent regression.
 - `e2e/specs/credential-switch.spec.ts` — credential switch regression.
 - `e2e/specs/forget-agent-root.spec.ts` — forget agent root regression.
+- `e2e/specs/handover-flow.spec.ts` — a real `brief.md` written into an adopted bare folder (there is no seeding IPC and deliberately none): the watcher picks it up, the Inbox gate is answered through the real UI, a real turn runs on the scripted ACP agent with the brief's body in its prompt, the `report.md` the spec writes closes the task, and the return packet appears in the origin chat as a system row. Skip cancels the task and leaves the folder alone; and a case that writes an `in_progress` report before the brief is ever seen proves the claim that keeps the desktop from starting a second executor — no gate, no executor, nothing of Cinna's running at all.
 - `e2e/specs/human-routing.spec.ts` — human routing regression.
 - `e2e/specs/local-dev.spec.ts` — local dev regression.
 - `e2e/specs/local-schedules.spec.ts` — local schedules regression.

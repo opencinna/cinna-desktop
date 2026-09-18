@@ -29,8 +29,12 @@ export interface InboxEntry {
   /** The address an answer is posted to. Unique across the inbox. */
   requestId: string
   source: InboxSource
-  /** Local runner gates survive closing a turn and restarting the app. */
-  deliveryOwner?: 'driver' | 'runner'
+  /**
+   * Local runner gates — and handover gates — survive closing a turn and
+   * restarting the app. A `handover` entry is a question about work that has
+   * not started; it renders as any other question card.
+   */
+  deliveryOwner?: 'driver' | 'runner' | 'handover'
   taskId: string
   /** The task's title, so a row reads as a sentence without a second query. */
   taskTitle: string

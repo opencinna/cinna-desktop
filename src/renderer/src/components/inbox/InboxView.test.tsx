@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
@@ -41,6 +41,9 @@ function snapshot(entries: InboxEntry[], unreadable: InboxUnreadableSource[] = [
   }
 }
 
+const { HANDOVER_GATE_OPTIONS, handoverGateQuestion, handoverGateRequestId } = await import(
+  '../../../../shared/handovers'
+)
 const { InboxView } = await import('./InboxView')
 const { useUIStore } = await import('../../stores/ui.store')
 const { useChatStore } = await import('../../stores/chat.store')
@@ -70,6 +73,33 @@ const QUESTION: InboxEntry = {
   },
   resume: 'reply',
   createdAt: new Date('2026-09-11T09:00:00Z')
+}
+
+/**
+ * A handover gate: the desktop asking whether to run a brief that appeared in a
+ * project folder (`drafts/file_handovers` §3.4).
+ *
+ * **No new component.** An ask has one rendering, so a gate is a `question`
+ * with options and lands in the same card as any other — which is exactly what
+ * this fixture is here to keep true. `deliveryOwner: 'handover'` changes only
+ * who main hands the answer to; nothing on this screen may branch on it.
+ */
+const GATE: InboxEntry = {
+  requestId: handoverGateRequestId('hov_1'),
+  source: 'local',
+  deliveryOwner: 'handover',
+  taskId: 't3',
+  taskTitle: 'Add retry to the uploader',
+  chatId: null,
+  agentId: 'a1',
+  request: {
+    kind: 'question',
+    questions: [
+      handoverGateQuestion({ title: 'Add retry to the uploader', folderName: 'uploader' })
+    ]
+  },
+  resume: 'reply',
+  createdAt: new Date('2026-09-11T08:00:00Z')
 }
 
 let client: QueryClient
@@ -405,5 +435,91 @@ describe('InboxView', () => {
     listMock.mockResolvedValue(snapshot([]))
     renderInbox()
     expect(await screen.findByText('Nothing is waiting on you.')).toBeTruthy()
+  })
+})
+
+/**
+ * A handover gate, answered.
+ *
+ * The gate is the security boundary of the whole feature: `Run` starts work
+ * this app was asked for by a *file*, and the middle option writes a standing
+ * permission for the project. What the inbox owes it is the ordinary question
+ * card and an answer that arrives verbatim — main matches the label it gets
+ * against its own constants, so a label this screen reworded would silently
+ * become "no answer at all".
+ */
+describe('InboxView — a handover gate', () => {
+  it('renders as an ordinary question, with the three options in order', async () => {
+    listMock.mockResolvedValue(snapshot([GATE]))
+    renderInbox()
+    fireEvent.click(await screen.findByRole('button', { name: /^Answer$/ }))
+    const dialog = await screen.findByRole('dialog')
+    // The row summarises the same question above the card, so the assertion is
+    // scoped to the thing the user is answering in.
+    expect(within(dialog).getByText(/Run the handover “Add retry to the uploader” in uploader\?/))
+      .toBeTruthy()
+    for (const label of [
+      HANDOVER_GATE_OPTIONS.run,
+      HANDOVER_GATE_OPTIONS.runAndAuto,
+      HANDOVER_GATE_OPTIONS.skip
+    ]) {
+      expect(within(dialog).getByText(label)).toBeTruthy()
+    }
+    // The order the options are offered in is main's, and it is a decision:
+    // the standing permission sits between the one-off Run and Skip.
+    const offered = [...document.querySelectorAll('[role="dialog"] button')]
+      .map((node) => node.textContent ?? '')
+      .filter((text) =>
+        (Object.values(HANDOVER_GATE_OPTIONS) as string[]).includes(text)
+      )
+    expect(offered).toEqual([
+      HANDOVER_GATE_OPTIONS.run,
+      HANDOVER_GATE_OPTIONS.runAndAuto,
+      HANDOVER_GATE_OPTIONS.skip
+    ])
+  })
+
+  it('says who is asking, and it is not an agent', async () => {
+    /*
+      No agent has been handed this brief yet — the gate is the desktop asking
+      whether one should be. The card announced "The agent is asking a
+      question" over a question no agent asked (§10), and dropped the `header`
+      the modal shows. Mutation: hardcode "The agent" and this fails.
+    */
+    listMock.mockResolvedValue(snapshot([GATE]))
+    renderInbox()
+    expect(await screen.findByText('Cinna Desktop is asking a question')).toBeTruthy()
+    expect(screen.queryByText('The agent is asking a question')).toBeNull()
+    // The question's own header, as the badge the answer modal renders.
+    expect(screen.getAllByText('Handover').length).toBeGreaterThan(0)
+  })
+
+  it('offers no free-text answer main would refuse', async () => {
+    /*
+      Main matches the answer against `HANDOVER_GATE_OPTIONS`; anything else
+      comes back as an error the user cannot act on, so the option that only
+      leads there is not offered (§6). Mutation: render the synthetic option
+      unconditionally and this fails.
+    */
+    listMock.mockResolvedValue(snapshot([GATE]))
+    renderInbox()
+    fireEvent.click(await screen.findByRole('button', { name: /^Answer$/ }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).queryByText('Other (enter custom answer)')).toBeNull()
+  })
+
+  it('sends the chosen label back against the gate’s own request id', async () => {
+    listMock.mockResolvedValue(snapshot([GATE]))
+    answerMock.mockResolvedValue({ ok: true })
+    renderInbox()
+    fireEvent.click(await screen.findByRole('button', { name: /^Answer$/ }))
+    fireEvent.click(within(await screen.findByRole('dialog')).getByText(HANDOVER_GATE_OPTIONS.skip))
+    fireEvent.click(screen.getByRole('button', { name: /Send answer/ }))
+    await waitFor(() =>
+      expect(answerMock).toHaveBeenCalledWith({
+        requestId: 'handover:hov_1',
+        answers: [[HANDOVER_GATE_OPTIONS.skip]]
+      })
+    )
   })
 })

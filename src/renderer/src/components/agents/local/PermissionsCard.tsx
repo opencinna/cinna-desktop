@@ -2,9 +2,11 @@ import { useState } from 'react'
 import { Loader2, ShieldCheck, X } from 'lucide-react'
 import {
   useForgetAgentGrants,
+  useHandoversCheck,
   useLocalAgentGrants,
   useSetClaudeApproval,
-  useSetCodexApproval
+  useSetCodexApproval,
+  useSetHandovers
 } from '../../../hooks/useLocalAgents'
 import { formatRelativeFromDate } from '../../../utils/cinnaTime'
 import { unwrapIpcError } from '../../../utils/ipcError'
@@ -23,6 +25,13 @@ import {
   isClaudeApproval,
   type ClaudeApproval
 } from '../../../../../shared/engine'
+import {
+  allowsAuto,
+  DEFAULT_HANDOVER_SETTING,
+  HANDOVERS_DIR,
+  type HandoverSetting
+} from '../../../../../shared/handovers'
+import { handoverAutoOverriddenText, handoverIgnoreText } from '../../../utils/handoverText'
 import { useDefaultRuntime } from '../../../hooks/useEngine'
 import { AgentCard } from './AgentCard'
 import { FIELD, LABEL } from './fieldClasses'
@@ -205,6 +214,15 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
           overriddenNames={overriddenNames}
         />
       )}
+
+      {/*
+        Bare folders only, and outside the engine branch above: a handover is a
+        brief dropped into the folder, which is a thing a folder has whatever
+        engine reads it. A kit folder is published and Cinna already writes into
+        it, so `.cinna/handovers` there would travel with the kit — it is not a
+        handover target at all (`drafts/file_handovers` §3.8).
+      */}
+      {bare && <HandoversSetting agent={agent} />}
 
       <div className="mt-3 text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]">
         Always allowed
@@ -511,4 +529,163 @@ function CodexApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element 
       <div role="alert" className="mt-1 h-[15px] truncate text-[11px] text-[var(--color-danger)]" title={error ?? undefined}>{error}</div>
     </div>
   </>
+}
+
+/**
+ * Whether a brief dropped into this folder runs without asking.
+ *
+ * **This is the security boundary, not the brief's own `execution: auto`**
+ * (`drafts/file_handovers` §3.4). Anything that can write to the folder can
+ * plant a brief — including a `git pull` — so the permission lives here, on the
+ * desktop, per agent, and defaults to asking.
+ *
+ * Which is why the git line under the select is always rendered: the answer is
+ * *evidence* for the choice above it, it has something true to say in every
+ * state (`ux_rules.md` §1), and in the two states that forbid `auto` it is the
+ * only thing on the card that explains why the option is greyed out. One line,
+ * truncated with the whole sentence on hover, like the refusal slot on the
+ * cards above — a status line that wrapped to two lines on a narrow card would
+ * move the grants list the moment git answered (§12).
+ *
+ * The refusal, by contrast, is rendered only when there is one, below the
+ * status line and last in the block: it exists only when something went wrong,
+ * so a reserved slot for it would be padding (§1).
+ *
+ * In the one state where the line reports a stored setting that is not in
+ * force, it carries the action that clears it — on the same line, so nothing
+ * moves, and in the accent, because a text button in the colour of the sentence
+ * beside it is not a control anybody finds (§11).
+ */
+function HandoversSetting({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+  const save = useSetHandovers()
+  const query = useHandoversCheck(agent.id)
+  /*
+    A read that failed is not a read that is still running. Left as
+    `undefined` the line below would say "Checking git…" for ever and the
+    `auto` option would stay enabled on evidence nobody has — so a failure
+    becomes the `unknown` answer, which is exactly what it is and which
+    forbids `auto` for the same reason main does.
+  */
+  const check = query.data ?? (query.isError ? ({ result: 'unknown' } as const) : undefined)
+  const [error, setError] = useState<string | null>(null)
+  /**
+   * The pick, until main has answered — the same optimistic hold the approval
+   * selects use, for the same reason: main re-scans the folder before it
+   * answers, and rendering the stored value alone snapped the control back for
+   * the length of the round trip (§1).
+   */
+  const [pending, setPending] = useState<HandoverSetting | null>(null)
+  const stored: HandoverSetting = agent.desktop.handovers ?? DEFAULT_HANDOVER_SETTING
+  /*
+    Disabled, not hidden: an option that vanishes teaches nothing, and the line
+    below says what would have to change for it to come back. Only once the
+    check has answered — greying it out while the answer is in flight would
+    offer it a moment later, which is the same jump seen from the other side.
+  */
+  const autoBlocked = check !== undefined && !allowsAuto(check)
+  const autoOverridden = autoBlocked && stored === 'auto'
+  /*
+    **The select shows what would happen, not what is stored.** A folder set to
+    `auto` whose handovers git tracks asks anyway — main refuses the automatic
+    start — so a select reading "Run automatically" beside a line saying
+    automatic runs are unavailable made the user read the refusal as the bug.
+    The stored value is not lost: the line below is where it still shows, and it
+    comes back into force by itself once git stops objecting.
+  */
+  const effective: HandoverSetting = stored === 'auto' && autoOverridden ? 'ask' : stored
+  const current = pending ?? effective
+
+  /*
+    The same slot, one sentence or the other: git's verdict, or — when the
+    folder is set to `auto` and that verdict forbids it — the setting and the
+    reason it is not in force, which is the only place the stored value is
+    still visible now that the select shows the effective one.
+  */
+  const statusLine = autoOverridden
+    ? handoverAutoOverriddenText(check)
+    : handoverIgnoreText(check)
+
+  return (
+    <div className="mt-3">
+      <label htmlFor="handovers-setting" className={LABEL}>
+        Handovers
+      </label>
+      {/*
+        One line, under the label and above the control it describes: this card
+        has no (?) affordance to put standing explanation behind (§12), and a
+        paragraph here would be read once and scrolled past for ever after.
+      */}
+      <div className="mb-1 text-[10px] text-[var(--color-text-muted)]">
+        A brief left in <span className="font-mono">{HANDOVERS_DIR}/</span> becomes a task for this
+        agent.
+      </div>
+      <select
+        id="handovers-setting"
+        className={FIELD}
+        value={current}
+        disabled={save.isPending}
+        onChange={(event) => {
+          const value = event.target.value
+          if ((value !== 'ask' && value !== 'auto') || value === current) return
+          setError(null)
+          setPending(value)
+          save.mutate(
+            { agentId: agent.id, handovers: value },
+            {
+              // The outcome first, then the reason (§6). Nothing was granted,
+              // and the select falls back to what is still stored on its own.
+              onError: (err) => setError(`Nothing was changed — ${lowerFirst(unwrapIpcError(err))}`),
+              onSettled: () => setPending(null)
+            }
+          )
+        }}
+      >
+        <option value="ask">Ask before running</option>
+        <option value="auto" disabled={autoBlocked}>
+          Run automatically
+        </option>
+      </select>
+      <div className="mt-1 flex items-baseline gap-2 text-[10px] leading-[15px]">
+        <span className="truncate text-[var(--color-text-muted)]" title={statusLine}>
+          {statusLine}
+        </span>
+        {/*
+          The way out of a setting the user cannot otherwise reach. While git
+          overrules `auto` the select shows the effective `ask`, so choosing
+          `ask` in it is not a change and fires nothing — the stored `auto`
+          stayed, silently, and came back into force the day the folder's
+          .gitignore did. This is the one control that clears it.
+
+          Accent, not the muted colour of the sentence it sits beside
+          (`ux_rules.md` §11), and on the line that is already there, so
+          nothing moves when it appears (§1).
+        */}
+        {autoOverridden && (
+          <button
+            type="button"
+            className="shrink-0 font-medium text-[var(--color-accent)] transition-colors hover:text-[var(--color-accent-hover)] disabled:opacity-50"
+            disabled={save.isPending}
+            onClick={() => {
+              setError(null)
+              setPending('ask')
+              save.mutate(
+                { agentId: agent.id, handovers: 'ask' },
+                {
+                  onError: (err) => setError(`Nothing was changed — ${lowerFirst(unwrapIpcError(err))}`),
+                  onSettled: () => setPending(null)
+                }
+              )
+            }}
+          >
+            Switch to ask
+          </button>
+        )}
+      </div>
+      {error && (
+        <div role="alert" className="mt-1 text-[11px] text-[var(--color-danger)]">
+          {error}
+        </div>
+      )}
+    </div>
+  )
 }

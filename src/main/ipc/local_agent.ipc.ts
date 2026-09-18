@@ -38,6 +38,7 @@ import type {
 } from '../../shared/localAgents'
 import type { LocalAgentOutcome } from '../../shared/localAgents'
 import type { ClaudeApproval, LocalAgentRuntimeInput } from '../../shared/engine'
+import type { HandoverIgnoreCheck, HandoverSetting } from '../../shared/handovers'
 import { localAgentFailure } from '../../shared/localAgents'
 import { DomainError } from '../errors'
 
@@ -612,6 +613,47 @@ export function registerLocalAgentHandlers(): void {
           input?.agentId ?? '',
           input?.approval
         )
+      )
+    }
+  )
+
+  /**
+   * Whether a brief dropped into this folder's `.cinna/handovers/` runs without
+   * asking (`drafts/file_handovers` §3.4). Bare folders only in practice: it is
+   * the one kind that has a handovers inbox.
+   *
+   * Async where the approval setters are not, because `auto` is checked against
+   * git before it is granted; a refusal comes back as
+   * `handovers_not_ignored` in the outcome, with the fix in its message.
+   */
+  ipcHandle(
+    'local-agent:set-handovers',
+    async (
+      _event,
+      input: { agentId: string; handovers: HandoverSetting | null }
+    ): Promise<LocalAgentOutcome<LocalAgentDto>> => {
+      userActivation.requireActivated()
+      return withCodeAsync(() =>
+        localAgentService.setHandovers(
+          getSettingsScopeUserId(),
+          input?.agentId ?? '',
+          input?.handovers
+        )
+      )
+    }
+  )
+
+  /**
+   * What git says about this folder's handovers directory — the evidence behind
+   * the `auto` option, so a surface can explain the refusal *before* the click
+   * rather than after it.
+   */
+  ipcHandle(
+    'local-agent:handovers-check',
+    async (_event, input: { agentId: string }): Promise<LocalAgentOutcome<HandoverIgnoreCheck>> => {
+      userActivation.requireActivated()
+      return withCodeAsync(() =>
+        localAgentService.handoversCheck(getSettingsScopeUserId(), input?.agentId ?? '')
       )
     }
   )

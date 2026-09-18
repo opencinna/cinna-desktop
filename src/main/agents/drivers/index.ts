@@ -42,7 +42,9 @@ import { providerService } from '../../services/providerService'
 import {
   assembleAgentPrompt,
   assembleBareAgentPrompt,
-  resolveDesktopPromptContext
+  assembleBareNativePrompt,
+  resolveDesktopPromptContext,
+  type NativeRuntimeEngine
 } from '../../services/localAgents/promptAssembly'
 import { getShellEnv, shellEnvForChild } from '../../shell/env'
 import { buildClaudeEnv } from './acp/claudeEnv'
@@ -50,6 +52,7 @@ import { readFolderAgents } from './acp/claudeAgents'
 import { app } from 'electron'
 import { fetchAgentCard } from '../a2a-client'
 import type { LocalAgentKind } from '../../../shared/localAgents'
+import type { AcpRuntimeMode } from './acp/types'
 import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
 import { DEFAULT_CLAUDE_APPROVAL } from '../../../shared/engine'
 import type { AcpLauncherId, AgentDriverId } from '../../../shared/agentDrivers'
@@ -239,19 +242,51 @@ async function claudePath(options?: { fresh?: boolean }): Promise<string | null>
 }
 
 /**
- * The assembled folder prompt, not the SDK's `claude_code` preset: the preset
- * is a coding assistant's system prompt and the folder already says what this
- * agent is. A bare folder has no manifest, so nothing in the kit assembler
- * applies to it — the same split `collectEngineAgents` makes.
+ * The system prompt one turn runs on, for the engine that is about to run it.
+ *
+ * Two different documents, because the two runtime modes run in two different
+ * places. An **isolated** session gets the whole assembled prompt, which
+ * replaces the engine's own preset: the preset is a coding assistant's system
+ * prompt and the folder already says what this agent is. A **native** session
+ * runs on the folder's own setup — the engine loads its instructions file, its
+ * settings, its hooks and its MCP servers itself — so it gets only the
+ * desktop's context, to be appended to the engine's preset.
+ *
+ * The engine is baked in per launcher because the two read different files by
+ * themselves: `assembleBareNativePrompt` pastes the folder's instructions in
+ * only for the engine that would not read *that* file.
+ *
+ * Called on every plan, so a folder edited between two turns takes effect on
+ * the next one. `mode` is the field the driver put on the folder view for this
+ * turn, the same one the launcher branched its session options on — one
+ * decision, no way for the prompt and the options to disagree.
+ *
+ * OpenCode is deliberately absent: its prompt travels through the generated
+ * config (`engineConfigSource.collectEngineConfigInput`), and a bare OpenCode
+ * agent keeps the whole assembled prompt there until that path is settled.
  */
-function folderSystemPrompt(userId: string, agentId: string): string {
-  const development = developmentAgentContext(userId, agentId)
-  if (development) return development.instructions
-  const agent = localAgentService.get(userId, agentId)
-  const context = resolveDesktopPromptContext()
-  return agent.kind === 'bare'
-    ? assembleBareAgentPrompt(agent.path, agent.name, context)
-    : assembleAgentPrompt(agent.path, agent.manifest, context)
+function folderSystemPrompt(
+  engine: NativeRuntimeEngine
+): (userId: string, agentId: string, mode: AcpRuntimeMode) => string {
+  return (userId, agentId, mode) => {
+    const development = developmentAgentContext(userId, agentId)
+    if (development) return development.instructions
+    const agent = localAgentService.get(userId, agentId)
+    // The agent's own id, which is stable per agent — see
+    // `DesktopPromptContext.agentId` for why a per-turn id could not go here.
+    const context = { ...resolveDesktopPromptContext(), agentId }
+    if (mode === 'native') {
+      return assembleBareNativePrompt(agent.path, agent.name, context, engine)
+    }
+    // An isolated bare folder is not reachable through `readAcpFolder` today —
+    // a development agent is the only isolated folder with no manifest, and it
+    // returned above. Kept explicit anyway: the failure it would otherwise
+    // cause is a folder answering on the kit assembler's "no instructions yet"
+    // stub, which reads as a broken agent rather than as a wiring mistake.
+    return agent.kind === 'bare'
+      ? assembleBareAgentPrompt(agent.path, agent.name, context)
+      : assembleAgentPrompt(agent.path, agent.manifest, context)
+  }
 }
 
 export const codexAuthProbe = new CodexAuthProbe({
@@ -280,7 +315,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     },
     nodeRuntime: electronNodeRuntime,
     env: async () => buildCodexEnv({ shellEnv: await getShellEnv() }),
-    systemPrompt: folderSystemPrompt,
+    systemPrompt: folderSystemPrompt('codex'),
     settings: (userId, agentId) => {
       const development = developmentAgentContext(userId, agentId)
       if (development) return { model: null, effort: codexEffortForComplexity(development.complexity), approval: 'ask' }
@@ -327,7 +362,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     nodeRuntime: electronNodeRuntime,
     claudeEnv: async () =>
       buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: app.getVersion() }),
-    systemPrompt: folderSystemPrompt,
+    systemPrompt: folderSystemPrompt('claude'),
     // A model **alias** (`haiku` / `sonnet` / `opus`), not a catalogue id: a
     // plan serves what the plan serves, and `runtimeService.resolve` returns the
     // alias for this engine. Null hands the choice to the CLI's own default.
@@ -356,7 +391,9 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       }
     },
     // Read fresh each turn, like the prompt: a subagent definition edited while
-    // the app runs takes effect on the next turn, not the next launch.
+    // the app runs takes effect on the next turn, not the next launch. Kit
+    // folders only — the launcher does not ask for a bare folder's, which load
+    // from its own settings.
     folderAgents: (agentPath) => readFolderAgents(agentPath).agents
   })
 }
@@ -379,6 +416,11 @@ function readAcpFolder(userId: string, agentId: string): AcpFolderView | null {
       description: dto.description,
       path: dto.path,
       kind: dto.kind,
+      // **The one place the rule lives.** A bare folder is somebody's own
+      // repository, adopted for its instructions file alone, so a turn in it
+      // is the turn a terminal session there would get; a kit folder is the
+      // harness the desktop scaffolded and stays sealed.
+      runtimeMode: dto.kind === 'bare' ? 'native' : 'isolated',
       enabled: dto.enabled,
       readiness: dto.readiness,
       readinessReason: dto.readinessReason,
@@ -400,8 +442,14 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
     const state = customAgentService.runtime(userId, agent)
     return {
       ...state, type: 'folder',
+      // `kind: 'bare'` because this workspace has no manifest — but
+      // **`runtimeMode: 'isolated'`**: it is a folder the desktop synced for
+      // its own build session, not a repository the user adopted, and it runs
+      // on the instructions `developmentContext` assembled rather than on
+      // whatever `.claude/settings.json` the workspace happens to carry.
       folder: { name: agent.name, slug: `cinna-build-${agent.id}`, description: agent.description ?? '',
-        path: context.workspacePath, kind: 'bare', enabled: agent.enabled, readiness: 'ok', readinessReason: null,
+        path: context.workspacePath, kind: 'bare', runtimeMode: 'isolated',
+        enabled: agent.enabled, readiness: 'ok', readinessReason: null,
         runtime: { engine: context.runtime.launcher } },
       validate(chatId) { state.validate(chatId); contextForDevelopmentAgent(agent) }
     }

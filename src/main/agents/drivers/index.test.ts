@@ -34,6 +34,7 @@ const state = vi.hoisted(() => ({
   codexSettings: null as null | ((userId: string, agentId: string) => { effort: string }),
   developmentPaths: [] as string[],
   handovers: [] as unknown[],
+  runtimeModes: [] as unknown[],
   kind: 'kit',
   handbackPlans: [] as boolean[],
   runtime: { engine: 'opencode' } as { engine?: string } | null,
@@ -61,8 +62,9 @@ vi.mock('../../services/customAgentService', () => ({ customAgentService: {
   runtime: () => ({ type: 'external', validate() {}, readSession: () => null, saveSession() {}, isGranted: () => false, rememberGrant: () => false })
 } }))
 vi.mock('./acp/codexLauncher', () => ({ createCodexLauncher: (options: { settings: (userId: string, agentId: string) => { effort: string } }) => { state.codexSettings = options.settings; return { id: 'codex',
-  plan: async (context: { folder: { path: string } }) => {
+  plan: async (context: { folder: { path: string; runtimeMode?: unknown } }) => {
     state.ran.push('codex'); state.developmentPaths.push(context.folder.path)
+    state.runtimeModes.push(context.folder.runtimeMode)
     return { error: 'refused by the codex launcher' }
   }
 } } }))
@@ -115,7 +117,7 @@ vi.mock('../../services/localAgents/toolDetectionService', () => ({
 }))
 vi.mock('../../services/localAgents/promptAssembly', () => ({
   assembleAgentPrompt: () => 'prompt',
-  assembleBareAgentPrompt: () => 'prompt',
+  assembleBareNativePrompt: () => 'prompt',
   resolveDesktopPromptContext: () => ({})
 }))
 vi.mock('../../services/providerService', () => ({ providerService: { listMerged: () => [] } }))
@@ -141,9 +143,10 @@ vi.mock('./acp/acpLaunchers', async (importOriginal) => {
   const original = await importOriginal<typeof import('./acp/acpLaunchers')>()
   const marker = (id: string) => () => ({
     id,
-    plan: async (context: { folder: { coordinatorHandback?: boolean; path: string } }) => {
+    plan: async (context: { folder: { coordinatorHandback?: boolean; path: string; runtimeMode?: unknown } }) => {
       state.developmentPaths.push(context.folder.path)
       state.handbackPlans.push(context.folder.coordinatorHandback === true)
+      state.runtimeModes.push(context.folder.runtimeMode)
       state.ran.push(id)
       return { error: `refused by the ${id} launcher` }
     }
@@ -204,7 +207,7 @@ beforeEach(() => {
   state.getThrows = false
   state.gets = 0
   state.ran = []
-  state.handovers = []; state.kind = 'kit'; state.handbackPlans = []
+  state.handovers = []; state.kind = 'kit'; state.handbackPlans = []; state.runtimeModes = []
 })
 
 describe('driverFor', () => {
@@ -274,6 +277,37 @@ describe('driverFor', () => {
     state.kind = 'bare'
     await ranFor(folderRow('opencode'))
     expect(state.handbackPlans).toEqual([false, false, true, false, false])
+  })
+
+  it('gives an adopted bare folder the native runtime and a kit folder the isolated one', async () => {
+    // The whole of file-handovers phase 1, decided **here** rather than in a
+    // launcher: `runtimeMode` is what the Claude launcher forks its session
+    // options on, so this is the line that says a repository the user adopted
+    // runs on its own settings, hooks and MCP servers and a scaffolded kit
+    // folder does not.
+    state.runtime = { engine: 'claude' }
+    state.kind = 'bare'
+    await ranFor(folderRow('claude'))
+    state.kind = 'kit'
+    await ranFor(folderRow('claude'))
+    expect(state.runtimeModes).toEqual(['native', 'isolated'])
+  })
+
+  it('keeps Cinna’s own build session isolated, though its folder view says bare', async () => {
+    // The build session's workspace is a folder **the desktop synced**, not a
+    // repository the user adopted: its prompt is the one
+    // `developmentContext` assembled, and a `.claude/settings.json` that
+    // happened to arrive in that workspace must not become this session's
+    // permission mode or MCP set. Its view says `kind: 'bare'` because there
+    // is no manifest, which is exactly why the launchers read the derived mode
+    // instead. Mutation: derive the mode from the kind and this session picks
+    // up the folder's runtime.
+    state.development = true
+    state.developmentEngine = 'claude'
+    const row = { ...folderRow('custom'), source: 'local', enabled: true,
+      driverConfig: { launcher: 'custom', command: ['cinna-development-session'], developmentProfileId: 'profile-1' } } as AgentRow
+    expect(await ranFor(row)).toEqual(['claude'])
+    expect(state.runtimeModes).toEqual(['isolated'])
   })
 
   it('launches a folder agent that names no engine on OpenCode', async () => {

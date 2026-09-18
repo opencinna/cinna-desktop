@@ -18,6 +18,7 @@ import { appIconService } from './services/appIconService'
 import { syncService } from './services/syncService'
 import { taskSyncScheduler } from './services/taskSyncScheduler'
 import { localScheduleScheduler } from './services/localScheduleScheduler'
+import { handoverScheduler } from './services/handoverScheduler'
 import { trayService } from './services/trayService'
 import { syncTrayFromSettings } from './services/traySync'
 import { createLogger } from './logger/logger'
@@ -227,6 +228,7 @@ function createWindow(): void {
     syncService.setWindowFocused(true)
     void taskSyncScheduler.refresh()
     void localScheduleScheduler.refresh()
+    void handoverScheduler.refresh()
   })
   mainWindow.on('blur', () => syncService.setWindowFocused(false))
 
@@ -409,12 +411,14 @@ function startup(): void {
   // catch up on resume. `powerMonitor` is only available after the app is ready.
   powerMonitor.on('suspend', () => {
     localScheduleScheduler.setSuspended(true)
+    handoverScheduler.setSuspended(true)
     taskRuntimeService.interruptAll('Execution paused when this device went to sleep. Review the conversation before resuming.')
     syncService.setSystemSuspended(true)
     taskSyncScheduler.setSuspended(true)
   })
   powerMonitor.on('resume', () => {
     localScheduleScheduler.setSuspended(false)
+    handoverScheduler.setSuspended(false)
     syncService.setSystemSuspended(false)
     taskSyncScheduler.setSuspended(false)
     // A laptop that was closed for a week wakes with an expired account token
@@ -450,6 +454,7 @@ app.on('will-quit', async () => {
   // are sync, and nothing below may run ahead of them.
   a2aStreamingService.saveInFlight()
   localScheduleScheduler.stop()
+  handoverScheduler.stop()
   taskRuntimeService.interruptAll('Execution stopped when the app closed. Review the conversation before resuming.')
   taskSyncScheduler.stop()
   // **The ACP processes first, and not awaited.** Each folder agent runs in a

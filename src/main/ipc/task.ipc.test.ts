@@ -70,6 +70,8 @@ vi.mock('../services/inboxService', () => ({
   inboxService: { list: vi.fn(() => []), answer: vi.fn() }
 }))
 vi.mock('../services/askDelivery', () => ({ parseAnswerPayload: vi.fn(() => null) }))
+const forTask = vi.hoisted(() => vi.fn(() => null as unknown))
+vi.mock('../services/handoverService', () => ({ handoverService: { forTask } }))
 vi.mock('../auth/activation', () => ({
   userActivation: { requireActivated: vi.fn() }
 }))
@@ -186,5 +188,20 @@ describe('autonomous task IPC', () => {
     expect(runtime.resume).toHaveBeenCalledWith('profile-1', 't1')
     await invoke('task:stop-runtime', 't1')
     expect(runtime.cancel).toHaveBeenCalledWith('profile-1', 't1')
+  })
+})
+
+describe('the handover behind a task', () => {
+  it('reads it in the profile scope, and answers null for a request with no task id', async () => {
+    forTask.mockReturnValueOnce({ id: 'row-1', state: 'gated' })
+    expect(await invoke('handover:for-task', { taskId: 't1' })).toMatchObject({ id: 'row-1' })
+    expect(forTask).toHaveBeenCalledWith('profile-1', 't1')
+
+    // A missing or malformed id never reaches the service: there is nothing to
+    // look up, and a `''` would be a scan of the profile's whole table.
+    forTask.mockClear()
+    expect(await invoke('handover:for-task', {})).toBeNull()
+    expect(await invoke('handover:for-task', { taskId: 42 })).toBeNull()
+    expect(forTask).not.toHaveBeenCalled()
   })
 })

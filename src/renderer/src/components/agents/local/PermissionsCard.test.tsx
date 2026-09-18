@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
@@ -21,8 +21,17 @@ const grantsList = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const grantForget = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const grantsClear = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const setClaudeApproval = vi.fn<() => Promise<unknown>>()
+const setHandovers = vi.fn<(agentId: string, handovers: unknown) => Promise<unknown>>()
+const handoversCheck = vi.fn<(agentId: string) => Promise<unknown>>()
 ;(window as unknown as { api: unknown }).api = {
-  localAgents: { grantsList, grantForget, grantsClear, setClaudeApproval },
+  localAgents: {
+    grantsList,
+    grantForget,
+    grantsClear,
+    setClaudeApproval,
+    setHandovers,
+    handoversCheck
+  },
   /**
    * This machine's Default runtime, which the card now reads: an agent whose
    * folder names no engine runs on whatever this says, and the card describes
@@ -35,7 +44,24 @@ const setClaudeApproval = vi.fn<() => Promise<unknown>>()
   engine: { defaultRuntime: async () => ({ engine: 'opencode' }) }
 }
 
-const agent = { id: 'folder:alpha', name: 'Alpha' } as LocalAgentDto
+const agent = {
+  id: 'folder:alpha',
+  name: 'Alpha',
+  desktop: { localApiBaseUrl: null, hasAgentToken: false, sessionCount: 0, lastStatusAt: null }
+} as LocalAgentDto
+
+/**
+ * A bare folder — the one kind with a handovers inbox. `desktop` is spelled out
+ * because the card now reads a setting out of it, and every DTO main builds has
+ * it: a fixture without one is a shape the app never produces.
+ */
+const BARE = {
+  id: 'folder:external:r1:a',
+  name: 'Alpha',
+  kind: 'bare',
+  instructionsFile: 'CLAUDE.md',
+  desktop: { localApiBaseUrl: null, hasAgentToken: false, sessionCount: 0, lastStatusAt: null }
+} as LocalAgentDto
 
 /** The same agent on the user's own Claude Code install, with no choice made. */
 const claudeAgent = {
@@ -81,6 +107,11 @@ function renderLiveCard(a: LocalAgentDto): ReturnType<typeof render> {
 afterEach(() => {
   vi.clearAllMocks()
 })
+
+/** Git's answer about `.cinna/handovers`, as the outcome the channel returns. */
+function gitSays(result: string): { ok: true; value: { result: string } } {
+  return { ok: true, value: { result } }
+}
 
 describe('PermissionsCard', () => {
   it('says what the agent may do without asking, even with nothing remembered', async () => {
@@ -212,12 +243,7 @@ describe('PermissionsCard', () => {
  * one that matters, about a command reaching anything they can.
  */
 describe('PermissionsCard — a bare agent', () => {
-  const bare = {
-    id: 'folder:external:r1:a',
-    name: 'Alpha',
-    kind: 'bare',
-    instructionsFile: 'CLAUDE.md'
-  } as LocalAgentDto
+  const bare = BARE
 
   it('names only files the folder actually has', async () => {
     grantsList.mockResolvedValue([])
@@ -364,3 +390,187 @@ describe('PermissionsCard — an agent on Claude', () => {
   })
 })
 
+
+/**
+ * Whether a brief left in the folder runs without asking.
+ *
+ * This is the one control on the page that grants **arbitrary code execution
+ * from a file anyone who can write to the folder can create** — a `git pull`
+ * included (`drafts/file_handovers` §3.4). So the two things worth pinning are
+ * that the folder's git state is stated whatever it is, and that `auto` cannot
+ * be picked when that state forbids it.
+ */
+describe('PermissionsCard — handovers', () => {
+  it('offers the choice on a bare folder, asking by default', async () => {
+    grantsList.mockResolvedValue([])
+    handoversCheck.mockResolvedValue(gitSays('ignored'))
+    renderCard(BARE)
+    const select = (await screen.findByLabelText('Handovers')) as HTMLSelectElement
+    // No choice made reads as the safe one, not as a blank option.
+    expect(select.value).toBe('ask')
+    expect(await screen.findByText('.cinna/handovers is ignored by git')).toBeTruthy()
+  })
+
+  it('offers it to no kit agent', async () => {
+    // A kit folder is published and Cinna writes into it: a handovers
+    // directory there would travel with the kit (§3.8).
+    grantsList.mockResolvedValue([])
+    renderCard()
+    await waitFor(() => expect(grantsList).toHaveBeenCalled())
+    expect(screen.queryByLabelText('Handovers')).toBeNull()
+    expect(handoversCheck).not.toHaveBeenCalled()
+  })
+
+  it('says what git said before anyone clicks, and refuses auto for it', async () => {
+    // Mutation: enable the option regardless of the check and this fails —
+    // the user picks `auto`, main refuses it, and the reason arrives after
+    // the click instead of before it (ux_rules §6).
+    grantsList.mockResolvedValue([])
+    handoversCheck.mockResolvedValue(gitSays('tracked'))
+    renderCard(BARE)
+    expect(
+      await screen.findByText(
+        '.cinna/handovers is tracked by git — automatic runs are unavailable'
+      )
+    ).toBeTruthy()
+    const auto = screen.getByRole('option', { name: 'Run automatically' }) as HTMLOptionElement
+    expect(auto.disabled).toBe(true)
+  })
+
+  it('shows what would happen, not what is stored, when git overrules auto', async () => {
+    /*
+      A folder set to `auto` whose handovers git tracks asks anyway — main
+      refuses the automatic start. The select used to read "Run automatically"
+      directly above a line saying automatic runs are unavailable, so the
+      control stated the opposite of what the app would do (`ux_rules.md` §1,
+      §7). Mutation: render `stored` instead of the effective value and the
+      first expectation fails.
+    */
+    grantsList.mockResolvedValue([])
+    handoversCheck.mockResolvedValue(gitSays('tracked'))
+    renderCard({ ...BARE, desktop: { ...BARE.desktop, handovers: 'auto' } })
+    // Once git has answered: until then nothing is known that could overrule
+    // the stored value, which is the same moment the `auto` option is greyed.
+    await waitFor(() =>
+      expect(((screen.getByLabelText('Handovers')) as HTMLSelectElement).value).toBe('ask')
+    )
+    // And the stored setting is not lost — this line is where it still shows.
+    const line = await screen.findByText(
+      'Run automatically is set but not in force — git tracks .cinna/handovers'
+    )
+    expect(line.getAttribute('title')).toBe(
+      'Run automatically is set but not in force — git tracks .cinna/handovers'
+    )
+  })
+
+  it('offers a way out of a stored auto git has overruled', async () => {
+    /*
+      The select shows the effective `ask`, so picking `ask` in it is not a
+      change and fires nothing — the stored `auto` stayed, invisible, and came
+      back into force the day the folder's .gitignore did. This is the one
+      control that clears it. Mutation: remove the button and this fails.
+    */
+    grantsList.mockResolvedValue([])
+    handoversCheck.mockResolvedValue(gitSays('tracked'))
+    setHandovers.mockResolvedValue({ ok: true, value: BARE })
+    renderLiveCard({ ...BARE, desktop: { ...BARE.desktop, handovers: 'auto' } })
+
+    const clear = await screen.findByRole('button', { name: 'Switch to ask' })
+    fireEvent.click(clear)
+    await waitFor(() => expect(setHandovers).toHaveBeenCalledWith('folder:external:r1:a', 'ask'))
+  })
+
+  it('offers it only where something is actually overruled', async () => {
+    grantsList.mockResolvedValue([])
+    handoversCheck.mockResolvedValue(gitSays('tracked'))
+    renderCard(BARE)
+    await screen.findByText('.cinna/handovers is tracked by git — automatic runs are unavailable')
+    expect(screen.queryByRole('button', { name: 'Switch to ask' })).toBeNull()
+  })
+
+  it('leaves a stored auto alone where git allows it', async () => {
+    grantsList.mockResolvedValue([])
+    handoversCheck.mockResolvedValue(gitSays('ignored'))
+    renderCard({ ...BARE, desktop: { ...BARE.desktop, handovers: 'auto' } })
+    expect(((await screen.findByLabelText('Handovers')) as HTMLSelectElement).value).toBe('auto')
+    expect(await screen.findByText('.cinna/handovers is ignored by git')).toBeTruthy()
+  })
+
+  it('allows auto in a folder that is not a repository at all', async () => {
+    // Nothing can arrive by pull, so there is nothing to protect against.
+    grantsList.mockResolvedValue([])
+    handoversCheck.mockResolvedValue(gitSays('not_a_repo'))
+    renderCard(BARE)
+    expect(await screen.findByText('Not a git repository')).toBeTruthy()
+    expect(
+      (screen.getByRole('option', { name: 'Run automatically' }) as HTMLOptionElement).disabled
+    ).toBe(false)
+  })
+
+  it('treats a git check that failed as a check that forbids auto', async () => {
+    /*
+      The line would otherwise read "Checking git…" for ever and the option
+      would stay enabled on evidence nobody has. `unknown` is not `ignored` —
+      the same rule main applies.
+    */
+    grantsList.mockResolvedValue([])
+    handoversCheck.mockRejectedValue(new Error('git is not installed'))
+    renderCard(BARE)
+    expect(
+      await screen.findByText('Could not check git — automatic runs are unavailable')
+    ).toBeTruthy()
+    expect(
+      (screen.getByRole('option', { name: 'Run automatically' }) as HTMLOptionElement).disabled
+    ).toBe(true)
+  })
+
+  it('says it is checking while it is checking, rather than nothing', async () => {
+    grantsList.mockResolvedValue([])
+    let answer: (value: unknown) => void = () => {}
+    handoversCheck.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve
+      })
+    )
+    renderCard(BARE)
+    expect(await screen.findByText('Checking git…')).toBeTruthy()
+    await act(async () => {
+      answer(gitSays('ignored'))
+    })
+    await waitFor(() => expect(screen.getByText('.cinna/handovers is ignored by git')).toBeTruthy())
+  })
+
+  it('saves the choice against this agent and keeps the pick across the round trip', async () => {
+    grantsList.mockResolvedValue([])
+    handoversCheck.mockResolvedValue(gitSays('ignored'))
+    setHandovers.mockResolvedValue({
+      ok: true,
+      value: { ...BARE, desktop: { ...BARE.desktop, handovers: 'auto' } }
+    })
+    renderLiveCard(BARE)
+    fireEvent.change(await screen.findByLabelText('Handovers'), { target: { value: 'auto' } })
+    // Immediately, not after main re-scans the folder (ux_rules §1).
+    expect((screen.getByLabelText('Handovers') as HTMLSelectElement).value).toBe('auto')
+    await waitFor(() =>
+      expect(setHandovers).toHaveBeenCalledWith('folder:external:r1:a', 'auto')
+    )
+    await waitFor(() =>
+      expect((screen.getByLabelText('Handovers') as HTMLSelectElement).value).toBe('auto')
+    )
+  })
+
+  it('keeps a refused save beside the control and snaps the select back', async () => {
+    grantsList.mockResolvedValue([])
+    handoversCheck.mockResolvedValue(gitSays('ignored'))
+    setHandovers.mockRejectedValue(new Error('.cinna/handovers is tracked by git.'))
+    renderCard(BARE)
+    fireEvent.change(await screen.findByLabelText('Handovers'), { target: { value: 'auto' } })
+    // Outcome first, reason second (§6) — nothing was granted.
+    expect(
+      await screen.findByText(/Nothing was changed — \.cinna\/handovers is tracked by git\./)
+    ).toBeTruthy()
+    await waitFor(() =>
+      expect((screen.getByLabelText('Handovers') as HTMLSelectElement).value).toBe('ask')
+    )
+  })
+})

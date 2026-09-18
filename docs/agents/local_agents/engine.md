@@ -375,7 +375,12 @@ Four rules shape it:
 
 ### A bare agent's prompt is one file, and deliberately not the folder
 
-A [bare agent](bare_agents.md) has no manifest, so `collectEngineAgents` branches to `assembleBareAgentPrompt`: the folder's instructions file — the first of `AGENT.md`, `AGENTS.md`, `CLAUDE.md` it has, resolved at assembly the same way the scan resolves it — comments stripped, plus a desktop context block, and **nothing else the folder contains**.
+A [bare agent](bare_agents.md) has no manifest, and which document it runs on depends on whether its session is **isolated** or **native** — one field decided where the folder view for a turn is built, never re-derived from the folder's kind.
+
+- **Isolated** — OpenCode today, through the generated engine config: `assembleBareAgentPrompt`, the whole document — the folder's instructions file, comments stripped, plus a desktop context block, and **nothing else the folder contains** — replacing the engine's own preset. Cinna's own build session is isolated too, but on a different document again: it runs on the instructions its development context assembled, which is why `folderSystemPrompt` answers that before it ever asks what kind of folder this is.
+- **Native** (an adopted bare folder on Claude or Codex): `assembleBareNativePrompt`, which is *appended* to the engine's preset and carries only what the desktop knows. The engine has already loaded the folder's setup for itself, so the instructions file is pasted in only when the engine running this turn would not read it — `AGENTS.md` and `AGENT.md` for Claude, `AGENT.md` and `CLAUDE.md` for Codex ([Bare Agents](bare_agents.md#the-instructions-file-is-pasted-in-only-for-the-engine-that-would-not-read-it)).
+
+Both paths resolve the instructions file the same way the scan does — the first of `AGENT.md`, `AGENTS.md`, `CLAUDE.md` the folder has — and both share the building-mode wording and the empty-file stand-in, so the two cannot drift apart.
 
 The asymmetry with the assembler above is the whole design. A kit folder has a known shape, so reaching into `scripts/`, `credentials/` and `knowledge/` is safe. A bare folder is somebody's repository, and concatenating whatever `.md` files happen to be in it would put a changelog, a licence or another agent's notes into the system prompt as instructions.
 
@@ -383,12 +388,14 @@ The asymmetry with the assembler above is the whole design. A kit folder has a k
 - **Three of the context block's rules are dropped rather than reworded** — `uv run`, "write only under `app-data/`", and the `credentials/.env` rule — because each describes a folder convention this folder never agreed to, and stating a rule about a file that does not exist is how a model ends up refusing ordinary work. One line replaces them: follow whatever the instructions above say about running this folder's own tools, because the desktop imposes no convention here
 - **Building mode is kept, pointed at this shape's own guide**: `README.md` where the folder has one, read as background rather than followed as steps, and otherwise the instructions file alone. Named, never inlined, so the exclusion above still holds
 - **An empty instructions file gets the same stand-in** the kit path gives an empty workflow prompt, and for the same reason. The stand-in names that file; a folder with none of the three gets one listing them, and building mode is pointed at `AGENT.md`, the file it would write
-- **The engine may read the file again by itself.** OpenCode and Codex run in the agent folder and their own project-instruction loading is not switched off, so an `AGENTS.md` or `CLAUDE.md` may reach the model beside the inlined prompt. This is unverified, and is recorded in [Bare Agents — Known gaps](bare_agents.md#known-gaps). Claude does not, under `settingSources: []`
+- **The engine reading the file itself is now the design, not a gap — on the native path.** Claude loads `CLAUDE.md` and Codex loads `AGENTS.md`, so the native prompt leaves out exactly the file that engine reads. It stays a gap on the **isolated** path, where the whole document is inlined and OpenCode's own project-rules loading is not switched off, so an `AGENTS.md` or `CLAUDE.md` may reach the model a second time. Recorded in [Bare Agents — Known gaps](bare_agents.md#known-gaps)
 - **The bare runtime comes from Desktop State**, or is null when no choice exists. It follows the same machine-engine and credential/model precedence as a kit runtime; adopting a folder adds no new credential fallback
 
 ### The desktop context block, and building mode
 
 The appended block is the part only the desktop knows: that the agent starts in **conversation mode**, that a request may come from a person or from an unattended task, and what this machine's rules are — run scripts with `uv run`, write only under `app-data/` while in conversation mode, never print or read a credential value, the user's locale and time zone, long output to a file with a summary in the reply.
+
+**A native bare folder's block is shorter, and says one extra thing.** Everything the folder already states reaches the engine through the engine's own loading, so the block drops to the desktop-only rules — and it says plainly that the runtime *is* the folder's own, naming per engine what that means (for Claude: its settings, hooks, skills and MCP servers, and the user's too; for Codex: its `AGENTS.md`, the user's `~/.codex/config.toml` and this project's trust decision). An agent that assumes a sandbox behaves differently from one that knows its hooks and MCP servers are live, and naming a capability an engine does not have is how a turn ends in a tool that never runs. Building mode's last rule changes wording with it: there is no "instructions above" on the native path, so it says the instructions were loaded when the session started.
 
 It ends with a **Building mode** section. Both folder shapes get the same four rules:
 

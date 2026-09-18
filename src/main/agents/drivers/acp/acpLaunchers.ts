@@ -43,13 +43,30 @@
  * **Claude** (`spike/acp/claude/`): the adapter runs its own bundled CLI unless
  * `CLAUDE_CODE_EXECUTABLE` names the user's, authenticates from that install's
  * login with no API key, and reads `_meta.claudeCode.options` as SDK options —
- * so `settingSources: []`, `strictMcpConfig`, the assembled system prompt and
- * the model alias all travel there. **`permissionMode` in that `_meta` is
- * overridden**: the adapter reads `defaultMode` from the user's own
+ * so the setting sources, the MCP policy, the system prompt and the model alias
+ * all travel there. **`permissionMode` in that `_meta` is overridden**: the
+ * adapter reads `defaultMode` from the user's own
  * `~/.claude/settings.json` and from the folder's `.claude/settings*.json` even
  * with `settingSources: []`, so a session can start in *any* mode — bypass
  * included. `session/set_mode` after every `new` and `load`, before the first
  * prompt, is the only thing that makes the desktop's approval setting true.
+ *
+ * ## A kit folder is isolated; a bare folder is not
+ *
+ * `ctx.folder.runtimeMode` forks the Claude session options. Nothing here asks
+ * what *kind* of folder it is: the answer is derived once, where the folder
+ * view is built (`drivers/index.ts`), so that the one folder whose kind lies —
+ * Cinna's own build session, a synthetic `bare` view over a synced workspace —
+ * cannot pick up a repository's runtime by accident. An **isolated** folder is
+ * a harness the desktop scaffolded, so its session stays sealed: `settingSources: []`,
+ * `strictMcpConfig: true`, `mcpServers: {}`, the assembled prompt instead of
+ * the preset, and the folder's `.claude/agents` shimmed back in by hand because
+ * those options hide them. A **native** folder is somebody's own repository,
+ * adopted for its instructions file alone, and it gets what a terminal session
+ * in it gets: `settingSources: ['user', 'project', 'local']`, no MCP override,
+ * no subagent shim, and the `claude_code` preset with the desktop's context
+ * appended. The approval mode is the one thing that does not fork — the
+ * desktop's choice wins over the folder's `defaultMode` on both branches.
  */
 
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
@@ -65,7 +82,12 @@ import type { EngineConfigInput } from '../../../engine/configGenerator'
 import { buildEngineConfig, digestEngineConfig } from '../../../engine/configGenerator'
 import { createLogger } from '../../../logger/logger'
 import type { ReadinessOptions } from '../driver'
-import { ACP_PROTOCOL_VERSION, type AcpLaunchSpec, type AcpLauncherId } from './types'
+import {
+  ACP_PROTOCOL_VERSION,
+  type AcpLaunchSpec,
+  type AcpLauncherId,
+  type AcpRuntimeMode
+} from './types'
 import { airClientMeta } from './acpActivity'
 
 const logger = createLogger('acp-launcher')
@@ -77,6 +99,11 @@ export interface AcpAgentFolder {
   description: string
   path: string
   kind: LocalAgentKind
+  /**
+   * Sealed session or the folder's own, decided by the caller that built this
+   * view. A launcher reads this and never the kind: see {@link AcpRuntimeMode}.
+   */
+  runtimeMode: AcpRuntimeMode
 }
 
 export type AcpLaunchContext = { userId: string; agentId: string; binding?: string; accessToken?: string } & (
@@ -359,13 +386,23 @@ export interface ClaudeLauncherDeps {
   nodeRuntime(): { command: string; args: string[]; env: Record<string, string> }
   /** `buildClaudeEnv`'s answer: the stripped, allowlisted child environment. */
   claudeEnv(): Promise<Record<string, string>>
-  /** The assembled folder prompt — never the SDK's `claude_code` preset. */
-  systemPrompt(userId: string, agentId: string): string
+  /**
+   * The system prompt for this turn, chosen by the folder's runtime mode: an
+   * **isolated** folder's whole assembled document, which replaces the SDK's
+   * `claude_code` preset, or a **native** folder's desktop context, which is
+   * appended to it. Read on every plan, so an edited folder takes effect on the
+   * next turn.
+   */
+  systemPrompt(userId: string, agentId: string, mode: AcpRuntimeMode): string
   /** The model alias this agent's runtime resolved to, or null for the CLI's default. */
   model(userId: string, agentId: string): string | null
   /** The desktop's approval choice for this agent, with the default already applied. */
   approval(userId: string, agentId: string): ClaudeApproval
-  /** The folder's own subagent definitions, which `settingSources: []` would otherwise hide. */
+  /**
+   * The folder's own subagent definitions, which `settingSources: []` would
+   * otherwise hide. Isolated sessions only — a native one loads them from
+   * settings, and this is not called for it.
+   */
   folderAgents(agentPath: string): Record<string, unknown>
 }
 
@@ -431,10 +468,21 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
         CLAUDE_CODE_EXECUTABLE: claudePath
       }
 
-      const systemPrompt = safely(() => deps.systemPrompt(ctx.userId, ctx.agentId), '')
+      // **The fork**, on the mode the caller derived rather than on what kind
+      // of folder this is. An isolated session is a harness the desktop built,
+      // so it stays sealed; a native one runs on what a terminal `claude` in
+      // that folder runs on.
+      const native = ctx.folder.runtimeMode === 'native'
+      const systemPrompt = safely(
+        () => deps.systemPrompt(ctx.userId, ctx.agentId, ctx.folder.runtimeMode),
+        ''
+      )
       const model = safely(() => deps.model(ctx.userId, ctx.agentId), null)
       const approval = safely(() => deps.approval(ctx.userId, ctx.agentId), 'ask' as ClaudeApproval)
-      const agents = safely(() => deps.folderAgents(ctx.folder.path), {})
+      // Not even asked on the native branch: the folder's `.claude/agents` load
+      // from the settings that branch keeps enabled, and passing them as well
+      // would hand the adapter every definition twice.
+      const agents = native ? {} : safely(() => deps.folderAgents(ctx.folder.path), {})
 
       return {
         spec: {
@@ -461,38 +509,68 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
           mcpServers: [],
           meta: {
             claudeCode: {
-              options: {
-                // The folder already says what this agent is, through
-                // `promptAssembly`. The `claude_code` preset is a coding
-                // assistant's prompt and would talk over it.
-                ...(systemPrompt ? { systemPrompt } : {}),
-                ...(model ? { model } : {}),
-                // **The desktop's boundary**, and the pair is not optional:
-                // `settingSources: []` alone leaves the user's own MCP
-                // connectors attached — the probe found `claude.ai Gmail`,
-                // Drive and Calendar registered beside ours — and with both,
-                // only the injected servers are, and no user settings or
-                // plugins load.
-                settingSources: [],
-                strictMcpConfig: true,
-                mcpServers: {},
-                // The folder's own subagents, omitted rather than passed empty
-                // so a folder without them hands the adapter exactly what it
-                // was handed before this option existed.
-                ...(Object.keys(agents).length > 0 ? { agents } : {})
-              }
+              options: native
+                ? {
+                    // **The folder's own runtime.** `settingSources` names the
+                    // three scopes a terminal session loads, which is what
+                    // brings the folder's `CLAUDE.md`, its hooks, its skills,
+                    // its plugins, its `.claude/agents` and its `.mcp.json`
+                    // into the session — the memory file, the hooks, the
+                    // subagents and the MCP server all watched on the wire
+                    // against claude 2.1.274 and adapter 0.76.0. No
+                    // `strictMcpConfig` and no `mcpServers` override, because
+                    // either one would take the folder's MCP servers back out
+                    // again.
+                    systemPrompt: {
+                      // The preset is a coding assistant's prompt, and for a
+                      // repository that is the right one; the desktop appends
+                      // only what the folder cannot know about this turn.
+                      type: 'preset',
+                      preset: 'claude_code',
+                      ...(systemPrompt ? { append: systemPrompt } : {})
+                    },
+                    ...(model ? { model } : {}),
+                    settingSources: ['user', 'project', 'local']
+                  }
+                : {
+                    // The folder already says what this agent is, through
+                    // `promptAssembly`. The `claude_code` preset is a coding
+                    // assistant's prompt and would talk over it.
+                    ...(systemPrompt ? { systemPrompt } : {}),
+                    ...(model ? { model } : {}),
+                    // **The desktop's boundary**, and the pair is not optional:
+                    // `settingSources: []` alone leaves the user's own MCP
+                    // connectors attached — the probe found `claude.ai Gmail`,
+                    // Drive and Calendar registered beside ours — and with both,
+                    // only the injected servers are, and no user settings or
+                    // plugins load.
+                    settingSources: [],
+                    strictMcpConfig: true,
+                    mcpServers: {},
+                    // The folder's own subagents, omitted rather than passed empty
+                    // so a folder without them hands the adapter exactly what it
+                    // was handed before this option existed.
+                    ...(Object.keys(agents).length > 0 ? { agents } : {})
+                  }
             }
           }
         },
         setup: {
-          // **After every `new` *and* every `load`.** The adapter reads
-          // `defaultMode` from the user's own settings and the folder's, even
-          // under `settingSources: []`, so a session can start in any mode —
-          // bypass included. `auto` is what a terminal `claude` runs for this
-          // user; `default` asks before every mutating call. Never anything
-          // else: every other mode takes the permission callback, and with it
-          // the desktop's grants and the transcript's record, out of the
-          // decision.
+          // **After every `new` *and* every `load`, on both branches.** The
+          // adapter reads `defaultMode` from the user's own settings and the
+          // folder's, even under `settingSources: []`, so a session can start
+          // in any mode — bypass included. `auto` is what a terminal `claude`
+          // runs for this user; `default` asks before every mutating call.
+          // Never anything else: every other mode takes the permission
+          // callback, and with it the desktop's grants and the transcript's
+          // record, out of the decision.
+          //
+          // `session/set_mode` is not belt-and-braces, it is the whole
+          // mechanism: `_meta.claudeCode.options.permissionMode` was watched
+          // being **ignored** (sent `default`, the session came up
+          // `acceptEdits` from the project's `settings.local.json`), so
+          // "simplifying" this into the `session/new` options would silently
+          // hand a bare folder its own permission mode.
           modeId: approval === 'auto' ? 'auto' : 'default'
         }
       }

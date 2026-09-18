@@ -43,6 +43,17 @@ interface AskUserQuestionBlockProps {
    * read one reload apart.
    */
   decision?: string
+  /**
+   * True when the desktop itself is asking — the handover gate, which is a
+   * question about work no agent has been given yet.
+   *
+   * Two things follow from it and both were findings. "The agent is asking"
+   * named an actor that does not exist at that moment (§10), and the modal's
+   * synthetic "Other (enter custom answer)" offered a free-text reply main
+   * refuses: the gate is matched against `HANDOVER_GATE_OPTIONS` and anything
+   * else comes back as an error the user cannot act on (§6).
+   */
+  askedByDesktop?: boolean
   onAnswerLocal?: (requestId: string, answers: string[][]) => Promise<unknown>
 }
 
@@ -59,6 +70,7 @@ export function AskUserQuestionBlock({
   chatId,
   liveRequestId,
   decision,
+  askedByDesktop = false,
   onAnswerLocal
 }: AskUserQuestionBlockProps): React.JSX.Element | null {
   if (questions.length === 0) return null
@@ -68,6 +80,9 @@ export function AskUserQuestionBlock({
   // `interactive` — which requires the stream to have finished — is not the
   // only way in.
   const live = interactive || !!liveRequestId
+  // One header for the card: every question in one ask comes from one place,
+  // and the modal repeats it per question where they can differ.
+  const header = questions.find((q) => q.header)?.header
 
   return (
     <div
@@ -85,8 +100,23 @@ export function AskUserQuestionBlock({
           <CheckCircle2 size={16} className="shrink-0 mt-0.5 text-[var(--color-text-muted)]" />
         )}
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium text-[var(--color-text)]">
-            {live ? `The agent is asking ${label.toLowerCase()}` : `${label} asked`}
+          <div className="flex items-center gap-2">
+            {/* The question's own `header` — "Handover" on a gate — as the
+                badge the answer modal already shows it as, so the card and the
+                modal it opens name the same thing. */}
+            {header && (
+              <span
+                className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium
+                  bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
+              >
+                {header}
+              </span>
+            )}
+            <div className="text-[13px] font-medium text-[var(--color-text)]">
+              {live
+                ? `${askedByDesktop ? 'Cinna Desktop' : 'The agent'} is asking ${label.toLowerCase()}`
+                : `${label} asked`}
+            </div>
           </div>
           <ul className="mt-1 space-y-0.5">
             {questions.map((q, i) => (
@@ -110,6 +140,7 @@ export function AskUserQuestionBlock({
               questions={questions}
               chatId={chatId}
               liveRequestId={liveRequestId}
+              allowCustomAnswer={!askedByDesktop}
               onAnswerLocal={onAnswerLocal}
             />
           )}
@@ -127,11 +158,13 @@ function AnswerAffordance({
   questions,
   chatId,
   liveRequestId,
+  allowCustomAnswer = true,
   onAnswerLocal
 }: {
   questions: AskQuestion[]
   chatId: string | null
   liveRequestId?: string
+  allowCustomAnswer?: boolean
   onAnswerLocal?: (requestId: string, answers: string[][]) => Promise<unknown>
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
@@ -194,6 +227,7 @@ function AnswerAffordance({
       {open && (
         <AnswerQuestionsModal
           questions={questions}
+          allowCustomAnswer={allowCustomAnswer}
           onSubmit={handleSubmit}
           onClose={() => setOpen(false)}
           pending={pending}

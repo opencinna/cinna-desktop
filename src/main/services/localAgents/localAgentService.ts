@@ -89,6 +89,8 @@ import {
   type UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
 import { isClaudeApproval, type LocalAgentRuntimeInput } from '../../../shared/engine'
+import { allowsAuto, type HandoverIgnoreCheck } from '../../../shared/handovers'
+import { handoverGit } from '../handoverGit'
 import { desktopStatePath, desktopStateService } from './desktopStateService'
 import { discoverBareAgents, kitFolderShape, resolveBareInstructionsFile } from './externalScan'
 import { isWithin } from './pathRules'
@@ -531,7 +533,16 @@ export const localAgentService = {
           .listFolder(getUserId())
           .filter((row) => row.localRootId === root.id)
           .map((row) => row.id),
-      keepBareAgent: (root) => scannerService.knownBareAgentFilter(getUserId(), root.id)
+      keepBareAgent: (root) => scannerService.knownBareAgentFilter(getUserId(), root.id),
+      // Something landed under `<agentDir>/.cinna/handovers/`. Not a change to
+      // what the agent *is*, so nothing is rescanned or re-indexed; the
+      // handover service reads its two files and reconciles its own table.
+      // Imported dynamically because that service imports this one.
+      onHandover: (_root, agentDir) => {
+        void import('../handoverService')
+          .then(({ handoverService }) => handoverService.scanFolderNow(agentDir))
+          .catch((error) => logger.warn('a handover watch scan could not run', { agentDir, error: String(error) }))
+      }
     })
     logger.info('local agents configured')
   },
@@ -1725,6 +1736,57 @@ export const localAgentService = {
     scannerService.markRootDirty(root.id)
     const dto = this.scanFolder(root, agentDir)
     return this.overlayEnabled(userId, [dto])[0]
+  },
+
+  /**
+   * Whether briefs dropped into this folder's `.cinna/handovers/` run without
+   * asking (`drafts/file_handovers` §3.4).
+   *
+   * **Async, unlike the approval setters, and that is the point.** `auto` is a
+   * standing permission to execute whatever a file in the folder says, under the
+   * folder's own permission settings — so it is granted only after git has been
+   * asked whether that folder's handovers directory can arrive by `git pull`.
+   * `ask` and `null` need no check: neither grants anything.
+   *
+   * The check runs *before* the lock rather than inside it: it spawns `git` and
+   * may take seconds, and holding the per-agent turn lock across a subprocess
+   * would block a turn on somebody else's disk. Nothing between the check and
+   * the write can widen the permission — a `.gitignore` edited in that window
+   * is caught by the next intake, which asks again.
+   *
+   * @throws LocalAgentError `not_found`, `invalid_input`, `handovers_not_ignored`, `turn_in_progress`
+   */
+  async setHandovers(userId: string, agentId: string, setting: unknown): Promise<LocalAgentDto> {
+    const { root, agentDir } = this.locate(userId, agentId)
+    if (setting !== null && setting !== 'ask' && setting !== 'auto') {
+      throw new LocalAgentError('invalid_input', 'That is not a handover setting this app knows.')
+    }
+    if (setting === 'auto') {
+      const check = await handoverGit.check(agentDir)
+      if (!allowsAuto(check)) {
+        throw new LocalAgentError('handovers_not_ignored',
+          check.detail ?? 'Add `.cinna/` to this project’s .gitignore before running handovers automatically.',
+          check.result)
+      }
+    }
+    const kind = kindOf(root)
+    const handle = turnLock.acquire(agentId, 'editor')
+    try {
+      desktopStateService.patch(agentDir, kind, { handovers: setting })
+    } finally {
+      handle.release()
+    }
+    // As the approval setters: the watcher sees neither file, so the row is
+    // re-read here or the page keeps rendering the choice it had before.
+    scannerService.markRootDirty(root.id)
+    const dto = this.scanFolder(root, agentDir)
+    return this.overlayEnabled(userId, [dto])[0]
+  },
+
+  /** What git says about this folder's handovers directory — the `auto` gate's evidence. */
+  async handoversCheck(userId: string, agentId: string): Promise<HandoverIgnoreCheck> {
+    const { agentDir } = this.locate(userId, agentId)
+    return handoverGit.check(agentDir)
   },
 
   setCodexApproval(userId: string, agentId: string, approval: unknown): LocalAgentDto {

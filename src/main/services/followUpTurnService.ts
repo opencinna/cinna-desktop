@@ -34,11 +34,9 @@
  *   in a row are two runs.
  */
 import { nanoid } from 'nanoid'
-import { chatRepo } from '../db/chats'
-import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { chatAgentCursorRepo } from '../db/chatAgentCursors'
 import { messageRepo } from '../db/messages'
-import { routingOf } from '../../shared/chatRouting'
+import { chatAnswersToAgent } from './chatRouting'
 import { REQUEST_PARK_TIMEOUT_MS } from '../../shared/localAgentRequests'
 import { createLogger } from '../logger/logger'
 import type { FollowUpRequest } from '../agents/drivers/driver'
@@ -73,15 +71,15 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/** Why the chat may not show this follow-up, or null when it may. */
+/**
+ * Why the chat may not show this follow-up, or null when it may.
+ *
+ * The rule itself lives in `chatRouting` because the handover service asks the
+ * same question of a chat id that came out of a file on disk, and two copies of
+ * "does this chat still answer to this agent" is one copy too many.
+ */
 function refusal(request: FollowUpRequest): string | null {
-  const chat = chatRepo.getOwned(request.scope.profileUserId, request.chatId)
-  if (!chat) return 'the chat is gone'
-  if (chat.deletedAt) return 'the chat is in the trash'
-  const routing = routingOf(chat)
-  if (routing.rootAgentId === request.agentId) return null
-  if (routing.router === 'human' && chatOnDemandAgentRepo.listAgentIds(request.chatId).includes(request.agentId)) return null
-  return 'the chat no longer answers to this agent'
+  return chatAnswersToAgent(request.scope.profileUserId, request.chatId, request.agentId)
 }
 
 function abandon(request: FollowUpRequest, reason: string, options?: { keepListening: true }): void {

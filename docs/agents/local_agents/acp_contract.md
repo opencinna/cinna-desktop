@@ -224,18 +224,26 @@ call and folds that result into the question block, instead of printing the answ
 The id and the wording were read from the adapter's source and the CLI binary (2.1.270), not from a
 recording.
 
-### `permissionMode` in `_meta` is overridden by the user's own settings
+### `permissionMode` in `_meta` is inert; `session/set_mode` is the whole mechanism
 
-The adapter reads `_meta.claudeCode.options` as SDK options, so `settingSources: []`,
-`strictMcpConfig`, the assembled system prompt, the model alias and the folder's own subagents all
-travel there.
+The adapter reads `_meta.claudeCode.options` as SDK options, so the setting sources, the MCP policy,
+the system prompt, the model alias and (on the isolated branch) the folder's own subagents all travel
+there.
 
-**`permissionMode` does not survive.** The adapter reads `defaultMode` from the user's own
-`~/.claude/settings.json` and from the folder's `.claude/settings*.json` **even under
-`settingSources: []`**, so a session can start in any mode — `bypassPermissions` included.
+**`permissionMode` does not survive, and this is watched rather than inferred.** *2026-09-17, `claude`
+2.1.274, adapter 0.76.0:* `permissionMode: 'default'` was sent in the session options and the session
+came back reporting `acceptEdits`, taken from the project's `.claude/settings.local.json`. The adapter
+reads `defaultMode` from the user's own `~/.claude/settings.json` and from the folder's
+`.claude/settings*.json` **under `settingSources: []` as well as under
+`['user','project','local']`** — the same folder reported `acceptEdits` on both branches — so a
+session can start in any mode, `bypassPermissions` included.
+
 `session/set_mode` after every `session/new` *and* every `session/load`, before the first prompt, is
-the only thing that makes the desktop's approval setting true. This is why a failed setup call
-refuses the turn instead of warning.
+the only thing that makes the desktop's approval setting true. In the same probe, `set_mode default`
+was answered `{}`, a `config_option_update` reported `currentValue: "default"`, and the next file
+write raised a `session/request_permission` that `allow_once` answered. This is why a failed setup
+call refuses the turn instead of warning, and why "simplifying" the call into the session options
+would be a silent regression rather than a tidy-up.
 
 ### The adapter runs its own `claude` unless told otherwise
 
@@ -256,13 +264,43 @@ Contract](claude_contract.md), section by section.
   over — because a turn billed to the wrong account looks exactly like a turn billed to the right
   one. Without `USER` the CLI reports *"Not logged in"* on a logged-in machine
   ([§2](claude_contract.md#2-verified--watched-not-inferred), [§7](claude_contract.md#7-the-corrected-environment-table))
-- **Isolation takes three options, not one.** `settingSources: []` alone left the user's own MCP
-  connectors attached — the probe found `claude.ai Gmail`, Drive and Calendar registered beside ours.
-  `settingSources: []` **plus** `strictMcpConfig: true` **plus** `mcpServers: {}` is what leaves only
-  what we injected ([§2](claude_contract.md#2-verified--watched-not-inferred))
-- **`settingSources: []` also hides the folder's own subagents**, so they are passed explicitly as
-  `options.agents` — omitted rather than passed empty, so a folder without any hands the adapter
-  exactly what it was handed before the option existed
+- **Isolation takes three options, not one — and it now applies to *isolated* sessions only.**
+  `settingSources: []` alone left the user's own MCP connectors attached — the probe found
+  `claude.ai Gmail`, Drive and Calendar registered beside ours. `settingSources: []` **plus**
+  `strictMcpConfig: true` **plus** `mcpServers: {}` is what leaves only what we injected
+  ([§2](claude_contract.md#2-verified--watched-not-inferred)). Kit folders and Cinna's own build
+  session take that triple; an adopted bare folder takes the native options below instead
+- **`settingSources: []` also hides the folder's own subagents**, so on the isolated branch they are
+  passed explicitly as `options.agents` — omitted rather than passed empty, so a folder without any
+  hands the adapter exactly what it was handed before the option existed. A native session is not
+  handed them at all; it loads them from the settings it keeps enabled
+
+### A bare folder's session is the folder's own, and that was watched
+
+*2026-09-17, `claude` 2.1.274, adapter 0.76.0, wire log in both directions.* A session created with
+`settingSources: ['user','project','local']`, `systemPrompt: {type:'preset', preset:'claude_code',
+append}`, **no** `strictMcpConfig`, **no** `mcpServers` and **no** `agents`:
+
+| What the folder held | Reached the session? |
+|---|---|
+| `CLAUDE.md` | **yes** — quoted in the first answer, no tool call |
+| `AGENTS.md` / `AGENT.md` | **no** — not memory to this CLI; the model ran `ls`/`cat`/`grep` to find the fact. So the desktop still pastes those two in for Claude |
+| `.claude/settings.json` hooks (`SessionStart`, `PreToolUse` matcher `Bash`) | **yes**, both fired. Neither fired on the isolated control run in the same folder |
+| `.claude/agents/probe-agent.md` | **yes** — listed as a `subagent_type`, with no `agents` option sent |
+| `.mcp.json` stdio server | **yes**, and **with no trust step**: the interactive CLI asks before enabling a project MCP server, the SDK path does not |
+| the user's own claude.ai connectors | **yes** — expected on this branch, and the reason the isolated branch exists |
+| `.claude/settings.local.json` `defaultMode` | **yes**, and it beat `permissionMode` in the options (above) |
+
+Two things the wire does **not** say, worth knowing before writing a test against it: `session/new`'s
+result carries only `sessionId`, `modes` and `configOptions` — no MCP list, no subagent list, on
+either branch — and the only observable difference in the frames was the `available_commands_update`
+count (57 native against 49 isolated, the delta being the user's own plugin skills).
+
+**Codex and OpenCode were not probed**: neither CLI is installed on the machine the probe ran on.
+Codex reading a project `AGENTS.md` natively, and therefore taking the desktop context alone as its
+`developer_instructions`, is **decided but unwatched**. OpenCode's `OPENCODE_CONFIG` merge-versus-replace
+question is likewise still open, and a bare OpenCode agent keeps the whole assembled prompt until it
+is answered
 - **Readiness costs nothing.** `claude auth status` says whether that install is logged in without
   running a turn, and only a definite `logged_out` refuses: a probe that could not answer is
   `unknown`, which never blocks ([§5](claude_contract.md#5-not-installed-not-logged-in--and-the-third-state))
@@ -452,6 +490,8 @@ Three corrections from this phase, all found by the real binaries after the fake
   `opencode acp --port` exists but is OpenCode-specific
 - **MCP servers passed in `session/new.mcpServers`.** The folder launchers send an empty list today, so
   nothing here has exercised Cinna per-session MCP injection. Codex may still load MCP servers from its own configuration
+- **Codex on a bare folder's native runtime.** That Codex reads a project `AGENTS.md` itself — and therefore that the desktop should hand it only its own context as `developer_instructions` — is decided from the CLI's documented behaviour, not watched. No Codex install was available for the 2026-09-17 probe
+- **OpenCode's `OPENCODE_CONFIG`: merge or replace.** Unanswered, and the reason a bare OpenCode agent still runs on the whole assembled prompt. No OpenCode install was available either
 - **The Claude adapter's own `session/load`** is covered by a fixture rather than by a live run
 - **How each engine behaves on a session id it has forgotten** has been watched on OpenCode only
 - **An ask between turns.** No probe produced a `session/request_permission` or an elicitation after the prompt returned, on either engine. A follow-up turn's asks run only against the fake agent
@@ -481,9 +521,20 @@ in the same process** — it will not ask again.
 spawn the adapter with `CLAUDE_CODE_EXECUTABLE` set to your own `claude`, declare
 `clientCapabilities: {elicitation: {form: {}}}`, and prompt something that asks a question: an
 `elicitation/create` with `question_0` proves the capability. For the mode override, put
-`{"defaultMode": "bypassPermissions"}` in `~/.claude/settings.json`, pass
+a `defaultMode` other than `default` in a throwaway project's `.claude/settings.local.json` (the
+project scope is enough — no need to touch the real `~/.claude/`), pass
 `_meta.claudeCode.options.permissionMode = 'default'`, and read the mode the session reports — it
 will be the file's. Then send `session/set_mode` and read it again.
+
+**For the native branch**, run two sessions over one throwaway project holding a `CLAUDE.md`, a
+`.mcp.json`, a `.claude/agents/*.md` and a hooks block, with the user's **real** `HOME` (the login
+lives there) and a `cwd` under `os.tmpdir()`: one with `settingSources: ['user','project','local']`
+and the `claude_code` preset, one with the isolated triple. The prompts that separate them are "what
+is the project codename" (the `CLAUDE.md` fact), "list your MCP servers and your subagent types", and
+one that writes a file after `set_mode`. Read the hooks' own log file between the two runs rather
+than asking the model whether its hooks ran. Note that read-only shell commands (`ls`, `cat`, `echo`)
+are auto-approved in **every** mode, so a probe that wants to see a `session/request_permission` must
+use a command that writes.
 
 **Between-turn traffic and activity.** Declare `clientCapabilities: {elicitation: {form: {}}, _meta:
 {jetbrains: {air: {version: 1, capabilities: ['asyncTasks', 'nativeSubagentSessions']}}}}` (only

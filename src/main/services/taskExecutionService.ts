@@ -2,13 +2,14 @@ import { taskService } from './taskService'
 import { handingOffTasks, taskOperationKey } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import { taskFileService } from './taskFileService'
-import { chatRepo } from '../db/chats'
+import { chatRepo, type ChatRow } from '../db/chats'
+import { messageRepo } from '../db/messages'
 import { chatMcpRepo } from '../db/chatMcp'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { agentOverrideRepo } from '../db/agents'
 import { agentService } from './agentService'
 import { driverFor } from '../agents/drivers'
-import { runExecutionService, type RunScope } from './runExecutionService'
+import { runExecutionService, type RunOutcome, type RunScope } from './runExecutionService'
 import { inboxService } from './inboxService'
 import { resolveTaskModelConfig, type TaskModelConfig } from './taskModelConfig'
 import { getProfileScopeUserId } from '../auth/scope'
@@ -29,9 +30,72 @@ export function taskContinuationPrompt(task: Pick<TaskDto, 'goal' | 'description
   return sections.join('\n\n')
 }
 
+/**
+ * Options no IPC payload carries — a caller *inside* main handing over state it
+ * created for this very start.
+ *
+ * Deliberately not on `DesktopTaskTarget` and not on the `task:start` payload:
+ * a renderer that could name a chat to reuse could point a task at somebody
+ * else's conversation, and every guard below would then be checking the wrong
+ * thing.
+ */
+export interface TaskStartOptions {
+  /**
+   * A chat created ahead of the start and not yet used — today, the chat a
+   * handover gate had to create so its Inbox row could have a `chat_id`
+   * (`handoverService`). It is adopted instead of creating a second one, so a
+   * gate that was answered Run does not leave an empty chat behind.
+   *
+   * Verified below before it is touched: owned by this profile, bound to the
+   * same agent by `direct` routing, no messages, not running, and the task
+   * still has no chat of its own.
+   */
+  reuseChatId?: string
+}
+
+/**
+ * Take over a chat somebody else created for this start, or refuse.
+ *
+ * Every condition is one the caller could otherwise get wrong in a way the
+ * user would see: a chat with messages would replay a stranger's conversation
+ * as this task's first turn; a chat bound to a different agent would send the
+ * prompt to the wrong engine; a running one would collide with a live turn; and
+ * a task that already has a chat does not need a second.
+ */
+function adoptChat(scope: RunScope, task: TaskDto, agentId: string | null, chatId: string): ChatRow {
+  const refuse = (reason: string): never => {
+    throw new TaskError('invalid_input', reason)
+  }
+  if (task.chatId) refuse('This task already has a conversation. Continue it there.')
+  const chat = chatRepo.getOwned(scope.profileUserId, chatId)
+  if (!chat || chat.deletedAt) return refuse('That conversation is no longer available.')
+  if (chat.router !== 'direct' || chat.agentId !== agentId) {
+    refuse('That conversation belongs to another agent.')
+  }
+  if (messageRepo.lastId(chatId) !== null) refuse('That conversation has already been used.')
+  if (runExecutionService.isRunning(chatId)) {
+    refuse('That conversation already has a turn running.')
+  }
+  return chat
+}
+
+/**
+ * What a start hands back **inside main**: the IPC result plus the turn's own
+ * outcome.
+ *
+ * `completed` never crosses the bridge — a Promise is not structured-cloneable,
+ * and `task:start` strips it for exactly that reason. It exists for a caller
+ * that has to know how the turn ended without polling: a file handover whose
+ * executor may finish without ever writing `report.md`
+ * (`handoverService`, `drafts/file_handovers` §3.6).
+ */
+export interface DesktopTaskStart extends TaskStartResult {
+  completed: Promise<RunOutcome>
+}
+
 /** Start the first local conversation after a task is brought to this device. */
 export const taskExecutionService = {
-  async start(scope: RunScope, taskId: string, target: DesktopTaskTarget): Promise<TaskStartResult> {
+  async start(scope: RunScope, taskId: string, target: DesktopTaskTarget, options: TaskStartOptions = {}): Promise<DesktopTaskStart> {
     if (!target || (target.kind !== 'model' && target.kind !== 'agent') ||
       (target.kind === 'agent' && (typeof target.agentId !== 'string' || !target.agentId.trim())) ||
       (target.kind === 'model' && target.modeId !== undefined && typeof target.modeId !== 'string')) {
@@ -102,11 +166,16 @@ export const taskExecutionService = {
       const task = assertTask()
       assertAgentCurrent()
       model?.assertCurrent()
-      const chat = chatRepo.create(scope.profileUserId, {
+      const reused = options.reuseChatId ? adoptChat(scope, task, assignee.agentId, options.reuseChatId) : null
+      const chat = reused ?? chatRepo.create(scope.profileUserId, {
         title: task.title, router: 'direct', agentId: assignee.agentId,
         modeId: model?.modeId, providerId: model?.providerId, modelId: model?.modelId
       })
-      createdChatId = chat.id
+      // Only a chat *this* call created is deleted when the start is refused.
+      // A reused one belongs to whoever handed it over, and it is that caller's
+      // job to clean it up — deleting it here would take the gate's chat away
+      // from a row that may still be settling.
+      createdChatId = reused ? null : chat.id
       if (model) chatMcpRepo.replaceForChat(chat.id, model.mcpIds)
       const handle = runExecutionService.start(scope,
         { chatId: chat.id, content: taskContinuationPrompt(task) }, {
@@ -123,7 +192,7 @@ export const taskExecutionService = {
       accepted = true
       const current = taskService.getById(scope.profileUserId, taskId)
       taskFileService.exportHandoff(current)
-      return { task: current, chatId: chat.id, runId: handle.id }
+      return { task: current, chatId: chat.id, runId: handle.id, completed: handle.completed }
     } catch (error) {
       if (createdChatId && !accepted) chatRepo.permanentDelete(scope.profileUserId, createdChatId)
       throw error

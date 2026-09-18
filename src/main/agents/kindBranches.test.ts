@@ -250,6 +250,7 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   { file: 'src/main/services/localAgents/agentsHomeService.ts', category: 'kind', count: 3, why: 'normalizes root layout and its count/cache' },
   { file: 'src/main/services/localAgents/desktopStateService.ts', category: 'kind', count: 1, why: 'owns the actual kit versus userData desktop-state path' },
   { file: 'src/main/services/localAgents/localAgentService.ts', category: 'kind', count: 11, why: 'owns folder schema, instruction edits, adoption and trash semantics' },
+  { file: 'src/main/services/handoverService.ts', category: 'kind', count: 1, why: 'handover targets are bare folders by definition: a kit folder is published and Cinna writes into it, so a .cinna/handovers there would travel' },
   { file: 'src/main/services/localAgents/scannerService.ts', category: 'kind', count: 1, why: 'owns root layout traversal' },
   { file: 'src/main/services/localAgents/watcherService.ts', category: 'kind', count: 3, why: 'owns folder layout event classification and watch paths' },
   { file: 'src/renderer/src/components/agents/local/AgentActionsMenu.tsx', category: 'kind', count: 5, why: 'owns folder Remove versus Trash actions and consent' },

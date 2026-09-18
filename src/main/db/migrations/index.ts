@@ -20,6 +20,7 @@ import { migrateChatFiles } from './chat-files'
 import { migrateJobs } from './jobs'
 import { migrateTasks } from './tasks'
 import { migrateLocalSchedules } from './local-schedules'
+import { migrateHandovers } from './handovers'
 import { migrateNotes } from './notes'
 import { migrateAppSettings } from './app-settings'
 import { runSyncMigrations } from './sync'
@@ -82,6 +83,9 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // task's chat is a `SET NULL` reference) and after `jobs`, whose `job_runs`
   // table it alters.
   migrateTasks(sqlite)
+  // `handovers` references `tasks` (SET NULL) and `users`, so it lands after
+  // `migrateTasks`. Creation only, no DML.
+  migrateHandovers(sqlite)
   migrateLocalSchedules(sqlite)
   migrateNotes(sqlite)
   migrateAppSettings(sqlite)

@@ -587,6 +587,176 @@ describe('input request ownership on an existing install', () => {
 })
 
 
+describe('handovers on an install that has the table already', () => {
+  it('adds the missing-brief column to a table created before it existed', () => {
+    /*
+      `CREATE TABLE IF NOT EXISTS` does nothing to a table that is there, so a
+      machine that ran a development build of the feature before this column
+      existed would be one column short for ever — every read of the row would
+      throw. Mutation: drop the guarded ALTER and this fails.
+    */
+    const raw = freshDatabase()
+    raw.exec('DROP TABLE handovers')
+    raw.exec(`CREATE TABLE handovers (
+      id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      folder_path TEXT NOT NULL,
+      handover_id TEXT NOT NULL,
+      task_id TEXT,
+      origin_chat_id TEXT,
+      group_id TEXT,
+      state TEXT NOT NULL DEFAULT 'seen',
+      brief_digest TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`)
+    runAllMigrations(adaptDatabase(raw))
+
+    const columns = raw.prepare("SELECT name FROM pragma_table_info('handovers')").all() as {
+      name: string
+    }[]
+    expect(columns.map((column) => column.name)).toContain('brief_missing_at')
+    // And twice over: the guard is what keeps a second run from throwing.
+    expect(() => runAllMigrations(adaptDatabase(raw))).not.toThrow()
+    raw.close()
+  })
+})
+
+/**
+ * The shape the table had when phase 2 of the feature landed, against the
+ * shape it has now.
+ *
+ * Every column below was added by a later development build, and `CREATE TABLE
+ * IF NOT EXISTS` does nothing to a table that already exists: a machine that
+ * ran any intermediate build is short every one of them, for ever, and every
+ * read of a row throws. Mutation: remove any entry from `ADDED_COLUMNS` in
+ * `migrations/handovers.ts` and this names it.
+ */
+describe('handovers on an install that stopped at phase 2', () => {
+  it('adds every column the feature has grown since, and its indexes', () => {
+    const raw = freshDatabase()
+    raw.exec('DROP TABLE handovers')
+    raw.exec(`CREATE TABLE handovers (
+      id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      folder_path TEXT NOT NULL,
+      handover_id TEXT NOT NULL,
+      task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+      origin_agent_id TEXT,
+      origin_chat_id TEXT,
+      origin_task_id TEXT,
+      depth INTEGER NOT NULL DEFAULT 1,
+      group_id TEXT,
+      execution TEXT NOT NULL DEFAULT 'ask',
+      state TEXT NOT NULL DEFAULT 'seen',
+      refusal_reason TEXT,
+      warning TEXT,
+      brief_digest TEXT NOT NULL,
+      report_digest TEXT,
+      report_status TEXT,
+      gate_request_id TEXT,
+      gate_chat_id TEXT,
+      run_id TEXT,
+      last_scanned_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(agent_id, handover_id)
+    )`)
+    runAllMigrations(adaptDatabase(raw))
+
+    const columns = new Set(
+      (raw.prepare("SELECT name FROM pragma_table_info('handovers')").all() as { name: string }[]).map(
+        (column) => column.name
+      )
+    )
+    for (const name of [
+      'summary',
+      'revisions_delivered',
+      'brief_stat',
+      'report_stat',
+      'woke_at',
+      'wake_run_id',
+      'gate_chat_id',
+      'run_id',
+      'brief_missing_at',
+      'last_scanned_at'
+    ]) {
+      expect([name, columns.has(name)]).toEqual([name, true])
+    }
+
+    // Every one of them is writable, which is the thing the column list is a
+    // proxy for.
+    raw.exec(`INSERT INTO users (id, type, username, display_name, created_at) VALUES ('phase2-user', 'local_user', 'phase2-user', 'P', 1);`)
+    raw.exec(`INSERT INTO handovers (id,user_id,agent_id,folder_path,handover_id,task_id,depth,execution,state,brief_digest,brief_stat,report_stat,summary,revisions_delivered,woke_at,wake_run_id,brief_missing_at,created_at,updated_at)
+      VALUES ('row-p2','phase2-user','folder:external:root:.','/p','20260917-1200-retry',NULL,1,'ask','done','digest','1:2','3:4','Retry added','["001.md"]',5,'run-9',6,1,1)`)
+    expect(raw.prepare("SELECT brief_stat, report_stat, summary FROM handovers WHERE id = 'row-p2'").get())
+      .toEqual({ brief_stat: '1:2', report_stat: '3:4', summary: 'Retry added' })
+
+    // The group index is over two of the columns above: created with the table
+    // it would have thrown on a shape that did not have them yet.
+    const indexes = (raw.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='handovers'").all() as {
+      name: string
+    }[]).map((index) => index.name)
+    expect(indexes).toContain('idx_handovers_group')
+
+    // And twice over: the guards are what keep a second run from throwing.
+    expect(() => runAllMigrations(adaptDatabase(raw))).not.toThrow()
+    raw.close()
+  })
+})
+
+describe('handovers on an install that predates them', () => {
+  it('creates the table, dedupes on (agent_id, handover_id) and keeps the row when the task goes', () => {
+    const raw = freshDatabase()
+    raw.exec(`DROP TABLE handovers;
+      INSERT INTO users (id, type, username, display_name, created_at) VALUES ('handover-user', 'local_user', 'handover-user', 'H', 1);
+      INSERT INTO tasks (id,user_id,title,goal,created_at,updated_at) VALUES ('brief-task','handover-user','Retry','Add retry',1,1);`)
+    runAllMigrations(adaptDatabase(raw))
+    raw.exec(`INSERT INTO handovers (id,user_id,agent_id,folder_path,handover_id,task_id,depth,execution,state,brief_digest,created_at,updated_at)
+      VALUES ('row-1','handover-user','folder:external:root:.','/p','20260917-1200-retry','brief-task',1,'ask','gated','digest',1,1)`)
+
+    // One brief, one task, forever: the index is what enforces it, not a read
+    // the next scan could race.
+    expect(() => raw.exec(`INSERT INTO handovers (id,user_id,agent_id,folder_path,handover_id,task_id,depth,execution,state,brief_digest,created_at,updated_at)
+      VALUES ('row-2','handover-user','folder:external:root:.','/p','20260917-1200-retry',NULL,1,'ask','seen','digest',2,2)`)).toThrow(/UNIQUE/)
+
+    // A deleted task must not make the brief look new again, so the reference
+    // is SET NULL and the row survives to keep holding the unique pair.
+    raw.prepare("DELETE FROM tasks WHERE id = 'brief-task'").run()
+    expect(raw.prepare('SELECT id, task_id FROM handovers').all()).toEqual([{ id: 'row-1', task_id: null }])
+
+    // The wake columns: set once, when the origin is told how it ended.
+    raw.prepare("UPDATE handovers SET woke_at = 99, wake_run_id = 'run-1' WHERE id = 'row-1'").run()
+    expect(raw.prepare('SELECT woke_at, wake_run_id FROM handovers').get())
+      .toEqual({ woke_at: 99, wake_run_id: 'run-1' })
+
+    // And the column that says the brief is no longer on disk.
+    raw.prepare("UPDATE handovers SET brief_missing_at = 42 WHERE id = 'row-1'").run()
+    expect(raw.prepare('SELECT brief_missing_at FROM handovers').get())
+      .toEqual({ brief_missing_at: 42 })
+
+    runAllMigrations(adaptDatabase(raw)); runAllMigrations(adaptDatabase(raw))
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM handovers').get()).toEqual({ n: 1 })
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+
+    // The profile owns its handovers: dropping the user takes them with it.
+    raw.prepare("DELETE FROM users WHERE id = 'handover-user'").run()
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM handovers').get()).toEqual({ n: 0 })
+    raw.close()
+  })
+
+  it('accepts a handover-owned input request with no agent', () => {
+    const raw = freshDatabase()
+    raw.exec(`INSERT INTO tasks (id, user_id, title, goal, created_at, updated_at)
+      VALUES ('gate-task', '__default__', 'Task', 'Goal', 1, 1)`)
+    expect(() => raw.prepare(`INSERT INTO task_input_requests (id, task_id, chat_id, agent_id, delivery_owner, request, resume, created_at)
+      VALUES ('handover:row-1', 'gate-task', 'gate-chat', NULL, 'handover', '{"kind":"question","questions":[]}', 'reply', 15)`).run()).not.toThrow()
+    raw.close()
+  })
+})
+
 describe('retired chat routing mirror', () => {
   it('is absent on fresh installs and never added back on repeated startup', () => {
     const raw = freshDatabase()

@@ -165,3 +165,30 @@ function clip(text: string, limit: number): string {
 export function withCatchUp(packet: string | null, userContent: string): string {
   return packet ? `${packet}\n\n${userContent}` : userContent
 }
+
+/**
+ * The turn's own identifiers, as wire-only text in front of the message.
+ *
+ * The agent already knows *who it is* from its system prompt; what it cannot
+ * know from there is which conversation this turn belongs to, which task if
+ * any, and how deep in a chain of handovers it is — all three change per turn,
+ * and a chat id in a system prompt would start one pooled Codex process per
+ * chat. So they travel the way the catch-up packet does: prepended to the wire
+ * content, never persisted (the transcript row is written from the user's text
+ * alone, in `messageRoutingService`).
+ *
+ * Only agents that run *in a folder on this machine* are told: a handover
+ * brief names a path, and a remote agent has no path to write one in.
+ */
+export function buildTurnHeader(input: {
+  chatId: string
+  taskId?: string | null
+  depth?: number
+}): string {
+  return [
+    'Turn context from Cinna Desktop, not part of the conversation:',
+    `- chat id: \`${input.chatId}\``,
+    `- task id: ${input.taskId ? `\`${input.taskId}\`` : 'none'}`,
+    `- handover depth: ${input.depth ?? 0}`
+  ].join('\n')
+}
