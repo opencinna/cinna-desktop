@@ -696,6 +696,8 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
       const path = join(directory, `codex-${version}.json`)
       writeFileSync(path, observed)
       const diff = pinned === null ? '(no pinned snapshot to compare with)' : lineDiff(pinned, observed)
+      // Beside the snapshot, for whoever reads the run as files rather than as a log. Empty when nothing changed.
+      writeFileSync(path.replace(/\.json$/, '.diff'), diff ? `${diff}\n` : '')
       console.log(`\n--- snapshot diff: codex ${RUNTIME_PINS.codex.cli} -> ${version} (candidate snapshot: ${path})\n${diff || '(no observed change)'}\n`)
       return
     }

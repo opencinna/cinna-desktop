@@ -124,6 +124,10 @@ export interface ProviderTurn {
   /** Developer/system text, for marker checks only. */
   systemText: string
   userText: string
+  /** The newest user item alone — what this request is *about*, where `userText` is the whole history. */
+  lastUserText: string
+  /** `function_call_output` items after that newest user item: 0 means the model has not acted on it yet. */
+  pendingOutputs: number
 }
 
 export type ProviderReply =
@@ -156,6 +160,7 @@ export async function startFakeProvider(decide: (turn: ProviderTurn) => Provider
       for await (const part of req) raw += part
       const body = JSON.parse(raw) as Json
       const input = (Array.isArray(body.input) ? body.input : []) as Json[]
+      const lastUserAt = input.map((item) => item.role).lastIndexOf('user')
       const turn: ProviderTurn = {
         index: turns.length,
         kind: providerRequestKind(body),
@@ -166,7 +171,9 @@ export async function startFakeProvider(decide: (turn: ProviderTurn) => Provider
         outputs: input.filter((item) => item.type === 'function_call_output').map((item) => textOf(item.output) || JSON.stringify(item.output)),
         systemText: [typeof body.instructions === 'string' ? body.instructions : '',
           ...input.filter((item) => item.role === 'developer' || item.role === 'system').map((item) => textOf(item.content))].join('\n'),
-        userText: input.filter((item) => item.role === 'user').map((item) => textOf(item.content)).join('\n')
+        userText: input.filter((item) => item.role === 'user').map((item) => textOf(item.content)).join('\n'),
+        lastUserText: lastUserAt < 0 ? '' : textOf(input[lastUserAt].content),
+        pendingOutputs: input.slice(lastUserAt + 1).filter((item) => item.type === 'function_call_output').length
       }
       turns.push(turn)
       const reply = decide(turn)

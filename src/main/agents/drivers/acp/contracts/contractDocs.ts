@@ -8,7 +8,7 @@
  * Loaded by a type-stripping Node from that script — so a **type-only** import
  * (erased entirely) and nothing else.
  */
-import type { ContractArea, ContractEntry } from './codex.contract'
+import type { ContractArea, ContractEntry, ContractFlow } from './codex.contract'
 
 export interface ContractDocInput {
   /** `Codex`, `Claude Code`. */
@@ -22,6 +22,10 @@ export interface ContractDocInput {
   snapshotPath: string
   areas: readonly ContractArea[]
   entries: readonly ContractEntry[]
+  /** Which Level 2 variants walk those steps **for this engine** — a markdown sentence. The no-billing spec does not cover every engine. */
+  flowVariants: string
+  /** The Level 2 steps and what each is, `none` excluded — `FLOW_STEPS`, passed in because this module imports nothing at runtime. */
+  flowSteps: readonly (readonly [string, string])[]
   /** `codex`, `claude` — the `ENGINE=` of every make target the doc names. */
   engine: string
   /** `real patched adapter` for Codex, whose adapter Cinna patches; `real adapter` otherwise. */
@@ -40,6 +44,13 @@ function owner(reference: string): string {
   return `[\`${name}\`](../../../../${file}) \`${symbol}\``
 }
 
+/** `A, B — note`, or `— note` when no step covers the entry. */
+function flowCell(flow: ContractFlow): string {
+  const steps = flow.steps.filter((step) => step !== 'none')
+  const head = steps.length > 0 ? `**${steps.join(', ')}**` : '—'
+  return flow.note ? `${head} ${steps.length > 0 ? '— ' : ''}${cell(flow.note)}` : head
+}
+
 export function renderContractDoc(input: ContractDocInput): string {
   const lines: string[] = [
     `# ${input.toolName} Interface Contract`,
@@ -55,6 +66,10 @@ export function renderContractDoc(input: ContractDocInput): string {
     `Hand-written evidence and reasoning stay in ${input.evidenceLinks}; this file is only the index of what is checked.`,
     ''
   ]
+  lines.push(
+    `**Flow step** names the step of the Level 2 whole flow that exercises the entry — ${input.flowSteps.map(([step, what]) => `**${step}** ${what}`).join('; ')}. A dash means no step does, and the note says why. ${input.flowVariants}`,
+    ''
+  )
   // Only when there is one to explain: a doc with no live entry stays as it was.
   if (input.entries.some((entry) => entry.live)) {
     lines.push('An entry marked **Live only** cannot be exercised against a fake provider — it needs a real login or the vendor’s servers. Its test is skipped, never faked, and the entry says why; it is checked by the live flow instead.', '')
@@ -66,7 +81,7 @@ export function renderContractDoc(input: ContractDocInput): string {
     lines.push('| Id | Surface | Expectation | Owners | Feature at risk | Flow step |', '|---|---|---|---|---|---|')
     for (const entry of entries) {
       const expectation = entry.live ? `**Live only.** ${entry.expectation} *Why not here:* ${entry.live}` : entry.expectation
-      lines.push(`| \`${entry.id}\` | ${cell(entry.surface)}: \`${cell(entry.name)}\` | ${cell(expectation)} | ${entry.owners.map(owner).join('<br>')} | ${cell(entry.feature)} | ${cell(entry.flow)} |`)
+      lines.push(`| \`${entry.id}\` | ${cell(entry.surface)}: \`${cell(entry.name)}\` | ${cell(expectation)} | ${entry.owners.map(owner).join('<br>')} | ${cell(entry.feature)} | ${flowCell(entry.flow)} |`)
     }
     lines.push('')
   }
@@ -83,7 +98,8 @@ export const CODEX_INTERFACE_DOC = 'docs/agents/local_agents/contracts/codex_int
 export function codexContractDocInput(
   pins: { codex: { cli: string; adapter: string } },
   entries: readonly ContractEntry[],
-  areas: readonly ContractArea[]
+  areas: readonly ContractArea[],
+  steps: Readonly<Record<string, string>>
 ): ContractDocInput {
   return {
     toolName: 'Codex',
@@ -95,7 +111,9 @@ export function codexContractDocInput(
     snapshotPath: `src/main/agents/drivers/acp/contracts/snapshots/codex-${pins.codex.cli}.json`,
     areas,
     entries,
+    flowSteps: Object.entries(steps).filter(([step]) => step !== 'none'),
     engine: 'codex',
+    flowVariants: 'Two variants walk the same steps: `make e2e-one SPEC=runtime-flow` (the built app and the real pinned CLI against a loopback fake provider, no billing, opt-in) and `make live-flow ENGINE=codex` (the user’s real login, billed, manual).',
     adapterPhrase: 'real patched adapter',
     evidenceLinks: '[The ACP Engine Contract](../acp_contract.md) and [The Codex Engine — Technical Details](../codex_engine_tech.md)'
   }
@@ -107,7 +125,8 @@ export const CLAUDE_INTERFACE_DOC = 'docs/agents/local_agents/contracts/claude_i
 export function claudeContractDocInput(
   pins: { claude: { cli: string; adapter: string } },
   entries: readonly ContractEntry[],
-  areas: readonly ContractArea[]
+  areas: readonly ContractArea[],
+  steps: Readonly<Record<string, string>>
 ): ContractDocInput {
   return {
     toolName: 'Claude Code',
@@ -119,7 +138,9 @@ export function claudeContractDocInput(
     snapshotPath: `src/main/agents/drivers/acp/contracts/snapshots/claude-${pins.claude.cli}.json`,
     areas,
     entries,
+    flowSteps: Object.entries(steps).filter(([step]) => step !== 'none'),
     engine: 'claude',
+    flowVariants: 'For Claude Code only the billed variant walks them: `make live-flow ENGINE=claude` (the user’s real login, manual). The no-billing `e2e/specs/runtime-flow.spec.ts` covers Codex alone — Cinna strips `ANTHROPIC_BASE_URL` and the key variables from every Claude child by design, so an app-spawned session cannot be sent to a fake provider without a new production seam.',
     adapterPhrase: 'real adapter',
     evidenceLinks: '[The ACP Engine Contract](../acp_contract.md) and [The Claude Engine Contract](../claude_contract.md)'
   }

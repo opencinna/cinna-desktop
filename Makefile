@@ -7,7 +7,7 @@
 
 PW := npx playwright test -c e2e/playwright.config.ts
 
-.PHONY: help test typecheck build contract contract-next contract-snapshot pin-assets demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine live-ctl live-help
+.PHONY: help test typecheck build contract contract-next contract-snapshot pin-assets demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine live-ctl live-help live-flow
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -50,7 +50,11 @@ contract-next: ## Same contract against a CANDIDATE version, pin untouched: make
 	$(CONTRACT_OVERRIDE_$(ENGINE))="$$BIN" npm run test:contract -- $(CONTRACT_FILE); STATUS=$$?; \
 	rm -rf "$$DIR"; exit $$STATUS
 # The run itself prints the snapshot diff (pinned -> candidate); the candidate's
-# snapshot goes to a temp path, never into $(SNAPSHOTS).
+# snapshot and the diff go to $$TMPDIR/cinna-contract-snapshots/$(ENGINE)-<version>.{json,diff},
+# never into $(SNAPSHOTS). The recipe's status is vitest's: non-zero only when a
+# contract TEST failed — a snapshot diff alone is success — or when the
+# candidate could not be installed at all, which prints "could not install".
+# (make itself reports any failed recipe as 2.)
 
 contract-snapshot: ## Rewrite the committed snapshot from the pinned CLI, once a change is understood: make contract-snapshot ENGINE=codex|claude
 	$(call check-engine,)
@@ -113,6 +117,14 @@ e2e-clean-engine: ## Drop the per-machine engine cache (next run downloads again
 live-ctl: ## Build, then hold the app for live-backend testing on your REAL profile (quit other Cinna apps; back up first)
 	npx electron-vite build
 	node scripts/live-backend/ctl.mjs
+
+live-flow: ## BILLED, manual: the whole flow on your REAL Claude/Codex login, throwaway userData: make live-flow ENGINE=claude|codex [ONLY=a|d] [DROP_PATH=<dir>] [KEEP=1] CONFIRM=1
+	$(call check-engine, [ONLY=a|d] [DROP_PATH=<dir>] [KEEP=1] CONFIRM=1)
+	@test -f out/main/index.js || (echo "no build — run: npx electron-vite build"; exit 2)
+	$(STRIP) scripts/live/runtime-flow.mjs $(ENGINE)
+# ONLY, DROP_PATH, KEEP and CONFIRM reach the script through make's exported
+# command-line variables. Without CONFIRM=1 it asks on a terminal and refuses
+# anywhere else; it is never run by CI. Results: scripts/live/results/.
 
 live-help: ## How to drive live-backend tests from a shell
 	@echo "source scripts/live-backend/live.sh && live_preflight && live_help"

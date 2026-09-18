@@ -13,5 +13,8 @@ e2e/test-results
 test-results
 e2e/playwright-report
 
+# `make live-flow` writes its run results here (chat dumps, logs, screenshots).
+/scripts/live/results/
+
 # Local plans and drafts; never committed.
 /drafts/

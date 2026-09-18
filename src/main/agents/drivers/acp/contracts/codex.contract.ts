@@ -30,6 +30,30 @@ export type ContractArea =
 
 export type ContractSurface = 'CLI' | 'provider request' | 'env var' | 'app-server RPC' | 'ACP method' | 'ACP field' | '_meta key' | 'file' | 'adapter patch' | 'MCP request' | 'network'
 
+/**
+ * The steps of the Level 2 whole flow, the same in its two variants: the
+ * no-billing `e2e/specs/runtime-flow.spec.ts` and the billed
+ * `scripts/live/runtime-flow.mjs` (`make live-flow`). `none` says no step
+ * exercises the entry, and then the note says why. A plain object rather than
+ * an enum: this file is read under a type-stripping Node.
+ */
+export const FLOW_STEPS = {
+  A: 'plain chat on the Default runtime, then its AI title',
+  B: 'a specialist @-added mid-chat, called through Cinna’s MCP server',
+  C: 'continuity: a later turn remembers the first',
+  D: 'a specialist attached before the first turn',
+  none: 'not covered by the whole flow'
+} as const
+
+export type FlowStep = keyof typeof FLOW_STEPS
+
+export interface ContractFlow {
+  /** One or more of A–D, or `none` alone. The ratchet rejects anything else. */
+  steps: readonly FlowStep[]
+  /** What about the step exercises it, or why none does. Required with `none`. */
+  note?: string
+}
+
 export interface ContractEntry {
   /** `codex.<area>.<what>` — stable, and quoted verbatim in its test's title. */
   id: string
@@ -43,8 +67,8 @@ export interface ContractEntry {
   owners: string[]
   /** What the user loses when it breaks. */
   feature: string
-  /** Which whole-flow (Level 2) step exercises it. Free text until that spec exists. */
-  flow: string
+  /** Which whole-flow (Level 2) step(s) exercise it — see {@link FLOW_STEPS}. */
+  flow: ContractFlow
   /**
    * Set when the entry **cannot be exercised against a fake provider** — it
    * needs a real login, a paid model or the vendor's own servers — and says
@@ -72,28 +96,28 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     expectation: 'Prints exactly `codex-cli <version>` on stdout and exits 0.',
     owners: ['src/main/engine/binaryResolver.ts#CODEX_SPEC', `${POLICY}#SUPPORTED_VERSION`],
     feature: 'The managed install is discarded as the wrong version, and restricted chats refuse to start.',
-    flow: 'first Codex turn (install)'
+    flow: { steps: ['A'], note: 'the live flow asserts the resolved binary reports the pinned version; the restricted-chat policy checks it before the first turn' }
   },
   {
     id: 'codex.launch.codex-path', area: 'launch & env', surface: 'env var', name: 'CODEX_PATH',
     expectation: 'The adapter starts the app-server from the executable this variable names, not from its bundled dependency.',
     owners: [`${LAUNCHER}#createCodexLauncher`, `${POLICY}#prepareCodexConductorPolicy`],
     feature: 'Sessions run on an unpinned CLI (or none: the bundled one is excluded from the packaged app), and the restricted-chat wrapper is bypassed.',
-    flow: 'plain chat'
+    flow: { steps: ['A'] }
   },
   {
     id: 'codex.launch.codex-config', area: 'launch & env', surface: 'env var', name: 'CODEX_CONFIG',
     expectation: 'Its JSON is applied at thread start: `model`, `model_reasoning_effort` and `developer_instructions` reach the model request.',
     owners: [`${LAUNCHER}#createCodexLauncher`],
     feature: 'A folder agent loses its instructions, its chosen model and its work-complexity effort.',
-    flow: 'folder agent turn'
+    flow: { steps: ['B', 'D'], note: 'the specialist’s folder-agent turn; model and effort are not asserted' }
   },
   {
     id: 'codex.launch.initial-agent-mode', area: 'launch & env', surface: 'env var', name: 'INITIAL_AGENT_MODE',
     expectation: 'A new session starts in the mode this variable names (`read-only`).',
     owners: [`${LAUNCHER}#createCodexLauncher`],
     feature: 'A session could begin in a wider approval mode than the agent’s Approvals setting before `session/set_mode` lands.',
-    flow: 'folder agent turn'
+    flow: { steps: ['B', 'D'], note: 'the specialist’s folder-agent turn starts under it; the mode itself is not asserted' }
   },
 
   /* -------------------------------------------------------------------- auth */
@@ -102,7 +126,7 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     expectation: 'With no login under `HOME`/`CODEX_HOME` it prints a line `Not logged in` and exits non-zero; the login follows the home directory, not the binary.',
     owners: ['src/main/agents/drivers/acp/codexAuth.ts#parseCodexAuthStatus', 'src/main/agents/drivers/acp/codexEnv.ts#buildCodexEnv'],
     feature: 'Readiness cannot tell a logged-out machine, so a turn fails mid-chat instead of being refused with the `codex login` remedy.',
-    flow: 'readiness before a turn'
+    flow: { steps: ['A'], note: 'the login probe before the first turn' }
   },
 
   /* ------------------------------------------------------- session lifecycle */
@@ -111,28 +135,28 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     expectation: 'Answers protocol version 1 and advertises `agentCapabilities.loadSession: true`.',
     owners: [`${LAUNCHER}#ACP_PROTOCOL_VERSION`, `${DRIVER}#loadSession`],
     feature: 'No Codex session starts, or every turn after the first loses the conversation.',
-    flow: 'plain chat'
+    flow: { steps: ['A'] }
   },
   {
     id: 'codex.session.modes', area: 'session lifecycle', surface: 'ACP method', name: 'session/set_mode',
     expectation: 'A session offers the mode ids `read-only` and `agent`, and `session/set_mode` to either succeeds.',
     owners: [`${LAUNCHER}#modeId`],
     feature: 'The Approvals setting (Ask for approval / Automatic) cannot be applied; the turn is refused at setup.',
-    flow: 'folder agent turn'
+    flow: { steps: ['A', 'B', 'D'], note: 'applied at session setup; the mode is not asserted' }
   },
   {
     id: 'codex.session.load', area: 'session lifecycle', surface: 'ACP method', name: 'session/load',
     expectation: 'Loading a session in the same process succeeds and **keeps the collaboration mode it was left in**, so setup must be re-applied after every load.',
     owners: [`${POLICY}#collaboration_mode`, `${DRIVER}#session/load`],
     feature: 'A resumed restricted chat would silently run in Plan mode, where `request_user_input` is a usable native tool.',
-    flow: 'continuity (second turn)'
+    flow: { steps: ['none'], note: 'no step restarts the app or reaps the process between turns, so nothing is loaded' }
   },
   {
     id: 'codex.session.system-prompt-meta', area: 'session lifecycle', surface: 'adapter patch', name: '_meta.cinna.systemPrompt',
     expectation: 'The patched adapter passes it as `developerInstructions` on thread start, so it reaches the model as developer/system text and never as user input.',
     owners: ['scripts/patch-codex-acp.cjs#patchCodexAcp', `${POLICY}#systemPrompt`],
     feature: 'Chat-mode instructions and AI-function prompts are lost, or leak between sessions sharing one warm process.',
-    flow: 'plain chat'
+    flow: { steps: ['A'] }
   },
 
   /* ------------------------------------------------------------- tools & MCP */
@@ -141,28 +165,28 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     expectation: 'An HTTP descriptor named `cinna` is connected with its headers, and its tools are offered to the model as `mcp__cinna.<tool>`.',
     owners: ['src/main/services/conductorBridge.ts#prepare', 'src/main/services/conductorMcpServer.ts#ConductorMcpServer'],
     feature: 'A Codex chat cannot call attached agents or MCP servers at all.',
-    flow: 'specialist attached'
+    flow: { steps: ['B', 'D'] }
   },
   {
     id: 'codex.mcp.tool-call-naming', area: 'tools & MCP', surface: 'ACP field', name: 'tool_call title / rawInput',
     expectation: 'A Cinna tool call is reported with `title: "mcp.cinna.<tool>"` and `rawInput: { server: "cinna", tool: "<tool>" }`.',
     owners: ['src/main/agents/drivers/acp/conductorToolPolicy.ts#cinnaToolName', 'src/main/services/conductorToolCorrelation.ts#ConductorToolCorrelation'],
     feature: 'Tool calls are not recognised as Cinna’s: no agent sub-thread in the transcript, and the permission gate treats them as native actions.',
-    flow: 'tool call'
+    flow: { steps: ['B', 'D'] }
   },
   {
     id: 'codex.mcp.list-changed-not-adopted', area: 'tools & MCP', surface: 'ACP field', name: 'notifications/tools/list_changed',
     expectation: 'A tool added mid-session is **not** offered to the model on the next turn; the tool list is fixed at session creation.',
     owners: [`${LAUNCHER}#sessionToolsFixed`, 'src/main/services/conductorBridge.ts#sessionToolsFixed'],
     feature: 'If this ever flips, the new-session-on-tool-change workaround is dead weight; while it holds, removing the workaround makes a specialist attached mid-chat never callable.',
-    flow: 'specialist attached'
+    flow: { steps: ['B'], note: 'the specialist attached mid-chat is callable only because the conductor gets a new session' }
   },
   {
     id: 'codex.mcp.inherited-disable-preserved', area: 'tools & MCP', surface: 'adapter patch', name: 'mcp_servers merge',
     expectation: 'With the patched adapter, a personal MCP server disabled by the policy stays disabled when a session injects `cinna`; its tools are never offered.',
     owners: ['scripts/patch-codex-acp.cjs#patchCodexAcp', `${POLICY}#mcp_servers`, `${POLICY}#DISABLE_MCP_CONFIG_FILTERING`],
     feature: 'A plain chat with "no tools" exposes the user’s personal MCP servers to the model.',
-    flow: 'plain chat'
+    flow: { steps: ['none'], note: 'needs a personal MCP server in the Codex config; no step sets one up' }
   },
 
   /* ------------------------------------------------- permissions & questions */
@@ -171,14 +195,14 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     expectation: 'Every Cinna MCP call raises a permission request with `toolCall.kind: "execute"`, an `allow_once` option, and the `toolCallId` of the `tool_call` update that named the tool — the request itself carries no title or `rawInput`.',
     owners: ['src/main/agents/drivers/acp/acpPermissions.ts#toAcpPermissionRequest', 'src/main/agents/drivers/acp/acpPermissions.ts#pickPermissionOption'],
     feature: 'Either tool calls stall with no ask to answer, or (if the ask disappears) the recorded `codex:<kind>` grants stop matching anything.',
-    flow: 'tool call'
+    flow: { steps: ['B', 'D'] }
   },
   {
     id: 'codex.question.unavailable-in-default-mode', area: 'permissions & questions', surface: 'ACP field', name: 'request_user_input',
     expectation: 'In Default collaboration mode a `request_user_input` call is answered "unavailable in Default mode" and no client request is made.',
     owners: [`${POLICY}#default_mode_request_user_input`, 'src/main/agents/drivers/acp/acpQuestions.ts#toInputQuestions'],
     feature: 'A no-tools chat or AI function could block on a question nobody is shown.',
-    flow: 'plain chat'
+    flow: { steps: ['none'], note: 'no step has the model ask a question' }
   },
 
   /* ------------------------------------------------------------ cancellation */
@@ -187,7 +211,7 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     expectation: 'A cancel notification during a model request ends `session/prompt` with `stopReason: "cancelled"` within seconds.',
     owners: [`${DRIVER}#session/cancel`],
     feature: 'Stop leaves the turn running until the eighty-minute ceiling, holding the agent’s turn lock.',
-    flow: 'stop mid-turn'
+    flow: { steps: ['none'], note: 'no step stops a turn' }
   },
 
   /* --------------------------------------------------------- models & config */
@@ -196,21 +220,21 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     expectation: '`config/read` with `includeLayers: false` returns `config.model` and `config.mcp_servers` without starting a thread.',
     owners: [`${POLICY}#discover`],
     feature: 'Restricted chats refuse: the policy cannot learn the effective model or which personal MCP servers to disable.',
-    flow: 'plain chat (policy preparation)'
+    flow: { steps: ['A'], note: 'policy preparation before the first turn' }
   },
   {
     id: 'codex.config.model-list-default', area: 'models & config', surface: 'app-server RPC', name: 'model/list',
     expectation: '`model/list` with `includeHidden: true` returns `data[]` with string `id`s and exactly one `isDefault: true`.',
     owners: [`${POLICY}#discover`],
     feature: 'A chat mode that names no model cannot resolve one and refuses.',
-    flow: 'plain chat (policy preparation)'
+    flow: { steps: ['A'], note: 'policy preparation, and only when the Codex config names no model' }
   },
   {
     id: 'codex.config.model-option', area: 'models & config', surface: 'ACP method', name: 'session/set_config_option model',
     expectation: 'Setting the `model` config option changes the model of the next request.',
     owners: ['src/main/services/runtimeModelCatalog.ts#recordRuntimeModelCatalog'],
     feature: 'Switching a chat’s model has no effect until the process is replaced.',
-    flow: 'model switch'
+    flow: { steps: ['none'], note: 'no step switches the model' }
   },
 
   /* -------------------------------------------------- restricted chat policy */
@@ -219,28 +243,28 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     expectation: 'Every feature flag the policy disables is a flag this CLI recognises.',
     owners: [`${POLICY}#FEATURES_DISABLED`],
     feature: 'A renamed flag is silently ignored and its native tool (shell, patch, browser, sub-agents) comes back into "no tools" chats.',
-    flow: 'plain chat'
+    flow: { steps: ['A'] }
   },
   {
     id: 'codex.policy.catalog-fields', area: 'restricted chat policy', surface: 'CLI', name: 'debug models --bundled',
     expectation: 'Prints `{ models: [...] }`; every model has string `slug`, `display_name` and `shell_type`, and every field the policy overwrites is still a field of the catalog.',
     owners: [`${POLICY}#CATALOG_POLICY`],
     feature: 'Restricted chats refuse ("catalog malformed"), or a new tool-selecting field is left at its native value.',
-    flow: 'plain chat (policy preparation)'
+    flow: { steps: ['A'], note: 'policy preparation before the first turn' }
   },
   {
     id: 'codex.policy.no-native-tools', area: 'restricted chat policy', surface: 'CLI', name: '-c overrides + model_catalog_json',
     expectation: 'Under the production policy the model is offered Cinna tools, MCP resource readers and `request_user_input` only — no shell, patch, image or delegation tool.',
     owners: [`${POLICY}#prepareCodexConductorPolicy`, 'src/main/agents/drivers/acp/conductorToolPolicy.ts#applyConductorToolPolicy'],
     feature: 'A plain chat can run commands and edit files on the user’s machine.',
-    flow: 'plain chat'
+    flow: { steps: ['A'] }
   },
   {
     id: 'codex.policy.collaboration-mode', area: 'restricted chat policy', surface: 'ACP method', name: 'session/set_config_option collaboration_mode',
     expectation: 'Sessions expose a `collaboration_mode` config option and accept the value `default`.',
     owners: [`${POLICY}#collaboration_mode`],
     feature: 'Restricted sessions cannot be pinned to Default mode and are refused at setup.',
-    flow: 'plain chat'
+    flow: { steps: ['A'] }
   },
 
   /* -------------------------------------------------------- provider traffic */
@@ -249,7 +273,7 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     expectation: 'Beyond the conversation the CLI sends exactly two kinds of request of its own. **Thread title**: once per session beside its first turn (folder, restricted chat and utility sessions alike, never again), on `gpt-5.6-luna` whatever model the session uses, strict `json_schema` output `{ title }`, carrying the user’s first message verbatim but not Cinna’s session instructions, offered no tool a restricted session is not allowed; a thread still untitled after `session/load` (the provider answered with something other than `{ title }`) is asked for again on its next turn. **Compaction**: once after a model change, on the *previous* model, with no tools, carrying the conversation so far and not the new turn’s prompt. No other request is made.',
     owners: [`${POLICY}#prepareCodexConductorPolicy`],
     feature: 'Extra provider calls on the user’s login that Cinna never asked for: the first message of every session — AI-function inputs included — also goes to a second model, and a model switch costs a full-context call on the old one. If either starts carrying native tools, the "no tools" guarantee of a restricted chat is broken through a request nobody scripted.',
-    flow: 'plain chat (first turn); model switch'
+    flow: { steps: ['A'], note: 'the thread-title request beside the first turn; compaction is not reached' }
   },
 
   /* ------------------------------------------------------------------ limits */
@@ -258,6 +282,6 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     expectation: 'A provider 429 ends `session/prompt` normally (`end_turn`, no error, no `errorKind`, no AIR session failure); it shows only as `_meta.codex.threadStatus.type: "systemError"` and as assistant text naming the 429.',
     owners: [`${DRIVER}#errorKind`],
     feature: 'KNOWN GAP: the driver pauses a rate-limited chat on `error.data.errorKind === "rate_limit"`, the Claude adapter’s shape, which Codex never sends — so on Codex a rate limit reads as an ordinary finished turn whose "answer" is the retry error. This entry pins what Codex does send, for whoever closes the gap.',
-    flow: 'rate limit'
+    flow: { steps: ['none'], note: 'no step produces a 429' }
   }
 ]

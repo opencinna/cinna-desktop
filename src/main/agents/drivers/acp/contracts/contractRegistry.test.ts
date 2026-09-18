@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RUNTIME_PINS } from '../../../../../shared/runtimePins'
-import { CODEX_CONTRACT, CODEX_CONTRACT_AREAS, type ContractArea, type ContractEntry } from './codex.contract'
+import { CODEX_CONTRACT, CODEX_CONTRACT_AREAS, FLOW_STEPS, type ContractArea, type ContractEntry } from './codex.contract'
 import { CLAUDE_CONTRACT, CLAUDE_CONTRACT_AREAS } from './claude.contract'
 import { CLAUDE_INTERFACE_DOC, CODEX_INTERFACE_DOC, claudeContractDocInput, codexContractDocInput, renderContractDoc } from './contractDocs'
 
@@ -54,12 +54,12 @@ interface Ratcheted {
 const ENGINES: Ratcheted[] = [
   {
     tool: 'codex', label: 'Codex', entries: CODEX_CONTRACT, areas: CODEX_CONTRACT_AREAS, pin: RUNTIME_PINS.codex, doc: CODEX_INTERFACE_DOC,
-    render: () => renderContractDoc(codexContractDocInput(RUNTIME_PINS, CODEX_CONTRACT, CODEX_CONTRACT_AREAS)),
+    render: () => renderContractDoc(codexContractDocInput(RUNTIME_PINS, CODEX_CONTRACT, CODEX_CONTRACT_AREAS, FLOW_STEPS)),
     links: [['docs/README.md', 'agents/local_agents/contracts/codex_interface.md'], ['docs/agents/local_agents/acp_contract.md', 'contracts/codex_interface.md']]
   },
   {
     tool: 'claude', label: 'Claude', entries: CLAUDE_CONTRACT, areas: CLAUDE_CONTRACT_AREAS, pin: RUNTIME_PINS.claude, doc: CLAUDE_INTERFACE_DOC,
-    render: () => renderContractDoc(claudeContractDocInput(RUNTIME_PINS, CLAUDE_CONTRACT, CLAUDE_CONTRACT_AREAS)),
+    render: () => renderContractDoc(claudeContractDocInput(RUNTIME_PINS, CLAUDE_CONTRACT, CLAUDE_CONTRACT_AREAS, FLOW_STEPS)),
     links: [['docs/README.md', 'agents/local_agents/contracts/claude_interface.md'], ['docs/agents/local_agents/acp_contract.md', 'contracts/claude_interface.md']]
   }
 ]
@@ -110,10 +110,32 @@ describe.each(ENGINES)('$label interface contract — registry ratchet', (engine
 
   it('every entry is filled in, in an area the doc renders', () => {
     const incomplete = engine.entries.filter((entry) =>
-      !entry.name.trim() || !entry.expectation.trim() || !entry.feature.trim() || !entry.flow.trim() ||
+      !entry.name.trim() || !entry.expectation.trim() || !entry.feature.trim() ||
       entry.owners.length === 0 || !engine.areas.includes(entry.area)
     ).map((entry) => entry.id)
     expect(incomplete).toEqual([])
+  })
+
+  it('every entry names Level 2 flow steps that exist, or `none` with the reason', () => {
+    // Read at run time on purpose: vitest strips types without checking them,
+    // so a step the union does not have would otherwise pass here unnoticed.
+    const known = Object.keys(FLOW_STEPS)
+    const broken: string[] = []
+    for (const entry of engine.entries) {
+      const steps: readonly string[] = Array.isArray(entry.flow?.steps) ? entry.flow.steps : []
+      if (steps.length === 0) broken.push(`${entry.id}: names no flow step`)
+      for (const step of steps) if (!known.includes(step)) broken.push(`${entry.id}: unknown flow step "${step}"`)
+      if (steps.some((step, index) => steps.indexOf(step) !== index)) broken.push(`${entry.id}: a flow step is repeated`)
+      if (steps.includes('none') && steps.length > 1) broken.push(`${entry.id}: \`none\` cannot be combined with a step`)
+      if (steps.includes('none') && !(entry.flow.note ?? '').trim()) broken.push(`${entry.id}: \`none\` needs a note saying why`)
+    }
+    expect(broken).toEqual([])
+  })
+
+  it('both Level 2 variants the steps refer to exist', () => {
+    for (const file of ['e2e/specs/runtime-flow.spec.ts', 'scripts/live/runtime-flow.mjs']) {
+      expect(existsSync(join(repoRoot, file)), `${file} is missing`).toBe(true)
+    }
   })
 
   it('every owner names a file that exists and a symbol that still appears in it', () => {
