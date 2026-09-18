@@ -6,7 +6,7 @@
 
 | File | Role |
 |------|------|
-| `src/shared/appSettings.ts` | `AppSettingsSchema` interface (currently one key: `autoChatTitles: boolean`), `AppSettingKey` alias, `CHAT_TITLE_UPDATED_CHANNEL` constant, `ChatTitleUpdatedPayload` interface. Single source of truth for the settings schema across main + preload + renderer. |
+| `src/shared/appSettings.ts` | `AppSettingsSchema` interface (`autoChatTitles: boolean` among other keys), `AppSettingKey` alias, `CHAT_TITLE_UPDATED_CHANNEL` constant, `ChatTitleUpdatedPayload` interface. Single source of truth for the settings schema across main + preload + renderer. |
 | `src/shared/chatTitle.ts` | `AUTO_TITLE_MAX_FROM_MESSAGE = 50` constant + `deriveTitleFromMessage(message)` function. Renderer uses it to compute the fallback chat title; main-process title service uses it to recognise that fallback as an "untouched auto-title". |
 
 ### Main Process — DB
@@ -14,7 +14,7 @@
 | File | Role |
 |------|------|
 | `src/main/db/schema.ts` | `appSettings` table (`key TEXT PK`, `value TEXT`, `updated_at INTEGER`). Installation-global KV store; no `user_id`. |
-| `src/main/db/migrations/app-settings.ts` | `migrateAppSettings` creates `app_settings` table. Idempotent (`CREATE TABLE IF NOT EXISTS`); no `ALTER TABLE` paths (the schema is fixed). |
+| `src/main/db/migrations/app-settings.ts` | `migrateAppSettings` creates `app_settings` table. Idempotent (`CREATE TABLE IF NOT EXISTS`); no `ALTER TABLE` paths (the schema is fixed). Also holds `backfillAiFunctionsCredential`, the one-time AI Functions credential backfill ([AI Functions](../../llm/ai_functions/ai_functions.md#technical-reference)). |
 | `src/main/db/client.ts` | Registers `migrateAppSettings` in `runMigrations()` after `migrateNotes`, before the legacy `migrateUserIdColumns` backfill. |
 | `src/main/db/appSettings.ts` | `appSettingsRepo` with `get<K>(key)`, `set<K>(key, value)`, `getAll()`. Values are JSON-serialised; corrupt rows fall back to `DEFAULTS` (`{ autoChatTitles: false }`). |
 | `src/main/db/messages.ts` | New `messageRepo.countByRole(chatId, role)` (`SELECT COUNT(*)`) and `messageRepo.firstByRole(chatId, role)` (`SELECT … ORDER BY sort_order ASC LIMIT 1`) for cheap first-message detection without loading the full history. |
@@ -24,9 +24,13 @@
 
 | File | Role |
 |------|------|
-| `src/main/services/chatTitleService.ts` | Owns the title-gen orchestration: toggle check → first-message check → adapter resolve → one-shot LLM → sanitise → re-check → persist → broadcast. Exports `chatTitleService.autoGenerateForFirstMessage({ userId, chatId })` and `ChatTitleError`. |
+| `src/main/services/chatTitleService.ts` | Owns the title-gen orchestration: toggle check → first-message check → adapter resolve → one-shot LLM → sanitise → re-check → persist → broadcast. Exports `chatTitleService.autoGenerateForFirstMessage({ userId, chatId })`, `chatTitleService.applyEngineTitle(...)` and `ChatTitleError`. |
+| `src/main/agents/drivers/acp/acpSessionTitle.ts` | The Codex engine-title path, no Electron and no services: `engineTitlesChat(launcher)` (Codex only), `agentTitlesChat(agentRow)` (ACP, not WebSocket, launcher `codex`), `sessionInfoTitle(notification)`, `isPromptPlaceholder(title, prompts)`, and `createSessionTitles(sink)` → `{prompted, observe}`. Keeps up to 12 recent prompt texts per session (4 × every block, plus the blocks joined) for 200 sessions, oldest evicted. |
+| `src/main/agents/drivers/acp/acpDriver.ts` | `AcpDriverDeps.sessionTitle` (the sink). `runTurn` calls `titles.prompted` just before `session/prompt` and `titles.observe` on every live update; the between-turn session observer and `runFollowUp` call `observe` too, since Codex usually titles after the turn is over. The scope carries `profileUserId` only for a non-nested turn with a `runScope`, so nested and utility sessions never name a chat. |
+| `src/main/agents/drivers/index.ts` | Wires `sessionTitle` to `chatTitleService.applyEngineTitle` through a lazy import, logging a failure at `warn`. |
+| `src/main/services/runExecutionService.ts` | `runAgentTurn` computes `engineTitles` (`!input.nested && agentTitlesChat(agent)` and the agent is the chat's `rootAgentId`) and passes it to `prepareAgentSend` and `retryTitleAfterTurn`. |
 | `src/main/services/appSettingsService.ts` | Chokepoint for `app_settings` reads/writes. Validates `(key, value)` against `AppSettingsSchema` at runtime (`Object.hasOwn(DEFAULTS, key)` + `typeof value === typeof DEFAULTS[key]`). Throws `AppSettingsError`. |
-| `src/main/services/messageRoutingService.ts` | Hosts `fireTitleGenInBackground(userId, chatId)` — the fire-and-forget caller. Invoked from both `prepareLlmSend` and `prepareAgentSend` after `messageRepo.saveUser`. Classifies `ChatTitleError` codes into debug/info/warn log levels. |
+| `src/main/services/messageRoutingService.ts` | Hosts `fireTitleGenInBackground(userId, chatId)` — the fire-and-forget caller. Invoked from `prepareAgentSend` after `messageRepo.saveUser`, unless `engineTitles` is set. Classifies `ChatTitleError` codes into debug/info/warn log levels. |
 | `src/main/services/aiFunctionsService.ts` | Independent AI Functions backend resolution and one-shot execution; runtime calls are warm-only. |
 | `src/main/errors.ts` | `AppSettingsError` (codes: `invalid_key`, `invalid_value`). `ChatTitleError` is defined inside `chatTitleService.ts`, not here. |
 
@@ -92,8 +96,9 @@ Emitted from `chatTitleService` via `getMainWindow().webContents.send(CHAT_TITLE
 - `src/main/services/chatTitleService.ts::chatTitleService.autoGenerateForFirstMessage({ userId, chatId })` — The whole orchestration. Self-checks all pre-conditions. Throws `ChatTitleError` with one of the codes below; caller is responsible for catching and classifying.
 - `src/main/services/chatTitleService.ts::isUntouchedAutoTitle(currentTitle, firstUserText)` — Pure helper. Returns `true` iff `currentTitle === 'New Chat'` or `currentTitle === deriveTitleFromMessage(firstUserText)`.
 - `src/main/services/chatTitleService.ts::sanitizeTitle(raw)` — Strips quotes/backticks/whitespace/trailing punctuation, hard-caps at 40 chars. Pure.
-- `src/main/services/messageRoutingService.ts::fireTitleGenInBackground(userId, chatId)` — Private; wraps `autoGenerateForFirstMessage` with the log-level classifier and `void`s the promise. Called from `prepareLlmSend` and `prepareAgentSend`. An in-flight set keyed by chat ID drops a second call for the same chat.
-- `src/main/services/messageRoutingService.ts::retryTitleAfterTurn(userId, chatId)` — The same trigger, called from `src/main/services/runExecutionService.ts` when an agent turn completes with non-desktop-authored input.
+- `src/main/services/messageRoutingService.ts::fireTitleGenInBackground(userId, chatId)` — Private; wraps `autoGenerateForFirstMessage` with the log-level classifier and `void`s the promise. Called from `prepareAgentSend` (skipped when `PrepareAgentSendInput.engineTitles`). An in-flight set keyed by chat ID drops a second call for the same chat.
+- `src/main/services/messageRoutingService.ts::retryTitleAfterTurn(userId, chatId, engineTitles = false)` — The same trigger, called from `src/main/services/runExecutionService.ts` when an agent turn completes with non-desktop-authored input; a no-op when `engineTitles`.
+- `src/main/services/chatTitleService.ts::chatTitleService.applyEngineTitle({ userId, chatId, agentId, title })` — The Codex path. Returns `false` (never throws) unless the chat exists and is not trashed, `agentId` is `routingOf(chat).rootAgentId`, the current title passes `isUntouchedAutoTitle`, and the sanitised title is non-empty and different; then `updateMeta` + broadcast, logged as `chat titled by its engine`. Does **not** read `autoChatTitles`.
 - `src/main/services/appSettingsService.ts::appSettingsService.set(key, value)` — Validates then delegates to `appSettingsRepo.set`. Throws `AppSettingsError`.
 - `src/main/services/appSettingsService.ts::appSettingsService.getAll()` — Delegates to `appSettingsRepo.getAll`.
 - `src/main/db/messages.ts::messageRepo.countByRole(chatId, role)` — Single-row COUNT query. Returns 0 when no rows.
@@ -108,7 +113,6 @@ Emitted from `chatTitleService` via `getMainWindow().webContents.send(CHAT_TITLE
 | `chat_not_found` | warn | Chat row missing (deleted, foreign user, or race with hard delete). |
 | `chat_renamed_initial` | debug | Up-front check found a user-set title. Fires on every non-first send too. |
 | `chat_renamed_mid_flight` | info | The chat was renamed during the LLM call — the rename wins, the generation is discarded. |
-| `no_provider` | warn | Default chat mode missing, or its provider has no API key / is disabled. |
 | `llm_failed` | warn | Adapter call threw (network, auth, rate limit). |
 | `empty_output` | warn | Model returned nothing, or sanitisation produced an empty string. |
 
@@ -131,7 +135,9 @@ No env vars. No build-time flags. The hard limits (40-char output cap, 50-char r
 - The toggle write path is gated by `userActivation.requireActivated()` — same gate as every other settings IPC. There is no per-user authorization on the value itself (`app_settings` is global).
 - The `(key, value)` pair is runtime-validated at `appSettingsService.set` against `AppSettingsSchema` to prevent mass-assignment from a buggy or compromised renderer (unknown keys / wrong types are rejected before reaching SQLite).
 - Title content originates from the LLM and is sanitised before persisting (quote/punct/whitespace stripping, hard 40-char cap). It is then rendered through the same React text path as any other chat title — no `dangerouslySetInnerHTML`.
-- The default chat mode's provider sees the user's first message text via `runSingleShot.userText`. This is the same provider the user already trusts with their conversation — no new third party is introduced. The Features-tab description flags token consumption to the user.
+- The AI Functions backend (the chosen credential, else the Default runtime) sees the user's first message text via `runSingleShot.userText`. The Features-tab description names that backend.
+- In a Codex chat Cinna sends nothing for the title; Codex itself sends the first message to `gpt-5.6-luna` for its thread title (contract `codex.provider.auxiliary-request`).
+- An engine title is model output too, and takes the same `sanitizeTitle` path before it is written.
 
 ## Observability
 

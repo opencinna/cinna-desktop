@@ -55,7 +55,7 @@ Let users define named presets that bundle a runtime engine, credential/model, i
 
 1. User opens the `[+]` → **Chat mode** sub-menu and clicks the currently active mode
 2. Mode clears — `modeId` is removed from the chat, input returns to default styling
-3. The chat falls back to standard ChatControls (model picker + MCP toggles) for manual configuration
+3. The chat keeps the baseline MCP set it had — the user's tools do not vanish because the preset was detached — still shown as locked chips below the composer. There is no per-chat model picker or MCP toggle strip to fall back to
 
 ## Business Rules
 
@@ -63,15 +63,14 @@ Let users define named presets that bundle a runtime engine, credential/model, i
 - **A mode inherits its credential's state, and says so before the user finds out.** Switching the AI credential off makes its OpenCode runtime unavailable rather than silently selecting another key. The mode's card therefore carries an `Inactive` badge and a **visible** short cause — `credential switched off`, `no API key`, `credential missing` — with the whole sentence and its remedy in the expanded card. The cause is not left to a tooltip: the collapsed list is the state the tab opens in, and one word covering three situations is unambiguous only to someone who thought to hover. Account-provisioned modes use the same wording and styling as the user's own, so two lists of chat modes one settings group apart cannot report the same state differently — and it matters most there, whose header carries the mode's *own* on/off switch, where an unqualified `Inactive` would be a second meaning of "off" one control away
 - **A mode with no credential is not inactive.** It runs on the default, which is what its own select already says ("None (use default)"); badging it would put a warning on the most ordinary chat mode there is. Nothing is badged while the credential list is still loading either, so a card cannot flash `Inactive` and un-flash
 - **The credential select never claims "None (use default)" over a mode that names a credential.** A `<select>` whose value matches no option displays the first one, so a mode bound to a switched-off credential read as unset — wrong, and unrecoverable, because the card never admitted what it was set to. The bound row is added as a synthetic option suffixed `— inactive`; a credential that has left the machine, where only its id survives, gets a plain `Missing credential`
-- A chat mode's MCP list is the chat's **complete** baseline MCP set. An empty list means the chat starts with **no** MCP servers — there is no "fall back to every enabled provider" rule (it used to exist and silently attached every connector the user owned, tool schemas included, to chats whose mode selected none). Extra servers are added per chat via [On-Demand MCP](../../mcp/on_demand/on_demand.md) (`@`-mention or the `[+]` picker), and a mode-less chat configures its own set through `ChatControls`
+- A chat mode's MCP list is the chat's **complete** baseline MCP set. An empty list means the chat starts with **no** MCP servers — there is no "fall back to every enabled provider" rule (it used to exist and silently attached every connector the user owned, tool schemas included, to chats whose mode selected none). Extra servers are added per chat via [On-Demand MCP](../../mcp/on_demand/on_demand.md) (`@`-mention or the `[+]` picker); that is the only per-chat way to change a chat's MCP servers
 - Switching modes on an active chat replaces the baseline with the new mode's list verbatim — switching to a mode with no MCPs clears it. On-demand engagements live in their own table and survive the switch
-- A moded chat hides `ChatControls`, so the mode's MCP servers are surfaced as **locked chips** below the composer (and as locked selections in the `[+]` picker) — visible, but managed on the mode itself. See [On-Demand MCP](../../mcp/on_demand/on_demand.md)
+- **A chat mode is the only way to choose a chat's model or change its baseline MCP set.** There is no per-chat model picker or baseline toggle strip: every plain chat is answered by a runtime, not by a model the chat picks, so a picker beside the composer would describe nothing that runs. (One existed, `ChatControls`, from when a mode-less chat was answered by a provider model directly.) The baseline MCP servers of every chat, moded or not, are surfaced as **locked chips** below the composer (and as locked selections in the `[+]` picker) — visible, but managed on the mode itself. See [On-Demand MCP](../../mcp/on_demand/on_demand.md)
 - At most one mode per user is `isDefault`. Marking a mode as default in Settings clears the flag on any previously default mode (single-default invariant, enforced in the same transaction)
 - The default chat mode applies until the user explicitly chooses or deselects a mode. That choice stays with the dashboard or agent-page draft across navigation. Confirmed send dispatch resets unchanged mode intent to the current default; a different selection made during preparation remains in the source draft
 - Mode selection is available on the new-chat screen and on active chats that were created with a mode
-- Active chats with a `mode_id` show the mode selector instead of separate model/MCP controls
 - Switching modes on an active chat updates its provider, model, and MCP configuration immediately
-- Deselecting a mode on an active chat clears `modeId` and reverts to manual model/MCP controls
+- Deselecting a mode on an active chat clears `modeId` and leaves the baseline MCP set as it was
 - The `mode_id` is persisted on the chat record so the app knows which mode was used to create it
 - Color presets are fixed (10 options) — they are not user-definable
 - Mode name must be non-empty
@@ -92,11 +91,11 @@ New Chat Screen (ChatWorkspace -> ChatInput -> ComposerPlusMenu "Chat mode" sub-
   -> On send: chat created with mode_id, provider, model, MCPs
 
 Active Chat (ChatWorkspace -> ChatInput -> ComposerPlusMenu "Chat mode" sub-menu)
-  -> Chat has mode_id -> "Chat mode" sub-menu offered; ChatControls hidden
-  -> Chat without mode_id -> no "Chat mode" item; ChatControls shown (model + MCP)
+  -> Chat has mode_id -> "Chat mode" sub-menu offered
+  -> Chat without mode_id -> no "Chat mode" item; no per-chat model/MCP controls
   -> User switches mode -> chat's provider/model/MCPs updated
   -> Chat input border/bg tint to active mode color
-  -> Deselecting mode -> modeId cleared, falls back to ChatControls
+  -> Deselecting mode -> modeId cleared, baseline MCPs kept (locked chips)
 ```
 
 ## Integration Points

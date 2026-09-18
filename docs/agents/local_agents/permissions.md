@@ -64,6 +64,20 @@ The independent `codexApproval` value is stored with desktop state, never in the
 
 Codex execute grants hold raw input, title, content and locations as **one exact scope**. The initial raw-input-only shape omitted SOCKS host and protocol carried in the adapter's presentation fields, allowing a saved grant for one host to cover another. Splitting command, cwd and extra privileges into separate resources would also let unrelated grants combine into broader rights. Edit asks retain every touched path; all must be covered. Unknown requests with no usable scope get an exact request-ID resource, never a whole-action grant. See [Codex security](codex_engine_tech.md#security).
 
+### A session conducting a chat is not asked about Cinna's own tools
+
+A session with a conductor lease — Cinna's MCP server attached and answering for a chat — has its permission asks for **Cinna's own tools** allowed silently: no block, no grant written, nothing in the transcript. This covers the hidden chat-owned runtime and a user's folder agent conducting a chat alike. Those tools are the conductor's whole job and the user attached them; an ask per call is an opaque widget with nothing to decide. Codex raises one for **every** MCP call (`codex.permission.mcp-call-asks`), so before this rule a Codex-conducted chat stopped on an Allow button for each specialist it called.
+
+**The tool is identified only from what the adapter set for the call, never from its title**, because this answer is given without asking and a model must not be able to steer it:
+
+- **Codex** — `rawInput.server === "cinna"` with a non-empty `rawInput.tool`, on the call's `tool_call` update. The title is not enough: a shell call is titled with its command, and a command can be named `mcp.cinna.x`
+- **Claude** — `_meta.claudeCode.toolName` starting `mcp__cinna__`. Its `rawInput` is the tool's input, model writing, so a `server: "cinna"` there means nothing
+- **OpenCode** — the title of the call's **opening** `tool_call` only, starting `cinna_`: a registered tool name the model cannot invent. A later update's title can be model-written (OpenCode titles a bash call with its command), so a call first met as an update gets no title at all
+
+Anything else — a custom command, an engine this build does not know, a call whose evidence is missing — is left to the ordinary path (standing grant, else the block). The silent allow is decided per ask and records nothing, so no permission outlives the turn.
+
+A **chat-owned** runtime has a second, earlier gate: an ask that does not name a Cinna tool at all is **rejected** silently, since that runtime may only ever use Cinna's tools. That gate is the older, looser predicate (the adapter's name, or the title when the engine reports none), so an ask it lets through but the adapter evidence does not confirm falls through to the ordinary path rather than being allowed.
+
 ### An agent works freely inside its own folder
 
 The generated rules in this section apply to OpenCode; Codex's sandbox policy is described above.
@@ -237,6 +251,8 @@ Dynamic half — one ask, mid-turn, on either engine
   agent: session/request_permission        (a BLOCKING request; the park is the
       └─► acpDriver.answerPermission        unresolved response, so there is no
              │                              reply endpoint and no id to correlate)
+             ├── chat-owned, not a Cinna tool? ──► rejected, nothing written
+             ├── conducting, adapter says Cinna tool? ──► allowed, nothing written
              ├── standing grant covers it? ──► answered `allow_once` at once,
              │                                 nothing written to the transcript
              └── otherwise ──► block in the transcript + pendingRequests.register

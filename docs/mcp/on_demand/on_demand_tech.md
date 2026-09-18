@@ -53,8 +53,6 @@ All three require `userActivation.requireActivated()` and use `getProfileScopeUs
 - `chatService.addOnDemandMcp(userId, chatId, mcpProviderId)` — ownership-checks chat + verifies MCP exists in settings scope (`mcpProviderRepo.getOwned`), then `chatOnDemandMcpRepo.add` (upsert that re-arms `pendingAnnounce`)
 - `chatService.removeOnDemandMcp(userId, chatId, mcpProviderId)` — ownership-checks then `chatOnDemandMcpRepo.remove`
 - `pending_announce` remains schema/API compatibility state; ACP tool discovery does not consume it.
-- `pending_announce` remains schema/API compatibility state; ACP tool discovery does not consume it.
-- `src/main/services/conductorBridge.ts` unions baseline/on-demand connected MCP providers and refreshes the injected endpoint on chat/tool changes.
 - `src/main/services/conductorBridge.ts` unions baseline/on-demand connected MCP providers and refreshes the injected endpoint on chat/tool changes.
 
 ## Renderer Components
@@ -62,7 +60,7 @@ All three require `userActivation.requireActivated()` and use `getProfileScopeUs
 - `ChatInput` — when `chatId` is set, switches the `@` popup from `AgentMentionPopup` to `AgentMcpMentionPopup`. Owns the flat `triggerIndex` that spans agents-then-MCPs and routes Enter/Tab to either `selectAgent` or `selectMcp`.
 - `AgentMcpMentionPopup` — `role="listbox"` containing one `role="group"` per non-empty section. Single `selectedIndex` highlights one row across the flattened list; option ids are `${listboxId}-opt-${flatIndex}` matching the index ChatInput maintains.
 - `ActiveMcpChips` — reads `useChatOnDemandMcps` + `useMcpProviders` directly so the strip stays in sync with whichever path mutated the table; the baseline half arrives as the `baselineIds` prop, resolved once in `ChatInput` (`useChatMcpProviders` for an active chat, the `baselineMcpIds` prop from `ChatWorkspace` on the new-chat screen) and shared with `useCapabilityPicker` so chips and picker can't disagree.
-- `ChatInput.showsChatControls` (`!boundAgent && !chatData?.modeId`) is the single gate: when `ChatControls` is on screen it owns the baseline (toggle pills), so `baselineIds` resolves to `[]` and the chips/picker stay on-demand-only. When it's hidden — a moded chat or an agent-rooted one — the baseline is mode-owned and shows up locked in both surfaces.
+- `ChatInput`'s `baselineIds` is always the chat's baseline (`useChatMcpProviders` for an active chat, the `baselineMcpIds` prop before it exists) and shows up locked in both the chips and the picker. There used to be a gate (`showsChatControls`) that emptied it while the per-chat `ChatControls` toggle pills were on screen; both are gone.
 
 ## Configuration
 
@@ -80,4 +78,3 @@ None. No env vars, no settings. The feature is always available inside an active
 
 - `pending_announce` remains schema/API compatibility state; ACP tool discovery does not consume it.
 - **Why a second listbox component instead of extending `MentionPopup`**: `MentionPopup<T>` is a flat single-section primitive used by four call sites (agents, prompts, commands, chat modes). Adding grouping to it would complicate every caller; `AgentMcpMentionPopup` inlines the same surface treatment with section grouping local to itself.
-- `pending_announce` remains schema/API compatibility state; ACP tool discovery does not consume it.
