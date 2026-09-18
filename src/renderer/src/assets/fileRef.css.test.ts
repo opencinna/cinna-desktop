@@ -34,13 +34,22 @@ describe('.file-ref styles', () => {
       for (const line of edgeLines) expect(line).not.toMatch(/--color-accent/)
     }
     const light = fileRefRules.find((rule) => rule.selector === '[data-theme="light"] .markdown-body code.file-ref')
-    expect(light?.body).toMatch(/--file-ref-edge:\s*color-mix\(in srgb, var\(--color-bg-hover\), (white|black) \d+%\)/)
+    expect(light?.body).toMatch(/--file-ref-edge:\s*color-mix\(in srgb, var\(--file-ref-fill\), (white|black) \d+%\)/)
     const base = fileRefRules.find((rule) => rule.selector === '.markdown-body code.file-ref')
     expect(base?.body).toMatch(/box-shadow:\s*inset 0 0 0 1px var\(--file-ref-edge\)/)
   })
 
-  it('keep the plain inline-code fill, with no gradient or background of their own', () => {
-    for (const rule of fileRefRules) expect(rule.body).not.toMatch(/background|gradient/)
+  it('fill from their own variable, tinted towards the accent per theme, with no gradient', () => {
+    for (const rule of fileRefRules) expect(rule.body).not.toMatch(/gradient/)
+    const base = fileRefRules.find((rule) => rule.selector === '.markdown-body code.file-ref')
+    expect(base?.body).toMatch(/background:\s*var\(--file-ref-fill\)/)
+    for (const selector of ['.markdown-body code.file-ref', '[data-theme="light"] .markdown-body code.file-ref']) {
+      const body = fileRefRules.find((rule) => rule.selector === selector)?.body ?? ''
+      expect(body).toMatch(/--file-ref-fill:\s*color-mix\(in srgb, var\(--color-bg-hover\), var\(--color-accent\) \d+%\)/)
+    }
+    for (const rule of fileRefRules) {
+      if (rule.selector !== '.markdown-body code.file-ref') expect(rule.body).not.toMatch(/background/)
+    }
   })
 
   it('darken or lighten the edge on hover through its own variable, defined in both themes', () => {
