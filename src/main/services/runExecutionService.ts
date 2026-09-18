@@ -669,6 +669,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
       onCompleted: () => {
         const last = messageRepo.lastId(chatId)
         if (last) chatAgentCursorRepo.advance(chatId, agentId, last)
+        if (!isDesktopAuthored(input.inputOrigin)) messageRoutingService.retryTitleAfterTurn(profileUserId, chatId)
       }
     }),
     (message) => input.refusal(chatId, message)

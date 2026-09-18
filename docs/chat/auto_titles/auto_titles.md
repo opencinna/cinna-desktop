@@ -59,7 +59,8 @@ In all cases, the user-visible streaming flow is untouched.
 
 ### Trigger placement
 
-- Trigger lives in `messageRoutingService` — `prepareLlmSend` and `prepareAgentSend` both fire it after the user message is persisted. No other path triggers title generation.
+- Trigger lives in `messageRoutingService` — `prepareLlmSend` and `prepareAgentSend` both fire it after the user message is persisted. The one other trigger is the after-turn retry below.
+- When an agent turn completes (and its input was not desktop-authored), the trigger fires once more. A warm-only title cannot run at first-message persist in a brand-new plain chat — that turn has not spawned its process yet — so titles on the Default runtime never appeared. Turn completion is the first moment the process is warm. Every precondition still applies, so the retry is a no-op after the first exchange or once a title exists; a chat with a title call still in flight is skipped rather than doubled.
 - The trigger is unconditional at the routing-service level. All checks (toggle, first-message, untouched title) live in the title service itself, so adding a new send channel only requires one extra `fireTitleGenInBackground` call.
 - Chats whose first message is a system action (e.g. job-spawned chats that pre-populate state) do not go through routing-service paths and therefore do not auto-generate titles.
 
@@ -142,6 +143,6 @@ Renderer (useChatList effect)
 
 The rule the renderer uses to derive its fallback title from a first user message lives in `src/shared/chatTitle.ts` as `deriveTitleFromMessage(message)` + `AUTO_TITLE_MAX_FROM_MESSAGE = 50`. Both layers import it; if the rule ever changes (different limit, different ellipsis), the title service's "untouched" check stays in sync structurally — there is no second copy to update.
 
-Runtime fallback uses warmOnly: true. If no compatible process is warm, title generation defers and keeps the derived title; it does not spawn a process in the background. Explicit AI Functions credentials still use one SDK request.
+Runtime fallback uses warmOnly: true. If no compatible process is warm, title generation defers and keeps the derived title; it does not spawn a process in the background. The deferred title is retried once, when the first turn completes (see Trigger placement). Explicit AI Functions credentials still use one SDK request.
 
 A compatible warm Codex chat process can serve a fresh restricted title session with its own cwd, exact per-session developer instructions and no MCP descriptors. The chat transcript and prompt are not reused. Compatibility still requires the [verified Codex policy](../../agents/local_agents/codex_engine_tech.md#restricted-chat-and-ai-function-policy); an installed or merely selected runtime is not itself a warm process.

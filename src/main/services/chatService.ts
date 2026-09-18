@@ -252,6 +252,12 @@ export const chatService = {
 
     if (current === 'coordinator') throw new ChatError('not_configured', 'AI routing cannot be turned off for this chat.')
 
+    // A plain chat's root is its own hidden runtime, never an agent the user
+    // picked: it cannot become a participant they address. It keeps answering
+    // and the arriving agent becomes its tool, whatever the caller assumed.
+    const root = chat.agentId ? agentService.findAgent(getSettingsScopeUserId(), userId, chat.agentId) : null
+    if (router === 'human' && current === 'direct' && root && isChatConductor(root.row)) router = 'coordinator'
+
     const attached = chatOnDemandAgentRepo.listAgentIds(chatId)
     let bindRoot: string | null = null
     if (router === 'coordinator') {

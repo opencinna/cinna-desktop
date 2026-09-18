@@ -115,6 +115,7 @@ vi.mock('../services/agentService', () => ({
   agentService: { findAgent, listMerged: vi.fn(() => AGENTS) }
 }))
 
+const retryTitleAfterTurn = vi.fn()
 const prepareAgentSend = vi.fn((input: { userContent: string }): { wireContent: string; userMessageId?: string } => ({
   wireContent: input.userContent
 }))
@@ -122,7 +123,7 @@ const prepareLlmSend = vi.fn((input: { userContent: string }) => ({
   wireContent: input.userContent
 }))
 vi.mock('../services/messageRoutingService', () => ({
-  messageRoutingService: { prepareAgentSend, prepareLlmSend }
+  messageRoutingService: { prepareAgentSend, prepareLlmSend, retryTitleAfterTurn }
 }))
 
 const streamToAgent = vi.fn(async (_input: unknown) => undefined)
@@ -459,6 +460,8 @@ describe('run:send — the cursor', () => {
     const input = streamToAgent.mock.calls.at(-1)![0] as { onCompleted?: () => void }
     input.onCompleted?.()
     expect(cursorAdvance).toHaveBeenCalledWith('chat-1', 'a-2', 'm-last')
+    // A warm-only title could not run at persist: the finished turn retries it.
+    expect(retryTitleAfterTurn).toHaveBeenCalledWith(expect.any(String), 'chat-1')
   })
 
   it('leaves the cursor alone when the chat has no messages to point at', async () => {

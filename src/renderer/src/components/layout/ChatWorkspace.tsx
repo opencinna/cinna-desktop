@@ -130,6 +130,13 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   // both the routing decision and the badge.
   const combinedAgentIds = pendingAgentIds
 
+  // "Coordinate by…" is one-way inside a chat, but nothing exists yet: a draft
+  // whose agents were all removed starts over, or the next pick would be
+  // coordinated with no control on screen that says why or undoes it.
+  useEffect(() => {
+    if (coordinate && combinedAgentIds.length === 0) setCoordinate(false)
+  }, [coordinate, combinedAgentIds.length, setCoordinate])
+
   // The router this selection would create — the same call `startNewChat`
   // makes, so the badge cannot promise a shape the send does not build.
   const newRouter = useMemo(

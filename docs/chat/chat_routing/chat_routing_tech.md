@@ -4,7 +4,7 @@
 
 - Shared: `src/shared/chatRouting.ts` — `routingOf`, `answererOf`, `newChatRouter`, `canConduct`, router validation and the default multi-agent preference type.
 - Main: `src/main/services/chatService.ts` — validates ownership, normalizes roots and participants, refreshes conductor tools. `src/main/services/chatConductorService.ts` — creates/reuses the hidden per-chat ACP root and captures runtime configuration.
-- Execution: `src/main/services/runExecutionService.ts` — binds missing runtime roots before driver dispatch; `src/main/services/threadContextService.ts` — per-agent catch-up; `src/main/services/conductorTranscript.ts` — full replacement-session replay.
+- Execution: `src/main/services/runExecutionService.ts` — binds missing runtime roots before driver dispatch; `src/main/services/threadContextService.ts` — per-agent catch-up; `src/main/services/conductorTranscript.ts` — full replacement-session replay, for the chat's root only.
 - Renderer: `src/renderer/src/hooks/useNewChatFlow.ts`, `src/renderer/src/hooks/useChat.ts`, `src/renderer/src/hooks/useAgents.ts`; `src/renderer/src/components/layout/ChatWorkspace.tsx`; `src/renderer/src/components/chat/ChatInput.tsx`, `RouterBadge.tsx`, `OnDemandAgentChips.tsx`, `ComposerPlusMenu.tsx`.
 
 ## Database Schema
@@ -22,14 +22,15 @@
 
 ## Services & Key Methods
 
-- `chatService.setRouter`: keep an eligible Local root; otherwise attach a remote root and bind an eligible Local participant or synthetic Default runtime. Existing sessions survive promotion.
+- `chatService.setRouter`: keep an eligible Local root; otherwise attach a remote root and bind an eligible Local participant or synthetic Default runtime. Existing sessions survive promotion. A request for human routing on a direct chat whose root is a chat-owned runtime (`isChatConductor`) is rewritten to coordinator before anything is detached, so no caller can turn the hidden runtime into a participant.
 - `chatConductorService.ensure/bind`: capture engine, credential, model, instructions and tool policy; write instructions into a chat-owned directory under userData.
 - `runExecutionService`: normal sends and resends build per-agent catch-up for human/coordinator routing or an explicit different participant. Only completed turns advance the recipient cursor; its own replies and addressed inputs remain excluded. Normalize a rootless non-human chat before choosing its driver. SDK adapter streaming is no longer an execution branch.
 - `routingOf`: root duality for direct/coordinator, sticky addressing for human; reports nominal attachment scope which the concrete agent's local attachment capability can override.
 
 ## Renderer Components
 
-- `ChatWorkspace` previews the initial router with the preference and explicit coordinate intent retained in the per-surface composer draft.
+- `ChatWorkspace` previews the initial router with the preference and explicit coordinate intent retained in the per-surface composer draft; the intent is cleared when the draft's last picked agent is removed.
+- `useAttachAgentToChat` (`src/renderer/src/hooks/useAgents.ts`) asks for coordinator, not the preference, when the direct root carries `conductor: true`; `ChatInput` applies the same test to the Coordinate action and to sticky addressing. These mirror main's rule for an honest optimistic state — `chatService.setRouter` is the enforcement.
 - `useNewChatFlow` prepares participants/MCPs, applies the root/mode, reads the normalized chat and fresh agent list, publishes that agent list to the query cache and resolves files under the actual root's capability.
 - `useUpdateChat` and `useSetChatRouter` invalidate affected detail, agent and participant caches. Optimistic coordinator state retains the current root until main normalizes it.
 - `RouterBadge` shows conductor details and the one-way Coordinate action; the plus menu exposes the same action. Role labels/rings do not reorder chips.

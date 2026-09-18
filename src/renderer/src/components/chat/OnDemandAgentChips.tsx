@@ -23,6 +23,8 @@ export interface ChipAddressing {
  * (`ChatInput`). The composer's chip row never wraps.
  */
 export const agentChipClass = 'shrink min-w-[4.5rem] max-w-[12rem]'
+/** A chip that also carries its role: the floor leaves the name room beside the label, and the row scrolls for the rest. */
+const roleChipClass = 'shrink min-w-[9.5rem] max-w-[14rem]'
 
 type OnDemandAgentChipsProps = (
   | { chatId: string; pendingIds?: never; onRemovePending?: never }
@@ -77,7 +79,7 @@ export function OnDemandAgentChips(
   return (
     <>
       {props.coordination && !props.coordination.conductorId && (
-        <div className={`flex items-center gap-1 px-1.5 py-1 rounded-lg border ring-2 ring-[var(--color-text)] text-[var(--color-accent)] border-[var(--color-accent)] bg-[var(--color-accent)]/10 ${agentChipClass}`} title={`${props.coordination.conductorName} — Coordinator`}>
+        <div className={`flex items-center gap-1 px-1.5 py-1 rounded-lg border ring-2 ring-[var(--color-text)] text-[var(--color-accent)] border-[var(--color-accent)] bg-[var(--color-accent)]/10 ${roleChipClass}`} title={`${props.coordination.conductorName} — Coordinator`}>
           <Bot size={12} className="shrink-0" />
           <span className="min-w-0 truncate text-[11px] font-medium">{props.coordination.conductorName}</span>
           <span className="text-[9px] shrink-0">Coordinator</span>
@@ -107,7 +109,7 @@ export function OnDemandAgentChips(
             // a ring in the chip's own colour then reads as nothing but a
             // slightly thicker border. The theme's text colour is the one colour
             // guaranteed to contrast with every chip.
-            className={`flex items-center gap-1 pl-1.5 pr-1 py-1 rounded-lg border ${agentChipClass} transition-shadow${
+            className={`flex items-center gap-1 pl-1.5 pr-1 py-1 rounded-lg border ${props.coordination ? roleChipClass : agentChipClass} transition-shadow${
               addressed || coordinator ? ' ring-2 ring-[var(--color-text)]' : ''
             }`}
             style={{

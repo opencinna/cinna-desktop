@@ -1,4 +1,5 @@
 import type { SessionNotification } from '@agentclientprotocol/sdk'
+import { cinnaToolName } from '../agents/drivers/acp/conductorToolPolicy'
 
 /** Claude carries its id in MCP metadata; other engines correlate by tool name and arrival order. */
 export class ConductorToolCorrelation {
@@ -9,13 +10,8 @@ export class ConductorToolCorrelation {
     const update = notification.update
     if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') return false
     if (this.calls.has(update.toolCallId)) return true
-    const raw = update.rawInput as {server?: string; tool?: string} | undefined
     const meta = update._meta as {claudeCode?: {toolName?: string}} | undefined
-    const label = meta?.claudeCode?.toolName ?? update.title ?? ''
-    const name = raw?.server === 'cinna' && typeof raw.tool === 'string' ? raw.tool
-      : label.startsWith('mcp__cinna__') ? label.slice('mcp__cinna__'.length)
-      : label.startsWith('mcp.cinna.') ? label.slice('mcp.cinna.'.length)
-      : label.startsWith('cinna_') ? label.slice('cinna_'.length) : null
+    const name = cinnaToolName(meta?.claudeCode?.toolName ?? update.title, update.rawInput)
     if (!name) return false
     const pending = this.early.get(name)
     const alreadyClaimed = !!pending?.shift()

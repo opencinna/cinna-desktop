@@ -226,6 +226,16 @@ describe('chatService.setRouter', () => {
     expect(agentSessionRepo.getByChatAndAgent(chatId, 'a-1')?.contextId).toBe('ctx-1')
   })
 
+  it('keeps a plain chat’s hidden runtime conducting instead of making it a participant', () => {
+    const chatId = directChat()
+    holder.current!.raw.prepare("UPDATE agents SET driver='acp', driver_config=? WHERE id='a-1'").run(JSON.stringify({launcher:'claude', conductorChatId: chatId}))
+    chatService.setRouter(USER, chatId, 'human')
+    const chat = chatRepo.getOwned(USER, chatId)!
+    expect(chat.router).toBe('coordinator')
+    expect(chat.agentId).toBe('a-1')
+    expect(chatOnDemandAgentRepo.listAgentIds(chatId)).toEqual([])
+  })
+
   it('keeps a local root and its session when it starts conducting', () => {
     holder.current!.raw.prepare("UPDATE agents SET driver='acp', driver_config=? WHERE id='a-1'").run(JSON.stringify({launcher:'claude'}))
     const chatId = directChat()

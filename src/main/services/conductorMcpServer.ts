@@ -3,7 +3,10 @@ import { createServer, type IncomingMessage, type Server as HttpServer, type Ser
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { CallToolRequestSchema, CallToolResultSchema, ListToolsRequestSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { createLogger } from '../logger/logger'
 import type { ToolCallOptions, ToolExecutionResult, ToolProvider } from '../llm/toolProvider'
+
+const logger = createLogger('conductor-mcp')
 
 /** Main-only ACP descriptor. Its bearer credential must never cross IPC. */
 export interface ConductorMcpDescriptor {
@@ -171,9 +174,13 @@ export class ConductorMcpServer {
         }
         this.origin = `http://127.0.0.1:${address.port}`
         listener.unref()
+        // A later socket-level error must not surface as an uncaught exception.
+        listener.on('error', (error) => logger.warn('Conductor MCP listener error', { error: String(error) }))
         resolve()
       })
     })
+    // One failed listen must not break every conductor until restart.
+    this.starting.catch(() => { this.starting = undefined; this.listener = undefined })
     return this.starting
   }
 

@@ -333,7 +333,8 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   const runtime = runtimeService.resolve(undefined, providerService.listMerged())
   if (runtime.reason) throw new Error(runtime.reason)
   const engine = runtime.launcher
-  let poolKey = aiFunctionRuntimePoolKey(userId, engine, runtime.credentialId ?? null, runtime.modelId ?? null, systemPrompt)
+  // OpenCode instructions are process config; Claude and Codex own them per session.
+  let poolKey = aiFunctionRuntimePoolKey(userId, engine, runtime.credentialId ?? null, runtime.modelId ?? null, engine === 'opencode' ? systemPrompt : null)
   // Claude shares a process across function prompts, but instruction files are
   // session-owned too: concurrent functions must never rewrite each other's cwd.
   const digest = createHash('sha256').update(JSON.stringify([poolKey, systemPrompt])).digest('hex').slice(0, 24)
@@ -609,8 +610,12 @@ export const acpDriver = createAcpDriver({
     const { conductorBridge } = await import('../../services/conductorBridge')
     return conductorBridge.prepare(userId, agent, input, plan, stop, wake)
   },
+  conductorAbandoned: (chatId, agentId, reason) => {
+    void import('../../services/conductorBridge').then(({ conductorBridge }) => conductorBridge.abandonWaiters(chatId, agentId, reason))
+      .catch((error) => logger.warn('Could not release conductor calls after an abandoned follow-up', { agentId, error: String(error) }))
+  },
   buildPrompt: (userId, input, connection) => import('../../services/acpAttachments').then(({ buildAcpPrompt }) => buildAcpPrompt(userId, input, connection)),
-  replayTranscript: (chatId, messageId, connection, userId) => import('../../services/conductorTranscript').then(({ replayTranscript }) => replayTranscript(chatId, messageId, connection, userId)),
+  replayTranscript: (chatId, messageId, connection, userId, agentId) => import('../../services/conductorTranscript').then(({ replayTranscript }) => replayTranscript(chatId, messageId, connection, userId, agentId)),
   launcher: (id) => {
     const launcher = acpLaunchers[id]
     if (!launcher) return undefined

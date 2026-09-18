@@ -59,6 +59,7 @@ import type {
   SessionNotification
 } from '@agentclientprotocol/sdk'
 import { RequestError } from '@agentclientprotocol/sdk'
+import { cinnaToolName } from './conductorToolPolicy'
 import type { AgentRow } from '../../../db/agents'
 import type { RunAgentTurnResult, TurnIO, TurnSteer } from '../../../services/a2aStreamingService'
 import type { RunEvent } from '../../../../shared/runEvents'
@@ -136,7 +137,9 @@ export interface ConductorOutcome { control?: import('../../../services/coordina
 
 export interface AcpDriverDeps {
   prepareConductor?(userId: string, agent: AgentRow, input: RunInput, plan: AcpLaunchPlan, stop: (outcome: ConductorOutcome) => void, wake: () => boolean): Promise<import('../../../services/conductorBridge').ConductorLease | undefined>
-  replayTranscript?(chatId: string, messageId: string | undefined, connection: AcpConnection, userId: string): Promise<string | ContentBlock[]>
+  /** A between-turn follow-up was dropped: conductor tool calls waiting for it must fail, not hang. */
+  conductorAbandoned?(chatId: string, agentId: string, reason: string): void
+  replayTranscript?(chatId: string, messageId: string | undefined, connection: AcpConnection, userId: string, agentId: string): Promise<string | ContentBlock[]>
   buildPrompt?(userId: string, input: RunInput, connection: AcpConnection): Promise<ContentBlock[]>
   recordModelCatalog?(userId: string, launcher: AcpLauncherId, metadata: unknown): void
   pool: AcpProcessPool
@@ -428,6 +431,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
         // From the trigger until the follow-up turn takes over (or is dropped):
         // the reaper must not stop the process the agent's turn runs in.
         hold: () => deps.pool.hold(scope.agentId),
+        onAbandon: (reason) => deps.conductorAbandoned?.(scope.chatId, scope.agentId, reason),
         open: () => openFollowUp({
           chatId: scope.chatId,
           agentId: scope.agentId,
@@ -1117,6 +1121,9 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     if (startupController.signal.aborted) throw new Error('The agent was stopped before its prompt started.')
     if (!sessionId) {
       freshSession = true
+      // A session recreated under an unchanged digest (its load failed) is as
+      // empty as any other: only taking its prompt marks it current again.
+      conductor?.sessionLost?.()
       try {
         runtime.validate(chatId)
         const created = await duringStart(connection.newSession(newSessionParams(plan, sessionCwd)))
@@ -1140,8 +1147,6 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       // next turn opened a fresh session and the agent remembered nothing.
       rememberSession(ctx, sessionId)
     }
-
-    conductor?.sessionReady?.()
 
     if (held) {
       const taken = held
@@ -1225,7 +1230,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       startingSession = false
       const prompt = deps.buildPrompt ? await deps.buildPrompt(ctx.userId, input, connection) : [{ type: 'text' as const, text: input.wireContent }]
       if (freshSession && !input.nested && input.runScope && deps.replayTranscript) {
-        const transcript = await deps.replayTranscript(chatId, input.messageId, connection, input.runScope.profileUserId)
+        const transcript = await deps.replayTranscript(chatId, input.messageId, connection, input.runScope.profileUserId, agent.id)
         if (typeof transcript === 'string') { if (transcript) prompt.unshift({ type: 'text', text: transcript }) }
         else prompt.unshift(...transcript)
       }
@@ -1237,6 +1242,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         agent.id,
         armSteering
       ).finally(settleSteering)
+      // Only a session that took its prompt — the transcript replay with it —
+      // is marked current. One that failed before that must be replaced and
+      // replayed again, not loaded empty on the next turn.
+      if (answer) conductor?.sessionReady?.()
       if (!answer) {
         // The grace expired: the agent never acknowledged the cancel. What was
         // streamed is kept, and a stop the user asked for is not an error — but
@@ -1589,7 +1598,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   const stopWatchingExit = onConnectionExit(connection, () => end('exited'))
   let leftover: HeldTraffic[] = []
   try {
-    conductor = await deps.prepareConductor?.(world.userId, agent, { ...input, flush: () => { accumulator.breakContinuation(); input.flush?.() } }, world.plan, (outcome) => { ctx.conductorOutcome = outcome; setTimeout(() => { if (!ended) askAgentToStop(false) }, 0) }, () => gate.wake())
+    conductor = await deps.prepareConductor?.(world.userId, agent, { ...input, flush: () => { accumulator.breakContinuation(); input.flush?.() } }, world.plan, (outcome) => { if (ctx.conductorOutcome) return; ctx.conductorOutcome = outcome; setTimeout(() => { if (!ended) askAgentToStop(false) }, 0) }, () => gate.wake())
     if (!connection.alive) {
       end('exited')
     } else if (!gate.pending) {
@@ -1847,6 +1856,13 @@ interface AskWorld {
   turn: AcpTurn
 }
 
+/** Whether an ask is for a Cinna tool, in whichever spelling the engine uses. */
+export function isCinnaToolAsk(toolName: string | undefined, params: Pick<RequestPermissionRequest, 'toolCall'>): boolean {
+  // The adapter's own name is authoritative; the title, which a model can
+  // influence, speaks only for an engine that reports no name.
+  return cinnaToolName(toolName ?? params.toolCall.title, params.toolCall.rawInput) !== null
+}
+
 /**
  * The permission gate.
  *
@@ -1882,7 +1898,8 @@ async function answerPermission(
   // silently: no block, no wait. A block that appeared and answered itself
   // milliseconds later would be a widget the user cannot act on, in the middle
   // of streaming text.
-  if (typeof agent.driverConfig?.conductorChatId === 'string' && !toolName?.startsWith('mcp__cinna__')) return selected('reject')
+  // A chat-owned runtime may only ever be asked about Cinna's own tools.
+  if (typeof agent.driverConfig?.conductorChatId === 'string' && !isCinnaToolAsk(toolName, params)) return selected('reject')
   let granted = false
   try {
     runtime.validate(input.chatId)

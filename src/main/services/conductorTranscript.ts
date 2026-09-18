@@ -4,7 +4,10 @@ import type { AcpConnection } from '../agents/drivers/acp/types'
 import { buildAcpPrompt } from './acpAttachments'
 
 /** A replacement session needs the transcript, including its own answers, not the 4K catch-up gap. */
-export async function replayTranscript(chatId: string, currentMessageId: string | undefined, connection: AcpConnection, userId: string): Promise<ContentBlock[]> {
+export async function replayTranscript(chatId: string, currentMessageId: string | undefined, connection: AcpConnection, userId: string, agentId: string): Promise<ContentBlock[]> {
+  // Only the chat's answerer owns the whole conversation. A participant the
+  // user addresses gets the catch-up packet, not every past turn on top of it.
+  if (chatRepo.getOwned(userId, chatId)?.agentId !== agentId) return []
   const messages = chatRepo.listMessages(chatId)
   const index = currentMessageId ? messages.findIndex((message) => message.id === currentMessageId) : -1
   const history = index < 0 ? messages.slice(0, -1) : messages.slice(0, index)

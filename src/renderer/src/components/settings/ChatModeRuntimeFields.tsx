@@ -44,7 +44,10 @@ export function ChatModeRuntimeFields({ value, onChange, section = 'all', resolv
         <option value="__custom__">Other model…</option>
       </select> : <div className="flex items-center gap-2">
         <input key={`${value.engine}-model`} id={`${id}-model`} className={`${settingsInputClass} min-w-0 flex-1`} defaultValue={value.modelId ?? ''}
-          placeholder="Runtime default" onBlur={(event) => { if (event.target.value !== (value.modelId ?? '')) onChange({ modelId: event.target.value.trim() || null }) }} />
+          placeholder="Runtime default"
+          // Enter would submit the form before blur commits the id: commit instead.
+          onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur() } }}
+          onBlur={(event) => { if (event.target.value !== (value.modelId ?? '')) onChange({ modelId: event.target.value.trim() || null }) }} />
         {customModel && choices.length > 0 && <button type="button" className="shrink-0 text-[13px] font-medium text-[var(--color-accent)] underline"
           onClick={() => setCustomModel(false)}>Listed models</button>}
       </div>}

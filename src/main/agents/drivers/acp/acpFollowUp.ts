@@ -158,6 +158,8 @@ export interface FollowUpGateOptions {
    * process the traffic is waiting in. Returns the release.
    */
   hold?(): () => void
+  /** A wanted follow-up was dropped: whoever asked for it through `wake` must stop waiting. */
+  onAbandon?(reason: string): void
   limit?: number
 }
 
@@ -292,6 +294,7 @@ export function createFollowUpGate(scope: SessionTrafficScope, options: FollowUp
     const asks = items.filter((item) => item.type !== 'update').length
     if (items.length > 0) logger[level]('a follow-up turn was not opened; its traffic was dropped', { ...where, reason, updates: items.length - asks, asks })
     for (const item of items) refuseHeld(item)
+    options.onAbandon?.(reason)
   }
 
   const sink: SessionTrafficSink = {

@@ -13,7 +13,7 @@ Run a short text transformation for titles and agent drafts with one output stri
 ## User Stories / Flows
 
 1. Select an AI Functions credential/model or leave Default runtime selected. Changing credential clears the model selection.
-2. Drafting may start a cold runtime and waits for the result. Background titles request a warm process only; without one they defer, leaving the ordinary derived title in place.
+2. Drafting may start a cold runtime and waits for the result. Background titles request a warm process only; without one they defer, leaving the ordinary derived title in place, and are retried once when the chat's first turn completes and its process is warm.
 3. A runtime utility receives the function's instructions as its system prompt and the caller's text as user input. It never receives a chat's transcript or attached connectors.
 
 ## Business Rules

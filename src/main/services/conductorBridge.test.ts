@@ -73,6 +73,29 @@ describe('runtime tool integration', () => {
     turn.lease.close()
   })
 
+  it('lets a parallel sibling finish before a durable question ends the turn', async () => {
+    const turn = await subject()
+    let finish!: () => void
+    const sibling = turn.execute({ providerType: 'agent', displayName: 'Slow', agentId: 'slow', getTools: () => [],
+      callTool: () => new Promise((resolve) => { finish = () => resolve({ content: 'Done' }) }) })
+    await turn.execute({ providerType: 'agent', displayName: 'Asker', agentId: 'asker', getTools: () => [],
+      callTool: async () => ({ content: 'Waiting in the Inbox', needsInput: true }) })
+    expect(turn.stop).not.toHaveBeenCalled()
+    finish()
+    await sibling
+    expect(turn.stop).toHaveBeenCalledExactlyOnceWith({ needsInput: true })
+    turn.lease.close()
+  })
+
+  it('fails a between-turn call when its follow-up is abandoned', async () => {
+    const turn = await subject()
+    turn.lease.close()
+    const chatId = `bridge-${counter}`
+    const waiting = state.options!.beforeCall!({ toolCallId: 'call-2', requestId: 'request', name: 'tool', signal: new AbortController().signal })
+    conductorBridge.abandonWaiters(chatId, 'root', 'the chat stayed busy')
+    await expect(waiting).rejects.toThrow('the chat stayed busy')
+  })
+
   it('persists a canceled tool result and releases its pending call', async () => {
     const turn = await subject()
     const running = turn.execute({ providerType: 'agent', displayName: 'Specialist', getTools: () => [],

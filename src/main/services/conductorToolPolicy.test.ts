@@ -27,3 +27,18 @@ describe('conductor native tool policy', () => {
     expect(applyConductorToolPolicy(sealed, 'codex')).toBe(sealed)
   })
 })
+
+describe('the conductor permission gate', () => {
+  it.each([
+    ['claude', 'mcp__cinna__ask_writer', { title: 'ask_writer' }],
+    ['codex', 'mcp.cinna.ask_writer', { title: 'mcp.cinna.ask_writer', rawInput: { server: 'cinna', tool: 'ask_writer', arguments: {} } }],
+    ['opencode', 'cinna_ask_writer', { title: 'cinna_ask_writer' }]
+  ])('lets %s ask about a Cinna tool', async (_engine, toolName, toolCall) => {
+    const { isCinnaToolAsk } = await import('../agents/drivers/acp/acpDriver')
+    expect(isCinnaToolAsk(toolName, { toolCall: { toolCallId: 'call', ...toolCall } })).toBe(true)
+  })
+  it.each(['Bash', 'execute', 'mcp__github__search', 'mcp.github.search'])('refuses %s', async (toolName) => {
+    const { isCinnaToolAsk } = await import('../agents/drivers/acp/acpDriver')
+    expect(isCinnaToolAsk(toolName, { toolCall: { toolCallId: 'call', title: toolName, rawInput: { command: 'ls' } } })).toBe(false)
+  })
+})

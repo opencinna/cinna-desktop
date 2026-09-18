@@ -92,7 +92,8 @@ Emitted from `chatTitleService` via `getMainWindow().webContents.send(CHAT_TITLE
 - `src/main/services/chatTitleService.ts::chatTitleService.autoGenerateForFirstMessage({ userId, chatId })` — The whole orchestration. Self-checks all pre-conditions. Throws `ChatTitleError` with one of the codes below; caller is responsible for catching and classifying.
 - `src/main/services/chatTitleService.ts::isUntouchedAutoTitle(currentTitle, firstUserText)` — Pure helper. Returns `true` iff `currentTitle === 'New Chat'` or `currentTitle === deriveTitleFromMessage(firstUserText)`.
 - `src/main/services/chatTitleService.ts::sanitizeTitle(raw)` — Strips quotes/backticks/whitespace/trailing punctuation, hard-caps at 40 chars. Pure.
-- `src/main/services/messageRoutingService.ts::fireTitleGenInBackground(userId, chatId)` — Private; wraps `autoGenerateForFirstMessage` with the log-level classifier and `void`s the promise. Called from `prepareLlmSend` and `prepareAgentSend`.
+- `src/main/services/messageRoutingService.ts::fireTitleGenInBackground(userId, chatId)` — Private; wraps `autoGenerateForFirstMessage` with the log-level classifier and `void`s the promise. Called from `prepareLlmSend` and `prepareAgentSend`. An in-flight set keyed by chat ID drops a second call for the same chat.
+- `src/main/services/messageRoutingService.ts::retryTitleAfterTurn(userId, chatId)` — The same trigger, called from `src/main/services/runExecutionService.ts` when an agent turn completes with non-desktop-authored input.
 - `src/main/services/appSettingsService.ts::appSettingsService.set(key, value)` — Validates then delegates to `appSettingsRepo.set`. Throws `AppSettingsError`.
 - `src/main/services/appSettingsService.ts::appSettingsService.getAll()` — Delegates to `appSettingsRepo.getAll`.
 - `src/main/db/messages.ts::messageRepo.countByRole(chatId, role)` — Single-row COUNT query. Returns 0 when no rows.

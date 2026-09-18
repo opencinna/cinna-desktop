@@ -244,9 +244,13 @@ export function useAttachAgentToChat(chatId: string | null): (agentId: string) =
       if (router === 'direct' && chat?.agentId === agentId) return
       try {
         if (router === 'direct') {
+          // A plain chat's root is its hidden runtime, not an agent in the chat.
+          const root = chat?.agentId
+            ? queryClient.getQueryData<{ id: string; conductor?: boolean }[]>(['agents'])?.find((agent) => agent.id === chat.agentId)
+            : undefined
           await setRouter.mutateAsync({
             chatId,
-            router: chat?.agentId ? (settings?.defaultMultiAgentRouting ?? 'human') : 'coordinator'
+            router: chat?.agentId && !root?.conductor ? (settings?.defaultMultiAgentRouting ?? 'human') : 'coordinator'
           })
         }
         await addAgent.mutateAsync({ chatId, agentId })

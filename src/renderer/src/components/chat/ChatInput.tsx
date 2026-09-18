@@ -677,7 +677,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const coordinateToggle = useMemo(() => {
     if (!chatId) return routerInfo?.coordinateAction ? { coordinating: false, conductorName: routerInfo.coordinateAction.conductorName, pending: false, onToggle: (next: boolean) => { if (next) routerInfo.coordinateAction?.onCoordinate() } } : undefined
     const coordinating = chatRouting.router === 'coordinator'
-    const hasAgents = attachedAgentIds.length > 0 || !!chatRouting.rootAgentId
+    // A plain chat's hidden runtime is not an agent there is anything to coordinate.
+    const hasAgents = attachedAgentIds.length > 0 || (!!chatRouting.rootAgentId && !boundAgent?.conductor)
     if (coordinating || !hasAgents) return undefined
     const firstAgent = boundAgent ?? (agents ?? []).find((agent) => agent.id === attachedAgentIds[0])
     const conductorName = firstAgent && canConduct(firstAgent) ? firstAgent.name : 'Default runtime'
@@ -1030,7 +1031,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         // root, so the sticky default sent it back to the wrong agent.
         const willRoute =
           chatRouting.router === 'human' ||
-          (chatRouting.router === 'direct' && !!chatRouting.rootAgentId)
+          (chatRouting.router === 'direct' && !!chatRouting.rootAgentId && !boundAgent?.conductor)
         if (willRoute) setAddressedAgent(chatId, agent.id)
         if (!attachedAgentIds.includes(agent.id)) void attachAgent(agent.id)
         return
@@ -1047,6 +1048,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       observeHint,
       chatRouting.router,
       chatRouting.rootAgentId,
+      boundAgent?.conductor,
       attachedAgentIds,
       setAddressedAgent
     ]

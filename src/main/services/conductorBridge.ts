@@ -19,7 +19,7 @@ import type { RunInput } from '../agents/drivers/driver'
 import type { AcpLaunchPlan } from '../agents/drivers/acp/acpLaunchers'
 import type { RunEvent } from '../../shared/runEvents'
 
-interface Binding { input: RunInput; pending: number; calls: number }
+interface Binding { input: RunInput; pending: number; calls: number; needsInput?: boolean }
 interface Entry {
   chatId: string
   agent: AgentRow
@@ -39,6 +39,8 @@ const logger = createLogger('conductor-bridge')
 export interface ConductorLease {
   freshSession?: boolean
   sessionReady?(): void
+  /** The driver had to create a session: whatever digest was saved describes one that is gone. */
+  sessionLost?(): void
   observe?(notification: import('@agentclientprotocol/sdk').SessionNotification): boolean
   owns?(id: string): boolean
   close(): void
@@ -117,10 +119,13 @@ export const conductorBridge = {
           publish(result.isError ? { type: 'tool_error', id, error: content } : { type: 'tool_result', id, result: result.content })
           if (result.budget) stop({ budget: true })
           else if (provider.providerType === 'coordinator' && result.control) stop({ control: result.control })
-          else if (result.needsInput) stop({ needsInput: true })
+          // Stopping cancels the session, and with it every parallel sibling:
+          // a durable question waits for them to finish before the turn ends.
+          else if (result.needsInput) turn.needsInput = true
           return result
         } finally {
           turn.pending--
+          if (turn.needsInput && turn.pending === 0) stop({ needsInput: true })
         }
       }
     }
@@ -139,6 +144,7 @@ export const conductorBridge = {
     return {
       freshSession: conductorSessionRepo.get(input.chatId, agent.id) !== hash,
       sessionReady: () => conductorSessionRepo.save(input.chatId, agent.id, hash),
+      sessionLost: () => conductorSessionRepo.save(input.chatId, agent.id, ''),
       observe: (notification) => entry!.correlation.observe(notification),
       owns: (id) => entry!.correlation.owns(id),
       hasCalls: () => binding.pending > 0,
@@ -152,6 +158,11 @@ export const conductorBridge = {
   },
   async refresh(chatId: string): Promise<void> {
     await Promise.all([...entries.values()].filter((entry) => entry.chatId === chatId).map((entry) => entry.session.refreshTools()))
+  },
+  /** The follow-up a between-turn call was waiting for will not open. */
+  abandonWaiters(chatId: string, agentId: string, reason: string): void {
+    const entry = entries.get(JSON.stringify([chatId, agentId]))
+    if (entry && !entry.binding) for (const waiter of entry.waiters) waiter.reject(new Error(`The conductor could not open a turn for this call: ${reason}.`))
   },
   abortAgent(agentId: string): void {
     for (const entry of entries.values()) if (entry.agent.id === agentId) { entry.session.abortCalls('The conductor process exited'); for (const waiter of entry.waiters) waiter.reject(new Error('The conductor session ended.')) }

@@ -76,7 +76,10 @@ export function AgentToolSubThread({
 
   return (
     <div className="text-xs">
-      {/* Badge line — sits above the content block, not inside a border box. */}
+      {/* Badge line — sits above the content block, not inside a border box.
+          One row with Stop and its error, so neither adds or removes a line
+          of transcript when the specialist starts, fails to stop, or ends. */}
+      <div className="flex items-center min-w-0">
       <button
         onClick={() => setExpanded((v) => !v)}
         className="flex items-center gap-1.5 px-1.5 py-1 rounded-md hover:bg-gradient-to-r hover:from-[var(--color-bg-hover)] hover:to-transparent transition-colors min-w-0 text-left"
@@ -118,7 +121,7 @@ export function AgentToolSubThread({
       </button>
       {isStreaming && onStop && (
         <button type="button" disabled={stopping} aria-label={`Stop ${agentName}`}
-          className="ml-1.5 px-2 py-0.5 rounded border border-[var(--color-border)] text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50"
+          className="ml-1.5 shrink-0 px-2 py-0.5 rounded border border-[var(--color-border)] text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50"
           onClick={() => {
             setStopping(true)
             setStopError(null)
@@ -130,7 +133,8 @@ export function AgentToolSubThread({
           {stopping ? 'Stopping…' : 'Stop'}
         </button>
       )}
-      {stopError && <p className="text-[11px] text-[var(--color-danger)]">{stopError}</p>}
+      {stopError && <span role="alert" title={stopError} className="ml-1.5 min-w-0 truncate text-[11px] text-[var(--color-danger)]">{stopError}</span>}
+      </div>
 
       <div
         className="grid transition-[grid-template-rows] duration-150 ease-out"

@@ -9,10 +9,14 @@ export function syntheticRuntimePoolKey(userId: string, context: ConductorContex
   ])).digest('hex').slice(0, 32)}`
 }
 
-/** OpenCode instructions are process config; incompatible functions cannot share that process. */
-export function aiFunctionRuntimePoolKey(userId: string, engine: ConductorContext['engine'], credentialId: string | null, modelId: string | null, systemPrompt: string): string {
+/**
+ * `processPrompt` is the function prompt when the engine takes instructions as
+ * process config (the driver decides), so incompatible functions cannot share
+ * that process; null when instructions are session-owned.
+ */
+export function aiFunctionRuntimePoolKey(userId: string, engine: ConductorContext['engine'], credentialId: string | null, modelId: string | null, processPrompt: string | null): string {
   const digest = createHash('sha256').update(JSON.stringify([
-    userId, engine, credentialId, modelId, engine === 'opencode' ? systemPrompt : null
+    userId, engine, credentialId, modelId, processPrompt
   ])).digest('hex').slice(0, 24)
   return `ai-function:${digest}`
 }

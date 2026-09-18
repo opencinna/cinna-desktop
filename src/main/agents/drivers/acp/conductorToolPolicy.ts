@@ -18,3 +18,16 @@ export function applyConductorToolPolicy(plan: AcpLaunchPlan, engine: AgentEngin
   // its caller owns generation, because the file participates in the spec key.
   return plan
 }
+
+/**
+ * The Cinna tool a call names, or null. Every engine spells it differently:
+ * Claude `mcp__cinna__<tool>`, Codex `mcp.cinna.<tool>` (or `rawInput`'s
+ * server/tool pair), OpenCode `cinna_<tool>`. The permission gate and the
+ * call correlation must agree, so both read it here.
+ */
+export function cinnaToolName(label: string | null | undefined, rawInput?: unknown): string | null {
+  const raw = rawInput as { server?: unknown; tool?: unknown } | null | undefined
+  if (raw?.server === 'cinna' && typeof raw.tool === 'string') return raw.tool
+  for (const prefix of ['mcp__cinna__', 'mcp.cinna.', 'cinna_']) if (label?.startsWith(prefix)) return label.slice(prefix.length)
+  return null
+}

@@ -24,9 +24,15 @@ const logger = createLogger('routing')
  *   - everything else (`no_provider`, `llm_failed`, `empty_output`,
  *     `chat_not_found`): real failures → warn.
  */
+const titlesInFlight = new Set<string>()
+
 function fireTitleGenInBackground(userId: string, chatId: string): void {
+  // The after-turn retry must not double a call that is still running.
+  if (titlesInFlight.has(chatId)) return
+  titlesInFlight.add(chatId)
   void chatTitleService
     .autoGenerateForFirstMessage({ userId, chatId })
+    .finally(() => titlesInFlight.delete(chatId))
     .catch((err) => {
       if (err instanceof ChatTitleError) {
         const expected =
@@ -90,6 +96,15 @@ export interface PreparedSend {
  * execution share the same persistence and title side effects.
  */
 export const messageRoutingService = {
+  /**
+   * A title on the runtime backend is warm-only, and the first message is
+   * persisted before its own turn has spawned anything. The turn ending is the
+   * first moment that process is warm; every precondition still applies.
+   */
+  retryTitleAfterTurn(userId: string, chatId: string): void {
+    fireTitleGenInBackground(userId, chatId)
+  },
+
   prepareAgentSend(input: PrepareAgentSendInput): PreparedSend {
     const { userId, chatId, agentId, userContent, attachments } = input
 

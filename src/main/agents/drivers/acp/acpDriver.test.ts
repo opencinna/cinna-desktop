@@ -254,6 +254,24 @@ describe('conductor session integration', () => {
     expect(close).toHaveBeenCalledTimes(2)
   })
 
+  it('marks a conductor session current only once it has taken its prompt', async () => {
+    const sessionReady = vi.fn()
+    const sessionLost = vi.fn()
+    const buildPrompt = vi.fn(async () => { throw new Error('attachment unreadable') })
+    const failing = world({ script: SAYS_HELLO, deps: { buildPrompt,
+      prepareConductor: async () => ({ close() {}, hasCalls: () => false, sessionReady, sessionLost }) } })
+    const failed = await failing.run({ runScope: { profileUserId: USER_ID, settingsUserId: USER_ID } })
+    expect(failed.error).toBeDefined()
+    // Saved here, the next turn would load this empty session and never replay.
+    expect(sessionReady).not.toHaveBeenCalled()
+    // A created session also drops whatever digest an earlier one had saved.
+    expect(sessionLost).toHaveBeenCalledTimes(1)
+
+    const working = world({ script: SAYS_HELLO, deps: { prepareConductor: async () => ({ close() {}, hasCalls: () => false, sessionReady }) } })
+    await working.run({ runScope: { profileUserId: USER_ID, settingsUserId: USER_ID } })
+    expect(sessionReady).toHaveBeenCalledTimes(1)
+  })
+
   it('ends an engine turn for a trusted task control without reporting user cancellation', async () => {
     let stop!: Parameters<NonNullable<AcpDriverDeps['prepareConductor']>>[4]
     const w = world({ script: { prompt: { emit: [{kind:'update',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Working'}}},{kind:'awaitCancel'}] } }, deps: {
