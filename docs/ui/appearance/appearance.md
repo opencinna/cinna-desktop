@@ -8,7 +8,7 @@ Let the user choose the app's color theme and whether chat switches and idle sur
 
 - **Theme preference** — System, Dark or Light. System follows the operating system; Dark and Light remain fixed. System is the default on a fresh install and whenever no valid preference is saved.
 - **Resolved theme** — The current Dark or Light appearance after resolving System. The app surface, dock/window icon and tray popup use this result; the menu-bar glyph follows the OS separately.
-- **Extra UI animation** — One default-on preference for quick chat-switch transitions, the new-chat logo's draw and sweep, grid pulses, input/sidebar border glows, secondary-button border glows and header-button background waves. These effects convey no readiness, progress or required action.
+- **Extra UI animation** — One default-on preference for quick chat-switch transitions, the new-chat logo's draw and sweep, grid pulses, input/sidebar border glows, secondary-button border glows (which the sidebar's chat row summary borrows on some openings) and header-button background waves. These effects convey no readiness, progress or required action.
 - **New-chat logo** — A thin wireframe of the app icon's wordmark above "What can I help with?", in the resolved theme's icon colors. Hidden until its reserved space is clicked; the only decoration that responds to input.
 - **Quiet interval** — A delay between bursts, including after the user leaves an input they interacted with. Decorative motion must not compete with editing.
 
@@ -68,7 +68,7 @@ Features / sidebar Theme shortcut → renderer UI store → localStorage → oth
 
 Theme preference + OS appearance → resolved theme → document colors + existing app-theme IPC → dock/window icon; tray popup resolves the same preference independently.
 
-Extra UI animation + reduced motion + document visibility + host/interaction state → grid / border / secondary-button / header schedulers → decorative CSS layers.
+Extra UI animation + reduced motion + document visibility + host/interaction state → grid / border / secondary-button / header schedulers → decorative CSS layers. The [chat row summary](../../chat/chat_row_summary/chat_row_summary.md) reaches the secondary-button layer without a scheduler: it decides for itself, once per opening.
 
 Click on the reserved logo box → screen-local shown state → CSS stroke draw (instant when animation is off or motion is reduced). Shown + Extra UI animation + motion/visibility guards → sweep scheduler → band-masked copy of the outlines.
 

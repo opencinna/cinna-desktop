@@ -6,7 +6,7 @@
 - Main — database: `src/main/db/chats.ts` — `chatRepo.listMessageStats`, `listMessageAgentIds`, `listOnDemandAgentIds`, and the `listedChats(userId)` condition they join on.
 - Main — services: `src/main/services/chatListSummary.ts:buildChatListSummaries()`, `src/main/services/chatService.ts:listSummaries()`, `src/main/services/agentTypeFields.ts:acpTransportOf()`.
 - IPC and preload: `src/main/ipc/chat.ipc.ts`, `window.api.chat.listSummaries` in `src/preload/index.ts`.
-- Renderer: `src/renderer/src/components/chat/ChatList.tsx`, `src/renderer/src/components/chat/ChatItem.tsx`, `src/renderer/src/components/chat/ChatItemTooltip.tsx`, `src/renderer/src/hooks/useChat.ts:useChatSummaries()`, `src/renderer/src/utils/chatSummaryFormat.ts`, `src/renderer/src/components/ui/usePopover.ts` (`'right'` placement), `HOVER_CLOSE_DELAY_MS` from `src/renderer/src/components/ui/useHoverPopover.ts`, `src/renderer/src/components/agents/AgentTypeIcon.tsx`, `src/renderer/src/constants/chatModeColors.ts`.
+- Renderer: `src/renderer/src/components/chat/ChatList.tsx`, `src/renderer/src/components/chat/ChatItem.tsx`, `src/renderer/src/components/chat/ChatItemTooltip.tsx`, `src/renderer/src/hooks/useChat.ts:useChatSummaries()`, `src/renderer/src/utils/chatSummaryFormat.ts`, `src/renderer/src/components/ui/usePopover.ts` (`'right'` placement), `HOVER_CLOSE_DELAY_MS` from `src/renderer/src/components/ui/useHoverPopover.ts`, `src/renderer/src/components/agents/AgentTypeIcon.tsx`, `src/renderer/src/constants/chatModeColors.ts`, `extraUIAnimation` from `src/renderer/src/stores/ui.store.ts`, the `.ambient-button` rules in `src/renderer/src/assets/main.css`.
 
 ## Database Schema
 
@@ -64,6 +64,11 @@ Each joins `chats` on `listedChats` — owned by the user, not deleted, not hidd
 ### ChatItemTooltip
 
 - `createPortal` to `document.body`; `role="tooltip"`, `z-50`, fixed 240 px wide, `--color-*` variables throughout.
+- The shell is the floating-panel one `src/renderer/src/components/chat/RouterBadge.tsx` uses for its popover: `--color-border` border, `--color-overlay-panel` background, `backdrop-blur-xl`, `shadow-xl`. Deliberately not a solid `--color-bg-secondary` block: it is the same kind of surface as the other panels floating over the app and should look it.
+- The glow is the secondary buttons' CSS, not their scheduler. The root carries `ambient-button`; `data-ambient-glow`, `--button-start-angle` and `--button-glow-duration` are set by the component itself, and `.ambient-button[data-ambient-glow]::after` in `main.css` draws the pass. `useAmbientButtons` selects `button.ambient-button` only, so it never picks, clears or counts this `div` — a tooltip may glow while a button does.
+  - Decided once per opening, in a `useState` initializer (the component mounts when the tooltip opens): `Math.random() < GLOW_CHANCE` (0.35), then a quarter-turn start angle and a 4200–5600 ms duration, the scheduler's own ranges. Deciding in render would restart or drop the pass on any re-render while it is open.
+  - `extraUIAnimation` is read live and ANDed with that decision; off means no attribute and no variables. Reduced motion is left to the existing `prefers-reduced-motion` rule, which hides the `::after`; the component does not query `matchMedia`.
+  - `.ambient-button` sets `position: relative`; the inline `position: fixed` from `usePopover`'s style outranks it, and a fixed box is still the containing block the `::after` needs.
 - Who line: `AgentTypeIcon` at 12 px for an agent; otherwise `MessageSquare` coloured with `getPreset(color).border` for a mode, `--color-text-muted` for a model id. The name clamps to two lines; "chat mode" tag for `mode` only. Omitted when `name` is empty.
 - "with …" through `formatChatOthers`, clamped to two lines. Started falls back from `firstMessageAt` to the row's `createdAt`, then `updatedAt`. Lasted is omitted when `formatChatLasted` returns null.
 - `chatSummaryFormat.ts` is pure: `now` and the locale are parameters. Day difference is computed between local midnights and rounded, because a DST change makes a day 23 or 25 hours long. Durations floor within a unit ("2 h 5 min") and round at days.
@@ -78,7 +83,7 @@ Each joins `chats` on `listedChats` — owned by the user, not deleted, not hidd
 
 ## Configuration
 
-None. No setting, no environment variable. `HOVER_CLOSE_DELAY_MS` (200 ms) is shared with `useHoverPopover`; `RIGHT_GAP` (4 px) and `EDGE` (8 px) live in `usePopover.ts`.
+No setting of its own and no environment variable; the glow follows the app-wide Extra UI animation preference ([Appearance](../../ui/appearance/appearance_tech.md)), and `GLOW_CHANCE` (0.35) lives in `ChatItemTooltip.tsx`. `HOVER_CLOSE_DELAY_MS` (200 ms) is shared with `useHoverPopover`; `RIGHT_GAP` (4 px) and `EDGE` (8 px) live in `usePopover.ts`.
 
 ## Security
 
@@ -88,7 +93,7 @@ Reads are scoped by `listedChats(userId)` with the profile user id resolved in m
 
 - `src/main/services/chatListSummary.test.ts` — bound agent and its type fields, profile-scope agent, mode with colour, conductor-bound chat naming its mode, model and empty fallbacks, first attached agent of a `human` chat, Others without the primary or a deleted agent, count vs span, empty chat, profile isolation.
 - `src/main/services/chatService.setRouter.test.ts` — summaries absent from list rows, keyed by chat id, per owner.
-- `src/renderer/src/components/chat/ChatItem.test.tsx` — immediate open and close on leave, mode tag, model/no first line, staying open across the action button with its title withheld, tooltip→row and row→tooltip crossings, one at a time, no navigation or close from inside, click still navigates, the three scroll cases, no summary, reorder.
+- `src/renderer/src/components/chat/ChatItem.test.tsx` — immediate open and close on leave, mode tag, model/no first line, staying open across the action button with its title withheld, tooltip→row and row→tooltip crossings, one at a time, no navigation or close from inside, click still navigates, the three scroll cases, no summary, reorder, and the glow: present with its duration variable on a low roll, absent on a high roll, absent with Extra UI animation off whatever the roll. Reduced motion is CSS-only and not asserted.
 - `src/renderer/src/components/chat/ChatList.test.tsx` — rows before summaries, never polled, refreshed by prefix invalidation and untouched by exact-key writes, one refresh when background turns end.
 - `src/renderer/src/utils/chatSummaryFormat.test.ts` and `src/renderer/src/components/ui/usePopover.test.tsx` — formats; `'right'` position, bottom lift that settles, top-edge priority, no vertical clamp elsewhere.
 - `e2e/specs/chat-row-tooltip.spec.ts` — the built app: an agent chat's tooltip beside its row, staying open while the pointer moves onto it, a mode chat, no tooltip for an empty chat, and a click that still opens the chat.
