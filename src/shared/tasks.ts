@@ -318,6 +318,39 @@ export interface TaskStartResult {
 }
 
 /**
+ * What `task:delete` removed. A task a job run produced goes together with that
+ * run and the run's chat, the way Delete run always removed them; any other
+ * task goes alone and its chat stays. Returned as data so the renderer knows
+ * which caches to drop.
+ */
+export interface TaskDeleteResult {
+  success: true
+  /** The run deleted with the task, or null when no live run produced it. */
+  jobRunId: string | null
+  jobId: string | null
+  chatId: string | null
+  chatDeleted: boolean
+}
+
+/**
+ * What `task:delete` would remove, read before the confirm dialog opens so its
+ * copy is final when it appears and matches what the delete does
+ * (`ux_rules.md` §5). Answered in main from the same predicate the delete uses
+ * — a live run whose `taskId` points back at the task.
+ */
+export interface TaskDeletePreview {
+  /** A live job run produced the task, and is deleted with it. */
+  deletesRun: boolean
+  /**
+   * The chat the task ran in: hard-deleted with the run, left in the Chats
+   * list, already in the Trash (left there), or none at all.
+   */
+  chat: 'deleted_with_run' | 'kept' | 'in_trash' | 'none'
+  /** The task came from a job that still exists; the job is never deleted with it. */
+  jobStays: boolean
+}
+
+/**
  * Where an entry in the inbox stands.
  *
  *  - `open` — waiting for a human. This is what the badge counts.

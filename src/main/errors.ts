@@ -94,6 +94,8 @@ export type JobErrorCode =
    */
   | 'incomplete_setup'
   | 'invalid_input'
+  /** Delete run while a turn is still working in the run's chat. Nothing was removed. */
+  | 'run_active'
 
 /**
  * The task domain (agent runtime plan, phase 5). Each code separates a
@@ -138,6 +140,11 @@ export type TaskErrorCode =
    * surface turns into that confirmation; it is not a failure.
    */
   | 'remote_unknown'
+  /**
+   * Delete task while a turn is still working in the chat of the job run it
+   * would take with it. Nothing was removed; stopping the turn clears it.
+   */
+  | 'run_active'
   /**
    * There is no service to hand the task to: the profile is linked to none, or
    * the one it names is not available right now. A `cinna_task` job run on an

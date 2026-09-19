@@ -1037,7 +1037,7 @@ describe('the exported handoff note', () => {
  */
 describe('every task write keeps the exported note in step', () => {
   /** Methods that only read. A read must not write the file either. */
-  const READS = ['list', 'getById', 'getRow']
+  const READS = ['list', 'getById', 'getRow', 'deletePreview']
 
   const NOTE = 'Half done; the ledger is open.'
 
@@ -1185,6 +1185,14 @@ describe('every task write keeps the exported note in step', () => {
     remove: {
       run: (id) => {
         taskService.remove(USER, id)
+        return id
+      },
+      leaves: 'no file'
+    },
+    // The task page's Delete task: the same tombstone, so the same file rule.
+    removeWithJobRun: {
+      run: (id) => {
+        taskService.removeWithJobRun(USER, id)
         return id
       },
       leaves: 'no file'

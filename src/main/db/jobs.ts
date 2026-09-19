@@ -26,6 +26,15 @@ export type JobFolderRow = typeof jobFolders.$inferSelect
 export type JobMcpRow = typeof jobMcpProviders.$inferSelect
 export type JobRunRow = typeof jobRuns.$inferSelect
 
+/**
+ * The chat a run's delete takes with it: a local run's own chat, and never a
+ * cinna run's (it has none here). `deleteWithChat` removes exactly this one,
+ * and the task delete preview names exactly this one, so the two cannot drift.
+ */
+export function jobRunChatId(run: Pick<JobRunRow, 'type' | 'localChatId'>): string | null {
+  return run.type === 'local' ? run.localChatId : null
+}
+
 export type JobType = 'local' | 'cinna_task'
 export type JobRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
@@ -682,6 +691,13 @@ export type JobRunRowWithMeta = JobRunRow & {
    * and cinna_task runs.
    */
   chatHidden: boolean
+  /**
+   * The run's task exists here and is not deleted. False for a legacy run with
+   * no task, and for one whose task was deleted — possibly on another device,
+   * since job runs do not sync. Such a run has no page to be deleted from, so
+   * its row offers Delete run itself.
+   */
+  taskLive: boolean
 }
 
 export const jobRunsRepo = {
@@ -718,7 +734,13 @@ export const jobRunsRepo = {
       .where(and(eq(jobRuns.jobId, jobId), eq(jobRuns.userId, userId)))
       .orderBy(desc(jobRuns.createdAt))
       .all()
-    return rows.map((r) => ({ ...r.run, chatHidden: !!r.chatHidden, refreshMode: jobRunRefreshMode(r.run, r.task, r.receipt) }))
+    return rows.map((r) => ({
+      ...r.run,
+      chatHidden: !!r.chatHidden,
+      refreshMode: jobRunRefreshMode(r.run, r.task, r.receipt),
+      // A left join with no task row yields nulls, and `executor` is never null on a real one.
+      taskLive: !!r.run.taskId && !!r.task?.executor && !r.task.deletedAt
+    }))
   },
 
   getById(userId: string, runId: string): JobRunRow | undefined {
@@ -941,7 +963,7 @@ export const jobRunsRepo = {
       if (!run) {
         return { runDeleted: false, chatId: null, chatDeleted: false }
       }
-      const chatId = run.type === 'local' ? run.localChatId : null
+      const chatId = jobRunChatId(run)
       const runResult = tx.delete(jobRuns).where(eq(jobRuns.id, runId)).run()
       let chatDeleted = false
       if (chatId) {

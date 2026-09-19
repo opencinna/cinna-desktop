@@ -36,6 +36,8 @@ const service = vi.hoisted(() => ({
   update: vi.fn(() => ({ id: 't1' })),
   setStatus: vi.fn(() => ({ id: 't1' })),
   remove: vi.fn(),
+  removeWithJobRun: vi.fn(() => ({ jobRunId: 'run-1', jobId: 'job-1', chatId: 'chat-1', chatDeleted: true })),
+  deletePreview: vi.fn(() => ({ deletesRun: true, chat: 'deleted_with_run', jobStays: true })),
   list: vi.fn(() => []),
   getById: vi.fn(() => ({ id: 't1' }))
 }))
@@ -107,6 +109,25 @@ describe('a task write a person made reaches the other devices without waiting a
     expect(markDirty).toHaveBeenCalledWith('profile-1')
   })
 
+  it('returns what the delete removed, as data the renderer can invalidate from', async () => {
+    await expect(invoke('task:delete', 't1')).resolves.toEqual({
+      success: true, jobRunId: 'run-1', jobId: 'job-1', chatId: 'chat-1', chatDeleted: true
+    })
+    expect(service.removeWithJobRun).toHaveBeenCalledWith('profile-1', 't1')
+    service.removeWithJobRun.mockImplementationOnce(() => { throw new Error('Task not found') })
+    markDirty.mockClear()
+    await expect(invoke('task:delete', 't1')).rejects.toThrow('Task not found')
+    expect(markDirty).not.toHaveBeenCalled()
+  })
+
+  it('previews a delete from the captured profile, as data', async () => {
+    await expect(invoke('task:delete-preview', 't1')).resolves.toEqual({
+      deletesRun: true, chat: 'deleted_with_run', jobStays: true
+    })
+    expect(service.deletePreview).toHaveBeenCalledWith('profile-1', 't1')
+    expect(service.removeWithJobRun).not.toHaveBeenCalled()
+  })
+
   it('nudges *after* the write, so a refused write never announces itself', async () => {
     sync.takeOver.mockImplementationOnce(() => {
       throw new Error('Task not found')
@@ -128,7 +149,9 @@ describe('a task write a person made reaches the other devices without waiting a
     ['task:list', []],
     ['task:get', ['t1']],
     // A probe, and nothing about this device changed by asking.
-    ['task:remote-live', ['t1']]
+    ['task:remote-live', ['t1']],
+    // What a delete would remove, read before its dialog opens.
+    ['task:delete-preview', ['t1']]
   ] as const)(
     '%s is a read and nudges nothing',
     async (channel, args) => {

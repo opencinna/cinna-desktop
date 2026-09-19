@@ -107,7 +107,7 @@ import type {
   NoteAttachAsFilesResultDto
 } from '../shared/notes'
 import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
-import type { TaskDto, TaskListQuery } from '../shared/tasks'
+import type { TaskDeletePreview, TaskDeleteResult, TaskDto, TaskListQuery } from '../shared/tasks'
 import type { TaskStatus } from '../shared/taskStatus'
 import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot } from '../shared/inbox'
 import type { TaskDelegationsDto } from '../shared/delegations'
@@ -160,6 +160,12 @@ export interface ChatData {
   router: ChatRouter
   /** The job run that spawned this chat, if any (drives the chat-page job-origin banner). */
   originatingJobRunId: string | null
+  /**
+   * Kept out of the Chats list — a job spawns its chats this way until one is
+   * moved into it. On the wire since the column existed (the row is spread);
+   * declared for the task page's "Show in the Chats list".
+   */
+  hiddenFromList?: boolean
   deletedAt: Date | null
   createdAt: Date
   updatedAt: Date
@@ -1196,7 +1202,11 @@ const api = {
      */
     takeOver: (taskId: string, force?: boolean): Promise<TaskDto> =>
       ipcRenderer.invoke('task:take-over', taskId, force === true),
-    delete: (taskId: string): Promise<{ success: boolean }> =>
+    /** What `delete` would remove — the run, the chat, whether the job stays — for the confirm dialog. */
+    deletePreview: (taskId: string): Promise<TaskDeletePreview> =>
+      ipcRenderer.invoke('task:delete-preview', taskId),
+    /** Deletes the task, and the job run and chat that produced it when it came from one. */
+    delete: (taskId: string): Promise<TaskDeleteResult> =>
       ipcRenderer.invoke('task:delete', taskId)
   },
 

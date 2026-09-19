@@ -2,12 +2,14 @@ import { scriptRuntimeRepo } from '../db/scriptRuntimes'
 import { validateTaskScript } from '../tasks/scriptRouter'
 import { taskRuntimeRepo } from '../db/taskRuntimes'
 import { taskRunnerBridge } from './taskRunnerBridge'
+import { activeChatRunId, chatHardDeleted } from './chatRemoval'
 import { runtimeBudget } from '../tasks/runtimeBudget'
-import type { TaskArtifact, TaskBudget } from '../../shared/tasks'
+import type { TaskArtifact, TaskBudget, TaskDeletePreview, TaskDeleteResult } from '../../shared/tasks'
 import { getDb } from '../db/client'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
-import { jobRunsRepo } from '../db/jobs'
+import { jobRunChatId, jobRunsRepo, jobsRepo, type JobRunRow } from '../db/jobs'
+import { chatRepo } from '../db/chats'
 import { syncRepo } from '../db/sync'
 import {
   taskRepo,
@@ -92,6 +94,19 @@ function requireTask(userId: string, taskId: string): TaskRow {
   const task = taskRepo.getById(userId, taskId)
   if (!task || task.deletedAt) throw new TaskError('not_found', 'Task not found')
   return task
+}
+
+/**
+ * The job run a task's delete takes with it: the one `tasks.job_run_id` points
+ * at, **only when it still exists and names this task back**. The column has
+ * no foreign key, so a pointer at a run that belongs to another task must not
+ * take that task's chat. Shared by `removeWithJobRun` and `deletePreview`, so
+ * the confirm dialog cannot describe a different delete than the one that runs.
+ */
+function ownJobRun(userId: string, task: TaskRow): JobRunRow | undefined {
+  if (!task.jobRunId) return undefined
+  const run = jobRunsRepo.getById(userId, task.jobRunId)
+  return run && run.taskId === task.id ? run : undefined
 }
 
 /** The three fields whose authority follows `executor`. */
@@ -1196,5 +1211,78 @@ export const taskService = {
     // anything reading the folder.
     taskFileService.removeHandoff(taskId)
     logger.info('task deleted', { taskId })
+  },
+
+  /**
+   * What Delete task would remove, for the confirm dialog to say before it
+   * opens (`ux_rules.md` §5). Read-only, and decided by `ownJobRun` — the same
+   * predicate `removeWithJobRun` deletes by — so the copy and the delete cannot
+   * disagree about whether the run and its chat go.
+   */
+  deletePreview(userId: string, taskId: string): TaskDeletePreview {
+    const task = requireTask(userId, taskId)
+    const run = ownJobRun(userId, task)
+    // A job is soft-deleted and keeps its runs, so "the job stays" is only
+    // true of one that is still live.
+    const jobId = run?.jobId ?? task.jobId
+    const job = jobId ? jobsRepo.getById(userId, jobId) : undefined
+    const jobStays = !!job && !job.deletedAt
+    if (run) {
+      // Hard-deleted with the run wherever it is, the Trash included.
+      const chatId = jobRunChatId(run)
+      const chat = chatId ? chatRepo.getOwned(userId, chatId) : undefined
+      return { deletesRun: true, chat: chat ? 'deleted_with_run' : 'none', jobStays }
+    }
+    const chat = task.chatId ? chatRepo.getOwned(userId, task.chatId) : undefined
+    return {
+      deletesRun: false,
+      chat: !chat ? 'none' : chat.deletedAt ? 'in_trash' : 'kept',
+      jobStays
+    }
+  },
+
+  /**
+   * The user's Delete task: the task, and — when a job run that still exists
+   * produced it — that run and the run's chat, the way Delete run removes them
+   * (`jobRunsRepo.deleteWithChat`). Any other task goes alone, and its chat
+   * stays.
+   *
+   * **One transaction, so neither half can be left done without the other.**
+   * The tombstone and the run's hard delete commit together; a run that
+   * vanished between the read and the delete throws inside the transaction,
+   * which rolls the tombstone back. Everything that is not SQLite — the runner
+   * hooks and the handoff file — happens only after the commit, so a failure
+   * never leaves a file removed for a task that is still there.
+   *
+   * The run counts only when it names this task back. `tasks.job_run_id` has no
+   * foreign key; a pointer at a run that belongs to another task must not take
+   * that task's chat with it.
+   */
+  removeWithJobRun(userId: string, taskId: string): Omit<TaskDeleteResult, 'success'> {
+    const task = requireTask(userId, taskId)
+    // Refused before any write while a turn still works in the chat that
+    // would go with the run — the guard chatService.delete has.
+    const ownRun = ownJobRun(userId, task)
+    const runChatId = ownRun ? jobRunChatId(ownRun) : null
+    if (runChatId && activeChatRunId(runChatId)) {
+      throw new TaskError('run_active', 'This run is still going. Stop it first; nothing was deleted.')
+    }
+    const outcome = getDb().transaction(() => {
+      if (!taskRepo.softDelete(userId, taskId)) throw new TaskError('not_found', 'Task not found')
+      const run = ownJobRun(userId, task)
+      if (!run) {
+        return { jobRunId: null, jobId: null, chatId: null, chatDeleted: false }
+      }
+      const deleted = jobRunsRepo.deleteWithChat(userId, run.id)
+      if (!deleted.runDeleted) throw new TaskError('not_found', 'The job run behind this task could not be deleted.')
+      return { jobRunId: run.id, jobId: run.jobId, chatId: deleted.chatId, chatDeleted: deleted.chatDeleted }
+    })
+    taskRunnerBridge.taskChanged(userId, taskId)
+    // The same release `jobService.deleteRun` does, so a waiting script cannot
+    // keep gates on a chat that is gone and no session or conductor outlives it.
+    if (outcome.chatDeleted && outcome.chatId) chatHardDeleted(userId, outcome.chatId)
+    taskFileService.removeHandoff(taskId)
+    logger.info('task deleted', { taskId, ...outcome })
+    return outcome
   }
 }

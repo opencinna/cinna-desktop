@@ -11,6 +11,7 @@ import {
   jobMcpRepo,
   jobAgentRepo,
   jobRunsRepo,
+  jobRunChatId,
   type JobRow,
   type JobFolderRow,
   type JobFolderCreateInput,
@@ -33,7 +34,7 @@ import { parseTaskPriority } from '../../shared/tasks'
 import { cinnaApiService } from './cinnaApiService'
 import { syncService } from './syncService'
 import { taskService } from './taskService'
-import { taskRunnerBridge } from './taskRunnerBridge'
+import { activeChatRunId, chatHardDeleted } from './chatRemoval'
 import { taskSyncService } from './taskSyncService'
 import { rebuildJobManifest } from '../sync/manifest'
 import {
@@ -111,11 +112,12 @@ function enrichRun(userId: string, run: JobRunRow): JobRunRowWithMeta {
   const task = run.taskId ? taskRepo.getById(userId, run.taskId) ?? null : null
   const receipt = run.taskId ? taskHandoffRepo.get(userId, run.taskId) : null
   const refreshMode = jobRunRefreshMode(run, task, receipt)
+  const taskLive = !!task && !task.deletedAt
   if (run.type !== 'local' || !run.localChatId) {
-    return { ...run, chatHidden: false, refreshMode }
+    return { ...run, chatHidden: false, refreshMode, taskLive }
   }
   const chat = chatRepo.getOwned(userId, run.localChatId)
-  return { ...run, chatHidden: !!chat?.hiddenFromList, refreshMode }
+  return { ...run, chatHidden: !!chat?.hiddenFromList, refreshMode, taskLive }
 }
 
 function validateCreate(input: JobCreateInput): void {
@@ -599,14 +601,22 @@ export const jobService = {
    * cache invalidation and (if it was the active chat) navigation reset.
    */
   deleteRun(userId: string, runId: string): { chatId: string | null; chatDeleted: boolean } {
+    const run = jobRunsRepo.getById(userId, runId)
+    if (!run) throw new JobError('not_found', 'Job run not found')
+    // The chat goes with the run, so a turn still working in it would be left
+    // writing into rows that are gone — the guard chatService.delete has.
+    const runChatId = jobRunChatId(run)
+    if (runChatId && activeChatRunId(runChatId)) {
+      throw new JobError('run_active', 'This run is still going. Stop it first; nothing was deleted.')
+    }
     const result = jobRunsRepo.deleteWithChat(userId, runId)
     if (!result.runDeleted) {
       throw new JobError('not_found', 'Job run not found')
     }
-    // The repository hard-deletes the owned chat too. Follow the same
-    // lifecycle notification as chatService.permanentDelete so a waiting
-    // script cannot retain unanswerable gates and permanent reservations.
-    if (result.chatDeleted && result.chatId) taskRunnerBridge.chatRemoved(userId, result.chatId)
+    // The repository hard-deletes the owned chat too. Release what memory
+    // holds for it, as chatService.permanentDelete does, so a waiting script
+    // cannot retain unanswerable gates and no session or conductor outlives it.
+    if (result.chatDeleted && result.chatId) chatHardDeleted(userId, result.chatId)
     logger.info('job run deleted', {
       runId,
       chatId: result.chatId,

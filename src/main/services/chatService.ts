@@ -14,7 +14,7 @@ import { ChatError, McpError, AgentError } from '../errors'
 import { routerOf, type ChatRouter } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
 import { taskRunnersByChat } from './taskRunnerState'
-import { activeRunsByChat } from './runExecutionState'
+import { activeChatRunId as activeRunId, chatHardDeleted } from './chatRemoval'
 import { sessionActivityHub } from './sessionActivityHub'
 import { forgetChatSessions, releaseChatSessions } from './chatSessionRelease'
 import { chatRunResultRepo } from '../db/chatRunResults'
@@ -36,11 +36,6 @@ function requireOwnedChat(userId: string, chatId: string): ChatRow {
   const chat = chatRepo.getOwned(userId, chatId)
   if (!chat) throw new ChatError('not_found', 'Chat not found')
   return chat
-}
-
-function activeRunId(chatId: string): string | null {
-  const runner = taskRunnersByChat.get(chatId)
-  return activeRunsByChat.get(chatId)?.id ?? (runner?.working ? runner.id : null)
 }
 
 export const chatService = {
@@ -101,10 +96,7 @@ export const chatService = {
   permanentDelete(userId: string, chatId: string): void {
     const ok = chatRepo.permanentDelete(userId, chatId)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
-    taskRunnerBridge.chatRemoved(userId, chatId)
-    forgetChatSessions(chatId)
-    sessionActivityHub.clear(chatId)
-    chatConductorService.remove(userId, chatId)
+    chatHardDeleted(userId, chatId)
     logger.info('chat permanently deleted', { chatId })
   },
 

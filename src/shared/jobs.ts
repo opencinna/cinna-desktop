@@ -142,6 +142,13 @@ export interface JobRunData {
    * cinna_task runs.
    */
   chatHidden: boolean
+  /**
+   * The task in `taskId` exists on this device and is not deleted. Decided in
+   * main, so a row never learns it from a failed `task:get`. A run whose task
+   * is gone opens its chat (or the service's run view) instead, and its row
+   * offers Delete run.
+   */
+  taskLive: boolean
 }
 
 /**

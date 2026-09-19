@@ -17,7 +17,7 @@ import type { TaskHandoffTarget, TaskHandoffOutcome } from '../../shared/taskHan
 import { ipcHandle } from './_wrap'
 import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot } from '../../shared/inbox'
 import type { HandoverDto } from '../../shared/handovers'
-import type { DesktopTaskTarget, TaskDto, TaskListQuery } from '../../shared/tasks'
+import type { DesktopTaskTarget, TaskDeletePreview, TaskDeleteResult, TaskDto, TaskListQuery } from '../../shared/tasks'
 import type { TaskStatus } from '../../shared/taskStatus'
 
 /**
@@ -221,12 +221,26 @@ export function registerTaskHandlers(): void {
   })
 
 
-  ipcHandle('task:delete', async (_event, taskId: string) => {
+  /**
+   * What `task:delete` would remove, read before its confirm dialog opens so
+   * the dialog's copy is final and true. A read: it nudges nothing.
+   */
+  ipcHandle('task:delete-preview', async (_event, taskId: string): Promise<TaskDeletePreview> => {
+    userActivation.requireActivated()
+    return taskService.deletePreview(getProfileScopeUserId(), taskId)
+  })
+
+  /**
+   * The task page's Delete task. A task a live job run produced takes that run
+   * and its chat with it, in one transaction (`removeWithJobRun`); what was
+   * removed comes back as data, so the renderer knows which caches to drop.
+   */
+  ipcHandle('task:delete', async (_event, taskId: string): Promise<TaskDeleteResult> => {
     userActivation.requireActivated()
     const userId = getProfileScopeUserId()
-    taskService.remove(userId, taskId)
+    const result = taskService.removeWithJobRun(userId, taskId)
     syncService.markDirty(userId)
-    return { success: true }
+    return { success: true, ...result }
   })
 
   /**
