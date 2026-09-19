@@ -74,10 +74,25 @@
     2. the filename, with a `title`;
     3. `CopyablePath`: the agent file's display path, when it differs from the name;
     4. the CSV Filter toggle, not shown with a notice;
-    5. for agent files, **Open folder** / **Open** (`HEADER_ACTION_CLASS`), disabled while `pendingAction` is set or while `fileGone` is true;
-    6. for attachments, Download;
-    7. Close.
+    5. the **Contents** toggle (`HEADER_ACTION_CLASS`, accent-tinted while open), only while `showContents`: loaded (not loading, no error, no notice), `kind === 'markdown'` and `toc.show`. `aria-expanded` and `aria-controls={CONTENTS_PANEL_ID}`;
+    6. for agent files, `FileActionsMenu` (`key={targetKey}`, `dismissed={exiting}`), given `pendingAction`, `fileGone`, `openAgentFileExternally` and `revealAgentFile`;
+    7. for attachments, Download;
+    8. Close.
   - **Action error row:** `role="alert"`, rendered unless `actionErrorRepeatsBody` says it would repeat the body.
+  - **Markdown split:** the modal, not `MarkdownPreview`, calls `useFrontmatter(kind === 'markdown' ? text : '')` and memoises `markdownToc(markdown.body)`, because the header's Contents button needs the verdict too. `MarkdownPreview({ card, body })` renders what it is handed; `PreviewBody` no longer handles `markdown`.
+  - **Body and panel:** the body sits in a `relative flex` row. While `showContents`, the body gets an explicit `width: closedWidth - CARD_BORDER_X` and `flex: none`, so it never reflows. `FilePreviewContents` (`key={targetKey}`, `overlay={!sideBySide}`, `left={closedWidth - CARD_BORDER_X}`) renders while `panelOpen`, or while a side-by-side close is animating (`closingFor === openSeq`, `animateWidth`, not reduced motion).
+  - `contentsGeometry(windowWidth, rem)` → `{ closedWidth, sideBySide, shift }`, exported and pure.
+    - `closedWidth` = `min(48rem, window − 2rem)`, the `max-w-3xl` card in the overlay's `px-4`.
+    - `sideBySide` when `closedWidth + CONTENTS_PANEL_WIDTH` fits in `window − 2rem`.
+    - `shift` = `clamp(0, CONTENTS_PANEL_WIDTH / 2, roomRight)`, where `roomRight` is the gap left to `window − WINDOW_MARGIN` by the wide card centred. The card is centred by flex, so a shift of half the panel width keeps its left edge where it was.
+    - `rem` is read from the root's computed `font-size` on each render, because the Tailwind widths are in rem.
+  - **Card style** while `showContents`: an explicit pixel `width` (`closedWidth`, or `+ CONTENTS_PANEL_WIDTH` when `widened`), `maxWidth: none`, `flexShrink: 0`, `left: shift` when widened (the card is `relative`), `overflow: hidden` to clip the panel mid-animation, and a `width`/`left` transition of the entrance's timing only when `animateWidth` and not reduced motion. Explicit widths are what let the toggle animate between two pixel values.
+  - **Width state:**
+    - `windowWidth`: a `resize` listener for the modal's whole lifetime, not only while open. A stale value would widen the next preview by the wrong amount, and the entrance measures its origin before a correction could land. A resize also clears `animateWidthFor`.
+    - `animateWidthFor` (`openSeq` of the toggle): set by `toggleContents`. Keyed to the open so a new preview never inherits it.
+    - `closingFor`: set to `openSeq` when a toggle closes the panel; cleared after `ENTRANCE.duration`.
+    - `slowOpenFor`: set to `openSeq` when `isLoading` outlasts `ENTRANCE_WAIT_MS`. While it matches, `sideBySide` is forced false. `toggleContents` clears it.
+    - `toggledAt`: a ref stamped by `toggleContents`, for the press guard.
   - **Body:** loading, then an error (`agentFileErrorText`, or "Couldn't load preview: …" for an attachment), then a notice, then `PreviewBody`. The truncation copy depends on the target.
   - `useCardEntrance({ cardRef, backdropRef, open, openSeq, settled })`:
     - **On each open:**
@@ -102,10 +117,14 @@
       - The card keeps the `transform-origin` the entrance set.
     - A timer of `ENTRANCE.duration` (0 when `Element.animate` is missing) clears `exitView`. The effect's cleanup cancels the timer and the animations; that is how a new open mid-fade cancels the fade.
     - The overlay gets `pointer-events-none` while `exiting`.
-  - **Window listeners** for `keydown` (Escape) and `mousedown`, keyed on `targetKey` and `exiting`, and not attached while the modal fades out.
-    - A press inside the card is ignored.
-    - A press outside is ignored within `OPEN_PRESS_GUARD_MS` of `openedAt`, which is stamped per `openSeq`.
-    - Otherwise `preventDefault` is called when the press is inside the overlay, and then `close()`.
+  - **Window listeners** for `keydown` (Escape) and `mousedown` (capture phase), keyed on `targetKey` and `exiting`, and not attached while the modal fades out. The `mousedown` handler returns early, in order:
+    1. for a press inside the card;
+    2. for a press inside an element carrying `PREVIEW_POPOVER_ATTR` (the portaled ⋯ menu);
+    3. while a `[role="menu"][data-file-preview-popover]` is in the document. The capture-phase `window` listener runs before `usePopover`'s `document` listener, so the menu is certainly still mounted; the press is left to the menu, which closes only itself;
+    4. within `OPEN_PRESS_GUARD_MS` of `openedAt`, which is stamped per `openSeq`;
+    5. within `OPEN_PRESS_GUARD_MS` of `toggledAt`.
+
+    Otherwise `preventDefault` is called when the press is inside the overlay, and then `close()`. Escape never reaches the modal's listener while the menu is open; see `FileActionsMenu`.
   - `CopyablePath({ path })`: the header path.
     - A `<button>` with `title={path}`. A click awaits `navigator.clipboard.writeText(path)` and sets `result` to `copied`, or `failed` when it rejects.
     - State: `hovered` (mouse enter or focus), `result` and `suppressed`.
@@ -113,7 +132,21 @@
       - Mouse leave or blur clears `hovered` and `suppressed`.
       - The hint shows while `result` is set, or while `hovered` and not `suppressed`.
     - The hint is a `role="status"`, `aria-live="polite"` span: `absolute left-0 top-full`, `pointer-events-none`, shown and hidden by opacity with a 200 ms transition. A `shownHint` ref keeps the last visible text, so the words do not change while it fades.
-  - **Also in this file:** `PreviewBody`, `MarkdownPreview` (`useFrontmatter(text)`, then the card above the `file-preview-markdown markdown-body` wrapper, whose `react-markdown` gets only `body`), `JsonPreview` (`useParsedJson(text)`, then `<JsonTreeBoundary key={text} fallback={raw}><JsonTree/></JsonTreeBoundary>`, or the raw text in a `<pre>` when it is `null`), `CsvPreview` (filter/sort), the `parseDelimited` / `compareCells` helpers, and the `MAX_PREVIEW_ROWS = 500` render cap.
+  - **Also in this file:** `PreviewBody`, `MarkdownPreview` (the modal's frontmatter card above the `file-preview-markdown markdown-body` wrapper, whose `react-markdown` gets only `body` and `previewMarkdownComponents`), `JsonPreview` (`useParsedJson(text)`, then `<JsonTreeBoundary key={text} fallback={raw}><JsonTree/></JsonTreeBoundary>`, or the raw text in a `<pre>` when it is `null`), `CsvPreview` (filter/sort), the `parseDelimited` / `compareCells` helpers, and the `MAX_PREVIEW_ROWS = 500` render cap.
+- `src/renderer/src/components/chat/FileActionsMenu.tsx`: `FileActionsMenu({ pendingAction, fileGone, onOpen, onReveal, dismissed })`, the ⋯ menu.
+  - `usePopover('below-right')`; the menu is portaled to `document.body` with `role="menu"`, `aria-label="File actions"`, the shared `MENU_SURFACE` / `MENU_ITEM` classes from `agents/local/OpenInMenu.tsx`, and `PREVIEW_POPOVER_ATTR` (`data-file-preview-popover`), which the modal's outside-press handler treats as inside the card.
+  - The trigger is named "More file actions", never disabled, and shows `Loader2` while `pendingAction` is set. Both `menuitem`s (Open, then Open folder) are disabled while `pendingAction !== null || fileGone`.
+  - Once positioned, focuses the first enabled item. A `window` capture-phase `keydown` listener, attached while open, handles Escape and Tab (`preventDefault` + `stopPropagation`, close, focus the trigger), which is what keeps the modal's own Escape listener from closing the preview, and ArrowUp/ArrowDown/Home/End over the enabled items, wrapping.
+  - `run(fn)` closes the menu and refocuses the trigger before calling the action. `dismissed` closes an open menu when the preview starts its exit.
+- `src/renderer/src/components/chat/FilePreviewContents.tsx`:
+  - `CONTENTS_PANEL_WIDTH` (240), `CONTENTS_PANEL_ID`, `FULL_TITLE_DELAY_MS` (250).
+  - `previewMarkdownComponents`: `markdownComponents` with `h1`–`h6` replaced by `anchoredHeading(tag)`, which renders the same tag with `data-heading-line` from the mdast node's `position.start.line`. Chat rendering keeps `markdownComponents`.
+  - `FilePreviewContents({ entries, bodyRef, overlay, left })`: a `<nav id={CONTENTS_PANEL_ID} aria-label="Contents">`, absolutely positioned at full body height and scrolling on its own. Side by side it is placed at `left`, just right of the body, so the widening card uncovers it instead of sliding it over the body; as an overlay it is `right-0` with a left shadow.
+    - Entries are buttons with `data-toc-line`, `aria-current="location"` on the current one, and `paddingLeft` of 8 px plus 12 px per level below `minDepth`.
+    - `compute()`: the last listed `[data-heading-line]` whose top is at or above the body's top + `ACTIVE_OFFSET` (16), else the first entry. Runs in a layout effect and, `requestAnimationFrame`-throttled, on the body's `scroll`. Skipped while `pinned` holds a clicked line; `wheel`, `touchstart`, `keydown` and `pointerdown` on the body clear `pinned`.
+    - `go(line)`: pins the line, then `body.scrollTo` the heading's offset minus `HEADING_SCROLL_MARGIN` (8), smooth unless reduced motion. Never `scrollIntoView`, which scrolls every scrollable ancestor.
+    - An effect adjusts `nav.scrollTop` to keep the current entry in view.
+    - Full-title hint: on `mouseenter`, only when `scrollWidth > clientWidth`, a `FULL_TITLE_DELAY_MS` timer sets `fullTitle` from the button's rect. It renders a `fixed`, `pointer-events-none`, `aria-hidden` box portaled to `document.body`, right-aligned under the entry. Mouse leave, a panel scroll and unmount clear it.
 - `src/renderer/src/components/chat/JsonTree.tsx`:
   - `JsonTree({ value })`, a `data-testid="json-tree"` block of plain rows with disclosure buttons (`aria-expanded` on each chevron) — deliberately not an ARIA `tree`, which needs focusable items and arrow-key navigation, and whose rows here hold buttons and links of their own. Fold state is a `Set` of container paths (`""` is the root, then `/` + each URI-encoded key or index), seeded once by `defaultCollapsed`; `JsonPreview` keys it by the file text, so new text remounts it with a fresh default instead of reusing stale paths.
   - `defaultCollapsed`: `countValues` (capped walk) above `EXPAND_ALL_LIMIT` (2000) → every container path at depth ≥ `FOLDED_DEPTH` (1); otherwise only those at depth ≥ `MAX_OPEN_DEPTH` (32). `containerPaths` and `countValues` are iterative: `JSON.parse` accepts nesting (5000 levels) that overflowed the first, recursive walk.
@@ -133,6 +166,11 @@
 - `src/renderer/src/App.tsx`: mounts `<FilePreviewModal />` once at the app root, beside the other global overlays and modals.
 
 ### Renderer — utils
+- `src/renderer/src/utils/markdownToc.ts`: `markdownToc(markdown)` → `{ entries: TocEntry[], show }`.
+  - Parses with `unified().use(remarkParse).use(remarkGfm)`, the parser side of what `react-markdown` renders the preview with, so its `position.start.line` matches the rendered heading's `data-heading-line`. The caller must pass exactly the string handed to `<Markdown>`, the body after the frontmatter split, or the lines drift.
+  - `collectHeadings` walks the whole tree, so headings inside blockquotes and lists count.
+  - `show` is `h1 > 1 || h2 > 1`. `entries` are depth 1–4, skipping the H1 when there is exactly one.
+  - `flattenText(node)`: text and inline code values, image alt text, recursively; whitespace is collapsed. `mdast-util-to-string` is only a transitive dependency, so it is not imported.
 - `src/renderer/src/utils/frontmatter.ts`:
   - `splitFrontmatter(text)` → `{ frontmatter: { entries } | null, body }`. Requires `---` on the first line (after an optional BOM), a closing `---` or `...`, a `KEY_LINE` as the first non-blank line inside (a `#` comment there fails it), and every later top-level line a `KEY_LINE`, blank or `#` comment (`parseEntries` returns `null` otherwise). `KEY_LINE` keys are identifiers — letters, digits, `_ $ @ . / -`, `:`-joined parts like `og:title` — or quoted; no spaces, no `*`. On any failure `frontmatter` is `null` and `body` is the untouched `text`, rendered as ordinary markdown. CRLF is accepted.
   - `entries` is `FrontmatterEntry[]` (`{ key, value }`, `value` of kind `text`, `list` or `raw`).
@@ -152,8 +190,11 @@
   - pinning the card to the top;
   - focus moving in and back out;
   - the press guard;
-  - the agent-file header and error states.
+  - the agent-file header and error states, including Open and Open folder disabled inside the ⋯ menu when the file has gone.
   - markdown frontmatter: the card sits outside `.markdown-body`, a URL value is a `_blank` link, and the body renders without a stray rule or setext heading.
+- `FilePreviewModal.test.tsx`, `the Contents panel`: offered for long markdown and open by default, not for short markdown, non-markdown or an attachment csv, frontmatter not counted, the full-title hint after the delay and never for an entry that fits, a click scrolling the body and marking the entry current, the closed state persisted to `localStorage`, widening to the right with the body at the closed width, widening with a partial left shift when the right is short, the press guard after a toggle, the overlay after a slow load until a toggle, the root font size, a resize while no preview was open, and the overlay in a narrow window.
+- `FilePreviewModal.test.tsx`, `the ⋯ menu`: item order, running an action without closing the preview, an outside press and Escape taken by the menu first, arrow-key movement, the spinning trigger with disabled items, and no menu for an attachment. `contentsGeometry` is exported for these tests.
+- `src/renderer/src/utils/markdownToc.test.ts`: the `show` threshold (lone H1 with H2s, two H1s, H2s without an H1, one H1 and one H2, no headings), `#` in a code fence, setext headings, a split-off frontmatter body, H5/H6 excluded, distinct lines for repeated texts, and flattened inline markup.
 - `src/renderer/src/components/chat/JsonTree.test.tsx`: the palette classes, chevron fold with count, Alt-click branch fold, a large document opening with only its top level unfolded, the exact 2000-value boundary, paging a huge container, 5000-level nesting (fails against a recursive walk), a small deep document folded at depth 32, the scroll shift and the `min-height` floor after a fold, array labels and the braces out of the tab order, and `parseJsonForTree` declining non-JSON. `FilePreviewModal.test.tsx` covers the tree for parsed text and the raw `<pre>` for truncated JSON.
 - `src/renderer/src/components/chat/MessageBubble.frontmatter.test.tsx`: user and assistant bubbles show the card and a link, no stray rule, and keep the unsplit text as `data-message-markdown`; a leading rule alone makes no card.
 - `src/renderer/src/utils/frontmatter.test.ts`: `splitFrontmatter` value shapes, nested values kept as source, CRLF/BOM/empty blocks; documents that are not frontmatter (prose or `**Summary**:` between rules, a `#` comment first, a non-key line after a key, no closing rule) left untouched; `commaSeparatedItems`; `linkifySegments`, including `**url**` and comma-joined URLs.
@@ -186,6 +227,9 @@
   - `lastPointer`: the last window pointer-down, the origin for attachment opens;
   - `agentOpenToken`: the newest-open guard across an agent file's consent dialog.
 - `useFileDownloadStore` (Zustand): reused for the modal's Download button.
+- `useUIStore.previewContentsOpen` / `togglePreviewContents()` (`src/renderer/src/stores/ui.store.ts`): whether the Contents panel shows, global across previews, persisted to `localStorage` key `cinna-preview-contents-open` (`'0'` closed; anything else, including absent, open).
+- In `FilePreviewModal`: `windowWidth`, `animateWidthFor`, `closingFor` and `slowOpenFor` state and the `toggledAt` ref, for where the Contents panel goes and the press guard after a toggle.
+- In `FilePreviewContents`: `active` state, the `pinned` ref for a clicked entry, and `fullTitle` state with its timer ref.
 - `CsvPreview` local `useState`:
   - `filters: Record<number, string>`, a substring per column;
   - `sort: { col, dir } | null`.
@@ -215,7 +259,11 @@
 - `ENTRANCE_WAIT_MS` = 150 (`FilePreviewModal.tsx`): how long the card stays hidden waiting for a settled state.
 - `ENTRANCE` = 170 ms, `cubic-bezier(0.2, 0, 0, 1)`. The exit uses the same options, with `fill: 'forwards'`.
 - `COPIED_HINT_MS` = 1200 (`FilePreviewModal.tsx`): how long "Copied" or "Couldn't copy" stands before the hint fades.
-- `OPEN_PRESS_GUARD_MS` = 500 (`FilePreviewModal.tsx`): how long after an open an outside press is ignored.
+- `OPEN_PRESS_GUARD_MS` = 500 (`FilePreviewModal.tsx`): how long after an open, or after a Contents toggle, an outside press is ignored.
+- `CONTENTS_PANEL_WIDTH` = 240 (`FilePreviewContents.tsx`): the panel's width, and what the card widens by.
+- `WINDOW_MARGIN` = 16, `CARD_MAX_WIDTH_REM` = 48, `OVERLAY_PADDING_X_REM` = 2, `CARD_BORDER_X` = 2 (`FilePreviewModal.tsx`): the inputs to `contentsGeometry` and the body's pinned width.
+- `FULL_TITLE_DELAY_MS` = 250 (`FilePreviewContents.tsx`): how long the pointer rests on a cut-off entry before its full text shows.
+- `cinna-preview-contents-open` (`localStorage`, `ui.store.ts`): the Contents panel's remembered state.
 - `POINTER_ORIGIN_MAX_AGE_MS` = 1000 (`filePreview.store.ts`): the oldest pointer-down an attachment open may grow from.
 - Previewable extensions and MIME types:
   - attachments: the tables in `src/shared/filePreview.ts` (`txt`, `log`, `md`, `markdown`, `json`, `csv`, `tsv`, `yaml`, `yml`);

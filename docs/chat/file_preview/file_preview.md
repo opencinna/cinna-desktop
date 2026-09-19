@@ -13,8 +13,10 @@ One read-only modal for looking at a text file **in place**, reached two ways.
   - **Agent attachments** under an assistant reply ([Agent Attachments](../agent_attachments/agent_attachments.md)), always `cinna` source.
 
 **A [file reference](../file_references/file_references.md) in a folder agent's chat.** This is an inline code span that names a real file.
-- **Open instead of Download:** the file is already on disk, so the header offers **Open folder** and **Open**.
+- **Open instead of Download:** the file is already on disk, so the header's **⋯** menu offers **Open** and **Open folder**.
 - **More types:** code and config preview as plain text as well.
+
+**A long markdown file**, from either way in, also gets a **Contents** panel: its headings, beside the body or over its right edge, so the user can jump to a section and see where they are.
 
 ## Core Concepts
 
@@ -39,8 +41,10 @@ One read-only modal for looking at a text file **in place**, reached two ways.
 - **Notice**: a body that is a sentence rather than content. For agent files it is either "Preview is off for credential files." or "No preview for this file type."
 - **Header actions**:
   - Attachments get an icon-only Download.
-  - Agent files get labelled **Open folder** and **Open** buttons, at the app-chrome type scale.
+  - Agent files get an icon-only **⋯** button ("More file actions"). Its menu holds **Open**, then **Open folder**.
   - For `csv` only, a **Filter** toggle reveals per-column controls. It is hidden while a notice shows.
+  - For a long markdown file only, a labelled **Contents** toggle, at the app-chrome type scale, shows and hides the Contents panel.
+- **Contents panel**: a 240 px column listing a markdown file's H1–H4 headings, indented by depth, with the current section in the accent colour. See [The Contents panel](#the-contents-panel).
 - **Entrance**: the card expands from the point the user clicked.
 - **Exit**: closing plays the entrance backwards, towards the same point.
 - **Header path**: an agent file's display path, beside its name. A click copies it.
@@ -60,9 +64,17 @@ One read-only modal for looking at a text file **in place**, reached two ways.
 
 ### Previewing a file an agent named
 1. The user clicks a file reference in a folder agent's chat, and main authorizes the path. See [File References](../file_references/file_references.md).
-2. The modal expands from the click. Its header shows the file name, its display path, **Open folder**, **Open** and Close. The content comes from `agent-files:read-preview`.
-3. **Open** and **Open folder** hand the file to the operating system. A failure appears in a row under the header.
+2. The modal expands from the click. Its header shows the file name, its display path, the **⋯** button and Close. The content comes from `agent-files:read-preview`.
+3. The user opens the **⋯** menu and picks **Open** or **Open folder**, which hand the file to the operating system. The menu closes, and the **⋯** icon spins until the action returns. A failure appears in a row under the header.
 4. Clicking the path beside the file name copies it. A hint under the path says "Copied".
+
+### Finding a section in a long markdown file
+1. The user opens a markdown file with several H1s or several H2s. The header shows **Contents**, and the panel is open unless the user closed it last time.
+2. In a wide window the card has grown to the right to hold the panel, and the body sits exactly where it would without it. In a narrow one the panel lies over the body's right edge.
+3. Clicking an entry scrolls the body so that heading sits just under the body's top edge. The entry turns accent.
+4. Scrolling the body moves the accent to whichever section is now at the top.
+5. Resting the pointer on an entry that is cut off shows its full text under it after a quarter of a second.
+6. Clicking **Contents** hides the panel, and the card narrows back. The choice holds for the next preview and the next launch.
 
 ### Filtering & sorting a CSV preview
 1. In a `csv`/`tsv` preview, the user clicks the **Filter** icon in the header. A sortable header and a row of filter inputs appear.
@@ -86,7 +98,7 @@ One read-only modal for looking at a text file **in place**, reached two ways.
 2. **Invalid bytes:** invalid byte sequences decode to the replacement character instead of failing, so the modal always shows *something*. Download or Open still gets the exact bytes.
 
 ### Closing
-1. Escape, the X button, or a press outside the card closes the modal. A press outside within 500 ms of opening is ignored.
+1. Escape, the X button, or a press outside the card closes the modal. A press outside within 500 ms of opening, or of a Contents toggle, is ignored. While the **⋯** menu is open, Escape or a press outside closes only the menu.
 2. The card shrinks back towards where it opened while it and the backdrop fade out, as fast as they came in. The page under it takes clicks at once.
 3. **Focus:** after a keyboard open, focus returns to whatever held it before, once the fade has ended. After a click open, focus is released and not returned.
 
@@ -155,10 +167,44 @@ One read-only modal for looking at a text file **in place**, reached two ways.
   - a folder that has gone: "That folder is no longer there.";
   - a failed folder reveal: "Couldn't show it in its folder: …", or main's own sentence when that already names the action.
 - **A folder reaches the modal only when showing it failed.** It shows a folder icon, its name and path, and no file actions.
-- **Open and Open folder are disabled while the body says the file has gone.** They could only fail, and their error would repeat the body, so a click would look like it did nothing.
+- **Open and Open folder are disabled while the body says the file has gone.** They could only fail, and their error would repeat the body, so a click would look like it did nothing. The **⋯** button itself stays enabled, so the user can still see what is unavailable.
 - **A failed header action** is named in a row under the header: "Couldn't open it: …", "Couldn't show it in its folder: …", or main's own sentence when that names the action already.
   - It closes nothing ([UX rule 6](../../development/ui_guidelines/ux_rules.md)).
   - The row is hidden when the body already shows the same failure.
+
+### The ⋯ menu
+- **Open and Open folder live in a menu, not the header.** They used to be labelled header buttons. The header now holds the Contents toggle, and these two actions are occasional.
+- **The trigger never disables.** Its items do, while an action runs or the file has gone. A disabled trigger would hide what exists.
+- **The trigger shows the running action.** The menu has closed by the time an action runs, so the **⋯** icon becomes a spinner in place. Nothing moves ([UX rule 1](../../development/ui_guidelines/ux_rules.md)).
+- **The menu is portaled out of the card**, like every menu ([UX rule 8](../../development/ui_guidelines/ux_rules.md)). A press on it still counts as inside the card, so picking an item never closes the preview.
+- **The menu takes the first dismissal.** While it is open, Escape, Tab or a press outside the card closes the menu and leaves the preview up. Only the next Escape or press closes the preview. Escape and Tab also return focus to the trigger.
+- **The keyboard reaches the items.** Opening the menu focuses the first enabled item. The arrow keys, Home and End move between enabled items. With none enabled, focus stays on the trigger.
+- **The menu closes with the preview.** A preview that starts fading out takes an open menu with it.
+- **Only agent files have it.** An attachment keeps its Download button, and a folder that failed to show has no file actions at all.
+
+### The Contents panel
+- **Only a long markdown file offers it.** The file must have more than one H1 or more than one H2. A short note gets no panel, because a list of one or two headings is not worth the width it takes. Frontmatter is not counted: the headings are read from exactly the body the preview renders.
+- **It is not offered until the preview has loaded.** While loading, or when the body is an error or a notice, the header has no Contents button.
+- **Entries are H1 to H4.** H5 and H6 are left out. A lone H1 is the document's title, so it is left out too, and its H2s become the top level. Several H1s are all listed.
+- **Indentation follows depth, starting from the shallowest level listed.** Top-level entries are in the text colour and deeper ones are secondary. The current one is accent.
+- **Headings are found the way the preview renders them.** A `#` inside a code fence is not a heading, while a setext heading (`===` / `---` underline) is. Inline markup is flattened, so `*(mandatory)*` lists as "(mandatory)".
+- **Entries point at source lines, not slugs.** Headings repeat, such as an "Edge Cases" under every section, and a line number cannot. The rendered headings keep the tags the preview already gave them; they only gain the line they came from.
+- **A click scrolls only the body.** The window and the page are never scrolled. The heading lands 8 px below the body's top edge. The scroll is smooth, or instant under reduced motion.
+- **The current section is the last heading at or above the body's top edge**, or the first entry when none is. It is recomputed once a frame while the body scrolls. The panel scrolls itself to keep the current entry in view.
+- **A clicked entry stays current until the user scrolls by hand**, with the wheel, a touch, a key or a press in the body. A heading near the end of the file cannot reach the top, and without the hold the accent would land on an earlier section than the one the user picked.
+- **A cut-off entry shows its full text after 250 ms.** The hint appears under the entry and floats over everything else. It replaces the native `title`, which waits about a second and cannot be made faster. An entry that fits shows no hint. Screen readers already get the full text from the button.
+- **Whether it is open is remembered**, across previews and launches. It starts open, because only long files offer it.
+
+### Where the Contents panel goes
+- **The body never changes width.** It keeps the closed card's width whether the panel is open or not, so its text never reflows when the panel toggles.
+- **In a wide enough window the card widens, and the panel sits beside the body.** That happens when the closed width plus 240 px fits within the window minus the overlay's padding, which is from about 1,040 px at the default font size.
+  - **With room for the whole panel on the right** (from about 1,280 px), the card grows to the right only. Its left edge, and so the body, stay exactly where they were.
+  - **With less room**, the card still widens. It moves left only as far as it must to keep 16 px from the window's right edge, so the body moves left by up to 120 px. The user chose this over an overlay.
+- **In a narrower window the panel lies over the body's right side**, with a shadow. The card keeps its width.
+- **A preview whose load took longer than the entrance wait (150 ms) uses the overlay**, until the user toggles Contents. The entrance ran on the narrow loading card, and widening it when the content landed would move the header's buttons under a pointer that may be on its way to them.
+- **Only the Contents button animates the width**, over the entrance's 170 ms. A preview that opens with the panel already open appears at its final width, and a window resize is followed without animating. Under reduced motion nothing animates.
+- **Closing a side-by-side panel keeps it drawn while the card narrows**, so the card clips it away rather than leaving an empty strip.
+- **A press outside the card is ignored for 500 ms after a toggle.** Toggling moves the card's edge from under the pointer. A second press on the same spot would otherwise land on the backdrop and close the preview.
 
 ### The header path
 - **The display path** next to the file name is left out when it equals the name, as it does for a file at the top of the agent folder. The name and the path each have a tooltip for when they are cut off.
@@ -214,11 +260,17 @@ Badge click (MessageBubble user badge | AgentAttachment):
 File reference click (folder agent chat):
   useFilePreviewStore.openAgentFile(agentId, ref, click point)
     → agent-files:authorize → agent-files:read-preview → FilePreviewModal
-       header Open folder → agent-files:reveal · Open → agent-files:open
+       header ⋯ menu: Open → agent-files:open · Open folder → agent-files:reveal
+
+Long markdown (either way in):
+  markdownToc(body after frontmatter) → several H1s or H2s? → header Contents toggle
+    → FilePreviewContents beside the body (card widens) or over it (narrow window / slow load)
+       entry click → scroll the body to [data-heading-line]
 
 FilePreviewModal (both):
   hidden until settled (≤ 150 ms) → measure card → expand from origin → focus card
-  close: Escape | X | outside press (after 500 ms)
+  close: Escape | X | outside press (after 500 ms, not within 500 ms of a Contents toggle)
+         an open ⋯ menu takes Escape or an outside press first
     → store closed at once → last open state plays the entrance backwards (170 ms, clicks reach the page)
     → unmount → focus back only after a keyboard open
 ```
@@ -241,4 +293,4 @@ For file paths, IPC signatures and method-level detail see [File Preview — Tec
 
 ---
 
-*Last updated: 2026-09-14*
+*Last updated: 2026-09-19*

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A folder agent works inside its folder and names files all the time: `data/reforecast/pulled/omp.csv`, `scripts/pull.py:42`. In that agent's chat, an inline code span that names a real file or folder is clickable. A file opens in the shared [preview modal](../file_preview/file_preview.md), which expands from the click point and has **Open folder** and **Open** in its header. A folder opens in Finder / Explorer. The user never has to go looking for a file the agent has just named.
+A folder agent works inside its folder and names files all the time: `data/reforecast/pulled/omp.csv`, `scripts/pull.py:42`. In that agent's chat, an inline code span that names a real file or folder is clickable. A file opens in the shared [preview modal](../file_preview/file_preview.md), which expands from the click point and has **Open** and **Open folder** in its header's **⋯** menu. A folder opens in Finder / Explorer. The user never has to go looking for a file the agent has just named.
 
 ## Core Concepts
 
@@ -27,9 +27,9 @@ A folder agent works inside its folder and names files all the time: `data/refor
 2. The user clicks one. Main checks that the path may be used; for a path inside the agent folder the answer is immediate.
 3. The preview modal expands from the click point. It shows:
    - the file name and its path in the agent folder;
-   - **Open folder**, **Open** and Close;
+   - the **⋯** menu (**Open**, **Open folder**) and Close;
    - the rendered content: markdown, JSON, a CSV table, or plain text for code and config.
-4. **Open** hands the file to the user's editor or its system app. **Open folder** selects it in Finder. A failure shows in a row under the header and closes nothing.
+4. From the **⋯** menu, **Open** hands the file to the user's editor or its system app, and **Open folder** selects it in Finder. A failure shows in a row under the header and closes nothing.
 
 ### Showing a folder
 1. The user clicks a span that names a folder. Its tooltip ends in `/`.
@@ -46,12 +46,12 @@ A folder agent works inside its folder and names files all the time: `data/refor
 ### A file that cannot be shown
 - **A credential file** (`.env`, `server.pem`, `credentials/api.json`): the modal says "Preview is off for credential files." Open and Open folder still work.
 - **A type with no preview** (`.gz`, `.xlsx`): the modal says "No preview for this file type." The header still works.
-- **A file that has gone** since the reply: "That file is no longer there." Open and Open folder are disabled, since they could only fail.
+- **A file that has gone** since the reply: "That file is no longer there." Open and Open folder are disabled in the **⋯** menu, since they could only fail.
 - **A folder that has gone**: "That folder is no longer there.", with no file actions.
 
 ### From the keyboard
 1. Tab reaches a reference. Enter or Space opens it, and the modal grows from its centre.
-2. Focus moves into the modal, so Tab reaches the path, Open folder, Open and Close. Escape closes the modal, and once it has faded out, focus goes back to the reference.
+2. Focus moves into the modal, so Tab reaches the path, the **⋯** button and Close. Enter on **⋯** opens the menu with its first item focused. Escape closes the modal, and once it has faded out, focus goes back to the reference.
 
 ## Business Rules
 
@@ -184,7 +184,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
   - the file icon and file name;
   - the display path, muted, next to the name; a click copies it (left out when it would repeat the name);
   - the CSV filter, when it applies;
-  - **Open folder**, **Open** and Close.
+  - the **⋯** menu, holding **Open** then **Open folder**, and Close.
 
   There is no Download button: the file is already on disk.
 - **A failure before there is anything to show still opens the modal**, where the click was, and says why. A click that does nothing is worse.

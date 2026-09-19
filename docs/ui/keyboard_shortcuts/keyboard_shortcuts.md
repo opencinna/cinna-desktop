@@ -81,7 +81,9 @@ A resolved file reference in a folder agent's chat is a focusable `code` with `r
 | Key | Action |
 |-----|--------|
 | `Esc` | Close the preview. It fades out as fast as it appeared. After a keyboard open, focus returns to the reference once the fade ends. Registered on `window` while a preview is open, and off during the fade. |
-| `Tab` | After a keyboard open, focus starts on the card. Tab goes through the header path (click-to-copy), the CSV Filter toggle, Open folder, Open, Close, then the scrolling body. |
+| `Tab` | After a keyboard open, focus starts on the card. Tab goes through the header path (click-to-copy), the CSV Filter toggle, the Contents toggle (long markdown), the ⋯ button, Close, then the scrolling body. |
+| `Esc` / `Tab` (⋯ menu open) | Close the menu only, and focus its trigger. The preview stays; the next `Esc` closes it. Registered on `window` in the capture phase while the menu is open, and stopped there. |
+| `↑` / `↓` / `Home` / `End` (⋯ menu open) | Move between the enabled items, wrapping. Opening the menu focuses the first enabled item. |
 
 ### Logs overlay (`LogsOverlay`)
 
