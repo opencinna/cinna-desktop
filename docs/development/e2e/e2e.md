@@ -126,6 +126,7 @@ playwright test -> fixtures/app.ts -> electron.launch(repoRoot, HOME=sandbox, CI
 - `e2e/specs/live.spec.ts` — `@live`: onboarding through the real API-key screen, a one-turn chat round trip, and D2: a folder agent given a secret word in its prompt documents, attached with `@` inside a model chat, answering through the engine
 - `e2e/specs/a2a-silent-stop.spec.ts` — a2a silent stop regression.
 - `e2e/specs/chat-session-status.spec.ts` — seven real loopback A2A cases for background spinner/interrupt/delete with the current draft preserved; completed, needs-input and failed unread outcomes through restart and transcript opening; and foreground outcomes remaining read after navigation. Checks computed icon opacity/animation, real cancellation/abort and persisted results. See [Sidebar Session Status](../../chat/session_status/session_status.md).
+- `e2e/specs/chat-row-tooltip.spec.ts` — the sidebar chat row's summary tooltip, seeded over IPC with no model: an agent chat names its agent, `with <other>`, Started and Lasted, 4px right of the row; the pointer crosses onto it and it stays past the closing delay, then goes when the pointer leaves; a mode chat shows exactly one tooltip tagged `chat mode`; an empty chat shows none; a click on a hovered row opens the chat and leaves no tooltip.
 - `e2e/specs/agent-turn-failures.spec.ts` — agent turn failures regression.
 - `e2e/specs/autonomous-task.spec.ts` — autonomous task regression.
 - `e2e/specs/cinna-integration.spec.ts` — cinna integration regression.
