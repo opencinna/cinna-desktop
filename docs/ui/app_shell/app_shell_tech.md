@@ -26,7 +26,7 @@
 
 ### Renderer — Shared UI / Hooks
 
-- `src/renderer/src/components/ui/usePopover.ts` — Generic popover wiring: trigger ref, popover ref, fixed-position computation, outside-click handler with portal-aware exclusion, and a horizontal clamp back inside the window; placements `above-left | above-right | below-right`
+- `src/renderer/src/components/ui/usePopover.ts` — Generic popover wiring: trigger ref, popover ref, fixed-position computation, outside-click handler with portal-aware exclusion, and a clamp back inside the window (horizontal for every placement, vertical for `right`); placements `above-left | above-right | below-right | right`
 - `src/renderer/src/hooks/useStartNewChat.ts` — Stable callback: clears `activeChatId`, sets `activeView` to `chat`
 
 ### Renderer — Styles
@@ -123,10 +123,11 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 
 ### usePopover (`usePopover.ts`)
 
-- Single `useEffect` keyed on `[open, placement]`
-- Computes `position: fixed` style from the trigger's `getBoundingClientRect`, with a `GAP = 8` (above) or `BELOW_GAP = 4`
+- Single `useLayoutEffect` keyed on `[open, placement]`. A layout effect, not a passive one: the position is measured in the frame the popover opens, so one that follows the pointer from row to row never paints a frame of nothing in between
+- Computes `position: fixed` style from the trigger's `getBoundingClientRect`, with a `GAP = 8` (above), `BELOW_GAP = 4` or `RIGHT_GAP = 4`
+- `right` sits beside the trigger with top edges level — for a row's hoverable popover, which must cover neither the row nor the rows the pointer moves on to. 4 px is close enough for the pointer to cross onto it; it may overlap the sidebar card's edge. Used by the [chat row summary](../../chat/chat_row_summary/chat_row_summary_tech.md)
 - `mousedown` handler closes when target is outside both the trigger ref and the popover ref
-- Re-measures on `window resize`; consumer is responsible for re-measuring on scroll if relevant (current shell does not scroll the trigger)
+- Re-measures on `window resize`; consumer is responsible for scroll. The shell's own triggers do not scroll; the chat row summary's does, and closes on it rather than re-measuring
 
 **Edge clamping.** Every placement anchors one *horizontal side* to the trigger, which is right for a trigger in a corner — where this hook started, in the sidebar footer — and wrong for one in the middle of a dialog, where a wide popover anchored two thirds of the way across a narrow window hangs off the far side. A `max-w` caps the width; it does not move anything. So a `useLayoutEffect` measures the popover once it is laid out and applies a horizontal `translateX` (`EDGE = 8` px minimum gap), leaving the anchor logic alone. Three details, each a trap worth not re-introducing:
 
@@ -134,7 +135,9 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 - The left-edge correction runs **only when the popover fits** (`width <= vw - EDGE * 2`). One wider than the window cannot satisfy both edges, and trying moves it back and forth forever.
 - A **zero-width rect returns early**. That covers an element not yet laid out *and* jsdom, where every rect is zero and "it starts before the left edge" would otherwise be true forever — a real infinite-render failure in the unit suite, not a hypothetical.
 
-Layout is unmeasurable in jsdom, so the behaviour is covered by an E2E assertion instead: `e2e/specs/connect-intent.spec.ts` resizes to 620 px, opens the local-dev explainer and asserts the popover's box stays within the viewport.
+**Vertical clamping, `right` only.** `right` is the one placement that hangs down beside its trigger, so a trigger near the bottom of the window would push its popover past the edge. A second layout effect applies the same correction vertically, built the same way (current shift included, whole pixels, zero-height rect returns early), and the style's transform becomes `translate(x, y)`. When both edges cannot be kept the **top wins**, because a popover's first line is the one that says what it is about. The other placements grow away from the edge they were designed against and are left exactly as they were.
+
+Layout is unmeasurable in jsdom, so the horizontal behaviour is covered by an E2E assertion instead: `e2e/specs/connect-intent.spec.ts` resizes to 620 px, opens the local-dev explainer and asserts the popover's box stays within the viewport. The `right` position and its vertical clamp are covered in `src/renderer/src/components/ui/usePopover.test.tsx` against stubbed rects and a stubbed window height.
 
 ### Shared chat workspace
 

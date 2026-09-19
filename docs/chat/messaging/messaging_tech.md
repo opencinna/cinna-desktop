@@ -60,6 +60,7 @@ DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-d
 | Channel | Type | Purpose |
 |---------|------|---------|
 | `chat:list` | invoke | List visible chats (sorted by updatedAt desc), including activeRunId and lastRunResult |
+| `chat:list-summaries` | invoke | Per-chat sidebar tooltip data keyed by chat id. Separate from `chat:list` because that is polled every second and this reads every message row of every listed chat. See [Chat Row Summary](../chat_row_summary/chat_row_summary_tech.md) |
 | `chat:get` | invoke | Get owned chat + saved messages, activeRunId and lastRunResult; does not acknowledge reading |
 | `chat:mark-result-read` | invoke | Mark the owned chat's matching result ID read; stale IDs cannot clear a newer result |
 | `chat:create` | invoke | Create new empty chat |

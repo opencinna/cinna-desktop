@@ -47,5 +47,6 @@ Main turn or controller → local latest-result record and active reservation �
 - [Technical details](session_status_tech.md) — storage, IPC, activity precedence, read identity and regression coverage.
 - [Messaging](../messaging/messaging.md) and [live attachment](../messaging/live_runs.md) — execution, cancellation and selected-chat replay.
 - [Turn outcomes](../messaging/turn_completion.md) — per-turn completion and the controller that owns the session outcome.
+- [Chat Row Summary](../chat_row_summary/chat_row_summary.md) — the hover tooltip on the same row; it holds the action button's native title back while open.
 - [Conversation UI](../conversation_ui/conversation_ui.md) and [App Shell](../../ui/app_shell/app_shell.md) — transcript visibility and sidebar navigation.
 - [Tasks](../../jobs/tasks/tasks.md), [autonomous coordination](../../jobs/tasks/autonomous_tasks.md), [script execution](../../jobs/tasks/script_execution.md) and [Inbox](../../jobs/tasks/inbox.md) — whole-session controls and durable human waits.
