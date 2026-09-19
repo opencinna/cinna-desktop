@@ -29,7 +29,8 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  * - Real files and folders, a short name the base heuristic resolves, and paths
  *   outside the folder render as clickable references; a missing file stays
  *   plain, and so does a fenced block holding a real path.
- * - A csv previews as a table with Open folder / Open; `.env` is refused as a
+ * - A csv previews as a table with Open / Open folder in its ⋯ menu, which
+ *   Escape closes without closing the preview; `.env` is refused as a
  *   credential file and `.gz` has no preview; a double-click leaves the preview
  *   open; keyboard activation moves focus into the card, and Tab walks the
  *   header, the copyable path first, to the scrolling body, which wears the
@@ -204,6 +205,35 @@ function previewCard(page: Page): Locator {
     .filter({ has: page.getByRole('button', { name: 'Close preview', exact: true }) })
 }
 
+/** The preview's ⋯ trigger, which holds Open and Open folder. */
+function moreActions(card: Locator): Locator {
+  return card.getByRole('button', { name: 'More file actions', exact: true })
+}
+
+/** The ⋯ menu, portaled out of the card. */
+function fileActionsMenu(page: Page): Locator {
+  return page.getByRole('menu', { name: 'File actions', exact: true })
+}
+
+/**
+ * Opens the ⋯ menu, checks its two items against `enabled`, and closes it
+ * with Escape — which must leave the preview open.
+ */
+async function expectFileActions(page: Page, card: Locator, enabled: boolean): Promise<void> {
+  await expect(moreActions(card)).toBeEnabled()
+  await moreActions(card).click()
+  const menu = fileActionsMenu(page)
+  await expect(menu.getByRole('menuitem')).toHaveText(['Open', 'Open folder'])
+  for (const name of ['Open', 'Open folder']) {
+    const item = menu.getByRole('menuitem', { name, exact: true })
+    if (enabled) await expect(item).toBeEnabled()
+    else await expect(item).toBeDisabled()
+  }
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  await expect(card).toBeVisible()
+}
+
 /**
  * Lets whatever main has already answered reach the screen before asserting
  * that nothing opened: one IPC round trip, which queues behind any reply main
@@ -285,16 +315,15 @@ test('a folder agent’s file references link, preview, refuse credentials and w
     await page.screenshot({ path: join(SHOTS, '1-reply-with-links.png'), animations: 'disabled' })
   })
 
-  await test.step('the csv opens as a table with Open folder and Open; Escape closes it', async () => {
+  await test.step('the csv opens as a table with Open and Open folder in its ⋯ menu; Escape closes it', async () => {
     await fileLink(page, CSV).click()
     await expect(card.getByRole('table')).toBeVisible()
     await expect(card.getByRole('row').first().getByRole('columnheader')).toHaveText(['partner', 'region', 'revenue_eur'])
     await expect(card.getByRole('cell', { name: 'partner-01', exact: true })).toBeVisible()
     await expect(card.getByText('omp.csv', { exact: true })).toBeVisible()
     await expect(card.getByText(CSV, { exact: true })).toBeVisible()
-    await expect(card.getByRole('button', { name: 'Open folder', exact: true })).toBeEnabled()
-    await expect(card.getByRole('button', { name: 'Open', exact: true })).toBeEnabled()
     await page.screenshot({ path: join(SHOTS, '2-csv-preview.png'), animations: 'disabled' })
+    await expectFileActions(page, card, true)
     await page.keyboard.press('Escape')
     await expect(card).toHaveCount(0)
   })
@@ -302,8 +331,7 @@ test('a folder agent’s file references link, preview, refuse credentials and w
   await test.step('.env is refused as a credential file, and .gz has no preview', async () => {
     await fileLink(page, ENV).click()
     await expect(card.getByText('Preview is off for credential files.', { exact: true })).toBeVisible()
-    await expect(card.getByRole('button', { name: 'Open', exact: true })).toBeEnabled()
-    await expect(card.getByRole('button', { name: 'Open folder', exact: true })).toBeEnabled()
+    await expectFileActions(page, card, true)
     await expect(page.locator('body')).not.toContainText(SECRET)
     await page.keyboard.press('Escape')
     await expect(card).toHaveCount(0)
@@ -383,9 +411,7 @@ test('a folder agent’s file references link, preview, refuse credentials and w
     await page.keyboard.press('Tab')
     await expect(card.getByRole('button', { name: 'Toggle column filters and sorting', exact: true })).toBeFocused()
     await page.keyboard.press('Tab')
-    await expect(card.getByRole('button', { name: 'Open folder', exact: true })).toBeFocused()
-    await page.keyboard.press('Tab')
-    await expect(card.getByRole('button', { name: 'Open', exact: true })).toBeFocused()
+    await expect(moreActions(card)).toBeFocused()
     await page.keyboard.press('Tab')
     await expect(card.getByRole('button', { name: 'Close preview', exact: true })).toBeFocused()
     await page.keyboard.press('Tab')
@@ -493,14 +519,13 @@ test('a folder link reveals the folder; a file or folder deleted after the links
     await expect(card).toHaveCount(0)
   })
 
-  await test.step('a file deleted after resolve opens a card whose Open and Open folder are disabled', async () => {
+  await test.step('a file deleted after resolve opens a card whose Open and Open folder are disabled in its menu', async () => {
     rmSync(join(agentDir, CSV))
     await fileLink(page, CSV).click()
     await expect(card.getByText('That file is no longer there.', { exact: true })).toBeVisible()
     await expect(card.getByText('omp.csv', { exact: true })).toBeVisible()
-    await expect(card.getByRole('button', { name: 'Open folder', exact: true })).toBeDisabled()
-    await expect(card.getByRole('button', { name: 'Open', exact: true })).toBeDisabled()
     await page.screenshot({ path: join(SHOTS, '3-missing-file-card.png'), animations: 'disabled' })
+    await expectFileActions(page, card, false)
     await page.keyboard.press('Escape')
     await expect(card).toHaveCount(0)
   })
@@ -510,8 +535,7 @@ test('a folder link reveals the folder; a file or folder deleted after the links
     await folderLink(page, PULLED).click()
     await expect(card.getByText('That folder is no longer there.', { exact: true })).toBeVisible()
     await expect(card.getByText('pulled', { exact: true })).toBeVisible()
-    await expect(card.getByRole('button', { name: 'Open', exact: true })).toHaveCount(0)
-    await expect(card.getByRole('button', { name: 'Open folder', exact: true })).toHaveCount(0)
+    await expect(moreActions(card)).toHaveCount(0)
     expect(await revealed(cinna)).toEqual([pulledReal])
   })
 })
