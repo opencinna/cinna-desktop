@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { useUIStore } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import type { ChatListSummary } from '../../../../shared/chatListSummary'
 import { HOVER_CLOSE_DELAY_MS } from '../ui/useHoverPopover'
@@ -292,4 +293,27 @@ it('closes when the list moves the row, rather than stay beside another', () => 
   expect(screen.getByRole('tooltip')).toBeTruthy()
   rerender(at(0))
   expect(screen.queryByRole('tooltip')).toBeNull()
+})
+
+it('glows on some openings only, and never with Extra UI animation off', () => {
+  const chance = vi.spyOn(Math, 'random').mockReturnValue(0.1)
+  useUIStore.setState({ extraUIAnimation: true })
+  const first = render(summarised())
+  fireEvent.mouseEnter(screen.getByText('Background session').parentElement!)
+  expect(screen.getByRole('tooltip').hasAttribute('data-ambient-glow')).toBe(true)
+  expect(screen.getByRole('tooltip').style.getPropertyValue('--button-glow-duration')).not.toBe('')
+  first.unmount()
+
+  useUIStore.setState({ extraUIAnimation: false })
+  const second = render(summarised())
+  fireEvent.mouseEnter(screen.getByText('Background session').parentElement!)
+  expect(screen.getByRole('tooltip').hasAttribute('data-ambient-glow')).toBe(false)
+  second.unmount()
+
+  useUIStore.setState({ extraUIAnimation: true })
+  chance.mockReturnValue(0.9)
+  render(summarised())
+  fireEvent.mouseEnter(screen.getByText('Background session').parentElement!)
+  expect(screen.getByRole('tooltip').hasAttribute('data-ambient-glow')).toBe(false)
+  chance.mockRestore()
 })

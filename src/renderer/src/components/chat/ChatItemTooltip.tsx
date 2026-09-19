@@ -1,9 +1,14 @@
+import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { MessageSquare } from 'lucide-react'
 import type { ChatListSummary } from '../../../../shared/chatListSummary'
 import { getPreset } from '../../constants/chatModeColors'
 import { AgentTypeIcon } from '../agents/AgentTypeIcon'
+import { useUIStore } from '../../stores/ui.store'
 import { formatChatLasted, formatChatOthers, formatChatStarted } from '../../utils/chatSummaryFormat'
+
+/** How many openings glow. */
+const GLOW_CHANCE = 0.35
 
 interface ChatItemTooltipProps {
   id: string
@@ -34,6 +39,14 @@ function WhoIcon({ who }: { who: ChatListSummary['with'] }): React.JSX.Element {
  */
 export function ChatItemTooltip({ id, summary, createdAt, popoverRef, onMouseEnter, onMouseLeave, style }: ChatItemTooltipProps): React.JSX.Element {
   const now = new Date()
+  // The secondary buttons' border glow, under the same Extra UI animation
+  // preference: one pass, on some openings only and from a random corner, so a
+  // sweep down the list is not a row of lights. Decided once, when it opens.
+  const animate = useUIStore((s) => s.extraUIAnimation)
+  const [glow] = useState(() => Math.random() < GLOW_CHANCE
+    ? { angle: Math.floor(Math.random() * 4) * 90, duration: 4200 + Math.random() * 1400 }
+    : null)
+  const glowing = animate && glow !== null
   const hasName = summary.with.name !== ''
   const lasted = formatChatLasted(summary.firstMessageAt, summary.lastMessageAt, summary.messageCount)
   return createPortal(
@@ -47,8 +60,12 @@ export function ChatItemTooltip({ id, summary, createdAt, popoverRef, onMouseEnt
       // Portaled, but React still bubbles these to the row, where they navigate.
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
-      style={style}
-      className="z-50 w-[240px] rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2.5 py-2 shadow-xl"
+      // `position: fixed` from `style` outranks the class's `relative`.
+      data-ambient-glow={glowing ? '' : undefined}
+      style={glowing
+        ? { ...style, '--button-start-angle': `${glow.angle}deg`, '--button-glow-duration': `${glow.duration}ms` } as React.CSSProperties
+        : style}
+      className="ambient-button z-50 w-[240px] rounded-lg border border-[var(--color-border)] bg-[var(--color-overlay-panel)] backdrop-blur-xl px-2.5 py-2 shadow-xl"
     >
       {hasName && (
         <div className="flex min-w-0 items-start gap-1.5 text-xs font-medium text-[var(--color-text)]">
