@@ -19,6 +19,8 @@ import { sessionActivityHub } from './sessionActivityHub'
 import { forgetChatSessions, releaseChatSessions } from './chatSessionRelease'
 import { chatRunResultRepo } from '../db/chatRunResults'
 import type { ChatRunResult } from '../../shared/chatRunResult'
+import type { ChatListSummary } from '../../shared/chatListSummary'
+import { buildChatListSummaries } from './chatListSummary'
 
 const logger = createLogger('chat')
 
@@ -45,6 +47,14 @@ export const chatService = {
   list(userId: string): (ChatRow & { activeRunId: string | null; lastRunResult: ChatRunResult | null })[] {
     const results = chatRunResultRepo.list(userId)
     return chatRepo.list(userId).map((chat) => ({ ...chat, activeRunId: activeRunId(chat.id), lastRunResult: results.get(chat.id) ?? null }))
+  },
+
+  /**
+   * The sidebar tooltips' data, keyed by chat id. Deliberately not part of
+   * `list`: that is polled every second, and this scans the messages table.
+   */
+  listSummaries(userId: string): Record<string, ChatListSummary> {
+    return Object.fromEntries(buildChatListSummaries(getSettingsScopeUserId(), userId, chatRepo.list(userId)))
   },
 
   markResultRead(userId: string, chatId: string, runId: string): void {

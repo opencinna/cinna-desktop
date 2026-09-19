@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 
-export type PopoverPlacement = 'above-left' | 'above-right' | 'below-right'
+export type PopoverPlacement = 'above-left' | 'above-right' | 'below-right' | 'right'
 
 export type FixedPos =
   | { left: number; bottom: number; right?: undefined; top?: undefined }
@@ -39,6 +39,8 @@ export interface PopoverApi<T extends HTMLElement, P extends HTMLElement> {
 
 const GAP = 8 // px between trigger edge and popover (used for above-*)
 const BELOW_GAP = 4
+/** `right` only: close enough for the pointer to cross onto a hoverable popover; it may overlap the sidebar card's edge. */
+const RIGHT_GAP = 4
 /** Smallest gap kept between a popover and the window edge. */
 const EDGE = 8
 
@@ -69,11 +71,16 @@ export function usePopover<
   const [pos, setPos] = useState<FixedPos | null>(null)
   /** Horizontal correction, applied as a transform so the anchors stay as-is. */
   const [shift, setShift] = useState(0)
+  /** Vertical correction — `right` only, the one placement that hangs down beside its trigger. */
+  const [shiftY, setShiftY] = useState(0)
 
-  useEffect(() => {
+  // A layout effect: measured in the frame it opens, so a popover that follows
+  // the pointer from row to row never paints one frame of nothing in between.
+  useLayoutEffect(() => {
     if (!open) {
       setPos(null)
       setShift(0)
+      setShiftY(0)
       return
     }
     const measure = (): void => {
@@ -91,6 +98,11 @@ export function usePopover<
           break
         case 'below-right':
           setPos({ right: vw - r.right, top: r.bottom + BELOW_GAP })
+          break
+        case 'right':
+          // Beside the trigger, top edges level: a row's tooltip, which must
+          // cover neither the row nor the rows the pointer moves on to.
+          setPos({ left: r.right + RIGHT_GAP, top: r.top })
           break
       }
     }
@@ -146,6 +158,27 @@ export function usePopover<
     if (next !== shift) setShift(next)
   }, [open, pos, shift])
 
+  // The same correction, vertically, for `right`: a trigger near the bottom of
+  // the window would otherwise hang its popover past the edge. The other
+  // placements grow away from an edge they were designed against and are left
+  // exactly as they were. Absolute, whole pixels and guarded for the same
+  // reasons as the horizontal one above.
+  useLayoutEffect(() => {
+    const el = popoverRef.current
+    if (placement !== 'right' || !open || !pos || !el) return
+    const r = el.getBoundingClientRect()
+    if (r.height === 0) return
+    const vh = window.innerHeight
+    const top = r.top - shiftY
+    const bottom = r.bottom - shiftY
+    let next = 0
+    if (bottom > vh - EDGE) next = vh - EDGE - bottom
+    // The top edge wins when both cannot be kept: the first line says who.
+    if (top + next < EDGE) next = EDGE - top
+    next = Math.round(next)
+    if (next !== shiftY) setShiftY(next)
+  }, [placement, open, pos, shiftY])
+
   // Pinned in the same frame it is first laid out, so the switch never shows.
   useLayoutEffect(() => {
     const el = popoverRef.current
@@ -161,7 +194,13 @@ export function usePopover<
     triggerRef,
     popoverRef,
     style: pos
-      ? { position: 'fixed', ...pos, ...(shift === 0 ? {} : { transform: `translateX(${shift}px)` }) }
+      ? {
+          position: 'fixed',
+          ...pos,
+          ...(shiftY !== 0
+            ? { transform: `translate(${shift}px, ${shiftY}px)` }
+            : shift === 0 ? {} : { transform: `translateX(${shift}px)` })
+        }
       : null
   }
 }

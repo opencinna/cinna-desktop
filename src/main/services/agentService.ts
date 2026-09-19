@@ -11,6 +11,7 @@ import { driverOfRow } from '../agents/drivers/driverOf'
 import { unsupportedReadiness } from '../agents/drivers/unsupportedDriver'
 import type { AgentCapabilities, AgentReadiness } from '../../shared/agentDrivers'
 import { agentReadinessService } from './agentReadinessService'
+import { acpTransportOf } from './agentTypeFields'
 import { AgentError, CinnaApiError } from '../errors'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
@@ -123,6 +124,7 @@ export interface SyncRemoteResult {
 
 function toDto(row: AgentRow): AgentDto {
   const developmentEngine = row.driverConfig?.developmentEngine
+  const acpTransport = acpTransportOf(row)
   return {
     id: row.id,
     name: row.name,
@@ -148,7 +150,7 @@ function toDto(row: AgentRow): AgentDto {
       development: true,
       ...(isAgentEngine(developmentEngine) ? { developmentEngine } : {})
     } : {}),
-    ...(row.driver === 'acp' && row.driverConfig?.launcher === 'custom' ? { acpTransport: row.driverConfig.transport === 'websocket' ? 'websocket' as const : 'stdio' as const } : {}),
+    ...(acpTransport ? { acpTransport } : {}),
     capabilities: capabilitiesFor(row),
     readiness: driverOfRow(row) ? agentReadinessService.peek(row.id) : unsupportedReadiness(),
     createdAt: row.createdAt

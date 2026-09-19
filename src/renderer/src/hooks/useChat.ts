@@ -25,6 +25,18 @@ export function useChatList() {
   })
 }
 
+/**
+ * The sidebar tooltips' data, keyed by chat id. Under the `['chats']` prefix so
+ * every invalidation of the list refreshes it too, and deliberately without a
+ * `refetchInterval`: main scans the messages table to build it.
+ */
+export function useChatSummaries() {
+  return useQuery({
+    queryKey: ['chats', 'summaries'],
+    queryFn: () => window.api.chat.listSummaries()
+  })
+}
+
 export function useChatDetail(chatId: string | null) {
   const hasAttachedStream = useChatStore((state) =>
     state.activeChatId === chatId && state.isStreaming)

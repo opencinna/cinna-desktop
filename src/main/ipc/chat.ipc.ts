@@ -11,6 +11,11 @@ export function registerChatHandlers(): void {
     return chatService.list(getProfileScopeUserId())
   })
 
+  ipcHandle('chat:list-summaries', async () => {
+    userActivation.requireActivated()
+    return chatService.listSummaries(getProfileScopeUserId())
+  })
+
   ipcHandle('chat:get', async (_event, chatId: string) => {
     userActivation.requireActivated()
     return chatService.get(getProfileScopeUserId(), chatId)

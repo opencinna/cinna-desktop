@@ -58,6 +58,17 @@ const { taskRunnersByChat } = await import('./taskRunnerState')
 const { chatRunResultRepo } = await import('../db/chatRunResults')
 const { runAllMigrations } = await import('../db/migrations')
 
+it('keeps the summaries off the polled list rows, and serves them keyed by chat id, per owner', () => {
+  const chat = chatService.create(USER)
+  const other = chatService.create('another-profile')
+  expect(chatService.list(USER)[0]).not.toHaveProperty('summary')
+  const summaries = chatService.listSummaries(USER)
+  expect(Object.keys(summaries)).toEqual([chat.id])
+  expect(summaries[chat.id]).toMatchObject({ with: { kind: 'none' }, others: [], messageCount: 0 })
+  expect(chatService.listSummaries('another-profile')).not.toHaveProperty(chat.id)
+  expect(Object.keys(chatService.listSummaries('another-profile'))).toEqual([other.id])
+})
+
 it('retains unread results across migration replay, scopes reads by owner and acknowledges only the opened run', () => {
   const chat = chatService.create(USER)
   chatRunResultRepo.record(chat.id, 'run-1', 'needs_input')

@@ -1,10 +1,31 @@
+import { useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
-import { useChatList } from '../../hooks/useChat'
+import { useChatList, useChatSummaries } from '../../hooks/useChat'
 import { useStartNewChat } from '../../hooks/useStartNewChat'
 import { ChatItem } from './ChatItem'
 
 export function ChatList(): React.JSX.Element {
   const { data: chats, isLoading } = useChatList()
+  // Its own unpolled query: a row whose summary has not loaded has no tooltip.
+  const { data: summaries } = useChatSummaries()
+  const queryClient = useQueryClient()
+
+  // Only the open chat's turn end invalidates `['chats']` (useLiveRunWatch). A
+  // background turn ends silently, so the polled list is what notices: a row
+  // that was running in the previous result and is not in this one has new
+  // messages to count. Once per result however many rows ended; never on the
+  // first result, which has nothing to compare against.
+  const running = useRef<Set<string> | null>(null)
+  useEffect(() => {
+    if (!chats) return
+    const now = new Set(chats.filter((chat) => chat.activeRunId).map((chat) => chat.id))
+    const before = running.current
+    running.current = now
+    if (before && [...before].some((id) => !now.has(id))) {
+      void queryClient.invalidateQueries({ queryKey: ['chats', 'summaries'] })
+    }
+  }, [chats, queryClient])
   const startNewChat = useStartNewChat()
 
   return (
@@ -31,8 +52,8 @@ export function ChatList(): React.JSX.Element {
           </div>
         ) : (
           <div className="px-1.5 py-1 space-y-px">
-            {chats.map((chat) => (
-              <ChatItem key={chat.id} chat={chat} />
+            {chats.map((chat, index) => (
+              <ChatItem key={chat.id} chat={chat} summary={summaries?.[chat.id]} index={index} />
             ))}
           </div>
         )}

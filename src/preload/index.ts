@@ -388,6 +388,9 @@ const api = {
 
   chat: {
     list: (): Promise<ChatData[]> => ipcRenderer.invoke('chat:list'),
+    /** Per-chat tooltip data, keyed by chat id. Not polled: it scans messages. */
+    listSummaries: (): Promise<Record<string, import('../shared/chatListSummary').ChatListSummary>> =>
+      ipcRenderer.invoke('chat:list-summaries'),
     markResultRead: (chatId: string, runId: string): Promise<void> =>
       ipcRenderer.invoke('chat:mark-result-read', chatId, runId),
     get: (chatId: string): Promise<(ChatData & { messages: MessageData[] }) | null> =>

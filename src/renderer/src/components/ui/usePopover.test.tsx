@@ -19,9 +19,12 @@ afterEach(() => {
 function stubRects(): void {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     const r = rects.get(this.dataset.rect ?? '') ?? {}
-    const top = r.top ?? 0
+    // A real rect includes the element's transform; the corrections are
+    // computed from "measured minus applied", which only settles if it does.
+    const moved = /translate\((-?\d+)px, (-?\d+)px\)/.exec(this.style.transform)
+    const top = (r.top ?? 0) + (moved ? Number(moved[2]) : 0)
     const height = r.height ?? 0
-    const left = r.left ?? 0
+    const left = (r.left ?? 0) + (moved ? Number(moved[1]) : 0)
     const width = r.width ?? 0
     return { top, height, left, width, bottom: top + height, right: left + width, x: left, y: top, toJSON: () => ({}) } as DOMRect
   })
@@ -88,6 +91,57 @@ describe('usePopover keepTopWhileOpen', () => {
     expect(latest).toEqual({ position: 'fixed', right: 100, bottom: 108 })
     view.rerender(createElement(Harness, { placement: 'above-right', rows: 2 }))
     expect(latest).toEqual({ position: 'fixed', right: 100, bottom: 108 })
+  })
+})
+
+/** Spreads `style` onto the popover, as a caller does, so the stubbed rect moves with it. */
+function StyledHarness(): React.JSX.Element {
+  const popover = usePopover<HTMLButtonElement, HTMLDivElement>('right')
+  latest = popover.style
+  setOpen = popover.setOpen
+  return createElement('div', null,
+    createElement('button', { ref: popover.triggerRef, 'data-rect': 'trigger' }),
+    popover.open && popover.style ? createElement('div', { ref: popover.popoverRef, 'data-rect': 'popover', style: popover.style }) : null)
+}
+
+describe('usePopover right placement', () => {
+  // Window 1000×800; a sidebar row 240 wide whose right edge is at 250;
+  // `right` stands 4 off it, close enough to cross onto.
+  function open(triggerTop: number, popover: Partial<DOMRect>): void {
+    stubRects()
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1000)
+    vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(800)
+    rects.set('trigger', { top: triggerTop, height: 28, left: 10, width: 240 })
+    rects.set('popover', popover)
+    render(createElement(StyledHarness))
+    act(() => setOpen(true))
+  }
+
+  it('sits beside the trigger, top edges level', () => {
+    open(300, { top: 300, height: 90, left: 254, width: 200 })
+    expect(latest).toEqual({ position: 'fixed', left: 254, top: 300 })
+  })
+
+  it('lifts a popover that would hang past the bottom of the window, and settles', () => {
+    // Row at 760: a 90-tall popover would end at 850. 800 − 8 − 850 = −58.
+    open(760, { top: 760, height: 90, left: 254, width: 200 })
+    expect(latest).toEqual({ position: 'fixed', left: 254, top: 760, transform: 'translate(0px, -58px)' })
+  })
+
+  it('keeps the top edge inside when the popover is taller than the window', () => {
+    open(100, { top: 100, height: 900, left: 254, width: 200 })
+    expect(latest).toEqual({ position: 'fixed', left: 254, top: 100, transform: 'translate(0px, -92px)' })
+  })
+
+  it('does not clamp any other placement vertically', () => {
+    stubRects()
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1000)
+    vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(800)
+    rects.set('trigger', { top: 760, height: 28, left: 700, width: 240 })
+    rects.set('popover', { top: 792, height: 90, left: 740, width: 200 })
+    render(createElement(Harness, { placement: 'below-right', rows: 1 }))
+    act(() => setOpen(true))
+    expect(latest).toEqual({ position: 'fixed', right: 60, top: 792 })
   })
 })
 

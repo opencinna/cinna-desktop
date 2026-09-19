@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import { and, desc, eq, isNull, isNotNull } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, isNotNull, max, min, or, sql } from 'drizzle-orm'
 import { getDb } from './client'
 import { chats, chatOnDemandAgents, messages } from './schema'
 import type { MessageRow } from './messages'
@@ -22,6 +22,19 @@ export interface ChatMetaUpdate {
    * `chat:update` is one channel and a new chat sets several fields at once.
    */
   router?: ChatRouter
+}
+
+/** The chats `chatRepo.list` returns, as a condition other tables can join on. */
+const listedChats = (userId: string) =>
+  and(eq(chats.userId, userId), isNull(chats.deletedAt), eq(chats.hiddenFromList, false))
+
+export interface ChatMessageStats {
+  chatId: string
+  /** Over every row of the chat, so a session ending in tool work lasts until it. */
+  firstAt: Date | null
+  lastAt: Date | null
+  /** `user` and `assistant` rows only. */
+  messageCount: number
 }
 
 export const chatRepo = {
@@ -73,6 +86,52 @@ export const chatRepo = {
         )
       )
       .orderBy(desc(chats.updatedAt))
+      .all()
+  },
+
+  /**
+   * The three reads behind the sidebar's per-chat summary. Each covers every
+   * listed chat of the user in one statement (joined on the list's own
+   * condition, so there is no id list to outgrow SQLite's variable limit);
+   * none of them runs per chat. `idx_messages_chat_id` only finds the row ids:
+   * every message row of every listed chat is still read, so the cost grows
+   * with the messages table. Never call these from a polled path.
+   */
+  listMessageStats(userId: string): ChatMessageStats[] {
+    return getDb()
+      .select({
+        chatId: messages.chatId,
+        firstAt: min(messages.createdAt),
+        lastAt: max(messages.createdAt),
+        messageCount: sql<number>`sum(case when ${messages.role} in ('user', 'assistant') then 1 else 0 end)`.mapWith(Number)
+      })
+      .from(messages)
+      .innerJoin(chats, eq(chats.id, messages.chatId))
+      .where(listedChats(userId))
+      .groupBy(messages.chatId)
+      .all()
+  },
+
+  /** Distinct agents named on a chat's messages, in order of first appearance. */
+  listMessageAgentIds(userId: string): { chatId: string; sourceAgentId: string | null; toolAgentId: string | null }[] {
+    return getDb()
+      .select({ chatId: messages.chatId, sourceAgentId: messages.sourceAgentId, toolAgentId: messages.toolAgentId })
+      .from(messages)
+      .innerJoin(chats, eq(chats.id, messages.chatId))
+      .where(and(listedChats(userId), or(isNotNull(messages.sourceAgentId), isNotNull(messages.toolAgentId))))
+      .groupBy(messages.chatId, messages.sourceAgentId, messages.toolAgentId)
+      .orderBy(asc(min(messages.sortOrder)))
+      .all()
+  },
+
+  /** On-demand agents of every listed chat, in the order they were attached. */
+  listOnDemandAgentIds(userId: string): { chatId: string; agentId: string }[] {
+    return getDb()
+      .select({ chatId: chatOnDemandAgents.chatId, agentId: chatOnDemandAgents.agentId })
+      .from(chatOnDemandAgents)
+      .innerJoin(chats, eq(chats.id, chatOnDemandAgents.chatId))
+      .where(listedChats(userId))
+      .orderBy(asc(chatOnDemandAgents.createdAt), asc(chatOnDemandAgents.agentId))
       .all()
   },
 
