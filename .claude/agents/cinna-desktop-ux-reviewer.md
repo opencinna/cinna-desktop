@@ -42,6 +42,26 @@ Pages that show one object — a task, a job, an agent, a note — share a shape
 - **Labels use the app's own nouns.** The navigation says Chats and New Chat, so a button that opens one says "chat", not "conversation" or "thread". A synonym makes the user wonder whether it is a different thing. Grep the diff's visible strings against the nouns the sidebar and top bar use.
 - **The status is an icon beside the title and a word in the panel.** The icon is `aria-hidden`; the word is what a screen reader hears, once.
 
+## A hover tooltip is judged by how fast it answers and whether the pointer can reach it
+
+The sidebar chat-row summary is the reference (`ChatItem.tsx` + `ChatItemTooltip.tsx`, `usePopover`'s `'right'` placement; `docs/chat/chat_row_summary/`). Two needs decide the design, and a surface that has either one uses this pattern rather than a native `title` or a delayed popover. When a list the user scans has rows that look alike and no such tooltip, suggest it.
+
+- **The user is scanning.** Someone moving down a list of similar rows (chats, runs, tasks, agents) to find one wants the answer on every row they pass. The tooltip opens with **no delay**, complete or not at all: its data is already loaded when the row is hovered, never fetched on hover, and a row whose data has not arrived shows nothing rather than a box that fills in (rule 1). What distinguishes the row comes first and largest (*with whom*), the rest is quick facts. A tooltip that would only repeat what the row or the list's order already says is not shown (rule 7). Same width on every row, so a sweep does not resize it.
+- **The user may act in it, or copy from it.** Then it must survive the trip: it sits **adjacent to the block that opened it** (a few pixels, never across a gutter), takes pointer events, and closes a short moment (`HOVER_CLOSE_DELAY_MS`) after the pointer has left *both* the trigger and the tooltip. A tooltip with `pointer-events: none`, or one placed far enough away that the pointer crosses other hover targets to reach it, fails this the day a button or a selectable value goes inside. With controls inside it is a non-modal dialog (`useHoverPopover`), not `role="tooltip"`.
+
+Drive it with the real mouse (`page.mouse.move` in steps), never with `hover()` alone:
+
+1. **Sweep** down twenty rows at several speeds and count tooltips per frame: never two, no frame with none between neighbouring rows, no lag behind the pointer.
+2. **Travel** from the row's text to the tooltip in a straight line at slow and fast speeds (2–32px per event), and again along the row's top and bottom edges. It must still be open on arrival at every speed. Anything lying on that path — an action button with its own close-on-enter, a native `title` — is the usual culprit: the tooltip stays open across it, and the native title is withheld while ours is open, so two tooltips never say two things.
+3. **Return** from the tooltip straight back onto its own row, and wait past the close delay: it must not close under a pointer that is still on the row.
+4. **Aim diagonally** at the tooltip's lower part across the next row. Report whether the neighbour steals it; harmless while it is read-only, a finding once it holds controls.
+5. **Rest** the pointer on it and check what it covers: a hoverable tooltip swallows clicks, so measure its rectangle against the controls beside the list (the composer, a header button) and say which it blocks and for how long.
+6. **Things that move the trigger** — a scroll of the list, a reorder on a poll, the row being deleted — close it; a scroll elsewhere (a streaming transcript) does not.
+7. **Nested tooltips:** grep the tooltip's subtree for `title=`; a native bubble over ours is a finding (rule 10).
+8. The trigger stays highlighted while its tooltip is open, since `:hover` ends when the pointer moves onto a portaled element.
+
+Report a breach under rule 1 (something appears, vanishes or moves under the pointer), rule 7 (content that restates the row) or rule 8 (popover wiring), and name which of the two needs it fails.
+
 ## Read the diff, then look at the screen
 
 `git diff HEAD` and every untracked file: list every component that renders something. Then drive the built app — the rules about jumping, truncation and banners cannot be judged from JSX.
