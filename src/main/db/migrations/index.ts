@@ -22,6 +22,7 @@ import { migrateJobs } from './jobs'
 import { migrateTasks } from './tasks'
 import { migrateLocalSchedules } from './local-schedules'
 import { migrateHandovers } from './handovers'
+import { migrateDelegations } from './delegations'
 import { migrateNotes } from './notes'
 import { migrateAppSettings, backfillAiFunctionsCredential } from './app-settings'
 import { runSyncMigrations } from './sync'
@@ -88,6 +89,7 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // `handovers` references `tasks` (SET NULL) and `users`, so it lands after
   // `migrateTasks`. Creation only, no DML.
   migrateHandovers(sqlite)
+  migrateDelegations(sqlite)
   migrateLocalSchedules(sqlite)
   migrateNotes(sqlite)
   migrateAppSettings(sqlite)

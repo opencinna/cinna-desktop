@@ -2,6 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import { getDb } from './client'
 import { handovers } from './schema'
+import { delegationRepo, type DelegationPatch } from './delegations'
 import { parseHandoverState, type HandoverDto } from '../../shared/handovers'
 
 export type HandoverRow = typeof handovers.$inferSelect
@@ -9,6 +10,8 @@ export type HandoverRow = typeof handovers.$inferSelect
 /** Everything the caller decides at intake. The rest is defaulted here. */
 export interface HandoverInsert {
   id?: string
+  title?: string
+  brief?: string
   userId: string
   agentId: string
   folderPath: string
@@ -109,7 +112,23 @@ export const handoverRepo = {
       createdAt: now,
       updatedAt: now
     }
-    getDb().insert(handovers).values(row).run()
+    getDb().transaction(() => {
+      getDb().insert(handovers).values(row).run()
+      const parent = delegationRepo.parentOfOrigin(row.userId, { taskId: row.originTaskId, chatId: row.originChatId })
+      delegationRepo.insert({
+        id: row.id, userId: row.userId, requesterKey: row.handoverId,
+        originKind: row.originTaskId ? 'local_task' : row.originChatId ? 'local_chat' : 'external',
+        originAgentId: row.originAgentId, originChatId: row.originChatId, originTaskId: row.originTaskId,
+        targetKind: 'bare', targetAgentId: row.agentId, channel: 'file',
+        rootDelegationId: parent?.rootDelegationId ?? row.id,
+        title: input.title ?? row.handoverId, brief: input.brief ?? '',
+        depth: row.depth, taskId: row.taskId, handoverId: row.id,
+        execution: row.execution, state: row.state, refusalReason: row.refusalReason,
+        warning: row.warning, resultStatus: row.reportStatus, resultDigest: row.reportDigest,
+        summary: row.summary, groupId: row.groupId, gateRequestId: row.gateRequestId,
+        gateChatId: row.gateChatId, runId: row.runId
+      })
+    })
     return row
   },
 
@@ -165,11 +184,22 @@ export const handoverRepo = {
   update(userId: string, id: string, patch: HandoverPatch): HandoverRow | undefined {
     const keys = Object.keys(patch)
     const scanOnly = keys.length === 0 || (keys.length === 1 && keys[0] === 'lastScannedAt')
-    getDb()
-      .update(handovers)
-      .set(scanOnly ? patch : { ...patch, updatedAt: new Date() })
-      .where(and(eq(handovers.userId, userId), eq(handovers.id, id)))
-      .run()
+    getDb().transaction(() => {
+      getDb()
+        .update(handovers)
+        .set(scanOnly ? patch : { ...patch, updatedAt: new Date() })
+        .where(and(eq(handovers.userId, userId), eq(handovers.id, id)))
+        .run()
+      if (!scanOnly) {
+        const neutral: DelegationPatch = {}
+        for (const key of ['taskId', 'state', 'refusalReason', 'warning', 'summary', 'gateRequestId', 'gateChatId', 'runId', 'wokeAt', 'wakeRunId', 'originAgentId', 'originChatId', 'originTaskId'] as const) {
+          if (key in patch) Object.assign(neutral, { [key]: patch[key] })
+        }
+        if ('reportStatus' in patch) neutral.resultStatus = patch.reportStatus
+        // File-byte digest stays on handovers; the bus hashes the parsed result.
+        if (Object.keys(neutral).length) delegationRepo.update(userId, id, neutral)
+      }
+    })
     return this.getById(userId, id)
   },
 

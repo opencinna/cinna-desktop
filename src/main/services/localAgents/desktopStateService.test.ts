@@ -10,7 +10,7 @@
  * differently by two callers.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -32,6 +32,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
   // The bare branch writes outside `dir`; clean up what this file created.
   rmSync(barePath, { force: true })
+  rmSync(`${barePath}.delegations`, { force: true })
 })
 
 describe('desktopStatePath', () => {
@@ -242,5 +243,24 @@ describe('Codex approval state', () => {
     mkdirSync(join(dir, 'app-data'), { recursive: true })
     writeFileSync(join(dir, 'app-data', 'desktop.json'), JSON.stringify({ codexApproval: 'agent-full-access' }))
     expect(desktopStateService.read(dir, 'kit').codexApproval).toBeNull()
+  })
+})
+
+
+describe('delegation standing permissions', () => {
+  it('stores kit permissions outside the kit and ignores permissions planted inside it', () => {
+    mkdirSync(join(dir, 'app-data'), { recursive: true })
+    writeFileSync(join(dir, 'app-data', 'desktop.json'), JSON.stringify({ cloudDelegations: 'auto', delegations: 'auto' }))
+    expect(desktopStateService.read(dir, 'kit').cloudDelegations).toBeNull()
+    expect(desktopStateService.read(dir, 'kit').delegations).toBeNull()
+    desktopStateService.patch(dir, 'kit', { cloudDelegations: 'auto', delegations: 'ask' })
+    expect(desktopStateService.read(dir, 'kit')).toMatchObject({ cloudDelegations: 'auto', delegations: 'ask' })
+    expect(readFileSync(join(dir, 'app-data', 'desktop.json'), 'utf8')).not.toContain('cloudDelegations')
+    expect(JSON.parse(readFileSync(`${barePath}.delegations`, 'utf8'))).toEqual({ cloudDelegations: 'auto', delegations: 'ask' })
+  })
+  it('grants only literal auto from machine state', () => {
+    mkdirSync(join(barePath, '..'), { recursive: true })
+    writeFileSync(`${barePath}.delegations`, JSON.stringify({ cloudDelegations: true, delegations: 'allow' }))
+    expect(desktopStateService.read(dir, 'bare')).toMatchObject({ cloudDelegations: null, delegations: null })
   })
 })

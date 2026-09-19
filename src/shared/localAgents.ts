@@ -318,6 +318,8 @@ export interface LocalAgentDesktopSummary {
    * `window.api.localAgents.handoversCheck` first.
    */
   handovers?: HandoverSetting | null
+  delegations?: HandoverSetting | null
+  cloudDelegations?: HandoverSetting | null
 }
 
 /**

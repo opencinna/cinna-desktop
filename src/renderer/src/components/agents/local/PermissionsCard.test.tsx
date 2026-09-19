@@ -21,6 +21,7 @@ const grantsList = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const grantForget = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const grantsClear = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const setClaudeApproval = vi.fn<() => Promise<unknown>>()
+const setDelegationPermission = vi.fn<(agentId: string, field: string, setting: unknown) => Promise<unknown>>()
 const setHandovers = vi.fn<(agentId: string, handovers: unknown) => Promise<unknown>>()
 const handoversCheck = vi.fn<(agentId: string) => Promise<unknown>>()
 ;(window as unknown as { api: unknown }).api = {
@@ -29,6 +30,7 @@ const handoversCheck = vi.fn<(agentId: string) => Promise<unknown>>()
     grantForget,
     grantsClear,
     setClaudeApproval,
+    setDelegationPermission,
     setHandovers,
     handoversCheck
   },
@@ -576,5 +578,42 @@ describe('PermissionsCard — handovers', () => {
     await waitFor(() =>
       expect((screen.getByLabelText('Handovers') as HTMLSelectElement).value).toBe('ask')
     )
+  })
+})
+
+describe('delegation standing permissions', () => {
+  it('keeps receiving kit work separate from sending cloud work and retains saved choices', async () => {
+    grantsList.mockResolvedValue([])
+    setDelegationPermission.mockImplementation(async (_id, field, setting) => ({ ok: true, value: { ...agent, desktop: { ...agent.desktop, [field]: setting } } }))
+    renderLiveCard(agent)
+    const receiving = await screen.findByRole('combobox', { name: 'Delegations' })
+    const cloud = screen.getByRole('combobox', { name: 'Cloud delegations' })
+    expect((receiving as HTMLSelectElement).value).toBe('ask')
+    expect((cloud as HTMLSelectElement).value).toBe('ask')
+    fireEvent.change(cloud, { target: { value: 'auto' } })
+    await waitFor(() => expect(setDelegationPermission).toHaveBeenCalledWith(agent.id, 'cloudDelegations', 'auto'))
+    await waitFor(() => expect((cloud as HTMLSelectElement).disabled).toBe(false))
+    expect((cloud as HTMLSelectElement).value).toBe('auto')
+    expect((receiving as HTMLSelectElement).value).toBe('ask')
+  })
+
+  it('offers cloud permission on bare agents while preserving their file Handovers control', async () => {
+    grantsList.mockResolvedValue([])
+    handoversCheck.mockResolvedValue(gitSays('ignored'))
+    renderCard(BARE)
+    await screen.findByRole('combobox', { name: 'Cloud delegations' })
+    expect(screen.queryByRole('combobox', { name: 'Delegations' })).toBeNull()
+    expect(screen.getByRole('combobox', { name: 'Handovers' })).not.toBeNull()
+  })
+
+  it('keeps a refused cloud grant on Ask and shows the save error next to the control', async () => {
+    grantsList.mockResolvedValue([])
+    setDelegationPermission.mockResolvedValue({ ok: false, code: 'write_failed', message: 'State could not be saved.' })
+    renderLiveCard(agent)
+    const cloud = await screen.findByRole('combobox', { name: 'Cloud delegations' })
+    fireEvent.change(cloud, { target: { value: 'auto' } })
+    expect((await screen.findByRole('alert')).textContent).toContain('Nothing was changed')
+    expect((cloud as HTMLSelectElement).value).toBe('ask')
+    expect((cloud as HTMLSelectElement).disabled).toBe(false)
   })
 })

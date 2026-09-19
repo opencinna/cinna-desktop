@@ -1062,6 +1062,10 @@ describe('every task write keeps the exported note in step', () => {
       run: (id) => taskService.setStatus(USER, id, 'in_progress').id,
       leaves: 'file'
     },
+    acceptRemoteResult: {
+      run: (id) => taskService.acceptRemoteResult(USER, id, { status: 'blocked', handoffNote: NOTE, artifacts: [] }).id,
+      leaves: 'file'
+    },
     acceptRemoteStatus: {
       run: (id) => taskService.acceptRemoteStatus(USER, id, 'blocked').id,
       leaves: 'file'
@@ -1435,5 +1439,20 @@ describe('a task that arrived from another device', () => {
 
     expect(taskRepo.getById(OTHER_USER, theirs.id)).toBeDefined()
     expect(existsSync(noteFilePath(theirs.id))).toBe(true)
+  })
+})
+
+describe('remote delegation result', () => {
+  it('accepts a result while authority remains with the remote executor', () => {
+    const task = makeTask({ executor: 'remote' })
+    expect(() => taskService.setHandoffNote(USER, task.id, 'No desktop authority')).toThrow()
+    const result = taskService.acceptRemoteResult(USER, task.id, {
+      status: 'completed', handoffNote: 'Finished remotely.',
+      artifacts: [{ kind: 'link', name: 'result', ref: 'https://example.com/result' }]
+    })
+    expect(result.executor).toBe('remote')
+    expect(result.status).toBe('completed')
+    expect(result.handoffNote).toBe('Finished remotely.')
+    expect(result.artifacts).toEqual([{ kind: 'link', name: 'result', ref: 'https://example.com/result' }])
   })
 })

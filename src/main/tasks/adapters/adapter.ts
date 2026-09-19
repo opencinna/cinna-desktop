@@ -144,6 +144,12 @@ export function isRemoteDirtyField(value: unknown): value is RemoteDirtyField {
 
 /** What this adapter can actually do. Callers ask; they never branch on `id`. */
 export interface RemoteTaskCapabilities {
+  /** Repeating a top-level create with the same profile/task id cannot duplicate it. */
+  idempotentCreate?: boolean
+  /** Create accepts the fourth, structured delegation argument without dropping it. */
+  delegationMetadata?: boolean
+  /** listArtifacts returns portable references, never server-local filesystem paths. */
+  readArtifacts?: boolean
   /** Whether the service exposes selectable remote assignees. */
   assigneeDirectory: boolean
   /**
@@ -251,6 +257,8 @@ export interface RemoteAssignee {
  * single `number` here would have put a conversion in `taskSyncService`.
  */
 export interface RemoteTaskSnapshot {
+  /** Absent on older servers. Missing audience on a blocked result means user. */
+  result?: RemoteDelegationResult | null
   binding: RemoteBinding
   title: string
   description: string | null
@@ -307,6 +315,12 @@ export interface RemoteComment {
   type: string
   body: string
   author: string | null
+  /**
+   * True when a remote agent wrote it, not a person or the system. A remote
+   * agent that never files a `result` answers in ordinary `message` comments,
+   * and a delegation's fallback must not mistake a user's note for that answer.
+   */
+  fromAgent?: boolean
   createdAt: Date
 }
 
@@ -338,6 +352,8 @@ export interface RemoteCommentDraft {
  * renders both and no second union exists to drift.
  */
 export interface RemoteAsk {
+  /** Older services have only user questions. Never infer requester authority. */
+  audience?: 'requester' | 'user'
   /** The remote's id for the ask — what `answerAsk` is given back. */
   id: string
   request: InputRequest
@@ -360,6 +376,30 @@ export interface RemoteAvailability {
   reason?: string
 }
 
+/** The delegation link is separate from the remote's user-created task tree. */
+export interface RemoteDelegationMetadata {
+  id: string
+  requesterKey: string
+  originKind: 'local_chat' | 'local_task' | 'remote_task' | 'external'
+  originAgentId: string | null
+  originChatId: string | null
+  originTaskId: string | null
+  depth: number
+  root: string
+  group: string | null
+}
+
+export interface RemoteDelegationResult {
+  status: 'in_progress' | 'blocked' | 'done' | 'failed'
+  summary: string
+  question?: string | null
+  artifacts: TaskArtifact[]
+  body: string
+  audience?: 'requester' | 'user'
+  /** Address of a requester question; never guessed from arbitrary open asks. */
+  askId?: string | null
+}
+
 export interface RemoteTaskAdapter {
   /**
    * Opaque outside this folder. It is stored in `tasks.remote_adapter` and used
@@ -376,6 +416,9 @@ export interface RemoteTaskAdapter {
    * unlinked profile is an answer, not a failure.
    */
   availability(userId: string): Promise<RemoteAvailability>
+
+  /** Versioned extension discovery for the linked server, separate from stable adapter capabilities. */
+  delegationSupport?(userId: string): Promise<{ metadata: boolean; structuredResult: boolean; reply: boolean }>
 
   listAssignees(userId: string): Promise<RemoteAssignee[]>
 
@@ -402,7 +445,7 @@ export interface RemoteTaskAdapter {
    *    caught at the seam rather than discovered in the remote a week later;
    *  - anything else the remote itself refuses is `rejected`.
    */
-  create(userId: string, task: TaskDto, parent: RemoteBinding | null): Promise<RemoteBinding>
+  create(userId: string, task: TaskDto, parent: RemoteBinding | null, delegation?: RemoteDelegationMetadata): Promise<RemoteBinding>
 
   /**
    * Leave the handoff note where the next agent on this remote will find it.
@@ -513,6 +556,8 @@ export interface RemoteTaskAdapter {
   listComments(userId: string, binding: RemoteBinding): Promise<RemoteComment[]>
   /** Gated by `capabilities().writeArtifactKinds` containing `artifact.kind`. */
   putArtifact(userId: string, binding: RemoteBinding, artifact: TaskArtifact): Promise<void>
+  /** Optional read half, gated by readArtifacts. References must be portable URLs. */
+  listArtifacts?(userId: string, binding: RemoteBinding): Promise<TaskArtifact[]>
 
   listOpenAsks(userId: string, binding: RemoteBinding): Promise<RemoteAsk[]>
 

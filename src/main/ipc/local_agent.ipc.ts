@@ -617,6 +617,14 @@ export function registerLocalAgentHandlers(): void {
     }
   )
 
+  ipcHandle(
+    'local-agent:set-delegation-permission',
+    (_event, input: { agentId: string; field: 'delegations' | 'cloudDelegations'; setting: HandoverSetting | null }): LocalAgentOutcome<LocalAgentDto> => {
+      userActivation.requireActivated()
+      return withCode(() => localAgentService.setDelegationPermission(getSettingsScopeUserId(), input?.agentId ?? '', input?.field, input?.setting))
+    }
+  )
+
   /**
    * Whether a brief dropped into this folder's `.cinna/handovers/` runs without
    * asking (`drafts/file_handovers` §3.4). Bare folders only in practice: it is

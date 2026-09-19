@@ -485,6 +485,75 @@
       "verdict": "logged_out"
     }
   },
+  "folderHandovers": {
+    "mcp": {
+      "calls": [
+        "first",
+        "second",
+        "first"
+      ],
+      "differentDescriptors": true,
+      "first": true,
+      "listReads": true,
+      "loaded": true,
+      "nativeTools": true,
+      "outputs": [
+        "HANDOVER_SESSION_first",
+        "HANDOVER_SESSION_second"
+      ],
+      "second": true
+    },
+    "writes": [
+      {
+        "accepted": true,
+        "deniedBySandbox": true,
+        "kinds": [],
+        "mode": "read-only",
+        "permissionCount": 0,
+        "promptError": null,
+        "reviewUnavailable": false,
+        "titles": [],
+        "wrote": false
+      },
+      {
+        "accepted": true,
+        "deniedBySandbox": false,
+        "kinds": [
+          "execute"
+        ],
+        "mode": "read-only:escalated",
+        "permissionCount": 1,
+        "promptError": null,
+        "reviewUnavailable": false,
+        "titles": [
+          "Run command"
+        ],
+        "wrote": true
+      },
+      {
+        "accepted": true,
+        "deniedBySandbox": true,
+        "kinds": [],
+        "mode": "agent",
+        "permissionCount": 0,
+        "promptError": null,
+        "reviewUnavailable": false,
+        "titles": [],
+        "wrote": false
+      },
+      {
+        "accepted": true,
+        "deniedBySandbox": false,
+        "kinds": [],
+        "mode": "agent:escalated",
+        "permissionCount": 0,
+        "promptError": null,
+        "reviewUnavailable": true,
+        "titles": [],
+        "wrote": false
+      }
+    ]
+  },
   "providerTraffic": {
     "compaction": {
       "folderSession": {

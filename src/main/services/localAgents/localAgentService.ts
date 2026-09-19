@@ -1135,7 +1135,8 @@ export const localAgentService = {
     // Resolved **before** anything moves the folder. A bare agent's state file
     // is keyed on the folder's `realpath`, and once the folder is in the Trash
     // that resolution silently changes — see `desktopStateService.forgetAt`.
-    const stateFile = bare ? desktopStatePath(agentDir, 'bare') : null
+    const externalStateFile = desktopStatePath(agentDir, 'bare')
+    const stateFile = bare ? externalStateFile : null
 
     if (!trashFolder && !bare) {
       // A kit agent's row is a derived index over its folder: dropping the row
@@ -1160,6 +1161,7 @@ export const localAgentService = {
         // be adopted by whatever is next created at that path. A kit agent's
         // state was inside the folder and went to the Trash with it.
         if (stateFile) desktopStateService.forgetAt(stateFile)
+        desktopStateService.forgetAt(`${externalStateFile}.delegations`)
       } else {
         desktopStateService.patch(agentDir, 'bare', { hidden: true })
       }
@@ -1781,6 +1783,17 @@ export const localAgentService = {
     scannerService.markRootDirty(root.id)
     const dto = this.scanFolder(root, agentDir)
     return this.overlayEnabled(userId, [dto])[0]
+  },
+
+  setDelegationPermission(userId: string, agentId: string, field: 'delegations' | 'cloudDelegations', setting: unknown): LocalAgentDto {
+    if ((field !== 'delegations' && field !== 'cloudDelegations') || (setting !== null && setting !== 'ask' && setting !== 'auto')) {
+      throw new LocalAgentError('invalid_input', 'Choose Ask or Allow without asking.')
+    }
+    const { root, agentDir } = this.locate(userId, agentId)
+    if (field === 'delegations' && kindOf(root) === 'bare') throw new LocalAgentError('invalid_input', 'Bare folders use the Handovers setting.')
+    desktopStateService.patch(agentDir, kindOf(root), { [field]: setting })
+    scannerService.markRootDirty(root.id)
+    return this.overlayEnabled(userId, [this.scanFolder(root, agentDir)])[0]
   },
 
   /** What git says about this folder's handovers directory — the `auto` gate's evidence. */

@@ -6,7 +6,8 @@ import {
   useLocalAgentGrants,
   useSetClaudeApproval,
   useSetCodexApproval,
-  useSetHandovers
+  useSetHandovers,
+  useSetDelegationPermission
 } from '../../../hooks/useLocalAgents'
 import { formatRelativeFromDate } from '../../../utils/cinnaTime'
 import { unwrapIpcError } from '../../../utils/ipcError'
@@ -33,6 +34,7 @@ import {
 } from '../../../../../shared/handovers'
 import { handoverAutoOverriddenText, handoverIgnoreText } from '../../../utils/handoverText'
 import { useDefaultRuntime } from '../../../hooks/useEngine'
+import { SettingsInfoTip } from '../../settings/SettingsLayout'
 import { AgentCard } from './AgentCard'
 import { FIELD, LABEL } from './fieldClasses'
 
@@ -215,14 +217,9 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
         />
       )}
 
-      {/*
-        Bare folders only, and outside the engine branch above: a handover is a
-        brief dropped into the folder, which is a thing a folder has whatever
-        engine reads it. A kit folder is published and Cinna already writes into
-        it, so `.cinna/handovers` there would travel with the kit — it is not a
-        handover target at all (`drafts/file_handovers` §3.8).
-      */}
-      {bare && <HandoversSetting agent={agent} />}
+      {/* File intake belongs to bare folders; kit intake and outgoing cloud work have separate grants. */}
+      {bare ? <HandoversSetting agent={agent} /> : <DelegationPermissionSetting agent={agent} field="delegations" />}
+      <DelegationPermissionSetting agent={agent} field="cloudDelegations" />
 
       <div className="mt-3 text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]">
         Always allowed
@@ -681,11 +678,58 @@ function HandoversSetting({ agent }: { agent: LocalAgentDto }): React.JSX.Elemen
           </button>
         )}
       </div>
-      {error && (
-        <div role="alert" className="mt-1 text-[11px] text-[var(--color-danger)]">
-          {error}
-        </div>
-      )}
+      {/* One line, always there — a refusal must not push the setting below it down (see Approvals). */}
+      <div
+        role={error ? 'alert' : undefined}
+        className="mt-1 h-[15px] truncate text-[11px] leading-[15px] text-[var(--color-danger)]"
+        title={error ?? undefined}
+      >
+        {error}
+      </div>
     </div>
   )
+}
+
+/** Receiving kit work and allowing outgoing cloud work are distinct grants. */
+function DelegationPermissionSetting({ agent, field }: {
+  agent: LocalAgentDto
+  field: 'delegations' | 'cloudDelegations'
+}): React.JSX.Element {
+  const save = useSetDelegationPermission()
+  const [pending, setPending] = useState<HandoverSetting | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const title = field === 'delegations' ? 'Delegations' : 'Cloud delegations'
+  const current = pending ?? (agent.desktop[field] === 'auto' ? 'auto' : 'ask')
+  return <div className="mt-3">
+    <div className="mb-1 flex items-center gap-1">
+      <label htmlFor={`${field}-setting`} className={`${LABEL} !mb-0`}>{title}</label>
+      <SettingsInfoTip label={`About ${title}`}>
+        {field === 'delegations'
+          ? 'Let this agent run work requested by another local agent. This permission stays on this machine.'
+          : 'Let this agent send work to cloud agents. The brief leaves this machine and cloud execution may incur charges. This permission belongs to the requesting agent and stays on this machine.'}
+      </SettingsInfoTip>
+    </div>
+    <select id={`${field}-setting`} className={FIELD} value={current} disabled={save.isPending}
+      onChange={(event) => {
+        const setting = event.target.value
+        if ((setting !== 'ask' && setting !== 'auto') || setting === current) return
+        setError(null)
+        setPending(setting)
+        save.mutate({ agentId: agent.id, field, setting }, {
+          onError: (failure) => setError(`Nothing was changed — ${lowerFirst(unwrapIpcError(failure))}`),
+          onSettled: () => setPending(null)
+        })
+      }}>
+      <option value="ask">{field === 'delegations' ? 'Ask before running' : 'Ask before sending'}</option>
+      <option value="auto">{field === 'delegations' ? 'Run automatically' : 'Send without asking'}</option>
+    </select>
+    {/* One line, always there — a refusal must not push the setting below it down (see Approvals). */}
+    <div
+      role={error ? 'alert' : undefined}
+      className="mt-1 h-[15px] truncate text-[11px] leading-[15px] text-[var(--color-danger)]"
+      title={error ?? undefined}
+    >
+      {error}
+    </div>
+  </div>
 }

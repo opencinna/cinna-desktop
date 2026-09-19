@@ -110,6 +110,7 @@ import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
 import type { TaskDto, TaskListQuery } from '../shared/tasks'
 import type { TaskStatus } from '../shared/taskStatus'
 import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot } from '../shared/inbox'
+import type { TaskDelegationsDto } from '../shared/delegations'
 import type { HandoverDto, HandoverIgnoreCheck, HandoverSetting } from '../shared/handovers'
 import type {
   CatalogEntryDto,
@@ -1214,6 +1215,11 @@ const api = {
    * desktop recorded it. Read-only from here: the requester owns `brief.md`,
    * the executor owns `report.md`, and Cinna writes neither.
    */
+  delegations: {
+    forTask: (taskId: string): Promise<TaskDelegationsDto> =>
+      ipcRenderer.invoke('delegation:for-task', { taskId })
+  },
+
   handovers: {
     forTask: (taskId: string): Promise<HandoverDto | null> =>
       ipcRenderer.invoke('handover:for-task', { taskId })
@@ -1576,6 +1582,12 @@ const api = {
       approval: ClaudeApproval | null
     ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
       ipcRenderer.invoke('local-agent:set-codex-approval', { agentId, approval }),
+    setDelegationPermission: (
+      agentId: string,
+      field: 'delegations' | 'cloudDelegations',
+      setting: HandoverSetting | null
+    ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
+      ipcRenderer.invoke('local-agent:set-delegation-permission', { agentId, field, setting }),
     /**
      * Whether briefs dropped into this folder's `.cinna/handovers/` run without
      * asking. `auto` may come back refused (`handovers_not_ignored`) when git

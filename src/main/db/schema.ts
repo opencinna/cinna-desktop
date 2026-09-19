@@ -1,3 +1,4 @@
+import type { DelegationOriginKind, DelegationTargetKind, DelegationChannel, DelegationState, DelegationDispatchState, DelegationReply } from '../../shared/delegations'
 import type { ScriptRuntimeCheckpoint } from '../tasks/scriptRuntimeTypes'
 import type { LocalScheduleDefinition, LocalScheduleOccurrence } from '../../shared/localSchedules'
 import type { TaskScript } from '../../shared/taskScript'
@@ -979,6 +980,55 @@ export const handovers = sqliteTable('handovers', {
    */
   briefMissingAt: integer('brief_missing_at', { mode: 'timestamp' }),
   lastScannedAt: integer('last_scanned_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull()
+})
+
+/** Durable bus state. File reconciliation remains in handovers, linked 1:1. */
+export const delegations = sqliteTable('delegations', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  requesterKey: text('requester_key').notNull(),
+  originKey: text('origin_key').notNull(),
+  originKind: text('origin_kind').$type<DelegationOriginKind>().notNull(),
+  originAgentId: text('origin_agent_id'),
+  originChatId: text('origin_chat_id'),
+  originTaskId: text('origin_task_id'),
+  originRemoteRef: text('origin_remote_ref'),
+  targetKind: text('target_kind').$type<DelegationTargetKind>().notNull(),
+  targetAgentId: text('target_agent_id').notNull(),
+  channel: text('channel').$type<DelegationChannel>().notNull(),
+  rootDelegationId: text('root_delegation_id').notNull(),
+  depth: integer('depth').notNull().default(1),
+  taskId: text('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+  handoverId: text('handover_id').unique(),
+  title: text('title').notNull().default(''),
+  brief: text('brief').notNull().default(''),
+  execution: text('execution').$type<HandoverExecution>().notNull().default('ask'),
+  state: text('state').$type<DelegationState>().notNull().default('seen'),
+  refusalReason: text('refusal_reason'),
+  warning: text('warning'),
+  resultStatus: text('result_status').$type<HandoverReportStatus>(),
+  summary: text('summary'),
+  question: text('question'),
+  resultDigest: text('result_digest'),
+  artifacts: text('artifacts', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  resultBody: text('result_body'),
+  pendingReplies: text('pending_replies', { mode: 'json' }).$type<DelegationReply[]>().notNull().default([]),
+  questionAudience: text('question_audience').$type<'requester' | 'user'>(),
+  groupId: text('group_id'),
+  wokeAt: integer('woke_at', { mode: 'timestamp' }),
+  wakeRunId: text('wake_run_id'),
+  wakeDigest: text('wake_digest'),
+  runId: text('run_id'),
+  gateRequestId: text('gate_request_id'),
+  gateChatId: text('gate_chat_id'),
+  remoteConnectionId: text('remote_connection_id'),
+  remoteTaskId: text('remote_task_id'),
+  remoteTaskKey: text('remote_task_key'),
+  remoteUrl: text('remote_url'),
+  dispatchState: text('dispatch_state').$type<DelegationDispatchState>(),
+  dispatchError: text('dispatch_error'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull()
 })

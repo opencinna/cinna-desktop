@@ -140,6 +140,8 @@ export interface DesktopState {
    * (`localAgentService.setHandovers`).
    */
   handovers: HandoverSetting | null
+  delegations?: HandoverSetting | null
+  cloudDelegations?: HandoverSetting | null
 }
 
 const EMPTY_STATE: DesktopState = {
@@ -238,7 +240,9 @@ function coerce(raw: unknown): DesktopState {
     // `'auto'` is no choice at all. A file another build wrote, or a hand edit,
     // must not be able to grant a standing permission to run code by writing
     // something that merely looks affirmative.
-    handovers: raw.handovers === 'auto' || raw.handovers === 'ask' ? raw.handovers : null
+    handovers: raw.handovers === 'auto' || raw.handovers === 'ask' ? raw.handovers : null,
+    delegations: raw.delegations === 'auto' || raw.delegations === 'ask' ? raw.delegations : null,
+    cloudDelegations: raw.cloudDelegations === 'auto' || raw.cloudDelegations === 'ask' ? raw.cloudDelegations : null
   }
 }
 
@@ -414,12 +418,19 @@ export const desktopStateService = {
   /** Read the state, or the empty state when the file is absent or unusable. */
   read(agentDir: string, kind: LocalAgentKind): DesktopState {
     const path = desktopStatePath(agentDir, kind)
-    return readState(path)
+    const state = readState(path)
+    // Incoming kit content cannot grant local execution or cloud spending.
+    const permissions = readState(`${desktopStatePath(agentDir, 'bare')}.delegations`)
+    return { ...state, delegations: permissions.delegations ?? null, cloudDelegations: permissions.cloudDelegations ?? null }
   },
 
   /** Replace the state wholesale. Creates the containing directory if needed. */
   write(agentDir: string, kind: LocalAgentKind, state: DesktopState): void {
-    writeAtomically(desktopStatePath(agentDir, kind), `${JSON.stringify(state, null, 2)}\n`)
+    const { delegations, cloudDelegations, ...folderState } = state
+    writeAtomically(desktopStatePath(agentDir, kind), `${JSON.stringify(folderState, null, 2)}\n`)
+    if (delegations !== undefined || cloudDelegations !== undefined) {
+      writeAtomically(`${desktopStatePath(agentDir, 'bare')}.delegations`, `${JSON.stringify({ delegations, cloudDelegations })}\n`)
+    }
     logger.debug('desktop state written', {
       sessions: Object.keys(state.sessions).length,
       hasToken: state.agentToken !== null
@@ -474,7 +485,9 @@ export const desktopStateService = {
       lastStatusAt: state.lastStatus?.at ?? null,
       claudeApproval: state.claudeApproval,
       codexApproval: state.codexApproval ?? null,
-      handovers: state.handovers ?? null
+      handovers: state.handovers ?? null,
+      delegations: state.delegations ?? null,
+      cloudDelegations: state.cloudDelegations ?? null
     }
   }
 }

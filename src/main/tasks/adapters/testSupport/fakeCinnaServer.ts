@@ -39,6 +39,8 @@ import type { CinnaWorld } from '../cinnaTaskAdapter'
 export type CinnaFarSide = null | 'transport' | 'not_ours' | 'rejected'
 
 interface FakeTask {
+  delegation_metadata?: Record<string, unknown>
+  delegation_result?: Record<string, unknown>
   id: string
   /**
    * Creation order, and the reason it is modelled at all.
@@ -109,6 +111,7 @@ export interface FakeCinnaServer {
 }
 
 export interface FakeCinnaOptions {
+  delegations?: boolean
   /** A profile that is not linked to a Cinna account. */
   ready?: boolean
   baseUrl?: string
@@ -174,6 +177,8 @@ export function createFakeCinnaServer(options: FakeCinnaOptions = {}): FakeCinna
       agent_name: task.agent_name,
       parent_task_id: task.parent_task_id,
       external_ref: task.external_ref,
+      delegation_metadata: task.delegation_metadata,
+      delegation_result: task.delegation_result,
       subtask_count: children.length,
       subtask_completed_count: children.filter((c) => c.status === 'completed').length,
       // Naive UTC, no zone marker — exactly what FastAPI serialises, and the
@@ -268,6 +273,11 @@ export function createFakeCinnaServer(options: FakeCinnaOptions = {}): FakeCinna
 
     if (parts[0] !== 'tasks') fail(404, 'Not Found')
 
+    if (parts[1] === 'delegation-capabilities') {
+      if (!options.delegations) fail(404, 'Not Found')
+      return { version: 1, metadata: true, structured_result: true, reply: true }
+    }
+
     // ── /tasks/ ───────────────────────────────────────────────────────────
     if (parts[1] === undefined) {
       if (method === 'POST') {
@@ -286,7 +296,8 @@ export function createFakeCinnaServer(options: FakeCinnaOptions = {}): FakeCinna
           priority: String(payload.priority ?? 'normal'),
           selected_agent_id:
             typeof payload.selected_agent_id === 'string' ? payload.selected_agent_id : null,
-          external_ref: ref
+          external_ref: ref,
+          ...(options.delegations && payload.delegation_metadata ? { delegation_metadata: payload.delegation_metadata as Record<string, unknown> } : {})
         })
         tasks.set(created.id, created)
         return publicTask(created)
@@ -368,6 +379,14 @@ export function createFakeCinnaServer(options: FakeCinnaOptions = {}): FakeCinna
       }
     }
 
+    if (parts[2] === 'delegation-reply' && method === 'POST' && options.delegations) {
+      const input = body as { result_id: string; message: string }
+      if (task.delegation_result?.id !== input.result_id || task.delegation_result.status !== 'blocked') return { delivered: false }
+      task.delegation_result = { ...task.delegation_result, status: 'in_progress', reply_message: input.message }
+      task.status = 'in_progress'
+      return { delivered: true }
+    }
+
     if (parts[2] === 'status' && method === 'POST') {
       const payload = (body ?? {}) as { status?: unknown }
       const next = String(payload.status ?? '')
@@ -434,8 +453,11 @@ export function createFakeCinnaServer(options: FakeCinnaOptions = {}): FakeCinna
 
     if (parts[2] === 'comments') {
       if (method === 'GET') {
+        const params = query(rawPath)
+        const skip = Number(params.get('skip') ?? 0)
+        const limit = Number(params.get('limit') ?? 100)
         return {
-          data: task.comments.map((c) => ({
+          data: task.comments.slice(skip, skip + limit).map((c) => ({
             id: c.id,
             comment_type: c.comment_type,
             content: c.content,

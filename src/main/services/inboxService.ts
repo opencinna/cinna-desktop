@@ -4,6 +4,9 @@ import { taskInputRequestRepo, type TaskInputRequestRow } from '../db/taskInputR
 import { taskRepo, type TaskRow } from '../db/tasks'
 import { chatRepo } from '../db/chats'
 import { jobRunsRepo } from '../db/jobs'
+import { delegationRepo } from '../db/delegations'
+import { handoverRepo } from '../db/handovers'
+import { parseHandoverState } from '../../shared/handovers'
 import { messageRepo } from '../db/messages'
 import { agentRepo } from '../db/agents'
 import { routerOf } from '../../shared/chatRouting'
@@ -354,6 +357,31 @@ export const inboxService = {
       if (expired > 0) markAfterAskChange(ctx.userId, task.id)
       return
     }
+
+    // **A handover's task is finished by its report**, and one whose turn ended
+    // without a report is settled by the handover service from the outcome
+    // (`applyOutcome`, or the lost-run sweep), so a `running` row is left to it.
+    // A `blocked` row is waiting on the requester whatever the task says — an
+    // answered ask moves the task back to `in_progress` without any report — so
+    // it goes back to `blocked` and is left for the revision that reopens it.
+    // Completing either here was the live bug: the revision was then refused as
+    // arriving on finished work. Otherwise a task that is no longer `in_progress`
+    // already says what a report said (`error`, which a revision may retry).
+    // Everything else falls through: a task the user started by hand from its
+    // page (a claimed brief, a gate never answered) or reopened by talking on in
+    // a finished executor chat has nobody else to end it.
+    const delegation = delegationRepo.byTaskId(ctx.userId, task.id)
+    const handover = handoverRepo.byTaskId(ctx.userId, task.id)
+    const handoverState = delegation?.state ?? (handover ? parseHandoverState(handover.state) : null)
+    if (handoverState === 'running') {
+      if (expired > 0) markAfterAskChange(ctx.userId, task.id)
+      return
+    }
+    if (handoverState === 'blocked' || handoverState === 'waiting_user') {
+      if (task.status === 'in_progress') markTask(ctx.userId, task.id, 'needs_input')
+      return
+    }
+    if (handoverState && task.status !== 'in_progress') return
 
     // **A task this chat made for itself has no such hook, and without this it
     // never ends.** `reportRunCompletion` is keyed on

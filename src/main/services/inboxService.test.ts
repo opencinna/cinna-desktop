@@ -79,6 +79,8 @@ const { inboxService } = await import('./inboxService')
 const { taskService } = await import('./taskService')
 const { taskInputRequestRepo } = await import('../db/taskInputRequests')
 const { jobsRepo, jobRunsRepo } = await import('../db/jobs')
+const { handoverRepo } = await import('../db/handovers')
+const { delegationRepo } = await import('../db/delegations')
 
 const USER = '__default__'
 const CHAT = 'chat-1'
@@ -514,6 +516,111 @@ describe('a turn ending in a chat that owns its own task', () => {
   })
 })
 
+/**
+ * A handover's task belongs to the handover service: its report finishes it,
+ * and `applyOutcome` settles one whose turn ended without a report. A `blocked`
+ * report is applied while the executor's turn is still running, so `endTurn`
+ * completing the task a moment later overwrote it — watched live on 2026-09-18,
+ * where the requester's revision was then refused as `revision_after_terminal`
+ * and the handover hung for good.
+ */
+describe('a turn ending in a kit delegation executor chat', () => {
+  it.each(['running', 'blocked'] as const)('leaves %s work to the delegation lifecycle', (state) => {
+    const task = makeChatTask()
+    delegationRepo.insert({ userId: USER, requesterKey: 'kit-request', originKind: 'local_chat', targetKind: 'kit', targetAgentId: AGENT, channel: 'local', depth: 1, taskId: task.id, state })
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+    expect(taskService.getById(USER, task.id).status).toBe(state === 'running' ? 'in_progress' : 'blocked')
+  })
+})
+
+describe('a turn ending in a handover executor chat', () => {
+  function handoverFor(taskId: string, state: 'running' | 'blocked' | 'done' | 'failed' | 'waiting_external') {
+    return handoverRepo.insert({
+      userId: USER,
+      agentId: AGENT,
+      folderPath: '/projects/uploader',
+      handoverId: '20260918-1200-which-module',
+      taskId,
+      depth: 1,
+      execution: 'ask',
+      state,
+      briefDigest: 'digest'
+    })
+  }
+
+  it('leaves a task the report has blocked as blocked', () => {
+    const task = makeChatTask()
+    handoverFor(task.id, 'blocked')
+    taskService.setStatus(USER, task.id, 'blocked')
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+  })
+
+  it('leaves a running handover for the handover service to settle', () => {
+    const task = makeChatTask()
+    handoverFor(task.id, 'running')
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+  })
+
+  it('leaves a failed report as an error, so a revision can still retry it', () => {
+    // `error → in_progress → completed` is a legal path for `applyRunState`, and
+    // a `completed` task refuses the "try again" revision a failure invites.
+    const task = makeChatTask()
+    handoverFor(task.id, 'failed')
+    taskService.setStatus(USER, task.id, 'error')
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+
+    expect(taskService.getById(USER, task.id).status).toBe('error')
+  })
+
+  it('does not reopen a blocked task when the turn ends with an ask expiring', () => {
+    const task = makeChatTask()
+    handoverFor(task.id, 'blocked')
+    inboxService.recordRunEvent(ctx(), permission)
+    taskService.setStatus(USER, task.id, 'blocked')
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'canceled' })
+
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+  })
+
+  it('puts a blocked handover back to blocked when an answered ask had reopened its task', () => {
+    // `closeAsk` re-marks the task as working with no report behind it, so the
+    // task being `in_progress` does not mean the requester's question went away.
+    const task = makeChatTask()
+    handoverFor(task.id, 'blocked')
+    taskService.setStatus(USER, task.id, 'blocked')
+    inboxService.recordRunEvent(ctx(), permission)
+    inboxService.closeAsk(ctx(), 'per_1', { kind: 'permission', reply: 'once' })
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+  })
+
+  it('ends a claimed brief the user started by hand from its task page', () => {
+    // A `waiting_external` row's turn is not one the handover service watches,
+    // so nothing but this ending would ever close it.
+    const task = makeChatTask()
+    handoverFor(task.id, 'waiting_external')
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+
+    expect(taskService.getById(USER, task.id).status).toBe('completed')
+  })
+
+  it('still ends a settled handover chat the user talked on in', () => {
+    // After `done`, typing in the executor's chat reopens its task
+    // (`resumeFinishedChat`); nothing but this ending closes it again.
+    const task = makeChatTask()
+    handoverFor(task.id, 'done')
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+
+    expect(taskService.getById(USER, task.id).status).toBe('completed')
+  })
+})
+
 describe('the list', () => {
   it('shows the newest ask first', async () => {
     makeTask()
@@ -717,6 +824,12 @@ describe('remote inbox', () => {
     return { adapter, task }
   }
 
+  it('keeps requester-addressed cloud questions out of the user Inbox', async () => {
+    const { adapter } = remote()
+    const [ask] = await adapter.listOpenAsks(USER, { adapter: adapter.id, id: 'task-there', key: null, url: null, state: {} })
+    vi.mocked(adapter.listOpenAsks).mockResolvedValue([{ ...ask, audience: 'requester' }])
+    expect(await listEntries(USER)).toEqual([])
+  })
   it('combines local and remote questions without colliding across tasks or services', async () => {
     makeTask()
     inboxService.recordRunEvent(ctx(), { ...permission, requestId: 'same-ask' })

@@ -184,11 +184,13 @@ export function buildTurnHeader(input: {
   chatId: string
   taskId?: string | null
   depth?: number
+  openDelegations?: { total: number; running: number; waitingOnUser: number }
 }): string {
   return [
     'Turn context from Cinna Desktop, not part of the conversation:',
     `- chat id: \`${input.chatId}\``,
     `- task id: ${input.taskId ? `\`${input.taskId}\`` : 'none'}`,
-    `- handover depth: ${input.depth ?? 0}`
+    `- handover depth: ${input.depth ?? 0}`,
+    ...(input.openDelegations?.total ? [`- open delegations: ${input.openDelegations.total} (${input.openDelegations.running} running, ${input.openDelegations.waitingOnUser} waiting on the user)`] : [])
   ].join('\n')
 }

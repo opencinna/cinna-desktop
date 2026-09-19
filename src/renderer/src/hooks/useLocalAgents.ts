@@ -545,6 +545,18 @@ export function useHandoversCheck(agentId: string | null): UseQueryResult<Handov
   })
 }
 
+export function useSetDelegationPermission() {
+  const queryClient = useQueryClient()
+  return useMutation<LocalAgentDto, Error, { agentId: string; field: 'delegations' | 'cloudDelegations'; setting: HandoverSetting }>({
+    mutationFn: async ({ agentId, field, setting }) =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.setDelegationPermission(agentId, field, setting)),
+    onSuccess: (agent) => {
+      queryClient.setQueryData(localAgentKey(agent.id), agent)
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+    }
+  })
+}
+
 /**
  * Save whether briefs in this folder run without asking.
  *

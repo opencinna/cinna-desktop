@@ -17,6 +17,7 @@ import {
   type ClaudeProviderReply, type ClaudeProviderTurn, type EgressTrap, type FakeAnthropic
 } from './claudeHarness'
 import { lineDiff, sorted } from './snapshotTools'
+import { probeFolderHandovers, handoverProbeSnapshot, type HandoverProbe } from './handoverProbes'
 
 /**
  * The Claude Code interface contract, checked against the **real** CLI.
@@ -74,6 +75,7 @@ const conversation = (turns: ClaudeProviderTurn[]): ClaudeProviderTurn[] => turn
 
 /** Everything the two scenarios observed. Filled by `beforeAll`. */
 const seen = {
+  handover: null as HandoverProbe | null,
   versionOutput: '', versionStatus: null as number | null,
   authWithKey: { status: null as number | null, stdout: '' },
   authLoggedOut: { status: null as number | null, stdout: '' },
@@ -304,6 +306,7 @@ function snapshot(): Json {
   }
   const authKeys = (stdout: string): string[] => { try { return keys(JSON.parse(stdout)) } catch { return [] } }
   return {
+    folderHandovers: handoverProbeSnapshot(seen.handover),
     tool: 'claude', version: seen.versionOutput, adapter: RUNTIME_PINS.claude.adapter,
     cli: {
       authStatusLoggedOut: { exitCode: seen.authLoggedOut.status, keys: authKeys(seen.authLoggedOut.stdout), verdict: parseClaudeAuthStatus(seen.authLoggedOut.stdout).state },
@@ -367,6 +370,7 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
     try {
       await folderScenario(binary, trap)
       await policyScenario(binary, trap)
+      seen.handover = await probeFolderHandovers('claude', binary, adapter, trap)
     } finally {
       seen.egress = [...trap.attempts]
       await trap.close()
@@ -563,6 +567,20 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
   })
 
   it.skip(entry('claude.limits.subscription-limit'), () => undefined)
+
+  it(entry('claude.permission.write-outside-cwd'), () => {
+    expect(seen.handover?.writes).toHaveLength(2)
+    expect(seen.handover?.writes[0]).toMatchObject({ mode: 'default', accepted: true, permissionCount: 1, kinds: ['edit'], wrote: true, promptError: null })
+    expect(seen.handover?.writes[1]).toMatchObject({ mode: 'auto', accepted: true, permissionCount: 0, wrote: false, promptError: null })
+    expect(seen.handover?.writes[1].outputs.join(' ')).toContain('Auto mode could not evaluate')
+  })
+
+  it(entry('claude.mcp.folder-session-load'), () => {
+    expect(seen.handover?.mcp).toMatchObject({ nativeTools: true, first: true, second: true, loaded: true, differentDescriptors: true, calls: ['first', 'second', 'first'] })
+    expect(seen.handover?.mcp.listReads).toBeGreaterThan(0)
+    expect(seen.handover?.mcp.outputs.join(' ')).toContain('HANDOVER_SESSION_first')
+    expect(seen.handover?.mcp.outputs.join(' ')).toContain('HANDOVER_SESSION_second')
+  })
 
   // Last on purpose: it reads what every scenario above observed. Not a registry
   // entry — it is the "what changed" report, not an interface.

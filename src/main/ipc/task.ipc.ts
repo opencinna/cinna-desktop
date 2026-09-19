@@ -3,6 +3,8 @@ import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { taskService, type TaskFieldPatch } from '../services/taskService'
 import { inboxService } from '../services/inboxService'
+import { delegationQueryService } from '../services/delegationQueryService'
+import type { TaskDelegationsDto } from '../../shared/delegations'
 import { handoverService } from '../services/handoverService'
 import { syncService } from '../services/syncService'
 import { taskSyncService } from '../services/taskSyncService'
@@ -235,6 +237,13 @@ export function registerTaskHandlers(): void {
   ipcHandle('inbox:list', async (): Promise<InboxSnapshot> => {
     userActivation.requireActivated()
     return inboxService.list(getProfileScopeUserId())
+  })
+
+  ipcHandle('delegation:for-task', async (_event, input: { taskId: string }): Promise<TaskDelegationsDto> => {
+    userActivation.requireActivated()
+    const taskId = typeof input?.taskId === 'string' ? input.taskId : ''
+    if (!taskId) return { from: null, to: [] }
+    return delegationQueryService.forTask(getProfileScopeUserId(), taskId)
   })
 
   /**

@@ -12,6 +12,8 @@ import {
   handoverGateQuestion,
   handoverGateRequestId,
   handoverProtocolParagraph,
+  handoverRequesterSection,
+  isHandoverSettled,
   HANDOVER_WARNING_KINDS,
   isDepthAllowed,
   isHandoverId,
@@ -400,12 +402,33 @@ describe('the gate', () => {
   })
 })
 
+describe('isHandoverSettled', () => {
+  it('is true only where the desktop has nothing left to do', () => {
+    expect(HANDOVER_STATES.filter(isHandoverSettled)).toEqual(['done', 'failed', 'skipped', 'refused'])
+  })
+})
+
 describe('the words the protocol is taught in', () => {
   it('teaches the requester the report vocabulary and the claim rule', () => {
     for (const status of HANDOVER_REPORT_STATUSES) expect(HANDOVER_HOW_TO_REPORT).toContain(status)
     expect(HANDOVER_HOW_TO_REPORT).toContain(`cinna_handover: ${HANDOVER_SCHEMA_VERSION}`)
     expect(HANDOVER_HOW_TO_REPORT).toContain('report.md')
     expect(HANDOVER_HOW_TO_REPORT).toContain('before you start')
+  })
+
+  it('teaches the requester how to follow up and how to fan out', () => {
+    // Watched live on 2026-09-18: a requester that was never told either
+    // answered a `blocked` report with a second brief (a new task, a fresh
+    // conversation, the first handover left blocked) and handed the same work
+    // to two projects without a group (two wakes instead of one).
+    const section = handoverRequesterSection('folder:itan')
+    expect(section).toContain('revisions/001.md')
+    expect(section).toContain(`cinna_handover: ${HANDOVER_SCHEMA_VERSION}`)
+    expect(section).toContain('do not write a new brief')
+    expect(section).toContain('group: <id>')
+    // Every revision example it shows must parse: an origin copies it verbatim.
+    const example = /```markdown\n(---\ncinna_handover[\s\S]*?)```/.exec(section)?.[1]
+    expect(example && parseHandoverRevision(example).ok).toBe(true)
   })
 
   it('sends a Cinna-run executor to the brief, in one short paragraph', () => {
@@ -523,7 +546,10 @@ describe('the return packet', () => {
   it('carries the question, and says how to answer it, only when blocked', () => {
     const blocked = buildHandoverReturnPacket({ ...base, status: 'blocked', question: 'Retry 4xx as well?' })
     expect(blocked).toContain('Question: Retry 4xx as well?')
-    expect(blocked).toContain('Answer by writing a new brief or a revision in the handover folder.')
+    // The exact path and marker: an origin told only "write a revision" wrote a
+    // second brief instead, which runs as a new task in a fresh conversation.
+    expect(blocked).toContain(`Answer with a revision: write \`.cinna/handovers/${base.handoverId}/revisions/NNN.md\``)
+    expect(blocked).toContain('`cinna_handover: 1`')
 
     // A `question` on a terminal report is noise: the work is over.
     expect(buildHandoverReturnPacket({ ...base, status: 'done', question: 'Retry 4xx as well?' }))

@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { HandoverRow } from '../db/handovers'
 
+vi.mock('../auth/activation', () => ({ userActivation: { isActivated: () => true } }))
+vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => 'user' }))
 vi.mock('../db/client', () => ({ getDb: () => ({}) }))
 vi.mock('../db/handovers', () => ({ handoverRepo: {} }))
 vi.mock('../logger/logger', () => ({
@@ -80,7 +82,7 @@ function fixture(options: { holdSend?: boolean } = {}): Fixture {
     release: null
   } as unknown as Fixture
 
-  f.wake = createHandoverWake({
+  f.wake = createHandoverWake({ isActive: () => true,
     chatAnswersToAgent: () => f.refusal,
     isRunning: (chatId) => f.running.has(chatId),
     async send(_scope, chatId, content) {
@@ -285,4 +287,60 @@ describe('waking an origin chat once for a whole group', () => {
     f.release?.()
     await f.wake.idle()
   })
+})
+
+describe('delegation result version acknowledgments', () => {
+  it('carries the queued result digest through a single wake', async () => {
+    const record = vi.fn()
+    const wake = createHandoverWake({ isActive: () => true, chatAnswersToAgent: () => null, isRunning: () => false,
+      send: async () => ({ runId: 'wake' }), record, logger: { debug() {}, info() {}, warn() {} }, now: () => 1, delay: async () => {} })
+    wake.wake({ scope: SCOPE, row: row(), status: 'done', summary: 'Done', expectedDigest: 'snapshot-a' })
+    await wake.idle()
+    expect(record).toHaveBeenCalledWith('profile', 'row-1', { wokeAt: new Date(1), wakeRunId: 'wake' }, 'snapshot-a')
+  })
+  it('carries each member’s own captured digest through a group wake', async () => {
+    const record = vi.fn()
+    const wake = createHandoverWake({ isActive: () => true, chatAnswersToAgent: () => null, isRunning: () => false,
+      send: async () => ({ runId: 'wake' }), record, logger: { debug() {}, info() {}, warn() {} }, now: () => 1, delay: async () => {} })
+    wake.wakeGroup({ scope: SCOPE, groupId: 'group', rows: [row(), row({ id: 'row-2' })], expectedDigests: { 'row-1': 'snapshot-a', 'row-2': 'snapshot-b' } })
+    await wake.idle()
+    expect(record).toHaveBeenCalledWith('profile', 'row-1', expect.anything(), 'snapshot-a')
+    expect(record).toHaveBeenCalledWith('profile', 'row-2', expect.anything(), 'snapshot-b')
+  })
+})
+
+it.each([false, true])('checks the active profile after waiting for a busy chat (group=%s)', async (group) => {
+  let active = true
+  let busy = true
+  const send = vi.fn(async () => ({ runId: 'unexpected' }))
+  const settled = vi.fn()
+  const wake = createHandoverWake({
+    isActive: () => active, chatAnswersToAgent: () => null,
+    isRunning: () => busy, send, record: vi.fn(),
+    logger: { debug() {}, info() {}, warn() {} }, now: () => 0,
+    delay: async () => { active = false; busy = false }
+  })
+  if (group) wake.wakeGroup({ scope: SCOPE, rows: [row()], groupId: 'g', onSettled: settled })
+  else wake.wake({ scope: SCOPE, row: row(), status: 'done', summary: 'Done', onSettled: settled })
+  await wake.idle()
+  expect(send).not.toHaveBeenCalled()
+  expect(settled).toHaveBeenCalledOnce()
+})
+
+it.each([false, true])('drops a superseded queued result before starting a requester turn (group=%s)', async (group) => {
+  let current = true
+  let busy = true
+  const send = vi.fn(async () => ({ runId: 'unexpected' }))
+  const settled = vi.fn()
+  const wake = createHandoverWake({
+    isActive: () => true, isCurrent: () => current, chatAnswersToAgent: () => null,
+    isRunning: () => busy, send, record: vi.fn(),
+    logger: { debug() {}, info() {}, warn() {} }, now: () => 0,
+    delay: async () => { current = false; busy = false }
+  })
+  if (group) wake.wakeGroup({ scope: SCOPE, rows: [row()], groupId: 'g', expectedDigests: { 'row-1': 'old' }, onSettled: settled })
+  else wake.wake({ scope: SCOPE, row: row(), status: 'blocked', summary: 'Old question', expectedDigest: 'old', onSettled: settled })
+  await wake.idle()
+  expect(send).not.toHaveBeenCalled()
+  expect(settled).toHaveBeenCalledOnce()
 })

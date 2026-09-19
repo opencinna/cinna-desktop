@@ -7,7 +7,7 @@ const openRunRequests = vi.hoisted(() => vi.fn(() => [] as { id: string; resume:
 const chatTask = vi.hoisted(() => vi.fn((): { id: string } | undefined => undefined))
 vi.mock('../db/tasks', () => ({ taskRepo: { getById: runnerTask, getByChatId: chatTask } }))
 const handoverOfTask = vi.hoisted(() => vi.fn((): { depth: number } | undefined => undefined))
-vi.mock('../db/handovers', () => ({ handoverRepo: { byTaskId: handoverOfTask } }))
+vi.mock('../db/delegations', () => ({ delegationRepo: { byTaskId: handoverOfTask, listForOrigin: () => [], toDto: (row: unknown) => row } }))
 vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: { listOpenForRun: openRunRequests } }))
 vi.mock('../db/sync', () => ({ syncRepo: { getState: () => null } }))
 const handoffPending = vi.hoisted(() => vi.fn(() => false))

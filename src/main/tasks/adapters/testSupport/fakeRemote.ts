@@ -36,6 +36,8 @@ import {
   type RemoteBinding,
   type RemoteComment,
   type RemoteCommentDraft,
+  type RemoteDelegationMetadata,
+  type RemoteDelegationResult,
   type RemoteTaskAdapter,
   type RemoteTaskCapabilities,
   type RemoteTaskFields,
@@ -53,6 +55,8 @@ export interface FakeRemoteOptions {
 }
 
 interface StoredTask {
+  delegation?: RemoteDelegationMetadata
+  result?: RemoteDelegationResult
   id: string
   key: string
   title: string
@@ -152,6 +156,7 @@ export const CAPABILITY_SHAPES: Record<string, Partial<RemoteTaskCapabilities>> 
 }
 
 export function createFakeRemote(options: FakeRemoteOptions = {}): FakeRemote {
+  const createdByKey = new Map<string, string>()
   const id = options.id ?? 'fake'
   const capabilities: RemoteTaskCapabilities = { ...FULL, ...options.capabilities }
   const ready = options.ready ?? true
@@ -265,7 +270,8 @@ export function createFakeRemote(options: FakeRemoteOptions = {}): FakeRemote {
       parentId: stored.parentId,
       subtaskCount: children.length,
       subtaskCompletedCount: children.filter((c) => c.status === 'completed').length,
-      updatedAt: stored.updatedAt
+      updatedAt: stored.updatedAt,
+      ...(stored.result && { result: structuredClone(stored.result) })
     }
   }
 
@@ -290,8 +296,9 @@ export function createFakeRemote(options: FakeRemoteOptions = {}): FakeRemote {
         ? { ready: true }
         : { ready: false, reason: 'This profile is not connected to the fake service.' },
 
-    async create(_userId, task: TaskDto, parent) {
+    async create(userId, task: TaskDto, parent, delegation) {
       require('create', 'create')
+      if (delegation) require('delegationMetadata', 'create with delegation metadata')
       if (parent) require('subtasks', 'create a subtask')
       if (task.parentTaskId && !parent) {
         // Never reaches the far side: a subtask with no parent binding would
@@ -303,9 +310,20 @@ export function createFakeRemote(options: FakeRemoteOptions = {}): FakeRemote {
         )
       }
       call()
+      const key = JSON.stringify([userId, task.id])
+      const existing = createdByKey.get(key)
+      if (!parent && capabilities.idempotentCreate && existing) return bindingOf(store.get(existing)!)
       const stored = storedFor(task, parent)
+      if (delegation) stored.delegation = structuredClone(delegation)
       store.set(stored.id, stored)
+      if (!parent && capabilities.idempotentCreate) createdByKey.set(key, stored.id)
       return bindingOf(stored)
+    },
+
+    async listArtifacts(_userId, binding) {
+      require('readArtifacts', 'listArtifacts')
+      call()
+      return structuredClone(load(binding).artifacts)
     },
 
     async putHandoffNote(_userId, binding, note) {

@@ -15,6 +15,8 @@ import {
   Server
 } from 'lucide-react'
 import { useAgents } from '../../hooks/useAgents'
+import { useTaskDelegations } from '../../hooks/useDelegations'
+import { delegationNoteText, delegationStateLabel } from '../../utils/delegationText'
 import { useHandoverForTask } from '../../hooks/useHandovers'
 import {
   handoverFolderPath,
@@ -185,6 +187,10 @@ function TaskPage({
    * already exists rather than a banner (`ux_rules.md` §2).
    */
   const handover = useHandoverForTask(task.id).data ?? null
+  const delegationQuery = useTaskDelegations(task.id)
+  const delegatedFrom = delegationQuery.data?.from ?? null
+  const delegatedTo = delegationQuery.data?.to ?? []
+  const requester = delegatedFrom ?? handover
   const inbox = useInboxList()
   const openChat = useOpenChatFromRun()
   const openTask = useOpenTask()
@@ -292,16 +298,16 @@ function TaskPage({
    * label and the value were the same word twice (`ux_rules.md` §7).
    */
   const originFound =
-    handover?.originAgentId && !agentsPending
-      ? (agents ?? []).find((a) => a.id === handover.originAgentId) ?? null
+    requester?.originAgentId && !agentsPending
+      ? (agents ?? []).find((a) => a.id === requester.originAgentId) ?? null
       : null
   /* Openable on the same terms as the assignee: a remote agent hidden from the
      desktop has a name and no page, so it stays plain text. */
   const originAgent =
     originFound && (originFound.source !== 'remote' || originFound.enabled) ? originFound : null
   const originName = ((): string | null => {
-    if (!handover) return null
-    if (!handover.originAgentId) return 'Outside the app'
+    if (!requester) return null
+    if (!requester.originAgentId) return 'Outside the app'
     if (agentsPending) return null
     return originFound ? originFound.name : 'Outside the app'
   })()
@@ -528,7 +534,7 @@ function TaskPage({
               {task.executor === 'remote' && (
                 <Detail label="Running">In the connected service</Detail>
               )}
-              {handover && (
+              {requester && (
                 <Detail label="Requested by">
                   {/*
                     A requester this app still lists is a page one click away,
@@ -549,6 +555,37 @@ function TaskPage({
                   )}
                 </Detail>
               )}
+              {delegatedFrom?.originTaskId && (
+                <Detail label="Delegated from"><DelegatedTaskLink taskId={delegatedFrom.originTaskId} /></Detail>
+              )}
+              {delegatedFrom && !handover && <>
+                <Detail label="Handover">{delegationStateLabel(delegatedFrom)}</Detail>
+                {delegatedFrom.targetKind === 'cloud' && <Detail label="Where">{delegatedFrom.remoteTaskKey ?? 'Cloud agent'}</Detail>}
+              </>}
+              {delegatedTo.length > 0 && <Detail label="Delegated to" wide>
+                <ul className="m-0 w-full min-w-0 list-none space-y-2 p-0">
+                  {delegatedTo.map((delegation) => <li key={delegation.id} className="min-w-0">
+                    {delegation.taskId ? <button type="button" onClick={() => openTask(delegation.taskId!)}
+                      className="block w-full truncate text-right font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]" title={delegation.title}>
+                      {delegation.title}
+                    </button> : <span className="block truncate" title={delegation.title}>{delegation.title}</span>}
+                    <div className="text-[10px] text-[var(--color-text-muted)]">
+                      {(agents ?? []).find((agent) => agent.id === delegation.targetAgentId)?.name ?? (delegation.targetKind === 'cloud' ? 'Cloud agent' : 'Local agent')}
+                      {/* The separator travels with the state, so a wrap never strands it. */}
+                      {' '}<span className="whitespace-nowrap">· {delegationStateLabel(delegation)}</span>
+                    </div>
+                    {/*
+                      Only where the label alone leaves the user with nothing to act on, and one
+                      line whatever the message: the poll must not grow the row under the reader.
+                    */}
+                    {['uncertain', 'failed', 'refused'].includes(delegation.state) && delegationNoteText(delegation) && (
+                      <div className="truncate text-[10px] text-[var(--color-text-muted)]" title={delegationNoteText(delegation) ?? undefined}>
+                        {delegationNoteText(delegation)}
+                      </div>
+                    )}
+                  </li>)}
+                </ul>
+              </Detail>}
               {handover && (
                 <Detail label="Handover">
                   {/* One line in every state, so a five-second poll cannot
@@ -624,6 +661,14 @@ function TaskPage({
                 the panel and moves nothing above it — a warning about work
                 that already happened is not a banner (§1, §2).
               */}
+              {delegatedFrom && !handover && (delegatedFrom.warning || delegatedFrom.refusalReason) && (
+                <Detail label="Note">{delegationNoteText(delegatedFrom)}</Detail>
+              )}
+              {delegationQuery.isError && !delegationQuery.data && <Detail label="Delegations">
+                <span role="alert">Could not read delegated work.</span>{' '}
+                <button type="button" disabled={delegationQuery.isFetching} onClick={() => void delegationQuery.refetch()}
+                  className="font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] disabled:opacity-50">Try again</button>
+              </Detail>}
               {handover && handoverNoteText(handover) && (
                 <Detail label="Note">{handoverNoteText(handover)}</Detail>
               )}
@@ -1350,18 +1395,40 @@ function Prose({ children }: { children: string }): React.JSX.Element {
  * that is still running reads as an error where an absent row reads as what it
  * is — so callers leave the row out, and an empty value renders nothing too.
  */
+function DelegatedTaskLink({ taskId }: { taskId: string }): React.JSX.Element {
+  const query = useTask(taskId)
+  const openTask = useOpenTask()
+  if (query.isPending) return <span className="text-[var(--color-text-muted)]">Loading requester…</span>
+  if (query.isError) return <>
+    <span role="alert">Could not read the requester task.</span>{' '}
+    <button type="button" disabled={query.isFetching}
+      onClick={() => void query.refetch()}
+      className="font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] disabled:opacity-50">
+      {query.isFetching ? 'Retrying…' : 'Try again'}
+    </button>
+  </>
+  if (!query.data) return <span>Requester task unavailable</span>
+  return <button type="button" onClick={() => openTask(taskId)} title={query.data.title}
+    className="block max-w-full truncate font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]">
+    {query.data.title}
+  </button>
+}
+
 function Detail({
   label,
-  children
+  children,
+  wide = false
 }: {
   label: string
   children: React.ReactNode
+  /** The value takes the rest of the row, so a truncating child has a width to truncate against. */
+  wide?: boolean
 }): React.JSX.Element | null {
   if (children === null || children === undefined || children === '') return null
   return (
     <div className="flex min-w-0 items-baseline justify-between gap-3">
       <dt className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">{label}</dt>
-      <dd className="m-0 min-w-0 break-words text-right text-xs text-[var(--color-text-secondary)]">
+      <dd className={`m-0 min-w-0 break-words text-right text-xs text-[var(--color-text-secondary)] ${wide ? 'flex-1' : ''}`}>
         {children}
       </dd>
     </div>

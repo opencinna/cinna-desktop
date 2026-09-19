@@ -22,4 +22,6 @@ import { createLocalScheduleScheduler } from './localScheduleScheduler'
 export const handoverScheduler = createLocalScheduleScheduler(async (scope, current) => {
   const { handoverService } = await import('./handoverService')
   if (current()) await handoverService.scanAll(scope)
+  const { delegationService } = await import('./delegationService')
+  if (current()) await delegationService.reconcile(scope)
 })

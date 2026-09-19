@@ -7,6 +7,8 @@ import type { AcpLaunchPlan } from '../agents/drivers/acp/acpLaunchers'
 
 const state = vi.hoisted(() => ({ options: null as ConductorMcpSessionOptions | null, save: vi.fn(), abort: vi.fn(), digest: vi.fn(), tools: [] as string[] }))
 vi.mock('../db/chats', () => ({ chatRepo: { getOwned: () => ({ agentId: 'root', router: 'coordinator' }) } }))
+vi.mock('../db/tasks', () => ({ taskRepo: { getByChatId: () => ({ id: 'delegated-task' }) } }))
+vi.mock('../db/delegations', () => ({ delegationRepo: { byTaskId: () => ({ targetAgentId: 'root' }) } }))
 vi.mock('../db/chatMcp', () => ({ chatMcpRepo: { listProviderIds: () => [] } }))
 vi.mock('../db/chatOnDemandMcp', () => ({ chatOnDemandMcpRepo: { listProviderIds: () => [] } }))
 vi.mock('../db/messages', () => ({ messageRepo: { saveToolCall: state.save } }))
@@ -41,6 +43,17 @@ async function subject() {
 }
 
 describe('runtime tool integration', () => {
+  it('offers requester and executor tools to an ordinary adopted folder session', async () => {
+    const plan = { spec: { remote: false }, session: { mcpServers: [] } } as unknown as AcpLaunchPlan
+    const lease = await conductorBridge.prepare('settings', { id: 'root', source: 'folder', localPath: '/tmp/project', driver: 'acp' } as AgentRow,
+      { chatId: 'ordinary-folder', wireContent: 'Work', signal: new AbortController().signal, runScope: { profileUserId: 'user', settingsUserId: 'settings' } }, plan, vi.fn(), () => true)
+    const providers = await state.options!.getProviders()
+    const tools = providers.flatMap((provider) => provider.getTools()).map((tool) => tool.name)
+    expect(tools).toEqual(expect.arrayContaining(['handover_targets', 'handover_create', 'handover_list', 'handover_reply', 'handover_report']))
+    expect(plan.session.mcpServers).toEqual([expect.objectContaining({ name: 'cinna', type: 'http' })])
+    lease?.close()
+  })
+
   it('pauses the conductor on the first classified specialist rate limit and keeps its diagnostic', async () => {
     const turn = await subject()
     await turn.execute({ providerType: 'agent', displayName: 'Limited', agentId: 'limited', getTools: () => [],

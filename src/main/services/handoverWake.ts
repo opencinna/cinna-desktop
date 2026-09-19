@@ -30,6 +30,8 @@ import {
   type HandoverReportStatus
 } from '../../shared/handovers'
 import { handoverRepo, type HandoverRow } from '../db/handovers'
+import { userActivation } from '../auth/activation'
+import { getProfileScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
 import { chatAnswersToAgent } from './chatRouting'
 import { createChatTurnQueue } from './handoverChatQueue'
@@ -57,12 +59,14 @@ export const handoverWakeTimings = {
 }
 
 export interface HandoverWakeDeps {
+  isActive(scope: RunScope): boolean
+  isCurrent?(userId: string, rowId: string, expectedDigest: string): boolean
   chatAnswersToAgent(profileUserId: string, chatId: string, agentId: string): string | null
   isRunning(chatId: string): boolean
   /** Start the turn that carries the packet. Resolves once the row is persisted. */
   send(scope: RunScope, chatId: string, content: string): Promise<{ runId: string }>
   /** Record the outcome on the row — `wokeAt`/`wakeRunId`, or a warning. */
-  record(userId: string, rowId: string, patch: { wokeAt?: Date; wakeRunId?: string; warning?: string }): void
+  record(userId: string, rowId: string, patch: { wokeAt?: Date; wakeRunId?: string; warning?: string }, expectedDigest?: string): void
   logger: { debug(msg: string, meta?: unknown): void; info(msg: string, meta?: unknown): void; warn(msg: string, meta?: unknown): void }
   now(): number
   delay(ms: number): Promise<void>
@@ -71,12 +75,16 @@ export interface HandoverWakeDeps {
 /** What the origin is being told about. */
 export interface HandoverWakeInput {
   scope: RunScope
+  onSettled?: () => void
   row: HandoverRow
   status: HandoverReportStatus
   summary: string
   question?: string | null
   artifacts?: string[]
   body?: string
+  /** Channel-specific return instructions, composed by the delegation bus. */
+  packet?: string
+  expectedDigest?: string
 }
 
 /**
@@ -89,8 +97,10 @@ export interface HandoverWakeInput {
  */
 export interface HandoverGroupWakeInput {
   scope: RunScope
+  onSettled?: () => void
   groupId: string
   rows: HandoverRow[]
+  expectedDigests?: Record<string, string>
 }
 
 export function createHandoverWake(deps: HandoverWakeDeps) {
@@ -115,13 +125,15 @@ export function createHandoverWake(deps: HandoverWakeDeps) {
 
     // The routing guard is re-checked here, after the wait: a chat deleted
     // while the queue held this packet is exactly where it matters.
+    if (!deps.isActive(scope)) return
+    if (input.expectedDigest && deps.isCurrent && !deps.isCurrent(row.userId, row.id, input.expectedDigest)) return
     const refusal = deps.chatAnswersToAgent(scope.profileUserId, chatId, agentId)
     if (refusal) {
-      deps.record(row.userId, row.id, { warning: `wake_refused:${refusal}` })
+      deps.record(row.userId, row.id, { warning: `wake_refused:${refusal}` }, input.expectedDigest)
       return
     }
 
-    const packet = buildHandoverReturnPacket({
+    const packet = input.packet ?? buildHandoverReturnPacket({
       handoverId: row.handoverId,
       folderPath: row.folderPath,
       taskId: row.taskId,
@@ -134,7 +146,7 @@ export function createHandoverWake(deps: HandoverWakeDeps) {
 
     try {
       const { runId } = await deps.send(scope, chatId, packet)
-      deps.record(row.userId, row.id, { wokeAt: new Date(deps.now()), wakeRunId: runId })
+      deps.record(row.userId, row.id, { wokeAt: new Date(deps.now()), wakeRunId: runId }, input.expectedDigest)
       deps.logger.info('an origin chat was told how its handover ended', {
         id: row.id,
         chatId,
@@ -143,17 +155,19 @@ export function createHandoverWake(deps: HandoverWakeDeps) {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       deps.logger.warn('a return packet could not be delivered', { id: row.id, chatId, message })
-      deps.record(row.userId, row.id, { warning: `wake_failed:${message}` })
+      deps.record(row.userId, row.id, { warning: `wake_failed:${message}` }, input.expectedDigest)
     }
   }
 
   async function deliverGroup(input: HandoverGroupWakeInput, chatId: string, agentId: string): Promise<void> {
     const { rows } = input
+    if (!deps.isActive(input.scope)) return
+    if (deps.isCurrent && rows.some((row) => input.expectedDigests?.[row.id] && !deps.isCurrent!(row.userId, row.id, input.expectedDigests[row.id]))) return
     const refusal = deps.chatAnswersToAgent(input.scope.profileUserId, chatId, agentId)
     if (refusal) {
       // Recorded on every member, not just the first: each row is what its own
       // task page shows, and "the group was told" is not true of any of them.
-      for (const row of rows) deps.record(row.userId, row.id, { warning: `wake_refused:${refusal}` })
+      for (const row of rows) deps.record(row.userId, row.id, { warning: `wake_refused:${refusal}` }, input.expectedDigests?.[row.id])
       return
     }
 
@@ -170,7 +184,7 @@ export function createHandoverWake(deps: HandoverWakeDeps) {
     try {
       const { runId } = await deps.send(input.scope, chatId, packet)
       const wokeAt = new Date(deps.now())
-      for (const row of rows) deps.record(row.userId, row.id, { wokeAt, wakeRunId: runId })
+      for (const row of rows) deps.record(row.userId, row.id, { wokeAt, wakeRunId: runId }, input.expectedDigests?.[row.id])
       deps.logger.info('an origin chat was told how a whole handover group ended', {
         groupId: input.groupId,
         chatId,
@@ -179,7 +193,7 @@ export function createHandoverWake(deps: HandoverWakeDeps) {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       deps.logger.warn('a group packet could not be delivered', { groupId: input.groupId, chatId, message })
-      for (const row of rows) deps.record(row.userId, row.id, { warning: `wake_failed:${message}` })
+      for (const row of rows) deps.record(row.userId, row.id, { warning: `wake_failed:${message}` }, input.expectedDigests?.[row.id])
     }
   }
 
@@ -209,6 +223,8 @@ export function createHandoverWake(deps: HandoverWakeDeps) {
               id: input.row.id,
               error: error instanceof Error ? error.message : String(error)
             })
+          } finally {
+            input.onSettled?.()
           }
         },
         onTimedOut: () => {
@@ -216,7 +232,8 @@ export function createHandoverWake(deps: HandoverWakeDeps) {
             id: input.row.id,
             chatId
           })
-          deps.record(input.row.userId, input.row.id, { warning: 'wake_timed_out' })
+          deps.record(input.row.userId, input.row.id, { warning: 'wake_timed_out' }, input.expectedDigest)
+          input.onSettled?.()
         }
       })
     },
@@ -244,6 +261,8 @@ export function createHandoverWake(deps: HandoverWakeDeps) {
               groupId: input.groupId,
               error: error instanceof Error ? error.message : String(error)
             })
+          } finally {
+            input.onSettled?.()
           }
         },
         onTimedOut: () => {
@@ -251,7 +270,8 @@ export function createHandoverWake(deps: HandoverWakeDeps) {
             groupId: input.groupId,
             chatId
           })
-          for (const row of input.rows) deps.record(row.userId, row.id, { warning: 'wake_timed_out' })
+          for (const row of input.rows) deps.record(row.userId, row.id, { warning: 'wake_timed_out' }, input.expectedDigests?.[row.id])
+          input.onSettled?.()
         }
       })
     },
@@ -277,6 +297,7 @@ export type HandoverWake = ReturnType<typeof createHandoverWake>
  */
 export const handoverWake = createHandoverWake({
   chatAnswersToAgent,
+  isActive: (scope) => userActivation.isActivated() && getProfileScopeUserId() === scope.profileUserId,
   isRunning: (chatId) => runExecutionService.isRunning(chatId),
   async send(scope, chatId, content) {
     const handle = runExecutionService.start(scope, { chatId, content }, {

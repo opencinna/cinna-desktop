@@ -50,8 +50,8 @@ export function findContractCodex(pinnedVersion: string): { path: string; source
 }
 
 /** A throwaway HOME with `work/` and `codex/` inside it. Removed by `dispose`. */
-export function makeScratch(prefix: string): { home: string; cwd: string; codexHome: string; env: Record<string, string>; dispose(): void } {
-  const home = mkdtempSync(join(tmpdir(), prefix))
+export function makeScratch(prefix: string, root = tmpdir()): { home: string; cwd: string; codexHome: string; env: Record<string, string>; dispose(): void } {
+  const home = mkdtempSync(join(root, prefix))
   const cwd = join(home, 'work')
   const codexHome = join(home, 'codex')
   mkdirSync(cwd)
@@ -134,6 +134,8 @@ export type ProviderReply =
   | { kind: 'text'; text: string }
   /** Call a tool by its bare name; the namespace is looked up in the offered catalog. */
   | { kind: 'tool'; name: string; args?: string }
+  /** Native deferred MCP discovery uses a Responses tool_search_call, not function_call. */
+  | { kind: 'tool-search'; args: Record<string, unknown> }
   | { kind: 'status'; status: number; body: Json }
   /** Hold the response open until the socket is closed — for cancellation. */
   | { kind: 'stall' }
@@ -167,7 +169,7 @@ export async function startFakeProvider(decide: (turn: ProviderTurn) => Provider
         path: String(req.url ?? ''),
         model: typeof body.model === 'string' ? body.model : null,
         reasoningEffort: typeof (body.reasoning as Json | undefined)?.effort === 'string' ? String((body.reasoning as Json).effort) : null,
-        tools: toolNames(body.tools),
+        tools: toolNames([...(Array.isArray(body.tools) ? body.tools : []), ...input.filter((item) => item.type === 'tool_search_output').flatMap((item) => Array.isArray(item.tools) ? item.tools : [])]),
         outputs: input.filter((item) => item.type === 'function_call_output').map((item) => textOf(item.output) || JSON.stringify(item.output)),
         systemText: [typeof body.instructions === 'string' ? body.instructions : '',
           ...input.filter((item) => item.role === 'developer' || item.role === 'system').map((item) => textOf(item.content))].join('\n'),
@@ -183,13 +185,15 @@ export async function startFakeProvider(decide: (turn: ProviderTurn) => Provider
         res.end(JSON.stringify(reply.body))
         return
       }
-      const offered = (Array.isArray(body.tools) ? body.tools : []) as Json[]
+      const offered = [...(Array.isArray(body.tools) ? body.tools : []), ...input.filter((item) => item.type === 'tool_search_output').flatMap((item) => Array.isArray(item.tools) ? item.tools : [])] as Json[]
       const flat = offered.flatMap((tool) => tool.type === 'namespace' && Array.isArray(tool.tools)
         ? (tool.tools as Json[]).map((child) => ({ name: String(child.name), namespace: String(tool.name) }))
         : [{ name: String(tool.name), namespace: undefined as string | undefined }])
       const args = reply.kind === 'tool' ? (reply.args ?? '{}') : ''
       const target = reply.kind === 'tool' ? (flat.find((tool) => tool.name === reply.name) ?? { name: reply.name, namespace: undefined }) : null
-      const item: Json = target
+      const item: Json = reply.kind === 'tool-search'
+        ? { type: 'tool_search_call', id: `search_${turn.index}`, call_id: `call_${turn.index}`, execution: 'client', status: 'completed', arguments: reply.args }
+        : target
         ? { type: 'function_call', id: `fc_${turn.index}`, call_id: `call_${turn.index}`, name: target.name,
             ...(target.namespace ? { namespace: target.namespace } : {}), arguments: args, status: 'completed' }
         : { type: 'message', id: `msg_${turn.index}`, role: 'assistant', status: 'completed',
@@ -201,7 +205,7 @@ export async function startFakeProvider(decide: (turn: ProviderTurn) => Provider
       if (target) {
         event('response.function_call_arguments.delta', { item_id: item.id, output_index: 0, delta: args })
         event('response.function_call_arguments.done', { item_id: item.id, output_index: 0, arguments: args })
-      } else {
+      } else if (reply.kind !== 'tool-search') {
         const text = (reply as { text: string }).text
         event('response.output_text.delta', { item_id: item.id, output_index: 0, content_index: 0, delta: text })
         event('response.output_text.done', { item_id: item.id, output_index: 0, content_index: 0, text })

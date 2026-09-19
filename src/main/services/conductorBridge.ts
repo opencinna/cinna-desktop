@@ -20,7 +20,7 @@ import type { RunInput } from '../agents/drivers/driver'
 import type { AcpLaunchPlan } from '../agents/drivers/acp/acpLaunchers'
 import type { RunEvent } from '../../shared/runEvents'
 
-interface Binding { input: RunInput; pending: number; calls: number; needsInput?: boolean }
+interface Binding { input: RunInput; pending: number; calls: number; needsInput?: boolean; handovers?: ToolProvider }
 interface Entry {
   chatId: string
   agent: AgentRow
@@ -60,6 +60,7 @@ async function providers(entry: Entry): Promise<ToolProvider[]> {
   if (isChatConductor(entry.agent) && conductorContext(entry.agent).toolPolicy === 'none') return []
   const controls = entry.binding?.input.coordinator
   const result: ToolProvider[] = controls ? [controls] : []
+  if (entry.binding?.handovers) result.push(entry.binding.handovers)
   const ids = new Set([...chatMcpRepo.listProviderIds(entry.chatId), ...chatOnDemandMcpRepo.listProviderIds(entry.chatId)])
   for (const id of ids) {
     const connection = mcpManager.getConnection(id)
@@ -91,6 +92,14 @@ export const conductorBridge = {
     const key = JSON.stringify([input.chatId, agent.id])
     let entry = entries.get(key)
     const binding: Binding = { input, pending: 0, calls: 0 }
+    if (agent.source === 'folder' && agent.localPath) {
+      const [{ DelegationToolProvider }, { taskRepo }, { delegationRepo }] = await Promise.all([
+        import('./delegationToolProvider'), import('../db/tasks'), import('../db/delegations')
+      ])
+      const task = taskRepo.getByChatId(input.runScope.profileUserId, input.chatId)
+      const delegation = task ? delegationRepo.byTaskId(input.runScope.profileUserId, task.id) : undefined
+      binding.handovers = new DelegationToolProvider({ scope: input.runScope, chatId: input.chatId, agentId: agent.id }, delegation?.targetAgentId === agent.id)
+    }
     // A follow-up the engine opened between turns carries no budget of its own; the task's checkpoint still caps it.
     const budget = input.toolCallBudget ?? taskToolCallBudgetForChat(input.chatId, input.runScope.profileUserId, agent.id)
     const options = {

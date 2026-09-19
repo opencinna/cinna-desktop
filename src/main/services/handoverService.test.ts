@@ -920,7 +920,7 @@ describe('the report', () => {
 })
 
 describe('origin', () => {
-  it('keeps an origin it can reach and hangs the task off it', async () => {
+  it('keeps the origin link independently of the user task tree', async () => {
     const parent = h.deps.tasks.create(PROFILE, { title: 'Ticket', goal: 'Ship the release' })
     h.write(
       '20260917-1200-retry',
@@ -935,7 +935,7 @@ describe('origin', () => {
       originTaskId: parent.id,
       warning: null
     })
-    expect(h.tasks.get(h.row().taskId as string)?.parentTaskId).toBe(parent.id)
+    expect(h.tasks.get(h.row().taskId as string)?.parentTaskId).toBeNull()
   })
 
   it('drops an origin it cannot reach and runs the handover anyway', async () => {
@@ -950,14 +950,40 @@ describe('origin', () => {
     })
   })
 
-  it('refuses to nest a second level, and says so', async () => {
+  it('accepts a delegation from a user subtask without a nesting warning', async () => {
     const grandparent = h.deps.tasks.create(PROFILE, { title: 'Epic', goal: 'Epic' })
     const parent = h.deps.tasks.create(PROFILE, { title: 'Ticket', goal: 'Ticket', parentTaskId: grandparent.id })
     h.write('20260917-1200-retry', 'brief.md', brief(`origin:\n  task: ${parent.id}\n`))
     await h.service.scanAgent(SCOPE, h.agent)
 
-    expect(h.row()).toMatchObject({ originTaskId: parent.id, warning: 'origin_parent_nested' })
+    expect(h.row()).toMatchObject({ originTaskId: parent.id, warning: null })
     expect(h.tasks.get(h.row().taskId as string)?.parentTaskId).toBeNull()
+  })
+})
+
+describe('delegation intake', () => {
+  it('preserves depth across a non-file delegation leg instead of trusting the brief', async () => {
+    const parent = h.deps.tasks.create(PROFILE, { title: 'Kit task', goal: 'Delegate' })
+    h.deps.chainDepth = (_userId, origin) => origin.taskId === parent.id ? 2 : null
+    h.write('20260917-1200-retry', 'brief.md', brief(`depth: 1\norigin:\n  task: ${parent.id}\n`))
+    await h.service.scanAgent(SCOPE, h.agent)
+    expect(h.row()).toMatchObject({ depth: 3, state: 'refused', refusalReason: 'depth_exceeded' })
+  })
+  it('derives depth through the origin chat when the brief names no task', async () => {
+    h.deps.chainDepth = (_userId, origin) => origin.chatId === 'chat-known' ? 2 : null
+    h.write('20260917-1200-retry', 'brief.md', brief('depth: 1\norigin:\n  agent: agent-known\n  chat: chat-known\n'))
+    await h.service.scanAgent(SCOPE, h.agent)
+    expect(h.row()).toMatchObject({ depth: 3, state: 'refused', refusalReason: 'depth_exceeded' })
+  })
+  it('does not let the scanning profile claim another profile’s validated brief', async () => {
+    h.deps.originProfile = () => 'another-profile'
+    h.write('20260917-1200-retry', 'brief.md', brief('origin:\n  agent: agent-known\n  chat: chat-known\n'))
+    await h.service.scanAgent(SCOPE, h.agent)
+    expect(h.rows.size).toBe(0)
+    expect(h.tasks.size).toBe(0)
+    h.deps.originProfile = () => PROFILE
+    await h.service.scanAgent(SCOPE, h.agent)
+    expect(h.row().userId).toBe(PROFILE)
   })
 })
 

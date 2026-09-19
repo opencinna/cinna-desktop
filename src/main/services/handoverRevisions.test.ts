@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { HandoverRow } from '../db/handovers'
 
+vi.mock('../auth/activation', () => ({ userActivation: { isActivated: () => true } }))
+vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => 'profile' }))
 vi.mock('../db/client', () => ({ getDb: () => ({}) }))
 vi.mock('../db/handovers', () => ({ handoverRepo: {} }))
 vi.mock('../logger/logger', () => ({

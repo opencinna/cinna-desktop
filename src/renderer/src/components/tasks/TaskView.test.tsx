@@ -3,6 +3,7 @@ import { act, within, cleanup, fireEvent, render, screen, waitFor } from '@testi
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InboxEntry, InboxSnapshot, InboxUnreadableSource } from '../../../../shared/inbox'
+import type { DelegationDto, TaskDelegationsDto } from '../../../../shared/delegations'
 import type { HandoverDto } from '../../../../shared/handovers'
 import type { TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
@@ -19,7 +20,7 @@ import type { TaskStatus } from '../../../../shared/taskStatus'
  * why the two branches below are the ones that matter.
  */
 
-const getTask = vi.fn<() => Promise<TaskDto>>()
+const getTask = vi.fn<(taskId?: string) => Promise<TaskDto>>()
 const listInbox = vi.fn<() => Promise<InboxSnapshot>>()
 
 /** One inbox read: what is waiting, and which services could not be asked. */
@@ -34,6 +35,7 @@ const remoteLive = vi.fn<(taskId: string) => Promise<boolean | null>>()
 const runSend = vi.fn().mockResolvedValue('run-1')
 const startTask = vi.fn()
 const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: string }>>()
+const delegationLinks = vi.fn<(taskId: string) => Promise<TaskDelegationsDto>>()
 const forTask = vi.fn<(taskId: string) => Promise<HandoverDto | null>>()
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
@@ -42,7 +44,7 @@ const forTask = vi.fn<(taskId: string) => Promise<HandoverDto | null>>()
     list: async () => [],
     children: async () => ({ tasks: [], refreshed: true }),
     start: (taskId: string, target: unknown) => startTask(taskId, target),
-    get: () => getTask(),
+    get: (taskId: string) => getTask(taskId),
     setStatus: (taskId: string, status: TaskStatus) => setStatus(taskId, status),
     takeOver: (taskId: string, force?: boolean) => takeOver(taskId, force),
     remoteLive: (taskId: string) => remoteLive(taskId)
@@ -58,6 +60,7 @@ const forTask = vi.fn<(taskId: string) => Promise<HandoverDto | null>>()
     checkReadiness: async () => undefined
   },
   jobs: { get: (jobId: string) => getJob(jobId) },
+  delegations: { forTask: (taskId: string) => delegationLinks(taskId) },
   handovers: { forTask: (taskId: string) => forTask(taskId) },
   chat: { get: (chatId: string) => getChat(chatId) },
   run: {
@@ -146,6 +149,7 @@ beforeEach(() => {
   remoteLive.mockResolvedValue(false)
   openExternal.mockResolvedValue({ success: true })
   forTask.mockResolvedValue(null)
+  delegationLinks.mockResolvedValue({ from: null, to: [] })
   useUIStore.setState({ activeView: 'task', activeTaskId: 't1', activeJobId: null } as never)
   useChatStore.setState({ activeChatId: null } as never)
 })
@@ -1202,5 +1206,71 @@ describe('a task that came from a handover', () => {
     await renderTask()
     await waitFor(() => expect(detail('Handover')).toBe('Running'))
     expect(detail('Note')).toBeNull()
+  })
+})
+
+describe('delegated work links', () => {
+  it('lets the user retry a failed requester lookup without losing the relation', async () => {
+    delegationLinks.mockResolvedValue({ from: { id: 'from', taskId: 't1', originTaskId: 'root-task', targetKind: 'kit', state: 'running' } as DelegationDto, to: [] })
+    let readable = false
+    getTask.mockImplementation(async (taskId) => {
+      if (taskId === 'root-task') {
+        if (!readable) throw new Error('Temporary read failure')
+        return { ...BASE, id: 'root-task', title: 'Plan the audit' }
+      }
+      return BASE
+    })
+    client.setQueryDefaults(['task', 'root-task'], { retryDelay: 0 })
+    render(createElement(TaskView), { wrapper })
+    const details = await screen.findByRole('complementary', { name: 'Details' })
+    expect(await within(details).findByText('Could not read the requester task.')).not.toBeNull()
+    expect(within(details).getByText('Delegated from')).not.toBeNull()
+    expect(within(details).queryByText('Requester task unavailable')).toBeNull()
+    readable = true
+    fireEvent.click(within(details).getByRole('button', { name: 'Try again' }))
+    expect(await within(details).findByRole('button', { name: 'Plan the audit' })).not.toBeNull()
+    expect(within(details).queryByText('Could not read the requester task.')).toBeNull()
+  })
+
+  it('explains an uncertain follow-up without exposing its internal warning or reply identifier', async () => {
+    delegationLinks.mockResolvedValue({ from: { id: 'from', taskId: 't1', targetKind: 'kit', state: 'running', warning: 'reply_uncertain:opaque-reply-id:Error: Interrupted admission' } as DelegationDto, to: [] })
+    await renderTask()
+    await waitFor(() => expect(detail('Note')).toContain('Check the executor’s conversation before sending it again.'))
+    expect(detail('Note')).not.toContain('reply_uncertain')
+    expect(detail('Note')).not.toContain('opaque-reply-id')
+  })
+
+  it('explains a delegation that needs review under its Delegated-to row, on one line', async () => {
+    const to = { id: 'to', taskId: 'cloud-task', title: 'Audit remotely', targetKind: 'cloud', targetAgentId: 'cloud-agent', state: 'uncertain', waitingOnUser: false, warning: null, refusalReason: null, dispatchError: 'The previous dispatch was interrupted. Check the remote task before retrying.' } as DelegationDto
+    delegationLinks.mockImplementation(async (taskId) => taskId === 't1' ? { from: null, to: [to] } : { from: null, to: [] })
+    render(createElement(TaskView), { wrapper })
+    const details = await screen.findByRole('complementary', { name: 'Details' })
+    const note = await within(details).findByText('The previous dispatch was interrupted. Check the remote task before retrying.')
+    expect(note.className).toContain('truncate')
+    expect(note.getAttribute('title')).toBe(note.textContent)
+  })
+
+  it('shows requester and executor task links with cloud user attention separately from the task tree', async () => {
+    const from = { id: 'from', taskId: 't1', originTaskId: 'root-task', originAgentId: 'a1', targetKind: 'kit', targetAgentId: 'folder:m1', state: 'running', waitingOnUser: false } as DelegationDto
+    const to = { id: 'to', taskId: 'cloud-task', title: 'Audit remotely', targetKind: 'cloud', targetAgentId: 'cloud-agent', state: 'waiting_user', waitingOnUser: true } as DelegationDto
+    delegationLinks.mockImplementation(async (taskId) => taskId === 't1' ? { from, to: [to] } : { from: null, to: [] })
+    getTask.mockImplementation(async (taskId) => taskId === 'root-task' ? { ...BASE, id: 'root-task', title: 'Plan the audit' } : { ...BASE, status: 'in_progress' })
+    render(createElement(TaskView), { wrapper })
+    const details = await screen.findByRole('complementary', { name: 'Details' })
+    const source = await within(details).findByRole('button', { name: 'Plan the audit' })
+    expect(within(details).getByText('Delegated from')).not.toBeNull()
+    expect(within(details).getByText('Delegated to')).not.toBeNull()
+    // The separator lives in its own span so a wrap keeps it with the state.
+    expect(within(details).getByText('· Waiting on you').parentElement?.textContent).toBe('Cloud agent · Waiting on you')
+    fireEvent.click(source)
+    expect(useUIStore.getState().activeTaskId).toBe('root-task')
+  })
+
+  it('opens the delegated executor task without changing its parent hierarchy', async () => {
+    delegationLinks.mockResolvedValue({ from: null, to: [{ id: 'to', taskId: 'worker-task', title: 'Review the patch', targetKind: 'kit', targetAgentId: 'folder:m1', state: 'done', waitingOnUser: false } as DelegationDto] })
+    await renderTask({ status: 'completed', parentTaskId: null })
+    const details = screen.getByRole('complementary', { name: 'Details' })
+    fireEvent.click(await within(details).findByRole('button', { name: 'Review the patch' }))
+    expect(useUIStore.getState().activeTaskId).toBe('worker-task')
   })
 })

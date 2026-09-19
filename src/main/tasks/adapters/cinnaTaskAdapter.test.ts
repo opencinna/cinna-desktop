@@ -488,6 +488,17 @@ describe('cinnaTaskAdapter — handing work over', () => {
     expect(comment.type).toBe('something_a_newer_agent_invented')
   })
 
+  it('reads beyond the first comment page so a delegation can find the latest result', async () => {
+    const { adapter, server, binding } = await bound()
+    for (let index = 0; index < 101; index++) {
+      await adapter.addComment(USER, binding, { type: index === 100 ? 'result' : 'note', body: `Comment ${index}` })
+    }
+    const comments = await adapter.listComments(USER, binding)
+    expect(comments).toHaveLength(101)
+    expect(comments.at(-1)?.body).toBe('Comment 100')
+    expect(server.calls().some(call => call.path.includes('skip=100'))).toBe(true)
+  })
+
   it('stores a file and refuses a link, because cinna has nowhere to put one', async () => {
     const { server, adapter, binding } = await bound()
     await adapter.putArtifact(USER, binding, {

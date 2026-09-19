@@ -626,6 +626,17 @@ export const HANDOVER_STATES: readonly HandoverState[] = [
   'refused'
 ]
 
+/**
+ * The states after which the desktop does nothing more for a handover on its
+ * own: a terminal report, a Skip or withdrawal, a refusal. Everything else is
+ * still the handover service's to settle.
+ */
+export const HANDOVER_SETTLED_STATES: readonly HandoverState[] = ['done', 'failed', 'skipped', 'refused']
+
+export function isHandoverSettled(state: HandoverState): boolean {
+  return HANDOVER_SETTLED_STATES.includes(state)
+}
+
 /** A state off a row or the wire. Unknown → `seen`: recorded, and nothing claimed about it. */
 export function parseHandoverState(raw: unknown): HandoverState {
   return (HANDOVER_STATES as readonly unknown[]).includes(raw) ? (raw as HandoverState) : 'seen'
@@ -757,6 +768,9 @@ export function handoverRequesterSection(agentId: string): string {
   return [
     '## Handing work to another project',
     '',
+    'Use `handover_targets` to discover available agents and exact folders. For a bare folder, writing the brief directly is preferred. If a direct write is refused or needs permission, use `handover_create` with the target, id, title and brief; Cinna writes the same brief and returns its paths. For kit or cloud agents, use `handover_create`.',
+    'After delegating, end your turn. Cinna wakes this conversation with the result. Do not poll or wait inside your turn. `handover_list` gives a status snapshot when the user asks; `handover_reply` answers a blocked executor or sends a follow-up. In an executor session, `handover_report` reports progress or completion without writing report.md.',
+    '',
     `Any folder adopted in Cinna Desktop has a handover inbox. To ask one for work, create \`${HANDOVERS_DIR}/<id>/${HANDOVER_BRIEF_FILE}\` inside **that** project. The \`<id>\` is yours to choose: 3 to 64 characters, lower case, starting with a letter or digit, then dots, dashes and underscores — use \`YYYYMMDD-HHMM-<slug>\`, e.g. \`20260917-1430-add-retry\`.`,
     '',
     'Write the file whole — a temp file, then a rename — and set `status: ready` only when everything else in it is final. A `ready` brief is never edited again; if you got it wrong, write a new one.',
@@ -782,7 +796,19 @@ export function handoverRequesterSection(agentId: string): string {
     HANDOVER_HOW_TO_REPORT,
     '```',
     '',
-    "Cinna Desktop notices the file, records it as a task for that folder's agent, asks the person or runs it, and brings the result back to this conversation as a turn. Once the report is final and you have read it you may delete your own handover folder; nothing else cleans it up. Never write in another project's handover folder except to create your own."
+    "Cinna Desktop notices the file, records it as a task for that folder's agent, asks the person or runs it, and brings the result back to this conversation as a turn. Once the report is final and you have read it you may delete your own handover folder; nothing else cleans it up. Never write in another project's handover folder except to create your own.",
+    '',
+    `**Following up.** When a report comes back \`blocked\` with a question — or you have more to say about work still under way — do not write a new brief. Write \`${HANDOVER_REVISIONS_DIR}/001.md\` in that same handover folder (then \`002.md\`, and so on; each is written once), whole, with this frontmatter and your message as the body. Where Cinna runs the executor, it arrives in the executor's own conversation, with everything it has already read:`,
+    '',
+    '```markdown',
+    '---',
+    `cinna_handover: ${HANDOVER_SCHEMA_VERSION}`,
+    'title: Answer — use the uploader module',
+    '---',
+    'Your message.',
+    '```',
+    '',
+    '**Handing the same work to several projects.** Give every brief the same `group: <id>` (same id rule as a handover id) and this conversation is woken once, when all of them are over, with one line per project — instead of once per report.'
   ].join('\n')
 }
 
@@ -1078,7 +1104,9 @@ export function buildHandoverReturnPacket(input: HandoverReturnPacketInput): str
     // when the report left it empty — an origin told "blocked" with nothing to
     // answer would otherwise have to go and read the file to find that out.
     lines.push('', `Question: ${question || 'The executor did not say what it needs.'}`)
-    lines.push('Answer by writing a new brief or a revision in the handover folder.')
+    lines.push(
+      `Answer with a revision: write \`${HANDOVERS_DIR}/${input.handoverId}/${HANDOVER_REVISIONS_DIR}/NNN.md\` in that project — the next free number, frontmatter \`cinna_handover: ${HANDOVER_SCHEMA_VERSION}\`, your answer as the body. Where Cinna runs the executor, it arrives in that same conversation.`
+    )
   }
 
   const artifacts = (input.artifacts ?? []).filter((path) => path.trim() !== '')

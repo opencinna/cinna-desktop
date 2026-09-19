@@ -207,6 +207,10 @@ const ALLOWLIST: string[] = [
  * A behavioural one moves into a driver.
  */
 const OWNERSHIP: { file: string; category: Category; count: number; why: string }[] = [
+  { file: 'src/main/services/delegationService.ts', category: 'kind', count: 7,
+    why: 'the delegation bus owns target directory, file-versus-task carrier choice, bare-folder Git admission and source/target trust policy; engine execution remains behind taskExecutionService' },
+  { file: 'src/main/services/conductorBridge.ts', category: 'source', count: 1,
+    why: 'offers session-authenticated delegation tools only to adopted folder owners; synthetic conversational runtimes have no folder authority' },
   // Runtime conductor: these sites own saved runtime fields, presentation, or
   // trusted tool authority. Engine execution/policy remains in ACP drivers.
   { file: 'src/main/services/chatConductorService.ts', category: 'engine', count: 2,

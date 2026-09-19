@@ -14,6 +14,7 @@ import { airClientMeta } from '../acpActivity'
 import type { AcpLaunchPlan } from '../acpLaunchers'
 import { CODEX_CONTRACT } from './codex.contract'
 import { lineDiff, sorted } from './snapshotTools'
+import { probeFolderHandovers, handoverProbeSnapshot, type HandoverProbe } from './handoverProbes'
 import {
   askAppServer, findContractCodex, makeScratch, runCli, spawnAdapter, startFakeProvider, writeProviderConfig,
   type AdapterConnection, type AdapterMessage, type FakeProvider, type ProviderReply, type ProviderTurn
@@ -89,6 +90,7 @@ async function until(check: () => boolean, ms = 15_000): Promise<boolean> {
 
 /** Everything the two scenarios observed. Filled by `beforeAll`. */
 const seen = {
+  handover: null as HandoverProbe | null,
   versionOutput: '', versionStatus: null as number | null,
   login: { status: null as number | null, output: '' },
   features: [] as string[],
@@ -352,6 +354,7 @@ function snapshot(): Json {
   const catalogModels = seen.catalog?.models ?? []
   const listed = (seen.appServer[2]?.result?.data as Json[] | undefined) ?? []
   return {
+    folderHandovers: handoverProbeSnapshot(seen.handover),
     tool: 'codex', version: seen.versionOutput, adapter: RUNTIME_PINS.codex.adapter,
     cli: {
       loginStatusLoggedOut: { exitCode: seen.login.status, verdict: parseCodexAuthStatus(seen.login.output).state },
@@ -473,6 +476,7 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     } finally { scratch.dispose() }
     await folderScenario(binary)
     await policyScenario(binary, seen.versionOutput)
+    seen.handover = await probeFolderHandovers('codex', binary, adapter)
   }, 300_000)
 
 
@@ -700,6 +704,24 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     expect(assistantText(seen.rateLimitUpdates)).toMatch(/429/)
     // No structured failure at all, with the launcher's exact capabilities.
     expect(failureKinds(seen.rateLimitUpdates)).toEqual([])
+  })
+
+  it(entry('codex.sandbox.write-outside-workspace'), () => {
+    expect(seen.handover?.writes).toHaveLength(4)
+    for (const index of [0, 2]) {
+      expect(seen.handover?.writes[index]).toMatchObject({ accepted: true, permissionCount: 0, wrote: false, promptError: null })
+      expect(seen.handover?.writes[index].outputs.join(' ')).toMatch(/operation not permitted|permission denied/i)
+    }
+    expect(seen.handover?.writes[1]).toMatchObject({ mode: 'read-only:escalated', permissionCount: 1, kinds: ['execute'], wrote: true })
+    expect(seen.handover?.writes[3]).toMatchObject({ mode: 'agent:escalated', permissionCount: 0, wrote: false })
+    expect(seen.handover?.writes[3].outputs.join(' ')).toContain('Automatic approval review failed')
+  })
+
+  it(entry('codex.mcp.folder-session-load'), () => {
+    expect(seen.handover?.mcp).toMatchObject({ nativeTools: true, first: true, second: true, loaded: true, differentDescriptors: true, calls: ['first', 'second', 'first'] })
+    expect(seen.handover?.mcp.listReads).toBeGreaterThan(0)
+    expect(seen.handover?.mcp.outputs.join(' ')).toContain('HANDOVER_SESSION_first')
+    expect(seen.handover?.mcp.outputs.join(' ')).toContain('HANDOVER_SESSION_second')
   })
 
   // Last on purpose: it reads what every scenario above observed. Not a registry

@@ -244,6 +244,53 @@
       "verdict": "logged_out"
     }
   },
+  "folderHandovers": {
+    "mcp": {
+      "calls": [
+        "first",
+        "second",
+        "first"
+      ],
+      "differentDescriptors": true,
+      "first": true,
+      "listReads": true,
+      "loaded": true,
+      "nativeTools": true,
+      "outputs": [
+        "HANDOVER_SESSION_first",
+        "HANDOVER_SESSION_second"
+      ],
+      "second": true
+    },
+    "writes": [
+      {
+        "accepted": true,
+        "deniedBySandbox": false,
+        "kinds": [
+          "edit"
+        ],
+        "mode": "default",
+        "permissionCount": 1,
+        "promptError": null,
+        "reviewUnavailable": false,
+        "titles": [
+          "Write <scratch>/sibling/default.txt"
+        ],
+        "wrote": true
+      },
+      {
+        "accepted": true,
+        "deniedBySandbox": false,
+        "kinds": [],
+        "mode": "auto",
+        "permissionCount": 0,
+        "promptError": null,
+        "reviewUnavailable": true,
+        "titles": [],
+        "wrote": false
+      }
+    ]
+  },
   "providerTraffic": {
     "apiKeys": [
       "dummy"

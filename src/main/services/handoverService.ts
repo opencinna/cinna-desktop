@@ -59,12 +59,15 @@ import {
   type HandoverIgnoreCheck,
   type HandoverReport,
   type HandoverState,
-  type HandoverWarning
+  type HandoverWarning,
+  isHandoverSettled
 } from '../../shared/handovers'
 import { canTransition, type TaskStatus } from '../../shared/taskStatus'
 import type { InboxAnswerResult } from '../../shared/inbox'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { TaskArtifact, TaskDto } from '../../shared/tasks'
+import { delegationRepo } from '../db/delegations'
+import { delegationLifecycle } from './delegationLifecycle'
 import { handoverRepo, type HandoverInsert, type HandoverPatch, type HandoverRow } from '../db/handovers'
 import type { TaskCreateInput } from '../db/tasks'
 import { agentRepo } from '../db/agents'
@@ -118,6 +121,11 @@ export interface HandoverAgent {
 }
 
 export interface HandoverDeps {
+  originProfile?(brief: HandoverBrief): string | null
+  /** Depth of the delegation that owns the origin's task — found by task id, or through the origin chat. */
+  chainDepth?(userId: string, origin: { taskId: string | null; chatId: string | null }): number | null
+  applyResult?(scope: RunScope, row: HandoverRow, report: HandoverReport): void
+  checkDelegationGroup?(scope: RunScope, row: HandoverRow): void
   repo: {
     insert(input: HandoverInsert): HandoverRow
     byAgentAndHandoverId(agentId: string, handoverId: string): HandoverRow | undefined
@@ -467,8 +475,8 @@ export function createHandoverService(deps: HandoverDeps) {
   function resolveOrigin(
     profileUserId: string,
     brief: HandoverBrief
-  ): { agentId: string | null; chatId: string | null; taskId: string | null; parentTaskId: string | null; warning: HandoverWarning | null } {
-    const empty = { agentId: null, chatId: null, taskId: null, parentTaskId: null, warning: null as HandoverWarning | null }
+  ): { agentId: string | null; chatId: string | null; taskId: string | null; warning: HandoverWarning | null } {
+    const empty = { agentId: null, chatId: null, taskId: null, warning: null as HandoverWarning | null }
     if (!brief.origin) return empty
     let unresolved = false
 
@@ -489,24 +497,17 @@ export function createHandoverService(deps: HandoverDeps) {
     }
 
     let taskId: string | null = null
-    let parentTaskId: string | null = null
-    let warning: HandoverWarning | null = null
     if (brief.origin.taskId) {
       try {
         const task = deps.tasks.getById(profileUserId, brief.origin.taskId)
         taskId = task.id
-        // Tasks are one level deep and `taskService.create` throws
-        // `nested_too_deep` rather than flattening, so a handover from a subtask
-        // hangs off nothing and says so. The work still runs; only the tree
-        // view of it is lost.
-        if (task.parentTaskId) warning = 'origin_parent_nested'
-        else parentTaskId = task.id
+        // Delegation links are independent of the user's one-level task tree.
       } catch {
         unresolved = true
       }
     }
 
-    return { agentId, chatId, taskId, parentTaskId, warning: unresolved ? 'origin_unresolved' : warning }
+    return { agentId, chatId, taskId, warning: unresolved ? 'origin_unresolved' : null }
   }
 
   /**
@@ -640,8 +641,15 @@ export function createHandoverService(deps: HandoverDeps) {
   async function intake(scope: RunScope, agent: HandoverAgent, found: FoundHandover, check: HandoverIgnoreCheck): Promise<void> {
     const brief = found.brief
     if (!brief) return
+    const originProfile = deps.originProfile?.(brief)
+    // A folder is visible to every profile. Only its validated origin may pay/run.
+    if (originProfile && originProfile !== scope.profileUserId) return
     const briefPath = join(found.dir, HANDOVER_BRIEF_FILE)
     const origin = resolveOrigin(scope.profileUserId, brief)
+    const parentDepth = origin.taskId || origin.chatId ? deps.chainDepth?.(scope.profileUserId, origin) : null
+    // The chain can only raise what the brief declares: an executor that leaves `origin.task`
+    // out, or writes `depth: 1`, must not get a fresh chain that way.
+    const depth = parentDepth != null ? Math.max(parentDepth + 1, brief.depth) : brief.depth
     const report = readReport(found.dir)
     const claimed = report?.parsed.ok === true
 
@@ -653,11 +661,13 @@ export function createHandoverService(deps: HandoverDeps) {
           agentId: agent.id,
           folderPath: agent.path,
           handoverId: found.handoverId,
+          title: brief.title,
+          brief: brief.body,
           taskId: null,
           originAgentId: origin.agentId,
           originChatId: origin.chatId,
           originTaskId: origin.taskId,
-          depth: brief.depth,
+          depth,
           groupId: brief.group,
           execution: brief.execution,
           state: 'seen',
@@ -679,7 +689,7 @@ export function createHandoverService(deps: HandoverDeps) {
           assigneeAgentId: agent.id,
           assigneeName: agent.name,
           assigneeKind: 'agent',
-          parentTaskId: origin.parentTaskId,
+          parentTaskId: null,
           origin: 'local',
           executor: 'desktop'
         })
@@ -694,7 +704,7 @@ export function createHandoverService(deps: HandoverDeps) {
 
     const gitAllowsAuto = allowsAuto(check)
 
-    if (!isDepthAllowed(brief.depth)) {
+    if (!isDepthAllowed(depth)) {
       // Recorded and refused with a visible reason — this is also what stops two
       // folders handing work to each other forever (§3.4).
       deps.repo.update(scope.profileUserId, row.id, { state: 'refused', refusalReason: 'depth_exceeded' })
@@ -731,9 +741,6 @@ export function createHandoverService(deps: HandoverDeps) {
     }
   }
 
-  /** The row states that mean a member of a group is over, one way or another. */
-  const GROUP_TERMINAL_STATES: readonly HandoverState[] = ['done', 'failed', 'skipped', 'refused']
-
   /**
    * A group wakes **once, when all of it is over** (§3.7) — the fan-in.
    *
@@ -752,6 +759,10 @@ export function createHandoverService(deps: HandoverDeps) {
    */
   function wakeGroupIfComplete(scope: RunScope, row: HandoverRow): boolean {
     if (!row.groupId || !row.originChatId) return false
+    if (deps.checkDelegationGroup) {
+      deps.checkDelegationGroup(scope, row)
+      return true
+    }
     let members: HandoverRow[]
     try {
       members = deps.repo.listForGroup(scope.profileUserId, row.originChatId, row.groupId)
@@ -761,7 +772,7 @@ export function createHandoverService(deps: HandoverDeps) {
     }
     if (members.length === 0) return false
 
-    const pending = members.filter((member) => !GROUP_TERMINAL_STATES.includes(member.state))
+    const pending = members.filter((member) => !isHandoverSettled(member.state))
     if (pending.length > 0) {
       deps.logger.debug('a handover group is not finished yet', {
         groupId: row.groupId,
@@ -834,6 +845,11 @@ export function createHandoverService(deps: HandoverDeps) {
    * this function already has in hand.
    */
   function applyReportEffects(scope: RunScope, row: HandoverRow, report: HandoverReport): void {
+    if (deps.applyResult) {
+      if (row.state === 'gated') deps.repo.update(row.userId, row.id, withdrawGate(row))
+      deps.applyResult(scope, row, report)
+      return
+    }
     const userId = scope.profileUserId
     const taskId = row.taskId
     if (!taskId) return
@@ -1737,6 +1753,22 @@ export type HandoverService = ReturnType<typeof createHandoverService>
 function productionDeps(): HandoverDeps {
   return {
     repo: handoverRepo,
+    originProfile: (brief) => {
+      const profile = delegationRepo.originProfile(brief.origin?.chatId, brief.origin?.taskId)
+      if (!profile) return null
+      if (brief.origin?.chatId && brief.origin.agentId && chatAnswersToAgent(profile, brief.origin.chatId, brief.origin.agentId) === null) return profile
+      if (!brief.origin?.chatId && brief.origin?.taskId) return profile
+      return null
+    },
+    chainDepth: (userId, origin) => delegationRepo.parentOfOrigin(userId, origin)?.depth ?? null,
+    applyResult: (scope, row, report) => {
+      const delegation = delegationRepo.getById(row.userId, row.id)
+      if (delegation) delegationLifecycle.applyResult(scope, delegation, { ...report, artifacts: report.artifacts.map((path) => join(row.folderPath, path)) })
+    },
+    checkDelegationGroup: (scope, row) => {
+      const delegation = delegationRepo.getById(row.userId, row.id)
+      if (delegation) delegationLifecycle.checkGroup(scope, delegation)
+    },
     tasks: {
       create: (userId, input) => taskService.create(userId, input),
       getById: (userId, taskId) => taskService.getById(userId, taskId),
@@ -1788,7 +1820,10 @@ function productionDeps(): HandoverDeps {
     git: handoverGit,
     setHandovers: (settingsUserId, agentId, setting) =>
       localAgentService.setHandovers(settingsUserId, agentId, setting),
-    wake: (input) => handoverWake.wake(input),
+    wake: (input) => {
+      const row = delegationRepo.getById(input.row.userId, input.row.id)
+      if (row) delegationLifecycle.applyResult(input.scope, row, input)
+    },
     wakeGroup: (input) => handoverWake.wakeGroup(input),
     sendRevision: (input) => handoverRevisions.send(input),
     isRunning: (chatId) => runExecutionService.isRunning(chatId),

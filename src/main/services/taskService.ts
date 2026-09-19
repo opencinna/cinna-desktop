@@ -551,6 +551,22 @@ export const taskService = {
    * arrive in a state the table forbids reaching. The desktop's job is to
    * mirror it, not to argue with the system that is executing the work.
    */
+  /** Result facts from the remote executor, without claiming desktop execution. */
+  acceptRemoteResult(userId: string, taskId: string, result: {
+    status: TaskStatus
+    handoffNote: string
+    artifacts: TaskArtifact[]
+    errorMessage?: string | null
+  }): TaskDto {
+    const task = requireTask(userId, taskId)
+    const row = persistRemotePatch(userId, taskId, {
+      ...statusPatch(task, result.status, result.errorMessage),
+      handoffNote: result.handoffNote,
+      artifacts: result.artifacts
+    })
+    return written(userId, row)
+  },
+
   acceptRemoteStatus(userId: string, taskId: string, status: TaskStatus): TaskDto {
     const task = requireTask(userId, taskId)
     const row = persistRemotePatch(userId, taskId, statusPatch(task, status))

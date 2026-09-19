@@ -70,6 +70,8 @@ vi.mock('../services/inboxService', () => ({
   inboxService: { list: vi.fn(() => []), answer: vi.fn() }
 }))
 vi.mock('../services/askDelivery', () => ({ parseAnswerPayload: vi.fn(() => null) }))
+const delegationLinks = vi.hoisted(() => vi.fn(() => ({ from: null, to: [] })))
+vi.mock('../services/delegationQueryService', () => ({ delegationQueryService: { forTask: delegationLinks } }))
 const forTask = vi.hoisted(() => vi.fn(() => null as unknown))
 vi.mock('../services/handoverService', () => ({ handoverService: { forTask } }))
 vi.mock('../auth/activation', () => ({
@@ -203,5 +205,15 @@ describe('the handover behind a task', () => {
     expect(await invoke('handover:for-task', {})).toBeNull()
     expect(await invoke('handover:for-task', { taskId: 42 })).toBeNull()
     expect(forTask).not.toHaveBeenCalled()
+  })
+})
+
+describe('delegation task links use the active profile', () => {
+  it('passes profile authority from main and rejects an empty task id', async () => {
+    await expect(invoke('delegation:for-task', { taskId: 't1', userId: 'injected-profile' })).resolves.toEqual({ from: null, to: [] })
+    expect(delegationLinks).toHaveBeenCalledWith('profile-1', 't1')
+    delegationLinks.mockClear()
+    await expect(invoke('delegation:for-task', { taskId: null })).resolves.toEqual({ from: null, to: [] })
+    expect(delegationLinks).not.toHaveBeenCalled()
   })
 })

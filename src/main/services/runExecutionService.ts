@@ -30,7 +30,8 @@ import type { RunEventContext } from './inboxService'
 import { activeRunsByChat as activeChats } from './runExecutionState'
 import { handingOffChats } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
-import { handoverRepo } from '../db/handovers'
+import { delegationRepo } from '../db/delegations'
+import { DELEGATION_TERMINAL_STATES } from '../../shared/delegations'
 import type { CoordinatorToolProvider } from './coordinatorToolProvider'
 import type { AgentDriver, FollowUpScope, SteerFn } from '../agents/drivers/driver'
 import type { AgentRow } from '../db/agents'
@@ -718,10 +719,13 @@ function turnHeaderFor(input: {
   if (!input.driver.capabilities(input.agent).cwd) return null
   let taskId: string | null = null
   let depth = 0
+  let openDelegations: { total: number; running: number; waitingOnUser: number } | undefined
   try {
     const task = taskRepo.getByChatId(input.profileUserId, input.chatId)
     taskId = task?.id ?? null
-    if (task) depth = handoverRepo.byTaskId(input.profileUserId, task.id)?.depth ?? 0
+    if (task) depth = delegationRepo.byTaskId(input.profileUserId, task.id)?.depth ?? 0
+    const open = delegationRepo.listForOrigin(input.profileUserId, input.chatId, taskId).filter((row) => !DELEGATION_TERMINAL_STATES.has(row.state))
+    if (open.length) openDelegations = { total: open.length, running: open.filter((row) => row.state === 'running').length, waitingOnUser: open.filter((row) => delegationRepo.toDto(row).waitingOnUser).length }
   } catch (error) {
     // A header is context, never a precondition: a turn still runs without it.
     logger.warn('the turn header could not be built', {
@@ -729,7 +733,7 @@ function turnHeaderFor(input: {
       error: error instanceof Error ? error.message : String(error)
     })
   }
-  return buildTurnHeader({ chatId: input.chatId, taskId, depth })
+  return buildTurnHeader({ chatId: input.chatId, taskId, depth, openDelegations })
 }
 
 function bindTurn(input: {

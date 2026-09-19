@@ -74,7 +74,7 @@ import { parseTaskPriority, type TaskArtifact, type TaskDto } from '../../../sha
 import type { InputQuestion, InputRequest } from '../../../shared/runEvents'
 import type { RequestResolution } from '../../../shared/localAgentRequests'
 import { CinnaApiError } from '../../errors'
-import { CinnaSessionChanged } from '../../auth/cinna-session'
+import { CinnaSessionChanged, cinnaSessionGeneration } from '../../auth/cinna-session'
 import { createLogger } from '../../logger/logger'
 import {
   RemoteTaskError,
@@ -86,6 +86,7 @@ import {
   type RemoteBinding,
   type RemoteComment,
   type RemoteCommentDraft,
+  type RemoteDelegationResult,
   type RemoteTaskAdapter,
   type RemoteTaskCapabilities,
   type RemoteTaskFields,
@@ -187,6 +188,9 @@ export interface CinnaWorld {
  * bytes) and a link has no representation there at all.
  */
 const CINNA_CAPABILITIES: RemoteTaskCapabilities = {
+  idempotentCreate: true,
+  delegationMetadata: false,
+  readArtifacts: false,
   assigneeDirectory: true,
   create: true,
   writeStatus: true,
@@ -202,6 +206,7 @@ const CINNA_CAPABILITIES: RemoteTaskCapabilities = {
 
 /** A cinna task row, as much of it as this adapter reads. */
 interface CinnaTaskRow {
+  delegation_result?: unknown
   id?: unknown
   short_code?: unknown
   title?: unknown
@@ -240,6 +245,7 @@ interface CinnaMessageRow {
 
 export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
   const id = CINNA_ADAPTER_ID
+  const negotiatedMetadata = new Map<string, { generation: number; server: string }>()
 
   /**
    * Every far-side call goes through here, so there is exactly one place that
@@ -256,6 +262,37 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
     } catch (err) {
       throw asRemoteError(err, path)
     }
+  }
+
+  async function delegationSupport(userId: string) {
+    const absent = { metadata: false, structuredResult: false, reply: false }
+    const generation = cinnaSessionGeneration(userId)
+    const server = world.serverUrl(userId)
+    try {
+      const body = await world.request<Record<string, unknown>>(userId, '/api/v1/tasks/delegation-capabilities')
+      if (generation !== cinnaSessionGeneration(userId) || server !== world.serverUrl(userId)) throw new CinnaSessionChanged()
+      const support = body?.version === 1
+        ? { metadata: body.metadata === true, structuredResult: body.structured_result === true, reply: body.reply === true }
+        : absent
+      if (support.metadata) negotiatedMetadata.set(userId, { generation, server })
+      else negotiatedMetadata.delete(userId)
+      return support
+    } catch (error) {
+      // Old UUID task routes answer 422 for this previously unknown literal.
+      if (error instanceof CinnaApiError && (error.status === 404 || error.status === 422)) {
+        if (generation === cinnaSessionGeneration(userId) && server === world.serverUrl(userId)) negotiatedMetadata.delete(userId)
+        return absent
+      }
+      throw asRemoteError(error, 'delegation capabilities')
+    }
+  }
+
+  async function structuredAsk(userId: string, binding: RemoteBinding): Promise<RemoteAsk | null> {
+    const row = await call<CinnaTaskRow>(userId, `/api/v1/tasks/${encodeURIComponent(binding.id)}/detail`)
+    const result = delegationResult(row.delegation_result)
+    if (!result || result.status !== 'blocked' || !result.askId || !result.question) return null
+    return { id: result.askId, audience: result.audience ?? 'user', createdAt: date(row.updated_at) ?? new Date(),
+      request: { kind: 'question', questions: [{ question: result.question, options: [], multiSelect: false }] } }
   }
 
   function require(
@@ -333,7 +370,8 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
       parentId: str(row.parent_task_id),
       subtaskCount: num(row.subtask_count) ?? 0,
       subtaskCompletedCount: num(row.subtask_completed_count) ?? 0,
-      updatedAt: date(row.updated_at) ?? new Date()
+      updatedAt: date(row.updated_at) ?? new Date(),
+      ...(row.delegation_result ? { result: delegationResult(row.delegation_result) } : {})
     }
   }
 
@@ -477,6 +515,7 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
 
   return {
     id,
+    delegationSupport,
 
     async listAssignees(userId) {
       const page = await call<{ data: Array<{ id?: unknown; name?: unknown }> }>(userId, '/api/v1/agents/')
@@ -502,8 +541,17 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
       return world.linked(userId)
     },
 
-    async create(userId, task: TaskDto, parent) {
+    async create(userId, task: TaskDto, parent, delegation) {
       require('create', 'create')
+      // Discovery is a separate read performed by the coordinator before its
+      // final profile-generation check. Do not insert another awaited probe
+      // between that check and the create write.
+      if (delegation) {
+        const support = negotiatedMetadata.get(userId)
+        if (!support || support.generation !== cinnaSessionGeneration(userId) || support.server !== world.serverUrl(userId)) {
+          throw new UnsupportedRemoteOperation(id, 'create with unnegotiated delegation metadata')
+        }
+      }
       if (parent && parent.adapter !== id) {
         throw new RemoteTaskError(
           'invalid_request',
@@ -532,6 +580,11 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
         // this adapter cannot work around: a retried *subtask* create makes a
         // second subtask. Recorded rather than papered over.
         external_ref: task.id
+      }
+      if (delegation) body.delegation_metadata = {
+        id: delegation.id, requester_key: delegation.requesterKey, origin_kind: delegation.originKind,
+        origin_agent_id: delegation.originAgentId, origin_chat_id: delegation.originChatId,
+        origin_task_id: delegation.originTaskId, depth: delegation.depth, root: delegation.root, group: delegation.group
       }
       if (task.assignee.kind === 'remote_agent' && task.assignee.agentId) {
         body.selected_agent_id = task.assignee.agentId
@@ -697,11 +750,18 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
 
     async listComments(userId, binding) {
       require('comments', 'listComments')
-      const page = await call<CinnaPage<Record<string, unknown>>>(
-        userId,
-        `/api/v1/tasks/${encodeURIComponent(binding.id)}/comments/`
-      )
-      return (page?.data ?? []).map(
+      // The server returns oldest first, limited to 100. Delegation result
+      // fallback needs the newest result, which can be on any later page.
+      const rows: Record<string, unknown>[] = []
+      for (let index = 0; index < MAX_PAGES; index++) {
+        const page = await call<CinnaPage<Record<string, unknown>>>(userId,
+          `/api/v1/tasks/${encodeURIComponent(binding.id)}/comments/?skip=${index * PAGE_SIZE}&limit=${PAGE_SIZE}`)
+        if (!Array.isArray(page?.data)) throw new RemoteTaskError('unavailable', 'The task comments could not be read.')
+        rows.push(...page.data)
+        if (page.data.length < PAGE_SIZE || rows.length >= (num(page.count) ?? Infinity)) break
+        if (index === MAX_PAGES - 1) throw new RemoteTaskError('unavailable', 'There are too many task comments to read the latest result safely.')
+      }
+      return rows.map(
         (row): RemoteComment => ({
           id: str(row.id) ?? '',
           // An open string on the way in, deliberately: cinna's `comment_type`
@@ -710,6 +770,7 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
           type: str(row.comment_type) ?? 'message',
           body: str(row.content) ?? '',
           author: str(row.author_name),
+          fromAgent: str(row.author_agent_id) !== null,
           createdAt: date(row.created_at) ?? new Date()
         })
       )
@@ -736,8 +797,9 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
 
     async listOpenAsks(userId, binding) {
       require('asks', 'listOpenAsks')
+      const delegated = await structuredAsk(userId, binding)
       const open = await openQuestions(userId, binding)
-      const asks: RemoteAsk[] = []
+      const asks: RemoteAsk[] = delegated ? [delegated] : []
       for (const { message } of open) {
         const askId = str(message.id)
         if (!askId) continue
@@ -766,6 +828,18 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
           'a cinna ask is always a question; a permission reply has nowhere to go'
         )
       }
+      const delegated = await structuredAsk(userId, binding)
+      if (delegated?.id === askId && delegated.request.kind === 'question') {
+        const outcome = await call<{ delivered: boolean; uncertain?: boolean }>(userId,
+          `/api/v1/tasks/${encodeURIComponent(binding.id)}/delegation-reply`, { method: 'POST', body: {
+            // The server quotes the question to the executor itself; repeating it here doubles it.
+            result_id: askId, message: resolution.kind === 'question'
+              ? resolution.answers.flat().join('\n')
+              : 'The user declined to answer this question.'
+          } })
+        if (outcome.uncertain) throw new RemoteTaskError('unavailable', 'The previous reply may have been delivered. Inspect the remote session before retrying.')
+        return { delivered: outcome.delivered === true }
+      }
       const open = await openQuestions(userId, binding)
       const target = open.find((entry) => str(entry.message.id) === askId)
       // Nothing waiting on that id: answered already, or the session moved on.
@@ -792,6 +866,22 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
 
     deepLink: (binding) => (binding.url && /^https?:\/\//i.test(binding.url) ? binding.url : null)
   }
+}
+
+function delegationResult(raw: unknown): RemoteDelegationResult | null {
+  if (!raw || typeof raw !== 'object') return null
+  const value = raw as Record<string, unknown>
+  if (!['in_progress', 'blocked', 'done', 'failed'].includes(String(value.status)) || typeof value.summary !== 'string') return null
+  const artifacts: TaskArtifact[] = Array.isArray(value.artifacts) ? value.artifacts.flatMap(rawArtifact => {
+    if (!rawArtifact || typeof rawArtifact !== 'object') return []
+    const artifact = rawArtifact as Record<string, unknown>
+    return (artifact.kind === 'file' || artifact.kind === 'link') && typeof artifact.name === 'string' &&
+      typeof artifact.ref === 'string' && /^https?:\/\//i.test(artifact.ref)
+      ? [{ kind: artifact.kind, name: artifact.name, ref: artifact.ref }] : []
+  }) : []
+  return { status: value.status as RemoteDelegationResult['status'], summary: value.summary,
+    question: str(value.question), body: str(value.body) ?? '', artifacts,
+    audience: value.audience === 'requester' ? 'requester' : 'user', askId: str(value.id) }
 }
 
 /** The three words the seam allows, in cinna's own vocabulary. */

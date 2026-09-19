@@ -120,6 +120,20 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['B', 'D'], note: 'the specialist’s folder-agent turn starts under it; the mode itself is not asserted' }
   },
 
+  {
+    id: 'codex.sandbox.write-outside-workspace', area: 'permissions & questions', surface: 'ACP method', name: 'sibling write / session/request_permission',
+    expectation: 'A sibling-directory exec_command outside the workspace and system temp roots is denied without an ACP ask in read-only and agent modes. Explicit require_escalated in read-only raises an execute permission and allow_once writes; the isolated fake-provider automatic reviewer refuses invalid reviewer output in agent mode.',
+    owners: ['src/main/agents/drivers/acp/codexLauncher.ts#modeId'],
+    feature: 'The file-handover requester cannot assume it can write another adopted folder unattended; handover_create supplies the main-owned alternative.',
+    flow: { steps: ['none'], note: 'the whole flow does not write another adopted folder' }
+  },
+  {
+    id: 'codex.mcp.folder-session-load', area: 'tools & MCP', surface: 'ACP field', name: 'native folder session/new and session/load mcpServers',
+    expectation: 'With native tools still enabled, two sessions on one adapter connect different cinna bearer descriptors and call their own provider; session/load with the first descriptor calls that provider again. Descriptor data stays in per-session RPC, outside process configuration.',
+    owners: ['src/main/agents/drivers/acp/acpDriver.ts#session/load'],
+    feature: 'Ordinary folder agents lose handover tools, or a pooled session delegates under another chat identity.',
+    flow: { steps: ['none'], note: 'the whole flow exercises restricted conductor sessions, not ordinary folder MCP injection' }
+  },
   /* -------------------------------------------------------------------- auth */
   {
     id: 'codex.auth.login-status', area: 'auth', surface: 'CLI', name: 'login status',

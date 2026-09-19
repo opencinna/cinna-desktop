@@ -96,6 +96,7 @@ import {
 import { createLogger } from '../logger/logger'
 import { TaskError } from '../errors'
 import { taskHandoffRepo } from '../db/taskHandoffs'
+import { delegationRepo } from '../db/delegations'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { messageRepo } from '../db/messages'
 import { chatRepo } from '../db/chats'
@@ -1467,7 +1468,8 @@ async function pullRemoteTasks(userId: string): Promise<void> {
       const snapshots = firstPass ? mergeById(active, await history(userId, adapter)) : active
       // An unacknowledged create has no local binding yet. Retry discovery
       // without advancing the cursor rather than manufacturing a duplicate.
-      if ((unboundCreates.get(cursorKey(userId, adapter.id)) ?? 0) > 0 || taskHandoffRepo.unboundCreatePending(userId, adapter.id)) continue
+      if ((unboundCreates.get(cursorKey(userId, adapter.id)) ?? 0) > 0 || taskHandoffRepo.unboundCreatePending(userId, adapter.id) ||
+        delegationRepo.unboundCreatePending(userId, adapter.id)) continue
       if (generation(userId) !== started) return
 
       // Two passes, and the second one is not belt-and-braces.

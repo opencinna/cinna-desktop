@@ -58,6 +58,20 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['none'], note: 'every step runs with the variable set, but none observes the updater; walked by hand in a sandbox HOME with an older binary (runtime_pins_llm.md)' },
     live: 'Nothing differs in a contract run: it needs an installed version older than the latest release and real egress to `downloads.claude.ai`, which the trap refuses. Probed by hand 2026-09-18 with 2.1.274 (latest 2.1.276) in a sandbox HOME laid out as a native install (`~/.local/share/claude/versions/2.1.274`, `~/.local/bin/claude` linked to it), `buildClaudeEnv` env, a fake provider and a recording pass-through proxy, 120 s per run. An ACP session (adapter + one turn), **with or without** the variable: no download, link unchanged, `downloads.claude.ai` never contacted — the kind of process Cinna launches does not self-update. Interactive `claude` (positive control) without the variable: 2.1.276 installed and the link retargeted within ~15 s; with it: nothing installed, link unchanged (it still reached `downloads.claude.ai`, without installing). So the variable is proven to stop the background updater, and on sessions it is belt-and-braces. `claude update` ignores it (updated 2.1.274 → 2.1.276 in the sandbox).'
   },
+  {
+    id: 'claude.permission.write-outside-cwd', area: 'permissions & questions', surface: 'ACP method', name: 'sibling write / session/request_permission',
+    expectation: 'A sibling-directory Write in default mode raises an edit permission and allow_once writes the file. In isolated fake-provider auto mode, no ACP ask is raised and the unavailable classifier refuses the write; authenticated classifier decisions are not established.',
+    owners: ['src/main/agents/drivers/acp/acpLaunchers.ts#modeId'],
+    feature: 'The file-handover requester cannot assume it can write another adopted folder unattended; handover_create supplies the main-owned alternative.',
+    flow: { steps: ['none'], note: 'the whole flow does not write another adopted folder' }
+  },
+  {
+    id: 'claude.mcp.folder-session-load', area: 'tools & MCP', surface: 'ACP field', name: 'native folder session/new and session/load mcpServers',
+    expectation: 'With native tools still enabled, two sessions on one adapter connect different cinna bearer descriptors and call their own provider; session/load with the first descriptor calls that provider again. Descriptor data stays in per-session RPC, outside process configuration.',
+    owners: ['src/main/agents/drivers/acp/acpDriver.ts#session/load'],
+    feature: 'Ordinary folder agents lose handover tools, or a pooled session delegates under another chat identity.',
+    flow: { steps: ['none'], note: 'the whole flow exercises restricted conductor sessions, not ordinary folder MCP injection' }
+  },
   /* -------------------------------------------------------------------- auth */
   {
     id: 'claude.auth.status-json', area: 'auth', surface: 'CLI', name: 'auth status',

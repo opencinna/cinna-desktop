@@ -681,7 +681,7 @@ describe('scanning a workshop', () => {
       hasAgentToken: true,
       sessionCount: 1,
       lastStatusAt: null,
-      claudeApproval: null, codexApproval: null, handovers: null
+      claudeApproval: null, codexApproval: null, handovers: null, delegations: null, cloudDelegations: null
     })
     expect(JSON.stringify(agent)).not.toContain('tok_do_not_leak')
   })

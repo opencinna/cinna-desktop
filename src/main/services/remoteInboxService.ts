@@ -87,7 +87,7 @@ async function read(userId: string, tasks: TaskRow[]): Promise<InboxSnapshot> {
     if (!availability.ready) throw new Error(availability.reason ?? 'The service is unavailable.')
     const asks = await adapter.listOpenAsks(userId, bindingOf(task)!)
     if (!stillBound(userId, task)) return []
-    return asks.map((ask) => ({
+    return asks.filter((ask) => ask.audience !== 'requester').map((ask) => ({
       requestId: address(task, ask.id), source: 'remote', taskId: task.id,
       taskTitle: task.title, chatId: null, agentId: task.assigneeAgentId,
       request: ask.request, resume: 'reply', createdAt: ask.createdAt
