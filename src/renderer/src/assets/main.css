@@ -180,8 +180,8 @@
   }
   [data-theme="dark"] .app-sidebar {
     background-color: rgba(0, 0, 0, 0.82);
-    backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
     border-color: rgba(255, 255, 255, 0.06);
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
   }
@@ -318,15 +318,20 @@
   /* Alpha is kept high enough to stay legible when backdrop-filter does NOT
      composite (e.g. x64 build under Rosetta, where Chromium blocklists the
      GPU path). Where the blur works it still reads as frosted glass. */
+  /* Every `backdrop-filter` in this file lists `-webkit-` FIRST. The build's
+     CSS minifier treats a prefixed declaration after the standard one as the
+     one that wins and drops the standard one — and Chromium ignores
+     `-webkit-backdrop-filter`, so every hand-written blur here rendered as no
+     blur at all (a menu showed the card under it sharp, through 10% alpha). */
   .app-popover-surface {
     background-color: rgba(245, 245, 245, 0.9);
-    backdrop-filter: blur(14px) saturate(140%);
     -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
   }
   [data-theme="dark"] .app-popover-surface {
     background-color: rgba(20, 20, 20, 0.9);
-    backdrop-filter: blur(14px) saturate(140%);
     -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
     border-color: rgba(255, 255, 255, 0.06);
   }
 
@@ -380,8 +385,8 @@
   [data-theme="dark"] .sidebar-tab {
     background-color: rgba(0, 0, 0, 0.18);
     border-color: rgba(255, 255, 255, 0.04);
-    backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
   }
   /* Active tab: same surface as the sidebar; no right border so it dissolves
      into the page on its right edge. Width stays at the rail — the
@@ -411,8 +416,8 @@
   }
   [data-theme="dark"] .sidebar-tab[aria-pressed='true']::after {
     background-color: rgba(0, 0, 0, 0.45);
-    backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
   }
 
   /* Animated collapse/expand. The wrap reserves layout width (so flex siblings
