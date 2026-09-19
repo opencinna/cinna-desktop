@@ -26,6 +26,8 @@ All colors use CSS variables `var(--color-*)` defined in `src/renderer/src/asset
 
 Custom CSS must go inside `@layer base` in `main.css` (otherwise it overrides Tailwind v4 utilities).
 
+A hand-written `backdrop-filter` lists `-webkit-backdrop-filter` **first** and the standard property after it. The build's CSS optimizer (lightningcss, run by `@tailwindcss/vite` on build only) keeps just the last of the pair, and Chromium ignores the prefixed one — so with the standard property first, every hand-written blur in `main.css` (`.app-sidebar`, `.app-popover-surface`, `.sidebar-tab`) shipped as no blur at all while looking right in `npm run dev`, and a menu showed the card under it sharp through its 10% alpha. Tailwind's `backdrop-blur-*` utilities are emitted correctly and need nothing.
+
 ## Typography — two scales, chosen by surface
 
 Cinna has **two** type scales, and picking the wrong one is the most visible way a screen goes wrong: it renders a step or two smaller than the screen beside it and reads as a different application. The scale is decided by *where the surface lives*, never by how much content it has.

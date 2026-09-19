@@ -45,6 +45,8 @@ Activation and profile resolution stay in main's thin IPC handlers. `chat:get` d
 
 Stopped unread rows use CircleCheck/success, CircleHelp/warning or CircleAlert/danger with CSS variable colors. Their image names are **Completed — unread results**, **Needs input — unread results** and **Failed — unread results**. Hover/focus replaces the image with Trash2; the button remains named Delete session and its title combines outcome and action. The title is withheld while the row's [summary tooltip](../chat_row_summary/chat_row_summary.md) is open — the button lies on the pointer's way to it, and two tooltips at once say two things; the accessible name does not depend on the title. Canceled or read results have no result image. Interrupt/delete errors use the existing IPC unwrapping and render beside the row.
 
+`ChatItem` also consumes `ui.store.revealChatId`: when it names the row's chat, an effect calls `scrollIntoView({ block: 'nearest' })` on the row, clears the request and sets a local `revealed` flag that adds `ring-1 ring-inset ring-[var(--color-accent)]` and a 10% accent fill with `data-revealed`, for `REVEAL_MS = 1_800`. The task page's `TaskActionsMenu` sets the request; `useShowChatInList`'s hook-level `onError` clears it when the move fails. It parallels `revealNoteId` for the Notes list.
+
 `MainArea` mounts useReadChatResult once and passes a chat ID only for activeView=chat. The hook tracks document focus and visibility, reads the shared chat list and detail queries, and requires all of: no list activity, unread result, successful detail, matching result ID, visible conversation and foreground document. Its effect sends an acknowledgement only then. Successful acknowledgement cancels older list reads and patches unread=false only for the same result and current profile. Rejection leaves the result unread; reopening or regaining focus can retry. It does not acknowledge on watch closure, since final saved output or an error may still be loading, particularly after replay overflow.
 
 ## Configuration
@@ -58,6 +60,7 @@ List/detail results are scoped through chat ownership. Mark-read requires activa
 ## Verification
 
 - `src/renderer/src/components/chat/ChatItem.test.tsx` covers background interruption without selection, pending/error controls, delete after stop and all result icons.
+- `src/renderer/src/components/chat/ChatItem.reveal.test.tsx` covers the reveal: it scrolls and lights the row once without opening the chat, waits for a row that appears later, and leaves other rows alone.
 - `src/renderer/src/hooks/useChat.watched.test.tsx` and `src/renderer/src/hooks/useLiveRunWatch.test.tsx` cover main activity refresh, selection changes with an older idle list request, and replay-unavailable closure without premature acknowledgement.
 - `src/renderer/src/hooks/useReadChatResult.test.tsx` covers foreground/background visibility, matching detail identity, pending/failed/stale reads and delayed acknowledgements against newer outcomes.
 - `src/main/services/chatService.setRouter.test.ts` covers owned activity/results, delete guards, stale run-ID reads, migration replay and permanent deletion. `src/main/ipc/run.routing.test.ts` covers standalone statuses, user cancellation and suppression of runner-owned leaf writes.

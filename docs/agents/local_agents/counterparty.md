@@ -167,7 +167,7 @@ Running a job whose agent is not here
 
   and, before the click:
     JobData.incompleteSetup (job:list and job:get)
-      ├─ JobDetail   → Run disabled + red "Incomplete setup" panel + "Agent unavailable" chip
+      ├─ JobDetail   → Run disabled + red "Incomplete setup" panel + "Agent unavailable" in Details
       └─ JobItem     → red marker shown unconditionally, no run-now button
 ```
 

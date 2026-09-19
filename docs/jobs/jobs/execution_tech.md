@@ -13,7 +13,7 @@ The [Jobs](jobs.md) definition is reusable; a Job Run is one attempt, and its Ta
 | Storage | `src/main/db/jobs.ts`, `src/main/db/jobRunRefresh.ts`: history queries and pure refresh projection |
 | Task lifecycle | `src/main/services/taskService.ts`, `src/main/services/taskSyncService.ts`, `src/main/services/taskSyncScheduler.ts`: current-attempt projection, confirmed loss and shared remote reads |
 | Wire | `src/shared/jobs.ts`, `src/main/ipc/job.ipc.ts`, `src/preload/index.ts`: result disposition and run refresh metadata |
-| Renderer | `src/renderer/src/hooks/useJobs.ts`, `useCinnaRunPoll.ts`, `src/renderer/src/components/jobs/JobRunRow.tsx`: one dispatch, saved-row polling and refresh affordance |
+| Renderer | `src/renderer/src/hooks/useJobs.ts`, `useCinnaRunPoll.ts`, `src/renderer/src/components/jobs/JobRunRow.tsx`: one dispatch, saved-row polling and the history row, which has no refresh control |
 
 ## Database Schema
 
@@ -72,7 +72,7 @@ Relink/reset uses the default false option, preserving the last-known Task and r
 
 `useExecuteJob` handles disposition rather than provenance. Accepted work invalidates Job/task/chat queries and optionally opens its chat; it never calls startRun. Ordinary renderer-turn preparation sends once after existing configuration resolution. Missing/unknown dispositions refuse before navigation or dispatch. `navigate: false` remains supported.
 
-`JobRunRow` offers Refresh for bound-task and legacy-adoption modes. Original Chat / On the service links and deletion disclosures still follow provenance. The profile task scheduler owns normal network refresh. Job list/history queries poll SQLite while active attempts remain. `useCinnaRunPoll` only performs legacy adoption every five seconds while visible and stops once association succeeds; bound work does not gain a second per-view timer.
+`JobRunRow` offers no Refresh: no renderer surface calls `job:refresh-run` with `force`, so terminal history is never re-read from the job page. A row with a live task opens the task; an orphaned row opens its chat or the service run view by provenance, and its Delete run disclosure follows provenance too (a local run's chat goes with it, a cinna run's service task does not). The profile task scheduler owns normal network refresh. Job list/history queries poll SQLite while active attempts remain. `useCinnaRunPoll` only performs legacy adoption every five seconds while visible and stops once association succeeds; bound work does not gain a second per-view timer.
 
 ## Configuration and Security
 
@@ -86,5 +86,5 @@ The kind-branch ratchet has zero counted behavioral debt. Job cleanup replaces e
 - `src/main/services/jobService.executeCinnaTask.test.ts`: changed/deleted preflight, deleted/repointed/terminal adoption, real SQL-trigger failure after remote acceptance, current-binding DTOs, takeover safety, background/scheduler loss, terminal history, unresolved-receipt refusal before remote calls, relink preserving last-known run state, and preserved remote errors/timestamps.
 - `src/renderer/src/hooks/useJobs.executeError.test.tsx`: exactly one ordinary send; accepted and unknown dispositions never send.
 - `src/renderer/src/hooks/useCinnaRunPoll.test.tsx`: visible legacy adoption stops after association and skips bound/recovery/passive/terminal history.
-- `src/renderer/src/components/jobs/JobRunRow.refreshError.test.tsx`: local-origin bound refresh, refusal surfaces and unavailable refresh modes.
+- `e2e/specs/job-executor-refresh.spec.ts`: a local-origin Job handed remote moves its history row from running to succeeded through the bound Task's own refresh, and a forced `refreshRun` over the API still reads the service.
 - `src/main/agents/kindBranches.test.ts`: exact ownership inventory and zero behavioral ceiling.

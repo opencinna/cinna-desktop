@@ -26,6 +26,11 @@ Show which conversations are still working and which have new results to read, e
 3. Open that conversation in the foreground and let its saved transcript load. The indicator clears only when the loaded conversation contains that same latest result.
 4. Leave and return, or restart the app. An acknowledged result stays read; an unopened result remains unread across restart.
 
+### A row pointed at from elsewhere
+
+1. On a task page, choose **⋯ → Show in the Chats list**. A chat a job spawned is moved out of hiding first.
+2. The sidebar opens on Chats, the chat's row scrolls into view and is outlined in the accent colour for under two seconds. The chat is not opened; the task stays on screen.
+
 ## Business Rules
 
 - **Main owns activity.** Running indicators survive selection changes and cover work started without an open conversation. A selected transcript's streaming flag alone previously lost the spinner as soon as another row was selected.
@@ -36,6 +41,7 @@ Show which conversations are still working and which have new results to read, e
 - **User cancellation creates no unread notification.** Stopping active or waiting work clears its previous result indicator, including cancellation through task controls. System interruption requiring recovery is distinct from user Stop.
 - **Selection alone is not reading.** The chat view must be visible, the document focused and not hidden, and a successful saved-transcript read must contain the current result identity. Opening Settings or the Inbox with that chat still selected does not count. Pending, failed or stale reads cannot acknowledge a newer result, and a delayed acknowledgement cannot clear a later one. This tracks opening the conversation, not scrolling to or reading every individual message.
 - **Only the latest result is retained.** A new result replaces the previous one for that chat. Repeated cleanup and metadata-only edits must not turn an already read result unread again. Read state is persisted locally; there is no notification history, badge count, new preference or app-sync collection.
+- **A reveal is a one-shot request, not a selection.** The row that shows itself clears it, so a row remounting later — a list refetch, a tab switch — does not scroll again. It waits for the row to exist: a chat just moved out of hiding only has a row once the list has been read again. A move that fails withdraws it, or it would fire whenever that chat next appeared.
 - **Status does not promote hidden chats.** Job-created conversations follow the existing rules for appearing in Chats. These indicators describe listed conversations; they do not replace the task page, Inbox, agent readiness or Agent Status.
 
 ## Architecture Overview
@@ -49,4 +55,4 @@ Main turn or controller → local latest-result record and active reservation �
 - [Turn outcomes](../messaging/turn_completion.md) — per-turn completion and the controller that owns the session outcome.
 - [Chat Row Summary](../chat_row_summary/chat_row_summary.md) — the hover tooltip on the same row; it holds the action button's native title back while open.
 - [Conversation UI](../conversation_ui/conversation_ui.md) and [App Shell](../../ui/app_shell/app_shell.md) — transcript visibility and sidebar navigation.
-- [Tasks](../../jobs/tasks/tasks.md), [autonomous coordination](../../jobs/tasks/autonomous_tasks.md), [script execution](../../jobs/tasks/script_execution.md) and [Inbox](../../jobs/tasks/inbox.md) — whole-session controls and durable human waits.
+- [Tasks](../../jobs/tasks/tasks.md) — the task page's ⋯ menu is where a row is revealed from. [Autonomous coordination](../../jobs/tasks/autonomous_tasks.md), [script execution](../../jobs/tasks/script_execution.md) and [Inbox](../../jobs/tasks/inbox.md) — whole-session controls and durable human waits.

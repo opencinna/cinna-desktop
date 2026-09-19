@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A read-only view inside the desktop that surfaces a Cinna task's **comments** and **attachments** so the user can see results without leaving the app. Reached by clicking a `cinna_task` row in a job's run history.
+A read-only view inside the desktop that surfaces a Cinna task's **comments** and **attachments** so the user can see results without leaving the app. Reached from the task page's ⋯ → **Open on the server**, or by clicking a `cinna_task` row whose task is gone in a job's Tasks history.
 
 ## Core Concepts
 
@@ -10,12 +10,11 @@ A read-only view inside the desktop that surfaces a Cinna task's **comments** an
 - **Task Comment** — Authored content on a task. Cinna-core distinguishes several `comment_type` values: `message` and `result` are user/agent content; `status_change`, `assignment`, and `system` are platform-generated.
 - **Activity** — UI-side grouping for the system-generated comment types. Rendered as a collapsible compact log separate from real comments.
 - **Task Attachment** — A `TaskAttachment` record (distinct from the `FileUpload` rows handled by chat attachments). Lives under a task-scoped download endpoint. Can be standalone on the task or inline on a specific comment.
-- **Cinna Run Counts** — Badge pills shown on each cinna_task row in the job's run history: a comments count (system entries excluded) and an attachments count.
 
 ## User Stories / Flows
 
 ### Opening the task view
-1. From a job’s **Run history**, user clicks **On the service** on a task-linked `cinna_task` run. A legacy run without a local task still opens this view on its row click; both require `cinnaTaskId`.
+1. From the task page of a task a `cinna_task` run produced, user picks **⋯ → Open on the server**. A run whose task is gone — a legacy run that never had one, or one whose task was deleted — opens this view on its own row click in the job's **Tasks history**; both require `cinnaTaskId`.
 2. Main area swaps to the **Cinna Task Run View**. The sidebar stays on the Jobs tab; the originating job stays highlighted.
 3. The view fetches the task detail (`GET /api/v1/tasks/{id}/detail`) and renders.
 4. Header shows: a "← Back to {job title}" link, the task title, a status pill, and the short code (or task id when no short code is set).
@@ -45,11 +44,6 @@ A read-only view inside the desktop that surfaces a Cinna task's **comments** an
 1. The Refresh icon forces an immediate `GET /detail` and updates the cache.
 2. While the task is non-terminal (anything other than `completed`/`succeeded`/`error`/`failed`/`cancelled`/`archived`), the view auto-refetches every 5 seconds in the background so new comments and status flips appear without action.
 
-### Counts on the run row
-1. In the job's run history, each `cinna_task` row shows up to two small pill badges before the action buttons: a MessageSquare badge with the comment count (system activity excluded) and a Paperclip badge with the attachment count.
-2. Each badge only renders when its count is > 0.
-3. The detail view and the row badges share the same query key — opening the view warms the cache for the row and vice versa.
-
 ### Leaving the view
 1. Back link returns to **Job Detail** (`activeView = 'job-detail'`) and clears `activeCinnaRunId`.
 2. Switching the sidebar tab away from Jobs also clears `activeCinnaRunId` (see [App Shell](../../ui/app_shell/app_shell.md)).
@@ -57,20 +51,19 @@ A read-only view inside the desktop that surfaces a Cinna task's **comments** an
 
 ## Business Rules
 
-- **Cinna-only.** The view requires a `cinna_task` run with a non-null `cinnaTaskId`. Every new run has a local task, which its row opens; the visible **On the service** action preserves access to this conversation. A legacy remote row without a task opens this view directly until refresh adopts it. Local runs offer **Chat** for their conversation instead, and a legacy local row still opens its chat. See [Jobs](../jobs/jobs.md).
+- **Cinna-only.** The view requires a `cinna_task` run with a non-null `cinnaTaskId`. Every new run has a local task, which its row opens; that task page's ⋯ → **Open on the server** preserves access to this conversation. A remote row whose task is gone opens this view directly — a legacy one until the visible-window timer adopts it, if it is still active. Local runs reach their conversation through the task page instead, and a local row whose task is gone still opens its chat. See [Jobs](../jobs/jobs.md).
 - **Single API call.** Comments + standalone attachments come from `/api/v1/tasks/{id}/detail` — one round-trip, not three.
-- **System entries hidden by default in counts.** The row's comment-count badge filters out `status_change | assignment | system` so the user sees the number of authored comments, not the activity log size.
+- **System entries are activity, not comments.** `status_change | assignment | system` are split out of the Comments list into the Activity log, so the Comments count is the number of authored comments.
 - **Timezone correction.** cinna-core serializes `datetime` columns from Python without a `Z`, but the values are UTC. The view parses timestamps with explicit UTC tagging so relative times don't drift by the user's offset.
 - **No editing.** The view is strictly read-only — no posting comments, no uploading attachments, no status changes. Those happen on cinna-core's web UI (reachable via the "Open on Cinna" icon).
-- **Cache shared across surfaces.** The query key (`['cinna', 'task-view', taskId]`) is shared between the detail view (polls every 5s while non-terminal) and the run-row badges (no polling, 60s `staleTime`).
+- **One cache key.** The query key is `['cinna', 'task-view', taskId]`; the view polls it every 5s while non-terminal. The history rows used to read the same key for count badges and no longer do: a service read per visible row bought two numbers the task page does not need.
 - **Attachment endpoint is task-scoped.** `TaskAttachment` files use `GET /api/v1/tasks/{taskId}/attachments/{id}/download` — NOT the standard `/api/v1/files/{id}/download`. The desktop has a separate IPC + service path for this.
 
 ## Architecture Overview
 
 ```
-JobRunRow (cinna_task)
-  -> click navigates: setActiveCinnaRunId(runId) + setActiveView('cinna-task-run')
-  -> badge counts: useCinnaTaskView(taskId, { polling: false })
+TaskActionsMenu (task page ⋯, a task a cinna_task run produced) / JobRunRow (orphaned cinna_task run)
+  -> setActiveCinnaRunId(runId) + setActiveView('cinna-task-run')
 
 MainArea (activeView === 'cinna-task-run')
   -> CinnaTaskRunView
@@ -99,7 +92,7 @@ useTaskAttachmentDownload().download({ taskId, attachmentId, filename })
 
 - [Tasks and the Inbox](../tasks/tasks.md) — the task page owns work status and takeover; the Inbox answers enumerated remote questions, while this service view retains conversation and attachment browsing.
 
-- [Jobs](../jobs/jobs.md) — Cinna-task runs originate from a Cinna Task Job's `Run` button. The task view is reached from the job's run history.
+- [Jobs](../jobs/jobs.md) — Cinna-task runs originate from a Cinna Task Job's `Run` button. The task view is reached from a run's task page, or from a history row whose task is gone.
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — All cinna-core HTTP requests use the active Cinna OAuth bearer token; 401/403 raises `CinnaApiError('reauth_required')`.
 - [File Attachments](../../chat/file_attachments/file_attachments.md) — Reuses the `AttachmentList` badge UI but with a separate download path; `TaskAttachment` ≠ `FileUpload`.
 - [App Shell](../../ui/app_shell/app_shell.md) — Routed as `activeView === 'cinna-task-run'`; switching sidebar tabs clears `activeCinnaRunId`.

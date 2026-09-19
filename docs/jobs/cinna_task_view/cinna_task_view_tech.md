@@ -17,14 +17,15 @@
   - `window.api.files.downloadTaskAttachment({ taskId, attachmentId, filename })` — wraps `files:download-task-attachment`. Returns the discriminator: `{ success: true, savedPath } | { success: true, canceled: true } | { success: false, error, code }`.
 
 ### Renderer
-- `src/renderer/src/hooks/useCinnaTaskView.ts` — `useCinnaTaskView(taskId, { polling? })`. `polling: true` (default) refetches every 5s while task status is non-terminal; `polling: false` disables the loop and uses `staleTime = 60_000` (used by row badges). Both variants share the query key `['cinna', 'task-view', taskId]`. Also exports `useInvalidateCinnaTaskView()`.
+- `src/renderer/src/hooks/useCinnaTaskView.ts` — `useCinnaTaskView(taskId, { polling? })`. `polling: true` (default) refetches every 5s while task status is non-terminal; `polling: false` disables the loop and uses `staleTime = 60_000` (built for the history rows' count badges, which are gone; no caller today). Both variants share the query key `['cinna', 'task-view', taskId]`. Also exports `useInvalidateCinnaTaskView()`.
 - `src/renderer/src/stores/taskAttachmentDownload.store.ts` — Zustand store with `downloadingIds: Set<string>`, `error`, `errorAttachmentId`, `download({ taskId, attachmentId, filename })`, `dismissError()`. Mirrors `fileDownload.store` shape. Logs failures via `createLogger('task-attachment-download')`.
 - `src/renderer/src/hooks/useTaskAttachmentDownload.ts` — Façade hook over the store: `{ isDownloading, error, errorAttachmentId, download, dismissError }`.
 - `src/renderer/src/utils/cinnaTime.ts` — `parseServerTimestamp(s)`, `formatRelativeFromServer(s, now)`, `formatRelativeFromDate(d, now)`. Naive ISO strings are tagged `Z` before `Date.parse` to correct cinna-core's TZ-less serialization.
 - `src/renderer/src/utils/markdownComponents.tsx` — shared component map reused for comment-content markdown rendering.
 - `src/renderer/src/stores/ui.store.ts` — `activeCinnaRunId: string | null` + `setActiveCinnaRunId`. `ActiveView` includes `'cinna-task-run'`.
 - `src/renderer/src/components/jobs/CinnaTaskRunView.tsx` — The view itself. Reads `activeJobId` + `activeCinnaRunId` from `ui.store`, finds the run via `useJobRuns(activeJobId).data.find(...)`, resolves `cinnaTaskId`, drives `useCinnaTaskView`. Sub-components: `CommentCard` (markdown + author + result pill + inline attachments), `ActivityRow` (inline-markdown one-line row), `TaskAttachmentList` (consumes `useTaskAttachmentDownload`), `CountBadge`. The status pill is **not** one of them any more: it is `src/renderer/src/components/tasks/TaskStatusPill.tsx`, shared with the task page, and this file's private `StatusPill` is gone — two components would be two places for the same status to pick a different colour.
-- `src/renderer/src/components/jobs/JobRunRow.tsx` — Navigates to the view through **On the service** on task-linked cinna_task rows, or the row click for legacy rows with no task (`setActiveCinnaRunId(runId)` + `setActiveView('cinna-task-run')`). Pulls counts from `useCinnaTaskView(cinnaTaskId, { polling: false })` and renders MessageSquare + Paperclip pill badges before the action buttons.
+- `src/renderer/src/components/tasks/TaskActionsMenu.tsx` — **Open on the server** in the task page's ⋯: shown for the run `task.jobRunId` names when that run names the task back and has a `cinnaTaskId`; sets `activeCinnaRunId` + `activeView('cinna-task-run')`. It does not set `activeJobId`, which this view reads its run list from.
+- `src/renderer/src/components/jobs/JobRunRow.tsx` — The row click of an orphaned cinna_task run (`!taskLive`) with a `cinnaTaskId` navigates to the view. Rows no longer show comment/attachment counts.
 - `src/renderer/src/components/layout/MainArea.tsx` — Routes `activeView === 'cinna-task-run'` to `<CinnaTaskRunView />`.
 - `src/renderer/src/components/layout/SidebarTabs.tsx` — Tab-switch handler also calls `setActiveCinnaRunId(null)` so the view doesn't leak across tabs.
 - `src/renderer/src/assets/main.css` — `.markdown-inline` class collapses `<p>` / `<ul>` / `<ol>` / `<li>` to `display: inline` for the single-line activity rows.
@@ -53,7 +54,7 @@
 - `url: string | null` — optional pre-resolved URL (typically null; desktop builds the task-scoped path)
 
 ### `SYSTEM_COMMENT_TYPES`
-`ReadonlySet<CinnaTaskCommentType>` = `{ 'status_change', 'assignment', 'system' }`. `isContentComment(c)` returns the inverse — used by both the detail view (Comments vs. Activity split) and the run-row badge counter.
+`ReadonlySet<CinnaTaskCommentType>` = `{ 'status_change', 'assignment', 'system' }`. `isContentComment(c)` returns the inverse — used by the detail view (Comments vs. Activity split).
 
 ## IPC Channels
 
@@ -98,8 +99,7 @@
 ## Configuration
 
 - Polling interval: `ACTIVE_REFETCH_MS = 5_000` in `useCinnaTaskView.ts`. Applied only when `polling: true` AND the task status is non-terminal.
-- Badge stale time: `BADGE_STALE_MS = 60_000` in `useCinnaTaskView.ts`. Applied when `polling: false`.
-- Minimum visible refresh-spin (in `JobRunRow`): `MIN_SPIN_MS = 500` — prevents the icon from never appearing to spin when the IPC roundtrip is sub-frame.
+- Badge stale time: `BADGE_STALE_MS = 60_000` in `useCinnaTaskView.ts`. Applied when `polling: false`, which nothing passes today.
 
 ## Security
 
@@ -113,4 +113,3 @@
 
 - **No write actions.** Posting a comment, uploading an attachment, or changing task status all require the cinna-core web UI today. The "Open on Cinna" button bridges the gap.
 - **No pagination.** `/api/v1/tasks/{id}/detail` returns the full lists. Long-running tasks with hundreds of comments are not currently truncated. If this becomes a problem, switch the comments fetch to the dedicated `/comments/` endpoint with `skip`/`limit`.
-- **Counts re-fetch on row mount.** Row badges fire one `/detail` call per row on first render (then cached for 60s). For a job with many cinna runs the initial burst could be reduced by hoisting the fetches into the parent and batching.
