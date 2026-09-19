@@ -2,6 +2,7 @@ import { mkdirSync, readdirSync, realpathSync, renameSync, writeFileSync } from 
 import { basename, join } from 'node:path'
 import type { Locator } from '@playwright/test'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
+import { seedChatTask } from '../fixtures/seed'
 import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine } from '../fixtures/scriptAcpEngine'
 import {
   HANDOVERS_DIR,
@@ -81,11 +82,11 @@ function handoverDir(folder: string, id = HANDOVER_ID): string {
 
 function writeBrief(
   folder: string,
-  options: { origin?: { agentId: string; chatId: string }; id?: string } = {}
+  options: { origin?: { agentId: string; chatId: string; taskId?: string }; id?: string } = {}
 ): void {
   const dir = handoverDir(folder, options.id)
   const origin = options.origin
-    ? ['origin:', `  agent: ${options.origin.agentId}`, `  chat: ${options.origin.chatId}`]
+    ? ['origin:', `  agent: ${options.origin.agentId}`, `  chat: ${options.origin.chatId}`, ...(options.origin.taskId ? [`  task: ${options.origin.taskId}`] : [])]
     : []
   atomicWrite(
     join(dir, HANDOVER_BRIEF_FILE),
@@ -397,7 +398,7 @@ test.describe('file handovers', () => {
 
   test('a finished handover is reported back into the chat that asked for it', async ({
     cinna
-  }) => {
+  }, testInfo) => {
     test.setTimeout(180_000)
     await arrange(cinna, fake)
     const manager = writeProject(cinna, 'delivery-manager', 'Delivery Manager')
@@ -415,6 +416,8 @@ test.describe('file handovers', () => {
       return chat.id
     }, managerId)
 
+    const originTaskId = await seedChatTask(cinna, { chatId, title: 'Coordinate delivery' })
+
     // A chat created over IPC is as stale to the sidebar as an agent is; the
     // restart is arrangement, not part of what is under test.
     await cinna.relaunch()
@@ -422,7 +425,7 @@ test.describe('file handovers', () => {
     await cinna.page.evaluate(() => window.api.localAgents.rescan())
 
     await openInbox(cinna)
-    writeBrief(worker, { origin: { agentId: managerId, chatId } })
+    writeBrief(worker, { origin: { agentId: managerId, chatId, taskId: originTaskId } })
     const { taskId } = await awaitGateEntry(cinna)
 
     const card = gateCard(cinna, worker)
@@ -460,6 +463,20 @@ test.describe('file handovers', () => {
       // Not exact: the packet's `Project:` and `Task:` lines are one Markdown
       // paragraph, so the rendered node holds both.
       await expect(cinna.page.getByText(`Project: ${worker}`)).toBeVisible()
+    })
+    await test.step('both task pages navigate the delegation independently of subtasks', async () => {
+      await openInbox(cinna)
+      await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true }).getByRole('button', { name: new RegExp(TITLE) }).click()
+      await expect(detailValue(cinna, 'Delegated from').getByRole('button', { name: 'Coordinate delivery' })).toBeVisible()
+      await cinna.page.screenshot({ path: testInfo.outputPath('delegated-task.png'), animations: 'disabled' })
+      await detailValue(cinna, 'Delegated from').getByRole('button', { name: 'Coordinate delivery' }).click()
+      await expect(cinna.page.getByRole('heading', { name: 'Coordinate delivery', exact: true })).toBeVisible()
+      await expect(detailValue(cinna, 'Delegated to').getByRole('button', { name: TITLE })).toBeVisible()
+      await detailValue(cinna, 'Delegated to').getByRole('button', { name: TITLE }).click()
+      await expect(cinna.page.getByRole('heading', { name: TITLE, exact: true })).toBeVisible()
+      const relations = await cinna.page.evaluate((id) => window.api.delegations.forTask(id), originTaskId)
+      expect(relations.to.map((delegation) => delegation.taskId)).toContain(taskId)
+      expect(await cinna.page.evaluate((id) => window.api.tasks.get(id), taskId)).toMatchObject({ parentTaskId: null })
     })
   })
 })

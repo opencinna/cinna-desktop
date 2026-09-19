@@ -16,6 +16,7 @@ export const SCRIPT_MODEL = 'qwen3:8b'
  * next stage of the same turn is released (`text` and `after` wait for the last).
  */
 export interface ScriptAcpReply {
+  tools?: { name: string; args?: Record<string, unknown>; id?: string }[]
   text?: string
   updates?: Record<string, unknown>[]
   after?: boolean
@@ -46,12 +47,13 @@ export async function scriptAcpEngine() {
   const afters: ScriptAcpHeld[] = []
   const stops: ScriptAcpHeld[] = []
   const mores: ScriptAcpHeld[] = []
+  const tools: ScriptAcpHeld[] = []
   const pending = new Set<ServerResponse>()
   const server = createServer((req, res) => {
     const send = (body: unknown): void => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(body)) }
     if (req.url === '/api/tags') { send({ models: [{ name: SCRIPT_MODEL, model: SCRIPT_MODEL, details: { family: 'qwen3', parameter_size: '8.2B' } }] }); return }
     if (req.url === '/api/version') { send({ version: '0.6.2' }); return }
-    const routes = ['/prompt', '/initialize', '/after', '/more', '/stop']
+    const routes = ['/prompt', '/initialize', '/after', '/more', '/stop', '/tools']
     if (req.method !== 'POST' || !routes.includes(req.url ?? '')) {
       unexpected.push(`${req.method} ${req.url}`); res.statusCode = 404; send({}); return
     }
@@ -59,12 +61,12 @@ export async function scriptAcpEngine() {
     req.on('data', (chunk) => { raw += chunk })
     req.on('end', () => {
       if (req.url === '/initialize') { inits.push(JSON.parse(raw)); send({}); return }
-      if (req.url === '/after' || req.url === '/more' || req.url === '/stop') {
+      if (req.url === '/after' || req.url === '/more' || req.url === '/stop' || req.url === '/tools') {
         const held: ScriptAcpHeld = { params: JSON.parse(raw), closed: false, released: false,
           release(reply) { if (held.closed || held.released) throw new Error(`${req.url} is no longer held`); held.released = true; send(reply) } }
         pending.add(res)
         res.on('close', () => { held.closed = true; pending.delete(res) })
-        ;(req.url === '/after' ? afters : req.url === '/more' ? mores : stops).push(held)
+        ;(req.url === '/after' ? afters : req.url === '/more' ? mores : req.url === '/tools' ? tools : stops).push(held)
         return
       }
       const body = JSON.parse(raw) as { cwd: string; pid: number; sessionId: string; prompt: { type: string; text?: string }[] }
@@ -80,7 +82,7 @@ export async function scriptAcpEngine() {
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   const host = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   return {
-    host, calls, unexpected, inits, afters, mores, stops,
+    host, calls, unexpected, inits, afters, mores, stops, tools,
     /**
      * The same agent as a command-line ACP agent (`customAgents.save`): no
      * engine setting and no credential, and the custom launcher's own

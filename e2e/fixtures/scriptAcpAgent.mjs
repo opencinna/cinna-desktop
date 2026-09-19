@@ -2,10 +2,13 @@
 import { randomUUID } from 'node:crypto'
 import { Readable, Writable } from 'node:stream'
 import { agent, ndJsonStream } from '@agentclientprotocol/sdk'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 const host = process.env.SCRIPT_ACP_CONTROLLER
 if (!host || !host.startsWith('http://127.0.0.1:')) throw new Error('A loopback controller is required')
 const pending = new Map()
+const sessions = new Map()
 
 /** POST to the controller and read its JSON answer; the controller may hold it. */
 async function ask(path, body, signal) {
@@ -31,10 +34,14 @@ const app = agent({ name: 'script-e2e-acp' })
   .onRequest('initialize', async (ctx) => {
     // The client's advertised capabilities are the witness for what the launcher sends.
     await ask('/initialize', ctx.params)
-    return { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [] }
+    return { protocolVersion: 1, agentCapabilities: { loadSession: true, mcpCapabilities: { http: true } }, authMethods: [] }
   })
-  .onRequest('session/new', () => ({ sessionId: `script-${randomUUID()}` }))
-  .onRequest('session/load', () => ({}))
+  .onRequest('session/new', (ctx) => {
+    const sessionId = `script-${randomUUID()}`
+    sessions.set(sessionId, ctx.params.mcpServers ?? [])
+    return { sessionId }
+  })
+  .onRequest('session/load', (ctx) => { sessions.set(ctx.params.sessionId, ctx.params.mcpServers ?? []); return {} })
   .onRequest('session/set_mode', () => ({}))
   .onRequest('session/set_config_option', () => ({ configOptions: [] }))
   .onRequest('session/prompt', async (ctx) => {
@@ -49,7 +56,30 @@ const app = agent({ name: 'script-e2e-acp' })
       let reply = await ask('/prompt', { cwd: process.cwd(), pid: process.pid, ...ctx.params }, controller.signal)
       // `more: true` keeps the prompt open after its `updates`: the controller
       // holds `/more` until the test releases the next stage of the same turn.
-      while (reply.more) {
+      while (reply.more || reply.tools) {
+        if (reply.tools) {
+          const descriptor = sessions.get(sessionId)?.find((server) => server.name === 'cinna' && server.type === 'http')
+          if (!descriptor?.url.startsWith('http://127.0.0.1:')) throw new Error('This folder did not receive Cinna MCP')
+          const mcp = new Client({ name: 'script-handover-e2e', version: '1' })
+          try {
+            await mcp.connect(new StreamableHTTPClientTransport(new URL(descriptor.url), {
+              requestInit: { headers: Object.fromEntries(descriptor.headers.map(({ name, value }) => [name, value])) }
+            }))
+            const listed = await mcp.listTools()
+            const results = []
+            for (const call of reply.tools) {
+              const id = call.id ?? randomUUID()
+              await ctx.client.notify('session/update', { sessionId, update: { sessionUpdate: 'tool_call', toolCallId: id,
+                title: `mcp__cinna__${call.name}`, kind: 'other', status: 'pending', rawInput: call.args ?? {} } })
+              const result = await mcp.callTool({ name: call.name, arguments: call.args ?? {}, _meta: { 'claudecode/toolUseId': id } }, undefined, { signal: controller.signal })
+              results.push({ name: call.name, result })
+              await ctx.client.notify('session/update', { sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: id,
+                status: result.isError ? 'failed' : 'completed', rawOutput: result } })
+            }
+            reply = await ask('/tools', { sessionId, results, offered: listed.tools.map((tool) => tool.name) }, controller.signal)
+          } finally { await mcp.close() }
+          continue
+        }
         await send(ctx.client, sessionId, reply.updates)
         reply = await ask('/more', { sessionId }, controller.signal)
       }
