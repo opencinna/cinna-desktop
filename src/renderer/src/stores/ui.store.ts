@@ -57,6 +57,8 @@ const ANIMATION_KEY = 'cinna-extra-ui-animation'
 // Only the sidebar's open state is remembered; the view, tab and chat are not,
 // so the app always starts on the new-chat screen.
 const SIDEBAR_KEY = 'cinna-sidebar-open'
+// Whether a long markdown preview opens with its Contents panel showing.
+const PREVIEW_CONTENTS_KEY = 'cinna-preview-contents-open'
 
 function applyTheme(theme: Theme): void {
   document.documentElement.setAttribute('data-theme', theme)
@@ -91,6 +93,11 @@ interface UIStore {
    */
   pendingDraftAgentId: string | null
   sidebarOpen: boolean
+  /**
+   * The file preview's Contents panel, as the user last left it. Only long
+   * markdown files offer the panel, so it starts open.
+   */
+  previewContentsOpen: boolean
   theme: Theme
   themePreference: ThemePreference
   extraUIAnimation: boolean
@@ -113,6 +120,7 @@ interface UIStore {
   setActiveLocalAgentId: (id: string | null) => void
   setPendingDraftAgentId: (id: string | null) => void
   toggleSidebar: () => void
+  togglePreviewContents: () => void
   toggleTheme: () => void
   setThemePreference: (preference: ThemePreference) => void
   setExtraUIAnimation: (enabled: boolean) => void
@@ -137,6 +145,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   activeLocalAgentId: null,
   pendingDraftAgentId: null,
   sidebarOpen: localStorage.getItem(SIDEBAR_KEY) !== '0',
+  previewContentsOpen: localStorage.getItem(PREVIEW_CONTENTS_KEY) !== '0',
   theme: resolveTheme(readThemePreference()),
   themePreference: readThemePreference(),
   extraUIAnimation: localStorage.getItem(ANIMATION_KEY) !== '0',
@@ -162,6 +171,12 @@ export const useUIStore = create<UIStore>((set, get) => ({
       const next = !state.sidebarOpen
       localStorage.setItem(SIDEBAR_KEY, next ? '1' : '0')
       return { sidebarOpen: next }
+    }),
+  togglePreviewContents: () =>
+    set((state) => {
+      const next = !state.previewContentsOpen
+      localStorage.setItem(PREVIEW_CONTENTS_KEY, next ? '1' : '0')
+      return { previewContentsOpen: next }
     }),
   // The footer always chooses a fixed theme, including when following System.
   toggleTheme: () => get().setThemePreference(get().theme === 'dark' ? 'light' : 'dark'),

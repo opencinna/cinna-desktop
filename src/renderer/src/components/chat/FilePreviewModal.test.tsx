@@ -10,8 +10,10 @@ vi.mock('../../stores/fileDownload.store', () => ({
     select({ download: () => {}, downloadingIds: new Set() })
 }))
 
-import { ENTRANCE_WAIT_MS, FilePreviewModal, OPEN_PRESS_GUARD_MS } from './FilePreviewModal'
+import { contentsGeometry, ENTRANCE_WAIT_MS, FilePreviewModal, OPEN_PRESS_GUARD_MS } from './FilePreviewModal'
+import { FULL_TITLE_DELAY_MS } from './FilePreviewContents'
 import { useFilePreviewStore } from '../../stores/filePreview.store'
+import { useUIStore } from '../../stores/ui.store'
 
 const csv: AgentFileRef = {
   text: 'data/omp.csv',
@@ -163,8 +165,7 @@ describe('focus', () => {
     open({ target: agentTarget(), kind: 'text', text: 'hello' })
     expect(document.activeElement).toBe(card())
     // Tab from the card reaches the header actions.
-    expect(card().contains(screen.getByRole('button', { name: 'Open folder' }))).toBe(true)
-    expect(card().contains(screen.getByRole('button', { name: 'Open' }))).toBe(true)
+    expect(card().contains(screen.getByRole('button', { name: 'More file actions' }))).toBe(true)
     expect(card().contains(screen.getByRole('button', { name: 'Close preview' }))).toBe(true)
 
     fireEvent.keyDown(window, { key: 'Escape' })
@@ -539,7 +540,7 @@ describe('a press outside the card straight after an open', () => {
     expect(notPrevented).toBe(true)
     expect(useFilePreviewStore.getState().target).not.toBeNull()
     // A press inside the card is the card's either way.
-    fireEvent.mouseDown(screen.getByRole('button', { name: 'Open' }))
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'More file actions' }))
     expect(useFilePreviewStore.getState().target).not.toBeNull()
 
     // A newer open restarts the guard.
@@ -562,8 +563,7 @@ describe('agent file header and errors', () => {
     expect(screen.getByText('That folder is no longer there.')).toBeTruthy()
     expect(screen.getByText('old_exports')).toBeTruthy()
     expect(screen.getByText('data/report/old_exports')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Open' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Open folder' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'More file actions' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Close preview' })).toBeTruthy()
   })
 
@@ -593,7 +593,15 @@ describe('agent file header and errors', () => {
   })
 
   it('disables Open and Open folder while the body says the file has gone, and only then', () => {
-    const actions = () => ['Open', 'Open folder'].map((name) => (screen.getByRole('button', { name }) as HTMLButtonElement).disabled)
+    const actions = () => {
+      fireEvent.click(screen.getByRole('button', { name: 'More file actions' }))
+      const disabled = ['Open', 'Open folder'].map((name) => (screen.getByRole('menuitem', { name }) as HTMLButtonElement).disabled)
+      // The trigger stays usable, so the unavailable items can be seen.
+      expect((screen.getByRole('button', { name: 'More file actions' }) as HTMLButtonElement).disabled).toBe(false)
+      fireEvent.click(screen.getByRole('button', { name: 'More file actions' }))
+      expect(screen.queryByRole('menu')).toBeNull()
+      return disabled
+    }
     render(<FilePreviewModal />)
     for (const failedStep of ['authorize', 'preview'] as const) {
       open({ target: agentTarget(), error: 'That file is no longer there.', errorCode: 'not_found', failedStep })
@@ -643,5 +651,363 @@ describe('agent file header and errors', () => {
     expect(body.className.split(/\s+/)).toEqual(
       expect.arrayContaining(['focus-visible:outline-2', 'focus-visible:outline-[var(--color-accent)]'])
     )
+  })
+})
+
+/** A spec-shaped file: a title, several sections, a repeated heading. */
+const LONG_MD = [
+  '# Spec',
+  '',
+  '## Goal',
+  '',
+  'Why.',
+  '',
+  '## Design',
+  '',
+  '### Edge Cases',
+  '',
+  '## Tests',
+  '',
+  '### Edge Cases'
+].join('\n')
+const mdFile: AgentFileRef = { text: 'docs/spec.md', path: '/agent/docs/spec.md', displayPath: 'docs/spec.md', kind: 'file', inside: true }
+const CONTENTS_KEY = 'cinna-preview-contents-open'
+
+const contentsButton = (): HTMLElement | null => screen.queryByRole('button', { name: 'Contents' })
+const body = (): HTMLElement => document.querySelector<HTMLElement>('div.overflow-auto')!
+
+describe('the Contents panel', () => {
+  let innerWidth: number
+  beforeEach(() => {
+    innerWidth = window.innerWidth
+    localStorage.removeItem(CONTENTS_KEY)
+    act(() => useUIStore.setState({ previewContentsOpen: true }))
+  })
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: innerWidth })
+    delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo
+  })
+
+  it('is offered for a long markdown file, open by default, listing H2s under a lone H1', () => {
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
+    const button = contentsButton()!
+    expect(button.getAttribute('aria-expanded')).toBe('true')
+    expect(button.getAttribute('aria-controls')).toBe('file-preview-contents')
+    const nav = screen.getByRole('navigation', { name: 'Contents' })
+    expect(nav.id).toBe('file-preview-contents')
+    expect(Array.from(nav.querySelectorAll('button')).map((b) => b.textContent)).toEqual([
+      'Goal',
+      'Design',
+      'Edge Cases',
+      'Tests',
+      'Edge Cases'
+    ])
+    // Every rendered heading carries its line; the order is Contents, ⋯, ×.
+    expect(Array.from(body().querySelectorAll('[data-heading-line]')).map((h) => h.getAttribute('data-heading-line'))).toEqual(
+      ['1', '3', '7', '9', '11', '13']
+    )
+    const header = screen.getByRole('button', { name: 'Close preview' }).parentElement!
+    expect(Array.from(header.querySelectorAll('button')).map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual([
+      'Contents',
+      'More file actions',
+      'Close preview'
+    ])
+  })
+
+  it('is not offered for a short markdown file, a non-markdown file, or an attachment csv', () => {
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(mdFile), kind: 'markdown', text: '# Title\n\n## Only\n\n### Sub\n\n### Sub' })
+    expect(screen.getByRole('heading', { name: 'Only' })).toBeTruthy()
+    expect(contentsButton()).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'Contents' })).toBeNull()
+
+    open({ target: agentTarget(), kind: 'text', text: LONG_MD })
+    expect(contentsButton()).toBeNull()
+
+    const attachment = { id: 'f1', filename: 'a.csv', size: 1, mimeType: 'text/csv' }
+    open({ target: { type: 'attachment', attachment }, attachment, kind: 'csv', text: 'a,b\n1,2\n' })
+    expect(contentsButton()).toBeNull()
+
+    // A long markdown attachment is offered it like an agent file.
+    const md = { id: 'f2', filename: 'spec.md', size: 1, mimeType: 'text/markdown' }
+    open({ target: { type: 'attachment', attachment: md }, attachment: md, kind: 'markdown', text: LONG_MD })
+    expect(contentsButton()).not.toBeNull()
+  })
+
+  it('does not count a frontmatter block, which is not part of the rendered body', () => {
+    render(<FilePreviewModal />)
+    const text = ['---', 'name: spec', '---', '', '# Spec', '', '## Only'].join('\n')
+    open({ target: agentTarget(mdFile), kind: 'markdown', text })
+    expect(screen.getByTestId('frontmatter')).toBeTruthy()
+    expect(contentsButton()).toBeNull()
+  })
+
+  it('shows a cut-off entry in full after a short rest, and never an entry that fits', () => {
+    vi.useFakeTimers()
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
+    act(() => {
+      vi.advanceTimersByTime(ENTRANCE_WAIT_MS)
+    })
+    const entries = screen.getByRole('navigation', { name: 'Contents' }).querySelectorAll('button')
+    const hint = (): HTMLElement | null => document.body.querySelector('[data-toc-full-title]')
+    Object.defineProperty(entries[1], 'scrollWidth', { configurable: true, value: 400 })
+    Object.defineProperty(entries[1], 'clientWidth', { configurable: true, value: 200 })
+
+    fireEvent.mouseEnter(entries[0])
+    act(() => {
+      vi.advanceTimersByTime(FULL_TITLE_DELAY_MS)
+    })
+    expect(hint()).toBeNull()
+
+    fireEvent.mouseLeave(entries[0])
+    fireEvent.mouseEnter(entries[1])
+    act(() => {
+      vi.advanceTimersByTime(FULL_TITLE_DELAY_MS - 1)
+    })
+    expect(hint()).toBeNull()
+    act(() => {
+      vi.advanceTimersByTime(1)
+    })
+    expect(hint()?.textContent).toBe(entries[1].textContent)
+
+    fireEvent.mouseLeave(entries[1])
+    expect(hint()).toBeNull()
+    vi.useRealTimers()
+  })
+
+  it('scrolls the body container to the clicked heading, and marks that entry current', () => {
+    const scrolled: Array<{ element: HTMLElement; options: ScrollToOptions }> = []
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      writable: true,
+      value: function (this: HTMLElement, options: ScrollToOptions) {
+        scrolled.push({ element: this, options })
+      }
+    })
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
+    const nav = screen.getByRole('navigation', { name: 'Contents' })
+    const entries = nav.querySelectorAll('button')
+    fireEvent.click(entries[3])
+    expect(scrolled).toHaveLength(1)
+    expect(scrolled[0].element).toBe(body())
+    expect(scrolled[0].options.behavior).toBe('smooth')
+    expect(entries[3].getAttribute('aria-current')).toBe('location')
+    expect(entries[0].getAttribute('aria-current')).toBeNull()
+    // The window is never what scrolls.
+    expect(scrolled.every((s) => s.element !== document.documentElement)).toBe(true)
+  })
+
+  it('remembers being closed, across previews and in localStorage', () => {
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
+    fireEvent.click(contentsButton()!)
+    expect(contentsButton()!.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('navigation', { name: 'Contents' })).toBeNull()
+    expect(localStorage.getItem(CONTENTS_KEY)).toBe('0')
+
+    open({ target: agentTarget({ ...mdFile, path: '/agent/b.md', text: 'b.md', displayPath: 'b.md' }), kind: 'markdown', text: LONG_MD })
+    expect(contentsButton()!.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('navigation', { name: 'Contents' })).toBeNull()
+
+    fireEvent.click(contentsButton()!)
+    expect(screen.getByRole('navigation', { name: 'Contents' })).toBeTruthy()
+    expect(localStorage.getItem(CONTENTS_KEY)).toBe('1')
+  })
+
+  it('widens the card to the right in a wide window, keeping the body at the closed width', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
+    // Opened already open: at its final width, with nothing to animate.
+    expect(card().style.width).toBe('1008px')
+    expect(card().style.left).toBe('120px')
+    expect(card().style.transition).toBe('')
+    expect(body().style.width).toBe('766px')
+    expect(screen.getByRole('navigation', { name: 'Contents' }).className).not.toContain('shadow-[')
+
+    // The button's own change animates, and the body keeps its width.
+    fireEvent.click(contentsButton()!)
+    expect(card().style.width).toBe('768px')
+    expect(card().style.left).toBe('0px')
+    expect(card().style.transition).toContain('width 170ms')
+    expect(body().style.width).toBe('766px')
+
+    // A new preview never inherits the animation.
+    open({ target: agentTarget({ ...mdFile, path: '/agent/b.md', text: 'b.md', displayPath: 'b.md' }), kind: 'markdown', text: LONG_MD })
+    expect(card().style.transition).toBe('')
+  })
+
+  it('still widens when the right side is short of room, moving left only as far as it must', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1100 })
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
+    // Centred at 1008px the right edge is at 1054; 30px more keeps 16 to spare.
+    expect(card().style.width).toBe('1008px')
+    expect(card().style.left).toBe('30px')
+    expect(body().style.width).toBe('766px')
+    expect(screen.getByRole('navigation', { name: 'Contents' }).className).not.toContain('shadow-[')
+  })
+
+  it('ignores a press outside straight after a toggle, which moved the card from under the pointer', () => {
+    vi.useFakeTimers()
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
+    act(() => vi.advanceTimersByTime(OPEN_PRESS_GUARD_MS))
+    fireEvent.click(contentsButton()!)
+    act(() => vi.advanceTimersByTime(OPEN_PRESS_GUARD_MS - 1))
+    fireEvent.mouseDown(backdrop())
+    expect(useFilePreviewStore.getState().target).not.toBeNull()
+    act(() => vi.advanceTimersByTime(1))
+    fireEvent.mouseDown(backdrop())
+    expect(useFilePreviewStore.getState().target).toBeNull()
+  })
+
+  it('lays the panel over the body after a slow load, until the user toggles it', () => {
+    vi.useFakeTimers()
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(mdFile), kind: 'markdown', isLoading: true })
+    act(() => vi.advanceTimersByTime(ENTRANCE_WAIT_MS))
+    act(() => useFilePreviewStore.setState({ isLoading: false, text: LONG_MD }))
+    // The loading card was shown narrow: it stays that width.
+    expect(card().style.width).toBe('768px')
+    expect(screen.getByRole('navigation', { name: 'Contents' }).className).toContain('shadow-[')
+
+    fireEvent.click(contentsButton()!)
+    fireEvent.click(contentsButton()!)
+    expect(card().style.width).toBe('1008px')
+  })
+
+  it('takes the closed width from the root font size', () => {
+    expect(contentsGeometry(1400, 17).closedWidth).toBe(816)
+    expect(contentsGeometry(1400).closedWidth).toBe(768)
+  })
+
+  it('follows a resize made while no preview was open', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
+    render(<FilePreviewModal />)
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1100 })
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
+    expect(card().style.left).toBe('30px')
+  })
+
+  it('lays the panel over the body in a narrow window, and follows a resize', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1000 })
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(mdFile), kind: 'markdown', text: LONG_MD })
+    expect(card().style.width).toBe('768px')
+    expect(card().style.left).toBe('0px')
+    expect(screen.getByRole('navigation', { name: 'Contents' }).className).toContain('shadow-[')
+
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    expect(card().style.width).toBe('1008px')
+    expect(screen.getByRole('navigation', { name: 'Contents' }).className).not.toContain('shadow-[')
+  })
+})
+
+describe('the ⋯ menu', () => {
+  const trigger = (): HTMLElement => screen.getByRole('button', { name: 'More file actions' })
+  const item = (name: string): HTMLButtonElement => screen.getByRole('menuitem', { name }) as HTMLButtonElement
+
+  it('holds Open then Open folder, and runs the one picked without closing the preview', () => {
+    vi.useFakeTimers()
+    const openExternally = vi.fn(() => Promise.resolve())
+    const reveal = vi.fn(() => Promise.resolve())
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(), kind: 'text', text: 'hello' })
+    act(() => useFilePreviewStore.setState({ openAgentFileExternally: openExternally, revealAgentFile: reveal }))
+    act(() => vi.advanceTimersByTime(OPEN_PRESS_GUARD_MS))
+
+    fireEvent.click(trigger())
+    const menu = screen.getByRole('menu', { name: 'File actions' })
+    expect(Array.from(menu.querySelectorAll('[role="menuitem"]')).map((m) => m.textContent)).toEqual(['Open', 'Open folder'])
+    expect(card().contains(menu)).toBe(false)
+    // The first item takes focus, for the keyboard.
+    expect(document.activeElement).toBe(item('Open'))
+
+    // A press on the portaled menu is not a press outside the preview.
+    fireEvent.mouseDown(item('Open folder'))
+    expect(useFilePreviewStore.getState().target).not.toBeNull()
+    fireEvent.click(item('Open folder'))
+    expect(reveal).toHaveBeenCalledTimes(1)
+    expect(openExternally).not.toHaveBeenCalled()
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(useFilePreviewStore.getState().target).not.toBeNull()
+    expect(document.activeElement).toBe(trigger())
+  })
+
+  it('takes a press outside while open for itself, as Escape does', () => {
+    vi.useFakeTimers()
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(), kind: 'text', text: 'hello' })
+    act(() => vi.advanceTimersByTime(OPEN_PRESS_GUARD_MS))
+    fireEvent.click(trigger())
+    fireEvent.mouseDown(backdrop())
+    expect(useFilePreviewStore.getState().target).not.toBeNull()
+    act(() => vi.runOnlyPendingTimers())
+    expect(screen.queryByRole('menu')).toBeNull()
+    fireEvent.mouseDown(backdrop())
+    expect(useFilePreviewStore.getState().target).toBeNull()
+  })
+
+  it('closes on Escape without closing the preview; the next Escape closes the preview', () => {
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(), kind: 'text', text: 'hello' })
+    fireEvent.click(trigger())
+    expect(screen.getByRole('menu')).toBeTruthy()
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(useFilePreviewStore.getState().target).not.toBeNull()
+    expect(document.activeElement).toBe(trigger())
+
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(useFilePreviewStore.getState().target).toBeNull()
+  })
+
+  it('moves between its items with the arrow keys', () => {
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(), kind: 'text', text: 'hello' })
+    fireEvent.click(trigger())
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(item('Open folder'))
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(item('Open'))
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(item('Open folder'))
+  })
+
+  it('spins its trigger while an action runs, with both items disabled and the trigger usable', () => {
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(), kind: 'text', text: 'hello' })
+    expect(trigger().querySelector('.animate-spin')).toBeNull()
+    act(() => useFilePreviewStore.setState({ pendingAction: 'reveal' }))
+    expect(trigger().querySelector('.animate-spin')).not.toBeNull()
+    expect((trigger() as HTMLButtonElement).disabled).toBe(false)
+    // A real click focuses the button; jsdom's does not.
+    act(() => trigger().focus())
+    fireEvent.click(trigger())
+    expect([item('Open').disabled, item('Open folder').disabled]).toEqual([true, true])
+    // Nothing usable to focus: it stays on the trigger.
+    expect(document.activeElement).toBe(trigger())
+    act(() => useFilePreviewStore.setState({ pendingAction: null }))
+    expect([item('Open').disabled, item('Open folder').disabled]).toEqual([false, false])
+  })
+
+  it('is not offered for an attachment, which keeps its Download button', () => {
+    const attachment = { id: 'f1', filename: 'a.txt', size: 1, mimeType: 'text/plain' }
+    render(<FilePreviewModal />)
+    open({ target: { type: 'attachment', attachment }, attachment, kind: 'text', text: 'x' })
+    expect(screen.queryByRole('button', { name: 'More file actions' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Download a.txt' })).toBeTruthy()
   })
 })

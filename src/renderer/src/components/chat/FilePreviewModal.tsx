@@ -3,12 +3,11 @@ import {
   ArrowUp,
   ArrowUpDown,
   Download,
-  ExternalLink,
   FileText,
   Filter,
   Folder,
-  FolderOpen,
   Loader2,
+  TableOfContents,
   X
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
@@ -16,8 +15,16 @@ import { createPortal } from 'react-dom'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import { markdownComponents } from '../../utils/markdownComponents'
 import { useFrontmatter } from '../ui/FrontmatterTable'
+import { markdownToc } from '../../utils/markdownToc'
+import { useUIStore } from '../../stores/ui.store'
+import { FileActionsMenu, PREVIEW_POPOVER_ATTR } from './FileActionsMenu'
+import {
+  CONTENTS_PANEL_ID,
+  CONTENTS_PANEL_WIDTH,
+  FilePreviewContents,
+  previewMarkdownComponents
+} from './FilePreviewContents'
 import { JsonTree, JsonTreeBoundary, useParsedJson } from './JsonTree'
 import {
   actionErrorRepeatsBody,
@@ -29,14 +36,54 @@ import { useFileDownloadStore } from '../../stores/fileDownload.store'
 import type { PreviewRenderKind } from '../../../../shared/filePreview'
 import { agentFileName } from '../../../../shared/agentFiles'
 
-/** Labelled secondary button at the app-chrome scale (Open folder / Open). */
+/** Labelled secondary button at the app-chrome scale (Contents); colours by state. */
 const HEADER_ACTION_CLASS =
-  'inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium border ' +
-  'border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] ' +
-  'hover:bg-[var(--color-bg-hover)] disabled:opacity-50 transition-colors'
+  'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium border ' +
+  'border-[var(--color-border)] disabled:opacity-50 transition-colors'
 
 /** Entrance timing: short enough to never be waited on. */
 const ENTRANCE: KeyframeAnimationOptions = { duration: 170, easing: 'cubic-bezier(0.2, 0, 0, 1)' }
+
+/** The card's widest closed width, `max-w-3xl`, in rem. */
+const CARD_MAX_WIDTH_REM = 48
+/** The overlay's horizontal padding (`px-4`), both sides together, in rem. */
+const OVERLAY_PADDING_X_REM = 2
+/** The gap the widened card keeps from the window's right edge. */
+const WINDOW_MARGIN = 16
+/** The card's left and right borders together, inside its border-box width. */
+const CARD_BORDER_X = 2
+
+/**
+ * Where the Contents panel goes, from the window width alone.
+ *
+ * The closed card is `min(768, window - padding)` wide and centred. Opening
+ * the panel widens it by the panel's width, **to the right** where the window
+ * has room: the card gets that explicit width and is shifted right by
+ * `shift`. With room for the whole panel (`shift` is half its width) the left
+ * edge — and the body, pinned at the closed width — stays exactly where it
+ * was. With less, the card still widens and moves left only as far as it must
+ * to keep {@link WINDOW_MARGIN} from the right edge. Only a window too narrow
+ * for the closed card and the panel side by side gets the overlay: the card
+ * keeps its width and the panel lies over the body's right side.
+ */
+export function contentsGeometry(
+  windowWidth: number,
+  /** The root font size: the Tailwind widths are in rem, and it is not always 16. */
+  rem = 16
+): {
+  closedWidth: number
+  sideBySide: boolean
+  shift: number
+} {
+  const padding = OVERLAY_PADDING_X_REM * rem
+  const closedWidth = Math.min(CARD_MAX_WIDTH_REM * rem, windowWidth - padding)
+  const wideWidth = closedWidth + CONTENTS_PANEL_WIDTH
+  const sideBySide = wideWidth <= windowWidth - padding
+  // Centred at the wide width, the right edge sits at (window + wide) / 2.
+  const roomRight = windowWidth - WINDOW_MARGIN - (windowWidth + wideWidth) / 2
+  const shift = sideBySide ? Math.max(0, Math.min(CONTENTS_PANEL_WIDTH / 2, roomRight)) : 0
+  return { closedWidth, sideBySide, shift }
+}
 
 /**
  * How long the card stays hidden waiting for its first settled state (content,
@@ -186,6 +233,8 @@ function useCardEntrance({
 export function FilePreviewModal(): React.JSX.Element | null {
   const live = useFilePreviewStore()
   const { close, openAgentFileExternally, revealAgentFile } = live
+  const contentsOpen = useUIStore((s) => s.previewContentsOpen)
+  const togglePreviewContents = useUIStore((s) => s.togglePreviewContents)
   // Closing fades out as fast as opening faded in. The store closes at once;
   // the modal keeps rendering the last open state until its exit ends. A new
   // open during the fade cancels it.
@@ -222,6 +271,15 @@ export function FilePreviewModal(): React.JSX.Element | null {
   const cardRef = useRef<HTMLDivElement>(null)
   const backdropRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  // Markdown only: the frontmatter split and the headings, computed here once
+  // because the header's Contents button needs the verdict too. The headings
+  // are parsed from exactly the body handed to <Markdown>.
+  const markdown = useFrontmatter(kind === 'markdown' ? text : '')
+  const toc = useMemo(
+    () => (kind === 'markdown' ? markdownToc(markdown.body) : null),
+    [kind, markdown.body]
+  )
   const targetKey = !target
     ? null
     : target.type === 'attachment'
@@ -233,6 +291,55 @@ export function FilePreviewModal(): React.JSX.Element | null {
   useEffect(() => {
     setFiltersEnabled(false)
   }, [targetKey])
+
+  const loaded = target !== null && !isLoading && error === null && !notice && kind !== null
+  const showContents = loaded && kind === 'markdown' && toc?.show === true
+  const panelOpen = showContents && contentsOpen
+  // The window width, followed for as long as the modal is mounted: a value
+  // left stale between previews would widen the card by the wrong amount, and
+  // the entrance measures its origin before a correction could land.
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth)
+  // The width only animates when the Contents button changed it: a preview
+  // that opens with the panel already open appears at its final width, and a
+  // window being resized is followed, not chased.
+  // Keyed to the open it was asked for in, so a new preview never inherits it.
+  const [animateWidthFor, setAnimateWidthFor] = useState<number | null>(null)
+  const animateWidth = animateWidthFor === openSeq
+  useEffect(() => {
+    const measure = (): void => {
+      setAnimateWidthFor(null)
+      setWindowWidth(window.innerWidth)
+    }
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [])
+  // Closing a side-by-side panel keeps it rendered while the card narrows, so
+  // the card clips it away instead of leaving an empty strip.
+  const [closingFor, setClosingFor] = useState<number | null>(null)
+  useEffect(() => {
+    if (closingFor === null) return
+    const timer = setTimeout(() => setClosingFor(null), Number(ENTRANCE.duration))
+    return () => clearTimeout(timer)
+  }, [closingFor])
+  // When Contents was last toggled, for the press guard below.
+  const toggledAt = useRef(0)
+  // A load that outlasted the entrance wait was shown on the narrow loading
+  // card: widening it when content lands would move the header's buttons
+  // under a pointer that may be on its way to them. That preview lays the
+  // panel over the body instead, until the user toggles Contents themselves.
+  const [slowOpenFor, setSlowOpenFor] = useState<number | null>(null)
+  useEffect(() => {
+    if (!isLoading) return
+    const timer = setTimeout(() => setSlowOpenFor(openSeq), ENTRANCE_WAIT_MS)
+    return () => clearTimeout(timer)
+  }, [isLoading, openSeq])
+  const toggleContents = (): void => {
+    setSlowOpenFor(null)
+    toggledAt.current = Date.now()
+    setAnimateWidthFor(openSeq)
+    setClosingFor(contentsOpen ? openSeq : null)
+    togglePreviewContents()
+  }
 
   // When the current preview opened, for the press guard below.
   const openedAt = useRef(0)
@@ -248,19 +355,29 @@ export function FilePreviewModal(): React.JSX.Element | null {
     }
     const onMouse = (e: MouseEvent): void => {
       if (!cardRef.current || cardRef.current.contains(e.target as Node)) return
+      // The ⋯ menu is portaled out of the card, and is the card's.
+      if ((e.target as Element).closest?.(`[${PREVIEW_POPOVER_ATTR}]`)) return
+      // A press outside with the menu open only closes the menu (its own
+      // outside-press handling does that), as Escape does. This listener
+      // captures on the window, so it runs before the menu's and still finds
+      // it mounted.
+      if (document.querySelector(`[role="menu"][${PREVIEW_POPOVER_ATTR}]`)) return
       // The second press of a double-click on the link that opened this lands
       // outside the card: leave it alone entirely, focus included.
       if (Date.now() - openedAt.current < OPEN_PRESS_GUARD_MS) return
+      // Toggling Contents moves the card's edge from under the pointer: a
+      // second press on the spot must not land on the backdrop and close.
+      if (Date.now() - toggledAt.current < OPEN_PRESS_GUARD_MS) return
       // A press on the backdrop would otherwise move focus to the page after
       // close has handed it back to the element that opened the preview.
       if (overlayRef.current?.contains(e.target as Node)) e.preventDefault()
       close()
     }
     window.addEventListener('keydown', onKey)
-    window.addEventListener('mousedown', onMouse)
+    window.addEventListener('mousedown', onMouse, true)
     return () => {
       window.removeEventListener('keydown', onKey)
-      window.removeEventListener('mousedown', onMouse)
+      window.removeEventListener('mousedown', onMouse, true)
     }
   }, [targetKey, exiting, close])
 
@@ -318,6 +435,28 @@ export function FilePreviewModal(): React.JSX.Element | null {
     agentFile !== null && actionError !== null && !actionErrorRepeatsBody({ actionError, error, errorCode, isLoading })
   const TitleIcon = agentFile?.ref.kind === 'dir' ? Folder : FileText
 
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+  const geometry = contentsGeometry(windowWidth, rem)
+  const { closedWidth, shift } = geometry
+  const sideBySide = geometry.sideBySide && slowOpenFor !== openSeq
+  const widened = panelOpen && sideBySide
+  const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+  const widthTransition = 'width 170ms cubic-bezier(0.2, 0, 0, 1), left 170ms cubic-bezier(0.2, 0, 0, 1)'
+  // Explicit only while the Contents button exists, so opening the panel is a
+  // change between two pixel widths that can animate; `flexShrink` keeps the
+  // widened card from being squeezed back into the overlay's padding.
+  const cardStyle: React.CSSProperties | undefined = showContents
+    ? {
+        width: widened ? closedWidth + CONTENTS_PANEL_WIDTH : closedWidth,
+        maxWidth: 'none',
+        flexShrink: 0,
+        left: widened ? shift : 0,
+        // Clips the side-by-side panel while the width animates.
+        overflow: 'hidden',
+        transition: animateWidth && !reduceMotion ? widthTransition : undefined
+      }
+    : undefined
+
   return createPortal(
     // Pinned to the top rather than centred: the card only grows downward, so
     // content landing or an error row appearing never moves the button the
@@ -330,6 +469,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
       <div
         ref={cardRef}
         tabIndex={-1}
+        style={cardStyle}
         className="relative w-full max-w-3xl max-h-[80vh] flex flex-col rounded-xl border
           border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg focus:outline-none"
       >
@@ -371,35 +511,33 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 <Filter size={14} />
               </button>
             )}
+            {showContents && (
+              <button
+                type="button"
+                onClick={toggleContents}
+                aria-expanded={contentsOpen}
+                aria-controls={CONTENTS_PANEL_ID}
+                title={contentsOpen ? 'Hide contents' : 'Show contents'}
+                className={
+                  HEADER_ACTION_CLASS +
+                  (contentsOpen
+                    ? ' bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
+                    : ' text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]')
+                }
+              >
+                <TableOfContents size={12} />
+                Contents
+              </button>
+            )}
             {fileActions && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => void revealAgentFile()}
-                  disabled={pendingAction !== null || fileGone}
-                  className={HEADER_ACTION_CLASS}
-                >
-                  {pendingAction === 'reveal' ? (
-                    <Loader2 size={12} className="animate-spin" />
-                  ) : (
-                    <FolderOpen size={12} />
-                  )}
-                  Open folder
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void openAgentFileExternally()}
-                  disabled={pendingAction !== null || fileGone}
-                  className={HEADER_ACTION_CLASS}
-                >
-                  {pendingAction === 'open' ? (
-                    <Loader2 size={12} className="animate-spin" />
-                  ) : (
-                    <ExternalLink size={12} />
-                  )}
-                  Open
-                </button>
-              </>
+              <FileActionsMenu
+                key={targetKey}
+                dismissed={exiting}
+                pendingAction={pendingAction}
+                fileGone={fileGone}
+                onOpen={() => void openAgentFileExternally()}
+                onReveal={() => void revealAgentFile()}
+              />
             )}
             {attachmentTarget && (
               <button
@@ -440,42 +578,57 @@ export function FilePreviewModal(): React.JSX.Element | null {
           </div>
         )}
 
-        {/* Scrollable, so Tab reaches it: the accent ring the links wear, drawn
-            inside so it does not cover the header's rule. */}
-        <div
-          className="px-5 py-4 overflow-auto flex-1 rounded-b-xl focus-visible:outline-2
-            focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)]"
-        >
-          {isLoading ? (
-            <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-              <Loader2 size={12} className="animate-spin" />
-              <span>Loading preview…</span>
-            </div>
-          ) : bodyError ? (
-            <div className="text-xs text-[var(--color-danger)]">{bodyError}</div>
-          ) : notice ? (
-            <div className="text-xs text-[var(--color-text-muted)]">
-              {notice === 'credential'
-                ? 'Preview is off for credential files.'
-                : 'No preview for this file type.'}
-            </div>
-          ) : kind ? (
-            <>
-              <PreviewBody
-                key={targetKey}
-                kind={kind}
-                text={text}
-                filtersEnabled={filtersEnabled}
-              />
-              {truncated && (
-                <div className="mt-3 text-[10px] italic text-[var(--color-text-muted)]">
-                  {agentFile
-                    ? 'Preview truncated — open the file to see the full content.'
-                    : 'Preview truncated — download the file to see the full content.'}
-                </div>
-              )}
-            </>
-          ) : null}
+        {/* The body, and beside it (or over its right edge) the Contents
+            panel. The body keeps the closed card's width whether the panel is
+            open or not, so its text never reflows when the panel toggles. */}
+        <div className="relative flex min-h-0 flex-1">
+          {/* Scrollable, so Tab reaches it: the accent ring the links wear, drawn
+              inside so it does not cover the header's rule. */}
+          <div
+            ref={bodyRef}
+            style={showContents ? { width: closedWidth - CARD_BORDER_X, flex: 'none' } : undefined}
+            className="px-5 py-4 overflow-auto flex-1 min-w-0 rounded-b-xl focus-visible:outline-2
+              focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+          >
+            {isLoading ? (
+              <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
+                <Loader2 size={12} className="animate-spin" />
+                <span>Loading preview…</span>
+              </div>
+            ) : bodyError ? (
+              <div className="text-xs text-[var(--color-danger)]">{bodyError}</div>
+            ) : notice ? (
+              <div className="text-xs text-[var(--color-text-muted)]">
+                {notice === 'credential'
+                  ? 'Preview is off for credential files.'
+                  : 'No preview for this file type.'}
+              </div>
+            ) : kind ? (
+              <>
+                {kind === 'markdown' ? (
+                  <MarkdownPreview key={targetKey} card={markdown.card} body={markdown.body} />
+                ) : (
+                  <PreviewBody key={targetKey} kind={kind} text={text} filtersEnabled={filtersEnabled} />
+                )}
+                {truncated && (
+                  <div className="mt-3 text-[10px] italic text-[var(--color-text-muted)]">
+                    {agentFile
+                      ? 'Preview truncated — open the file to see the full content.'
+                      : 'Preview truncated — download the file to see the full content.'}
+                  </div>
+                )}
+              </>
+            ) : null}
+          </div>
+          {showContents && toc && (panelOpen || (closingFor === openSeq && animateWidth && sideBySide && !reduceMotion)) && (
+            <FilePreviewContents
+              key={targetKey}
+              entries={toc.entries}
+              bodyRef={bodyRef}
+              overlay={!sideBySide}
+              left={closedWidth - CARD_BORDER_X}
+            />
+          )}
         </div>
       </div>
     </div>,
@@ -568,10 +721,6 @@ function PreviewBody({
   text: string
   filtersEnabled: boolean
 }): React.JSX.Element {
-  if (kind === 'markdown') {
-    return <MarkdownPreview text={text} />
-  }
-
   if (kind === 'json') {
     return <JsonPreview text={text} />
   }
@@ -590,8 +739,8 @@ function PreviewBody({
   )
 }
 
-function MarkdownPreview({ text }: { text: string }): React.JSX.Element {
-  const { card, body } = useFrontmatter(text)
+/** Split by the modal (see `useFrontmatter` there), which also reads the headings. */
+function MarkdownPreview({ card, body }: { card: React.JSX.Element | null; body: string }): React.JSX.Element {
   return (
     <>
       {card}
@@ -599,7 +748,7 @@ function MarkdownPreview({ text }: { text: string }): React.JSX.Element {
         <Markdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeHighlight]}
-          components={markdownComponents}
+          components={previewMarkdownComponents}
         >
           {body}
         </Markdown>
