@@ -31,7 +31,14 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 export function useTaskRowsInPlace<T extends { id: string }>(
   rows: T[],
   pageSize: number,
-  scrollSelector: string
+  scrollSelector: string,
+  /**
+   * Where a row first seen after mount goes. `'append'` (the Inbox) keeps
+   * every row above it still; `'prepend'` (a job's Tasks history, newest
+   * first) puts a run the user just started where they look for it, above
+   * any "Show more". Rows already seen keep their order either way.
+   */
+  newRows: 'append' | 'prepend' = 'append'
 ): {
   ordered: T[]
   visible: number
@@ -45,9 +52,12 @@ export function useTaskRowsInPlace<T extends { id: string }>(
     const byId = new Map(rows.map((row) => [row.id, row]))
     const known = new Set(order.current)
     const fresh = rows.filter((row) => !known.has(row.id))
-    if (fresh.length > 0) order.current = [...order.current, ...fresh.map((row) => row.id)]
+    if (fresh.length > 0) {
+      const freshIds = fresh.map((row) => row.id)
+      order.current = newRows === 'prepend' ? [...freshIds, ...order.current] : [...order.current, ...freshIds]
+    }
     return order.current.map((id) => byId.get(id)).filter((row) => row !== undefined)
-  }, [rows])
+  }, [rows, newRows])
 
   const [visible, setVisible] = useState(pageSize)
   const sectionRef = useRef<HTMLElement | null>(null)

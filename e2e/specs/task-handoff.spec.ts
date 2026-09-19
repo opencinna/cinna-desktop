@@ -2,6 +2,12 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 
+/** A row of the job page's Tasks history, found by where it stands: its accessible name ends in the status. */
+function runRow(page: CinnaApp['page'], status: string) {
+  return page.getByRole('region', { name: 'Tasks history', exact: true })
+    .getByRole('button', { name: new RegExp(` — ${status}$`) })
+}
+
 /**
  * Arrange a real local job task/chat without starting a renderer turn. The
  * user hands that existing task to a remote agent through the task page.
@@ -265,12 +271,12 @@ test('an existing desktop task hands off once and preserves its recipient and no
     // Stay on the job page while the actual adapter/surface polls complete the
     // original local attempt. A manual refresh/navigation must not assist it.
     await cinna.page.getByRole('button', { name: `From job ${TITLE}`, exact: true }).click()
-    await expect(cinna.page.getByText('Running', { exact: true })).toBeVisible()
+    await expect(runRow(cinna.page, 'running')).toBeVisible()
     await expect(cinna.page.getByLabel('Running', { exact: true })).toBeVisible()
     fake.state.task!.status = 'completed'
     fake.state.task!.updated_at = new Date().toISOString()
     fake.state.remoteRunning = false
-    await expect(cinna.page.getByText('Succeeded', { exact: true })).toBeVisible({ timeout: 20_000 })
+    await expect(runRow(cinna.page, 'succeeded')).toBeVisible({ timeout: 20_000 })
     await expect(cinna.page.getByLabel('Running', { exact: true })).toHaveCount(0)
     // The attempt is over, so leaving the job page can no longer assist it.
     // The task list lives on the Inbox screen now.

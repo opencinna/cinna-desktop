@@ -341,8 +341,9 @@ test('a job parks on a permission ask, the user answers it in the Inbox, and the
     // **The row's target is the task now**, not the chat — the task is what
     // outlives a conversation that is hidden from the Chats list and is deleted
     // with the run. The conversation is still one click away, from the task.
-    const runRow = cinna.page.getByTitle('Open the task')
-    await expect(runRow).toContainText('Succeeded')
+    const runRow = cinna.page.getByRole('region', { name: 'Tasks history', exact: true })
+      .getByRole('button', { name: / — succeeded$/ })
+    await expect(runRow).toHaveAttribute('title', 'Open the task')
     await runRow.click()
 
     const page = cinna.page

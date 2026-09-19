@@ -82,6 +82,12 @@ interface UIStore {
    * Notes), so a row remounting — a folder re-expanded — does not scroll.
    */
   revealNoteId: string | null
+  /**
+   * A chat whose Chats-list row should scroll into view and flash once, without
+   * the chat being opened. One-shot intent from the task page's "Show in the
+   * Chats list"; the row clears it when it has shown itself.
+   */
+  revealChatId: string | null
   activeExternalAgentId: string | null
   /** Folder agent whose page is open (when activeView === 'local-agent'). */
   activeLocalAgentId: string | null
@@ -116,6 +122,7 @@ interface UIStore {
   setActiveTaskId: (id: string | null) => void
   setActiveNoteId: (id: string | null) => void
   setRevealNoteId: (id: string | null) => void
+  setRevealChatId: (id: string | null) => void
   setActiveExternalAgentId: (id: string | null) => void
   setActiveLocalAgentId: (id: string | null) => void
   setPendingDraftAgentId: (id: string | null) => void
@@ -141,6 +148,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   activeTaskId: null,
   activeNoteId: null,
   revealNoteId: null,
+  revealChatId: null,
   activeExternalAgentId: null,
   activeLocalAgentId: null,
   pendingDraftAgentId: null,
@@ -163,6 +171,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setActiveTaskId: (id) => set({ activeTaskId: id }),
   setActiveNoteId: (id) => set({ activeNoteId: id }),
   setRevealNoteId: (id) => set({ revealNoteId: id }),
+  setRevealChatId: (id) => set({ revealChatId: id }),
   setActiveExternalAgentId: (id) => set({ activeExternalAgentId: id, activeLocalAgentId: null }),
   setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id, activeExternalAgentId: null }),
   setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),

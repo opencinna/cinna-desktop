@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { CircleAlert, CircleCheck, CircleHelp, Loader2, Square, Trash2 } from 'lucide-react'
 import { useChatStore } from '../../stores/chat.store'
 import { useDeleteChat, useInterruptChat } from '../../hooks/useChat'
@@ -23,6 +23,9 @@ const resultIndicators = {
  * a sweep down the list.
  */
 let closeOpenTooltip: (() => void) | null = null
+
+/** How long a row asked to show itself stays lit — long enough to be found. */
+const REVEAL_MS = 1_800
 
 interface ChatItemProps {
   chat: {
@@ -107,6 +110,25 @@ export function ChatItem({ chat, summary: loaded, index }: ChatItemProps): React
 
   const showTooltip = tooltipOpen && !!summary && !!tooltip.style
 
+  // "Show in the Chats list" on a task page: bring this row into view and
+  // flash it once, without opening the chat — the user stays on the task. The
+  // request is one-shot, so a row remounting later does not scroll; and it
+  // waits for the row, which for a chat just moved out of hiding only exists
+  // once the list has been read again.
+  const revealChatId = useUIStore((s) => s.revealChatId)
+  const [revealed, setRevealed] = useState(false)
+  useEffect(() => {
+    if (revealChatId !== chat.id) return
+    triggerRef.current?.scrollIntoView?.({ block: 'nearest' })
+    useUIStore.getState().setRevealChatId(null)
+    setRevealed(true)
+  }, [revealChatId, chat.id, triggerRef])
+  useEffect(() => {
+    if (!revealed) return
+    const timer = setTimeout(() => setRevealed(false), REVEAL_MS)
+    return () => clearTimeout(timer)
+  }, [revealed])
+
   return (
     <div
       ref={tooltip.triggerRef}
@@ -126,7 +148,8 @@ export function ChatItem({ chat, summary: loaded, index }: ChatItemProps): React
           // The portaled tooltip is not a DOM child, so `:hover` ends on the way
           // onto it; the row it describes stays lit for as long as it is open.
           : `text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] ${showTooltip ? 'bg-[var(--color-bg-hover)]' : ''}`
-      }`}
+      } ${revealed ? 'ring-1 ring-inset ring-[var(--color-accent)] bg-[var(--color-accent)]/10' : ''}`}
+      data-revealed={revealed || undefined}
       onClick={() => {
         // Picking a chat from the main Chats list leaves any jobs-context
         // anchor behind — the user is navigating via chats now.

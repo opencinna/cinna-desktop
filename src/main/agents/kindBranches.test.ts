@@ -262,9 +262,9 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   { file: 'src/main/db/jobRunRefresh.ts', category: 'jobType', count: 1, why: 'only legacy remote-origin pointer rows without a Task require adoption' },
   { file: 'src/main/services/jobService.ts', category: 'jobType', count: 5, why: 'validates authored type values and projects historical hidden-chat provenance' },
   { file: 'src/main/db/jobs.ts', category: 'jobType', count: 1, why: 'deletion preserves remote provenance and owns only local-origin chats' },
-  { file: 'src/renderer/src/components/jobs/JobRunRow.tsx', category: 'jobType', count: 7, why: 'presents saved origin, deep links and deletion disclosure; refresh comes from current-task metadata' },
+  { file: 'src/renderer/src/components/jobs/JobRunRow.tsx', category: 'jobType', count: 3, why: 'picks the saved deep link for a run with no task: its chat, or the service run view' },
   { file: 'src/renderer/src/components/jobs/CinnaTaskRunView.tsx', category: 'jobType', count: 3, why: 'presents the original remote conversation using its saved pointer' },
-  { file: 'src/renderer/src/components/jobs/JobDetail.tsx', category: 'jobType', count: 4, why: 'presents the authored definition and dependency editing affordances' },
+  { file: 'src/renderer/src/components/jobs/JobDetail.tsx', category: 'jobType', count: 1, why: 'presents the authored definition and dependency editing affordances' },
   { file: 'src/renderer/src/components/jobs/JobEditForm.tsx', category: 'jobType', count: 2, why: 'owns the authored local versus remote definition fields' },
   { file: 'src/main/services/jobExecution/dependencies.ts', category: 'source', count: 2, why: 'resolves the account or folder owning portable dependency descriptors' },
   // Phase 7 audit: classification is reported separately from behavior removal.
@@ -357,10 +357,10 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
     why: '"Set up" opens the settings tab that owns the dependency'
   },
   {
-    file: 'src/renderer/src/components/tasks/TaskView.tsx',
+    file: 'src/renderer/src/hooks/useOpenAgentPage.ts',
     category: 'source',
-    count: 3,
-    why: 'presents the assignee and the handover origin as a link or as plain text: a server-owned row hidden from the desktop has a name and no page (twice), and a folder id opens the local page where any other opens the external one — the sidebar’s own split; nothing is run or sent'
+    count: 2,
+    why: 'shared by the task page (assignee, handover origin) and the job page (its agents): a server-owned row hidden from the desktop has a name and no page, and a folder id opens the local page where any other opens the external one — the sidebar’s own split; nothing is run or sent'
   },
   {
     file: 'src/renderer/src/components/agents/local/OpenInMenu.tsx',

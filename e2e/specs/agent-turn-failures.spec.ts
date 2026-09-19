@@ -1,6 +1,15 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { test, expect } from '../fixtures/app'
+import { test, expect, type CinnaApp } from '../fixtures/app'
+
+/**
+ * A row of the job page's Tasks history, found by where it stands: its
+ * accessible name ends in the status, and a failure's in "failed: ‹error›".
+ */
+function runRow(page: CinnaApp['page'], status: string) {
+  return page.getByRole('region', { name: 'Tasks history', exact: true })
+    .getByRole('button', { name: new RegExp(` — ${status}(: .*)?$`) })
+}
 
 const AGENT = 'Failure Reporting Agent'
 const PROMPT = 'Validate the quarterly briefing before publication.'
@@ -100,8 +109,8 @@ for (const streaming of [true, false]) {
       await cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true }).fill('I can retry after fixing the report.')
       await expect(cinna.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
       await cinna.page.getByRole('button', { name: `From job ${title}`, exact: true }).click()
-      await expect(cinna.page.getByText('Failed', { exact: true })).toBeVisible()
-      await expect(cinna.page.getByText('Succeeded', { exact: true })).toHaveCount(0)
+      await expect(runRow(cinna.page, 'failed')).toBeVisible()
+      await expect(runRow(cinna.page, 'succeeded')).toHaveCount(0)
       await expect(cinna.page.getByLabel('Running', { exact: true })).toHaveCount(0)
       expect(fake.requests).toEqual([{ method: streaming ? 'message/stream' : 'message/send', text: PROMPT }])
       expect(await cinna.page.evaluate(() => window.api.providers.list())).toEqual([])

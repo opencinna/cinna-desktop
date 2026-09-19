@@ -16,6 +16,11 @@ async function openJob(cinna: CinnaApp, title: string): Promise<void> {
   // The Job row precedes its same-titled entry in the separate Tasks region.
   await cinna.page.getByText(title, { exact: true }).first().click()
 }
+/** A row of the job page's Tasks history, found by where it stands: its accessible name ends in the status. */
+function runRow(page: CinnaApp['page'], status: string) {
+  return page.getByRole('region', { name: 'Tasks history', exact: true })
+    .getByRole('button', { name: new RegExp(` — ${status}$`) })
+}
 function mutationCounts(fake: Awaited<ReturnType<typeof jobRemoteService>>) {
   return {
     creates: fake.requests.filter((row) => row.method === 'POST' && row.path === '/api/v1/tasks/').length,
@@ -25,7 +30,7 @@ function mutationCounts(fake: Awaited<ReturnType<typeof jobRemoteService>>) {
 }
 
 /** Job type remains local provenance while its current bound Task owns refresh. */
-test('a local-origin Job handed remote exposes bound-task refresh without another dispatch', async ({ cinna }) => {
+test('a local-origin Job handed remote refreshes through its bound task without another dispatch', async ({ cinna }) => {
   const fake = await jobRemoteService()
   try {
     await cinna.skipOnboarding()
@@ -66,8 +71,7 @@ test('a local-origin Job handed remote exposes bound-task refresh without anothe
       .filter((message) => message.role === 'agent_transition').map((message) => message.content)).toEqual([RECEIPT])
     await cinna.page.getByRole('button', { name: 'Open the chat', exact: true }).click()
     await cinna.page.getByRole('button', { name: `From job ${TITLE}`, exact: true }).click()
-    const refresh = cinna.page.getByRole('button', { name: 'Refresh status', exact: true })
-    await expect(refresh).toBeVisible()
+    await expect(runRow(cinna.page, 'running')).toBeVisible()
     const expected = { id: run.id, type: 'local', taskId: original.id, localChatId: original.chatId,
       refreshMode: 'bound_task', status: 'running' }
     expect((await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId))[0]).toMatchObject(expected)
@@ -76,17 +80,17 @@ test('a local-origin Job handed remote exposes bound-task refresh without anothe
     fake.state.task!.status = 'completed'
     fake.state.task!.updated_at = new Date().toISOString()
     fake.state.remoteRunning = false
-    await refresh.click()
-    await expect(cinna.page.getByText('Succeeded', { exact: true })).toBeVisible({ timeout: 20_000 })
-    expect(fake.requests.filter((row) => row.path.endsWith('/detail')).length).toBeGreaterThan(detailReads)
-    // Scheduler reads may coalesce with the button. The public refresh result must
-    // independently use the bound Task despite the unchanged local-origin type.
+    // No per-row refresh any more: the bound Task's own refresh moves the row.
+    await expect(runRow(cinna.page, 'succeeded')).toBeVisible({ timeout: 20_000 })
+    // The public refresh result must independently use the bound Task despite
+    // the unchanged local-origin type, and read the service to do it.
     const refreshed = await cinna.page.evaluate((id) => window.api.jobs.refreshRun(id, { force: true }), run.id)
     expect(refreshed).toMatchObject({ ...expected, status: 'succeeded' })
+    expect(fake.requests.filter((row) => row.path.endsWith('/detail')).length).toBeGreaterThan(detailReads)
     expect(mutationCounts(fake)).toEqual({ creates: 1, executes: 1, local: 0 })
     await restart(cinna)
     await openJob(cinna, TITLE)
-    await expect(cinna.page.getByText('Succeeded', { exact: true })).toBeVisible()
+    await expect(runRow(cinna.page, 'succeeded')).toBeVisible()
     expect(await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId))
       .toEqual([expect.objectContaining({ ...expected, status: 'succeeded' })])
     expect(await cinna.page.evaluate(() => window.api.tasks.list())).toHaveLength(1)
@@ -139,7 +143,7 @@ test('an accepted main-owned Job starts one ACP step without a renderer model pr
     await restart(cinna)
     await cinna.page.evaluate(() => window.api.localAgents.rescan())
     await openJob(cinna, title)
-    await expect(cinna.page.getByText('Succeeded', { exact: true })).toBeVisible()
+    await expect(runRow(cinna.page, 'succeeded')).toBeVisible()
     await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
     await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true })
       .getByRole('button', { name: title }).click()
@@ -205,7 +209,7 @@ test('a pointer-only historical remote Job run adopts one Task and survives rest
     fake.state.task.updated_at = new Date().toISOString()
     fake.state.remoteRunning = false
     fake.state.includeInLists = true
-    await expect(cinna.page.getByText('Succeeded', { exact: true })).toBeVisible({ timeout: 20_000 })
+    await expect(runRow(cinna.page, 'succeeded')).toBeVisible({ timeout: 20_000 })
     expect(await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), job.id))
       .toEqual([expect.objectContaining({ id: runId, taskId: adopted.taskId, status: 'succeeded' })])
     expect(await cinna.page.evaluate(() => window.api.tasks.list())).toHaveLength(1)

@@ -3,14 +3,18 @@ import { useUIStore } from '../stores/ui.store'
 
 const random = (min: number, max: number): number => min + Math.random() * (max - min)
 
-/** One visible, explicitly opted-in secondary button glows at a time. */
+/**
+ * One visible, explicitly opted-in secondary button glows at a time. A card
+ * marked `data-ambient-card` (the job and task pages' Details) takes its turn
+ * among them, so a card and a button never glow together.
+ */
 export function useAmbientButtons(): void {
   const enabled = useUIStore((s) => s.extraUIAnimation)
   useEffect(() => {
     if (!enabled || !window.matchMedia) return
     const motion = window.matchMedia('(prefers-reduced-motion: reduce)')
     let timer: ReturnType<typeof setTimeout>
-    let current: HTMLButtonElement | undefined
+    let current: HTMLElement | undefined
 
     const clear = (): void => {
       clearTimeout(timer)
@@ -21,7 +25,7 @@ export function useAmbientButtons(): void {
     }
     const play = (): void => {
       if (document.hidden || motion.matches) return
-      const candidates = Array.from(document.querySelectorAll<HTMLButtonElement>('button.ambient-button:not(:disabled)'))
+      const candidates = Array.from(document.querySelectorAll<HTMLElement>('button.ambient-button:not(:disabled), .ambient-button[data-ambient-card]'))
         .filter((button) => {
           if (!button.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false
           const bounds = button.getBoundingClientRect()

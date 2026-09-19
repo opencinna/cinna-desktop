@@ -4,6 +4,7 @@ import { useUIStore } from '../../stores/ui.store'
 import { useJob, useDeleteJob } from '../../hooks/useJobs'
 import { JobEditForm, type JobEditFormHandle } from './JobEditForm'
 import { DeleteJobConfirm } from './JobItem'
+import { unwrapIpcError } from '../../utils/ipcError'
 
 /**
  * Full-page edit screen for a job. Wraps `JobEditForm` (which still auto-saves
@@ -20,6 +21,7 @@ export function JobEditPage(): React.JSX.Element {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   if (!activeJobId) {
     return (
@@ -68,7 +70,10 @@ export function JobEditPage(): React.JSX.Element {
           </h1>
           <button
             type="button"
-            onClick={() => setConfirmingDelete(true)}
+            onClick={() => {
+              setDeleteError(null)
+              setConfirmingDelete(true)
+            }}
             className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md
               border border-[var(--color-border)] text-[var(--color-text-muted)]
               hover:text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors"
@@ -109,14 +114,17 @@ export function JobEditPage(): React.JSX.Element {
         <DeleteJobConfirm
           jobTitle={job.title}
           pending={deleteJob.isPending}
+          error={deleteError}
           onCancel={() => setConfirmingDelete(false)}
           onConfirm={() => {
+            setDeleteError(null)
             // useDeleteJob.onSuccess handles routing (clears activeJobId and
             // switches activeView back to 'chat' when this job was active),
-            // so we just close the modal.
+            // so we just close the modal. A failure keeps it open with the
+            // reason in it, as on JobDetail (§6).
             deleteJob.mutate(job.id, {
               onSuccess: () => setConfirmingDelete(false),
-              onError: () => setConfirmingDelete(false)
+              onError: (err) => setDeleteError(unwrapIpcError(err, 'The job could not be deleted.'))
             })
           }}
         />

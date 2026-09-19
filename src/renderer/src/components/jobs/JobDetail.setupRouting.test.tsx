@@ -25,7 +25,8 @@ vi.mock('../../hooks/useJobs', () => ({
   }),
   useJobRuns: () => ({ data: [] }),
   useExecuteJob: () => ({ mutate: vi.fn(), isPending: false }),
-  useJobDependencyStatus: () => ({ data: deps.current })
+  useJobDependencyStatus: () => ({ data: deps.current }),
+  useDeleteJob: () => ({ mutate: vi.fn(), isPending: false })
 }))
 vi.mock('../../hooks/useCinnaRunPoll', () => ({ useCinnaRunPoll: () => undefined }))
 vi.mock('../../hooks/useAgents', () => ({ useAgents: () => ({ data: [] }) }))

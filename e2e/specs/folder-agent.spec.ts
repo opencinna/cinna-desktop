@@ -72,7 +72,7 @@ test('D3 the job agent picker groups a folder agent under Local with the LOCAL-F
   const { page } = cinna
   await page.getByRole('button', { name: 'Jobs', exact: true }).click()
   await page.getByText('Pick me', { exact: true }).click()
-  await page.getByRole('button', { name: 'Edit job' }).click()
+  await page.getByRole('button', { name: 'Edit', exact: true }).click()
   await page.getByRole('button', { name: 'Add', exact: true }).click()
 
   const dialog = page.getByRole('dialog', { name: 'Agents & Connectors' })

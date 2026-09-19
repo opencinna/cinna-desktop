@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
+import { useUIStore } from '../stores/ui.store'
 import { useEffect } from 'react'
 import { type ChatRouter } from '../../../shared/chatRouting'
 
@@ -104,6 +105,11 @@ export function useTrashList() {
  * Invalidates `['chats']` so the chat appears immediately, and `['jobs']` so
  * any run row showing the "Move to Chats" button updates to reflect the new
  * `chatHidden = false` state.
+ *
+ * A failure withdraws a pending reveal of that chat here, at hook level: the
+ * row that would consume `revealChatId` never appears for a chat still hidden,
+ * and a `mutate`-level callback is dropped once the caller unmounted — which
+ * would leave the reveal armed for whenever the chat next shows up.
  */
 export function useShowChatInList() {
   const queryClient = useQueryClient()
@@ -112,6 +118,10 @@ export function useShowChatInList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['chats'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+    onError: (_err, chatId) => {
+      const ui = useUIStore.getState()
+      if (ui.revealChatId === chatId) ui.setRevealChatId(null)
     }
   })
 }

@@ -1,11 +1,11 @@
 import { useCallback, useState } from 'react'
-import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
 import { useUIStore } from '../stores/ui.store'
 import { useChatStream } from './useChatStream'
 import { INBOX_QUERY_KEY } from './useInbox'
 import { unwrapIpcError } from '../utils/ipcError'
-import type { DesktopTaskTarget, TaskDto } from '../../../shared/tasks'
+import type { DesktopTaskTarget, TaskDeletePreview, TaskDeleteResult, TaskDto } from '../../../shared/tasks'
 import type { TaskStatus } from '../../../shared/taskStatus'
 
 /**
@@ -312,4 +312,56 @@ export function useRerunTask(): {
   )
 
   return { rerun, isPending }
+}
+
+/**
+ * Delete a task from its page. Main removes the task, and — for a task a job
+ * run produced — that run and its chat, in one transaction; the result says
+ * which, so only the caches that changed are dropped.
+ *
+ * `onDeleted` is a hook-level option, not a `mutate`-level callback: TanStack
+ * drops the latter once the calling component has unmounted, and the confirm
+ * dialog that calls `mutate` is exactly that component. The page owning this
+ * hook outlives the dialog, so leaving the page cannot be lost with it.
+ */
+export function useDeleteTask(options: { onDeleted?: (result: TaskDeleteResult) => void } = {}) {
+  const queryClient = useQueryClient()
+  const { onDeleted } = options
+  return useMutation({
+    mutationFn: (taskId: string) => window.api.tasks.delete(taskId),
+    onSuccess: (result, taskId) => {
+      onDeleted?.(result)
+      // Outside `['tasks']`: the page's own read of the task, which would
+      // otherwise answer a later visit from a cache of a task that is gone.
+      queryClient.removeQueries({ queryKey: TASK_QUERY_KEY(taskId) })
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      void queryClient.invalidateQueries({ queryKey: ['chats'] })
+      void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
+      if (result.chatDeleted && result.chatId) {
+        void queryClient.invalidateQueries({ queryKey: ['trash'] })
+        queryClient.removeQueries({ queryKey: ['chat', result.chatId] })
+        const chatStore = useChatStore.getState()
+        if (chatStore.activeChatId === result.chatId) chatStore.setActiveChatId(null)
+      }
+    }
+  })
+}
+
+/**
+ * Read what Delete task would remove before its confirm dialog opens, so the
+ * dialog appears with its final copy and never grows under the pointer
+ * (`ux_rules.md` §1, §5). Main answers from the same predicate the delete
+ * uses. A mutation rather than a query: it runs once per click, and the
+ * trigger shows its pending state while it does.
+ *
+ * `onReady` is hook-level, so it runs even if the menu item that asked has
+ * unmounted — the component owning this hook decides what to open.
+ */
+export function useTaskDeletePreview(options: { onReady?: (preview: TaskDeletePreview) => void } = {}) {
+  const { onReady } = options
+  return useMutation({
+    mutationFn: (taskId: string) => window.api.tasks.deletePreview(taskId),
+    onSuccess: (preview) => onReady?.(preview)
+  })
 }

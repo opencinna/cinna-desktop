@@ -1,7 +1,4 @@
 import { useMemo, useState } from 'react'
-import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -41,14 +38,15 @@ import { useUIStore } from '../../stores/ui.store'
 import { readinessBlocksTurn } from '../../../../shared/agentDrivers'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { unwrapIpcError } from '../../utils/ipcError'
-import { markdownComponents } from '../../utils/markdownComponents'
 import { TaskStatusIcon } from './TaskStatusIcon'
 import { TaskStatusPill } from './TaskStatusPill'
 import { PendingHandoffControl } from './PendingHandoffControl'
 import { HandOffTaskControl } from './HandOffTaskControl'
 import { TaskList } from './TaskList'
 import { TaskRuntimeControl } from './TaskRuntimeControl'
-import { isFolderAgentId } from '../../../../shared/localAgents'
+import { TaskActionsMenu } from './TaskActionsMenu'
+import { Detail, HEADER_BUTTON, Prose, Section } from './DetailParts'
+import { hasAgentPage, useOpenAgentPage } from '../../hooks/useOpenAgentPage'
 import type { TaskArtifact, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
 
@@ -304,7 +302,7 @@ function TaskPage({
   /* Openable on the same terms as the assignee: a remote agent hidden from the
      desktop has a name and no page, so it stays plain text. */
   const originAgent =
-    originFound && (originFound.source !== 'remote' || originFound.enabled) ? originFound : null
+    originFound && hasAgentPage(originFound) ? originFound : null
   const originName = ((): string | null => {
     if (!requester) return null
     if (!requester.originAgentId) return 'Outside the app'
@@ -320,23 +318,9 @@ function TaskPage({
     open. `setSidebarTab('agents')` so the sidebar shows the row that was opened.
   */
   const assigneeAgent = task.assignee.kind === 'agent' && task.assignee.agentId && !agentsPending
-    ? (agents ?? []).find((a) => a.id === task.assignee.agentId && (a.source !== 'remote' || a.enabled)) ?? null
+    ? (agents ?? []).find((a) => a.id === task.assignee.agentId && hasAgentPage(a)) ?? null
     : null
-  const setAgentPageMode = useUIStore((s) => s.setAgentPageMode)
-  const setSidebarTab = useUIStore((s) => s.setSidebarTab)
-  const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
-  const setActiveExternalAgentId = useUIStore((s) => s.setActiveExternalAgentId)
-  const openAgentPage = (agent: { id: string }): void => {
-    setAgentPageMode('chat')
-    setSidebarTab('agents')
-    if (isFolderAgentId(agent.id)) {
-      setActiveLocalAgentId(agent.id)
-      setActiveView('local-agent')
-    } else {
-      setActiveExternalAgentId(agent.id)
-      setActiveView('external-agent')
-    }
-  }
+  const openAgentPage = useOpenAgentPage()
 
   const handleBackToJob = (): void => {
     if (!task.jobId) return
@@ -434,7 +418,7 @@ function TaskPage({
               <button
                 type="button"
                 onClick={() => void openUrl(task.remote?.url as string)}
-                className="p-1.5 rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
+                className={`${HEADER_BUTTON} px-2 border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors`}
                 // The tooltip and the announced name are one sentence (§10).
                 title="Open this task in the service it is connected to"
                 aria-label="Open this task in the service it is connected to"
@@ -446,13 +430,16 @@ function TaskPage({
               <button
                 type="button"
                 onClick={() => openChat(task.chatId as string)}
-                className="inline-flex items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-md text-xs font-medium
-                  bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors"
+                // The same box as ⋯ beside it and the job page's header buttons.
+                className={`${HEADER_BUTTON} whitespace-nowrap px-3 border-[var(--color-accent)]
+                  bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] hover:border-[var(--color-accent-hover)] text-white transition-colors`}
               >
                 <MessageSquare size={12} />
                 Open the chat
               </button>
             )}
+            {/* Last: occasional actions, the destructive one inside it (§2). */}
+            <TaskActionsMenu task={task} onDeleted={back.go} onError={setOpenError} />
           </div>
         </header>
         {/*
@@ -508,7 +495,9 @@ function TaskPage({
 
           <aside
             aria-label="Details"
-            className="self-start rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-3"
+            // Takes its turn in the secondary buttons' border glow (useAmbientButtons).
+            data-ambient-card
+            className="ambient-button self-start rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-3"
           >
             {/*
               Label left, value right, one fact per row. Two columns of rows
@@ -1360,41 +1349,6 @@ function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
-function Section({
-  title,
-  children
-}: {
-  title: string
-  children: React.ReactNode
-}): React.JSX.Element {
-  return (
-    <section>
-      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">{title}</h2>
-      {children}
-    </section>
-  )
-}
-
-function Prose({ children }: { children: string }): React.JSX.Element {
-  return (
-    <div className="text-xs text-[var(--color-text)] leading-relaxed markdown-body">
-      <Markdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
-        components={markdownComponents}
-      >
-        {children}
-      </Markdown>
-    </div>
-  )
-}
-
-/**
- * One fact: label on the left, value on the right. A fact with nothing to say
- * is **not rendered** rather than rendered with a dash: "Finished —" on a task
- * that is still running reads as an error where an absent row reads as what it
- * is — so callers leave the row out, and an empty value renders nothing too.
- */
 function DelegatedTaskLink({ taskId }: { taskId: string }): React.JSX.Element {
   const query = useTask(taskId)
   const openTask = useOpenTask()
@@ -1412,27 +1366,6 @@ function DelegatedTaskLink({ taskId }: { taskId: string }): React.JSX.Element {
     className="block max-w-full truncate font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]">
     {query.data.title}
   </button>
-}
-
-function Detail({
-  label,
-  children,
-  wide = false
-}: {
-  label: string
-  children: React.ReactNode
-  /** The value takes the rest of the row, so a truncating child has a width to truncate against. */
-  wide?: boolean
-}): React.JSX.Element | null {
-  if (children === null || children === undefined || children === '') return null
-  return (
-    <div className="flex min-w-0 items-baseline justify-between gap-3">
-      <dt className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">{label}</dt>
-      <dd className={`m-0 min-w-0 break-words text-right text-xs text-[var(--color-text-secondary)] ${wide ? 'flex-1' : ''}`}>
-        {children}
-      </dd>
-    </div>
-  )
 }
 
 /**

@@ -253,6 +253,9 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     () => newChatRouter({ agentIds: Array.from(agentIds), mcpIds: Array.from(mcpIds) }),
     [agentIds, mcpIds]
   )
+  const directAgent = router === 'direct'
+    ? (agents ?? []).find((a) => agentIds.has(a.id)) ?? null
+    : null
 
   const selectedCinnaAgent = (cinnaAgents ?? []).find((a) => a.id === cinnaAgentId)
 
@@ -499,9 +502,11 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
 
       {/* Routing badge pinned to the form's bottom-right corner. Default
           tooltip placement (opens upward) keeps it clear of the form edge. */}
-      {type === 'local' && (
+      {/* Named for where a direct job's one agent runs, as the new-chat
+          composer does — and not shown for a direct job with no agent. */}
+      {type === 'local' && (router !== 'direct' || directAgent) && (
         <div className="flex justify-end pt-1">
-          <RouterBadge router={router} />
+          <RouterBadge router={router} connectionAgent={directAgent} agentName={directAgent?.name} />
         </div>
       )}
     </div>

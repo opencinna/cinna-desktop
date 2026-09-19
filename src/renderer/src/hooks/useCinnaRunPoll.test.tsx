@@ -6,7 +6,7 @@ vi.mock('./useCinna', () => ({ useRefreshCinnaRun: () => ({ mutate: refresh }) }
 import { useCinnaRunPoll } from './useCinnaRunPoll'
 const run = (refreshMode: JobRunData['refreshMode'], status: JobRunData['status'] = 'running'): JobRunData => ({
   id: 'run', jobId: 'job', userId: 'user', type: 'cinna_task', localChatId: null,
-  cinnaTaskId: 'remote', cinnaShortCode: null, status, errorMessage: null, startedAt: null,
+  cinnaTaskId: 'remote', cinnaShortCode: null, status, errorMessage: null, startedAt: null, taskLive: true,
   finishedAt: null, createdAt: new Date(0), taskId: null, chatHidden: false, refreshMode
 })
 beforeEach(() => { vi.useFakeTimers(); refresh.mockClear() })

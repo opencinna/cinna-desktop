@@ -34,11 +34,13 @@ vi.mock('../../hooks/useJobs', () => ({
   useJob: () => ({ data: jobState.current, isLoading: false }),
   useJobRuns: () => ({ data: [] }),
   useExecuteJob: () => exec,
-  useJobDependencyStatus: () => ({ data: [] })
+  useJobDependencyStatus: () => ({ data: [] }),
+  useDeleteJob: () => ({ mutate: vi.fn(), isPending: false })
 }))
 vi.mock('../../hooks/useCinnaRunPoll', () => ({ useCinnaRunPoll: () => undefined }))
+const agentsState = vi.hoisted(() => ({ current: [] as Array<Record<string, unknown>> }))
 vi.mock('../../hooks/useAgents', () => ({
-  useAgents: () => ({ data: [{ id: 'a1', name: 'Invoice Checker' }] })
+  useAgents: () => ({ data: agentsState.current })
 }))
 vi.mock('../../hooks/useChatModes', () => ({ useChatModes: () => ({ data: [] }) }))
 vi.mock('../../hooks/useMcp', () => ({ useMcpProviders: () => ({ data: [] }) }))
@@ -95,6 +97,7 @@ function runButton(): HTMLButtonElement {
 }
 
 beforeEach(() => {
+  agentsState.current = [{ id: 'a1', name: 'Invoice Checker' }]
   exec.mutate.mockClear()
   exec.error = null
   jobState.current = job()
@@ -163,8 +166,11 @@ describe('the job detail view for a job this device cannot run', () => {
     // for another.
     jobState.current = job({ agentIds: ['a1'] })
     render(<JobDetail />)
+    // A direct job names where its one agent runs, as the new-chat composer
+    // does — not "Direct".
     const badge = screen.getByRole('status')
-    expect(badge.getAttribute('aria-label')).toBe('Direct agent connection')
+    expect(badge.getAttribute('aria-label')).toBe('Remote agent connection')
+    expect(badge.textContent).toBe('Remote')
     expect(screen.queryByText('Agent unavailable')).toBeNull()
     expect(screen.getByText('Invoice Checker')).toBeTruthy()
   })
@@ -236,4 +242,19 @@ it.each([
   render(<JobDetail />)
   expect(screen.getByRole('status', { name: label })).toBeTruthy()
   expect(screen.queryByRole('status', { name: 'Direct agent connection' })).toBeNull()
+})
+
+describe('the router badge on a direct job', () => {
+  it('reads the agent’s location for a folder agent', () => {
+    agentsState.current = [{ id: 'folder:m1', name: 'Ledger Folder', source: 'folder' }]
+    jobState.current = job({ agentIds: ['folder:m1'] })
+    render(<JobDetail />)
+    expect(screen.getByRole('status', { name: 'Local agent connection' }).textContent).toBe('Local')
+  })
+
+  it('is not shown for a direct job with no agent, as the composer shows none', () => {
+    jobState.current = job({ agentIds: [], mcpProviderIds: [] })
+    render(<JobDetail />)
+    expect(screen.queryByRole('status')).toBeNull()
+  })
 })

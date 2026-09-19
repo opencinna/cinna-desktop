@@ -46,7 +46,7 @@ test('A2 a fixed site shows a plain sentence with no channel or class name', asy
   )
   await page.getByRole('button', { name: 'Jobs', exact: true }).click()
   await page.getByText('Editable', { exact: true }).click()
-  await page.getByRole('button', { name: 'Edit job' }).click()
+  await page.getByRole('button', { name: 'Edit', exact: true }).click()
   const title = page.getByRole('textbox').first()
   await title.fill('')
   await page.getByRole('button', { name: 'Save', exact: true }).click()

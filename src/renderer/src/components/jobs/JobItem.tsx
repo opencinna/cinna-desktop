@@ -207,6 +207,8 @@ interface DeleteJobConfirmProps {
   pending: boolean
   onCancel: () => void
   onConfirm: () => void
+  /** Why the last attempt failed. Shown last, so it moves nothing above it. */
+  error?: string | null
 }
 
 /**
@@ -217,15 +219,21 @@ export function DeleteJobConfirm({
   jobTitle,
   pending,
   onCancel,
-  onConfirm
+  onConfirm,
+  error
 }: DeleteJobConfirmProps): React.JSX.Element {
   const modalRef = useRef<HTMLDivElement>(null)
+  // Undismissable while the delete runs (`ux_rules.md` §5): closing would
+  // cancel nothing and only hide what is happening.
+  const pendingRef = useRef(pending)
+  pendingRef.current = pending
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onCancel()
+      if (e.key === 'Escape' && !pendingRef.current) onCancel()
     }
     const onClick = (e: MouseEvent): void => {
+      if (pendingRef.current) return
       if (modalRef.current && !modalRef.current.contains(e.target as Node)) onCancel()
     }
     window.addEventListener('keydown', onKey)
@@ -237,9 +245,13 @@ export function DeleteJobConfirm({
   }, [onCancel])
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25">
+    // Anchored at a fixed top, like the task delete dialog: a line appearing
+    // under the buttons lengthens the card downwards and moves neither (§1).
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/25 pt-[20vh]">
       <div
         ref={modalRef}
+        role="dialog"
+        aria-label="Delete job"
         className="app-popover-surface w-96 rounded-lg border border-[var(--color-border)] shadow-xl p-5 space-y-4"
       >
         <div className="flex items-center gap-2 text-sm font-medium text-red-400">
@@ -254,7 +266,8 @@ export function DeleteJobConfirm({
           <button
             type="button"
             onClick={onCancel}
-            className="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            disabled={pending}
+            className="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
@@ -267,6 +280,11 @@ export function DeleteJobConfirm({
             {pending ? 'Deleting…' : 'Delete'}
           </button>
         </div>
+        {error && (
+          <div role="alert" className="text-[11px] leading-relaxed text-[var(--color-danger)]">
+            {error}
+          </div>
+        )}
       </div>
     </div>,
     document.body

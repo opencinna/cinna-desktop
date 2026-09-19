@@ -5,6 +5,12 @@ import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine } from '../fixtures
 import { splitTurnHeader } from '../fixtures/turnHeader'
 import type { TaskScript } from '../../src/shared/taskScript'
 
+/** A row of the job page's Tasks history, found by where it stands: its accessible name ends in the status. */
+function runRow(page: CinnaApp['page'], status: string) {
+  return page.getByRole('region', { name: 'Tasks history', exact: true })
+    .getByRole('button', { name: new RegExp(` — ${status}$`) })
+}
+
 /**
  * Real folder scaffolds, configured engine launcher, ACP processes, Jobs Run,
  * persistence and Inbox. The fake controls only agent replies over loopback.
@@ -107,7 +113,7 @@ async function verifyCompleted(cinna: CinnaApp, fake: ScriptAcpEngine, jobId: st
   expect(chat?.messages.filter((message) => message.role === 'error')).toEqual([])
   expect(fake.unexpected).toEqual([]) // Catalogue reads allowed; model inference is not.
   await cinna.page.getByRole('button', { name: `From job ${TITLE}`, exact: true }).click()
-  await expect(cinna.page.getByText('Succeeded', { exact: true })).toBeVisible()
+  await expect(runRow(cinna.page, 'succeeded')).toBeVisible()
   await expect(cinna.page.getByLabel('Running', { exact: true })).toHaveCount(0)
 }
 
