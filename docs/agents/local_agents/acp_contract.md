@@ -667,3 +667,20 @@ Inherited MCP isolation requires preserving explicit per-server disables when th
 A fresh Codex utility session in Default collaboration mode exposed only `request_user_input`; a valid call returned “unavailable in Default mode,” and a fabricated mode-changing tool was unsupported. This establishes no usable tool action for that configuration, not an empty tool-schema array. Same-process session/load retained a deliberately saved Plan mode until explicit Default setup. Resumed turns, model changes and auxiliary model requests then retained the restricted tool sets. Applying restrictions only to thread configuration had exposed native tools in auxiliary requests; the final probe covers both layers.
 
 The actual production policy helper passed separate cases using its own configuration discovery, wrapper and catalog output with the installed digest-verified adapter. Chat and title plans produced identical process keys and wrappers while separate sessions received their own exact developer/system instructions. The title session had no chat prompt, no instruction prefix in user input and no usable tool. The [ledger](runtime_conductor_probe_results.json) retains exact transforms, feature flags, observations and limits. Cross-process resume, cancellation, list changes, concurrent tool execution, other binaries and authenticated model use require separate verification.
+
+## Ordinary-folder handover evidence — 2026-09-19
+
+The [handover probe ledger](../../../drafts/cross_agents_handover_bus/probe_results.md) and the
+pinned interface clauses extend MCP evidence to native-tool folder sessions. Claude 2.1.276,
+Codex 0.155.0 and OpenCode 1.18.27 called the Cinna loopback server and called it again after
+same-process `session/load`, using isolated HOME and loopback fake providers. Claude/Codex
+also kept two session bearers isolated on one adapter process. This supersedes the older
+"descriptor accepted only" limitation for these tested versions and conditions, without
+claiming authenticated model behavior or cross-process continuity.
+
+Sibling writes require separate treatment: Claude Ask raises an edit ask; Codex's two desktop
+modes deny ordinary sibling writes through workspace-write, with explicit escalation in Ask
+raising an execute ask. `allow_once` then writes in both measured Ask cases. Isolated automatic
+reviewers could not evaluate the fake-provider responses and refused; their real decisions
+remain unverified. OpenCode's explicit ask policy raised external-directory and edit asks,
+and allow_once wrote. The ledger gives exact commands, shapes, limits and the filesystem control.

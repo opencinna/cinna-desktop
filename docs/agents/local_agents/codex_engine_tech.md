@@ -172,3 +172,16 @@ Policy fixtures cover executable/argument quoting, immutable generations, authen
 - Run focused Vitest files or `npm test`, plus `npm run typecheck` and `npm run build`. The full E2E suite is a separate manual validation.
 - `npm run test:packaging` covers dependency/build-hook and isolated-environment regressions separately from Vitest. The manual [packaged runtime checks](../../development/distribution/packaged_runtime.md#commands-and-coverage) use actual shipped files; macOS arm64 initialization passed with the fake app-server, including a check-runner Node path containing spaces. No Windows/Linux runtime result is implied by the build guard or Windows fixture launcher.
 - No real paid Codex model turn, live account login flow, actual automatic-review decision or native sandbox enforcement is established by these tests; the contract's provider is a loopback fake. Nothing yet drives a whole user flow on the real binary — the registry's `flow` column names the step that would. The exact restricted CLI/local-provider evidence is recorded in [the ACP contract](acp_contract.md); other CLI versions/platforms, forgotten-session error shapes and provider/configuration variations remain external validation limits.
+
+## File handover requester boundary
+
+The 0.155.0 [pinned contract](contracts/codex_interface.md) checks sibling writes outside both
+cwd and system temp roots. Both `read-only` and `agent` use workspace-write and deny a normal
+shell write without an ACP ask. Explicit escalation in `read-only` raises an execute ask;
+`allow_once` then writes. The isolated `agent` reviewer refuses invalid fake-provider review
+JSON; authenticated automatic-review decisions remain unverified.
+
+Ordinary-folder MCP discovery uses Responses `tool_search_call` and definitions returned in
+`tool_search_output`. Two bearer sessions and same-process load reach their own providers.
+Keep descriptors in session RPCs, outside `CODEX_CONFIG` and the launcher's process key.
+See the [measured handover ledger](../../../drafts/cross_agents_handover_bus/probe_results.md).

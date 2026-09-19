@@ -947,3 +947,13 @@ through this route, so Google accepts all three as written. Both provider paths 
 are now confirmed against a real credential: an Anthropic second credential as a custom
 `@ai-sdk/anthropic` entry, and Gemini as a custom `@ai-sdk/openai-compatible` entry here. An
 `openai` custom entry has still never been exercised on the wire against the real provider.
+
+## Native-folder handover probe — 2026-09-19
+
+The isolated [reproduction](../../../scripts/probes/handover-folder-opencode.mjs), with
+OpenCode 1.18.27 and a loopback fake provider, offers native tools alongside Cinna MCP tools.
+It calls Cinna before and after same-process `session/load`. A sibling `write` under explicit
+`* : ask` produces external-directory (`other`) and file (`edit`) permission asks; answering
+`allow_once` leaves the exact marker on disk. This is a native-tool policy probe, not an
+assertion about every adopted folder's own permission configuration. See the
+[full ledger and limits](../../../drafts/cross_agents_handover_bus/probe_results.md).

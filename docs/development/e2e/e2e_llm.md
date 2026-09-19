@@ -218,3 +218,31 @@ Sidebar tabs `Chats` `Jobs` `Notes` `Agents` (use `exact: true`) · onboarding `
 - **A populated status button has a dynamic name.** Use a role locator starting with `Agent status`: its title adds the agent count and worst severity once snapshots exist. The per-card Refresh title comes from the main snapshot’s `refreshDescription`. `agent-status-intents.spec.ts` runs a real `/run:status` catalog command with a marker file; only manual refresh may append to it. Batch/read/after_turn must reveal changed STATUS.md content without touching the marker. A permission turn persists both the original tool ID and a separate `cinna_permission_request` part whose `toolInput.callId` links back; the answer’s tool ID matches the permission part, not the original tool.
 
 - **Job origin is not its current refresh policy.** `job-executor-refresh.spec.ts` checks `refreshMode` from list/detail/refresh DTOs after a local-origin task is handed remote. Its historical run fixture inserts only a scoped pre-Task `job_runs` row, then allows the real UI poll to adopt the remote pointer; no Task is seeded. The same title can appear in the Job list and the separate Tasks region below it, so select the intended entry explicitly. Restarting a fake linked profile also makes a public `/.well-known/cinna-desktop` request: handle that route separately while continuing to require authorization for task API requests.
+
+**Delegation permissions and links** (`delegation-settings.spec.ts`, `handover-flow.spec.ts`) ·
+Open an agent's `Settings`, then the **tab** `Permissions`. A kit's receiving grant is the
+`combobox` named `Delegations`; every folder has `Cloud delegations`. Both use values `ask`
+and `auto` (visible `Ask before running` / `Run automatically`; for Cloud delegations `Ask before sending` / `Send without asking`). A bare folder keeps its separate
+`Handovers` control. `localAgents.get()` returns a coded `{ok, value}` outcome; successful
+settings assertions read `value.desktop`. These grants persist under fixture userData and
+must not appear in the kit's `app-data/desktop.json` or anywhere in the adopted folder.
+The task Details panel has `Delegated from` and `Delegated to` rows whose buttons use the
+other task's title; outgoing rows include agent and state, including `Waiting on you`.
+`window.api.delegations.forTask(taskId)` reads `{from, to}` under the active profile.
+The file return scenario seeds only the existing origin task with `seedChatTask`, writes a
+real brief/report and proves both links through UI navigation with `parentTaskId: null`.
+
+**A bare target through the tools** (`delegation-bare.spec.ts`) · `handover_create` on a
+`bare` target goes through the **file** gate, not the kit one: `requestId` `handover:<row id>`,
+question `Run the handover “<title>” in <folder basename>?`, options `HANDOVER_GATE_OPTIONS`
+(`Run` — the kit and cloud gates use the same label), card line `Cinna Desktop is asking a question`.
+Its result is `{ folder, briefPath, reportPath, revisionsDir, status, id, delegationId, handoverId,
+taskId, state }` — not the `DelegationDto` a kit target answers with; `id` and `delegationId` are
+the same value (both null when the scan recorded no row), and it is what `handover_reply` takes.
+The kit/cloud gate is `requestId` `delegation:<row id>`, header `Delegation`, question
+`Run “<title>” on <executor>, requested by <requester>?` (cloud: `Send “<title>” to <executor> in the cloud, requested by <requester>? …`),
+options `Run`, the standing label (`Run and auto-run delegations to <executor>` / `Send and let <requester> delegate to the cloud without asking`), `Skip`. A released `/tools` hold may itself carry
+`tools`, which chains calls inside one turn (targets → create → create again). "The turn
+ended" for a scripted executor is its reply text appearing in `chat.get(task.chatId).messages`;
+read the task's status after that, while the requester's wake turn is held. Both reports being
+tool calls, the handover folder ends as `brief.md` + `revisions/` with **no `report.md`**.

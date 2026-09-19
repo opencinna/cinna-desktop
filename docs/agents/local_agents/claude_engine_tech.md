@@ -322,3 +322,12 @@ So: `refetchInterval` is `CLAUDE_AUTH_POLL_MS` (10 s) **only** while the answer 
 - [The Agent Turn (tech)](agent_turn_tech.md) — the driver all folder engines share, the process pool, and the shared input/result
 - [The Local Engine (tech)](engine_tech.md) — runtime resolution, config generation and the "Runs with" panel's other half
 - [Local Agent Permissions (tech)](permissions_tech.md) — the grant store all folder engines write to
+
+## File handover requester boundary
+
+The 2.1.276 [pinned contract](contracts/claude_interface.md) now checks a native `Write` to a
+sibling of the session cwd. `default` raises one edit permission and `allow_once` writes;
+`auto` with the isolated fake provider refuses because its classifier cannot evaluate.
+That latter result does not predict a real authenticated classifier decision. Ordinary-folder
+Cinna MCP calls, separate bearer sessions on one adapter, and same-process load are verified.
+See the [measured handover ledger](../../../drafts/cross_agents_handover_bus/probe_results.md).
