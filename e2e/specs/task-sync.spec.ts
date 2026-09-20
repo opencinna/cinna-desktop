@@ -9,6 +9,7 @@ import { test, expect, type CinnaApp } from '../fixtures/app'
  * OAuth, a real Cinna server, and model execution are outside this scenario.
  */
 const INITIAL_TITLE = 'Report waiting on the service'
+const DETAIL_ONLY_TITLE = 'This detail response must not drive list discovery'
 const DELTA_TITLE = 'Report renamed on the service'
 const FINISHED_TITLE = 'Report completed on the service'
 const REVISED_TITLE = 'Completed report title corrected'
@@ -34,6 +35,7 @@ interface ServiceState {
   requests: string[]
   authorized: boolean
   detailReads: number
+  detailTitle: string | null
 }
 let service: ServiceState
 let server: Server
@@ -57,7 +59,7 @@ function serve(): Server {
     }
     if (url.pathname === `/api/v1/tasks/${REMOTE_ID}/detail`) {
       service.detailReads += 1
-      send(service.task)
+      send({ ...service.task, title: service.detailTitle ?? service.task.title })
       return
     }
     if (url.pathname === `/api/v1/tasks/${REMOTE_ID}/sessions`) {
@@ -93,7 +95,7 @@ test.beforeEach(() => {
       original_message: GOAL, current_description: 'A report owned by the remote service.',
       status: 'blocked', priority: 'normal', updated_at: new Date().toISOString()
     },
-    suppressDelta: false, asksOpen: true, requests: [], authorized: true, detailReads: 0
+    suppressDelta: false, asksOpen: true, requests: [], authorized: true, detailReads: 0, detailTitle: DETAIL_ONLY_TITLE
   }
 })
 test.afterAll(async () => {
@@ -130,8 +132,9 @@ test('scheduled sync discovers a remote-only task and its ask, then the open tas
   expect(discovered.remote).toMatchObject({ adapter: 'cinna', id: REMOTE_ID, key: 'REPORT-42' })
   expect(service.requests.some((request) => request.startsWith('GET /api/v1/tasks/?status=active&'))).toBe(true)
   expect(service.requests.some((request) => request.startsWith('GET /api/v1/tasks/?updated_since='))).toBe(true)
-  // Neither a selected task nor task:get has assisted discovery.
-  expect(service.detailReads).toBe(0)
+  // Inbox reads detail to discover structured delegation asks. Its detail-only
+  // title differs, so the title above proves the list carrier discovered the task;
+  // forbidding all detail requests would incorrectly forbid ordinary Inbox reads.
 
   const inbox = () => cinna.page.getByRole('button', { name: /^Inbox/ })
   await expect(inbox()).toHaveAccessibleName('Inbox — 1 waiting', { timeout: 20_000 })
@@ -146,12 +149,12 @@ test('scheduled sync discovers a remote-only task and its ask, then the open tas
   await test.step('the unattended delta carrier refreshes the task while the Inbox stays open', async () => {
     service.task = { ...service.task, title: DELTA_TITLE, updated_at: new Date().toISOString() }
     await expect(row().getByText(DELTA_TITLE, { exact: true })).toBeVisible({ timeout: 20_000 })
-    expect(service.detailReads).toBe(0)
     expect((await tasks())[0].id).toBe(discovered.id)
     expect((await tasks())[0].title).toBe(DELTA_TITLE)
   })
 
   await test.step('an open task reads detail updates even when the delta list omits them', async () => {
+    service.detailTitle = null
     await row().getByRole('button', { name: 'Open the task', exact: true }).click()
     await expect(cinna.page.getByRole('heading', { level: 1, name: DELTA_TITLE, exact: true })).toBeVisible()
     await expect(cinna.page.getByText('blocked', { exact: true })).toBeVisible()

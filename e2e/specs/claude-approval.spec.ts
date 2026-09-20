@@ -195,11 +195,15 @@ test('an OpenCode agent’s Permissions tab has no approvals control, and descri
   await cinna.skipOnboarding()
 
   const root = await addAgentRoot(cinna)
-  // No engine declared: the scaffold writes `runtime: null`, and an agent
-  // naming no engine runs on OpenCode.
   const agent = await createFolderAgent(cinna, root, OPENCODE_AGENT, OPENCODE_AGENT)
-  const runtime = manifest(agent.path).runtime as { engine?: unknown } | null
-  expect(runtime?.engine, 'the scaffolded manifest names no engine').toBeUndefined()
+  // An unconfigured agent follows Default now. Name the engine this scenario tests.
+  const saved = await cinna.page.evaluate((input) => window.api.localAgents.updateField({
+    agentId: input.agentId,
+    update: { field: 'runtime', value: { engine: 'opencode', credential: null, modelId: null, complexity: null } },
+    expectedStamp: input.expectedStamp
+  }), { agentId: agent.id, expectedStamp: agent.stamps[MANIFEST_FILE]! })
+  expect(saved.ok, saved.ok ? '' : saved.message).toBe(true)
+  expect(manifest(agent.path).runtime).toEqual({ engine: 'opencode' })
 
   await restart(cinna)
   await openPermissions(cinna, OPENCODE_AGENT)
@@ -208,6 +212,8 @@ test('an OpenCode agent’s Permissions tab has no approvals control, and descri
   await expect(card).toContainText(OPENCODE_SENTENCE)
   await expect(card).not.toContainText(CLAUDE_SENTENCE)
   await expect(card.getByLabel('Approvals')).toHaveCount(0)
-  await expect(card.locator('select')).toHaveCount(0)
+  // Delegation grants are independent of the runtime's approvals control.
+  await expect(card.getByLabel('Delegations', { exact: true })).toBeVisible()
+  await expect(card.getByLabel('Cloud delegations', { exact: true })).toBeVisible()
   await expect(card.getByText('Always allowed', { exact: true })).toBeVisible()
 })
