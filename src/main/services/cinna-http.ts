@@ -1,8 +1,9 @@
+import { runtimeHost } from '../host/runtimeHost'
 /**
  * Shared authenticated HTTP client for the active profile's Cinna server.
  *
  * One canonical place that resolves the profile's server URL + Bearer JWT,
- * issues the request via Electron `net.fetch`, measures latency, and maps
+ * issues the request via the host HTTP client (`net.fetch` on desktop), measures latency, and maps
  * transport/HTTP failures onto typed {@link CinnaApiError} codes the renderer
  * can switch on. Both `catalogService` (`/api/v1/catalog/*`) and `agentService`
  * (native install update endpoints) consume this so auth, error mapping, and
@@ -19,7 +20,6 @@
  *   - token refresh fail → re-mapped from {@link CinnaReauthRequired} to
  *                          `CinnaApiError('reauth_required')`
  */
-import { net } from 'electron'
 import { userRepo } from '../db/users'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
@@ -130,7 +130,7 @@ export async function cinnaFetch<T>(
   const started = Date.now()
   let response: Response
   try {
-    response = await net.fetch(url, { method, headers, body })
+    response = await runtimeHost.http.fetch(url, { method, headers, body })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     logger.error('network error', { url, method, error: msg, durationMs: Date.now() - started })

@@ -1,6 +1,6 @@
-import { appSettingsRepo } from '../db/appSettings'
-import { getMainWindow } from '../index'
-import { createLogger } from '../logger/logger'
+import { appSettingsRepo } from '../../db/appSettings'
+import { getMainWindow } from '../../index'
+import { createLogger } from '../../logger/logger'
 import { trayService } from './trayService'
 
 const logger = createLogger('tray-sync')

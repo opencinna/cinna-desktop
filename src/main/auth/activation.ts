@@ -13,7 +13,7 @@ import { taskSyncScheduler } from '../services/taskSyncScheduler'
 import { localScheduleScheduler } from '../services/localScheduleScheduler'
 import { handoverScheduler } from '../services/handoverScheduler'
 import { getSettingsScopeUserId } from './scope'
-import { localDevService } from '../localdev/localDevService'
+import { desktopFeatures } from '../host/desktopFeatures'
 import { userRepo } from '../db/users'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
 
@@ -112,7 +112,7 @@ class UserActivation {
     // Login, profile switching and logout all enter through activate(), without
     // necessarily calling deactivate(). Retire the former profile before any
     // awaited reload, including when the destination has no Cinna account.
-    localDevService.clear()
+    desktopFeatures.clearDevelopment()
     taskSyncScheduler.stop()
     localScheduleScheduler.stop()
     handoverScheduler.stop()
@@ -154,7 +154,7 @@ class UserActivation {
       // already there, so it belongs on every activation rather than only on
       // the first — a pinned version the server bumped, a token that expired
       // overnight and a workspace the user deleted are all discovered here.
-      void localDevService.reconcile(userId)
+      void desktopFeatures.reconcileDevelopment(userId)
     }
   }
 
@@ -169,7 +169,7 @@ class UserActivation {
     // The local-dev state names a host and a folder belonging to the profile
     // that is going away; leaving it up would show the next profile someone
     // else's workspace path.
-    localDevService.clear()
+    desktopFeatures.clearDevelopment()
     stopPeriodicSync()
     stopAccountConfigPeriodicSync()
     // Zero all UMKs + clear sync timers on profile switch / sign-out.

@@ -15,7 +15,7 @@ vi.mock('../services/syncService', () => ({ syncService: { ensureActivated() {},
 vi.mock('../services/taskSyncScheduler', () => ({ taskSyncScheduler: { stop() {}, start: state.syncStart } }))
 vi.mock('../services/localScheduleScheduler', () => ({ localScheduleScheduler: { stop() {}, start: state.start } }))
 vi.mock('../services/handoverScheduler', () => ({ handoverScheduler: { stop() {}, start() {} } }))
-vi.mock('../localdev/localDevService', () => ({ localDevService: { clear: state.localDevClear, reconcile: state.localDevReconcile } }))
+vi.mock('../host/desktopFeatures', () => ({ desktopFeatures: { clearDevelopment: state.localDevClear, reconcileDevelopment: state.localDevReconcile } }))
 vi.mock('../db/users', () => ({ userRepo: { get: state.user } }))
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve() }
 

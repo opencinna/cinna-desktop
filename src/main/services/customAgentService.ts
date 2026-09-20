@@ -1,6 +1,6 @@
+import { runtimeHost } from '../host/runtimeHost'
 import { createHash, randomUUID } from 'node:crypto'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
-import { app } from 'electron'
 import { agentRepo, agentSessionRepo, type AgentRow } from '../db/agents'
 import { chatRepo } from '../db/chats'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
@@ -28,7 +28,7 @@ const assertCustom = (row: AgentRow | undefined, allowDevelopment = false): Agen
   return row
 }
 const launcher = createCustomLauncher({
-  defaultLocalCwd: () => app.getPath('home'),
+  defaultLocalCwd: () => runtimeHost.getPath('home'),
   childEnv: async () => ({ ...shellEnvForChild(await getShellEnv()), SSH_ASKPASS_REQUIRE: 'never' })
 })
 interface Receipt {

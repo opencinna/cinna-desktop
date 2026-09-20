@@ -1,3 +1,4 @@
+import { runtimeHost } from '../host/runtimeHost'
 /**
  * Finding an `opencode` binary to run folder agents with.
  *
@@ -12,7 +13,7 @@
  *    download is 46 MB the app then owns forever. The lookup is Phase 4's
  *    {@link which}; there is deliberately no second PATH walker in this repo.
  * 3. **The pinned version this app downloads** into
- *    `app.getPath('userData')/engine/`, verified against a SHA-256 recorded in
+ *    `runtimeHost.getPath('userData')/engine/`, verified against a SHA-256 recorded in
  *    {@link ENGINE_ASSETS} before anything is unpacked.
  *
  * TODO(packaging): shipping per-platform `opencode` binaries inside the app as
@@ -21,7 +22,7 @@
  * `electron-builder.yml` (there is none today — see seam 14 of
  * `plans/local-agents.md`), proof that a Bun single-file executable launches
  * from a signed and notarised macOS bundle, and a fourth branch here that
- * prefers `process.resourcesPath` over the download. Until then a bundled copy
+ * prefers `runtimeHost.resourcesPath` over the download. Until then a bundled copy
  * would be a large untested asset in every installer, so the download path is
  * the shipping one and this note is the record of why.
  *
@@ -48,7 +49,6 @@ import { spawn } from 'node:child_process'
 import type { Dirent } from 'node:fs'
 import { chmod, readdir, realpath, rename, rm, stat, utimes } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { app } from 'electron'
 import { appSettingsRepo } from '../db/appSettings'
 import { createLogger } from '../logger/logger'
 import {
@@ -732,7 +732,7 @@ export function probeEngineVersion(path: string): Promise<string | null> {
 
 /** The engine's own directory inside the app data dir. Never the agents home. */
 export function engineRootDir(): string {
-  return join(app.getPath('userData'), 'engine')
+  return join(runtimeHost.getPath('userData'), 'engine')
 }
 
 /**
@@ -804,7 +804,7 @@ export function realBinaryResolverDeps(configuredPath: () => string | null): Bin
  * change what "the engine directory" means to code that lists it.
  */
 export function runtimesRootDir(): string {
-  return join(app.getPath('userData'), 'runtimes')
+  return join(runtimeHost.getPath('userData'), 'runtimes')
 }
 
 /** The Codex path a user set in Settings, or null. Unpinned, shown as unverified. */

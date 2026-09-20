@@ -1,4 +1,4 @@
-import { net } from 'electron'
+import { runtimeHost } from '../host/runtimeHost'
 import type {
   McpRegistryEntry,
   McpRegistryInfo,
@@ -69,7 +69,7 @@ function isHttpUrl(raw: string | undefined): raw is string {
 async function fetchRegistryJson<T>(url: string, label: string): Promise<T> {
   let resp: Response
   try {
-    resp = await net.fetch(url, {
+    resp = await runtimeHost.http.fetch(url, {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
     })

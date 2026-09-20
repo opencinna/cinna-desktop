@@ -1,3 +1,5 @@
+import { publishEvent } from '../../host/events'
+import { runtimeHost } from '../../host/runtimeHost'
 /**
  * Folder watching — how an edit made outside the app reaches the agents list.
  *
@@ -59,7 +61,6 @@
 
 import { readdirSync, statSync, watch, type FSWatcher } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
-import { app } from 'electron'
 import type { AgentRootRow } from '../../db/agentRoots'
 import { createLogger } from '../../logger/logger'
 import {
@@ -73,7 +74,6 @@ import {
 import { MANIFEST_FILE } from '../../../shared/kit/manifest'
 import { discoverBareAgents, KIT_WORKSHOP_DIR } from './externalScan'
 import { isWithin } from './pathRules'
-import { getMainWindow } from '../../index'
 import { turnLock } from './turnLock'
 import { HANDOVERS_DIR } from '../../../shared/handovers'
 
@@ -168,10 +168,7 @@ let quitHookInstalled = false
 
 /** Push a change to the renderer. Mirrors `notifyRemoteSyncComplete`. */
 function broadcast(payload: LocalAgentChangedPayload): void {
-  const win = getMainWindow()
-  if (win && !win.isDestroyed()) {
-    win.webContents.send(LOCAL_AGENT_CHANGED_CHANNEL, payload)
-  }
+  publishEvent(LOCAL_AGENT_CHANGED_CHANNEL, payload)
 }
 
 /**
@@ -611,9 +608,9 @@ export const watcherService = {
     if (!quitHookInstalled) {
       quitHookInstalled = true
       try {
-        app.on('will-quit', () => watcherService.stopAll())
+        runtimeHost.onShutdown(() => watcherService.stopAll())
       } catch {
-        // No Electron `app` (unit tests). `stopAll` is still callable directly.
+        // A test may omit lifecycle wiring. `stopAll` remains callable directly.
       }
     }
   },

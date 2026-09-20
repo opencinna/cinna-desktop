@@ -1,11 +1,11 @@
 import { app, BrowserWindow, dialog } from 'electron'
 import electronUpdater from 'electron-updater'
 import { is } from '@electron-toolkit/utils'
-import { createLogger } from '../logger/logger'
+import { createLogger } from '../../logger/logger'
 import {
   UPDATER_BROADCAST_CHANNEL,
   type UpdaterState
-} from '../../shared/updaterState'
+} from '../../../shared/updaterState'
 
 const { autoUpdater } = electronUpdater
 

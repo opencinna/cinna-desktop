@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { runtimeHost } from '../host/runtimeHost'
 import { join, basename, extname } from 'path'
 import { mkdir, readFile, stat, writeFile, unlink } from 'fs/promises'
 import { nanoid } from 'nanoid'
@@ -116,7 +116,7 @@ export interface FileStore {
  */
 class LocalFileStore implements FileStore {
   private rootDir(): string {
-    return join(app.getPath('userData'), 'files')
+    return join(runtimeHost.getPath('userData'), 'files')
   }
 
   private resolveChatDir(userId: string, chatId: string): string {

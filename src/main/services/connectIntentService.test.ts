@@ -4,7 +4,7 @@ import {
   connectUrlFromArgv,
   normalizeServerOrigin,
   parseConnectUrl
-} from './connectIntentService'
+} from '../host/desktop/connectIntentService'
 import { CONNECT_INTENT_ARGV_FLAG } from '../../shared/connectIntent'
 
 /**

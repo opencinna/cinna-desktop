@@ -1,5 +1,5 @@
+import { runtimeHost } from '../host/runtimeHost'
 import { randomBytes } from 'node:crypto'
-import { shell } from 'electron'
 import type { OAuthClientMetadata, StoredOAuthClientInformation, StoredOAuthTokens, OAuthClientProvider, OAuthDiscoveryState } from '@modelcontextprotocol/client'
 import { startOAuthCallback, type OAuthCallbackListener } from './oauth-callback'
 
@@ -90,7 +90,7 @@ export class ElectronOAuthProvider implements OAuthClientProvider {
   async redirectToAuthorization(url: URL): Promise<void> {
     this.assertUsable()
     if (!this.callback?.isPending()) throw new McpReauthorizationRequiredError('MCP authorization needs a new connection. Connect again.')
-    await shell.openExternal(url.toString())
+    await runtimeHost.shell.openExternal(url.toString())
   }
   async prepareForAuth(): Promise<void> {
     this.cleanup()

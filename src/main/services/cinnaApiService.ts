@@ -1,4 +1,4 @@
-import { net } from 'electron'
+import { runtimeHost } from '../host/runtimeHost'
 import { cinnaWriteFetch } from './cinnaWriteFetch'
 import { userRepo } from '../db/users'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
@@ -113,7 +113,7 @@ async function cinnaFetch<T>(userId: string, path: string, opts: FetchOptions = 
     // must release inbox answers and polling work as well as initial connects.
     const signal = AbortSignal.timeout(30_000)
     response = method === 'GET' || method === 'HEAD'
-      ? await net.fetch(url, { method, headers, signal })
+      ? await runtimeHost.http.fetch(url, { method, headers, signal })
       : await cinnaWriteFetch(url, { method, headers, body, signal, beforeDispatch: () => {
         if (cinnaSessionGeneration(userId) !== generation || resolveBaseUrl(userId) !== baseUrl) {
           throw new CinnaSessionChanged()

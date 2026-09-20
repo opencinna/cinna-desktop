@@ -1,3 +1,7 @@
+vi.mock('../host/runtimeHost', async () => {
+  const { createDesktopHost } = await import('../host/desktop/runtimeHost')
+  return { runtimeHost: createDesktopHost() }
+})
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest'
 
 const writeMock = vi.hoisted(() => vi.fn())

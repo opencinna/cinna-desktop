@@ -1,8 +1,8 @@
+import { runtimeHost } from '../../host/runtimeHost'
 import { execFile, spawn } from 'node:child_process'
 import { realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import { shell } from 'electron'
 import { createLogger } from '../../logger/logger'
 import { which } from '../../shell/env'
 import { toolDetectionService } from './toolDetectionService'
@@ -68,7 +68,7 @@ function runToCompletion(file: string, args: string[]): Promise<void> {
  *
  * `code <target>` / `cursor <target>` where the CLI shim exists, else the
  * bundle and the target to LaunchServices with `open -a`. Never
- * `shell.openExternal`: nothing user-influenced is parsed as a URL, and the
+ * `runtimeHost.shell.openExternal`: nothing user-influenced is parsed as a URL, and the
  * target is always its own argv element. Validating `target` is the caller's
  * job — this launches whatever it is given.
  */
@@ -292,7 +292,7 @@ export function createOpenInService(deps: OpenInDeps) {
       // and reports nothing back), so this catches a synchronous throw but
       // cannot detect a file manager that silently declined to open.
       await guardLaunch('reveal the folder', async () => {
-        shell.showItemInFolder(resolved)
+        runtimeHost.shell.showItemInFolder(resolved)
       })
       logger.info('revealed folder in file manager')
     },

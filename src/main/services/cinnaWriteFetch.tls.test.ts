@@ -1,3 +1,7 @@
+vi.mock('../host/runtimeHost', async () => {
+  const { createDesktopHost } = await import('../host/desktop/runtimeHost')
+  return { runtimeHost: createDesktopHost() }
+})
 import { createServer as createHttpServer, type Server } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
 import { connect, type AddressInfo, type Socket } from 'node:net'

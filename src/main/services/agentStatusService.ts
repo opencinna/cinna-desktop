@@ -1,4 +1,4 @@
-import { net } from 'electron'
+import { runtimeHost } from '../host/runtimeHost'
 import { agentRepo, agentOverrideRepo } from '../db/agents'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { AgentStatusError, ipcErrorShape } from '../errors'
@@ -165,7 +165,7 @@ export const agentStatusService = {
 
     let response: Response
     try {
-      response = await net.fetch(url, {
+      response = await runtimeHost.http.fetch(url, {
         headers: {
           Authorization: `Bearer ${ctx.accessToken}`,
           Accept: 'application/json'

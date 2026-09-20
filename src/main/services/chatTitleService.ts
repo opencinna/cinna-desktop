@@ -1,9 +1,9 @@
+import { publishEvent } from '../host/events'
 import { MAX_TITLE_CHARS, TITLE_SYSTEM_PROMPT } from './aiFunctionPrompts'
 import { chatRepo } from '../db/chats'
 import { messageRepo } from '../db/messages'
 import { appSettingsRepo } from '../db/appSettings'
 import { aiFunctions, AiFunctionError } from './aiFunctionsService'
-import { getMainWindow } from '../index'
 import { DomainError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { CHAT_TITLE_UPDATED_CHANNEL } from '../../shared/appSettings'
@@ -74,10 +74,7 @@ function sanitizeTitle(raw: string): string {
 }
 
 function broadcastTitleUpdate(chatId: string, title: string): void {
-  const win = getMainWindow()
-  if (win && !win.isDestroyed()) {
-    win.webContents.send(CHAT_TITLE_UPDATED_CHANNEL, { chatId, title })
-  }
+  publishEvent(CHAT_TITLE_UPDATED_CHANNEL, { chatId, title })
 }
 
 export const chatTitleService = {

@@ -1,3 +1,4 @@
+import { publishEvent } from '../host/events'
 /**
  * Periodic runner for remote agent sync. The transactional upsert/prune and
  * fetch logic live in {@link agentService.syncRemoteAgents}; this module only
@@ -5,7 +6,6 @@
  */
 import { agentService } from '../services/agentService'
 import { CinnaReauthRequired } from './../auth/cinna-oauth'
-import { getMainWindow } from '../index'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('remote-sync')
@@ -29,10 +29,7 @@ export interface RemoteSyncCompletePayload {
  * the renderer to refetch, leaving stale agent rows on screen.
  */
 export function notifyRemoteSyncComplete(payload: RemoteSyncCompletePayload = {}): void {
-  const win = getMainWindow()
-  if (win && !win.isDestroyed()) {
-    win.webContents.send('agents:remote-sync-complete', payload)
-  }
+  publishEvent('agents:remote-sync-complete', payload)
 }
 
 /**

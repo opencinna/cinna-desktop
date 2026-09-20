@@ -1,3 +1,4 @@
+import { runtimeHost } from '../../host/runtimeHost'
 /**
  * The folder-agent surface the IPC layer talks to.
  *
@@ -36,7 +37,6 @@ import {
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, join, relative, sep } from 'node:path'
-import { shell } from 'electron'
 import { agentSessionRepo, agentRepo, type FolderIndexEntry } from '../../db/agents'
 import { jobAgentRepo, jobsRepo } from '../../db/jobs'
 import { rebuildJobManifest } from '../../sync/manifest'
@@ -499,7 +499,7 @@ function reseedEngineSessions(userId: string, root: AgentRootRow, agentDir: stri
 export const localAgentService = {
   /**
    * Wire the feature up: hand Phase 4's "open in…" guard the real roots, give
-   * the watcher its scanner callbacks. Called once, from the IPC registrar —
+   * the watcher its scanner callbacks. Called once, from the shared Hub startup —
    * the composition root for this slice — and safe to call again.
    *
    * Until this runs, `openInService` refuses every request by design, so the
@@ -1036,7 +1036,7 @@ export const localAgentService = {
   openPath(userId: string, input: OpenLocalAgentPathInput): void {
     const { agentDir } = this.locate(userId, input?.agentId)
     const target = resolveWithinRoot(agentDir, input?.relPath)
-    shell.showItemInFolder(target)
+    runtimeHost.shell.showItemInFolder(target)
     logger.info('revealed an agent path', {
       agentId: input.agentId,
       relPath: input?.relPath ?? MANIFEST_FILE
@@ -1049,7 +1049,7 @@ export const localAgentService = {
    * The affordance says "Add them in credentials/.env", so the click has to end
    * with that file open in an editor. Revealing the folder was the previous
    * behaviour and it stopped one step short — and two things stop a plain
-   * `shell.openPath` from covering the gap:
+   * `runtimeHost.shell.openPath` from covering the gap:
    *
    * * **The file need not exist.** The scaffold writes `credentials/.env.example`
    *   and deliberately not the real file, so on a fresh agent — exactly the
@@ -1089,17 +1089,17 @@ export const localAgentService = {
     const target = resolveWithinRoot(agentDir, ENV_FILE)
 
     let revealed = false
-    const failure = await shell.openPath(target)
+    const failure = await runtimeHost.shell.openPath(target)
     if (failure) {
       if (process.platform === 'darwin') {
         try {
           await openInTextEditor(target)
         } catch {
-          shell.showItemInFolder(target)
+          runtimeHost.shell.showItemInFolder(target)
           revealed = true
         }
       } else {
-        shell.showItemInFolder(target)
+        runtimeHost.shell.showItemInFolder(target)
         revealed = true
       }
     }
@@ -1155,7 +1155,7 @@ export const localAgentService = {
     const handle = turnLock.acquire(agentId, 'delete')
     try {
       if (trashFolder) {
-        await shell.trashItem(agentDir)
+        await runtimeHost.shell.trashItem(agentDir)
         // The folder is gone, so its state file — which for a bare agent lives
         // under `userData`, not in the folder — would otherwise outlive it and
         // be adopted by whatever is next created at that path. A kit agent's

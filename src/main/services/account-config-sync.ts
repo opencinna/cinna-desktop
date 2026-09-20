@@ -1,3 +1,4 @@
+import { publishEvent } from '../host/events'
 /**
  * Periodic runner for account-config sync. The fetch + DB upsert/prune live in
  * {@link accountConfigService.syncAccountConfig}; this module owns the timer,
@@ -6,7 +7,6 @@
  */
 import { accountConfigService } from './accountConfigService'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
-import { getMainWindow } from '../index'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('account-config-sync')
@@ -29,10 +29,7 @@ export interface AccountConfigSyncCompletePayload {
 export function notifyAccountConfigSynced(
   payload: AccountConfigSyncCompletePayload = {}
 ): void {
-  const win = getMainWindow()
-  if (win && !win.isDestroyed()) {
-    win.webContents.send('providers:account-config-synced', payload)
-  }
+  publishEvent('providers:account-config-synced', payload)
 }
 
 /** Run a single account-config sync pass and notify the renderer on completion. */

@@ -32,12 +32,16 @@ describe('the ACP process pool at quit', () => {
   /** Comments blanked, so a doc comment naming the call cannot satisfy this. */
   const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
 
+  const core = readFileSync(join(dirname(mainEntry), 'hub/core.ts'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  const shutdown = core.slice(core.indexOf('export async function shutdownHubCore'))
+
   it('is shut down from a quit handler in the main entry point', () => {
-    expect(code).toContain('acpProcessPool')
-    expect(code).toMatch(/acpProcessPool\.shutdown\(\)/)
+    expect(code).toContain('shutdownHubCore')
+    expect(shutdown).toMatch(/acpProcessPool\.shutdown\(\)/)
     const quit = code.indexOf("app.on('will-quit'")
     expect(quit, "a 'will-quit' handler in src/main/index.ts").toBeGreaterThanOrEqual(0)
-    expect(code.indexOf('acpProcessPool.shutdown()')).toBeGreaterThan(quit)
+    expect(code.indexOf('shutdownHubCore()', quit)).toBeGreaterThan(quit)
   })
 
   it('does not await it, because Electron does not await the handler', () => {
@@ -45,7 +49,8 @@ describe('the ACP process pool at quit', () => {
     // nothing and risks the opposite: `shutdown` waits for every process to
     // exit, and `stopNow` → `dispose` has already reached `killTree`
     // synchronously by then. The kill is what matters; the wait is a courtesy.
-    expect(code).toMatch(/void\s+acpProcessPool\.shutdown\(\)/)
+    expect(code).toMatch(/void\s+shutdownHubCore\(\)/)
+    expect(shutdown.indexOf('acpProcessPool.shutdown()')).toBeLessThan(shutdown.indexOf('await'))
   })
 
   it('is killed only after the turns it runs have saved what they streamed', () => {
@@ -53,10 +58,9 @@ describe('the ACP process pool at quit', () => {
     // process is killed never does. The flush has to be in the same handler
     // and ahead of the kill — anywhere after it, or after an await, and the
     // turn the user left parked on a question is gone from the transcript.
-    const quit = code.indexOf("app.on('will-quit'")
-    const flush = code.indexOf('a2aStreamingService.saveInFlight()')
-    expect(flush, 'saveInFlight() inside the will-quit handler').toBeGreaterThan(quit)
-    expect(flush).toBeLessThan(code.indexOf('acpProcessPool.shutdown()'))
-    expect(flush).toBeLessThan(code.indexOf('await', quit))
+    const flush = shutdown.indexOf('a2aStreamingService.saveInFlight()')
+    expect(flush, 'saveInFlight() inside shared shutdown').toBeGreaterThan(0)
+    expect(flush).toBeLessThan(shutdown.indexOf('acpProcessPool.shutdown()'))
+    expect(flush).toBeLessThan(shutdown.indexOf('await'))
   })
 })

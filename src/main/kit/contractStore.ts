@@ -1,3 +1,4 @@
+import { runtimeHost } from '../host/runtimeHost'
 /**
  * Resolves the **active kit contract** — the tree under
  * `resources/cinna-kit-contract/` that says what an agent folder is: the
@@ -19,7 +20,6 @@
  * after a refresh swaps the tree.
  */
 
-import { app } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute, join, normalize, resolve, sep } from 'node:path'
 import { KitError } from '../errors'
@@ -71,7 +71,7 @@ const cache = new Map<string, ContractCacheEntry>()
  * through `extraResources` in `electron-builder.yml` instead, which puts it at a
  * stable path beside the asar.
  *
- * Resolved lazily: this module must be importable before `app.whenReady()`.
+ * Resolved lazily: this module must be importable before host startup.
  *
  * **Packaging note — read before changing `electron-builder.yml`.** Three
  * entries there work together, and changing one alone breaks this function:
@@ -93,9 +93,9 @@ const cache = new Map<string, ContractCacheEntry>()
  * not, and cannot be until someone builds and inspects a package.
  */
 function bundledContractDir(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, CONTRACT_DIR)
-    : join(app.getAppPath(), 'resources', CONTRACT_DIR)
+  return runtimeHost.isPackaged
+    ? join(runtimeHost.resourcesPath, CONTRACT_DIR)
+    : join(runtimeHost.getAppPath(), 'resources', CONTRACT_DIR)
 }
 
 function isContractTree(root: string): boolean {
@@ -114,7 +114,7 @@ let loggedBundledRoot = false
 export function getBundledContractDir(): string {
   const root = bundledContractDir()
   if (!isContractTree(root)) {
-    logger.error('bundled kit contract not found', { root, packaged: app.isPackaged })
+    logger.error('bundled kit contract not found', { root, packaged: runtimeHost.isPackaged })
     throw new KitError(
       'contract_missing',
       'The bundled agent contract is missing from this installation.',
@@ -122,7 +122,7 @@ export function getBundledContractDir(): string {
     )
   }
   if (!loggedBundledRoot) {
-    logger.debug('bundled kit contract resolved', { root, packaged: app.isPackaged })
+    logger.debug('bundled kit contract resolved', { root, packaged: runtimeHost.isPackaged })
     loggedBundledRoot = true
   }
   return root

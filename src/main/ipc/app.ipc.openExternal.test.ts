@@ -1,3 +1,7 @@
+vi.mock('../host/runtimeHost', async () => {
+  const { createDesktopHost } = await import('../host/desktop/runtimeHost')
+  return { runtimeHost: createDesktopHost() }
+})
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
@@ -15,7 +19,7 @@ vi.mock('./_wrap', () => ({
 
 const openExternal = vi.hoisted(() => vi.fn())
 vi.mock('electron', () => ({ shell: { openExternal } }))
-vi.mock('../services/appIconService', () => ({ appIconService: { apply: vi.fn() } }))
+vi.mock('../host/desktop/appIconService', () => ({ appIconService: { apply: vi.fn() } }))
 
 const { registerAppHandlers } = await import('./app.ipc')
 registerAppHandlers()

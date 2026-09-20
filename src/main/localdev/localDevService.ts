@@ -1,3 +1,5 @@
+import { publishEvent } from '../host/events'
+import { runtimeHost } from '../host/runtimeHost'
 /**
  * Getting one Cinna profile from "signed in" to "can develop agents locally",
  * and keeping it there.
@@ -53,7 +55,6 @@
 import { homedir, hostname } from 'node:os'
 import { lstat, mkdir, readlink, stat, symlink, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { BrowserWindow, shell } from 'electron'
 import { userRepo } from '../db/users'
 import { appSettingsRepo } from '../db/appSettings'
 import { cinnaFetch } from '../services/cinna-http'
@@ -517,9 +518,7 @@ function setState(next: LocalDevState): void {
   // task-less state on every transition, so the per-component list existed in
   // main and never survived a single broadcast — which is what left the UI
   // showing one "Installing…" line for a five-part install.
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send(LOCAL_DEV_STATE_CHANNEL, state)
-  }
+  publishEvent(LOCAL_DEV_STATE_CHANNEL, state, 'all')
 }
 
 // ── Consent, per host ───────────────────────────────────────────────────────
@@ -1304,7 +1303,7 @@ export const localDevService = {
   /** Reveal the account workspace in Finder / Explorer. */
   async openWorkspace(): Promise<{ ok: boolean }> {
     if (state.phase !== 'ready') return { ok: false }
-    const error = await shell.openPath(state.workspacePath)
+    const error = await runtimeHost.shell.openPath(state.workspacePath)
     if (error) logger.warn('could not open the workspace folder', { error })
     return { ok: !error }
   },

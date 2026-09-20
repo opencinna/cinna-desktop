@@ -1,6 +1,6 @@
 import { BrowserWindow } from 'electron'
 import { userActivation } from '../auth/activation'
-import { agentFileService, nativeConsentPrompt } from '../services/agentFiles'
+import { agentFileService, nativeConsentPrompt } from '../host/desktop/agentFiles'
 import { ipcHandle } from './_wrap'
 import type {
   AgentFileActionResult,

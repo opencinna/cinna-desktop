@@ -1,3 +1,7 @@
+vi.mock('../host/runtimeHost', async () => {
+  const { createDesktopHost } = await import('../host/desktop/runtimeHost')
+  return { runtimeHost: createDesktopHost() }
+})
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AgentRow } from '../db/agents'
 import type { MessageRow } from '../db/messages'

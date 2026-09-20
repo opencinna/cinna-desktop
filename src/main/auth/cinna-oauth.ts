@@ -1,7 +1,6 @@
+import { runtimeHost } from '../host/runtimeHost'
 import crypto from 'node:crypto'
-import { shell, net } from 'electron'
 import os from 'node:os'
-import { app } from 'electron'
 import { startOAuthCallback } from '../mcp/oauth-callback'
 import { createLogger } from '../logger/logger'
 import type { CinnaLocalDev } from '../../shared/localDevState'
@@ -73,7 +72,7 @@ async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
   logger.debug(`${method} ${url}`)
   let resp: Response
   try {
-    resp = await net.fetch(url, init)
+    resp = await runtimeHost.http.fetch(url, init)
   } catch (err) {
     logger.error(`Network error on ${method} ${url}`, { error: String(err) })
     throw err
@@ -139,14 +138,14 @@ export async function startCinnaOAuthFlow(serverUrl: string): Promise<CinnaOAuth
     state,
     device_name: os.hostname(),
     platform: process.platform,
-    app_version: app.getVersion()
+    app_version: runtimeHost.getVersion()
   })
 
   const authorizeUrl = `${endpoints.authorization_endpoint}?${params.toString()}`
   logger.info('Opening browser for authorization', { authorizeUrl })
   let result: Awaited<typeof promise>
   try {
-    await shell.openExternal(authorizeUrl)
+    await runtimeHost.shell.openExternal(authorizeUrl)
     result = await promise
     logger.debug('Received OAuth callback', { hasCode: !!result.code, state: result.state })
   } catch (err) {
@@ -267,7 +266,7 @@ export async function refreshCinnaTokens(
   logger.debug(`Refreshing tokens at ${serverUrl}`)
   const endpoints = await discoverCinnaEndpoints(serverUrl)
 
-  const resp = await net.fetch(endpoints.token_endpoint, {
+  const resp = await runtimeHost.http.fetch(endpoints.token_endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({

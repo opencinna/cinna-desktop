@@ -1,3 +1,4 @@
+import { publishEvent } from '../host/events'
 import { Client, SSEClientTransport, StreamableHTTPClientTransport, UnauthorizedError, InsufficientScopeError, isCallToolResult } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { McpProviderConfig, McpTool, McpConnection } from './types'
@@ -5,7 +6,6 @@ import { ElectronOAuthProvider, McpReauthorizationRequiredError, OAuthStoredStat
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { createLogger } from '../logger/logger'
-import { getMainWindow } from '../index'
 import { notifyMcpToolsChanged } from './toolChanges'
 import { droppedChildEnvNames, getShellEnv, mergeEnv, shellEnvForChild } from '../shell/env'
 
@@ -31,10 +31,7 @@ interface InternalConnection extends McpConnection {
 
 function broadcastStatusChange(providerId: string, status: string): void {
   notifyMcpToolsChanged(providerId)
-  const win = getMainWindow()
-  if (win && !win.isDestroyed()) {
-    win.webContents.send(MCP_STATUS_CHANGED_CHANNEL, { providerId, status })
-  }
+  publishEvent(MCP_STATUS_CHANGED_CHANNEL, { providerId, status })
 }
 
 export class MCPManager {

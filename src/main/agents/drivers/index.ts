@@ -1,3 +1,4 @@
+import { runtimeHost } from '../../host/runtimeHost'
 import { recordRuntimeModelCatalog } from '../../services/runtimeModelCatalog'
 import { chatConductorService, isChatConductor, conductorContext } from '../../services/chatConductorService'
 import { isCoordinatorHandover } from '../../../shared/kit/handovers'
@@ -8,7 +9,7 @@ import { isCoordinatorHandover } from '../../../shared/kit/handovers'
  * without a process, a port, a database or Electron. This module is where that
  * world is actually supplied — and it is the only file under `agents/drivers/`
  * that names `localAgentService`, `desktopStateService`, `agentSessionRepo`, the
- * engine's binary resolver or Electron, so the dependency direction stays
+ * engine's binary resolver or host capabilities, so the dependency direction stays
  * one-way and the test files stay free of them.
  *
  * Phase 2 of the agent runtime plan moved this here from
@@ -17,7 +18,6 @@ import { isCoordinatorHandover } from '../../../shared/kit/handovers'
  * agent, and which engine it launches is a setting rather than an identity.
  */
 
-import { createRequire } from 'node:module'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { applyConductorToolPolicy } from './acp/conductorToolPolicy'
@@ -58,7 +58,6 @@ import {
 import { getShellEnv, shellEnvForChild } from '../../shell/env'
 import { buildClaudeEnv } from './acp/claudeEnv'
 import { readFolderAgents } from './acp/claudeAgents'
-import { app } from 'electron'
 import { fetchAgentCard } from '../a2a-client'
 import type { LocalAgentKind } from '../../../shared/localAgents'
 import type { AcpRuntimeMode } from './acp/types'
@@ -79,8 +78,8 @@ acpProcessPool.onStatus((agentId, state) => {
       .catch((error) => logger.warn('Could not close conductor calls after runtime exit', { agentId, error: String(error) }))
   }
 })
-import { developmentAgentContext, contextForDevelopmentAgent, restoreDevelopmentContext, isDevelopmentAgent, developmentPlanKey } from '../../localdev/developmentSessionService'
-import { localDevService } from '../../localdev/localDevService'
+import { isDevelopmentAgent } from '../../../shared/developmentSession'
+import { desktopFeatures } from '../../host/desktopFeatures'
 import { customAgentService } from '../../services/customAgentService'
 import type { AcpRuntimeView } from './acp/acpRuntime'
 import {
@@ -215,7 +214,7 @@ export const claudeAuthProbe = new ClaudeAuthProbe({
   // in…". The login follows HOME, not the binary (verified 2026-09-18: a second
   // binary reported the same Max login with no Keychain prompt).
   claudePath: runningBinary(claudeBinaryService),
-  env: async () => buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: app.getVersion() })
+  env: async () => buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() })
 })
 
 
@@ -244,31 +243,17 @@ export const claudeAuthProbe = new ClaudeAuthProbe({
  * ~190 MB `claude` the user never chose; `CLAUDE_CODE_EXECUTABLE` is what makes
  * that exclusion safe.
  */
-function electronNodeRuntime(): { command: string; args: string[]; env: Record<string, string> } {
-  return { command: process.execPath, args: [], env: { ELECTRON_RUN_AS_NODE: '1' } }
+function hostNodeRuntime(): { command: string; args: string[]; env: Record<string, string> } {
+  return runtimeHost.nodeRuntime()
 }
 
 const ADAPTER_PACKAGE = '@agentclientprotocol/claude-agent-acp'
 const ADAPTER_ENTRY = 'dist/index.js'
 
 function claudeAdapterEntry(): string {
-  if (app.isPackaged) {
-    const packaged = join(
-      process.resourcesPath,
-      'app.asar.unpacked',
-      'node_modules',
-      ADAPTER_PACKAGE,
-      ADAPTER_ENTRY
-    )
-    if (!existsSync(packaged)) {
-      throw new Error(`the Claude ACP adapter is not at ${packaged}`)
-    }
-    return packaged
-  }
-  // In development it is an ordinary dependency. Resolved rather than joined
-  // from `process.cwd()`: the resolution follows npm's own layout, hoisted or
-  // not, which is the same question `require` answers for every other import.
-  return createRequire(import.meta.url).resolve(`${ADAPTER_PACKAGE}/${ADAPTER_ENTRY}`)
+  const path = runtimeHost.resolvePackageFile(`${ADAPTER_PACKAGE}/${ADAPTER_ENTRY}`)
+  if (!existsSync(path)) throw new Error(`the Claude ACP adapter is not at ${path}`)
+  return path
 }
 
 /**
@@ -305,7 +290,7 @@ function folderSystemPrompt(
     if (utility?.userId === userId) return utility.systemPrompt
     const conductor = agentRepo.getOwned(userId, agentId)
     if (conductor && isChatConductor(conductor)) return conductorContext(conductor).instructions
-    const development = developmentAgentContext(userId, agentId)
+    const development = desktopFeatures.developmentAgentContext(userId, agentId)
     if (development) return development.instructions
     const agent = localAgentService.get(userId, agentId)
     // The agent's own id, which is stable per agent — see
@@ -346,7 +331,7 @@ const aiFunctionProfiles = new Map<string, { userId: string; modelId: string | n
 
 /** Process cwd is stable; acpDriver/AI Functions supply their own session cwd. */
 function codexProcessCwd(poolKey: string): string {
-  const path = join(app.getPath('userData'), 'chat-conductors', 'processes', createHash('sha256').update(poolKey).digest('hex'))
+  const path = join(runtimeHost.getPath('userData'), 'chat-conductors', 'processes', createHash('sha256').update(poolKey).digest('hex'))
   mkdirSync(path, { recursive: true, mode: 0o700 })
   return path
 }
@@ -376,7 +361,7 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   if (warmOnly && acpProcessPool.status(poolKey).state !== 'running' && compatibleCandidates.length === 0 && !chatCandidate) {
     throw new Error('AI function deferred until the default runtime is warm')
   }
-  const cwd = join(app.getPath('userData'), 'chat-conductors', 'ai-functions', digest)
+  const cwd = join(runtimeHost.getPath('userData'), 'chat-conductors', 'ai-functions', digest)
   mkdirSync(cwd, { recursive: true, mode: 0o700 })
   for (const name of ['CLAUDE.md', 'AGENTS.md']) {
     // The patched Codex adapter accepts exact per-session developer instructions.
@@ -391,7 +376,7 @@ export async function prepareAiFunctionRuntime(userId: string, systemPrompt: str
   const candidateKey = chatContext ? syntheticRuntimePoolKey(userId, chatContext) : poolKey
   if (chatContext) syntheticRuntimeProfiles.set(candidateKey, { userId, context: chatContext })
   const restrict = async (proposed: AcpLaunchPlan): Promise<AcpLaunchPlan> => applyConductorToolPolicy(engine === 'codex'
-    ? await prepareCodexConductorPolicy(proposed, join(app.getPath('userData'), 'acp')) : proposed, engine)
+    ? await prepareCodexConductorPolicy(proposed, join(runtimeHost.getPath('userData'), 'acp')) : proposed, engine)
   let proposed = await launcher.plan({ userId, agentId: candidateKey, folder: {
     name: 'AI Functions', slug: 'ai-functions', description: 'One-shot AI function', path: engine === 'codex' ? codexProcessCwd(candidateKey) : chatContext?.path ?? cwd, kind: 'bare', runtimeMode: 'isolated'
   } })
@@ -449,13 +434,11 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     auth: (options) => options?.fresh ? codexAuthProbe.refresh() : codexAuthProbe.status(),
     adapterEntry: () => {
       const entry = '@agentclientprotocol/codex-acp/dist/index.js'
-      const path = app.isPackaged
-        ? join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', entry)
-        : createRequire(import.meta.url).resolve(entry)
+      const path = runtimeHost.resolvePackageFile(entry)
       if (!existsSync(path)) throw new Error('Codex ACP adapter is missing')
       return path
     },
-    nodeRuntime: electronNodeRuntime,
+    nodeRuntime: hostNodeRuntime,
     env: async () => buildCodexEnv({ shellEnv: await getShellEnv() }),
     systemPrompt: folderSystemPrompt('codex'),
     settings: (userId, agentId) => {
@@ -465,7 +448,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       if (utility?.userId === userId) return { model: utility.modelId, effort: 'medium', approval: 'ask' }
       const conductor = agentRepo.getOwned(userId, agentId)
       if (conductor && isChatConductor(conductor)) return { model: conductorContext(conductor).modelId, effort: 'medium', approval: 'ask' }
-      const development = developmentAgentContext(userId, agentId)
+      const development = desktopFeatures.developmentAgentContext(userId, agentId)
       if (development) return { model: null, effort: codexEffortForComplexity(development.complexity), approval: 'ask' }
       const agent = localAgentService.get(userId, agentId)
       return {
@@ -505,14 +488,14 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       }
       for (const row of agentRepo.list(userId).filter(isDevelopmentAgent)) {
         try {
-          const context = contextForDevelopmentAgent(row)
+          const context = desktopFeatures.contextForDevelopmentAgent(row)
           input.agents.push({ agentId: row.id, slug: `cinna-build-${row.id}`, description: row.description ?? '',
             prompt: context.instructions, providerId: context.runtime.credentialId ?? '', modelId: context.runtime.modelId ?? '' })
         } catch { /* Other profiles and previous runtimes are deliberately excluded. */ }
       }
       return input
     },
-    configRoot: () => join(app.getPath('userData'), 'acp'),
+    configRoot: () => join(runtimeHost.getPath('userData'), 'acp'),
     childEnv: async () => shellEnvForChild(await getShellEnv())
   }),
   claude: createClaudeLauncher({
@@ -533,9 +516,9 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     // the binary now, so a `claude login` the user just ran counts.
     claudeAuth: (options) => (options?.fresh ? claudeAuthProbe.refresh() : claudeAuthProbe.status()),
     adapterEntry: claudeAdapterEntry,
-    nodeRuntime: electronNodeRuntime,
+    nodeRuntime: hostNodeRuntime,
     claudeEnv: async () =>
-      buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: app.getVersion() }),
+      buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() }),
     systemPrompt: folderSystemPrompt('claude'),
     // A model **alias** (`haiku` / `sonnet` / `opus`), not a catalogue id: a
     // plan serves what the plan serves, and `runtimeService.resolve` returns the
@@ -547,7 +530,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       if (utility?.userId === userId) return utility.modelId
       const conductor = agentRepo.getOwned(userId, agentId)
       if (conductor && isChatConductor(conductor)) return conductorContext(conductor).modelId
-      const development = developmentAgentContext(userId, agentId)
+      const development = desktopFeatures.developmentAgentContext(userId, agentId)
       if (development) return development.runtime.modelId
       try {
         const agent = localAgentService.get(userId, agentId)
@@ -619,7 +602,7 @@ function readAcpFolder(userId: string, agentId: string): AcpFolderView | null {
 async function readAcpRuntime(userId: string, agent: AgentRow, options?: ReadinessOptions): Promise<AcpRuntimeView | null> {
   if (isChatConductor(agent)) return chatConductorService.runtime(userId, agent)
   if (isDevelopmentAgent(agent)) {
-    const context = await restoreDevelopmentContext(agent, options)
+    const context = await desktopFeatures.restoreDevelopmentContext(agent, options)
     const state = customAgentService.runtime(userId, agent)
     return {
       ...state, type: 'folder',
@@ -632,7 +615,7 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
         path: context.workspacePath, kind: 'bare', runtimeMode: 'isolated',
         enabled: agent.enabled, readiness: 'ok', readinessReason: null,
         runtime: { engine: context.runtime.launcher } },
-      validate(chatId) { state.validate(chatId); contextForDevelopmentAgent(agent) }
+      validate(chatId) { state.validate(chatId); desktopFeatures.contextForDevelopmentAgent(agent) }
     }
   }
   if (agent.source === 'local' && agent.driverConfig?.launcher === 'custom') return customAgentService.runtime(userId, agent)
@@ -677,7 +660,7 @@ export const acpDriver = createAcpDriver({
         let plan = await launcher.plan({ ...ctx, agentId: poolKey, folder: { ...ctx.folder, path: processCwd, slug: 'chat-runtime' } })
         if ('error' in plan) return plan
         if (id === 'codex') {
-          try { plan = await prepareCodexConductorPolicy(plan, join(app.getPath('userData'), 'acp')) }
+          try { plan = await prepareCodexConductorPolicy(plan, join(runtimeHost.getPath('userData'), 'acp')) }
           catch (error) {
             return { error: error instanceof Error && error.message.startsWith('Codex cannot enforce the chat tool policy:')
               ? error.message : 'Codex chat policy could not be verified. Check the installed runtime.' }
@@ -686,16 +669,16 @@ export const acpDriver = createAcpDriver({
         acpProcessPool.share?.(ctx.agentId, poolKey)
         return plan
       }
-      const development = developmentAgentContext(ctx.userId, ctx.agentId)
+      const development = desktopFeatures.developmentAgentContext(ctx.userId, ctx.agentId)
       if (!development) return launcher.plan(ctx)
-      const execution = await localDevService.executionContext(development.profileId)
+      const execution = await desktopFeatures.developmentExecutionContext(development.profileId)
       const plan = await launcher.plan(ctx)
-      developmentAgentContext(ctx.userId, ctx.agentId)
+      desktopFeatures.developmentAgentContext(ctx.userId, ctx.agentId)
       if ('error' in plan) return plan
       // Keep runtime credential/environment policy; add only the managed CLI tools.
       const path = execution.env.PATH ?? plan.spec.env.PATH ?? ''
       return { ...plan, spec: { ...plan.spec, env: { ...plan.spec.env, PATH: path },
-        key: developmentPlanKey(plan.spec.key, path) } }
+        key: createHash('sha256').update(JSON.stringify([plan.spec.key, path])).digest('hex') } }
     } }
   },
   readRuntime: readAcpRuntime,

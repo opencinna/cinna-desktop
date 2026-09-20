@@ -1,8 +1,9 @@
+import { runtimeHost } from '../host/runtimeHost'
 /**
  * The managed local-development toolchain: uv, Mutagen and cinna-cli.
  *
  * Everything the desktop needs in order to drive cinna-cli on the user's
- * machine, installed into `app.getPath('userData')/localdev/` and **nowhere
+ * machine, installed into `runtimeHost.getPath('userData')/localdev/` and **nowhere
  * else**. Not Homebrew, not `~/.local/bin`, not the user's global Python. Two
  * reasons, and both matter more than the disk they cost:
  *
@@ -56,7 +57,6 @@
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { delimiter, isAbsolute, join } from 'node:path'
-import { app } from 'electron'
 import type { ManagedLocalDevCli } from '../../shared/localDevState'
 import { ToolchainError } from '../errors'
 import { createLogger } from '../logger/logger'
@@ -904,7 +904,7 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
 
 /** `<userData>/localdev`. Never the agents home, never anywhere on the user's PATH. */
 export function localDevRootDir(): string {
-  return join(app.getPath('userData'), 'localdev')
+  return join(runtimeHost.getPath('userData'), 'localdev')
 }
 
 /**

@@ -39,15 +39,15 @@
 
 import { resolve as resolvePath } from 'node:path'
 import { app, type BrowserWindow } from 'electron'
-import { createLogger } from '../logger/logger'
-import { focusMainWindow } from '../window/focus'
-import { isCinnaOAuthInProgress } from '../auth/cinna-oauth'
+import { createLogger } from '../../logger/logger'
+import { focusMainWindow } from '../../window/focus'
+import { isCinnaOAuthInProgress } from '../../auth/cinna-oauth'
 import {
   CONNECT_INTENT_ARGV_FLAG,
   CONNECT_INTENT_CHANNEL,
   CONNECT_SCHEME,
   type ConnectIntent
-} from '../../shared/connectIntent'
+} from '../../../shared/connectIntent'
 
 const logger = createLogger('connect-intent')
 

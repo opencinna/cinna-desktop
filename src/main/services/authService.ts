@@ -13,9 +13,7 @@ import { syncService } from './syncService'
 import { taskSyncService } from './taskSyncService'
 import { AuthError } from '../errors'
 import { createLogger } from '../logger/logger'
-import { focusMainWindow } from '../window/focus'
-import { connectIntentService } from './connectIntentService'
-import { localDevService } from '../localdev/localDevService'
+import { desktopFeatures } from '../host/desktopFeatures'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
 
 const logger = createLogger('auth')
@@ -191,8 +189,7 @@ export const authService = {
       // that it failed, which is why this is in `finally` rather than after the
       // success path. A deep link that arrived mid-flow is released here too:
       // it was buffered precisely because this flow was running.
-      focusMainWindow()
-      connectIntentService.flush()
+      desktopFeatures.authCompleted()
     }
 
     const username = tokens.profile.email
@@ -313,8 +310,7 @@ export const authService = {
     } finally {
       // Same reason as `registerCinna`: bring the user back from the browser,
       // and release any deep link that was held while this flow ran.
-      focusMainWindow()
-      connectIntentService.flush()
+      desktopFeatures.authCompleted()
     }
 
     if (tokens.profile.email !== row.username) {
@@ -337,7 +333,7 @@ export const authService = {
     // report a failure because a toolchain check did. OAuth may have outlived
     // a profile switch: save its tokens above, but do not reactivate its setup.
     if (userActivation.isActivated() && getCurrentUserId() === userId) {
-      void localDevService.reconcile(userId)
+      void desktopFeatures.reconcileDevelopment(userId)
       // Work that waited on a usable session — a remote turn the app was
       // closed under, say — can go on now.
       userActivation.credentialsRenewed(userId)

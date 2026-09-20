@@ -1,4 +1,4 @@
-import { getUpdaterState, promptInstallCurrent } from '../updater/updater'
+import { getUpdaterState, promptInstallCurrent } from '../host/desktop/updater'
 import { ipcHandle } from './_wrap'
 
 export function registerUpdaterHandlers(): void {

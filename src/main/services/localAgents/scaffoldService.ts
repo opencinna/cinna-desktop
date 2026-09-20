@@ -1,3 +1,4 @@
+import { runtimeHost } from '../../host/runtimeHost'
 /**
  * The scaffolder — a TypeScript port of `kit.py new`.
  *
@@ -24,7 +25,6 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import { app } from 'electron'
 import {
   getLayoutView,
   getTemplateRoot,
@@ -220,7 +220,7 @@ function buildManifest(
 /** The app version, recorded informationally as the manifest's `kit_version`. */
 function kitVersion(): string {
   try {
-    return `cinna-desktop/${app.getVersion()}`
+    return `cinna-desktop/${runtimeHost.getVersion()}`
   } catch {
     // `app` is unavailable outside Electron (unit tests); the field is
     // informational, so a placeholder is better than failing a scaffold.

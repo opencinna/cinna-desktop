@@ -1,3 +1,7 @@
+vi.mock('../host/runtimeHost', async () => {
+  const { createDesktopHost } = await import('../host/desktop/runtimeHost')
+  return { runtimeHost: createDesktopHost() }
+})
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'

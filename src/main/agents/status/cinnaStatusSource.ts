@@ -1,4 +1,4 @@
-import { net } from 'electron'
+import { runtimeHost } from '../../host/runtimeHost'
 import type { AgentRow } from '../../db/agents'
 import type { AgentStatusSnapshot, AgentStatusSeverity } from '../../../shared/agentStatus'
 import { CINNA_STATUS_REFRESH_DESCRIPTION } from '../../../shared/agentStatus'
@@ -97,7 +97,7 @@ async function readCinnaStatus(userId: string, agent: Pick<AgentRow, 'id' | 'nam
 
     let response: Response
     try {
-      response = await net.fetch(url, {
+      response = await runtimeHost.http.fetch(url, {
         headers: {
           Authorization: `Bearer ${ctx.accessToken}`,
           Accept: 'application/json'

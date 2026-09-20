@@ -1,6 +1,6 @@
+import { runtimeHost } from '../host/runtimeHost'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { app } from 'electron'
 import { agentRepo, agentSessionRepo, type AgentRow } from '../db/agents'
 import { chatRepo, type ChatRow } from '../db/chats'
 import { chatModeService } from './chatModeService'
@@ -50,7 +50,7 @@ export const chatConductorService = {
     // Only generated rows own these folders. User-added local agents are never
     // removed as a side effect of deleting a conversation.
     for (const agent of agentRepo.list(userId)) if (agent.driverConfig?.conductorChatId === chatId) {
-      rmSync(join(app.getPath('userData'), 'chat-conductors', chatId), { recursive: true, force: true })
+      rmSync(join(runtimeHost.getPath('userData'), 'chat-conductors', chatId), { recursive: true, force: true })
       agentRepo.delete(userId, agent.id)
     }
   },
@@ -66,7 +66,7 @@ export const chatConductorService = {
     const providerId = chat.providerId ?? mode?.providerId
     const modelId = chat.modelId ?? mode?.modelId
     const runtime = runtimeService.resolve({ engine, ...(engine === 'opencode' && providerId ? { credential: providerId } : {}), ...(modelId ? { model: modelId } : {}) }, providerService.listMerged())
-    const path = join(app.getPath('userData'), 'chat-conductors', chat.id)
+    const path = join(runtimeHost.getPath('userData'), 'chat-conductors', chat.id)
     const instructions = mode?.systemPrompt?.trim() || PLAIN_PROMPT
     mkdirSync(path, { recursive: true, mode: 0o700 })
     for (const name of ['AGENTS.md', 'CLAUDE.md']) writeFileSync(join(path, name), `${instructions}\n`, { mode: 0o600 })

@@ -1,3 +1,7 @@
+vi.mock('../host/runtimeHost', async () => {
+  const { createDesktopHost } = await import('../host/desktop/runtimeHost')
+  return { runtimeHost: createDesktopHost() }
+})
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 /**
@@ -67,12 +71,14 @@ const deleteRemote = vi.fn(async () => {})
 vi.mock('../services/remoteAgentActions', () => ({ deleteRemoteAgent: (...args: unknown[]) => deleteRemote(...(args as [])) }))
 
 const { registerAgentHandlers } = await import('./agent.ipc')
+const { installAgentReadiness } = await import('../hub/agentReadiness')
 
 beforeEach(() => {
   handlers.clear()
   refresh.mockClear()
   driverReadiness.mockClear()
   findAgent.mockClear()
+  installAgentReadiness()
   registerAgentHandlers()
 })
 

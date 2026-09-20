@@ -1,4 +1,4 @@
-import { session } from 'electron'
+import { runtimeHost } from '../host/runtimeHost'
 import { STATUS_CODES } from 'node:http'
 import { getCACertificates } from 'node:tls'
 import { Agent, ProxyAgent, interceptors, type Dispatcher } from 'undici'
@@ -14,7 +14,7 @@ async function proxyFor(url: string, signal: AbortSignal): Promise<string> {
   let abort!: () => void
   try {
     return await Promise.race([
-      session.defaultSession.resolveProxy(url),
+      runtimeHost.resolveProxy(url),
       new Promise<never>((_, reject) => {
         signal.throwIfAborted()
         abort = () => reject(signal.reason)

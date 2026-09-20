@@ -1,4 +1,4 @@
-import { connectIntentService } from '../services/connectIntentService'
+import { connectIntentService } from '../host/desktop/connectIntentService'
 import type { ConnectIntent } from '../../shared/connectIntent'
 import { ipcHandle } from './_wrap'
 

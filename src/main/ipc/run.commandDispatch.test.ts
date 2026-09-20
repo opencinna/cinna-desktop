@@ -1,3 +1,7 @@
+vi.mock('../host/runtimeHost', async () => {
+  const { createDesktopHost } = await import('../host/desktop/runtimeHost')
+  return { runtimeHost: createDesktopHost() }
+})
 vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: { listOpenForRun: () => [] } }))
 vi.mock('../db/taskHandoffs', () => ({ taskHandoffRepo: { unresolvedForChat: () => false } }))
 // The turn header's two lookups: this chat belongs to no task, so it is depth 0.

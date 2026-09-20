@@ -1,3 +1,4 @@
+import { runtimeHost } from '../host/runtimeHost'
 /**
  * The handoff note as a file on disk — `<userData>/tasks/<task-id>.md`, with
  * the task's identity in frontmatter and the note as the body.
@@ -26,7 +27,6 @@
  * string rather than the path.
  */
 
-import { app } from 'electron'
 import { mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { formatFrontmatter } from '../kit/miniYaml'
@@ -62,9 +62,9 @@ const complainedAbout = new Set<string>()
 /** `<userData>/tasks`, or null when Electron is not there to say where that is. */
 function tasksRoot(): string | null {
   try {
-    return join(app.getPath('userData'), 'tasks')
+    return join(runtimeHost.getPath('userData'), 'tasks')
   } catch (err) {
-    // Reached only outside a running app: `app.getPath('userData')` is
+    // Reached only outside a running app: `runtimeHost.getPath('userData')` is
     // available before `whenReady` and throws only for an unknown path name or
     // when there is no `app` at all — a unit test that has not mocked Electron.
     // `desktopStateService` has the same try/catch for the same reason; null

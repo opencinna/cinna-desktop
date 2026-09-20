@@ -1,5 +1,5 @@
 import { shell } from 'electron'
-import { appIconService, type AppTheme } from '../services/appIconService'
+import { appIconService, type AppTheme } from '../host/desktop/appIconService'
 import { ipcHandle } from './_wrap'
 
 export function registerAppHandlers(): void {

@@ -1,3 +1,8 @@
+vi.mock('../host/events', () => ({ publishEvent: (_channel: string, state: unknown) => { sent.push(JSON.parse(JSON.stringify(state))) } }))
+vi.mock('../host/runtimeHost', async () => {
+  const { createDesktopHost } = await import('../host/desktop/runtimeHost')
+  return { runtimeHost: createDesktopHost() }
+})
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'

@@ -1,3 +1,7 @@
+vi.mock('../host/runtimeHost', async () => {
+  const { createDesktopHost } = await import('../host/desktop/runtimeHost')
+  return { runtimeHost: createDesktopHost() }
+})
 import { createServer, type RequestListener } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { gzipSync } from 'node:zlib'

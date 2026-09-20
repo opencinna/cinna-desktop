@@ -1,3 +1,11 @@
+vi.mock('../host/desktopFeatures', async () => {
+  const { localDevService } = await import('../localdev/localDevService')
+  return { desktopFeatures: { authCompleted() {}, reconcileDevelopment: localDevService.reconcile } }
+})
+vi.mock('../host/runtimeHost', async () => {
+  const { createDesktopHost } = await import('../host/desktop/runtimeHost')
+  return { runtimeHost: createDesktopHost() }
+})
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
 
@@ -69,7 +77,7 @@ vi.mock('../auth/session', async () => {
 vi.mock('./syncService', () => ({
   syncService: { signOutCleanup: vi.fn(async () => {}) }
 }))
-vi.mock('./connectIntentService', () => ({ connectIntentService: { flush: vi.fn() } }))
+vi.mock('../host/desktop/connectIntentService', () => ({ connectIntentService: { flush: vi.fn() } }))
 vi.mock('../window/focus', () => ({ focusMainWindow: vi.fn() }))
 vi.mock('../localdev/localDevService', () => ({ localDevService: { stop: vi.fn(async () => {}), reconcile: vi.fn(async () => {}) } }))
 

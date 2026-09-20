@@ -1,3 +1,12 @@
+vi.mock('../../host/desktopFeatures', async () => {
+  const context = await import('../../localdev/developmentSessionService')
+  const { localDevService } = await import('../../localdev/localDevService')
+  return { desktopFeatures: { ...context, developmentExecutionContext: localDevService.executionContext } }
+})
+vi.mock('../../host/runtimeHost', async () => {
+  const { createDesktopHost } = await import('../../host/desktop/runtimeHost')
+  return { runtimeHost: createDesktopHost() }
+})
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { AcpProcessPool } from './acp/types'
 import type { AgentRow } from '../../db/agents'

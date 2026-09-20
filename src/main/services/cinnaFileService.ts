@@ -1,4 +1,4 @@
-import { net } from 'electron'
+import { runtimeHost } from '../host/runtimeHost'
 import { basename, extname } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { createWriteStream } from 'fs'
@@ -172,7 +172,7 @@ export const cinnaFileService = {
     const started = Date.now()
     let response: Response
     try {
-      response = await net.fetch(url, {
+      response = await runtimeHost.http.fetch(url, {
         method: 'POST',
         headers: { Authorization: authHeader, Accept: 'application/json' },
         body: form
@@ -270,7 +270,7 @@ export const cinnaFileService = {
     const started = Date.now()
     let response: Response
     try {
-      response = await net.fetch(url, {
+      response = await runtimeHost.http.fetch(url, {
         method: 'GET',
         headers: { Authorization: authHeader }
       })
@@ -357,7 +357,7 @@ export const cinnaFileService = {
     const started = Date.now()
     let response: Response
     try {
-      response = await net.fetch(url, {
+      response = await runtimeHost.http.fetch(url, {
         method: 'GET',
         headers: { Authorization: authHeader }
       })
@@ -420,7 +420,7 @@ export const cinnaFileService = {
     const started = Date.now()
     let response: Response
     try {
-      response = await net.fetch(url, {
+      response = await runtimeHost.http.fetch(url, {
         method: 'GET',
         headers: { Authorization: authHeader }
       })
@@ -487,7 +487,7 @@ export const cinnaFileService = {
     const started = Date.now()
     let response: Response
     try {
-      response = await net.fetch(url, {
+      response = await runtimeHost.http.fetch(url, {
         method: 'DELETE',
         headers: { Authorization: authHeader, Accept: 'application/json' }
       })

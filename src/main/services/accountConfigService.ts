@@ -1,4 +1,4 @@
-import { net } from 'electron'
+import { runtimeHost } from '../host/runtimeHost'
 import { userRepo } from '../db/users'
 import { llmProviderRepo } from '../db/llmProviders'
 import { chatModeRepo } from '../db/chatModes'
@@ -92,7 +92,7 @@ export const accountConfigService = {
     // carries decrypted API keys.
     logger.info('account-config request', { baseUrl })
     const started = Date.now()
-    const response = await net.fetch(`${baseUrl}/api/v1/external/account-config`, {
+    const response = await runtimeHost.http.fetch(`${baseUrl}/api/v1/external/account-config`, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }
     })
     if (!response.ok) {

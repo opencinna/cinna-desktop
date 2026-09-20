@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { runtimeHost } from '../host/runtimeHost'
 import { join } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { pbkdf2Sync, randomBytes } from 'crypto'
@@ -102,5 +102,5 @@ function persistLastUser(userId: string): void {
 }
 
 function getSessionFilePath(): string {
-  return join(app.getPath('userData'), 'session.json')
+  return join(runtimeHost.getPath('userData'), 'session.json')
 }

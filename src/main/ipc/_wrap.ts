@@ -1,3 +1,4 @@
+import { HandlerRegistry } from '../hub/handlerRegistry'
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { createLogger } from '../logger/logger'
 import { DomainError } from '../errors'
@@ -6,6 +7,7 @@ import { broadcastReauthRequired } from '../auth/reauth-notify'
 import { REAUTH_REQUIRED_CODE, CINNA_REAUTH_REQUIRED_CODE } from '../../shared/cinnaErrors'
 
 const logger = createLogger('ipc')
+export const ipcHandlers = new HandlerRegistry<IpcMainInvokeEvent>()
 
 function isReauthCode(code: unknown): boolean {
   return code === REAUTH_REQUIRED_CODE || code === CINNA_REAUTH_REQUIRED_CODE
@@ -66,7 +68,7 @@ type IpcHandler<T> = (event: IpcMainInvokeEvent, ...args: any[]) => T | Promise<
  * screen observing the failing query.
  */
 export function ipcHandle<T>(channel: string, fn: IpcHandler<T>): void {
-  ipcMain.handle(channel, async (event, ...args) => {
+  ipcHandlers.register(channel, async (event, ...args) => {
     try {
       const result = await fn(event, ...args)
       if (isReauthResult(result)) broadcastReauthRequired(channel)
@@ -97,4 +99,5 @@ export function ipcHandle<T>(channel: string, fn: IpcHandler<T>): void {
       throw err
     }
   })
+  ipcMain.handle(channel, (event, ...args) => ipcHandlers.invoke(channel, event, ...args))
 }

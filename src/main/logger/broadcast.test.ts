@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { BrowserWindow } from 'electron'
-import { installLogBroadcast } from './broadcast'
+import { installLogBroadcast } from '../host/desktop/logBroadcast'
 import { clearLogEntries, createLogger, setLogSink } from './logger'
 
 /**

@@ -1,3 +1,4 @@
+import { runtimeHost } from '../../host/runtimeHost'
 /**
  * `app-data/desktop.json` — the **one** file in an agent folder Cinna Desktop
  * owns (Invariant 2, and `desktop_owned` in the contract's `layout.json`).
@@ -20,7 +21,6 @@ import { createHash } from 'node:crypto'
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { app } from 'electron'
 import { DESKTOP_STATE_FILE } from '../../../shared/kit/manifest'
 import type { AgentRuntimeRef } from '../../../shared/kit/manifest'
 import { isClaudeApproval, type ClaudeApproval } from '../../../shared/engine'
@@ -282,14 +282,14 @@ function coerceRuntime(raw: unknown): AgentRuntimeRef | null {
 /**
  * Where bare agents keep their state.
  *
- * `app.getPath` is called inside the try because this module is imported by
+ * `runtimeHost.getPath` is called inside the try because this module is imported by
  * pure unit tests that never boot Electron; in the running app it cannot fail,
  * and a temp fallback keeps a test from having to mock Electron to read a file
  * it does not care about.
  */
 function externalStateRoot(): string {
   try {
-    return join(app.getPath('userData'), 'external-agents')
+    return join(runtimeHost.getPath('userData'), 'external-agents')
   } catch {
     return join(tmpdir(), 'cinna-desktop-external-agents')
   }

@@ -1,4 +1,4 @@
-import { net } from 'electron'
+import { runtimeHost } from '../host/runtimeHost'
 import { isDevelopmentAgent } from '../../shared/developmentSession'
 import { isAgentEngine, type AgentEngine } from '../../shared/engine'
 import { agentRepo, agentOverrideRepo, AgentRow, RemoteTarget } from '../db/agents'
@@ -511,7 +511,7 @@ export const agentService = {
     const accessToken = await getCinnaAccessToken(userId)
 
     const baseUrl = user.cinnaServerUrl.replace(/\/$/, '')
-    const response = await net.fetch(`${baseUrl}/api/v1/external/agents`, {
+    const response = await runtimeHost.http.fetch(`${baseUrl}/api/v1/external/agents`, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/json'

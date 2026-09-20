@@ -1,5 +1,5 @@
+import { publishEvent } from '../host/events'
 import os from 'os'
-import { BrowserWindow } from 'electron'
 import { nanoid } from 'nanoid'
 import QRCode from 'qrcode'
 import { createLogger } from '../logger/logger'
@@ -172,9 +172,7 @@ function normalizeSas(sas: string): string {
 }
 
 function broadcast(event: SyncEvent): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send(SYNC_EVENT_CHANNEL, event)
-  }
+  publishEvent(SYNC_EVENT_CHANNEL, event, 'all')
 }
 
 function emitStatus(status: SyncStatus): void {

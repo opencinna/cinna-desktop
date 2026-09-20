@@ -1,3 +1,4 @@
+import { publishEvent } from '../host/events'
 /**
  * Single place that tells the renderer "the active Cinna session is gone".
  *
@@ -11,7 +12,6 @@
  * throws or returns a reauth-required code, so it fires app-wide — not just on
  * whichever screen happens to be observing the failing query.
  */
-import { getMainWindow } from '../index'
 import { getProfileScopeUserId } from './scope'
 import { userRepo } from '../db/users'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../../shared/cinnaErrors'
@@ -45,10 +45,8 @@ function resolveAccount(): { account: string; serverUrl: string | null } {
 }
 
 export function broadcastReauthRequired(channel?: string): void {
-  const win = getMainWindow()
-  if (!win || win.isDestroyed()) return
   const { account, serverUrl } = resolveAccount()
   const payload: ReauthRequiredEvent = { account, serverUrl, source: sourceLabel(channel) }
   logger.info('broadcasting reauth-required', { account, serverUrl, channel })
-  win.webContents.send(CINNA_REAUTH_REQUIRED_CHANNEL, payload)
+  publishEvent(CINNA_REAUTH_REQUIRED_CHANNEL, payload)
 }

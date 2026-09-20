@@ -1,4 +1,4 @@
-import { trayService } from '../services/trayService'
+import { trayService } from '../host/desktop/trayService'
 import { userActivation } from '../auth/activation'
 import { ipcHandle } from './_wrap'
 

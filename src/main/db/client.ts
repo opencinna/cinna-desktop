@@ -1,5 +1,5 @@
+import { runtimeHost } from '../host/runtimeHost'
 import { encryptApiKey } from '../security/keystore'
-import { app } from 'electron'
 import { join } from 'path'
 import Database from 'better-sqlite3'
 import { drizzle, BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
@@ -14,9 +14,9 @@ const logger = createLogger('db')
 let db: BetterSQLite3Database<typeof schema>
 let sqlite: Database.Database
 
-export function initDatabase(): void {
-  const dbPath = join(app.getPath('userData'), 'cinna.db')
-  sqlite = new Database(dbPath)
+export function initDatabase(openDatabase: (path: string) => Database.Database = (path) => new Database(path)): void {
+  const dbPath = join(runtimeHost.getPath('userData'), 'cinna.db')
+  sqlite = openDatabase(dbPath)
 
   sqlite.pragma('journal_mode = WAL')
 
@@ -103,3 +103,6 @@ export function getDb(): BetterSQLite3Database<typeof schema> {
 export function getRawSqlite(): Database.Database {
   return sqlite
 }
+
+/** Release the host-owned connection after runtimes and schedulers have stopped. */
+export function closeDatabase(): void { sqlite?.close() }

@@ -2,7 +2,7 @@ import { Tray, BrowserWindow, nativeImage, screen, app, type NativeImage } from 
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { appIconService } from './appIconService'
-import { createLogger } from '../logger/logger'
+import { createLogger } from '../../logger/logger'
 
 const logger = createLogger('tray')
 

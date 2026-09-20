@@ -88,11 +88,6 @@ async function withCodeAsync<T>(fn: () => Promise<T>): Promise<LocalAgentOutcome
  * `localAgentService`.
  */
 export function registerLocalAgentHandlers(): void {
-  // Composition root for the feature: hands Phase 4's "open in…" guard the real
-  // roots and gives the folder watcher its scanner callbacks. Must run before
-  // any handler below, and before `local-tools:open-in` can succeed.
-  localAgentService.configure(getSettingsScopeUserId)
-
   ipcHandle(
     'local-agent:list',
     (): { roots: AgentRootDto[]; agents: LocalAgentDto[]; homeAccess: AgentsHomeAccess } => {

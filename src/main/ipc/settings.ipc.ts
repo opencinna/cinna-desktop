@@ -1,6 +1,6 @@
 import { userActivation } from '../auth/activation'
 import { appSettingsService } from '../services/appSettingsService'
-import { syncTrayFromSettings } from '../services/traySync'
+import { syncTrayFromSettings } from '../host/desktop/traySync'
 import { localAgentService } from '../services/localAgents/localAgentService'
 import { defaultEngineService } from '../services/localAgents/defaultEngineService'
 import { getSettingsScopeUserId } from '../auth/scope'

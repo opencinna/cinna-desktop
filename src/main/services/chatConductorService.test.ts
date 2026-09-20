@@ -1,3 +1,7 @@
+vi.mock('../host/runtimeHost', async () => {
+  const { createDesktopHost } = await import('../host/desktop/runtimeHost')
+  return { runtimeHost: createDesktopHost() }
+})
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'

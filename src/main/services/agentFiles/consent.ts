@@ -1,7 +1,6 @@
 import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, parse, relative, resolve, sep } from 'node:path'
-import type { MessageBoxOptions } from 'electron'
 import { isWithin } from '../localAgents/pathRules'
 import type { AgentFileRefKind } from '../../../shared/agentFiles'
 import { createPathCanonicalizer, type PathCanonicalizer } from './canonicalPath'
@@ -146,7 +145,7 @@ export type ConsentRegistry = ReturnType<typeof createConsentRegistry>
 export function consentDialogOptions(
   request: ConsentRequest,
   platform: NodeJS.Platform = process.platform
-): MessageBoxOptions {
+): ConsentDialogOptions {
   const folder = request.kind === 'dir'
   const showButton = folder ? (platform === 'darwin' ? 'Show in Finder' : 'Show in folder') : 'Show file'
   const detail = [request.displayPath]
@@ -169,4 +168,16 @@ export function consentDialogOptions(
         }
       : {})
   }
+}
+
+/** Native-dialog data, independent of any window toolkit. */
+export interface ConsentDialogOptions {
+  type: 'question'
+  buttons: string[]
+  defaultId: number
+  cancelId: number
+  message: string
+  detail: string
+  checkboxLabel?: string
+  checkboxChecked?: boolean
 }

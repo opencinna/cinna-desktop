@@ -1,13 +1,13 @@
 import { dialog, shell, type BrowserWindow } from 'electron'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../../auth/scope'
-import { appSettingsService } from '../appSettingsService'
-import { isGuardedLocation } from '../localAgents/homePath'
-import { localAgentService, openInTextEditor } from '../localAgents/localAgentService'
-import { launchEditor } from '../localAgents/openInService'
-import { toolDetectionService } from '../localAgents/toolDetectionService'
-import { createAgentFileService } from './agentFileService'
-import { consentDialogOptions, createConsentRegistry, type ConsentPrompt } from './consent'
-import { findDefaultEditor } from './openStrategy'
+import { appSettingsService } from '../../services/appSettingsService'
+import { isGuardedLocation } from '../../services/localAgents/homePath'
+import { localAgentService, openInTextEditor } from '../../services/localAgents/localAgentService'
+import { launchEditor } from '../../services/localAgents/openInService'
+import { toolDetectionService } from '../../services/localAgents/toolDetectionService'
+import { createAgentFileService } from '../../services/agentFiles/agentFileService'
+import { consentDialogOptions, createConsentRegistry, type ConsentPrompt } from '../../services/agentFiles/consent'
+import { findDefaultEditor } from '../../services/agentFiles/openStrategy'
 
 /**
  * The production wiring of {@link createAgentFileService}. Folder agents live

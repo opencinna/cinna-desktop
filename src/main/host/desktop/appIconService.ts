@@ -1,6 +1,6 @@
 import { app, nativeImage, BrowserWindow } from 'electron'
-import iconDarkPath from '../../../resources/cinna-desktop-icon-dark.png?asset'
-import iconLightPath from '../../../resources/cinna-desktop-icon-light.png?asset'
+import iconDarkPath from '../../../../resources/cinna-desktop-icon-dark.png?asset'
+import iconLightPath from '../../../../resources/cinna-desktop-icon-light.png?asset'
 
 export type AppTheme = 'dark' | 'light'
 

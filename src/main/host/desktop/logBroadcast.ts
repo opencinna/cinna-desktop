@@ -1,12 +1,12 @@
 import type { BrowserWindow } from 'electron'
-import { setLogSink, type LogEntry } from './logger'
+import { setLogSink, type LogEntry } from '../../logger/logger'
 
 /**
  * The Electron half of logging, kept out of `logger.ts` so that logging costs a
  * module nothing but this package's own types.
  *
  * The window getter arrives as an argument rather than as an
- * `import { getMainWindow } from '../index'`, which would only move the cycle
+ * `import { getMainWindow } from '../../index'`, which would only move the cycle
  * here from `logger.ts`. `index.ts` owns the window, so `index.ts` supplies it;
  * the only import in this file is type-only and erased at compile time, so no
  * runtime edge to electron or to the entry point is created by either module.

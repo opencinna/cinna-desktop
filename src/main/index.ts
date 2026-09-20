@@ -1,35 +1,34 @@
+import { initializeHubCore, shutdownHubCore } from './hub/core'
+import { installDesktopFeatures } from './host/desktopFeatures'
+import { developmentAgentContext, contextForDevelopmentAgent, restoreDevelopmentContext } from './localdev/developmentSessionService'
+import { installRuntimeHost } from './host/runtimeHost'
+import { installEventPublisher } from './host/events'
+import { createDesktopHost, desktopEventPublisher } from './host/desktop/runtimeHost'
 import { taskRuntimeService } from './services/taskRuntimeService'
-import { interruptedTurnService } from './services/interruptedTurnService'
 import { app, shell, BrowserWindow, Menu, dialog, powerMonitor } from 'electron'
 import { join } from 'path'
 import { appendFileSync, renameSync, statSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerAllIpcHandlers } from './ipc'
-import { toolInstallService } from './services/localAgents/toolInstallService'
-import { initDatabase } from './db/client'
-import { mcpManager } from './mcp/manager'
-import { conductorBridge } from './services/conductorBridge'
-import { acpProcessPool, a2aTurnRecoverer, managedTurnRecoverer } from './agents/drivers'
-import { registerRecoverer, remoteTurnRecoveryService } from './services/remoteTurnRecoveryService'
+import { remoteTurnRecoveryService } from './services/remoteTurnRecoveryService'
 import { userActivation } from './auth/activation'
-import { a2aStreamingService } from './services/a2aStreamingService'
-import { getCurrentUserId, initSession } from './auth/session'
-import { initAutoUpdater, checkForUpdatesManual } from './updater/updater'
-import { appIconService } from './services/appIconService'
+import { getCurrentUserId } from './auth/session'
+import { initAutoUpdater, checkForUpdatesManual } from './host/desktop/updater'
+import { appIconService } from './host/desktop/appIconService'
 import { syncService } from './services/syncService'
 import { taskSyncScheduler } from './services/taskSyncScheduler'
 import { localScheduleScheduler } from './services/localScheduleScheduler'
 import { handoverScheduler } from './services/handoverScheduler'
-import { trayService } from './services/trayService'
-import { syncTrayFromSettings } from './services/traySync'
+import { trayService } from './host/desktop/trayService'
+import { syncTrayFromSettings } from './host/desktop/traySync'
 import { createLogger } from './logger/logger'
-import { installLogBroadcast } from './logger/broadcast'
+import { installLogBroadcast } from './host/desktop/logBroadcast'
 import { localDevService } from './localdev/localDevService'
 import {
   connectIntentService,
   connectUrlFromArgv,
   registerConnectScheme
-} from './services/connectIntentService'
+} from './host/desktop/connectIntentService'
 import { BACKGROUND_WINDOW, focusMainWindow, installWindowResolver } from './window/focus'
 import {
   loadWindowState,
@@ -57,6 +56,17 @@ const bootLogger = createLogger('boot')
 // puts entries in front of the renderer, and it lives here because the window
 // lives here. `getMainWindow` is a hoisted function declaration and reads
 // `mainWindow` lazily, so installing before there is a window is correct.
+installRuntimeHost(createDesktopHost())
+installDesktopFeatures({
+  authCompleted() { focusMainWindow(); connectIntentService.flush() },
+  clearDevelopment: () => localDevService.clear(),
+  reconcileDevelopment: (userId) => localDevService.reconcile(userId),
+  developmentAgentContext,
+  contextForDevelopmentAgent,
+  restoreDevelopmentContext,
+  developmentExecutionContext: (profileId) => localDevService.executionContext(profileId)
+})
+installEventPublisher(desktopEventPublisher(getMainWindow))
 installLogBroadcast(getMainWindow)
 installWindowResolver(getMainWindow)
 connectIntentService.install(getMainWindow)
@@ -370,25 +380,7 @@ function startup(): void {
     optimizer.watchWindowShortcuts(window)
   })
 
-  initDatabase()
-  initSession()
-  taskRuntimeService.recover()
-  // Before the boot pass, which leaves the turns of a driver with a recoverer
-  // to `remoteTurnRecoveryService`.
-  registerRecoverer('a2a', a2aTurnRecoverer)
-  registerRecoverer('managed', managedTurnRecoverer)
-  // After `recover()`: turns the app was killed under are settled once the
-  // runtimes have re-reserved what they own, and with this device's id known.
-  interruptedTurnService.finalizeLeftovers()
-  // A remote turn is asked how it ended once its profile can reach the agent:
-  // after the profile's activation, and again after a re-auth for the markers
-  // that waited on it.
-  userActivation.onProfileReady((userId) => { void remoteTurnRecoveryService.resume(userId) })
-  // A marker left because its agent was unreachable is tried again on a timer,
-  // and on wake (below), for the profile that is active then.
-  remoteTurnRecoveryService.onRetryDue((userId) => {
-    if (userActivation.isActivated() && getCurrentUserId() === userId) void remoteTurnRecoveryService.resume(userId)
-  })
+  initializeHubCore()
   registerAllIpcHandlers()
   // Providers are activated through auth flow (auth:get-startup / auth:login)
 
@@ -446,33 +438,10 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('will-quit', async () => {
-  // **What the running turns streamed, before anything can end them.** A direct
-  // chat writes its rows only when the turn returns, and the kills below end
-  // turns that never will — a question the user left parked, minutes of tool
-  // calls — so without this the whole turn vanished from the transcript. First
-  // and synchronous: Electron does not await this handler, the SQLite writes
-  // are sync, and nothing below may run ahead of them.
-  a2aStreamingService.saveInFlight()
-  localScheduleScheduler.stop()
-  handoverScheduler.stop()
-  taskRuntimeService.interruptAll('Execution stopped when the app closed. Review the conversation before resuming.')
-  taskSyncScheduler.stop()
-  // **The ACP processes first, and not awaited.** Each folder agent runs in a
-  // child of its own — `opencode acp`, or the Claude adapter and the `claude`
-  // it spawns — in its own process group, so nothing else can reach them once
-  // this window closes. Electron does not await a `will-quit` handler, which is
-  // why this is fired rather than awaited: `shutdown` reaches `killTree`
-  // synchronously for every running process, and the await that follows it is
-  // only the wait for their exits. Without this, quitting mid-turn leaves a
-  // ~260 MB `claude` behind with nobody left to stop it.
-  void acpProcessPool.shutdown()
-  void conductorBridge.shutdown()
-  // Same rule, and before the first await for the same reason: an installer is
-  // a `curl` piped into a shell that writes the user's home directory, and one
-  // left running after the window closes has nothing left to report to.
-  toolInstallService.shutdown()
-  await mcpManager.disconnectAll()
+app.on('will-quit', () => {
+  // shutdownHubCore persists partial turns and signals children synchronously;
+  // Electron does not await the subsequent process-exit promises.
+  void shutdownHubCore()
 })
 
 export function getMainWindow(): BrowserWindow | null {
