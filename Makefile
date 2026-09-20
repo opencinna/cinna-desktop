@@ -7,13 +7,16 @@
 
 PW := npx playwright test -c e2e/playwright.config.ts
 
-.PHONY: help test typecheck build contract contract-next contract-snapshot pin-assets demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine live-ctl live-help live-flow
+.PHONY: help test test-hub typecheck build contract contract-next contract-snapshot pin-assets demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine live-ctl live-help live-flow
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 test: ## Unit suite (vitest, all against fakes)
 	npm test
+
+test-hub: ## Hub import boundary and plain-Node offline fixture turn
+	npm run test:hub
 
 typecheck: ## Type-check main, preload, renderer and e2e
 	npm run typecheck

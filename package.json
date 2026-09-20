@@ -29,7 +29,8 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck:e2e": "tsc --noEmit -p e2e/tsconfig.json",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:e2e"
+    "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:e2e",
+    "test:hub": "node scripts/check-hub-boundary.mjs && node scripts/check-hub-core.mjs"
   },
   "dependencies": {
     "@a2a-js/sdk": "^0.3.13",
