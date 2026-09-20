@@ -14,6 +14,7 @@ const { useLocalDevStore } = await import('../../stores/localDev.store')
 const { useAuthStore } = await import('../../stores/auth.store')
 const resetConsent = vi.fn(async () => undefined)
 const openWorkspace = vi.fn(async () => undefined)
+const reconnectWorkspace = vi.fn(async () => undefined)
 
 function withState(state: LocalDevState): void {
   useLocalDevStore.setState({ state, subscribed: true })
@@ -21,7 +22,7 @@ function withState(state: LocalDevState): void {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useLocalDevStore.setState({ resetConsent, openWorkspace })
+  useLocalDevStore.setState({ resetConsent, openWorkspace, reconnectWorkspace })
   useAuthStore.setState({ currentUser: {
     id: 'account-a', type: 'cinna_user', username: 'alice', displayName: 'Alice',
     hasPassword: false, cinnaServerUrl: 'https://cinna.example.com'
@@ -92,5 +93,38 @@ describe('ProfileLocalDevSettingsSection', () => {
     await waitFor(() => expect((screen.getByRole('button', { name: 'Reset consent' }) as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(screen.getByRole('button', { name: 'Reset consent' }))
     await waitFor(() => expect(resetConsent).toHaveBeenCalledWith('cinna.example.com'))
+  })
+
+  /**
+   * Exit `11`. Repair re-mints a token for the account signed in here and
+   * cinna-cli refuses it for the same reason, so this is the one attention
+   * state whose primary button is not Repair.
+   */
+  describe('a workspace that belongs to another account', () => {
+    const mismatch = {
+      phase: 'attention', reason: 'account_mismatch',
+      detail: 'Token belongs to a different account than this workspace.'
+    } as const
+
+    it('leads with Reconnect and keeps Repair as the secondary', async () => {
+      withState(mismatch)
+      render(<ProfileLocalDevSettingsSection />)
+      expect(screen.getByText(/Repair cannot change/i)).toBeTruthy()
+      const reconnect = screen.getByRole('button', { name: /reconnect workspace/i })
+      const repair = screen.getByRole('button', { name: /repair/i })
+      expect(reconnect.compareDocumentPosition(repair) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      fireEvent.click(reconnect)
+      await waitFor(() => expect(reconnectWorkspace).toHaveBeenCalledOnce())
+    })
+
+    it('says so when the channel refuses, instead of a spinner that stops and nothing else', async () => {
+      reconnectWorkspace.mockRejectedValueOnce(new Error('Activate this profile first.'))
+      withState(mismatch)
+      render(<ProfileLocalDevSettingsSection />)
+      fireEvent.click(screen.getByRole('button', { name: /reconnect workspace/i }))
+      expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Activate this profile first.')
+      // Still offered, because the thing it fixes is still true.
+      expect(screen.getByRole('button', { name: /reconnect workspace/i })).toBeTruthy()
+    })
   })
 })

@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { AlertTriangle, FolderOpen, Loader2, RefreshCw } from 'lucide-react'
+import { AlertTriangle, FolderOpen, FolderSync, Loader2, RefreshCw } from 'lucide-react'
 import { useLocalDev } from '../../hooks/useLocalDev'
 import { useLocalDevStore } from '../../stores/localDev.store'
 import { useAuthStore } from '../../stores/auth.store'
 import type { LocalDevAttentionReason } from '../../../../shared/localDevState'
 import { SettingsButton, SettingsInfoTip } from './SettingsLayout'
+import { unwrapIpcError } from '../../utils/ipcError'
 
 /**
  * Settings → Profile → Local Development.
@@ -24,10 +25,20 @@ export function ProfileLocalDevSettingsSection(): React.JSX.Element {
   const consent = useLocalDevStore((s) => s.consent)
   const resetConsent = useLocalDevStore((s) => s.resetConsent)
   const repair = useLocalDevStore((s) => s.repair)
+  const reconnectWorkspace = useLocalDevStore((s) => s.reconnectWorkspace)
   const openWorkspace = useLocalDevStore((s) => s.openWorkspace)
   const cinnaServerUrl = useAuthStore((s) => s.currentUser?.cinnaServerUrl)
 
   const [busy, setBusy] = useState(false)
+  /**
+   * Rendered only when it exists, below the buttons and last in the card (§1).
+   *
+   * The service answers ordinary failures with a state, so this is for the ones
+   * that cannot: a channel refused before it reached the service, a profile
+   * deactivated mid-click. Without it `run()` swallowed them — the spinner
+   * stopped, the card did not change, and the user pressed the button again.
+   */
+  const [error, setError] = useState<string | null>(null)
 
   /**
    * `consent` and `declined` name their host; `ready` does not, so it falls
@@ -43,8 +54,11 @@ export function ProfileLocalDevSettingsSection(): React.JSX.Element {
 
   const run = async (fn: () => Promise<unknown>): Promise<void> => {
     setBusy(true)
+    setError(null)
     try {
       await fn()
+    } catch (err) {
+      setError(unwrapIpcError(err, 'Could not complete this step. Try again.'))
     } finally {
       setBusy(false)
     }
@@ -195,11 +209,30 @@ export function ProfileLocalDevSettingsSection(): React.JSX.Element {
                   </div>
                 </div>
                 <Actions>
-                  <PrimaryButton onClick={() => run(repair)} busy={busy}>
-                    <RefreshCw size={13} /> Repair
-                  </PrimaryButton>
+                  {/* Reconnect leads for the one reason Repair cannot fix, and
+                      Repair stays beside it rather than disappearing — it is
+                      still the right button for everything else on this row. */}
+                  {state.reason === 'account_mismatch' && (
+                    <PrimaryButton onClick={() => run(reconnectWorkspace)} busy={busy}>
+                      <FolderSync size={13} /> Reconnect workspace
+                    </PrimaryButton>
+                  )}
+                  {state.reason === 'account_mismatch' ? (
+                    <SettingsButton onClick={() => run(repair)} disabled={busy}>
+                      <RefreshCw size={13} /> Repair
+                    </SettingsButton>
+                  ) : (
+                    <PrimaryButton onClick={() => run(repair)} busy={busy}>
+                      <RefreshCw size={13} /> Repair
+                    </PrimaryButton>
+                  )}
                 </Actions>
               </>
+            )}
+            {error && (
+              <p role="alert" className="text-[13px] text-[var(--color-danger)] leading-relaxed">
+                {error}
+              </p>
             )}
           </div>
         </Card>
@@ -230,10 +263,15 @@ export function ProfileLocalDevSettingsSection(): React.JSX.Element {
 }
 
 /**
- * What Repair will and will not do, per reason. `toolchain` is the one that
- * earns real copy: it is the only reason whose commonest cause — a desktop
- * older than the versions the server pinned — Repair cannot fix, and a user
- * left pressing it would never find that out.
+ * What Repair will and will not do, per reason.
+ *
+ * Two of them earn real copy, and for the same reason: Repair cannot fix
+ * either, and a user left pressing it would never find that out. `toolchain`'s
+ * commonest cause is a desktop older than the versions the server pinned;
+ * `account_mismatch` is a folder that belongs to someone else's account, which
+ * is what Reconnect is for. Each stays one or two lines, like the rest: a hint
+ * that runs five lines for one reason and two for every other is the card
+ * changing shape according to how it broke (§12).
  */
 function attentionHint(reason: LocalDevAttentionReason): string {
   switch (reason) {
@@ -245,6 +283,8 @@ function attentionHint(reason: LocalDevAttentionReason): string {
       return 'The account token in the workspace is no longer valid. Repair mints a new one.'
     case 'workspace':
       return 'The account workspace could not be created or read. Repair tries again — but if the folder already belongs to a different Cinna account, move it aside first.'
+    case 'account_mismatch':
+      return 'The workspace folder belongs to a different Cinna account, which Repair cannot change. Reconnect sets this account up fresh.'
   }
 }
 

@@ -7,7 +7,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mkdir, readlink, symlink, unlink } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readlink, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import type { LocalDevState } from '../../shared/localDevState'
 import type { ToolchainProgress, ToolchainResult, ToolchainPins } from './toolchain'
 
@@ -713,5 +713,101 @@ describe('managed PATH link ownership', () => {
     await symlink('/managed/bin/../bin/cinna', target)
     expect(await localDevService.addToPath()).toMatchObject({ ok: true, path: target })
     expect(await readlink(target)).toBe('/managed/bin/cinna')
+  })
+})
+
+/**
+ * Exit `11` — the workspace on disk belongs to the account that set it up, and
+ * the token being offered belongs to the one signed in now. Repair re-mints for
+ * the same account and is refused identically, so the only way out renames the
+ * folder and starts over. These tests are about not doing that to the wrong
+ * folder, at the wrong moment, or silently.
+ */
+describe('reconnecting a workspace that belongs to another account', () => {
+  const cloud = join(agentsHome, 'Cloud')
+  const workspace = join(cloud, 'cinna.example.com')
+
+  async function archives(): Promise<string[]> {
+    return (await readdir(cloud).catch(() => [] as string[])).filter((name) => name.startsWith('cinna.example.com.old-'))
+  }
+
+  /** A reconcile that finds a workspace already set up, and is told it is not this account's. */
+  async function reachMismatch(): Promise<void> {
+    await mkdir(join(workspace, '.cinna'), { recursive: true })
+    await writeFile(join(workspace, '.cinna', 'account.json'), '{}')
+    vi.mocked(runCinnaCli).mockResolvedValueOnce({
+      exitCode: 11,
+      result: { result: 'error', detail: 'Token belongs to a different account than this workspace.' },
+      stderr: '', stdout: '', timedOut: false
+    } as never)
+    const run = localDevService.reconcile('u1')
+    await untilInstalling()
+    install.finish(installed)
+    expect(await run).toMatchObject({ phase: 'attention', reason: 'account_mismatch' })
+  }
+
+  /**
+   * Drive a reconcile the service started for itself through its toolchain wait.
+   *
+   * `untilInstalling` spins the microtask queue, which is enough for the rest of
+   * this file — but a Reconnect does real `stat` and `rename` first, and those
+   * resolve on the event loop, not between microtasks.
+   */
+  async function settle<T>(pending: Promise<T>): Promise<T> {
+    install = undefined as never
+    // Generous, because a `setTimeout(1)` on a machine running the whole suite
+    // in parallel workers is not a millisecond. Too short a budget here fails
+    // as `install is undefined`, which reads like a bug in the service.
+    const deadline = Date.now() + 30_000
+    while (install === undefined && Date.now() < deadline) await new Promise((next) => setTimeout(next, 1))
+    if (install === undefined) throw new Error('the reconcile never reached the toolchain')
+    install.finish(installed)
+    return pending
+  }
+
+  beforeEach(async () => {
+    await rm(cloud, { recursive: true, force: true })
+  })
+
+  it('renames the old workspace beside the new one and sets this account up again', async () => {
+    await reachMismatch()
+    expect(await settle(localDevService.reconnectWorkspace('u1'))).toMatchObject({ phase: 'ready' })
+    // Renamed, never deleted: the folder holds a context package and whatever
+    // else its owner put there.
+    expect(await archives()).toHaveLength(1)
+    expect(vi.mocked(runCinnaCli).mock.calls.some(([call]) => call.args[0] === 'account' && call.args[1] === 'setup')).toBe(true)
+  })
+
+  it('leaves a workspace alone once the state has moved off the mismatch', async () => {
+    // The queue ahead of a Reconnect can be a whole toolchain install, and the
+    // run that drains from it may have reached `ready` — archiving a workspace
+    // that now works would throw away the thing the user was trying to get back.
+    const first = localDevService.reconcile('u1')
+    await untilInstalling()
+    install.finish(installed)
+    expect(await first).toMatchObject({ phase: 'ready' })
+    await mkdir(join(workspace, '.cinna'), { recursive: true })
+    await writeFile(join(workspace, '.cinna', 'account.json'), '{}')
+    expect(await settle(localDevService.reconnectWorkspace('u1'))).toMatchObject({ phase: 'ready' })
+    expect(await archives()).toEqual([])
+  })
+
+  it('reports a rename the filesystem refused, and keeps Reconnect on offer', async () => {
+    await reachMismatch()
+    // Read-only parent: the rename cannot be written, the way a locked folder
+    // or a cinna-cli still holding it would refuse on Windows.
+    await chmod(cloud, 0o555)
+    try {
+      const refused = await localDevService.reconnectWorkspace('u1')
+      // An unhandled rejection instead of this leaves Settings showing an
+      // unchanged card and no message anywhere — its `run()` has no catch.
+      expect(refused).toMatchObject({ phase: 'attention', reason: 'account_mismatch' })
+      expect(refused.phase === 'attention' && refused.detail).toContain('Could not move the old workspace aside')
+      // Still `account_mismatch`, so the button that fixes it is still drawn.
+      expect(sent.at(-1)).toMatchObject({ phase: 'attention', reason: 'account_mismatch' })
+      expect(await archives()).toEqual([])
+    } finally {
+      await chmod(cloud, 0o755)
+    }
   })
 })

@@ -64,9 +64,12 @@ describe('fromCliOutcome', () => {
     })
   })
 
-  it('maps an account mismatch to the workspace, because no retry fixes it', () => {
+  it('gives an account mismatch its own reason, because no retry fixes it', () => {
+    // Not `workspace`: the surfaces key the Reconnect button off this, and a
+    // mismatch that arrived as a workspace failure would offer only Repair —
+    // which mints another token for the same account and fails identically.
     const state = fromCliOutcome(outcome({ exitCode: 11 }), 'Setup')
-    expect(state).toMatchObject({ phase: 'attention', reason: 'workspace' })
+    expect(state).toMatchObject({ phase: 'attention', reason: 'account_mismatch' })
     expect(state.phase === 'attention' && state.detail).toContain('different Cinna account')
   })
 

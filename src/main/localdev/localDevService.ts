@@ -53,7 +53,7 @@ import { runtimeHost } from '../host/runtimeHost'
  */
 
 import { homedir, hostname } from 'node:os'
-import { lstat, mkdir, readlink, stat, symlink, unlink } from 'node:fs/promises'
+import { lstat, mkdir, readlink, rename, stat, symlink, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { userRepo } from '../db/users'
 import { appSettingsRepo } from '../db/appSettings'
@@ -578,6 +578,25 @@ async function isFile(path: string): Promise<boolean> {
   }
 }
 
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * `20260920-143000`, for the name a moved-aside workspace keeps.
+ *
+ * UTC and no colons: the folder lands in the user's agents home, which syncs
+ * to machines whose filesystems disagree about what a filename may contain,
+ * and a name that sorts is the one thing that makes a row of them readable.
+ */
+function archiveStamp(now = new Date()): string {
+  return now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '').replace('T', '-')
+}
+
 /** The file whose presence means "cinna-cli has set this workspace up". */
 function accountConfigPath(workspacePath: string): string {
   return join(workspacePath, '.cinna', 'account.json')
@@ -607,8 +626,9 @@ export function fromToolchainError(err: ToolchainError): LocalDevState {
  * token that expired between minting and use, and re-running mints a new one —
  * so it is `token_expired`, whose Repair does exactly that, rather than a dead
  * end. `11` is an account mismatch: the workspace at that path belongs to a
- * different Cinna account, which no retry fixes and which the user has to
- * resolve by moving the folder.
+ * different Cinna account, which no retry fixes — it gets its own reason so the
+ * surfaces can offer {@link localDevService.reconnectWorkspace}, the one action
+ * that does, rather than a Repair button that will fail identically.
  */
 export function fromCliOutcome(outcome: CliRunOutcome, what: string): LocalDevState {
   const detail = outcome.result?.detail ?? outcome.stderr ?? ''
@@ -631,10 +651,10 @@ export function fromCliOutcome(outcome: CliRunOutcome, what: string): LocalDevSt
     case EXIT_ACCOUNT_MISMATCH:
       return {
         phase: 'attention',
-        reason: 'workspace',
+        reason: 'account_mismatch',
         detail:
           detail ||
-          'The folder for this server already belongs to a different Cinna account. Move it aside and try again.'
+          'The workspace folder for this server belongs to a different Cinna account.'
       }
     default:
       return {
@@ -1285,6 +1305,79 @@ export const localDevService = {
     if (inFlight) await inFlight.catch(() => undefined)
     if (profileGeneration !== profile || profileUserId !== userId) return state
     return this.reconcile(userId)
+  },
+
+  /**
+   * Move the account workspace aside and set a fresh one up.
+   *
+   * The one failure Repair provably cannot clear. cinna-cli refuses a setup
+   * token minted for account B inside a workspace that already belongs to
+   * account A, and every Repair mints another token for B — which is why exit
+   * `11` has its own attention reason and this has its own verb. cinna-cli's
+   * own advice is to run `cinna account setup` in a new directory; this is that
+   * advice, without the terminal.
+   *
+   * **Renamed, never deleted.** The old workspace holds a context package and
+   * whatever else its owner put there, and an app that removes a folder from
+   * the user's agents home to fix its own setup has chosen the wrong trade.
+   * `<host>.old-<stamp>` lands beside the new one inside `Cloud/`, which the
+   * agent scanner never walks — it only ever reads `Local/` — so nothing
+   * adopts it and the user deletes it when they feel like it.
+   *
+   * Like `setConsent`, it waits for a reconcile already in flight rather than
+   * racing it: that run is reading the very directory about to be renamed, and
+   * may have a cinna-cli spawned with its cwd inside.
+   */
+  async reconnectWorkspace(userId: string): Promise<LocalDevState> {
+    selectProfile(userId)
+    const profile = profileGeneration
+    // On the shared operation chain, not merely after whatever was in flight
+    // when the click arrived. A reconcile started in the gap — a power resume,
+    // an activation, the re-auth the button beside this one just finished —
+    // would otherwise be spawning `cinna account status` with its cwd inside
+    // the directory being renamed out from under it.
+    const decision = await enqueueOperation(async (): Promise<'skip' | 'reconcile' | LocalDevState> => {
+      if (profileGeneration !== profile || profileUserId !== userId) return 'skip'
+      // Re-read, because the queue ahead of this can be a whole toolchain
+      // install: the run that just drained may have reached `ready`, and
+      // archiving a workspace that now works would throw away the thing the
+      // user was trying to get back. Repair is the honest fallback.
+      if (state.phase !== 'attention' || state.reason !== 'account_mismatch') return 'reconcile'
+      const user = userRepo.get(userId)
+      // `account_mismatch` implies a Cinna profile, so this means the row
+      // changed underneath: nothing to reconnect and nothing to say about it.
+      if (!user || user.type !== 'cinna_user' || !user.cinnaServerUrl) return 'skip'
+      try {
+        const workspacePath = workspacePathFor(userId, new URL(user.cinnaServerUrl).host)
+        if (await isDirectory(workspacePath)) {
+          // Two reconnects inside the same second would otherwise rename onto
+          // an existing directory, which POSIX refuses once it is non-empty —
+          // an `ENOTEMPTY` where the honest answer is "pick another name".
+          const base = `${workspacePath}.old-${archiveStamp()}`
+          let archived = base
+          for (let n = 2; await isDirectory(archived); n += 1) archived = `${base}-${n}`
+          await rename(workspacePath, archived)
+          logger.info('moved a mismatched account workspace aside', { archived })
+        }
+        return 'reconcile'
+      } catch (err) {
+        // A locked or read-only folder is something the UI renders, not
+        // something it catches — every other verb on this service answers with
+        // a state, and the IPC surface promises callers exactly that. The
+        // reason stays `account_mismatch` on purpose: it is still true, and it
+        // is what keeps Reconnect on screen to press again once the folder is
+        // free.
+        setState({
+          phase: 'attention',
+          reason: 'account_mismatch',
+          detail: `Could not move the old workspace aside: ${err instanceof Error ? err.message : String(err)}`
+        })
+        return state
+      }
+    })
+    if (decision === 'skip') return state
+    if (decision !== 'reconcile') return decision
+    return this.reconcile(userId, true)
   },
 
   /** Forget the answer for a host, so the next reconcile asks again. */

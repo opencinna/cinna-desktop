@@ -36,6 +36,7 @@ interface LocalDevStore {
   consent: (host: string, accepted: boolean) => Promise<void>
   resetConsent: (host: string) => Promise<void>
   repair: () => Promise<void>
+  reconnectWorkspace: () => Promise<void>
   openWorkspace: () => Promise<void>
 }
 
@@ -124,6 +125,13 @@ export const useLocalDevStore = create<LocalDevStore>((set, get) => ({
   repair: async () => {
     const request = ++revision
     receiveReply(await window.api.localDev.repair(), request)
+  },
+
+  // Main moves the old folder aside and reconciles, so — like Repair — the
+  // answer *is* the next state and there is nothing to invalidate here.
+  reconnectWorkspace: async () => {
+    const request = ++revision
+    receiveReply(await window.api.localDev.reconnectWorkspace(), request)
   },
 
   openWorkspace: async () => {

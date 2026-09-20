@@ -28,6 +28,18 @@ export type LocalDevAttentionReason =
   | 'toolchain'
   /** cinna-cli could not create or read the account workspace. */
   | 'workspace'
+  /**
+   * The workspace on disk belongs to a different Cinna account than the one
+   * signed in here.
+   *
+   * Its own reason rather than a `workspace` failure because Repair provably
+   * cannot clear it: every retry mints a token for the same account and
+   * cinna-cli refuses it again for the same reason. The surfaces offer
+   * Reconnect instead, which moves the old workspace aside and sets a fresh
+   * one up — the in-app spelling of cinna-cli's own advice to run
+   * `cinna account setup` in a new directory.
+   */
+  | 'account_mismatch'
   /** The server could not be reached. Nothing is wrong; try again. */
   | 'network'
 

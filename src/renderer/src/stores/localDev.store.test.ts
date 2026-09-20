@@ -24,7 +24,8 @@ const api = {
   getState: vi.fn(async (): Promise<LocalDevState> => ({ phase: 'idle' })),
   consent: vi.fn(async (_host: string, _accepted: boolean): Promise<LocalDevState> => oldReady),
   resetConsent: vi.fn(async (_host: string): Promise<LocalDevState> => oldReady),
-  repair: vi.fn(async (): Promise<LocalDevState> => oldReady)
+  repair: vi.fn(async (): Promise<LocalDevState> => oldReady),
+  reconnectWorkspace: vi.fn(async (): Promise<LocalDevState> => oldReady)
 }
 
 beforeEach(() => {
@@ -45,7 +46,7 @@ describe('local development IPC response ordering', () => {
     expect(useLocalDevStore.getState().state).toEqual({ phase: 'consent', host: 'profile-b.example.com' })
   })
 
-  it.each(['consent', 'resetConsent', 'repair'] as const)(
+  it.each(['consent', 'resetConsent', 'repair', 'reconnectWorkspace'] as const)(
     'ignores a former profile %s reply after idle and a newer state', async (action) => {
       await useLocalDevStore.getState().subscribe()
       const reply = deferred<LocalDevState>()
@@ -54,7 +55,9 @@ describe('local development IPC response ordering', () => {
         ? useLocalDevStore.getState().consent('profile-a.example.com', true)
         : action === 'resetConsent'
           ? useLocalDevStore.getState().resetConsent('profile-a.example.com')
-          : useLocalDevStore.getState().repair()
+          : action === 'repair'
+            ? useLocalDevStore.getState().repair()
+            : useLocalDevStore.getState().reconnectWorkspace()
       onState({ phase: 'idle' })
       onState({ phase: 'consent', host: 'profile-b.example.com' })
       reply.resolve(oldReady)
@@ -83,5 +86,22 @@ describe('local development IPC response ordering', () => {
     await useLocalDevStore.getState().subscribe()
     await useLocalDevStore.getState().repair()
     expect(useLocalDevStore.getState().state).toEqual(oldReady)
+  })
+
+  it('applies the state a reconnect comes back with, and lets a refusal reach its caller', async () => {
+    await useLocalDevStore.getState().subscribe()
+    const mismatch: LocalDevState = {
+      phase: 'attention', reason: 'account_mismatch',
+      detail: 'Could not move the old workspace aside: EACCES'
+    }
+    // Main answers a refused rename with a state, like every other verb.
+    api.reconnectWorkspace.mockResolvedValueOnce(mismatch)
+    await useLocalDevStore.getState().reconnectWorkspace()
+    expect(useLocalDevStore.getState().state).toEqual(mismatch)
+    // A channel that refuses before reaching the service still rejects, and
+    // nothing here swallows it — the Settings card renders the message.
+    api.reconnectWorkspace.mockRejectedValueOnce(new Error('Activate this profile first.'))
+    await expect(useLocalDevStore.getState().reconnectWorkspace()).rejects.toThrow('Activate this profile first.')
+    expect(useLocalDevStore.getState().state).toEqual(mismatch)
   })
 })

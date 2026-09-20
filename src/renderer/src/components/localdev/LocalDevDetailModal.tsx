@@ -14,7 +14,7 @@
  */
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, RefreshCw, X } from 'lucide-react'
+import { AlertTriangle, FolderSync, RefreshCw, X } from 'lucide-react'
 import { useLocalDev } from '../../hooks/useLocalDev'
 import { useLocalDevStore } from '../../stores/localDev.store'
 import { LocalDevTaskList } from './LocalDevTaskList'
@@ -25,11 +25,21 @@ export interface LocalDevDetailModalProps {
 
 const btnSecondaryClass =
   'px-3 py-1.5 text-xs rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] transition-colors disabled:opacity-50'
+const btnPrimaryClass =
+  'px-3 py-1.5 text-xs rounded-md bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)] transition-colors disabled:opacity-50'
 
 export function LocalDevDetailModal({ onClose }: LocalDevDetailModalProps): React.JSX.Element {
   const state = useLocalDev()
   const repair = useLocalDevStore((s) => s.repair)
+  const reconnectWorkspace = useLocalDevStore((s) => s.reconnectWorkspace)
   const openWorkspace = useLocalDevStore((s) => s.openWorkspace)
+  /**
+   * The one attention reason Repair cannot clear. This modal is the sidebar's
+   * route into the same state the build page shows, and leaving it with only
+   * Repair meant a user who arrived this way could press the one button that
+   * provably fails, forever, with the fix two screens away and unmentioned.
+   */
+  const mismatched = state.phase === 'attention' && state.reason === 'account_mismatch'
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -148,6 +158,13 @@ export function LocalDevDetailModal({ onClose }: LocalDevDetailModalProps): Reac
               className={btnSecondaryClass}
             >
               Open folder
+            </button>
+          )}
+          {mismatched && (
+            <button type="button" onClick={() => void reconnectWorkspace()} className={btnPrimaryClass}>
+              <span className="inline-flex items-center gap-1.5">
+                <FolderSync size={12} /> Reconnect workspace
+              </span>
             </button>
           )}
           {state.phase !== 'installing' && (

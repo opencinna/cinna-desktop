@@ -29,7 +29,8 @@ Setup prepares the machine; an explicit build prompt or Develop action performs 
 | **Consent** | A per-host yes/no, remembered — including the no. Stored as JSON in the `localDevConsent` app setting |
 | **Engine pre-fetch** | Making sure a usable `opencode` binary is on this machine before anyone needs one. Runs alongside the rest, resolves through the [engine](../local_agents/engine.md)'s own three sources, and is **best effort** — a failure is shown and `ready` is still reached |
 | **Build session** | A direct chat with an internal local builder bound to the active profile, account workspace and selected engine; see [Account Build Sessions](build_sessions.md) |
-| **Attention reason** | Which of four things is wrong (`token_expired`, `toolchain`, `workspace`, `network`), derived from a cinna-cli exit code, a typed toolchain error or a failed capability check, never by parsing a message string |
+| **Attention reason** | Which of five things is wrong (`token_expired`, `toolchain`, `workspace`, `account_mismatch`, `network`), derived from a cinna-cli exit code, a typed toolchain error or a failed capability check, never by parsing a message string |
+| **Reconnect** | `localDevService.reconnectWorkspace(userId)` — the only exit from `account_mismatch`: rename the workspace that belongs to another account aside, then reconcile. Not a second setup door; it ends in the same `reconcile(force)` |
 
 ## The state union
 
@@ -44,7 +45,7 @@ Setup prepares the machine; an explicit build prompt or Develop action performs 
 | `declined` | Asked, and the answer was no. Remembered |
 | `installing` | Working. `step` is user-visible text straight from the installer or cinna-cli; `percent` is a coarse hint, not a byte count |
 | `ready` | Carries `workspacePath`, `cliVersion`, `cinnaBinPath`, and the `protocol` the installed cinna-cli turned out to support |
-| `attention` | Broken in a way the reconciler can be asked to fix, with a `reason` and a shown `detail` |
+| `attention` | Broken, with a `reason` and a shown `detail`. Four of the five reasons are what the reconciler can be asked to fix; `account_mismatch` is the one it cannot, and the surfaces offer Reconnect for it |
 
 Every phase also carries `tasks` — the per-step checklist the build setup page renders — once a reconcile has run. It is empty before that, because there is nothing truthful to say about uv before anybody has looked.
 
@@ -104,9 +105,19 @@ See [Account Build Sessions](build_sessions.md) for complete flows, runtime rule
 4. A pinned version the server bumped, or a workspace folder the user deleted, is discovered here too
 
 ### Something went wrong
-1. The sidebar footer shows a warning dot; clicking it opens the build setup page, where Retry setup is available
+1. The sidebar footer shows a warning dot; clicking it opens the build setup page, whose notice offers up to three actions — **Reconnect workspace**, **Re-authenticate**, **Retry setup** — ordered and weighted by what actually ends the reason it is showing
 2. Settings → Profile → Local Development shows the `detail` plus a per-reason hint saying what Repair will and will not do
-3. The reason that earns real copy is `toolchain`: its commonest cause — a desktop older than the versions the server pinned — is the one thing Repair cannot fix, and a user left pressing the button would never find that out
+3. Two reasons earn real copy, for the same reason: Repair cannot fix either, and a user left pressing the button would never find that out. `toolchain`'s commonest cause is a desktop older than the versions the server pinned; `account_mismatch` is a folder that belongs to another account, which is what Reconnect is for
+
+### Reconnecting a workspace that belongs to another account
+
+1. The user signs in as a different Cinna account on a machine whose `<AgentsHome>/Cloud/<host>/` was set up by the previous one. cinna-cli refuses the setup token with exit `11`, and the reconcile lands on `attention/account_mismatch`
+2. The build page shows cinna-cli's own detail, which typically ends by telling the user to run `cinna account setup` in a new directory (the desktop's fallback sentence, used when cinna-cli sent no detail, only names the cause). Under it are three sentences that close the loops that advice leaves open: no terminal is needed, **Retry setup cannot fix this one** because it asks the server for the same account again, and agents opened with Develop keep pointing at the old folder until they are Developed again
+3. **Reconnect workspace** carries the accent, because it is the only action that ends this state. **Re-authenticate** sits beside it for the user who meant to be signed in as the other account, and **Retry setup** stays last — still the escape hatch if the reason was misread
+4. Reconnect renames `<host>/` to `<host>.old-<UTC stamp>` beside it and reconciles with `force`, so setup runs from scratch into a fresh `<host>/`. The old folder is never deleted
+5. Settings → Profile → Local Development shows the same pair for this reason: Reconnect is the primary button and Repair is demoted beside it rather than removed
+
+**Only the action that was pressed says it is running**, and it says so with a spinner on its own icon rather than a changed label: the row wraps, and a button that widened into "Reconnecting…" would re-flow it and move the composer under the user's pointer. Everything else in the row disables while a short local action runs — but **never behind a re-authentication**, which waits on a browser tab the user may simply have closed, and ten minutes of dead buttons is a trap rather than a safeguard.
 
 ### Running `cinna` yourself
 1. Settings → Default → Local Development → **Add to PATH** symlinks the managed `cinna` into `~/.local/bin`
@@ -158,6 +169,7 @@ Reconcile is triggered by account lifecycle and explicit recovery; a saved build
 | A re-auth succeeds | `src/main/services/authService.ts:reauthCinna()` — non-blocking, only when the reauthenticated account is still current and activated; an OAuth flow may finish after a switch |
 | The machine wakes | `powerMonitor.on('resume')` in `src/main/index.ts` |
 | The user presses Repair / Set up | `localdev:repair`, and `localdev:consent` after recording an answer |
+| The user presses Reconnect workspace | `localdev:reconnect-workspace`, after the old workspace has been renamed aside |
 | A saved builder resumes during startup | `restoreDevelopmentContext` joins reconciliation before readiness/turn preparation; settled failures are not automatically retried |
 
 Every activation begins with `clear()` synchronously, and deactivation also clears. Login and logout can call activation directly, so clearing only during deactivation would leave a former Cinna workspace visible while a local/default profile loads. A cleared state has no checklist or openable workspace.
@@ -247,13 +259,23 @@ The desktop installs and orchestrates. cinna-cli owns setup, the token exchange,
 |---|---|---|
 | `0` | ok | continue |
 | `10` | the setup token was rejected (invalid, expired, already used) | `attention/token_expired` — almost always a token that expired between minting and use, and re-running mints a new one, so Repair is a real fix rather than a dead end |
-| `11` | the token belongs to a different account than the workspace | `attention/workspace`, with copy saying to move the folder aside. Repair tries again, but no retry fixes this one |
+| `11` | the token belongs to a different account than the workspace | `attention/account_mismatch` — its own reason rather than a `workspace` failure, because no retry fixes it: every Repair mints another token for the same account and is refused identically. Having its own reason is what lets the surfaces offer Reconnect, which does fix it |
 | `12` | the platform could not be reached | `attention/network` |
 | `2` | the desktop called cinna-cli wrongly | `attention/workspace` (the default branch) |
 | `1` | everything else | `attention/workspace` |
 | killed | the run overstayed its timeout | `attention/network` |
 
 A run that exits non-zero is an **outcome, not a rejection**: `runCinnaCli` never rejects, because a rejection would drop the exit code that says which outcome it is.
+
+A reason exists so a surface can offer the button that ends it. What each one is answered with:
+
+| Reason | What ends it |
+|---|---|
+| `token_expired` | **Retry setup** / Repair, which mints a fresh token. **Re-authenticate** as well, since a dead desktop session is the usual reason the account token went stale with it |
+| `toolchain` | **Retry setup** / Repair, which reinstalls — except for its commonest cause, a desktop older than the versions the server pinned, which no button here fixes |
+| `workspace` | **Retry setup** / Repair |
+| `account_mismatch` | **Reconnect workspace**, and only that. Repair mints another token for the same account and is refused identically; Re-authenticate is offered beside it for the user who meant to be signed in as the other account |
+| `network` | **Retry setup** / Repair. Nothing is wrong; try again |
 
 ### The desktop asks the cinna-cli it was given what it can do
 
@@ -340,11 +362,25 @@ The button is now shown when everything is `ready` too, quietly and without a do
 
 When the heavy path *is* taken, it deliberately **destroys the proof of a good install before rebuilding it**: the point of Repair is that the files may be there and still wrong. It removes the install directories and `state.json` but keeps the uv cache and the downloaded Python, which is the difference between a repair that takes seconds and one that re-downloads a hundred megabytes.
 
+### Reconnect
+
+The one failure Repair provably cannot clear, and therefore the one verb beside it. It is not a second setup door: it renames one directory and then calls `reconcile(force)`, so everything about setup still happens in one place.
+
+- **Renamed, never deleted.** The old workspace holds a context package and whatever else its owner put there, and an app that removes a folder from the user's own agents home to fix its own setup has chosen the wrong trade. `<host>.old-<UTC stamp>` lands beside the new one inside `Cloud/`, which the agent scanner never walks — it only reads `Local/` — so nothing adopts it and the user deletes it whenever they like. The stamp is UTC and free of colons, because that folder lives in a directory that syncs to machines whose filesystems disagree about what a filename may contain, and a name that sorts is what makes a row of archives readable. Two reconnects inside the same second get `-2`, `-3`… rather than an `ENOTEMPTY` where the honest answer is "pick another name"
+- **It waits on the shared operation chain**, like recording consent does, rather than merely on whatever was in flight when the click arrived. A reconcile started in the gap — a power resume, an activation, the re-authentication the button beside it just finished — would be spawning `cinna account status` with its cwd inside the directory about to be renamed out from under it
+- **It re-reads the state after that wait.** The queue ahead of it can be a whole toolchain install, and the run that just drained may have reached `ready`; archiving a workspace that now works would throw away exactly what the user was trying to get back. If the state is no longer `attention/account_mismatch` it falls through to a plain forced reconcile
+- **A rename the filesystem refused comes back as a state, not a throw** — `attention/account_mismatch` again, with the refusal in its `detail`. The reason stays what it was on purpose: it is still true, and it is what keeps Reconnect on screen to press again once the folder is free. Every other verb on this service answers with a state, and the surfaces that call it have no catch
+
+**What it does not fix:** a **Develop <agent name>** connection stores an absolute working directory under the old workspace, so after a reconnect it points into the archived copy until the user runs Develop again. The page says so in the same breath as the offer, because it is the one consequence a user would otherwise meet as a surprise.
+
 ## Architecture Overview
 
 ```
 activation / reauth / resume / Repair
         │
+        │   Reconnect ─► localDevService.reconnectWorkspace(userId)
+        │                  └─ rename <AgentsHome>/Cloud/<host>/ → <host>.old-<stamp>
+        │                     (on the shared operation chain, then force)
         ▼
 localDevService.reconcile(userId, force)      ← serialized, same-profile dedupe
         │
@@ -376,7 +412,7 @@ localDevService.reconcile(userId, force)      ← serialized, same-profile dedup
 - [Account Build Sessions](build_sessions.md) — one-click composer, inspectable guide, separate runtime settings and account-bound saved chats; [build-session technical details](build_sessions_tech.md)
 
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — the OAuth session whose bearer mints setup tokens; local development exists only for a `cinna_user` profile
-- [Cinna Re-authentication](../../auth/cinna_accounts/reauthentication.md) — a successful re-auth fires a reconcile only while that account is current and activated, because a dead session is the usual reason the workspace's account token went stale too
+- [Cinna Re-authentication](../../auth/cinna_accounts/reauthentication.md) — a successful re-auth fires a reconcile only while that account is current and activated, because a dead session is the usual reason the workspace's account token went stale too. The build page's attention notice can start that same round trip in place for `token_expired` and `account_mismatch`, so the notice moves on by itself when it succeeds and a mismatched sign-in is reported on the page rather than nowhere
 - [Onboarding](../../auth/onboarding/onboarding.md) — the `localdev` step is the last step of the Cinna path
 - [The `cinna://connect` Link](../../auth/onboarding/connect_link.md) — the other route in, and the one that answers the consent question on its confirm screen rather than in a step of its own
 - [Agents Home, Scanner & Folder Index](../local_agents/folder_index.md) — the account workspace is created under the Agents Home, and `Cloud/` is the [kit contract](../local_agents/kit_contract.md)'s `workshop.cloud_dir` rather than a literal in this feature's code
@@ -395,4 +431,6 @@ Carried honestly rather than implied as passing. Build-session validation and li
 - **Windows is absent from both pin tables**, because the desktop does not build for it. A musl-only Linux distribution is the same known gap the engine has
 - **The context-package refresh is fire-and-forget.** A repeated failure is logged and never surfaced anywhere the user can see
 - **The OS `open-url` hook and the packaged scheme registration are untested.** Playwright cannot raise a Launch Services event, so the E2E specs enter the funnel through the test-only argv flag and everything below the hook is real — but that a *packaged* build actually claims `cinna://` has only been asserted by the `protocols:` block in `electron-builder.yml`, never by installing a DMG and clicking a link
-- **Two profiles on the same host share a workspace location and consent.** A workspace belonging to another account is still refused by CLI identity checks; separating per-account workspace folders is outside this change.
+- **Two profiles on the same host share a workspace location and consent.** A workspace belonging to another account is still refused by CLI identity checks; Reconnect resolves that refusal by archiving one account's workspace and setting the other up in its place, which is a way out rather than coexistence. Separating per-account workspace folders remains outside this change, so switching back and forth between two accounts on one host archives a workspace each time.
+- **A Develop connection does not follow a reconnect.** Its saved working directory is absolute and under the old workspace, so it keeps pointing into the archived copy until the user runs Develop again. The page's copy says so; nothing rewrites the saved path.
+- **Archived workspaces are never reaped.** `<host>.old-<stamp>` folders accumulate in `Cloud/` until the user deletes them, and nothing in the app lists or counts them.

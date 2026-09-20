@@ -80,6 +80,19 @@ export function registerLocalDevHandlers(): void {
     return localDevService.reconcile(getProfileScopeUserId(), true)
   })
 
+  /**
+   * The one thing Repair cannot do. Exit `11` means the workspace on disk
+   * belongs to another account, so the folder is moved aside and set up again
+   * from scratch. Like every other verb here it answers with a state and never
+   * throws — a rename the filesystem refused comes back as attention with the
+   * refusal in its detail, which is a thing the UI renders rather than a thing
+   * two different callers have to remember to catch.
+   */
+  ipcHandle('localdev:reconnect-workspace', async (): Promise<LocalDevState> => {
+    userActivation.requireActivated()
+    return localDevService.reconnectWorkspace(getProfileScopeUserId())
+  })
+
   ipcHandle('localdev:get-consent', async (): Promise<Record<string, boolean>> => {
     userActivation.requireActivated()
     return localDevService.consent()

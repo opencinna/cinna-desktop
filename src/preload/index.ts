@@ -1329,6 +1329,12 @@ const api = {
       ipcRenderer.invoke('localdev:reset-consent', host),
     /** Re-run everything, overriding a remembered decline. Backs Repair. */
     repair: (): Promise<LocalDevState> => ipcRenderer.invoke('localdev:repair'),
+    /**
+     * Move a workspace that belongs to another Cinna account aside and set a
+     * fresh one up. The only exit from `attention/account_mismatch`.
+     */
+    reconnectWorkspace: (): Promise<LocalDevState> =>
+      ipcRenderer.invoke('localdev:reconnect-workspace'),
     /** The recorded per-host answers, for Settings. */
     getConsent: (): Promise<Record<string, boolean>> =>
       ipcRenderer.invoke('localdev:get-consent'),

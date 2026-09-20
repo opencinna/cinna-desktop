@@ -209,3 +209,98 @@ describe('Local Development entry', () => {
     expect(useLocalDevStore.getState().drafts.alice).toBe('Build for Alice')
   })
 })
+
+/**
+ * Exit `11` from cinna-cli, which no Repair clears: the folder on disk belongs
+ * to the account that was signed in before, and every retry mints a token for
+ * the one signed in now. The detail is cinna-cli's own, verbatim — it is what
+ * a developer who re-authenticated against another account actually reads.
+ */
+const MISMATCH_DETAIL =
+  "Token belongs to a different account than this workspace. Run 'cinna account setup' in a new directory to connect it."
+const mismatch = { phase: 'attention', reason: 'account_mismatch', detail: MISMATCH_DETAIL } as const
+const expired = { phase: 'attention', reason: 'token_expired', detail: 'Your Cinna session expired. Sign in again, then Repair.' } as const
+
+describe('an account workspace that needs attention', () => {
+  let reconnectWorkspace = vi.fn()
+  let repair = vi.fn()
+  let cinnaReauth = vi.fn()
+  beforeEach(() => {
+    reconnectWorkspace = vi.fn().mockResolvedValue(ready)
+    repair = vi.fn().mockResolvedValue(mismatch)
+    cinnaReauth = vi.fn().mockResolvedValue({ success: true, user: { id: 'alice' } })
+    window.api = {
+      localDev: { sessionContext, prepareSession, reconnectWorkspace, repair },
+      auth: { cinnaReauth }
+    } as unknown as typeof window.api
+  })
+
+  it('offers Reconnect before the Repair that cannot fix a mismatch, and takes the state main sends back', async () => {
+    useLocalDevStore.setState({ state: mismatch })
+    renderPage()
+    expect(screen.getByText(MISMATCH_DETAIL)).toBeTruthy()
+    const reconnect = screen.getByRole('button', { name: 'Reconnect workspace' })
+    const retry = screen.getByRole('button', { name: 'Retry setup' })
+    // Ahead of Repair, not instead of it: Repair is still the right button for
+    // every other reason, and removing a user's escape hatch is not the fix.
+    expect(reconnect.compareDocumentPosition(retry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Says the terminal cinna-cli pointed at is not needed, and that the
+    // button that looks like the fix is not one.
+    expect(screen.getByText(/No terminal needed/)).toBeTruthy()
+    expect(screen.getByText(/Retry setup cannot fix this one/)).toBeTruthy()
+    // The one consequence of renaming the folder that a Develop row cannot survive.
+    expect(screen.getByText(/keep pointing at the old folder/)).toBeTruthy()
+    fireEvent.click(reconnect)
+    await waitFor(() => expect(reconnectWorkspace).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(useLocalDevStore.getState().state).toEqual(ready))
+    expect(repair).not.toHaveBeenCalled()
+  })
+
+  it('marks only the action that is running, without resizing a single button', async () => {
+    let finish!: () => void
+    reconnectWorkspace.mockImplementation(() => new Promise<typeof ready>((done) => { finish = () => done(ready) }))
+    useLocalDevStore.setState({ state: mismatch })
+    renderPage()
+    const labels = screen.getAllByRole('button').map((button) => button.textContent)
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect workspace' }))
+    // The row is `flex-wrap`, so a button that widened into "Reconnecting…"
+    // would re-wrap it and move the composer under the pointer (§1). The
+    // spinner names the running action instead, and every label holds still.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reconnect workspace' }).querySelector('.animate-spin')).toBeTruthy())
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(labels)
+    // One `busy` flag for three buttons would have all three claim the click.
+    expect(screen.getByRole('button', { name: 'Retry setup' })).toHaveProperty('disabled', true)
+    expect(screen.getByRole('button', { name: 'Retry setup' }).querySelector('.animate-spin')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Re-authenticate' }).querySelector('.animate-spin')).toBeNull()
+    await act(async () => finish())
+  })
+
+  it('leaves the other ways out reachable while the browser has the user', async () => {
+    // `startOAuthCallback` waits ten minutes. Disabling Reconnect and Retry
+    // setup behind a tab the user may simply have closed is a trap whose only
+    // escape — navigate away and back — nobody would guess.
+    cinnaReauth.mockReturnValue(new Promise(() => {}))
+    useLocalDevStore.setState({ state: mismatch })
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Re-authenticate' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Re-authenticate' })).toHaveProperty('disabled', true))
+    expect(screen.getByRole('button', { name: 'Reconnect workspace' })).toHaveProperty('disabled', false)
+    expect(screen.getByRole('button', { name: 'Retry setup' })).toHaveProperty('disabled', false)
+    // A short local action still locks the row, as before.
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect workspace' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry setup' })).toHaveProperty('disabled', true))
+  })
+
+  it('re-authenticates in place from the page and reports a mismatched sign-in without losing the notice', async () => {
+    cinnaReauth.mockResolvedValue({ success: false, error: 'Signed in as bob@example.com, but this account is alice@example.com.' })
+    useLocalDevStore.setState({ state: expired })
+    renderPage()
+    // No Reconnect here: the workspace is this account's, only its token is dead.
+    expect(screen.queryByRole('button', { name: 'Reconnect workspace' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Re-authenticate' }))
+    await waitFor(() => expect(cinnaReauth).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText('Signed in as bob@example.com, but this account is alice@example.com.')).toBeTruthy()
+    expect(screen.getByText(expired.detail)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Re-authenticate' })).toHaveProperty('disabled', false)
+  })
+})

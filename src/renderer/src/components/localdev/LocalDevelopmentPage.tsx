@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { BookOpen, SendHorizontal, Loader2, RefreshCw, MessageSquare, Settings2, TerminalSquare } from 'lucide-react'
+import { BookOpen, SendHorizontal, Loader2, RefreshCw, FolderSync, KeyRound, MessageSquare, Settings2, TerminalSquare } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth.store'
 import { useUIStore } from '../../stores/ui.store'
 import { useLocalDevStore } from '../../stores/localDev.store'
-import { useDevelopmentWorkspace } from '../../hooks/useDevelopmentWorkspace'
+import { useDevelopmentWorkspace, type DevelopmentAction } from '../../hooks/useDevelopmentWorkspace'
 import { serverLabel } from '../../utils/agentNavigation'
 import { RuntimeInstallAction } from './RuntimeInstallAction'
 import { LocalDevTaskList } from './LocalDevTaskList'
@@ -16,6 +16,8 @@ import { AmbientGrid } from '../ui/AmbientGrid'
 import { SettingsButton } from '../settings/SettingsLayout'
 
 const actionClass = 'ambient-button inline-flex items-center justify-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 transition-colors'
+/** The one action that ends the state it is offered in, in the accent the rest of the app gives that. */
+const primaryActionClass = 'inline-flex items-center justify-center gap-2 rounded-md bg-[var(--color-accent)] px-3 py-2 text-xs font-medium text-white hover:bg-[var(--color-accent-hover)] disabled:opacity-50 transition-colors'
 const EXAMPLES = [
   { title: 'Build a new agent', text: 'Help me build an agent that ' },
   { title: 'Improve an existing agent', text: 'Show me the agents I can build on this Cinna instance, then help me improve one.' },
@@ -29,7 +31,9 @@ export function LocalDevelopmentPage(): React.JSX.Element {
 }
 
 function DevelopmentWorkspace(): React.JSX.Element {
-  const { state, user, context, data, ready, blocker, error, busy, send, repairWorkspace, checkWorkspace, openWorkspace, openInstance } = useDevelopmentWorkspace()
+  const { state, user, context, data, ready, blocker, error, busy, pending, send, repairWorkspace, reconnectWorkspace, reauthenticate, checkWorkspace, openWorkspace, openInstance } = useDevelopmentWorkspace()
+  /** @see the note on the attention actions — a re-auth locks only itself. */
+  const held = (action: DevelopmentAction): boolean => pending === action || (busy && pending !== 'reauth')
   const [guideOpen, setGuideOpen] = useState(false)
   const settingsOpen = useLocalDevStore((s) => s.pageMode === 'settings')
   const setSettingsOpen = (open: boolean): void => useLocalDevStore.getState().setPageMode(open ? 'settings' : 'chat')
@@ -56,7 +60,7 @@ function DevelopmentWorkspace(): React.JSX.Element {
           <DevelopmentRuntimeBadges data={data} />
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <button type="button" disabled={busy} className={actionClass} onClick={() => setSettingsOpen(!settingsOpen)}>{settingsOpen ? <MessageSquare size={14} /> : <Settings2 size={14} />}{settingsOpen ? 'Start chat' : 'Settings'}</button>
+          <button type="button" disabled={busy && pending !== 'reauth'} className={actionClass} onClick={() => setSettingsOpen(!settingsOpen)}>{settingsOpen ? <MessageSquare size={14} /> : <Settings2 size={14} />}{settingsOpen ? 'Start chat' : 'Settings'}</button>
           <button type="button" className={actionClass} aria-haspopup="dialog" onClick={() => setGuideOpen(true)}><BookOpen size={14} /> Build guide</button>
         </div>
       </header>
@@ -73,9 +77,31 @@ function DevelopmentWorkspace(): React.JSX.Element {
                 {state.phase === 'installing' ? 'Preparing your build workspace' : context.isFetching ? 'Checking your workspace and runtime' : 'Let’s get ready to build'}
               </div>
               <p className="text-sm text-[var(--color-text-secondary)]">{state.phase === 'installing' ? state.step : state.phase === 'attention' ? state.detail : blocker ?? 'Finish setup for this Cinna account. The composer will appear here when everything is ready.'}</p>
+              {/* cinna-cli's own detail above ends by telling the user to open a
+                  terminal, and Retry setup looks like it might do instead. Close
+                  both loops here rather than letting the buttons imply it: the
+                  terminal is not needed, and the obvious button cannot work.
+                  The third sentence is the one consequence a user would
+                  otherwise meet as a surprise — a Develop row keeps the
+                  absolute path it was saved with, and that path is about to
+                  become the archived copy. */}
+              {state.phase === 'attention' && state.reason === 'account_mismatch' && <p className="text-xs text-[var(--color-text-muted)]">No terminal needed: Reconnect renames that folder beside the new one and sets this account up here. Retry setup cannot fix this one — it asks the server for the same account again. Agents you opened with Develop keep pointing at the old folder until you Develop them again.</p>}
               {!!state.tasks?.length && state.phase !== 'ready' && <LocalDevTaskList tasks={state.tasks} />}
               <div className="flex flex-wrap gap-2">
-                {state.phase === 'attention' && <button type="button" disabled={busy} className={actionClass} onClick={() => void repairWorkspace()}><RefreshCw size={13} /> {busy ? 'Retrying…' : 'Retry setup'}</button>}
+                {state.phase === 'attention' && <>
+                  {/* Disabled while *this* action runs, and while a short local
+                      one does. Never behind a re-auth: that waits on a browser
+                      the user may simply have closed, and ten minutes of dead
+                      buttons is a trap, not a safeguard. */}
+                  {/* Ordered and weighted by what actually ends each reason. A
+                      mismatched workspace is the one state whose obvious button
+                      provably fails the same way, so Reconnect carries the
+                      accent and Retry setup stays last — kept, because it is
+                      still the escape hatch if the reason was misread. */}
+                  {state.reason === 'account_mismatch' && <button type="button" disabled={held('reconnect')} className={primaryActionClass} onClick={() => void reconnectWorkspace()}><ActionIcon busy={pending === 'reconnect'}><FolderSync size={13} /></ActionIcon> Reconnect workspace</button>}
+                  {(state.reason === 'account_mismatch' || state.reason === 'token_expired') && <button type="button" disabled={held('reauth')} className={actionClass} onClick={() => void reauthenticate()}><ActionIcon busy={pending === 'reauth'}><KeyRound size={13} /></ActionIcon> Re-authenticate</button>}
+                  <button type="button" disabled={held('repair')} className={actionClass} onClick={() => void repairWorkspace()}><ActionIcon busy={pending === 'repair'}><RefreshCw size={13} /></ActionIcon> Retry setup</button>
+                </>}
                 {state.phase === 'ready' && <>
                   {data?.installTool && <RuntimeInstallAction tool={data.installTool} onDone={() => void context.refetch()} />}
                   <SettingsButton onClick={() => openSettings(!!data && data.setupTarget !== 'local-dev', true)}><Settings2 size={13} />{data && data.setupTarget !== 'local-dev' ? 'Open Runtime settings' : 'Local Development settings'}</SettingsButton>
@@ -86,7 +112,7 @@ function DevelopmentWorkspace(): React.JSX.Element {
               {state.phase === 'installing' && <p className="text-xs text-[var(--color-text-muted)]">You can leave this page. Setup continues in the background.</p>}
             </DevelopmentSetupNotice>}
             {error && <ComposerWarning role="alert" className="mt-4"><p>{error}</p></ComposerWarning>}
-            {(ready || !!blocker || state.phase === 'attention') && <DevelopmentComposer profileId={user?.id ?? ''} active={!settingsOpen && ready} busy={busy} blocked={!ready} onSend={send} />}
+            {(ready || !!blocker || state.phase === 'attention') && <DevelopmentComposer profileId={user?.id ?? ''} active={!settingsOpen && ready} busy={busy} sending={pending === 'send'} blocked={!ready} onSend={send} />}
           </div>
         </main>
 
@@ -97,6 +123,19 @@ function DevelopmentWorkspace(): React.JSX.Element {
   )
 }
 
+/**
+ * Async state on one button of several, without moving the others.
+ *
+ * A label that swaps to "Reconnecting…" changes that button's width, and this
+ * row is `flex-wrap`: at the narrow end of the window the row re-wraps under
+ * the user's own click and the composer below it jumps by a line. The icon box
+ * is the same 13px either way, so the row cannot re-flow (§1) and the running
+ * action is still named — by the spinner sitting on it.
+ */
+function ActionIcon({ busy, children }: { busy: boolean; children: React.ReactNode }): React.JSX.Element {
+  return busy ? <Loader2 size={13} className="animate-spin" /> : <>{children}</>
+}
+
 function DevelopmentSetupNotice({ warning, children }: { warning: boolean; children: React.ReactNode }): React.JSX.Element {
   return warning
     ? <ComposerWarning role="alert" label="Development setup" className="mt-6"><div className="space-y-4">{children}</div></ComposerWarning>
@@ -104,10 +143,13 @@ function DevelopmentSetupNotice({ warning, children }: { warning: boolean; child
 }
 
 /** Draft notifications stay here: typing must not rerender the workspace and its CLI guides. */
-function DevelopmentComposer({ profileId, active, busy, blocked, onSend }: {
+function DevelopmentComposer({ profileId, active, busy, sending, blocked, onSend }: {
   profileId: string
   active: boolean
+  /** Anything is running, so nothing here may be pressed. */
   busy: boolean
+  /** *This* is what is running. Repairing the workspace is not "Starting…". */
+  sending: boolean
   blocked: boolean
   onSend: (message: string) => Promise<void>
 }): React.JSX.Element {
@@ -140,7 +182,7 @@ function DevelopmentComposer({ profileId, active, busy, blocked, onSend }: {
         </div>
         <div className="flex items-center justify-end px-1 pt-2">
           <button type="submit" disabled={busy || blocked || !draft.trim()} className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-[var(--color-success)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-80 disabled:opacity-20 disabled:cursor-not-allowed transition-opacity">
-            {busy ? <Loader2 size={16} className="animate-spin" /> : <SendHorizontal size={16} />} {busy ? 'Starting…' : 'Start building'}
+            {sending ? <Loader2 size={16} className="animate-spin" /> : <SendHorizontal size={16} />} {sending ? 'Starting…' : 'Start building'}
           </button>
         </div>
       </form>
