@@ -6,7 +6,7 @@ const { ExternalAgentActionsMenu } = await import('./ExternalAgentActionsMenu')
 const { useUIStore } = await import('../../stores/ui.store')
 const { useAuthStore } = await import('../../stores/auth.store')
 
-const api = { remove: vi.fn(), removeRemote: vi.fn(), uninstall: vi.fn(), setEnabled: vi.fn(), syncRemote: vi.fn() }
+const api = { remove: vi.fn(), uninstall: vi.fn(), setEnabled: vi.fn(), syncRemote: vi.fn(), openExternal: vi.fn() }
 const base = { id: 'agent', name: 'Research', source: 'local', enabled: true, remoteTargetType: null, remoteTargetId: null, remoteMetadata: null }
 const onError = vi.fn()
 function mount(overrides: Record<string, unknown> = {}, agents?: unknown[]) {
@@ -21,12 +21,12 @@ function deferredResult() {
   const promise = new Promise<{ success: boolean; error?: string }>((done) => { resolve = done })
   return { promise, resolve }
 }
-const profile = { id: 'profile', type: 'cinna_user', username: 'user', displayName: 'User', hasPassword: false }
+const profile = { id: 'profile', type: 'cinna_user', username: 'user', displayName: 'User', hasPassword: false, cinnaServerUrl: 'https://cinna.example/' }
 beforeEach(() => {
   vi.resetAllMocks()
   useAuthStore.setState({ currentUser: profile })
   for (const fn of Object.values(api)) fn.mockResolvedValue({ success: true })
-  window.api = { agents: { delete: api.remove, deleteRemote: api.removeRemote, setEnabled: api.setEnabled, syncRemote: api.syncRemote }, catalog: { uninstall: api.uninstall } } as never
+  window.api = { agents: { delete: api.remove, setEnabled: api.setEnabled, syncRemote: api.syncRemote }, catalog: { uninstall: api.uninstall }, system: { openExternal: api.openExternal } } as never
   useUIStore.setState({ activeExternalAgentId: 'agent', activeView: 'external-agent' })
 })
 
@@ -59,22 +59,27 @@ describe('agent actions', () => {
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Agent busy')
     expect(useUIStore.getState().activeExternalAgentId).toBe('agent')
   })
-  it('uninstalls bundles through the server install endpoint', async () => {
-    mount({ source: 'remote', remoteTargetType: 'agent', remoteTargetId: 'install-id', remoteMetadata: { bundle_uuid: 'bundle', is_publisher_install: false } })
+  /*
+    Every remote shape: a catalog install, a publisher's working copy, and an
+    agent that was simply created on the server — cinna-server stamps a
+    non-null `bundle_id` on all three at creation, so the third used to be
+    read as somebody else's bundle and offered "Uninstall agent…". None of
+    them is the desktop's to destroy.
+  */
+  it.each([
+    ['a catalog install', { bundle_id: 'com.acme.research', bundle_uuid: 'bundle', is_publisher_install: false }],
+    ['a published working copy', { bundle_id: 'com.acme.research', bundle_uuid: 'bundle', is_publisher_install: true }],
+    ['an agent created on the server', { bundle_id: 'com.acme.research', bundle_uuid: null, is_publisher_install: false }]
+  ])('offers %s its page on the server and nothing destructive', async (_name, remoteMetadata) => {
+    mount({ source: 'remote', remoteTargetType: 'agent', remoteTargetId: 'server-id', remoteMetadata })
+    // The page on the server leads, as the same-named item does in the task menu.
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Open on the server', 'Disable in Desktop App'])
     expect(screen.queryByRole('menuitem', { name: 'Delete agent…' })).toBeNull()
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Uninstall agent…' }))
-    expect(api.uninstall).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Uninstall' }))
-    await waitFor(() => expect(api.uninstall).toHaveBeenCalledWith('install-id'))
-    await waitFor(() => expect(useUIStore.getState().activeExternalAgentId).toBeNull())
+    expect(screen.queryByRole('menuitem', { name: 'Uninstall agent…' })).toBeNull()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open on the server' }))
+    // One slash, from a server URL stored with a trailing one.
+    await waitFor(() => expect(api.openExternal).toHaveBeenCalledWith('https://cinna.example/agent/server-id'))
     expect(api.remove).not.toHaveBeenCalled()
-    expect(api.removeRemote).not.toHaveBeenCalled()
-  })
-  it('deletes a publisher working copy through remote deletion', async () => {
-    mount({ source: 'remote', remoteTargetType: 'agent', remoteTargetId: 'server-id', remoteMetadata: { bundle_uuid: 'bundle', is_publisher_install: true } })
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete agent…' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete agent' }))
-    await waitFor(() => expect(api.removeRemote).toHaveBeenCalledWith('agent'))
     expect(api.uninstall).not.toHaveBeenCalled()
   })
   it('offers only the Desktop switch for a shared route', () => {
@@ -138,16 +143,19 @@ describe('agent actions', () => {
     expect(useUIStore.getState().activeExternalAgentId).toBe(selected)
   })
 
-  it('keeps a rejected remote deletion open and retryable', async () => {
-    api.removeRemote.mockRejectedValue(new Error('Server refused deletion'))
+  it('says so on the page when the browser could not be opened', async () => {
+    api.openExternal.mockResolvedValue({ success: false, error: 'open_failed' })
     mount({ source: 'remote', remoteTargetType: 'agent', remoteTargetId: 'server-id' })
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete agent…' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete agent' }))
-    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Server refused deletion')
-    expect(screen.getByRole('dialog', { name: 'Delete agent' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Delete agent' }).hasAttribute('disabled')).toBe(false)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open on the server' }))
+    // The code is translated once, in `useSystem`, not shown as `open_failed`.
+    await waitFor(() => expect(onError).toHaveBeenCalledWith('Your system could not open that link.'))
     expect(useUIStore.getState().activeExternalAgentId).toBe('agent')
-    expect(api.remove).not.toHaveBeenCalled()
+  })
+
+  it('has no page to offer for a target that is not an agent', () => {
+    mount({ source: 'remote', remoteTargetType: 'identity', remoteTargetId: 'owner-id' })
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1)
+    expect(screen.queryByRole('menuitem', { name: 'Open on the server' })).toBeNull()
   })
 
 })

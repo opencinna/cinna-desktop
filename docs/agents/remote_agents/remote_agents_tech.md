@@ -12,7 +12,6 @@ For manually added ACP WebSocket connections, see [Remote ACP agents](remote_acp
 | Sync logic (fetch + transactional upsert/prune) | `src/main/services/agentService.ts` — `agentService.syncRemoteAgents()` |
 | Transactional remote upsert/prune | `src/main/db/agents.ts` — `agentRepo.syncRemote(userId, targets)` |
 | A2A client (shared) | `src/main/agents/a2a-client.ts` |
-| Server deletion | `src/main/services/remoteAgentActions.ts` — profile-owned cached target validation and server-first delete |
 | Shared eligibility | `src/shared/agentDevelopment.ts` — `canDevelopAgent`; `src/shared/agentPresentation.ts` — `isBundleAgent` |
 | IPC handlers (CRUD + sync) | `src/main/ipc/agent.ipc.ts` |
 | IPC handlers (A2A + JWT routing) | `src/main/ipc/agent_a2a.ipc.ts` |
@@ -25,7 +24,6 @@ For manually added ACP WebSocket connections, see [Remote ACP agents](remote_acp
 
 | Purpose | File |
 |---------|------|
-| Bridge API (server delete) | `src/preload/index.ts` — `api.agents.deleteRemote(agentId)` |
 | Bridge API (manual sync) | `src/preload/index.ts` — `api.agents.syncRemote()` |
 | Bridge API (sync event) | `src/preload/index.ts` — `api.agents.onRemoteSyncComplete(handler)` |
 | Type definition | `src/preload/index.ts` — `AgentData` interface (remote fields) |
@@ -36,7 +34,8 @@ For manually added ACP WebSocket connections, see [Remote ACP agents](remote_acp
 |---------|------|
 | Sync mutation hook | `src/renderer/src/hooks/useAgents.ts` — `useSyncRemoteAgents()` |
 | Sync-complete listener | `src/renderer/src/hooks/useAgents.ts` — `useAgents()` auto-invalidation via `onRemoteSyncComplete` |
-| Shared agent page and actions | `src/renderer/src/components/agents/ExternalAgentPage.tsx`, `src/renderer/src/components/agents/ExternalAgentActionsMenu.tsx` |
+| Shared agent page and actions | `src/renderer/src/components/agents/ExternalAgentPage.tsx`, `src/renderer/src/components/agents/ExternalAgentActionsMenu.tsx` (Open on the server · visibility · Delete agent… for non-remote rows only) |
+| Open in the browser | `src/renderer/src/hooks/useSystem.ts` — `useOpenExternal()`, which also translates the refusal code |
 | Desktop visibility | `src/renderer/src/hooks/useAgentDesktopVisibility.ts`, `src/renderer/src/utils/agentNavigation.ts` |
 | Settings section (server visibility) | `src/renderer/src/components/settings/AgentsSettingsSection.tsx` |
 | Agent card (remote mode) | `src/renderer/src/components/settings/AgentCard.tsx` |
@@ -63,18 +62,19 @@ Remote agents use deterministic IDs: `remote:{target_type}:{target_id}` — ensu
 | `agent:sync-remote` | handle | — | `{ success, synced?, removed?, error? }`. Also emits `agents:remote-sync-complete` (success → `{}`, reauth → `{ error: 'reauth_required' }`, other failure → `{ error: 'sync_failed' }`) via `notifyRemoteSyncComplete`, so a renderer-triggered sync refreshes the UI identically to the periodic runner |
 | `agent:list` | handle | — | `AgentData[]` — now includes `source`, `remoteTargetType`, `remoteTargetId`, `remoteMetadata` |
 | `agent:delete` | handle | `agentId` | Returns `{ success: false, error }` for `source='remote'` agents; direct connections use this channel |
-| `agent:delete-remote` | handle | nonempty `agentId: string` | `{ success: true }`; requires activation, resolves profile internally, throws failures and broadcasts `agents:remote-sync-complete` after success |
 | `agents:remote-sync-complete` | send (main→renderer) | — | Fired after **every** successful (or failed) remote sync — initial activation, the 5-minute periodic tick, **and** the on-demand `agent:sync-remote` IPC handler. The single refresh signal `useAgents` listens on |
 
 Shared run:start/watch and agent test/discovery work for remote agents; the A2A driver owns JWT routing.
 
 ## Services & Key Methods
 
-### Server Deletion and Desktop Visibility
+### Eligibility and Desktop Visibility
 
-- `src/main/services/remoteAgentActions.ts:deleteRemoteAgent(userId, agentId)` uses `agentRepo.getOwned`, requires `source=remote`, `remoteTargetType=agent` and a target ID, and rejects `isBundleAgent`. It sends DELETE `/api/v1/agents/{encoded remoteTargetId}` through `cinnaFetch`, then deletes the local row and forgets readiness. Server failure leaves the row intact. The cached ID selects the request target; the renderer supplies neither a server URL nor server target ID.
-- `src/shared/agentPresentation.ts` — `isBundleAgent` recognizes `bundle_uuid` or `bundle_id`, only on remote agent targets, excluding explicit publisher installs. The header routes these to `useUninstallBundle`; other remote removal is offered only when `canDevelopAgent` passes. Main deletion deliberately leaves developer-role/ownership enforcement to the server rather than treating UI metadata as authorization.
-- `useDeleteAgent` throws on returned `{success:false}` as well as IPC rejection. `useDeleteRemoteAgent` invalidates agents/catalog after success; the IPC broadcast refreshes other listeners. A successful removal clears the selected external agent only if profile and selection still match.
+- **There is no server-deletion path.** `remoteAgentActions.ts`, the `agent:delete-remote` channel, its preload binding and `useDeleteRemoteAgent` were all removed once the ⋯ menu stopped offering a destructive action for a remote agent; a destructive channel with no caller is a guard no surface test exercises. Deleting a server agent is the server's own page, reached from **Open on the server**.
+- `src/shared/agentPresentation.ts` — `isBundleAgent` requires a remote `agent` target with a non-empty `bundle_uuid` **and** `is_publisher_install === false`. `bundle_id` is deliberately not read: cinna-core auto-generates one for every agent at creation (`Agent.bundle_id` is non-nullable, and `_agent_metadata` sends all three fields under `metadata`), so `bundle_uuid || bundle_id` classified every self-created remote agent as a catalog install. The identical condition on the server is `Agent.app_data_catalog_type`'s `bundle_uuid is not None and not is_publisher_install`. Requiring an explicit `false` rather than merely not-`true` is a deliberate reading of silence as "a server that does not know the field": its worst case is offering Develop on a bundle the server then refuses, and since nothing here deletes a server agent, no reading of this predicate can destroy anything.
+- `src/shared/agentDevelopment.ts` — `canDevelopAgent` is `!isBundleAgent(agent)` plus its own guards (`can_build !== false`, `is_foreign_install !== true`, remote `agent` target with an ID). It calls the predicate instead of restating it, because the restated copy drifted and left an agent neither developable nor uninstallable.
+- `ExternalAgentActionsMenu` asks one question — `remote = agent.source === 'remote'` — and reads the answer three times: `showVisibility` (`remote || !agent.enabled`), `canRemove` (`!remote`), and `serverHref`, which is `<cinnaServerUrl without trailing slashes>/agent/<remoteTargetId>` when the row is a remote `agent` target with an ID and the active profile has a server URL, else `null`. Item order is **Open on the server** (a separator, then) the visibility switch, (a separator, then) **Delete agent…**. Opening the link goes through `useOpenExternal`, whose failure reason is translated once in `useSystem` and raised on the page through the menu's `onError`, not inside the closing menu. The menu no longer imports `useUninstallBundle`, `CatalogUninstallModal`, `isBundleAgent` or `canDevelopAgent` (and `useDeleteRemoteAgent` no longer exists); its one confirmation dialog has a single, unbranched body.
+- `useDeleteAgent` throws on returned `{success:false}` as well as IPC rejection, and is reached only from a non-remote row. A successful removal clears the selected external agent only if profile and selection still match.
 - `useAgentDesktopVisibility` rejects disabling non-remote connections; old disabled direct rows can still be enabled. It snapshots sidebar order before the optimistic mutation, invalidates agent-status on success, and uses `nextAgentAfterHiding` for the selected page. Profile and current-view checks protect unrelated navigation. Enabled folders remain candidates even when they cannot run yet; current cache filtering excludes remote rows hidden during the request.
 
 ### Sync Logic — `src/main/services/agentService.ts`

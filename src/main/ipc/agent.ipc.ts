@@ -1,4 +1,3 @@
-import { deleteRemoteAgent } from '../services/remoteAgentActions'
 import { agentService } from '../services/agentService'
 import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId, getProfileScopeUserId } from '../auth/scope'
@@ -94,14 +93,6 @@ export function registerAgentHandlers(): void {
       const e = ipcErrorShape(err)
       return { success: false as const, error: e.message }
     }
-  })
-
-  ipcHandle('agent:delete-remote', async (_event, agentId: string) => {
-    userActivation.requireActivated()
-    if (typeof agentId !== 'string' || !agentId) throw new Error('An agent is required.')
-    await deleteRemoteAgent(getProfileScopeUserId(), agentId)
-    notifyRemoteSyncComplete()
-    return { success: true as const }
   })
 
   ipcHandle('agent:sync-remote', async () => {

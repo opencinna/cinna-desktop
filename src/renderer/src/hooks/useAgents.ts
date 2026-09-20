@@ -147,17 +147,6 @@ export function useDeleteAgent() {
   })
 }
 
-export function useDeleteRemoteAgent() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (agentId: string) => window.api.agents.deleteRemote(agentId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      queryClient.invalidateQueries({ queryKey: ['catalog'] })
-    }
-  })
-}
-
 export function useFetchAgentCard() {
   return useMutation({
     mutationFn: (data: { cardUrl: string; accessToken?: string }) =>

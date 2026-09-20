@@ -53,7 +53,7 @@ Cross-cutting model that splits app data into two scopes: **Default** (shared ac
 
 - **Default scope is the only write target for shared settings.** Mutations to LLM providers, MCP providers, chat modes, and locally-registered agents always target `__default__` regardless of which profile is active.
 - **Profile scope is the only read/write target for profile-bound data.** Chats, remote agents, agent overrides, and Cinna tokens always use the active profile's id.
-- **Remote agents are not editable via the standard `agent:upsert` IPC.** Their metadata is owned by Cinna sync. Desktop visibility uses `agent:set-enabled` → override table; eligible server deletion uses the separate `agent:delete-remote` path and removes the cache only after server success. Consumer bundles use uninstall. See [Remote Agents](../../agents/remote_agents/remote_agents.md).
+- **Remote agents are not editable via the standard `agent:upsert` IPC.** Their metadata is owned by Cinna sync. Desktop visibility uses `agent:set-enabled` → override table. They cannot be deleted from the desktop at all — that happens on the server, reached from **Open on the server**; consumer bundles use uninstall in Settings → Catalog. See [Remote Agents](../../agents/remote_agents/remote_agents.md).
 - **UI lifecycle actions follow ownership.** Cinna agents have a reversible Desktop visibility toggle; direct connections offer deletion instead. Previously disabled direct connections have an enable-only recovery action. The underlying enablement IPC still supports local rows.
 - **Agent enable/disable routing:**
   - Local agents (id without `remote:` prefix) → update `agents.enabled` in Default scope.

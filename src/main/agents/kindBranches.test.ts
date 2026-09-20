@@ -232,8 +232,6 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   // Agents UI refactor: exact lifecycle/identity/presentation pins, not a
   // transport exception. Location icons and auth labels describe a connection;
   // sending, authenticating and answering its turns remain driver-owned.
-  { file: 'src/main/services/remoteAgentActions.ts', category: 'source', count: 1,
-    why: 'server deletion requires a cached agent owned by this Cinna profile; deleting a local connection cannot select this authority' },
   { file: 'src/shared/agentDevelopment.ts', category: 'source', count: 1,
     why: 'development eligibility belongs to a Cinna-owned agent workspace, with publisher versus consumer ownership checked separately' },
   { file: 'src/shared/developmentSession.ts', category: 'source', count: 1,
@@ -242,8 +240,8 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
     why: 'consumer bundle ownership selects uninstall instead of deleting a connection or publisher working copy' },
   { file: 'src/renderer/src/components/agents/AgentTypeIcon.tsx', category: 'source', count: 2,
     why: 'presents a folder or network type icon; protocol and ACP transport refine identity without dispatching work' },
-  { file: 'src/renderer/src/components/agents/ExternalAgentActionsMenu.tsx', category: 'source', count: 4,
-    why: 'owns visibility availability, removal eligibility, server versus local deletion authority and the matching confirmation disclosure' },
+  { file: 'src/renderer/src/components/agents/ExternalAgentActionsMenu.tsx', category: 'source', count: 1,
+    why: 'asks once whether the agent lives on a server; visibility, the link to its page there and removal eligibility all read that one answer, since nothing server-hosted is deleted from the desktop' },
   { file: 'src/renderer/src/components/agents/ExternalAgentPage.tsx', category: 'source', count: 2,
     why: 'excludes folder-owned pages and presents the owning Cinna profile domain link' },
   { file: 'src/renderer/src/components/agents/local/LocalAgentsList.tsx', category: 'source', count: 3,

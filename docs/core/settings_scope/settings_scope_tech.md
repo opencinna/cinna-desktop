@@ -15,13 +15,13 @@
 - `src/main/db/schema.ts` — `agentOverrides` table; composite primary key `(userId, agentId)`.
 - `src/main/db/migrations/agent-overrides.ts` — table creation with documented absence of FK/cascade.
 - `src/main/services/agentService.ts` — `listMerged()`, `findAgent()`, `setEnabled()`. `agentService.list(userId)` removed.
-- `src/main/ipc/agent.ipc.ts` — `agent:list` calls `listMerged`; `agent:upsert` / `agent:delete` target Default scope; `agent:sync-remote` and `agent:delete-remote` target Profile scope; `agent:set-enabled` routes local rows versus profile overrides.
+- `src/main/ipc/agent.ipc.ts` — `agent:list` calls `listMerged`; `agent:upsert` / `agent:delete` target Default scope; `agent:sync-remote` targets Profile scope; `agent:set-enabled` routes local rows versus profile overrides.
 - `src/main/ipc/agent_a2a.ipc.ts` — all agent lookups via `agentService.findAgent(default, profile, id)`.
 - `src/main/ipc/chatmode.ipc.ts`, `provider.ipc.ts`, `mcp.ipc.ts` — all use `getSettingsScopeUserId()`.
 - `src/main/ipc/chat.ipc.ts`, `agent_status.ipc.ts`, `llm.ipc.ts`, `auth.ipc.ts` (`auth:get-current`) — use `getProfileScopeUserId()`.
 
 ### Preload
-- `src/preload/index.ts` — `window.api.agents.setEnabled(agentId, enabled)` and `deleteRemote(agentId)`.
+- `src/preload/index.ts` — `window.api.agents.setEnabled(agentId, enabled)`.
 
 ### Renderer
 - `src/renderer/src/stores/ui.store.ts` — `SettingsMenu` includes `'profile-agents'`; `PROFILE_SCOPE_TABS` constant lists Profile-only tabs.
@@ -47,7 +47,6 @@ All other tables (`llm_providers`, `mcp_providers`, `chat_modes`, `agents`, `cha
 - `agent:list` — returns local agents from Default scope + remote agents from Profile scope, with `enabled` overlaid from overrides.
 - `agent:upsert` — Default scope only; rejects remote ids.
 - `agent:delete` — Default scope only; remote agents return inline `remote_immutable` error.
-- `agent:delete-remote` — active-profile, server-owned deletion; verifies the cached target and removes its local row only after server success.
 - `agent:set-enabled` — payload `{ agentId, enabled }`. Routes by id prefix (`remote:` → override table, else local row).
 - `agent:sync-remote` — Profile scope (active Cinna user).
 - `chatmode:*`, `provider:*`, `mcp:*` — all Default scope.

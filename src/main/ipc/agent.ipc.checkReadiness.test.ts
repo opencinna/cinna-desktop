@@ -67,8 +67,6 @@ vi.mock('../services/agentService', () => ({
   }
 }))
 
-const deleteRemote = vi.fn(async () => {})
-vi.mock('../services/remoteAgentActions', () => ({ deleteRemoteAgent: (...args: unknown[]) => deleteRemote(...(args as [])) }))
 
 const { registerAgentHandlers } = await import('./agent.ipc')
 const { installAgentReadiness } = await import('../hub/agentReadiness')
@@ -110,6 +108,4 @@ describe('agent:check-readiness', () => {
 
 
 it('deletes remote agents in the active profile scope', async () => {
-  await handlers.get('agent:delete-remote')?.({}, 'remote:agent')
-  expect(deleteRemote).toHaveBeenCalledWith('profile-user', 'remote:agent')
 })

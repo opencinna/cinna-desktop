@@ -51,7 +51,7 @@
 | UI store | `src/renderer/src/stores/ui.store.ts` — external-agent selection, chat/settings page mode, and settings routing |
 
 - `src/renderer/src/components/agents/ExternalAgentPage.tsx` — chat/settings landing and Overview/Connection tabs.
-- `src/renderer/src/components/agents/ExternalAgentActionsMenu.tsx` — visibility, delete and uninstall confirmations.
+- `src/renderer/src/components/agents/ExternalAgentActionsMenu.tsx` — Open on the server, Desktop visibility, and the delete confirmation for non-remote connections only; nothing server-hosted is destroyed here.
 - `src/renderer/src/components/agents/AgentTypeIcon.tsx` — shared agent identity icon.
 
 ## Database Schema
@@ -133,7 +133,7 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 
 ### IPC Agent Handler — `src/main/ipc/agent.ipc.ts`
 
-- `registerAgentHandlers()` — Registers CRUD + sync `agent:*` channels using `ipcHandle()`. All handlers `requireActivated()`; CRUD delegates to `agentService`, while `agent:delete-remote` delegates to `remoteAgentActions.deleteRemoteAgent` (see [Remote Agents](../remote_agents/remote_agents_tech.md)). `agent:upsert`, `agent:delete`, `agent:sync-remote` catch errors via `ipcErrorShape()` and return `{ success: false, error }` for inline display in the settings UI. Delegates to `registerA2AHandlers()`.
+- `registerAgentHandlers()` — Registers CRUD + sync `agent:*` channels using `ipcHandle()`. All handlers `requireActivated()`; CRUD delegates to `agentService`; there is no server-deletion channel, because nothing in the desktop deletes a server-hosted agent (see [Remote Agents](../remote_agents/remote_agents_tech.md)). `agent:upsert`, `agent:delete`, `agent:sync-remote` catch errors via `ipcErrorShape()` and return `{ success: false, error }` for inline display in the settings UI. Delegates to `registerA2AHandlers()`.
 
 ### IPC A2A Handler — `src/main/ipc/agent_a2a.ipc.ts`
 
@@ -156,7 +156,7 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 - `AgentsSettingsSection` — Profile-only visibility list for `source === 'remote'`; direct connection creation is in the sidebar chooser.
 - `A2AAgentForm` — Portalled dialog opened by `NewLocalAgentModal` through `LocalAgentsList`. Escape/close and inputs are disabled while saving; rejected IPC and returned `{success:false}` keep the form open with an error. Card URL + access token inputs, test connection shows card preview: name, description, agent version, resolved protocol version + transport (e.g. "A2A v0.3.0 · JSONRPC"), all supported versions, endpoint URL, streaming badge, skills. Passes `protocolInterfaceUrl` and `protocolInterfaceVersion` on save.
 - `ExternalAgentPage` — Shared non-folder page; keeps `ChatWorkspace` mounted behind `hidden` in Settings mode, keyed by profile/agent to preserve mode-switch drafts without sharing them between agents. Overview owns description/readiness/skills. ACP/Managed Connection opens the corresponding edit modal; A2A uses `AgentCard(connectionOnly)`. The server host opens via `system.openExternal`.
-- `ExternalAgentActionsMenu` — Header lifecycle actions and guarded confirmation dialogs; see [Remote Agents](../remote_agents/remote_agents_tech.md).
+- `ExternalAgentActionsMenu` — Header lifecycle actions: the link to the agent's page on the server, the Desktop visibility switch, and one guarded confirmation dialog, reached only by a non-remote connection's Delete; see [Remote Agents](../remote_agents/remote_agents_tech.md).
 - `AgentCard` — Its routed use passes `connectionOnly`, hiding the legacy expandable header, status dot, toggle, delete button and duplicated skills. Visible sections are Connection details, Authentication and Connection test; bundle update banner remains above them. Transport matches `protocolInterfaceUrl` against `cardData.supportedInterfaces`. **Readiness:**
   - The reason renders beside Test Connection (`readinessText`, `title={readinessTitle}`) — `AlertTriangle` for a warning state, `XCircle` for a danger one — while `readinessIssue && !testAgent.data?.success`. A failed test never replaces it and a passing test shows *Connected*; a failed test's error (with itself as its `title`) renders only when there is no refusal
   - `handleTest` also calls `useCheckAgentReadiness().mutate(agent.id)`

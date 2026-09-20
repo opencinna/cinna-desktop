@@ -78,7 +78,7 @@ describe('Develop from an agent page', () => {
   it.each([
     { can_build: false },
     { is_foreign_install: true },
-    { bundle_id: 'legacy-bundle' }
+    { bundle_uuid: 'bundle', is_publisher_install: false }
   ])('refuses ineligible metadata before preparing a workspace (%j)', async (metadata) => {
     f.remote.remoteMetadata = metadata
     await expect(developAgent('remote:a')).rejects.toThrow('not available')
@@ -86,8 +86,17 @@ describe('Develop from an agent page', () => {
     expect(f.cli).not.toHaveBeenCalled()
   })
 
-  it('allows a publisher working copy while keeping the same workspace checks', async () => {
-    f.remote.remoteMetadata = { bundle_id: 'bundle', is_publisher_install: true }
+  /*
+    Both shapes an owner can have. The second is the one that regressed: an
+    agent created on the server and never published carries a `bundle_id` and
+    no `bundle_uuid`, and counting the former as bundle membership hid Develop
+    from the person who wrote the agent.
+  */
+  it.each([
+    { bundle_id: 'bundle', bundle_uuid: 'bundle', is_publisher_install: true },
+    { bundle_id: 'com.acme.research', bundle_uuid: null, is_publisher_install: false }
+  ])('allows an agent of the caller’s own (%j) while keeping the same workspace checks', async (metadata) => {
+    f.remote.remoteMetadata = metadata
     f.cli.mockResolvedValue(status('/account/agents/alpha'))
     expect(await developAgent('remote:a')).toEqual({ agentId: 'dev-a' })
     expect(f.save).toHaveBeenCalledOnce()
