@@ -25,7 +25,7 @@
   - the `ConsentRequest`, `ConsentAnswer` and `ConsentPrompt` types.
 - `src/main/services/agentFiles/canonicalPath.ts`: `createPathCanonicalizer` and `DARWIN_DATA_VOLUME`.
 - `src/main/services/agentFiles/openStrategy.ts`: `chooseOpenStrategy` and `findDefaultEditor`.
-- `src/main/services/agentFiles/index.ts`: the production wiring (`agentFileService`) and `nativeConsentPrompt(win)`.
+- `src/main/host/desktop/agentFiles.ts`: the production wiring (`agentFileService`) and `nativeConsentPrompt(win)`.
 
 ### Main process — reused from Local Agents
 - `src/main/services/localAgents/localAgentService.ts`:
@@ -194,7 +194,7 @@ None.
   7. otherwise → `reveal`.
 - `findDefaultEditor(setting, getTool)`: returns the `localAgentsDefaultTool` tool only when it is a known id, available, has a path, and is of kind `editor`. Otherwise null.
 
-### `src/main/services/agentFiles/index.ts`
+### `src/main/host/desktop/agentFiles.ts`
 - `agentFileService`: the production wiring.
   - `locateAgent` goes through `localAgentService.locate(getSettingsScopeUserId(), …)`, since folder agents are settings-scoped.
   - `agentName` goes through `localAgentService.get`, falling back to "this agent".

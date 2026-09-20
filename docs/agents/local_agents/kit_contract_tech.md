@@ -211,7 +211,7 @@ Path resolution is lazy (`app.isPackaged` is only consulted inside the function)
 - packaged → `join(process.resourcesPath, 'cinna-kit-contract')`
 - development → `join(app.getAppPath(), 'resources', 'cinna-kit-contract')`
 
-The contract is read as a *tree* — schema, layout, and templates copied file by file — so electron-vite's `?asset` import (single files, as `src/main/services/appIconService.ts` uses) does not apply.
+The contract is read as a *tree* — schema, layout, and templates copied file by file — so electron-vite's `?asset` import (single files, as `src/main/host/desktop/appIconService.ts` uses) does not apply.
 
 > **The packaged branch has never been executed.** `contractStore.test.ts` covers the development path only, and nothing verifies the packaged one until someone builds an installer and inspects it. If `extraResources` is ever dropped, the packaged path would have to rely on Electron redirecting asar reads to `app.asar.unpacked` — documented behaviour, but unverified here, so prefer the explicit copy.
 

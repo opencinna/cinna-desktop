@@ -215,7 +215,7 @@ Once you have signed+notarized DMGs in `dist/`:
 
 ## Releasing & auto-update
 
-Auto-update is wired up via `electron-updater` (in `src/main/updater/updater.ts`) and `electron-builder`'s GitHub publish provider. Each release goes through the same 8-step runbook below.
+Auto-update is wired up via `electron-updater` (in `src/main/host/desktop/updater.ts`) and `electron-builder`'s GitHub publish provider. Each release goes through the same 8-step runbook below.
 
 At a glance:
 1. **Pre-flight** — clean tree on `main`, typecheck/build/dev sanity-checks pass.
@@ -516,7 +516,7 @@ The `.blockmap` files (macOS only currently) enable **differential downloads** �
 
 ### How the in-app update works
 
-`src/main/updater/updater.ts` runs `autoUpdater.checkForUpdates()`:
+`src/main/host/desktop/updater.ts` runs `autoUpdater.checkForUpdates()`:
 - On every app launch (after the main window is created).
 - Every 6 hours while the app is running.
 
@@ -616,7 +616,7 @@ A clean re-run will redownload Electron (~120 MB per arch from GitHub Releases) 
   - `release:linux` — Linux AppImage + deb build + upload draft. Designed for CI; can also run locally on Linux/Docker.
   - `release:all` — both platforms in one invocation (only useful from a Linux box with Apple secrets).
   - Added runtime dep `electron-updater`.
-- `src/main/updater/updater.ts`: auto-update wire-up. Checks on launch + every 6h, prompts user on `update-downloaded`, installs on quit. Dev-mode guard via `is.dev`.
+- `src/main/host/desktop/updater.ts`: auto-update wire-up. Checks on launch + every 6h, prompts user on `update-downloaded`, installs on quit. Dev-mode guard via `is.dev`.
 - `src/main/index.ts`: calls `initAutoUpdater()` after `createWindow()`. Loads dock icon from `resources/cinna-desktop-icon.png`.
 - `.github/workflows/release-linux.yml`: triggers on `v*` tag push or manual dispatch. Runs on `ubuntu-latest`, tests the packaging guard/environment fixtures, then calls `npm run release:linux` with the auto-provided `GITHUB_TOKEN`. Appends Linux assets to the same draft release the macOS build created; runtime smoke commands are manual.
 - `build/entitlements.mac.plist`: unchanged — current entitlements (JIT, unsigned exec memory, dyld env vars) are correct for Electron + hardened runtime.

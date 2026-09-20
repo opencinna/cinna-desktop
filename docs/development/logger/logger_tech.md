@@ -4,7 +4,7 @@
 
 ### Main Process
 - `src/main/logger/logger.ts` — Ring buffer, `logEntry()`, `createLogger(scope)`, `getLogEntries()`, `clearLogEntries()`, `setLogSink()`. **This file has zero imports, by rule.** It used to import `BrowserWindow` from `electron` and `getMainWindow` from `../index` so `push` could broadcast to the renderer itself; the broadcast is now an installed **sink**. Keep it importless — an import here is paid for by every caller. **109 files import `logger/logger` at `12686f0`, 76 of them non-test modules under `src/main/`** (counted by grep on 4 Sep 2026; the larger number includes test files, which is the population that actually paid the cost)
-- `src/main/logger/broadcast.ts` — `installLogBroadcast(getWindow)`. The Electron half, kept out of `logger.ts`. It holds `BROADCAST_CHANNEL = 'logger:entry'` and registers a sink that sends to `getWindow()` while a live, non-destroyed window exists. **The window getter arrives as an argument, not as an import** — importing `getMainWindow` here would only move the cycle rather than cut it. Its one import is type-only and erased at compile time, so neither module creates a runtime edge to `electron` or to the entry point
+- `src/main/host/desktop/logBroadcast.ts` — `installLogBroadcast(getWindow)`. The Electron half, kept out of `logger.ts`. It holds `BROADCAST_CHANNEL = 'logger:entry'` and registers a sink that sends to `getWindow()` while a live, non-destroyed window exists. **The window getter arrives as an argument, not as an import** — importing `getMainWindow` here would only move the cycle rather than cut it. Its one import is type-only and erased at compile time, so neither module creates a runtime edge to `electron` or to the entry point
 - `src/main/index.ts:25` — the single `installLogBroadcast(getMainWindow)` call, made as early in startup as possible
 - `src/main/ipc/logger.ipc.ts` — `registerLoggerHandlers()` — exposes `logger:get-all`, `logger:clear`, `logger:log`
 - `src/main/ipc/index.ts` — Calls `registerLoggerHandlers()` first in `registerAllIpcHandlers()`
@@ -44,8 +44,8 @@ None — logger is in-memory only.
 ## Services & Key Methods
 
 - `src/main/logger/logger.ts:logEntry(level, scope, source, message, data?)` — Assigns id, timestamps, serializes data, pushes to buffer, hands the entry to the sink if one is installed, mirrors to `console.*`
-- `src/main/logger/logger.ts:setLogSink(next | null)` — Installs (or, with `null`, removes) the destination for live entries. `index.ts` installs the renderer broadcast at startup via `logger/broadcast.ts`; tests pass `null` to put it back
-- `src/main/logger/broadcast.ts:installLogBroadcast(getWindow)` — Registers the sink. Call once, as early as possible; entries logged before it are already buffered and reach the renderer through `logger:get-all`
+- `src/main/logger/logger.ts:setLogSink(next | null)` — Installs (or, with `null`, removes) the destination for live entries. `index.ts` installs the renderer broadcast at startup via `host/desktop/logBroadcast.ts`; tests pass `null` to put it back
+- `src/main/host/desktop/logBroadcast.ts:installLogBroadcast(getWindow)` — Registers the sink. Call once, as early as possible; entries logged before it are already buffered and reach the renderer through `logger:get-all`
 - `src/main/logger/logger.ts:createLogger(scope)` — Returns `{debug, info, warn, error}` bound to `logEntry(..., source='main', ...)`
 - `src/main/logger/logger.ts:serializeData(data)` — Converts `Error` to `{name, message, stack}`; **every other value is walked by `redact()` first** — any key matching `/(api[_-]?key|access[_-]?token|refresh[_-]?token|password|authorization|bearer|secret|token|cookie)/i` with a non-empty value becomes `'[REDACTED]'`, cycles become `'[Circular]'` — and only then goes through `JSON.parse(JSON.stringify(...))`, with a `String(data)` fallback
 - `src/renderer/src/stores/logger.store.ts:subscribe()` — Guards against double-subscription; seeds state with `getAll()`, then wires `onEntry` listener
@@ -67,7 +67,7 @@ Each entry carries the date it was checked and the method.
 ## Configuration
 
 - `MAX_ENTRIES = 2000` (hard-coded in both `src/main/logger/logger.ts` and `src/renderer/src/stores/logger.store.ts`)
-- `BROADCAST_CHANNEL = 'logger:entry'` — now in `src/main/logger/broadcast.ts`, not `logger.ts`
+- `BROADCAST_CHANNEL = 'logger:entry'` — now in `src/main/host/desktop/logBroadcast.ts`, not `logger.ts`
 - `data` payloads on `[cinna-oauth]` / `[a2a-client]` HTTP error logs are trimmed to 2000 chars to keep the buffer bounded
 
 ## Security

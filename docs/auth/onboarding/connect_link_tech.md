@@ -8,7 +8,7 @@ Implementation companion to [connect_link.md](connect_link.md).
 - `src/shared/connectIntent.ts` — `ConnectIntent` (`serverUrl`, `receivedAt`), `CONNECT_INTENT_CHANNEL` (`'connect:intent'`), `CONNECT_SCHEME` (`'cinna'`), `CONNECT_INTENT_ARGV_FLAG` (`'--cinna-connect-intent='`)
 
 ### Main process
-- `src/main/services/connectIntentService.ts` — `normalizeServerOrigin()`, `parseConnectUrl()`, `connectUrlFromArgv()`, `registerConnectScheme()`, and the `connectIntentService` object (`install`, `deliver`, `flush`, `getPending`, `consume`, `reset`); module constants `MAX_URL_LENGTH` (2048), `LOOPBACK_HOSTS`, `CONNECT_ACTION`
+- `src/main/host/desktop/connectIntentService.ts` — `normalizeServerOrigin()`, `parseConnectUrl()`, `connectUrlFromArgv()`, `registerConnectScheme()`, and the `connectIntentService` object (`install`, `deliver`, `flush`, `getPending`, `consume`, `reset`); module constants `MAX_URL_LENGTH` (2048), `LOOPBACK_HOSTS`, `CONNECT_ACTION`
 - `src/main/services/connectIntentService.test.ts` — the parser, the argv scan and the buffer
 - `src/main/ipc/connect.ipc.ts` — `registerConnectHandlers()`
 - `src/main/window/focus.ts` — `installWindowResolver()`, `focusMainWindow()`

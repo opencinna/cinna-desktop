@@ -41,6 +41,19 @@ See `docs/README.md` for the project index, glossary, and domain map. Feature do
 
 **TL;DR**: Electron main process handles SQLite (Drizzle), LLM SDK calls, MCP connections, and API key encryption (safeStorage). Renderer is fully sandboxed React 19 + Tailwind v4 + Zustand + TanStack Query. Communication via typed `window.api.*` (contextBridge) and MessagePort for streaming.
 
+## Hub core versus desktop UI
+
+Agent management and execution are shared Hub core, running in-process in the
+desktop. Allocate runtime, task, Inbox, permission, scheduling and persistence
+features to the existing `src/main` core services. Allocate windows, dialogs,
+tray, updater and deep links to `src/main/host/desktop`; renderer components only
+present data and request core operations. Platform calls use `host/runtimeHost.ts`,
+notifications use `host/events.ts`, and startup/shutdown live in `hub/core.ts`.
+Core imports no Electron or desktop transport. The AST ratchet and plain-Node
+fixture turn run with `npm run test:hub`. Read
+`docs/development/hub_core/hub_core_llm.md` for ownership, extension points and
+Phase 0 evidence limits before implementing or reviewing cross-boundary work.
+
 ## Key Conventions
 
 - All colors use CSS variables `var(--color-*)` defined in `src/renderer/src/assets/main.css` — never hardcode colors

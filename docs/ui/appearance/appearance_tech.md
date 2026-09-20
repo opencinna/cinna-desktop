@@ -7,7 +7,7 @@ Implementation companion to [Appearance](appearance.md).
 ### Main process and preload
 
 - `src/main/ipc/app.ipc.ts` — existing `app:set-theme` validation and icon update.
-- `src/main/services/appIconService.ts` — `apply`, `iconForCurrentTheme`; dock/window icon assets for resolved themes.
+- `src/main/host/desktop/appIconService.ts` — `apply`, `iconForCurrentTheme`; dock/window icon assets for resolved themes.
 - `src/preload/index.ts` — `window.api.app.setTheme`.
 
 ### Renderer — state and scheduling

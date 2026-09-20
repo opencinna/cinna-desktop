@@ -2,6 +2,14 @@
 description: Review Electron app architecture for proper layering, separation of concerns, and best practices.
 ---
 
+> Hub boundary review: read `docs/development/hub_core/hub_core_llm.md`. Runtime,
+> tasks, permissions, schedules, Inbox and persistence belong to Hub core; windows,
+> native dialogs, tray and deep links belong to desktop UI. Reject transitive
+> Electron/UI imports from core and runtime initialization hidden in IPC. Run
+> `npm run test:hub`; inspect host parity, packaged adapter paths, activation and
+> detach-versus-cancel semantics. The diagnostic Node host is not a shipping daemon.
+
+
 ## User Input
 
 ```text

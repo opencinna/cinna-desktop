@@ -2,6 +2,17 @@
 
 Project-specific layering convention for `src/main/`. LLM-targeted reference — concise patterns only, skip standard Electron/Drizzle knowledge.
 
+## Hub ownership boundary
+
+All three layers below sit inside a larger core/desktop split. Runtime business
+logic and persistence are Hub core; IPC is the desktop transport. Read
+[Hub core and desktop ownership](../hub_core/hub_core_llm.md) before adding a
+platform dependency. Core imports no Electron, desktop entry point, windows or
+IPC. Paths, HTTP, keystore and process runtime come from `host/runtimeHost.ts`;
+notifications use `host/events.ts`. Shared startup wiring lives in `hub/core.ts`.
+The desktop still calls core in process. `npm run test:hub` enforces and boots the
+boundary under plain Node.
+
 ## The Three Layers
 
 ```
@@ -50,10 +61,10 @@ Adapters (`llm/*.ts`, `mcp/manager.ts`, `agents/a2a-client.ts`, `agents/drivers/
 
 ### `agents/drivers/` — kind-specific agent logic
 - **Kind decisions live here.** Everything that depends on *what kind of agent* a row is — the turn, readiness, auth, attachments, commands, answering a parked ask — belongs in this folder. Code elsewhere asks `capabilitiesFor(row)` / `AgentDto.capabilities`, and `source` means ownership only. `src/main/agents/kindBranches.test.ts` pins what remains outside by exact count — see [Agent Drivers — Technical Details](../../agents/drivers/drivers_tech.md#the-kind-branch-ratchet)
-- **`drivers/index.ts` is the only file in the folder that imports Electron**, and the only one naming `engineBinaryService`, `localAgentService`, `desktopStateService` or `agentSessionRepo`. Driver implementations accept injected runtime dependencies; production wiring installs folder, custom and Managed state/auth authorities
+- **No file in `drivers/` imports Electron; `drivers/index.ts` uses the injected runtime host**, and the only one naming `engineBinaryService`, `localAgentService`, `desktopStateService` or `agentSessionRepo`. Driver implementations accept injected runtime dependencies; production wiring installs folder, custom and Managed state/auth authorities
 - **`capabilities.ts` and `driverOf.ts` are pure and import-light.** `agentService` (DTO mapping), `agentReadinessService` (TTL choice) and `scannerService` (the index row's `driver`) import only these two, so the service layer does not pull in the production wiring
-- **`a2aConnection.ts` imports no Electron directly, but reaches it** through `security/keystore` and `auth/cinna-oauth`. So `a2aDriver.ts` takes endpoint and token resolution and the `CinnaReauthRequired` predicate as deps, and `authRejectionStatus` is split out into `a2aErrors.ts`
-- **A service that needs a driver's answer has it installed from the IPC layer.** `agent.ipc.ts` installs `agentReadinessService`'s probe (`driverFor(row).readiness`) and its broadcast (`webContents.send`), so the service names neither the drivers' wiring nor Electron
+- **`a2aConnection.ts` and its keystore/OAuth dependencies are host-neutral.** So `a2aDriver.ts` takes endpoint and token resolution and the `CinnaReauthRequired` predicate as deps, and `authRejectionStatus` is split out into `a2aErrors.ts`
+- **A service that needs a driver's answer has it installed from the core composition root.** `hub/agentReadiness.ts` installs the readiness probe and DTO event publisher, independently of IPC registration
 - **The main run executor, specialist provider and shared answer delivery use driverFor from agents/drivers** (runExecutionService, a2aAsMcpProvider and shared answer delivery). `ipc/local_tools.ipc.ts` imports `claudeAuthProbe` from the same module
 
 ### `agents/status/` — optional reported data
@@ -118,7 +129,7 @@ Use `ipcErrorShape(err)` to extract `{ code, message, detail? }` for inline `{ s
 
 - `createLogger('domain')` from `logger/logger.ts`. **109 files import it at `12686f0`** — 76 non-test modules under `src/main/`, the rest tests (counted by grep on 4 Sep 2026). That population is why the next rule exists.
 - **`logger/logger.ts` must stay importless.** No `electron`, no `../index`, nothing. An import there is paid for by every caller: it used to import `getMainWindow` from `src/main/index.ts` so it could broadcast to the renderer itself, so a test of a pure function three layers away had to stub the logger and `db/client` just to *load* — and a file that fails to load reports as a **smaller test count**, not as a failure (importing `kit/validator.ts` into one pure test dropped the suite 991 → 977 with nothing to point at).
-- **The renderer broadcast is a sink, installed from the entry point.** `logger.ts` exposes `setLogSink(fn | null)`; `logger/broadcast.ts` holds the Electron half and takes the window getter **as an argument** — importing `getMainWindow` there would move the cycle rather than cut it. `index.ts` owns the window, so `index.ts` supplies it. `broadcast.ts`'s only import is type-only and erased at compile time.
+- **The renderer broadcast is a sink, installed from the entry point.** `logger.ts` exposes `setLogSink(fn | null)`; `host/desktop/logBroadcast.ts` holds the Electron half and takes the window getter **as an argument** — importing `getMainWindow` there would move the cycle rather than cut it. `index.ts` owns the window, so `index.ts` supplies it. `broadcast.ts`'s only import is type-only and erased at compile time.
 - **Apply the same test to any new cross-cutting module.** If most of `src/main/` will import it, it may not import anything that reaches `index.ts` or `electron` at runtime. `src/main/sync/identity.ts` and `src/shared/kit/manifest.ts` are held to this for the same reason.
 - Full detail: [Logger](../logger/logger.md) and [Logger — Technical Details](../logger/logger_tech.md).
 

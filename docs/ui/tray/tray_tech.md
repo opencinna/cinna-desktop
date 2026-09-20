@@ -3,14 +3,14 @@
 ## File Locations
 
 ### Main process
-- `src/main/services/trayService.ts` — `trayService` owns the `Tray` and the popup `BrowserWindow`. Public: `create({ getMainWindow })` (idempotent — placeholder image, tooltip, `click`/`right-click` → `toggle()`, eager `buildPopup()`), `setImage(dataUrl, tooltip)`, `startChat(agentId)`, `openStatus(agentId)`, `hidePopup()`, `destroy()` (idempotent). Internal: `buildPopup()` (frameless / `transparent` / `alwaysOnTop` / `skipTaskbar`; macOS adds `vibrancy: 'popover'` + `visualEffectState: 'active'` + `hasShadow`; loads `trayPanel.html`; `blur` → `fadeOutPopup`), `positionPopup()` (centers under `tray.getBounds()`, clamped to the display work area; cursor-position fallback for empty bounds), `raiseMain()`, `toggle()` (with `REOPEN_GUARD_MS` blur/click guard), and fade helpers `showPopup` / `fadeOutPopup` / `animateOpacity` (native `BrowserWindow.setOpacity` tween, `stopFade()` cancels in-flight). Uses `appIconService.iconForCurrentTheme()` for the initial placeholder and `createLogger('tray')`.
-- `src/main/services/traySync.ts` — `syncTrayFromSettings()` reads `appSettingsRepo.get('enableTrayIcon')` and either calls `trayService.create({ getMainWindow })` + sends `tray:request-icon` to the main window, or calls `trayService.destroy()`. Single chokepoint for the lifecycle rule (startup + settings-write). Uses `createLogger('tray-sync')`.
+- `src/main/host/desktop/trayService.ts` — `trayService` owns the `Tray` and the popup `BrowserWindow`. Public: `create({ getMainWindow })` (idempotent — placeholder image, tooltip, `click`/`right-click` → `toggle()`, eager `buildPopup()`), `setImage(dataUrl, tooltip)`, `startChat(agentId)`, `openStatus(agentId)`, `hidePopup()`, `destroy()` (idempotent). Internal: `buildPopup()` (frameless / `transparent` / `alwaysOnTop` / `skipTaskbar`; macOS adds `vibrancy: 'popover'` + `visualEffectState: 'active'` + `hasShadow`; loads `trayPanel.html`; `blur` → `fadeOutPopup`), `positionPopup()` (centers under `tray.getBounds()`, clamped to the display work area; cursor-position fallback for empty bounds), `raiseMain()`, `toggle()` (with `REOPEN_GUARD_MS` blur/click guard), and fade helpers `showPopup` / `fadeOutPopup` / `animateOpacity` (native `BrowserWindow.setOpacity` tween, `stopFade()` cancels in-flight). Uses `appIconService.iconForCurrentTheme()` for the initial placeholder and `createLogger('tray')`.
+- `src/main/host/desktop/traySync.ts` — `syncTrayFromSettings()` reads `appSettingsRepo.get('enableTrayIcon')` and either calls `trayService.create({ getMainWindow })` + sends `tray:request-icon` to the main window, or calls `trayService.destroy()`. Single chokepoint for the lifecycle rule (startup + settings-write). Uses `createLogger('tray-sync')`.
 - `src/main/ipc/tray.ipc.ts` — `registerTrayHandlers()` — `tray:set-image`, `tray:start-chat` (+ `userActivation.requireActivated()`), `tray:open-status` (+ `userActivation.requireActivated()`), `tray:close-popup`.
 - `src/main/ipc/settings.ipc.ts` — `settings:set` calls `syncTrayFromSettings()` after a successful write when `key === 'enableTrayIcon'` so a renderer toggle takes effect live without restart.
 - `src/main/ipc/index.ts` — `registerTrayHandlers()` wired into `registerAllIpcHandlers()`.
 - `src/main/index.ts` — `syncTrayFromSettings()` at the end of `createWindow()` (replaces the unconditional `trayService.create`); `mainWindow.on('closed', …)` calls `trayService.destroy()` and nulls the ref so `activate` rebuilds both.
 - `src/main/db/appSettings.ts` — `DEFAULTS.enableTrayIcon: true` so existing installs keep the tray on after upgrade.
-- `src/main/services/appIconService.ts` — reused for the placeholder tray image.
+- `src/main/host/desktop/appIconService.ts` — reused for the placeholder tray image.
 
 ### Preload
 - `src/preload/index.ts` — `window.api.tray`: `setImage(dataUrl, tooltip)`, `startChat(agentId)`, `openStatusDetail(agentId)`, `closePopup()`, `onFocusChat(handler)` (listens `tray:focus-chat`), `onFocusStatus(handler)` (listens `tray:focus-status`), `onRequestIcon(handler)` (listens `tray:request-icon`).
@@ -56,8 +56,8 @@ Main → main window (`webContents.send`):
 
 ## Services & Key Methods
 
-- `src/main/services/trayService.ts` — `create` / `setImage` / `startChat` / `openStatus` / `hidePopup` / `destroy`; internal `buildPopup` / `positionPopup` / `raiseMain` / `toggle` / `showPopup` / `fadeOutPopup` / `animateOpacity` / `stopFade`.
-- `src/main/services/traySync.ts` — `syncTrayFromSettings()` only. Reads `appSettingsRepo.get('enableTrayIcon')`, branches on the boolean, and pings the renderer with `tray:request-icon` after a create so the canvas icon replaces the placeholder.
+- `src/main/host/desktop/trayService.ts` — `create` / `setImage` / `startChat` / `openStatus` / `hidePopup` / `destroy`; internal `buildPopup` / `positionPopup` / `raiseMain` / `toggle` / `showPopup` / `fadeOutPopup` / `animateOpacity` / `stopFade`.
+- `src/main/host/desktop/traySync.ts` — `syncTrayFromSettings()` only. Reads `appSettingsRepo.get('enableTrayIcon')`, branches on the boolean, and pings the renderer with `tray:request-icon` after a create so the canvas icon replaces the placeholder.
 - Data services are unchanged — the popup calls the existing `agentStatusService` via `agent-status:*` (see [Agent Status](../../agents/agent_status/agent_status.md)).
 
 ## Renderer Components

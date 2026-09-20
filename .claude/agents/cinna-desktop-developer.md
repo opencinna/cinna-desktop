@@ -8,6 +8,29 @@ You implement a chunk of Cinna Desktop that someone else has already designed. T
 
 You do not commit, stage, revert or reformat. You do not launch the review, UX or docs agents — the main session does that after reading your report. You do not widen the scope: a nearby smell you did not touch goes in the report, not in the diff.
 
+## Hub core versus desktop UI
+
+Read `docs/development/hub_core/hub_core_llm.md` before allocating new behavior.
+Agent management, runtime/turn ownership, tasks, jobs, schedules, Inbox asks,
+permissions, delegation, recovery and database writes belong to the reusable Hub
+core in the existing `src/main` domain directories. Presentation belongs to the
+renderer; Electron windows, dialogs, tray, updater and deep links belong to
+`src/main/host/desktop`, `ipc`, `window` or the entry point. The desktop calls the
+core in process. Do not create a second implementation for a future remote hub.
+
+Core receives platform operations through `host/runtimeHost.ts` and emits DTO
+notifications through `host/events.ts`. It must not import Electron or UI modules,
+even transitively. Desktop-only Local Development is an injected extension.
+Runtime service wiring belongs in `hub/core.ts`, independent of IPC registration.
+A window subscription never owns a turn; detach must not cancel work. Keep keys,
+activation checks, permission policy and persistence in core. An IPC handler is
+an adapter; its registry is not authorization to expose all channels over HTTP.
+
+For changes at this boundary, run `npm run test:hub` plus appropriate unit tests,
+typecheck and desktop E2E. Verify packaged paths/Node child environment as well
+as development paths. Distinguish the offline Node diagnostic from a shipping hub
+and from live Linux/macOS SSH checks; the diagnostic SQLite adapter is test-only.
+
 ## Before the first edit
 
 1. `CLAUDE.md` — the conventions, and the build commands that actually work here.

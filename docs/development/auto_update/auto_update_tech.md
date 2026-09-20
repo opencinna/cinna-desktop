@@ -6,7 +6,7 @@
 - `src/shared/updaterState.ts` — `UpdaterState` discriminated union (`idle` | `downloading` | `downloaded`) and the `UPDATER_BROADCAST_CHANNEL` constant; consumed by both main and renderer
 
 ### Main Process
-- `src/main/updater/updater.ts` — Wraps `electron-updater`. Holds `currentState`, `setState()` (cache + broadcast), `configureUpdater()` (idempotent listener attachment), `initAutoUpdater()` (production-only init + 6h interval), `checkForUpdatesManual()` (menu-triggered with dialog feedback), `promptInstall(version)` (internal restart dialog), `promptInstallCurrent()` (used by IPC), `getUpdaterState()` (snapshot accessor)
+- `src/main/host/desktop/updater.ts` — Wraps `electron-updater`. Holds `currentState`, `setState()` (cache + broadcast), `configureUpdater()` (idempotent listener attachment), `initAutoUpdater()` (production-only init + 6h interval), `checkForUpdatesManual()` (menu-triggered with dialog feedback), `promptInstall(version)` (internal restart dialog), `promptInstallCurrent()` (used by IPC), `getUpdaterState()` (snapshot accessor)
 - `src/main/ipc/updater.ipc.ts` — `registerUpdaterHandlers()` — exposes `updater:get-state` and `updater:prompt-install`
 - `src/main/ipc/index.ts` — Calls `registerUpdaterHandlers()` at the end of `registerAllIpcHandlers()`
 - `src/main/index.ts` — (a) Calls `initAutoUpdater()` after `createWindow()`. (b) Replaces `role: 'appMenu'` with an explicit submenu containing "Check for Updates…" wired to `checkForUpdatesManual()`
@@ -49,13 +49,13 @@ None — auto-update state is in-memory only. `currentState` is reset on every p
 
 ## Services & Key Methods
 
-- `src/main/updater/updater.ts:setState(next)` — Mutates `currentState` and broadcasts on `UPDATER_BROADCAST_CHANNEL` via `BrowserWindow.getAllWindows()` (skipping destroyed windows)
-- `src/main/updater/updater.ts:configureUpdater()` — Idempotent. Sets `autoDownload`/`autoInstallOnAppQuit`, plugs the logger adapter, attaches all event listeners. Safe to call from both `initAutoUpdater()` and `checkForUpdatesManual()`
-- `src/main/updater/updater.ts:initAutoUpdater()` — Production-build entry: skips in dev, calls `configureUpdater()`, fires initial check, schedules a 6-hour periodic check (`SIX_HOURS_MS`)
-- `src/main/updater/updater.ts:checkForUpdatesManual()` — Menu-triggered. In dev shows an info dialog. In prod calls `configureUpdater()` then `autoUpdater.checkForUpdates()`; the resolved `UpdateCheckResult.downloadPromise` is the truthiness signal for "update available". If `currentState.phase === 'downloaded'` the manual path re-opens the install prompt directly
-- `src/main/updater/updater.ts:promptInstall(version)` — Native message box with `Restart now` (id 0) / `Later` (id 1). Response 0 → `autoUpdater.quitAndInstall()`
-- `src/main/updater/updater.ts:promptInstallCurrent()` — Used by the renderer-triggered IPC. Guards against `phase !== 'downloaded'` (shows "No update is ready to install yet.")
-- `src/main/updater/updater.ts:getUpdaterState()` — Snapshot accessor for the `updater:get-state` IPC handler
+- `src/main/host/desktop/updater.ts:setState(next)` — Mutates `currentState` and broadcasts on `UPDATER_BROADCAST_CHANNEL` via `BrowserWindow.getAllWindows()` (skipping destroyed windows)
+- `src/main/host/desktop/updater.ts:configureUpdater()` — Idempotent. Sets `autoDownload`/`autoInstallOnAppQuit`, plugs the logger adapter, attaches all event listeners. Safe to call from both `initAutoUpdater()` and `checkForUpdatesManual()`
+- `src/main/host/desktop/updater.ts:initAutoUpdater()` — Production-build entry: skips in dev, calls `configureUpdater()`, fires initial check, schedules a 6-hour periodic check (`SIX_HOURS_MS`)
+- `src/main/host/desktop/updater.ts:checkForUpdatesManual()` — Menu-triggered. In dev shows an info dialog. In prod calls `configureUpdater()` then `autoUpdater.checkForUpdates()`; the resolved `UpdateCheckResult.downloadPromise` is the truthiness signal for "update available". If `currentState.phase === 'downloaded'` the manual path re-opens the install prompt directly
+- `src/main/host/desktop/updater.ts:promptInstall(version)` — Native message box with `Restart now` (id 0) / `Later` (id 1). Response 0 → `autoUpdater.quitAndInstall()`
+- `src/main/host/desktop/updater.ts:promptInstallCurrent()` — Used by the renderer-triggered IPC. Guards against `phase !== 'downloaded'` (shows "No update is ready to install yet.")
+- `src/main/host/desktop/updater.ts:getUpdaterState()` — Snapshot accessor for the `updater:get-state` IPC handler
 - `src/renderer/src/stores/updater.store.ts:subscribe()` — Hydrate-then-subscribe pattern. Guards against double-subscription via the `subscribed` flag
 
 ## Renderer Components
