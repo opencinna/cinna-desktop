@@ -1,3 +1,4 @@
+import { redactingRepository } from '../security/serviceCredentialRedaction'
 import { nanoid } from 'nanoid'
 import { and, asc, eq, desc, isNotNull, sql } from 'drizzle-orm'
 import { getDb } from './client'
@@ -86,7 +87,7 @@ function getNextSortOrder(chatId: string): number {
   return last ? last.sortOrder + 1 : 0
 }
 
-export const messageRepo = {
+const rawMessageRepo = {
   saveSystem(msg: { chatId: string; content: string; addressedAgentId?: string }, onSaved?: () => void): string {
     return getDb().transaction(() => {
       const id = nanoid()
@@ -307,3 +308,5 @@ export const messageRepo = {
     return row?.agentId ?? null
   }
 }
+
+export const messageRepo = redactingRepository(rawMessageRepo, ['saveSystem', 'saveUser', 'saveAssistant', 'updateAssistantParts', 'saveToolCall', 'saveTransition', 'saveError', 'insertRaw'])

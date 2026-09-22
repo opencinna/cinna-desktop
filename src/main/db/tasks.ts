@@ -1,3 +1,4 @@
+import { redactingRepository } from '../security/serviceCredentialRedaction'
 import type { TaskScript } from '../../shared/taskScript'
 import { nanoid } from 'nanoid'
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
@@ -191,7 +192,7 @@ export interface SubtaskCounts {
 
 const ARCHIVED: TaskStatus = 'archived'
 
-export const taskRepo = {
+const rawTaskRepo = {
   list(userId: string, filter: TaskListFilter = {}): TaskRow[] {
     const where = [eq(tasks.userId, userId), isNull(tasks.deletedAt)]
     if (filter.statuses?.length) where.push(inArray(tasks.status, [...filter.statuses]))
@@ -608,3 +609,5 @@ export const taskRepo = {
     return counts
   }
 }
+
+export const taskRepo = redactingRepository(rawTaskRepo, ['create', 'update', 'upsertFromSync'])

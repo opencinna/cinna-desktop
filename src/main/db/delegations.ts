@@ -1,3 +1,4 @@
+import { redactingRepository } from '../security/serviceCredentialRedaction'
 import { and, desc, eq, or, isNull } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import { delegationOriginKey, type DelegationDto, type DelegationReply } from '../../shared/delegations'
@@ -26,7 +27,7 @@ function selectAll(...conditions: Parameters<typeof and>): DelegationRow[] {
   return getDb().select().from(delegations).where(and(...conditions)).all()
 }
 
-export const delegationRepo = {
+const rawDelegationRepo = {
   /** Main-only lookup. Callers still validate routing before trusting an origin. */
   originProfile(chatId?: string | null, taskId?: string | null): string | null {
     if (chatId) {
@@ -296,3 +297,5 @@ export const delegationRepo = {
     }
   }
 }
+
+export const delegationRepo = redactingRepository(rawDelegationRepo, ['insert', 'update', 'appendReply', 'changeReply', 'recordWake'])

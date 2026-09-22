@@ -1,3 +1,4 @@
+import { redactCredentialText } from '../security/serviceCredentialRedaction'
 import { runtimeHost } from '../host/runtimeHost'
 /**
  * The handoff note as a file on disk — `<userData>/tasks/<task-id>.md`, with
@@ -148,7 +149,7 @@ function writeAtomically(path: string, contents: string): void {
   sweepStaleTemps(dir)
   const temp = join(dir, `${TEMP_PREFIX}${process.pid}.${Date.now()}${TEMP_SUFFIX}`)
   try {
-    writeFileSync(temp, contents)
+    writeFileSync(temp, redactCredentialText(contents))
     renameSync(temp, path)
   } catch (err) {
     try {

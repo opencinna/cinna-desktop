@@ -1,3 +1,4 @@
+import { createCredentialEventStream } from '../security/serviceCredentialRedaction'
 import type { RunEvent } from '../../shared/runEvents'
 import type { RunWatchMessage } from '../../shared/runWatch'
 import { continuesPart } from '../../shared/partMerge'
@@ -204,29 +205,33 @@ export function createLiveRunHub(maxBytes = 8 * 1024 * 1024, maxEvents = 5_000) 
       if (bytes > maxBytes) unavailable(run, 'baseline')
       runs.set(key, run)
       publish(key, snapshot(run))
+      const redactor = createCredentialEventStream()
       const current = (): boolean => runs.get(key) === run
       return {
         setAgentId(agentId: string | null): void { if (current()) run.agentId = agentId },
         accepted(): void {
           if (current()) publish(key, { type: 'accepted', runId: id, sequence: ++run.sequence, agentId: run.agentId })
         },
-        push(event: RunEvent): void {
+        push(rawEvent: RunEvent): void {
           if (!current()) return
-          try {
-            // Bytes track what is retained: a merged fragment adds only its
-            // growth, so a part repeating its full tool input is counted once.
-            // `status` is not retained (a later projection ignores it). Over
-            // the byte cap the cache first sheds tool output heads and long
-            // tool arguments; only if it is still over, or over the entry cap,
-            // is replay dropped. Existing watchers still receive every event.
-            if (run.replayAvailable && retainable(event)) retain(run, event)
-          } catch {
-            unavailable(run, 'serialization')
+          for (const event of redactor.push(rawEvent)) {
+            try {
+              // Bytes track what is retained: a merged fragment adds only its
+              // growth, so a part repeating its full tool input is counted once.
+              // `status` is not retained (a later projection ignores it). Over
+              // the byte cap the cache first sheds tool output heads and long
+              // tool arguments; only if it is still over, or over the entry cap,
+              // is replay dropped. Existing watchers still receive every event.
+              if (run.replayAvailable && retainable(event)) retain(run, event)
+            } catch {
+              unavailable(run, 'serialization')
+            }
+            publish(key, { type: 'event', runId: id, sequence: ++run.sequence, agentId: run.agentId, event })
           }
-          publish(key, { type: 'event', runId: id, sequence: ++run.sequence, agentId: run.agentId, event })
         },
         close(): void {
           if (!current()) return
+          for (const event of redactor.finish()) publish(key, { type: 'event', runId: id, sequence: ++run.sequence, agentId: run.agentId, event })
           runs.delete(key)
           publish(key, { type: 'closed', runId: id, sequence: ++run.sequence, agentId: run.agentId })
         }

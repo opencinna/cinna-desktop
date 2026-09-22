@@ -41,6 +41,8 @@ const MAX_ENTRIES = 2000
 let nextId = 1
 const buffer: LogEntry[] = []
 let sink: LogSink | null = null
+let valueRedactor: (value: unknown) => unknown = value => value
+export function setLogValueRedactor(redactor: typeof valueRedactor): void { valueRedactor = redactor }
 
 /**
  * Install (or, with `null`, remove) the destination for live entries.
@@ -91,6 +93,8 @@ function serializeData(data: unknown): unknown {
 }
 
 function push(entry: LogEntry): void {
+  entry.message = String(valueRedactor(entry.message))
+  entry.data = valueRedactor(entry.data)
   buffer.push(entry)
   if (buffer.length > MAX_ENTRIES) buffer.shift()
 
@@ -150,8 +154,8 @@ export function logEntry(
         : level === 'debug'
           ? console.debug
           : console.log
-  if (data !== undefined) fn(prefix, message, data)
-  else fn(prefix, message)
+  if (entry.data !== undefined) fn(prefix, entry.message, entry.data)
+  else fn(prefix, entry.message)
 }
 
 export function createLogger(scope: string): ScopedLogger {

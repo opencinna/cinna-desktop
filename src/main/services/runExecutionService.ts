@@ -1,3 +1,4 @@
+import { createCredentialEventStream, redactCredentialValues } from '../security/serviceCredentialRedaction'
 import { chatConductorService } from './chatConductorService'
 import { runNestedAgentTurn } from './nestedAgentTurn'
 import { nanoid } from 'nanoid'
@@ -366,8 +367,9 @@ export const runExecutionService = {
     activeChats.set(payload.chatId, handle)
     const finish: TurnCompletion = (result) => {
       if (outcome) return
-      outcome = result
+      outcome = redactCredentialValues(result)
     }
+    const subscriberRedactor = createCredentialEventStream()
     const port: StreamPort = {
       postMessage(event) {
         if (closed) return
@@ -377,7 +379,7 @@ export const runExecutionService = {
         }
         if (event.type === 'error') failure = event.error
         live.push(event)
-        try { options.port?.postMessage(event) } catch {
+        try { for (const safe of subscriberRedactor.push(event)) options.port?.postMessage(safe) } catch {
           // A closed view is only a lost subscriber. Persistence and asks live on.
         }
       },
@@ -394,7 +396,7 @@ export const runExecutionService = {
         steerableListeners.clear()
         if (!accepted) refuse(new Error(failure ?? 'The turn could not be started.'))
         if (activeChats.get(payload.chatId) === handle) activeChats.delete(payload.chatId)
-        try { options.port?.close() } catch { /* subscriber already disconnected */ }
+        try { for (const safe of subscriberRedactor.finish()) options.port?.postMessage(safe); options.port?.close() } catch { /* subscriber already disconnected */ }
         const { inputRequestIds, inputRequestReadError } = remainingRunRequests(payload.chatId, handle.id)
         const result = outcome!
         const final: RunOutcome = { ...result, state: result.state === 'completed' && inputRequestIds.length ? 'needs_input' : result.state,

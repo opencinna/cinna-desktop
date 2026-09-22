@@ -1,3 +1,4 @@
+import { redactCredentialValues } from '../security/serviceCredentialRedaction'
 /** Core notifications carry data only. The transport owns windows/subscribers. */
 export type EventAudience = 'main' | 'all'
 export type EventPublisher = (channel: string, payload: unknown, audience: EventAudience) => void
@@ -8,5 +9,5 @@ export function installEventPublisher(next: EventPublisher): void {
 }
 
 export function publishEvent(channel: string, payload?: unknown, audience: EventAudience = 'main'): void {
-  publisher(channel, payload, audience)
+  publisher(channel, redactCredentialValues(payload), audience)
 }

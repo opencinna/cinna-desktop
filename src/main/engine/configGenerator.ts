@@ -244,6 +244,8 @@ function engineBaseUrl(type: EngineProviderType, credentialBaseUrl: string | nul
  * their head to see that it is denied.
  */
 const SECRET_FILES: Record<string, string> = {
+  '*credentials.json': 'deny',
+  'credentials/*.json': 'deny',
   'credentials/.env': 'deny',
   '*.env': 'deny',
   '*.pem': 'deny',
@@ -339,6 +341,8 @@ export const CONVERSATION_PERMISSIONS: Record<string, unknown> = {
   bash: {
     '*': 'allow',
     '*.env*': 'ask',
+    '*credentials.json*': 'ask',
+    '*credentials/*.json*': 'ask',
     '*credentials/.env*': 'ask',
     'sudo *': 'ask',
     'rm -r *': 'ask',

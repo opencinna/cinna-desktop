@@ -1,3 +1,4 @@
+import { redactCredentialText } from '../security/serviceCredentialRedaction'
 import {
   constants, lstatSync, mkdirSync, openSync, closeSync, writeFileSync, linkSync, unlinkSync, readFileSync,
   readdirSync
@@ -44,7 +45,7 @@ function atomicWrite(path: string, content: string): void {
   const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW
   const fd = openSync(temporary, flags, 0o600)
   try {
-    writeFileSync(fd, content, 'utf8')
+    writeFileSync(fd, redactCredentialText(content), 'utf8')
   } finally {
     closeSync(fd)
   }

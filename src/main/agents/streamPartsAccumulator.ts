@@ -1,3 +1,4 @@
+import { redactCredentialValues, redactCredentialText } from '../security/serviceCredentialRedaction'
 /**
  * Accumulates A2A streaming text parts into a structured list, computing
  * per-part deltas and routing each delta to the renderer with its content kind.
@@ -498,14 +499,14 @@ export class StreamPartsAccumulator {
     // Strip `<cinna_attach>` tags from text the agent streamed raw — the file
     // itself rides a separate `file` part / FilePart, so the literal tag must
     // not persist in the visible text. Only `text`-kind parts can carry it.
-    return this.parts.map((p) =>
+    return redactCredentialValues(this.parts.map((p) =>
       p.kind === 'text' ? { ...p, text: stripCinnaAttachTags(p.text, opts) } : p
-    )
+    ))
   }
 
   answerText(): string {
     // Cleaned for the `messages.content` column (chat preview / title / search).
-    return stripCinnaAttachTags(this.answer)
+    return redactCredentialText(stripCinnaAttachTags(this.answer))
   }
 
   /**
@@ -517,7 +518,7 @@ export class StreamPartsAccumulator {
   snapshotNotices(): AccumulatedNotice[] {
     const out: AccumulatedNotice[] = []
     for (const [partKey, text] of this.notices) {
-      if (text) out.push({ partKey, text })
+      if (text) out.push({ partKey, text: redactCredentialText(text) })
     }
     return out
   }

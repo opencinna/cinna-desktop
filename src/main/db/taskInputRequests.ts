@@ -1,3 +1,4 @@
+import { redactingRepository } from '../security/serviceCredentialRedaction'
 import { and, desc, eq, isNull, or } from 'drizzle-orm'
 import { getDb } from './client'
 import { taskInputRequests, tasks } from './schema'
@@ -45,7 +46,7 @@ export interface OpenInputRequestInput {
  * task never fires. A query that trusted the foreign key would keep offering
  * asks that belong to a task the user has thrown away.
  */
-export const taskInputRequestRepo = {
+const rawTaskInputRequestRepo = {
   /**
    * Record an ask the run is now parked on.
    *
@@ -251,3 +252,5 @@ export const taskInputRequestRepo = {
       .run().changes
   }
 }
+
+export const taskInputRequestRepo = redactingRepository(rawTaskInputRequestRepo, ['open', 'settle', 'commitReply'])

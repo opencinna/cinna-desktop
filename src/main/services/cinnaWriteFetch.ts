@@ -1,3 +1,4 @@
+import { redactCredentialValues } from '../security/serviceCredentialRedaction'
 import { runtimeHost } from '../host/runtimeHost'
 import { STATUS_CODES } from 'node:http'
 import { getCACertificates } from 'node:tls'
@@ -50,6 +51,9 @@ export async function cinnaWriteFetch(url: string, init: {
   signal: AbortSignal
   beforeDispatch?: () => void
 }): Promise<Response> {
+  if (init.body && /\/(tasks|delegations)(\/|$)/.test(new URL(url).pathname)) {
+    try { init = { ...init, body: JSON.stringify(redactCredentialValues(JSON.parse(init.body))) } } catch { throw new Error('Invalid task request body.') }
+  }
   let dispatcher: Dispatcher
   try {
     const proxy = await proxyFor(url, init.signal)
