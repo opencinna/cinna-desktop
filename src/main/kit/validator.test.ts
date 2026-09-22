@@ -711,3 +711,13 @@ describe('the shipped templates', () => {
     expect(unresolved).toEqual([])
   })
 })
+
+it('validates the sibling publication ledger rather than obsolete embedded history', () => {
+  patchManifest(agentDir, m => { m.publications = [{ agent_id: 'missing-platform' } as never] })
+  writeFileSync(join(agentDir, 'publications.json'), JSON.stringify({ publications: [{ platform_url: 'https://fixture.test', agent_id: 'fixture' }] }))
+  expect(validateAgentFolder(agentDir, OPTIONS).errors).toEqual([])
+  writeFileSync(join(agentDir, 'publications.json'), JSON.stringify({ publications: [{ agent_id: 'fixture' }] }))
+  expect(validateAgentFolder(agentDir, OPTIONS).errors).toContainEqual(expect.objectContaining({ code: 'manifest.publications.required', path: 'publications.json' }))
+  writeFileSync(join(agentDir, 'publications.json'), '{broken')
+  expectError(validateAgentFolder(agentDir, OPTIONS), 'publications.invalid_json')
+})

@@ -15,6 +15,8 @@ export interface CredentialSlot {
   name: string
   /** A platform `CredentialType` value, e.g. `api_token`. */
   type: string
+  /** Exact service slot when the name differs from the credential label. */
+  service_uri?: string
   description?: string
   /** Prefix of the local `.env` variable names: `<env_prefix><FIELD>`. */
   env_prefix?: string
@@ -148,6 +150,7 @@ export interface CinnaAgentManifest {
   schedules?: AgentSchedule[]
   handovers?: AgentHandover[]
   features?: AgentFeatures
+  /** Legacy embedded history; new publishers write the sibling publications.json ledger. */
   publications?: AgentPublication[]
   cloud?: AgentCloudStamp
   [key: string]: unknown

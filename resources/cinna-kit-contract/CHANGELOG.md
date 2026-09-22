@@ -8,6 +8,13 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.4.0 — cloud and local credential delivery
+
+- One reader for injected and cloud credential arrays, legacy objects, and local env files; strict slot lookup and service-account side files.
+- Exclude the entire credentials directory from exports and content hashes.
+- Reconcile the core skills folder definitions with Desktop runtime, schedule, and coordinator handback fields. Publication history remains in publications.json.
+- Desktop attachments and generated secrets are host-owned; no credential values enter the manifest.
+
 ## 1.3.0 — explicit coordinator handback
 
 ### Added

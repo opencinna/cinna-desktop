@@ -1,3 +1,4 @@
+import { readPublications } from './publications'
 import { isCoordinatorHandover } from '../../shared/kit/handovers'
 /**
  * A TypeScript port of `kit.py validate`: is this folder a coherent, cloud-ready
@@ -433,6 +434,10 @@ function checkCredentials(report: Report, manifest: CinnaAgentManifest): void {
       )
     }
 
+    if (raw.service_uri !== undefined && (typeof raw.service_uri !== 'string' || raw.service_uri.trim() === '')) {
+      report.error('manifest.credentials.service_uri', `\`${label}.service_uri\` must be a non-empty string.`, MANIFEST_FILE)
+    }
+
     if (raw.env_prefix !== undefined) {
       if (typeof raw.env_prefix !== 'string' || !ENV_PREFIX_PATTERN.test(raw.env_prefix)) {
         report.error(
@@ -580,24 +585,25 @@ function checkHandovers(report: Report, manifest: CinnaAgentManifest, agentDir?:
   })
 }
 
-function checkPublications(report: Report, manifest: CinnaAgentManifest): void {
+function checkPublications(report: Report, manifest: CinnaAgentManifest, agentDir?: string): void {
   if (manifest.cloud !== undefined) {
     report.info(
       'manifest.cloud.deprecated',
-      'The `cloud` stamp is deprecated. It still reads, and moves into `publications[]` on the next publish.',
+      'The `cloud` stamp is deprecated. It still reads, and publication history belongs in `publications.json`.',
       MANIFEST_FILE
     )
   }
-  const publications = manifest.publications
+  const { source, value: publications, invalidJson } = readPublications(agentDir, manifest)
+  if (invalidJson) { report.error('publications.invalid_json', 'The publication ledger is not readable JSON.', source); return }
   if (publications === undefined) return
   if (!Array.isArray(publications)) {
-    report.error('manifest.publications.type', '`publications` must be an array.', MANIFEST_FILE)
+    report.error('manifest.publications.type', '`publications` must be an array.', source)
     return
   }
   publications.forEach((raw, index) => {
     const label = `publications[${index}]`
     if (!isRecord(raw)) {
-      report.error('manifest.publications.item', `\`${label}\` must be an object.`, MANIFEST_FILE)
+      report.error('manifest.publications.item', `\`${label}\` must be an object.`, source)
       return
     }
     for (const key of ['platform_url', 'agent_id'] as const) {
@@ -605,7 +611,7 @@ function checkPublications(report: Report, manifest: CinnaAgentManifest): void {
         report.error(
           'manifest.publications.required',
           `\`${label}.${key}\` is required.`,
-          MANIFEST_FILE
+          source
         )
       }
     }
@@ -615,7 +621,7 @@ function checkPublications(report: Report, manifest: CinnaAgentManifest): void {
         report.error(
           'manifest.publications.field_type',
           `\`${label}.${key}\` must be a string or null.`,
-          MANIFEST_FILE
+          source
         )
       }
     }
@@ -690,7 +696,7 @@ export function validateManifest(
   checkCredentials(report, doc)
   checkSchedules(report, doc)
   checkHandovers(report, doc, options.agentDir)
-  checkPublications(report, doc)
+  checkPublications(report, doc, options.agentDir)
 
   return report.toReport()
 }

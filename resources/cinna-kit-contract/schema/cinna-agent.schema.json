@@ -137,7 +137,7 @@
       "additionalProperties": true,
       "properties": {
         "engine": {
-          "description": "Which engine runs the agent. Known values: `opencode` (a host-managed OpenCode server) `claude` and `codex` (ACP adapters driving a CLI already installed on the machine under its own login). Added in contract 1.2.0; a host that does not recognise the value runs the agent on its own default engine rather than refusing the folder. Deliberately not an enum: a newer minor may name an engine this schema predates, and the contract's additive promise says such a folder must still validate. `claude`/`codex` and `credential` are not meaningful together — that engine uses no host credential.",
+          "description": "Which engine runs the agent. Known values: `opencode` (a host-managed OpenCode server) `claude` and `codex` (ACP adapters driving a CLI already installed on the machine under its own login). Added in contract 1.2.0; a host that does not recognise the value runs the agent on its own default engine rather than refusing the folder. Deliberately not an enum: a newer minor may name an engine this schema predates, and the contract's additive promise says such a folder must still validate. `claude`/`codex` and `credential` are not meaningful together \u2014 that engine uses no host credential.",
           "type": [
             "string",
             "null"
@@ -202,9 +202,9 @@
             "maxLength": 255
           },
           "type": {
-            "description": "A platform CredentialType value.",
+            "description": "A platform credential type. The values below are the types known at contract 1.0.0; they are advisory, not a closed set. The platform's list grows independently of any bundled contract, so a contract pinned in a shipped desktop build cannot track it - an unrecognised value is therefore tolerated here and reported as a warning, and is resolved against the authoritative list at import.",
             "type": "string",
-            "enum": [
+            "examples": [
               "email_imap",
               "email_smtp",
               "odoo",
@@ -222,6 +222,11 @@
           "description": {
             "type": "string",
             "maxLength": 2000
+          },
+          "service_uri": {
+            "description": "Explicit service slot for matching attached credentials of this type. Without it, match the declared name to the credential name or service_uri.",
+            "type": "string",
+            "minLength": 1
           },
           "env_prefix": {
             "description": "Prefix of the local .env variable names for this slot. Variable name is <env_prefix><FIELD in upper case>.",
@@ -384,65 +389,8 @@
         }
       }
     },
-    "publications": {
-      "description": "One entry per Cinna instance this agent was published to. Written only by a publish/import step. An update resolves the entry whose platform_url matches the instance it runs against.",
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "platform_url",
-          "agent_id"
-        ],
-        "additionalProperties": true,
-        "properties": {
-          "platform_url": {
-            "description": "Origin of the instance, e.g. https://acme.opencinna.io.",
-            "type": "string",
-            "minLength": 1
-          },
-          "agent_id": {
-            "description": "Id of the agent created on that instance.",
-            "type": "string",
-            "minLength": 1
-          },
-          "workspace": {
-            "description": "Account workspace the CLI pushed from, relative to the workshop root, e.g. Cloud/acme.opencinna.io. Absent when the desktop published directly through the account API.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "imported_at": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "updated_at": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "contract_version": {
-            "description": "Contract version the folder was pushed with.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "content_hash": {
-            "description": "Hash of the exported tree at the last push (cloud_import_excludes applied). A mismatch against the current export means the instance is behind.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        }
-      }
-    },
     "cloud": {
-      "description": "DEPRECATED, replaced by publications[]. Still accepted so a folder written before contract 1.0.0 parses; migrate it into publications[] on the next write.",
+      "description": "DEPRECATED, replaced by the publications[] ledger, which lives in the sibling file publications.json and not in this one. Still accepted so a folder written before contract 1.0.0 parses; a tool that writes this manifest for any other reason migrates it into publications.json and drops the key. Never migrated at export time - an export must not mutate the manifest.",
       "type": "object",
       "deprecated": true,
       "additionalProperties": true,

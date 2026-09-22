@@ -68,8 +68,6 @@ describe('exportTree', () => {
 
     expect(files).toEqual([
       'cinna-agent.json',
-      'credentials/.env.example',
-      'credentials/README.md',
       'docs/README.md',
       'docs/WORKFLOW_PROMPT.md',
       'knowledge/rules.md',
@@ -106,9 +104,9 @@ describe('exportTree', () => {
     const { files } = buildExportTree(dir, layout)
     expect(files).not.toContain('credentials.json')
     expect(files).not.toContain('scripts/credentials.json')
-    // The documentation of the slots still travels — it carries no value.
-    expect(files).toContain('credentials/README.md')
-    expect(files).toContain('credentials/.env.example')
+    // The shared Core/CLI contract excludes the entire delivery directory.
+    expect(files).not.toContain('credentials/README.md')
+    expect(files).not.toContain('credentials/.env.example')
   })
 
   it('keeps a nested README that is not the wrapper', () => {

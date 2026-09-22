@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
 """Credential access for this agent — the same call locally and in the cloud.
 
-Two places a credential can come from:
-
-* **Cloud** — the platform writes ``credentials.json`` at the agent root, a JSON
-  object keyed by credential-slot name, each value an object of field/value pairs.
-* **Local** — ``credentials/.env`` holds one variable per field, named
-  ``<env_prefix><FIELD in upper case>``. ``env_prefix`` is declared per slot in
-  ``cinna-agent.json``; when a slot does not declare one it is derived from the
-  slot name (``Vendor Portal`` -> ``VENDOR_PORTAL_``). Real environment variables
-  win over the file, so a host can inject a value without writing to disk.
+Precedence: the injected CINNA_CREDENTIALS_PATH array, credentials/credentials.json
+(array or envelope), the legacy root object, environment, then credentials/.env.
+Attached entries replace a whole slot; placeholders never merge environment fields.
 
 Use one call either way::
 
@@ -30,7 +24,8 @@ from pathlib import Path
 from typing import Any
 
 AGENT_ROOT = Path(__file__).resolve().parents[1]
-CLOUD_CREDENTIALS = AGENT_ROOT / "credentials.json"
+HELPER_VERSION = "1.4.0"
+CLOUD_CREDENTIALS = AGENT_ROOT / "credentials" / "credentials.json"
 LOCAL_ENV = AGENT_ROOT / "credentials" / ".env"
 MANIFEST = AGENT_ROOT / "cinna-agent.json"
 
@@ -58,6 +53,9 @@ def _slots() -> list[dict]:
 def _slot(name: str) -> dict:
     for slot in _slots():
         if slot.get("name") == name:
+            return slot
+    for slot in _slots():
+        if slot.get("type") == name or slot.get("service_uri") == name:
             return slot
     return {}
 
@@ -101,19 +99,90 @@ def _parse_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def _entries() -> list[dict]:
+    paths = []
+    if os.environ.get("CINNA_CREDENTIALS_PATH"):
+        paths.append(Path(os.environ["CINNA_CREDENTIALS_PATH"]))
+    paths.append(CLOUD_CREDENTIALS)
+    for path in paths:
+        data = _read_json(path)
+        if isinstance(data, dict):
+            data = data.get("credentials")
+        if isinstance(data, list):
+            return [e for e in data if isinstance(e, dict)]
+    return []
+
+
+def _match(entries: list[dict]) -> dict | None:
+    filled = [e for e in entries if not e.get("is_placeholder")]
+    if not filled:
+        return {} if entries else None
+    data = filled[0].get("credential_data")
+    return dict(data) if isinstance(data, dict) else None
+
+
+def by_slot(slot: str, credential_type: str | None = None) -> dict | None:
+    """Strict service_uri lookup; never falls back to names or types."""
+    return _match([e for e in _entries() if e.get("service_uri") == slot
+                   and (credential_type is None or e.get("type") == credential_type)])
+
+
+def require_slot(slot: str, credential_type: str | None = None) -> dict:
+    result = by_slot(slot, credential_type)
+    if not result:
+        raise CredentialError(f"credential slot {slot!r} is not configured. Attach a filled credential to this agent.")
+    return result
+
+
 def _cloud_payload(name: str) -> dict[str, Any] | None:
-    data = _read_json(CLOUD_CREDENTIALS)
-    if not isinstance(data, dict):
-        return None
-    payload = data.get(name)
-    return payload if isinstance(payload, dict) else None
+    entries = _entries()
+    slot = _slot(name)
+    if slot:
+        # A declared name identifies a service, not every token of its type.
+        candidates = [e for e in entries if e.get("type") == slot.get("type")]
+        explicit = slot.get("service_uri")
+        groups = ([e for e in candidates if e.get("service_uri") == explicit],) if explicit else (
+            [e for e in candidates if e.get("name") == slot.get("name")],
+            [e for e in candidates if e.get("service_uri") == slot.get("name")],
+        )
+    else:
+        # Keep explicit type lookups compatible for callers without manifest slots.
+        groups = ([e for e in entries if e.get("name") == name],
+                  [e for e in entries if e.get("service_uri") == name],
+                  [e for e in entries if e.get("type") == name])
+    for candidates in groups:
+        result = _match(candidates)
+        if result is not None:
+            return result
+    data = _read_json(AGENT_ROOT / "credentials.json")
+    if isinstance(data, dict) and isinstance(data.get(name), dict):
+        return data[name]
+    return None
+
+
+def agent_root() -> Path:
+    return AGENT_ROOT
+
+
+def _coerce(field: str, raw: str) -> Any:
+    if field == "port" or field.endswith("_port"):
+        try:
+            return int(raw.strip())
+        except ValueError:
+            return raw
+    if field.startswith(("is_", "use_")):
+        if raw.strip().lower() in ("true", "yes", "1", "on"):
+            return True
+        if raw.strip().lower() in ("false", "no", "0", "off"):
+            return False
+    return raw
 
 
 def _local_payload(name: str) -> dict[str, Any] | None:
     prefix = _env_prefix(name)
     merged: dict[str, str] = {**_parse_env_file(LOCAL_ENV), **os.environ}
     payload = {
-        key[len(prefix):].lower(): value
+        key[len(prefix):].lower(): _coerce(key[len(prefix):].lower(), value)
         for key, value in merged.items()
         if key.startswith(prefix) and value != ""
     }
@@ -125,15 +194,17 @@ def get_credential(
     field: str | None = None,
     *,
     default: Any = None,
-    required: bool = True,
+    required: bool = False,
 ) -> Any:
     """Return one field of a credential slot, or the whole slot as a dict.
 
     Raises :class:`CredentialError` when the slot (or the field) is missing and
     ``required`` is true; otherwise returns ``default``.
     """
-    payload = _cloud_payload(name) or _local_payload(name)
+    payload = _cloud_payload(name)
     if payload is None:
+        payload = _local_payload(name)
+    if not payload:
         if required:
             raise CredentialError(
                 f"credential {name!r} is not configured. "
@@ -152,6 +223,17 @@ def get_credential(
             )
         return default
     return value
+
+
+def require_credential(name: str, field: str | None = None) -> Any:
+    return get_credential(name, field, required=True)
+
+
+def list_credential_slots() -> list[dict]:
+    return _slots()
+
+
+MissingCredentialError = CredentialError
 
 
 def has_credential(name: str, field: str | None = None) -> bool:
