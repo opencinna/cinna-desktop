@@ -27,7 +27,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..')
  * which is a property of the code, not of any particular version number.
  */
 const BUNDLED_CONTRACT = readFileSync(
-  join(repoRoot, 'resources/cinna-kit-contract/VERSION'),
+  join(repoRoot, 'resources/cinna-kit-contract/CONTRACT_VERSION'),
   'utf8'
 ).trim()
 const holder = vi.hoisted(() => ({ current: null as TestDatabase | null }))

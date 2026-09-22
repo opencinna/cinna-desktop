@@ -44,7 +44,7 @@ describe('the bundled contract', () => {
     // Named explicitly so moving or renaming any of them fails here first.
     for (const rel of [
       'kit.json',
-      'VERSION',
+      'CONTRACT_VERSION',
       'CHANGELOG.md',
       'layout.json',
       'schema/cinna-agent.schema.json',
@@ -95,7 +95,7 @@ describe('a workshop with its own .cinna-kit/', () => {
     const target = join(workshop, '.cinna-kit')
     cpSync(getBundledContractDir(), target, { recursive: true })
     writeFileSync(join(target, 'kit.json'), JSON.stringify({ contract_version: version }, null, 2))
-    writeFileSync(join(target, 'VERSION'), `${version}\n`)
+    writeFileSync(join(target, 'CONTRACT_VERSION'), `${version}\n`)
   }
 
   beforeEach(() => {
@@ -127,6 +127,17 @@ describe('a workshop with its own .cinna-kit/', () => {
   it('never adopts a newer major — that is what the version gate is for', () => {
     installWorkshopContract('2.0.0')
     expect(resolveContract(workshop).source).toBe('bundled')
+  })
+
+  it('falls back to CONTRACT_VERSION, never to the full kit\'s VERSION', () => {
+    // A full kit installed by kit.py: VERSION is the kit content hash, and a
+    // kit.json without contract_version leaves CONTRACT_VERSION as the answer.
+    installWorkshopContract('1.9.0')
+    writeFileSync(join(workshop, '.cinna-kit/kit.json'), JSON.stringify({ name: 'no version here' }))
+    writeFileSync(join(workshop, '.cinna-kit/VERSION'), '2feb753f95761046\n')
+    const contract = resolveContract(workshop)
+    expect(contract.source).toBe('workshop')
+    expect(contract.version).toBe('1.9.0')
   })
 
   it('ignores a .cinna-kit/ that is not a contract tree', () => {

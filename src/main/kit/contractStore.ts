@@ -35,7 +35,11 @@ const CONTRACT_DIR = 'cinna-kit-contract'
 const WORKSHOP_KIT_DIR = '.cinna-kit'
 
 const KIT_JSON = 'kit.json'
-const VERSION_FILE = 'VERSION'
+/**
+ * The contract's own version file. Not `VERSION`: in core's full kit (which a
+ * workshop's `.cinna-kit/` may hold) `VERSION` is the *kit* content version.
+ */
+const CONTRACT_VERSION_FILE = 'CONTRACT_VERSION'
 const SCHEMA_FILE = 'schema/cinna-agent.schema.json'
 const LAYOUT_FILE = 'layout.json'
 const TEMPLATES_DIR = 'templates'
@@ -129,16 +133,17 @@ export function getBundledContractDir(): string {
 }
 
 function readVersionAt(root: string): string | null {
-  // kit.json is the authority: a workshop's `.cinna-kit/VERSION` may hold the
-  // *kit* version when the full kit is installed there, not the contract's.
+  // kit.json is the authority; CONTRACT_VERSION is the fallback. Never
+  // `VERSION` — a workshop's `.cinna-kit/VERSION` holds the *kit* version when
+  // the full kit is installed there, not the contract's.
   try {
     const kit = JSON.parse(readFileSync(join(root, KIT_JSON), 'utf8')) as Record<string, unknown>
     if (typeof kit.contract_version === 'string') return kit.contract_version
   } catch {
-    /* fall through to VERSION */
+    /* fall through to CONTRACT_VERSION */
   }
   try {
-    const version = readFileSync(join(root, VERSION_FILE), 'utf8').trim()
+    const version = readFileSync(join(root, CONTRACT_VERSION_FILE), 'utf8').trim()
     return version === '' ? null : version
   } catch {
     return null

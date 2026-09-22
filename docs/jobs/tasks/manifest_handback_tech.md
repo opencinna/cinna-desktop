@@ -34,7 +34,7 @@ There is no new editor, button or marker parser in the renderer. Existing transc
 
 ## Configuration
 
-The bundled contract is 1.3.0 in VERSION, kit.json and layout.json. Existing major-version compatibility rules remain unchanged; folders are not automatically rewritten. The note bound is fixed at 4,000 characters. No setting or environment variable enables handback independently of main ownership.
+`handovers[].target_kind` is part of core's contract since 1.5.0 (`x-scope: host:cinna-desktop`), and the bundled contract is core's render (see [Kit Contract (tech)](../../agents/local_agents/kit_contract_tech.md#updating-the-bundle)); the desktop first shipped the field under a 1.3.0 of its own, which core's CHANGELOG records. Existing major-version compatibility rules remain unchanged; folders are not automatically rewritten. The note bound is fixed at 4,000 characters. No setting or environment variable enables handback independently of main ownership.
 
 ## Security
 

@@ -399,13 +399,15 @@ describe('driverFor', () => {
     expect(await ranFor(folderRow('claude'))).toEqual(['claude'])
   })
 
-  it('refuses an engine this build has no launcher for, in words, launching nothing', async () => {
-    // A folder written by a newer tool. Running it on the default engine would
-    // be worse than saying so: the agent would answer as something it is not.
-    state.runtime = { engine: 'gemini' }
-    const result = await driverFor(folderRow('claude')).run('user-1', folderRow('claude'), turn)
-    expect(result.error?.message).toMatch(/does not support/)
-    expect(state.ran).toEqual([])
+  it('runs an engine a folder cannot use on OpenCode, not on the row or the machine default', async () => {
+    // A folder written by a newer tool. `runtime.engine` is a preference, never
+    // refused: an engine this build cannot run a folder on — `gemini` has no
+    // launcher, `custom` belongs to external agents — runs on OpenCode.
+    for (const engine of ['gemini', 'custom']) {
+      state.ran = []
+      state.runtime = { engine }
+      expect(await ranFor(folderRow('claude')), engine).toEqual(['opencode'])
+    }
   })
 
   it('refuses a folder it cannot read, launching nothing', async () => {

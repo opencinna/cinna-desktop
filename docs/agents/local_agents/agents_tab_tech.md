@@ -135,7 +135,7 @@ The rest of the app uses the older convention — a **returned** `{success:false
 - `.runDraftCall({resolved, systemPrompt, userText, label, maxOutputChars})` — one `aiFunctions.runSingleShot` with `AbortSignal.timeout(90_000)`; returns `null` instead of throwing
 - `.saveField(userId, agentId, update, expectedStamp)` — one `localAgentService.updateField`; returns `null` on a stale-write refusal, which is logged and never retried
 - `parseDraftMeta(raw)` — the line-based `TRIGGER:` / `PROMPT:` parser
-- `isUntouchedWorkflowPrompt(contents)` — matches the scaffold template markers (`This file IS the agent.`, `<!-- first step -->`)
+- `isUntouchedWorkflowPrompt(contents)` — true when a line of the file is, whole and trimmed, the placeholder line of the bundled `templates/agent/docs/WORKFLOW_PROMPT.md` (`SCAFFOLD_PLACEHOLDER_LINE`), or when either marker of the desktop's pre-sync template (`This file IS the agent.`, `<!-- first step -->`) survives in an older folder. Whole-line, never substring: the rest of core's template is example steps a user may keep around their own text, and matching one of those would draft over their work. The placeholder is copied from the bundle, so re-check it after `make kit-sync` changes that template
 - Manifest stamp threading: each manifest write invalidates the stamp the next one needs, so `manifestStamp` is re-read from the agent returned by the previous write
 
 ### `src/main/services/localAgents/localAgentService.ts`

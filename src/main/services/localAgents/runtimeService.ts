@@ -56,6 +56,7 @@ import {
   DEFAULT_AGENT_ENGINE,
   effectiveEngine,
   isAgentEngine,
+  KEEP_ENGINE,
   type AgentEngine,
   type LocalAgentRuntimeInput,
   type ResolvedRuntime
@@ -102,9 +103,10 @@ function catalogueFor(
  * `runtime.engine`, if it is one this build knows.
  *
  * The tolerant half of the contract's read/write asymmetry: an engine value
- * this build does not recognise reads as **no engine**, so the agent falls to
- * the default and keeps running. A folder written by a newer tool must not be
- * bricked by a field this one has never heard of.
+ * this build does not recognise is not a declared engine here, and
+ * `effectiveEngine` runs such an agent on OpenCode rather than refusing it. A
+ * folder written by a newer tool must not be bricked by a field this one has
+ * never heard of.
  */
 function declaredEngine(runtime: AgentRuntimeRef | null | undefined): AgentEngine | null {
   const value = typeof runtime?.engine === 'string' ? runtime.engine.trim() : ''
@@ -491,8 +493,17 @@ export const runtimeService = {
    *   a newer tool still runs, while writing is strict so this desktop never
    *   authors the ambiguity it tolerates in others.
    */
-  validate(input: LocalAgentRuntimeInput): {
-    engine: AgentEngine | null
+  validate(
+    input: LocalAgentRuntimeInput,
+    /**
+     * The engine the file names now, whatever string it is. What a "keep"
+     * (`KEEP_ENGINE`, or an absent key) resolves to, and what the
+     * engine-and-credential check below is run against in that case.
+     */
+    current: unknown = undefined
+  ): {
+    /** `KEEP_ENGINE` when the file's value — `current` — is to stay as it is. */
+    engine: AgentEngine | null | typeof KEEP_ENGINE
     credential: string | null
     modelId: string | null
     complexity: WorkComplexity | null
@@ -500,20 +511,25 @@ export const runtimeService = {
     const credential = normaliseRef(input?.credential, 'The credential', MAX_CREDENTIAL_REF)
     const modelId = normaliseRef(input?.modelId, 'The model', MAX_MODEL_ID)
     const complexity = input?.complexity ?? null
-    const engine = input?.engine ?? null
+    // Absent means keep, exactly like the explicit value: an `undefined` key
+    // does not survive every serialisation, and a save that lost it must not
+    // turn into "remove the engine".
+    const engine = input?.engine === undefined ? KEEP_ENGINE : input.engine
 
-    if (engine !== null && !isAgentEngine(engine)) {
+    if (engine !== null && engine !== KEEP_ENGINE && !isAgentEngine(engine)) {
       throw new LocalAgentError('invalid_input', 'That is not an engine this app can run.')
     }
+    // The pair check runs on the engine the file will carry, kept or written.
+    const resultingEngine = engine === KEEP_ENGINE ? (typeof current === 'string' ? current.trim() : '') : engine
     // Refused rather than resolved by precedence, and refused on **both** write
     // paths because this method is shared by them. A manifest carrying both is
     // only a validator *warning* — reading stays tolerant so a folder written by
     // a newer tool keeps running — but this desktop never authors the ambiguity
     // it tolerates in others.
-    if ((engine === 'claude' || engine === 'codex') && credential !== null) {
+    if ((resultingEngine === 'claude' || resultingEngine === 'codex') && credential !== null) {
       throw new LocalAgentError(
         'invalid_input',
-        `An agent on the ${engine === 'claude' ? 'Claude' : 'Codex'} engine runs on that install’s own login, so it does not use a credential configured here.`
+        `An agent on the ${resultingEngine === 'claude' ? 'Claude' : 'Codex'} engine runs on that install’s own login, so it does not use a credential configured here.`
       )
     }
 
@@ -548,8 +564,19 @@ export const runtimeService = {
    * and `resolve` takes the Default runtime branch for it without a special
    * case of its own.
    */
-  toRuntimeRef(input: LocalAgentRuntimeInput): AgentRuntimeRef | null {
-    const { engine, credential, modelId, complexity } = this.validate(input)
+  toRuntimeRef(
+    input: LocalAgentRuntimeInput,
+    /** What the state file holds now: a kept engine is read from here. */
+    current: AgentRuntimeRef | null = null
+  ): AgentRuntimeRef | null {
+    const validated = this.validate(input, current?.engine)
+    const { credential, modelId, complexity } = validated
+    const engine =
+      validated.engine === KEEP_ENGINE
+        ? typeof current?.engine === 'string' && current.engine.trim() !== ''
+          ? current.engine
+          : null
+        : validated.engine
     if (engine === null && credential === null && modelId === null && complexity === null) {
       return null
     }
@@ -575,17 +602,20 @@ export const runtimeService = {
    * round-trip rule.
    */
   applyToManifest(manifest: CinnaAgentManifest, input: LocalAgentRuntimeInput): void {
-    const { engine, credential, modelId, complexity } = this.validate(input)
-
     const existing =
       manifest.runtime && typeof manifest.runtime === 'object' ? { ...manifest.runtime } : {}
-    delete existing.engine
+    const { engine, credential, modelId, complexity } = this.validate(input, existing.engine)
+
+    // A kept engine is left in `existing` — verbatim, whatever the file says,
+    // including a name this build cannot run — and so survives as an unknown
+    // key would. Only an explicit choice replaces or removes it.
+    if (engine !== KEEP_ENGINE) delete existing.engine
     delete existing.credential
     delete existing.model
     delete existing.complexity
 
     if (
-      engine === null &&
+      (engine === null || engine === KEEP_ENGINE) &&
       credential === null &&
       modelId === null &&
       complexity === null &&
@@ -596,7 +626,7 @@ export const runtimeService = {
     }
 
     const next: AgentRuntimeRef = { ...existing }
-    if (engine !== null) next.engine = engine
+    if (engine !== null && engine !== KEEP_ENGINE) next.engine = engine
     if (credential !== null) next.credential = credential
     if (modelId !== null) next.model = modelId
     if (complexity !== null) next.complexity = complexity

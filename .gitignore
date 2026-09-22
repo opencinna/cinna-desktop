@@ -16,5 +16,9 @@ e2e/playwright-report
 # `make live-flow` writes its run results here (chat dumps, logs, screenshots).
 /scripts/live/results/
 
+# `make kit-sync` builds the contract bundle here before swapping it into
+# resources/; kept outside resources/ so packaging never sees it.
+/scripts/kit-sync/.work/
+
 # Local plans and drafts; never committed.
 /drafts/

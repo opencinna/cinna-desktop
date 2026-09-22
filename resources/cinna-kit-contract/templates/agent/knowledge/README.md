@@ -1,10 +1,11 @@
-# Knowledge
+# Knowledge — {{NAME}}
 
-Reference material this agent reads to be **correct**: business rules, how an
-external system really behaves, terminology, the reasoning behind a decision. Not
-instructions — those belong in `docs/WORKFLOW_PROMPT.md`.
+Static reference material this agent needs in order to be correct: business rules,
+how an external system actually behaves, terminology, decision rationale. Read-only
+at runtime, both locally and in the cloud.
 
-One topic per file, named for the topic:
+Create one file (or one folder) per topic and reference it from
+`docs/WORKFLOW_PROMPT.md` so the agent knows where to look:
 
 ```
 knowledge/
@@ -14,13 +15,15 @@ knowledge/
     └── field_mapping.md
 ```
 
-Reference each topic from `docs/WORKFLOW_PROMPT.md` so the agent knows where to
-look:
+Do not put here:
 
-```markdown
-## References
-- `knowledge/invoice_matching_rules.md` — how a PO number is matched to an invoice.
-```
+- prompts (`docs/`), capabilities (`skills/<name>/SKILL.md`), tunable parameters
+  (`config/`), lookup tables the scripts load (`files/`), or anything the agent
+  produces at runtime (`app-data/storage/`);
+- credentials, hostnames with tokens in them, or personal data.
 
-Never put a credential, a tokenised URL or personal data here. This folder ships
-with the agent and, in the cloud, may travel to other installs.
+Add this folder only when the ladder's **Knowledge & local skills** trigger has
+fired; for *this* folder that means three or more distinct capabilities, or domain
+documentation longer than a page. The rung's full trigger is in the ladder
+(`.cinna-kit/README.md`); the guide is
+`.cinna-kit/guides/08-knowledge-and-local-skills.md`.

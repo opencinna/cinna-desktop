@@ -357,13 +357,13 @@ The grant key gains no engine segment. A grant is already scoped to a folder, an
 
 ### The manifest gains a key, additively — read tolerantly, written strictly
 
-`runtime.engine` is contract **1.2.0**, exactly as `runtime.complexity` was 1.1.0. See [Kit Contract & Manifest Layer](kit_contract.md).
+`runtime.engine` is part of cinna-core's contract since **1.5.0**. The desktop introduced it first, under a contract version of its own that core's CHANGELOG now records as history. See [Kit Contract & Manifest Layer](kit_contract.md).
 
-- **An unrecognised engine value reads as no engine**, and the agent falls to the host default. It does not fail validation and does not brick the folder, because a folder written by a newer tool must keep running. The schema deliberately does not close the value set with an enum: engines are expected to grow
+- **`runtime.engine` is a preference, and an engine this build cannot run runs on OpenCode.** It is not refused, it does not fail validation and it does not brick the folder, because a folder written by a newer tool must keep running. It does not fall to the host default either, which could spend a Claude or Codex subscription the folder never asked for. The value stays in the file across saves that are not an engine pick (see [the engine rules](engine.md#the-machine-default-is-selected-once-and-explicit-agents-keep-their-choice)). The schema deliberately does not close the value set with an enum: engines are expected to grow
 - **`engine: "claude"` with a `credential` is refused on write** and, on read, is a warning with the credential ignored. They are not meaningful together: a manifest naming one would make the panel report a key that pays for nothing
 - The validator **warns rather than errors** on both cases, because an error there marks the folder invalid and drops it from the engine entirely — which is the exact brick the additive promise exists to prevent
 
-The tolerant read is applied again at the last place it could be forgotten: dispatch. An engine value this build does not know sends the turn to the default runner.
+The tolerant read is applied again at the last place it could be forgotten: dispatch. `launcherOfFolder` asks `effectiveEngine`, so an engine value this build does not know sends the turn to OpenCode.
 
 ### An unreadable folder falls back to the default engine
 
@@ -532,7 +532,7 @@ parts accumulator → message repository → renderer   (all unchanged)
 - [The Local Engine, Runtimes & Prompt Assembly](engine.md) — the runtime resolution this extends, the prompt assembly it reuses verbatim, and the environment narrowing rule it widens by exactly one variable
 - [Session Activity](../session_activity/session_activity.md) — the background shells and subagents this engine reports, and the Stop control
 - [Local Agent Permissions](permissions.md) — the standing grants the permission callback consults, the Approvals setting that decides whether the CLI's reviewer stands in front of them, and why *Always* is never written into a tool's own store
-- [Kit Contract & Manifest Layer](kit_contract.md) — `runtime.engine` as an additive 1.2.0 field, and the tolerant-read rule that keeps a newer folder running
+- [Kit Contract & Manifest Layer](kit_contract.md) — `runtime.engine` as an additive field of core's contract, and the tolerant-read rule that keeps a newer folder running
 - [Agents Tab & Agent Page](agents_tab.md) — the "Runs with" panel and its one reserved status line
 - [Open in… (Local Agent Tools)](open_in_tools.md) — the tool detection that finds the `claude` on the PATH. That copy is what **Open in Claude Code** launches and a first-launch hint for the Default runtime; it no longer decides whether an agent can run. The login probe still rides the same `local-tools:*` surface (`local-tools:claude-auth`), so pressing **Refresh** in Settings re-asks it
 - [Claude Code Interface Contract](contracts/claude_interface.md) — the generated index of every CLI and adapter interface relied on, each tested against the real pinned binary

@@ -19,7 +19,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 - **Refusal** — the composer declining to send a message to the agent it goes straight to, because that agent's driver answered a state that blocks a turn: anything but `ok`, except a folder agent's `credentials_needed` (`readinessBlocksTurn`)
 - **Warning** — the composer showing a non-`ok` answer that does not block, which today is only a folder agent's `credentials_needed`. Same panel, same **Check again**, Send left on
 - **Check again** — the composer's action on a refusal or a warning; the Settings card's **Test Connection** does the same. It is a check the user asked for, so it goes past every cache a probe keeps
-- **Launcher** — the ACP process definition in driver_config. Folder engines use opencode, claude or codex; gemini remains recognized but unimplemented. The custom launcher runs a user-configured executable/argv, including SSH, with separately captured state and no folder. See [Command-line Agents](../custom_agents/custom_agents.md)
+- **Launcher** — the ACP process definition in driver_config. Folder engines use opencode, claude or codex; a folder naming any other engine — `gemini` (a launcher id with no launcher), `custom`, or a name this build has never seen — runs on opencode, because the contract makes `runtime.engine` a preference. The custom launcher runs a user-configured executable/argv, including SSH, with separately captured state and no folder. See [Command-line Agents](../custom_agents/custom_agents.md)
 - **Reconcile** — the ACP driver re-reading its folder's engine at the start of every turn and taking the launcher from what it says now. It used to mean handing the turn to a *sibling driver*, and while that hand-off was missing a Claude agent on a stale row answered "try again in a moment" for ever
 
 ## User Stories / Flows
@@ -95,7 +95,7 @@ Inbox and transcript share the durable answer path. ACP still writes its local g
 
 ### The folder decides its launcher; external configuration owns its binding
 
-A folder row always dispatches to ACP. Its stored launcher is a scanner cache: each turn re-reads the folder runtime and selects that launcher inside the same driver. A missing, invalid or unsupported folder refuses rather than guessing another engine. Historically separate OpenCode/Claude drivers had to hand off stale rows; that sibling-driver mechanism is gone.
+A folder row always dispatches to ACP. Its stored launcher is a scanner cache: each turn re-reads the folder runtime and selects that launcher inside the same driver. A missing or invalid folder refuses rather than guessing. An engine the folder names but this build cannot run is not a refusal: it runs on OpenCode (`effectiveEngine`), the one fallback the contract defines. Historically separate OpenCode/Claude drivers had to hand off stale rows; that sibling-driver mechanism is gone.
 
 Custom commands instead capture their locally owned configuration and state authority. Managed sessions capture profile, agent and credential identity. Neither invents a folder or silently substitutes a new binding into existing work.
 

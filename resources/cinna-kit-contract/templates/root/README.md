@@ -1,40 +1,48 @@
-# Agent workshop
+# My agents
 
-This folder is a workshop for agents you build yourself. Each agent is a plain
-folder: prompts, scripts, knowledge and a manifest, laid out the way a Cinna
-workspace is laid out, so the same folder runs locally and imports into a Cinna
-instance unchanged.
+This folder is an agent workshop. Each folder under `Local/` is one self-contained
+AI agent: prompts, scripts, configuration and data in a fixed layout.
 
-```
-.cinna-kit/   the kit — conventions, templates and tools (do not edit by hand)
-Local/        your agents, one folder each
-Cloud/        one account workspace per Cinna instance you publish to
-```
+You are not expected to edit anything here by hand. Open your coding assistant in
+this folder and ask it for what you want — it reads `AGENTS.md` and the conventions
+in `.cinna-kit/` and does the work.
 
-## Getting started
+## What is where
 
-Open this folder in a coding assistant (Claude Code, Codex, OpenCode) and say
-what you want the agent to do. The assistant reads `AGENTS.md`, scaffolds the
-folder and builds it with you.
+| Folder | What it holds |
+|--------|---------------|
+| `Local/` | Your agents. One folder each. Everything runs on this machine. |
+| `Cloud/` | Empty until you decide to run an agent on the platform 24/7. Then one folder per platform you connect to, named after it. |
+| `.cinna-kit/` | The conventions your assistant follows. Re-downloadable; do not edit. |
 
-Or create agents from Cinna Desktop: the Agents tab creates them here, runs them,
-and shows what each folder contains. Both routes produce the same folder, and you
-can switch between them mid-build.
+## Running an agent
 
-## The commands you will actually use
+Open your assistant inside `Local/<agent>` and talk to it normally. It reads the
+agent's `AGENTS.md`, which points at the agent's real instructions.
+
+Most agents also expose plain commands:
 
 ```bash
-uv run .cinna-kit/tools/kit.py list                    # what exists here
-uv run .cinna-kit/tools/kit.py new <slug>              # scaffold a new agent
-uv run .cinna-kit/tools/kit.py validate Local/<slug>   # is it coherent and cloud-ready?
+cd Local/<agent>
+make help
 ```
 
-They need [`uv`](https://docs.astral.sh/uv/); it provisions its own Python.
+## Secrets
 
-## Two rules worth knowing
+Credentials live in `Local/<agent>/credentials/.env`, which is git-ignored and never
+copied anywhere. Your assistant is instructed never to print their values. If you
+ever see a secret echoed back at you, stop and tell it to fix that first.
 
-- **Never put a secret anywhere but `credentials/.env`.** It is git-ignored, it is
-  excluded from anything published, and its values are read only by the agent's
-  own scripts.
-- **Everything an agent writes at runtime goes under its `app-data/`.** That folder
-  is ignored and never travels; everything else in the folder is the agent itself.
+## Moving an agent to the cloud
+
+Ask your assistant: *"move this agent to the cloud"*. It follows a documented
+playbook — you will need a free account on the platform, and the assistant will
+tell you exactly which links to open.
+
+## Updating the conventions
+
+Ask your assistant to *"refresh the kit"*, or run:
+
+```bash
+uv run .cinna-kit/tools/kit.py refresh
+```

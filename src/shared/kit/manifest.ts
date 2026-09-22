@@ -45,7 +45,11 @@ export interface AgentSchedule {
 /** Delegation to a sibling agent, by slug. */
 export interface AgentHandover {
   target_slug: string
-  /** Optional host role. Only the exact coordinator pair grants desktop handback. */
+  /**
+   * Optional host role, registered to this host (`x-scope: host:cinna-desktop`)
+   * in core's contract 1.5.0. Only the exact coordinator pair grants desktop
+   * handback.
+   */
   target_kind?: string
   description?: string
   [key: string]: unknown
@@ -78,14 +82,15 @@ export interface AgentFeatures {
  */
 export interface AgentRuntimeRef {
   /**
-   * Which engine runs the agent: `opencode` (the host-managed server) or
+   * Which engine the author *prefers*: `opencode` (the host-managed server),
    * `claude` (the Claude Agent SDK, driving the `claude` binary already
-   * installed on the machine under its own login).
+   * installed on the machine under its own login) or `codex` (the Codex CLI).
    *
-   * Added in contract 1.2.0, additively. An **unrecognised value reads as no
-   * engine** and the agent falls to the host default — it does not fail
-   * validation and does not brick the folder, because a folder written by a
-   * newer tool must keep running.
+   * Part of core's contract since 1.5.0 (the desktop shipped it earlier under
+   * its own, now retired, 1.2.0). A preference, not an enum: absent means the
+   * host default; a value this build does not recognise **runs on OpenCode**
+   * (`effectiveEngine`) — it does not fail validation and does not brick the
+   * folder, because a folder written by a newer tool must keep running.
    *
    * `engine: "claude"` and `credential` are not meaningful together: that path
    * has no credential. Writing both is refused; reading both ignores the
@@ -96,7 +101,9 @@ export interface AgentRuntimeRef {
   /**
    * Work Complexity: `simple` | `medium` | `complex`. The host resolves it
    * against whatever the chosen credential lists — see `shared/modelFamilies.ts`.
-   * Added in contract 1.1.0; an older host ignores it and falls back to `model`.
+   * Part of core's contract since 1.5.0 (the desktop shipped it earlier under
+   * its own, now retired, 1.1.0); an older host ignores it and falls back to
+   * `model`.
    */
   complexity?: string | null
   credential?: string | null

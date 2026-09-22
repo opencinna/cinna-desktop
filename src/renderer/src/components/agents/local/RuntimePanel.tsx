@@ -23,12 +23,14 @@ import {
   DEFAULT_AGENT_ENGINE,
   effectiveEngine,
   isAgentEngine,
+  KEEP_ENGINE,
   PINNED_CLAUDE_VERSION,
   PINNED_CODEX_VERSION,
   type AgentEngine,
   type ClaudeAuthState
 } from '../../../../../shared/engine'
 import { FIELD, LABEL } from './fieldClasses'
+import { SettingsInfoTip } from '../../settings/SettingsLayout'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isStaleWriteError } from '../../../../../shared/localAgents'
 import {
@@ -128,6 +130,13 @@ import {
  */
 const CLAUDE_OPTION = 'engine:claude'
 const CODEX_OPTION = 'engine:codex'
+/**
+ * Selected, never pickable: an engine this build cannot run with no credential
+ * named runs on OpenCode with the fallback credential. Selecting `''` there
+ * claimed the machine's Default runtime — Claude Agent on some machines — and
+ * picking Default fired no change, so the unrecognised engine could not be dropped.
+ */
+const UNSUPPORTED_OPTION = 'engine:unsupported'
 
 const NOTE = 'text-[10px] text-[var(--color-text-muted)]'
 const WARN = 'text-[10px] text-[var(--color-warning)]'
@@ -581,14 +590,10 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
   const declaredCredential = agent.runtime?.credential ?? null
   const declaredModel = agent.runtime?.model ?? null
   /**
-   * The engine the manifest already names, carried through every save.
-   *
-   * This panel has no engine control yet, but `applyToManifest` rewrites the
-   * whole `runtime` block — so *not* sending this would delete an engine choice
-   * a manifest already carries the moment the user changes the model, in a file
-   * they commit. Read through `isAgentEngine`, so a value a newer tool wrote
-   * that this build does not recognise reads as none rather than being written
-   * back as itself.
+   * The engine the manifest names, if it is one this build knows. Read through
+   * `isAgentEngine`, so a value a newer tool wrote reads as none here — and is
+   * never written back by this panel: saves that are not an engine pick send
+   * `KEEP_ENGINE`, and main leaves the file's value as it is.
    */
   const declaredEngine = isAgentEngine(agent.runtime?.engine) ? agent.runtime.engine : null
   /**
@@ -599,7 +604,14 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
    * OpenCode engine — none of which exists on this path — so this is checked
    * early and branched on rather than woven through each one.
    */
-  const unsupportedEngine = agent.runtime?.engine && !isAgentEngine(agent.runtime.engine) ? agent.runtime.engine : null
+  /**
+   * An engine the manifest names that this build cannot run. The agent runs on
+   * **OpenCode** (`effectiveEngine`: a preference, never refused), so the panel
+   * treats it as an OpenCode agent everywhere: Runs on selects what actually
+   * runs, and the preference is told behind the (?) beside its label.
+   */
+  const declaredEngineRaw = typeof agent.runtime?.engine === 'string' ? agent.runtime.engine.trim() : ''
+  const unsupportedEngine = declaredEngineRaw !== '' && !isAgentEngine(declaredEngineRaw) ? declaredEngineRaw : null
   /**
    * **This machine's Default Runtime**, resolved by main and read here as one
    * value.
@@ -625,7 +637,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
    */
   const engineFromFile: AgentEngine | null =
     declaredEngine ??
-    ((agent.runtime?.credential ?? '') !== '' || (agent.runtime?.model ?? '') !== ''
+    (unsupportedEngine !== null || (agent.runtime?.credential ?? '') !== '' || (agent.runtime?.model ?? '') !== ''
       ? 'opencode'
       : null)
   /**
@@ -1277,11 +1289,11 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
       persist?: boolean
       keep?: string | null
       /**
-       * The engine to write. **Absent means "the one the manifest already
-       * names"**, which is what every caller but the engine picker wants: this
-       * panel rewrites the whole `runtime` block, so a save about the model
-       * that did not carry the engine would delete the user's engine choice out
-       * of a file they commit.
+       * The engine to write. **Absent means "keep what the file names"** —
+       * sent as `KEEP_ENGINE`, which main resolves against the file — and that
+       * is what every caller but the Runs-on picker wants. The file may name an
+       * engine this build does not recognise, which this panel cannot write
+       * back; sending anything but "keep" from a model or tier change erased it.
        */
       engine?: AgentEngine | null
     } = {}
@@ -1294,7 +1306,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
     if (options.note) note(options.note, { model: modelId, complexity })
     else setDropped(null)
     const runtime = {
-      engine: options.engine === undefined ? declaredEngine : options.engine,
+      engine: options.engine === undefined ? KEEP_ENGINE : options.engine,
       credential,
       modelId,
       complexity
@@ -1376,16 +1388,25 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
    * never serve. The status line says so rather than letting it vanish quietly.
    */
   const changeRuntimeTarget = (value: string): void => {
+    /**
+     * A pick here replaces the file's engine. When the file named one this
+     * build cannot run, the pick drops it — said on the status line, the way a
+     * dropped model is, because the file loses a value the user may have
+     * written on purpose.
+     */
+    const droppedEngine = unsupportedEngine ? `Dropped engine “${unsupportedEngine}”.` : undefined
+    const withDropped = (text: string | undefined): string | undefined =>
+      droppedEngine && text ? `${droppedEngine} ${text}` : (droppedEngine ?? text)
     if (value === CODEX_OPTION) {
-      commit(null, null, declaredComplexity, { engine: 'codex', note: declaredModel ? 'Codex will use its configured default model.' : undefined })
+      commit(null, null, declaredComplexity, { engine: 'codex', note: withDropped(declaredModel ? 'Codex will use its configured default model.' : undefined) })
       return
     }
     if (value === CLAUDE_OPTION) {
       commit(null, null, declaredComplexity, {
         engine: 'claude',
-        note: declaredModel
+        note: withDropped(declaredModel
           ? `Dropped “${nameOf(declaredModel)}” — Claude Agent runs on ${claudeModelForComplexity(declaredComplexity)}.`
-          : undefined
+          : undefined)
       })
       return
     }
@@ -1395,10 +1416,18 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
       commit(value || null, null, declaredComplexity, { engine: null })
       return
     }
-    changeCredential(value)
+    changeCredential(value, unsupportedEngine ? { engine: null, droppedEngine } : undefined)
   }
 
-  const changeCredential = (value: string): void => {
+  const changeCredential = (
+    value: string,
+    /**
+     * Set only from the Runs-on picker over an engine this build cannot run:
+     * the pick replaces it, so the write removes the engine and the status line
+     * says so. Every other credential change keeps the file's engine.
+     */
+    replace?: { engine: null; droppedEngine: string | undefined }
+  ): void => {
     const next = value ? (usable.find((provider) => provider.name === value) ?? null) : fallbackProvider
     const stale = modelBelongsElsewhere(declaredModel, next, models ?? [], providers ?? [])
     /**
@@ -1426,13 +1455,16 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
      * and only a both-set one loses one — the one not on screen.
      */
     const bothSet = declaredModel !== null && declaredComplexity !== null
+    const staleNote = stale && next ? `Dropped “${nameOf(declaredModel)}” — ${next.name} does not list it.` : undefined
+    const noteText = [replace?.droppedEngine, staleNote].filter(Boolean).join(' ') || undefined
     commit(
       value || null,
       bothSet && !advanced ? null : stale ? null : declaredModel,
       bothSet && advanced ? null : declaredComplexity,
-      stale && next
-        ? { note: `Dropped “${nameOf(declaredModel)}” — ${next.name} does not list it.` }
-        : {}
+      {
+        ...(noteText ? { note: noteText } : {}),
+        ...(replace ? { engine: replace.engine } : {})
+      }
     )
   }
 
@@ -1559,17 +1591,15 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
     const subscription = claudeAuth?.state === 'logged_in' &&
       (claudeAuth.authMethod === 'claude.ai' || !!claudeAuth.subscriptionType)
     const credentialMissing = !!declaredCredential && !selected
-    const label = unsupportedEngine ? `Unsupported runtime: ${unsupportedEngine}`
-      : engineUnknown ? 'Loading runtime…'
+    const label = engineUnknown ? 'Loading runtime…'
       : onCodex ? 'Codex'
       : onClaude ? `Claude Agent${subscription ? ' with subscription' : ''}`
       : effectiveProvider && !credentialMissing ? `OpenCode with ${effectiveProvider.name}` : 'OpenCode'
-    const model = engineUnknown || unsupportedEngine ? null
+    const model = engineUnknown ? null
       : onCodex ? `${declaredModel ?? 'CLI default'} · ${codexEffortForComplexity(declaredComplexity)} effort`
       : onClaude ? claudeModelForComplexity(declaredComplexity)
       : !credentialMissing && modelsLoaded ? nameOf(choice.modelId) : null
-    const issue = unsupportedEngine ? 'Update required'
-      : engineUnknown ? null
+    const issue = engineUnknown ? null
       : onCodex ? (codexFailure ? codexFailure.badge : codexAuth?.state === 'logged_out' ? 'Sign-in required' : null)
       : onClaude ? (claudeFailure ? claudeFailure.badge : claudeAuth?.state === 'logged_out' ? 'Sign-in required' : null)
       : credentialMissing || (providers !== undefined && !effectiveProvider) ? 'AI credential needed'
@@ -1606,9 +1636,28 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
       */}
       <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-3">
         <div>
-          <label htmlFor="runtime-credential" className={LABEL}>
-            Runs on
-          </label>
+          {/*
+            An engine this build cannot run is a preference the file states, not
+            a runtime: the select shows what runs, and the (?) says what the file
+            asked for. No tip otherwise — the label alone is the whole story.
+          */}
+          {unsupportedEngine ? (
+            <div className="mb-1 flex items-center gap-1">
+              <label htmlFor="runtime-credential" className={`${LABEL} !mb-0`}>
+                Runs on
+              </label>
+              {/* Negative margin: the (?) must not make this label row taller than the Model label beside it, or the two selects stop lining up. */}
+              <span className="-my-1 inline-flex">
+                <SettingsInfoTip label="About Runs on">
+                  {`${MANIFEST_FILE} asks for ${unsupportedEngine}; this version runs it on OpenCode.`}
+                </SettingsInfoTip>
+              </span>
+            </div>
+          ) : (
+            <label htmlFor="runtime-credential" className={LABEL}>
+              Runs on
+            </label>
+          )}
           <select
             id="runtime-credential"
             className={FIELD}
@@ -1632,15 +1681,14 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
               was impossible.
             */
             value={
-              unsupportedEngine
-                ? 'unsupported-engine'
-                : declaredEngine === 'codex' ? CODEX_OPTION : declaredEngine === 'claude'
-                  ? CLAUDE_OPTION
+              declaredEngine === 'codex' ? CODEX_OPTION : declaredEngine === 'claude'
+                ? CLAUDE_OPTION
+                : unsupportedEngine && !selected
+                  ? UNSUPPORTED_OPTION
                   : (selected?.name ?? '')
             }
             onChange={(event) => changeRuntimeTarget(event.target.value)}
           >
-            {unsupportedEngine && <option value="unsupported-engine" disabled>Unsupported engine: {unsupportedEngine}</option>}
             {/*
               **"Default runtime", the same words Settings uses for the setting
               this follows** — and then what it currently resolves to, which is
@@ -1660,6 +1708,11 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
                 opencode: fallbackProvider ? `Default runtime (${fallbackProvider.name})` : 'Default runtime (none set)'
               }[defaultRuntime.engine] : 'Default runtime'}
             </option>
+            {unsupportedEngine && !selected && (
+              <option value={UNSUPPORTED_OPTION} disabled>
+                {fallbackProvider ? `OpenCode (${fallbackProvider.name})` : 'OpenCode (none set)'}
+              </option>
+            )}
             {/*
               **Two honest lists behind one separator, not one list pretending.**
               An engine is not a credential row — it has no key, no `enabled`
@@ -1792,7 +1845,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
               aria-label="Model"
               className={FIELD}
               title={inheritedName ? `Default: ${inheritedName}` : undefined}
-              disabled={disabled || !!unsupportedEngine}
+              disabled={disabled}
               value={declaredModel ?? ''}
               onChange={(event) =>
                 commit(commitCredential(declaredCredential), event.target.value || null, null)
@@ -1826,7 +1879,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
               title={WORK_COMPLEXITIES.map(
                 (tier) => `${WORK_COMPLEXITY_LABELS[tier]} — ${WORK_COMPLEXITY_HINTS[tier]}`
               ).join('\n')}
-              disabled={disabled || !!unsupportedEngine}
+              disabled={disabled}
               value={declaredComplexity ?? ''}
               onChange={(event) =>
                 commit(

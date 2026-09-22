@@ -1,127 +1,92 @@
-#!/usr/bin/env python3
-"""Write ``app-data/storage/STATUS.md`` — the agent's one-line health report.
+"""Write the agent's self-reported status file atomically.
 
-A host reads this file to show a status badge and a summary line, so it is
-written **atomically**: a temporary file in the same directory, then a rename, so
-a reader never sees half a file.
+Produces ``app-data/storage/STATUS.md`` with YAML frontmatter followed by a markdown
+body, using a temp-file + ``os.replace`` so a reader never sees a partial write.
+This is the same file and the same convention the platform reads in the cloud, so a
+locally built agent's status surfaces on its agent card unchanged after import.
 
-Format — YAML frontmatter, then optional markdown detail::
+Usage::
 
-    ---
-    status: ok
-    summary: "42 invoices checked, none missing a PO number"
-    timestamp: 2026-09-02T10:15:00Z
-    ---
+    python scripts/update_status.py --status ok --summary "All clear"
+    python scripts/update_status.py --status warning --summary "Queue backing up" \
+        --details "Queue depth: 142"
+    python scripts/update_status.py --status error --summary "Source unreachable"
 
-    Optional detail, in markdown.
+Frontmatter keys are exactly ``status``, ``summary`` and ``timestamp``. Severity is
+one of ok | info | warning | error; anything else is rejected here because the
+platform would normalise it to ``unknown``.
 
-Use it from another script::
+STATUS.md is a public artefact: it is rendered in the UI, returned by the REST API
+and shared over A2A. Never put a credential value, a token or a personal identifier
+in ``--summary`` or ``--details``.
 
-    from update_status import write_status
-    write_status("attention", "3 invoices without a PO number", body=table)
-
-Or from the command line (this is the ``/run:status`` command)::
-
-    uv run scripts/update_status.py --status ok --summary "Nothing to report"
+Standard library only. Python 3.11+.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import tempfile
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-AGENT_ROOT = Path(__file__).resolve().parents[1]
-STATUS_PATH = AGENT_ROOT / "app-data" / "storage" / "STATUS.md"
+VALID_STATUSES = ("ok", "info", "warning", "error")
 
-#: Values a host understands. Anything else is shown as unknown.
-STATUSES = ("ok", "attention", "error", "unknown")
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+AGENT_ROOT = Path(__file__).resolve().parent.parent
+STATUS_FILE = AGENT_ROOT / "app-data" / "storage" / "STATUS.md"
+TEMP_FILE = AGENT_ROOT / "app-data" / "storage" / ".STATUS.md.tmp"
 
 
-def _quote(value: str) -> str:
-    """One-line, double-quoted YAML scalar. Newlines become spaces."""
-    flattened = " ".join(str(value).split())
-    escaped = flattened.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+def build_content(status: str, summary: str | None, details: str | None) -> str:
+    """Build the full STATUS.md text."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    lines = ["---", f"status: {status}"]
+    if summary:
+        # Keep the YAML scalar valid whatever the caller passed in.
+        safe_summary = summary.replace('"', "'").replace("\n", " ").strip()
+        lines.append(f'summary: "{safe_summary}"')
+    lines.append(f"timestamp: {timestamp}")
+    lines.append("---")
+    lines.append("")
+    lines.append("# Agent Status")
+    lines.append("")
+    lines.append(details if details else f"Status updated to **{status}**.")
+    lines.append("")
+    return "\n".join(lines)
 
 
-def render_status(status: str, summary: str, body: str = "", timestamp: str | None = None) -> str:
-    lines = [
-        "---",
-        f"status: {status if status in STATUSES else 'unknown'}",
-        f"summary: {_quote(summary)}",
-        f"timestamp: {timestamp or _now()}",
-        "---",
-        "",
-    ]
-    text = "\n".join(lines)
-    if body:
-        text += body.rstrip("\n") + "\n"
-    return text
-
-
-def write_status(
-    status: str,
-    summary: str,
-    body: str = "",
-    path: Path = STATUS_PATH,
-    timestamp: str | None = None,
-) -> Path:
-    """Write the status file atomically and return its path."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    content = render_status(status, summary, body, timestamp)
-    handle = tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=path.parent, prefix=".status-", suffix=".tmp", delete=False
-    )
-    try:
-        with handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(handle.name, path)
-    except BaseException:
-        try:
-            os.unlink(handle.name)
-        except OSError:
-            pass
-        raise
-    return path
-
-
-def collect() -> tuple[str, str, str]:
-    """What the agent reports when nobody passed a summary.
-
-    Replace this with the real check — read what the agent produced, count what
-    matters, and return ``(status, summary, body)``. Keep it fast: a host runs it
-    before showing the agent.
-    """
-    return "unknown", "No status reported yet.", ""
+def write_atomic(content: str, target: Path, tmp: Path) -> None:
+    """Write to a temp file in the same directory, then rename over the target."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, target)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--status", choices=STATUSES, help="health of the agent")
-    parser.add_argument("--summary", help="one line a human reads first")
-    parser.add_argument("--body", default="", help="optional markdown detail")
+    parser = argparse.ArgumentParser(description="Update the agent's STATUS.md atomically.")
+    parser.add_argument(
+        "--status",
+        required=True,
+        choices=VALID_STATUSES,
+        help="Severity: ok | info | warning | error",
+    )
+    parser.add_argument("--summary", default=None, help="Short one-line description")
+    parser.add_argument("--details", default=None, help="Markdown body appended below the heading")
     args = parser.parse_args()
 
-    status, summary, body = collect()
-    if args.status:
-        status = args.status
-    if args.summary:
-        summary = args.summary
-    if args.body:
-        body = args.body
+    try:
+        write_atomic(build_content(args.status, args.summary, args.details), STATUS_FILE, TEMP_FILE)
+    except OSError as exc:
+        print(f"Error writing STATUS.md: {exc}", file=sys.stderr)
+        return 1
 
-    path = write_status(status, summary, body)
-    print(f"{status}: {summary}")
-    print(f"written to {path.relative_to(AGENT_ROOT)}")
+    suffix = f" - {args.summary}" if args.summary else ""
+    print(f"Status updated: {args.status}{suffix}")
     return 0
 
 

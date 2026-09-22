@@ -1,13 +1,18 @@
-# Local mirror of docs/CLI_COMMANDS.yaml.
-# Same commands, localized: `python …` becomes `uv run …`. Keep one target per
-# command name in the catalog — a host that offers /run:<name> looks for it here.
+# Local convenience targets for {{NAME}}.
+#
+# Every target here mirrors an entry in docs/CLI_COMMANDS.yaml. The YAML file is
+# cloud-first (`python scripts/x.py`, paths relative to the workspace root); this
+# Makefile is the local mirror and adds `uv run` so the project venv is used.
+# When you add a command in one place, add it in the other in the same change.
 
 .DEFAULT_GOAL := help
-.PHONY: help status
+.PHONY: help status validate
 
-help:
-	@echo "$(notdir $(CURDIR)) — available commands:"
-	@echo "  make status   Refresh app-data/storage/STATUS.md and print the status line."
+help: ## Show available commands
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  make %-14s %s\n", $$1, $$2}'
 
-status:
-	uv run scripts/update_status.py
+status: ## Refresh app-data/storage/STATUS.md
+	uv run scripts/update_status.py --status ok --summary "Ready"
+
+validate: ## Check this agent against the kit conventions
+	uv run ../../.cinna-kit/tools/kit.py validate .

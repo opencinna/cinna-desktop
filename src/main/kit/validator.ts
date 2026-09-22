@@ -192,8 +192,10 @@ function checkIdentity(report: Report, manifest: CinnaAgentManifest, contractVer
     manifest.schema_version !== undefined
 
   if (isLegacy) {
+    // Coded under `schema_version`, the field that makes it legacy: the
+    // conformance set matches this warning at that path.
     report.warn(
-      'manifest.legacy',
+      'manifest.schema_version.restamp',
       `This agent predates contract 1.0.0: it has \`schema_version\` but no \`contract_version\` or \`id\`. Re-stamp it so moves, renames and publications stay attached.`,
       MANIFEST_FILE
     )
@@ -317,22 +319,25 @@ function checkRuntime(report: Report, manifest: CinnaAgentManifest): void {
   for (const key of ['model', 'credential', 'engine'] as const) {
     const value = runtime[key]
     if (value !== undefined && value !== null && typeof value !== 'string') {
-      report.error('manifest.runtime.type', `\`runtime.${key}\` must be a string or null.`, MANIFEST_FILE)
+      // The code names the field (`manifest.runtime.<key>.type`), as every
+      // other type error here does: the contract's conformance set matches
+      // findings by field path, and `runtime.type` names no field.
+      report.error(`manifest.runtime.${key}.type`, `\`runtime.${key}\` must be a string or null.`, MANIFEST_FILE)
     }
   }
-  // Contract 1.2.0, warnings for the same reason `complexity` warns: an error
+  // `runtime.engine` (contract 1.5.0): warnings for the same reason `complexity` warns: an error
   // here makes `scannerService` mark the folder `invalid` and drops it from the
   // engine entirely, which is exactly the brick the "minor bumps are additive"
   // promise is against. Both cases have defined behaviour instead of a refusal:
-  // an unrecognised engine reads as no engine (`isAgentEngine` in
-  // `runtimeService`), and `engine: "claude"` with a credential ignores the
+  // an unrecognised engine runs on OpenCode (`effectiveEngine` in
+  // `shared/engine`), and `engine: "claude"` with a credential ignores the
   // credential.
   const engine = runtime.engine
   if (typeof engine === 'string' && engine.trim() !== '') {
     if (!isAgentEngine(engine.trim())) {
       report.warn(
         'manifest.runtime.engine',
-        '`runtime.engine` is not one this build recognises, so the agent runs on the host default engine instead.',
+        '`runtime.engine` is not one this build recognises, so the agent runs on OpenCode instead.',
         MANIFEST_FILE
       )
     } else if (
@@ -347,7 +352,7 @@ function checkRuntime(report: Report, manifest: CinnaAgentManifest): void {
       )
     }
   }
-  // Contract 1.1.0, and warnings rather than errors on purpose.
+  // `runtime.complexity` (contract 1.5.0), and warnings rather than errors on purpose.
   //
   // An error here is not a message: `scannerService` turns one into readiness
   // `invalid`, and `collectEngineAgents` drops an invalid folder from the engine
@@ -389,7 +394,7 @@ function checkRuntime(report: Report, manifest: CinnaAgentManifest): void {
   }
   if (runtime.permissions !== undefined && !isRecord(runtime.permissions)) {
     report.error(
-      'manifest.runtime.type',
+      'manifest.runtime.permissions.type',
       '`runtime.permissions` must be an object.',
       MANIFEST_FILE
     )
@@ -552,7 +557,9 @@ function checkHandovers(report: Report, manifest: CinnaAgentManifest, agentDir?:
       report.error('manifest.handovers.target_kind', `\`${label}.target_kind\` must be a string.`, MANIFEST_FILE)
     }
     if (raw.target_kind === 'coordinator' && target !== 'coordinator') {
-      report.error('manifest.handovers.coordinator_target', 'A coordinator handover must name target_slug coordinator.', MANIFEST_FILE)
+      // Under `target_kind`: the conformance set reports this pair error at
+      // `handovers.target_kind`, the field that asked for a coordinator.
+      report.error('manifest.handovers.target_kind.coordinator_target', 'A coordinator handover must name target_slug coordinator.', MANIFEST_FILE)
     }
     const coordinator = isCoordinatorHandover(raw)
     if (!coordinator && target === manifest.slug) {
@@ -832,7 +839,7 @@ export function readMakefileTargets(agentDir: string): Set<string> {
 /** Directories a validator never needs to walk into, whatever they contain. */
 const UNWALKED_DIRS = new Set(['app-data', 'node_modules', '__pycache__', 'venv', 'dist', 'build'])
 
-function listFilesRecursively(dir: string, relBase = ''): string[] {
+function listFilesRecursively(dir: string, relBase = '', includeDotfiles = false): string[] {
   let entries: Dirent[]
   try {
     entries = readdirSync(dir, { withFileTypes: true })
@@ -841,11 +848,13 @@ function listFilesRecursively(dir: string, relBase = ''): string[] {
   }
   const out: string[] = []
   for (const entry of entries) {
-    // Dotfiles are skipped here on purpose: the one that matters (`credentials/.env`)
-    // is checked by path in `checkSecrets`.
-    if (UNWALKED_DIRS.has(entry.name) || entry.name.startsWith('.')) continue
+    // Dotfiles are skipped unless asked for: only the secret check wants them
+    // (every dotenv shape — `.env`, `.env.<suffix>` — is a dotfile). Dot
+    // directories (`.git`, `.venv`, `.claude`) are never walked.
+    if (UNWALKED_DIRS.has(entry.name)) continue
+    if (entry.name.startsWith('.') && (entry.isDirectory() || !includeDotfiles)) continue
     const rel = relBase === '' ? entry.name : `${relBase}/${entry.name}`
-    if (entry.isDirectory()) out.push(...listFilesRecursively(join(dir, entry.name), rel))
+    if (entry.isDirectory()) out.push(...listFilesRecursively(join(dir, entry.name), rel, includeDotfiles))
     else if (entry.isFile()) out.push(rel)
   }
   return out
@@ -931,24 +940,49 @@ export function isIgnoredPath(agentDir: string, rel: string): boolean {
   return ignored
 }
 
+/** `secret_files`' dotenv rule, as core's contract (1.5.0) states it. */
+const DOTENV_EXCEPTIONS = ['.example', '.sample', '.template']
+
 /**
- * Files that can hold a credential *value*. This list is one of four copies of
- * the same rule and they must not drift. The other three are
- * `cloud_import_excludes` in `layout.json` (what never travels),
- * `templates/agent/gitignore` (what an agent never commits) and
- * `templates/root/gitignore` (the workshop-wide net, which catches a secret
- * dropped before any agent is scaffolded). Change one, change all four —
- * `credentials.json` in particular is what the platform injects at the agent
- * root and what `scripts/cinna_credentials.py` reads in the cloud, so a folder
- * that has ever run there can carry live values home.
+ * Files that can hold a credential *value*. This rule has copies that must not
+ * drift, and all but this one come from core's contract (`make kit-sync`):
+ * `secret_files` and `cloud_import_excludes` in `layout.json` (what never
+ * travels), `templates/agent/gitignore` (what an agent never commits) and
+ * `templates/root/gitignore` (the workshop-wide net). `contractBundle.test.ts`
+ * checks this function against the bundled copies. `credentials.json` in
+ * particular is what the platform injects at the agent root and what
+ * `scripts/cinna_credentials.py` reads in the cloud, so a folder that has ever
+ * run there can carry live values home.
+ *
+ * The dotenv half mirrors `secret_files` so the check holds without a layout;
+ * with one, the contract's own rules are applied as well.
  */
-function isSecretFile(rel: string): boolean {
+export function isSecretFile(rel: string, layout?: LayoutView): boolean {
   const name = basename(rel)
-  if (name.endsWith('.env.example')) return false
+  if (name === 'credentials.json' || name.endsWith('.pem') || name.endsWith('.key') || name.endsWith('.p12')) {
+    return true
+  }
+  const dotenv = name === '.env' || name.startsWith('.env.') || name.endsWith('.env')
+  if (dotenv && !DOTENV_EXCEPTIONS.some((suffix) => name.endsWith(suffix))) return true
+  return layout?.isSecretFile(rel) ?? false
+}
+
+/**
+ * The secret shapes the agent `.gitignore` template has always covered
+ * (`credentials.json`, `.env`, `*.env`, `*.pem`, `*.key`, `*.p12`). An
+ * uncovered one of these is an ERROR — the folder was scaffolded ignoring it,
+ * so someone removed the rule.
+ *
+ * `.env.<suffix>` is not among them: templates before contract 1.5.0 did not
+ * ignore it, so an agent scaffolded then, with a `.env.local` beside it, would
+ * turn `invalid` over its own template's gap and drop out of the engine. That
+ * shape is a WARNING that names the rule to add; export withholds it either way.
+ */
+function isTemplateCoveredSecret(rel: string): boolean {
+  const name = basename(rel)
   return (
     name === 'credentials.json' ||
-    name === '.env' ||
-    name.endsWith('.env') ||
+    (name.endsWith('.env') && !name.endsWith('.env.example')) ||
     name.endsWith('.pem') ||
     name.endsWith('.key') ||
     name.endsWith('.p12')
@@ -956,20 +990,27 @@ function isSecretFile(rel: string): boolean {
 }
 
 function checkSecrets(report: Report, agentDir: string, layout?: LayoutView): void {
-  const secretFiles = listFilesRecursively(agentDir).filter(isSecretFile)
-  // The walk skips dotfiles, so check the dotted paths the contract names.
-  for (const dotted of ['credentials/.env', '.env']) {
-    if (existsSync(join(agentDir, dotted))) secretFiles.push(dotted)
-  }
+  const secretFiles = listFilesRecursively(agentDir, '', true).filter((rel) => isSecretFile(rel, layout))
   if (secretFiles.length === 0) return
 
   for (const rel of secretFiles) {
     if (!isIgnoredPath(agentDir, rel)) {
-      report.error(
-        'secrets.not_ignored',
-        `${rel} can hold credential values and no .gitignore rule covers it. Add it to the agent's .gitignore before committing anything.`,
-        rel
-      )
+      if (isTemplateCoveredSecret(rel)) {
+        report.error(
+          'secrets.not_ignored',
+          `${rel} can hold credential values and no .gitignore rule covers it. Add it to the agent's .gitignore before committing anything.`,
+          rel
+        )
+      } else {
+        // Beyond `.env.<suffix>`, only a shape a newer contract's
+        // `secret_files` adds lands here — equally not the folder's fault.
+        const rule = basename(rel).startsWith('.env.') ? '`.env.*`' : 'it'
+        report.warn(
+          'secrets.not_ignored',
+          `${rel} can hold credential values and no .gitignore rule covers it. Add ${rule} to the agent's .gitignore before committing anything.`,
+          rel
+        )
+      }
     }
     if (layout && !layout.isExcludedFromExport(rel)) {
       report.error(

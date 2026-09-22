@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { CinnaAgentManifest } from '../../../shared/kit/manifest'
 import type { ProviderDto } from '../providerService'
+import { KEEP_ENGINE } from '../../../shared/engine'
 
 /**
  * Resolving a runtime, and writing one back.
@@ -871,20 +872,81 @@ describe('the engine survives a save that is not about it', () => {
     expect(manifest.runtime).toEqual({ engine: 'claude', model: 'gpt-5' })
   })
 
-  it('is protected by the type, because omitting the field still erases it', () => {
-    // The guard is `LocalAgentRuntimeInput.engine` being **required**, not a
-    // runtime check — and this cast is what a caller that forgot would compile
-    // to. `applyToManifest` rewrites the whole `runtime` block, so an absent
-    // field is indistinguishable from "the user cleared it": the manifest's
-    // round-trip promise stops protecting a key the moment the layer knows
-    // about it. Hence the compiler, rather than a default, does the asking.
+  it('keeps the engine when the caller omits the field', () => {
+    // An absent key is "keep", like the explicit value: `undefined` does not
+    // survive every serialisation, and a save that lost it must not become
+    // "remove the engine" in a file the user commits.
     const manifest: CinnaAgentManifest = { runtime: { engine: 'claude' } }
     runtimeService.applyToManifest(manifest, {
       credential: null,
       modelId: 'gpt-5',
       complexity: null
     } as never)
-    expect(manifest.runtime).toEqual({ model: 'gpt-5' })
+    expect(manifest.runtime).toEqual({ engine: 'claude', model: 'gpt-5' })
+  })
+
+  it('keeps an engine this build does not recognise through a complexity change', () => {
+    // The panel cannot send `gemini` back — it is not an `AgentEngine` — so
+    // anything but "keep" erased it, and with Claude as the machine default
+    // the next turn ran on the Claude subscription the folder never asked for.
+    const manifest: CinnaAgentManifest = { runtime: { engine: 'gemini', complexity: 'simple' } }
+    runtimeService.applyToManifest(manifest, {
+      engine: KEEP_ENGINE,
+      credential: null,
+      modelId: null,
+      complexity: 'complex'
+    })
+    expect(manifest.runtime).toEqual({ engine: 'gemini', complexity: 'complex' })
+  })
+
+  it('keeps an unrecognised engine through a credential change, and an explicit pick replaces it', () => {
+    const manifest: CinnaAgentManifest = { runtime: { engine: 'gemini' } }
+    runtimeService.applyToManifest(manifest, {
+      engine: KEEP_ENGINE,
+      credential: 'Work OpenAI',
+      modelId: null,
+      complexity: null
+    })
+    expect(manifest.runtime).toEqual({ engine: 'gemini', credential: 'Work OpenAI' })
+    runtimeService.applyToManifest(manifest, {
+      engine: null,
+      credential: 'Work OpenAI',
+      modelId: null,
+      complexity: null
+    })
+    expect(manifest.runtime).toEqual({ credential: 'Work OpenAI' })
+  })
+
+  it('checks a kept Claude engine against a credential, as if it were written', () => {
+    const manifest: CinnaAgentManifest = { runtime: { engine: 'claude' } }
+    expect(() =>
+      runtimeService.applyToManifest(manifest, {
+        engine: KEEP_ENGINE,
+        credential: 'Work OpenAI',
+        modelId: null,
+        complexity: null
+      })
+    ).toThrow(/own login/)
+  })
+
+  it('keeping nothing and clearing everything still removes the runtime block', () => {
+    const manifest: CinnaAgentManifest = { runtime: { complexity: 'simple' } }
+    runtimeService.applyToManifest(manifest, {
+      engine: KEEP_ENGINE,
+      credential: null,
+      modelId: null,
+      complexity: null
+    })
+    expect(Object.hasOwn(manifest, 'runtime')).toBe(false)
+  })
+
+  it('a bare agent keeps the engine its state file holds', () => {
+    expect(
+      runtimeService.toRuntimeRef(
+        { engine: KEEP_ENGINE, credential: null, modelId: null, complexity: 'medium' },
+        { engine: 'gemini', complexity: 'simple' }
+      )
+    ).toEqual({ engine: 'gemini', complexity: 'medium' })
   })
 
   it('still clears the engine when the caller explicitly says none', () => {

@@ -27,6 +27,28 @@ export interface LayoutCommandRule {
   when?: { file_exists?: string }
 }
 
+/**
+ * One rule of `layout.json`'s `secret_files`, **kept exactly as declared**: a
+ * path is secret when a clause of `match` hits its basename and no clause of
+ * `unless` does. Not narrowed at parse time on purpose — an entry this build
+ * cannot read has to reach {@link isSecretByRules}, which treats it as secret;
+ * filtering it out here would switch that fail-safe off one function early
+ * (cinna-cli's `secret_file_rules` makes the same choice).
+ */
+export type SecretFileRule = unknown
+
+/**
+ * The dotenv rule built in, used when a layout declares no usable
+ * `secret_files.rules` — the same fallback cinna-cli's `kit_contract.py` has.
+ */
+export const DEFAULT_SECRET_FILE_RULES: readonly SecretFileRule[] = [
+  {
+    id: 'dotenv',
+    match: { basename_equals: ['.env'], basename_prefix: ['.env.'], basename_suffix: ['.env'] },
+    unless: { basename_suffix: ['.example', '.sample', '.template'] }
+  }
+]
+
 /** `[path in the template tree, path in the created folder]`. */
 export type ScaffoldIgnorePair = readonly [string, string]
 
@@ -49,6 +71,8 @@ export interface KitLayout {
   scaffold_ignore_files: { agent: ScaffoldIgnorePair[]; root: ScaffoldIgnorePair[] }
   desktop_owned: string[]
   cloud_import_excludes: string[]
+  /** `secret_files.rules` — the authority for what holds a credential value. */
+  secret_files: SecretFileRule[]
   local_command_runner: { description?: string; rules: LayoutCommandRule[] }
 }
 
@@ -66,8 +90,13 @@ export interface LayoutView {
   workshopRoles(): LayoutRole[]
   /** The agent-folder role covering a path, or `null` when none does. */
   roleFor(relPath: string): LayoutRole | null
-  /** True when the cloud-import exclude list drops this agent-relative path. */
+  /**
+   * True when this agent-relative path never travels: the cloud-import exclude
+   * list drops it, or `secret_files` says it can hold a credential value.
+   */
   isExcludedFromExport(relPath: string): boolean
+  /** True when the contract's `secret_files` rules call this path secret. */
+  isSecretFile(relPath: string): boolean
   /**
    * True when a contract refresh must leave this path alone. Unknown paths
    * survive: a refresh never removes something the contract does not claim.
@@ -104,6 +133,7 @@ const EMPTY_LAYOUT: KitLayout = {
   scaffold_ignore_files: { agent: [], root: [] },
   desktop_owned: [],
   cloud_import_excludes: [],
+  secret_files: [...DEFAULT_SECRET_FILE_RULES],
   local_command_runner: { rules: [] }
 }
 
@@ -227,11 +257,72 @@ export function parseLayout(raw: unknown): KitLayout {
     },
     desktop_owned: asStringArray(doc.desktop_owned).map(normalizeRelPath),
     cloud_import_excludes: asStringArray(doc.cloud_import_excludes),
+    secret_files: parseSecretRules(asRecord(doc.secret_files).rules),
     local_command_runner: {
       description: typeof runner.description === 'string' ? runner.description : undefined,
       rules: parseCommandRules(runner.rules)
     }
   }
+}
+
+/**
+ * `secret_files.rules` as declared, or the built-in dotenv rule when the block,
+ * or its `rules`, is missing, not an array, or empty.
+ */
+function parseSecretRules(value: unknown): SecretFileRule[] {
+  return Array.isArray(value) && value.length > 0 ? [...value] : [...DEFAULT_SECRET_FILE_RULES]
+}
+
+const SECRET_CLAUSE_TESTS: Record<string, (name: string, value: string) => boolean> = {
+  basename_equals: (name, value) => name === value,
+  basename_prefix: (name, value) => name.startsWith(value),
+  basename_suffix: (name, value) => name.endsWith(value)
+}
+
+/**
+ * Does any test in one `match` / `unless` clause fire for this basename?
+ *
+ * `onUnknown` is the fail-safe direction, which differs by position: an
+ * unevaluable `match` counts as a hit, an unevaluable `unless` as a miss, so
+ * both resolve toward "secret". "Unevaluable" is broad, as in cinna-cli's
+ * `_secret_clause_hits`, which this mirrors key for key: an absent clause, one
+ * that is not an object, an empty one, an unknown key, or a known key with no
+ * usable (non-empty string) value.
+ */
+function secretClauseHits(name: string, clause: unknown, onUnknown: boolean): boolean {
+  if (clause === null || typeof clause !== 'object' || Array.isArray(clause)) return onUnknown
+  const entries = Object.entries(clause as Record<string, unknown>)
+  if (entries.length === 0) return onUnknown
+  for (const [key, raw] of entries) {
+    const test = Object.hasOwn(SECRET_CLAUSE_TESTS, key) ? SECRET_CLAUSE_TESTS[key] : undefined
+    if (test === undefined) return onUnknown
+    const values = typeof raw === 'string' ? [raw] : raw
+    const usable = Array.isArray(values)
+      ? values.filter((value): value is string => typeof value === 'string' && value !== '')
+      : []
+    if (usable.length === 0) return onUnknown
+    if (usable.some((value) => test(name, value))) return true
+  }
+  return false
+}
+
+/**
+ * `secret_files`, as the contract states it: clauses test the basename at any
+ * depth, rules OR together, and anything this build cannot evaluate fails safe
+ * — a rule that is not an object is secret outright, and see
+ * {@link secretClauseHits} for clauses. Same answers as cinna-cli's
+ * `is_secret_filename`.
+ */
+export function isSecretByRules(rules: readonly SecretFileRule[], relPath: string): boolean {
+  const path = normalizeRelPath(relPath)
+  if (path === '') return false
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  return rules.some((rule) => {
+    if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) return true
+    const { match, unless } = rule as { match?: unknown; unless?: unknown }
+    if (!secretClauseHits(name, match, true)) return false
+    return !secretClauseHits(name, unless, false)
+  })
 }
 
 /** Match one segment of a pattern against one path segment (`*` and `?`). */
@@ -315,8 +406,16 @@ export function createLayoutView(layout: KitLayout): LayoutView {
     isExcludedFromExport(relPath: string): boolean {
       const path = normalizeRelPath(relPath)
       if (path === '') return false
-      return layout.cloud_import_excludes.some((pattern) => matchesPattern(pattern, path))
+      // `secret_files` is the authority; the dotenv globs in the exclude list
+      // are its belt-and-braces subset. Applied here, it covers both the files
+      // an export copies and the ones it hashes for `content_hash`.
+      return (
+        layout.cloud_import_excludes.some((pattern) => matchesPattern(pattern, path)) ||
+        isSecretByRules(layout.secret_files, path)
+      )
     },
+
+    isSecretFile: (relPath: string) => isSecretByRules(layout.secret_files, relPath),
 
     survivesUpdate(relPath: string): boolean {
       const path = normalizeRelPath(relPath)

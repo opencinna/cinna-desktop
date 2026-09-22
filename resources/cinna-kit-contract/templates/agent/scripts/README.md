@@ -1,37 +1,67 @@
-# Scripts
+# Scripts catalog — {{NAME}}
 
-Every script in this folder is listed here, with what it does, how it is run and
-what it prints. A script that is not catalogued does not exist as far as the agent
-is concerned — `docs/WORKFLOW_PROMPT.md` and any host reading this folder both
-start here.
+**This file is mandatory and must never fall behind reality.** Every time a script
+is added, renamed, changed or removed, update the matching entry here in the same
+change. An out-of-date catalog makes the agent give wrong instructions.
 
-Scripts are always run **from the agent root**, so top-level helpers stay
-importable:
+Run everything from the agent root:
 
 ```bash
-uv run scripts/<name>.py [args]
+uv run scripts/<script>.py [args]
 ```
 
-## Shared helpers
+In the cloud the same scripts run as `python scripts/<script>.py` with the workspace
+root as the working directory — which is why no script may use an absolute path.
 
-| Script | What it does |
-|--------|--------------|
-| `cinna_credentials.py` | Credential access. `get_credential("<slot>", "<field>")` reads `credentials.json` in the cloud and `credentials/.env` locally, with the same call. Import it; do not read `.env` yourself. |
+## Shipped helpers
 
-## Commands
+### `cinna_credentials.py`
 
-| Script | Run | Prints |
-|--------|-----|--------|
-| `update_status.py` | `uv run scripts/update_status.py` (`make status`, `/run:status`) | The status line, and writes `app-data/storage/STATUS.md` atomically with `status`, `summary` and `timestamp` frontmatter. |
+Portability shim for credentials. Import it; do not read credential files directly.
 
-## Adding a script
+```python
+from cinna_credentials import require_credential
+config = require_credential("email_imap")
+```
 
-1. One script, one step. Print JSON or CSV; write anything large to
-   `app-data/storage/`.
-2. Run it and see it work before describing it anywhere.
-3. Add a row here, in the same change.
-4. Wire it into `docs/WORKFLOW_PROMPT.md`, and into `docs/CLI_COMMANDS.yaml` plus
-   the `Makefile` if a human should be able to run it directly.
+Reads the platform-injected `credentials/credentials.json` when it exists (cloud),
+otherwise assembles the values from `credentials/.env` using the `env_prefix` and
+`fields` declared for that slot in `cinna-agent.json` (local). Never prints anything.
 
-Above roughly eight scripts, group them into subfolders by skill and group this
-table the same way.
+### `update_status.py`
+
+Writes `app-data/storage/STATUS.md` atomically with `status`, `summary` and
+`timestamp` frontmatter.
+
+```bash
+uv run scripts/update_status.py --status ok --summary "All clear"
+```
+
+Severity is one of `ok`, `info`, `warning`, `error`. STATUS.md is a public artefact:
+never put a secret or a personal identifier in the summary or details.
+
+## Agent scripts
+
+<!-- One subsection per script you add. Keep this template shape: -->
+
+<!--
+### `<script_name>.py`
+
+**Purpose**: one line.
+**Usage**: `uv run scripts/<script_name>.py --<arg> <value>`
+**Reads**: config/settings.json, credential slot `<name>`
+**Writes**: `app-data/storage/<file>` (format)
+**Output**: what it prints to stdout, in what format.
+-->
+
+_No agent scripts yet._
+
+## Conventions
+
+- One step per script. If a script needs a paragraph to explain, split it.
+- Scripts take arguments; they do not hardcode values that belong in `config/`.
+- Large results are passed between scripts through files in `app-data/storage/`,
+  not through stdout.
+- Paginated fetching always specifies a deterministic sort order.
+- Shared helpers stay at the top level of `scripts/`; a script belonging to exactly
+  one skill goes into `skills/<name>/scripts/` and is catalogued here all the same.

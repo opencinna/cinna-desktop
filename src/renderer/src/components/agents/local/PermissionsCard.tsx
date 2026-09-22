@@ -22,7 +22,6 @@ import {
   DEFAULT_AGENT_ENGINE,
   DEFAULT_CLAUDE_APPROVAL,
   effectiveEngine,
-  isAgentEngine,
   isClaudeApproval,
   type ClaudeApproval
 } from '../../../../../shared/engine'
@@ -126,7 +125,9 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
    */
   const engineUnknown =
     defaultRuntime === undefined &&
-    !isAgentEngine(agent.runtime?.engine) &&
+    // Any named engine settles it: a known one as named, anything else on
+    // OpenCode (`effectiveEngine`), neither waiting on the machine default.
+    (typeof agent.runtime?.engine === 'string' ? agent.runtime.engine.trim() : '') === '' &&
     (agent.runtime?.credential ?? '') === '' &&
     (agent.runtime?.model ?? '') === ''
   const { data: grants } = useLocalAgentGrants(agent.id)

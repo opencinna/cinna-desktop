@@ -68,6 +68,16 @@ function tomlBasicString(value: string): string {
 }
 
 /**
+ * A Makefile comment line: every control character (a line break above all)
+ * becomes a space. The contract's `Makefile` carries the agent name in its first
+ * comment line, and a name with a line break would otherwise end the comment and
+ * put the rest of the name into the Makefile as a rule or recipe.
+ */
+function makefileCommentText(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]/g, ' ')
+}
+
+/**
  * Files whose `{{TOKEN}}` placeholders are substituted, each with the escaping
  * its syntax needs. Everything else is copied byte-for-byte — a template that is
  * not text must survive untouched, and a script must never have its contents
@@ -85,7 +95,8 @@ const SUBSTITUTED_FILES: ReadonlyMap<string, (value: string) => string> = new Ma
   ['WORKFLOW_PROMPT.md', (v: string) => v],
   ['ENTRYPOINT_PROMPT.md', (v: string) => v],
   ['REFINER_PROMPT.md', (v: string) => v],
-  ['pyproject.toml', tomlBasicString]
+  ['pyproject.toml', tomlBasicString],
+  ['Makefile', makefileCommentText]
 ])
 
 export interface ScaffoldAgentInput {

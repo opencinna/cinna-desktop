@@ -13,6 +13,10 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # Build, check and sync tooling; nothing at runtime reads it. Among it is
+  # `scripts/kit-sync/.work/`, where `make kit-sync` stages a contract tree.
+  # The build hooks below run from the repo, not from the asar.
+  - '!scripts/**'
   # The kit contract ships via extraResources below, not inside the asar.
   # Without this it would be packed twice: once here (and unpacked again by
   # asarUnpack) and once as an extra resource.

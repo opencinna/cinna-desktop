@@ -1681,7 +1681,8 @@ export const localAgentService = {
         'This agent states its runtime in its manifest. Save it there instead.'
       )
     }
-    const next = runtimeService.toRuntimeRef(runtime)
+    // The current value is what a "keep" engine resolves to.
+    const next = runtimeService.toRuntimeRef(runtime, desktopStateService.read(agentDir, 'bare').runtime)
     const handle = turnLock.acquire(agentId, 'editor')
     try {
       desktopStateService.patch(agentDir, 'bare', { runtime: next })

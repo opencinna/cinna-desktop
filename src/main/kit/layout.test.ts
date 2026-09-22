@@ -7,7 +7,7 @@ vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-import { createLayoutView, matchesPattern, parseLayout } from './layout'
+import { createLayoutView, isSecretByRules, matchesPattern, parseLayout } from './layout'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const raw = JSON.parse(
@@ -86,5 +86,60 @@ describe('localizeCommand', () => {
   it('leaves a command no rule matches alone', () => {
     expect(layout.localizeCommand('make status', { hasPyproject: true })).toBe('make status')
     expect(layout.localizeCommand('  node tools/x.js  ', { hasPyproject: true })).toBe('node tools/x.js')
+  })
+})
+
+describe('secret_files', () => {
+  it('reads the shipped dotenv rule and keeps every dotenv shape home', () => {
+    for (const rel of ['.env', 'credentials/.env', '.env.production', 'config/.env.staging', 'vendor.env']) {
+      expect(layout.isSecretFile(rel), rel).toBe(true)
+      expect(layout.isExcludedFromExport(rel), rel).toBe(true)
+    }
+    for (const rel of ['.env.example', 'config/.env.sample', 'vendor.env.template', 'docs/env.md']) {
+      expect(layout.isSecretFile(rel), rel).toBe(false)
+    }
+  })
+
+  it('fails safe on a clause this build cannot evaluate', () => {
+    // An unknown `match` clause counts as a hit; an unknown `unless` clause as a miss.
+    const unknownMatch = [{ id: 'x', match: { basename_regex: ['^never$'] }, unless: {} }]
+    expect(isSecretByRules(unknownMatch, 'README.md')).toBe(true)
+    const unknownUnless = [
+      { id: 'y', match: { basename_equals: ['.env'] }, unless: { basename_regex: ['.*'] } }
+    ]
+    expect(isSecretByRules(unknownUnless, '.env')).toBe(true)
+  })
+
+  it('counts what it cannot read as secret, as cinna-cli does', () => {
+    // `is_secret_filename` / `_secret_clause_hits` in cinna-cli's kit_contract.py.
+    const cases: Array<[string, unknown]> = [
+      ['a rule that is not an object', 'dotenv'],
+      ['a rule that is null', null],
+      ['a rule with no match', { id: 'x' }],
+      ['a rule with an empty match', { id: 'x', match: {} }],
+      ['a match that is not an object', { id: 'x', match: ['.env'] }],
+      ['a known clause with no values', { id: 'x', match: { basename_equals: [] } }],
+      ['a known clause with no usable string', { id: 'x', match: { basename_suffix: ['', 7, null] } }],
+      ['a known clause whose value is not a list', { id: 'x', match: { basename_prefix: 3 } }]
+    ]
+    for (const [label, rule] of cases) {
+      expect(isSecretByRules([rule], 'README.md'), label).toBe(true)
+    }
+    // A known `unless` clause with no usable values is a miss, so still secret.
+    expect(isSecretByRules([{ match: { basename_equals: ['.env'] }, unless: { basename_suffix: [''] } }], '.env')).toBe(true)
+    // A bare string value is one value, not a list of characters.
+    expect(isSecretByRules([{ match: { basename_equals: '.env' } }], '.env')).toBe(true)
+    expect(isSecretByRules([{ match: { basename_equals: '.env' } }], 'e')).toBe(false)
+  })
+
+  it('falls back to the built-in dotenv rule when rules are missing, not a list or empty', () => {
+    for (const doc of [{}, { secret_files: {} }, { secret_files: { rules: 'dotenv' } }, { secret_files: { rules: [] } }, { secret_files: 'x' }]) {
+      const view = createLayoutView(parseLayout(doc))
+      expect(view.isSecretFile('.env.local'), JSON.stringify(doc)).toBe(true)
+      expect(view.isSecretFile('config/vendor.env'), JSON.stringify(doc)).toBe(true)
+      expect(view.isSecretFile('.env.example'), JSON.stringify(doc)).toBe(false)
+      expect(view.isSecretFile('README.md'), JSON.stringify(doc)).toBe(false)
+    }
+    expect(createLayoutView(parseLayout(null)).isSecretFile('.env.local')).toBe(true)
   })
 })

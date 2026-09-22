@@ -7,7 +7,7 @@
 
 PW := npx playwright test -c e2e/playwright.config.ts
 
-.PHONY: help test test-hub typecheck build contract contract-next contract-snapshot pin-assets demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine live-ctl live-help live-flow
+.PHONY: help test test-hub typecheck build kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine live-ctl live-help live-flow
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -23,6 +23,13 @@ typecheck: ## Type-check main, preload, renderer and e2e
 
 build: ## Production build into out/ (what the E2E suite launches)
 	npx electron-vite build
+
+# The kit contract bundle (resources/cinna-kit-contract/) is a byte-exact render
+# of cinna-core's docs/local_agent_kit/ contract members; never edit it by hand.
+# CORE=<path> overrides $CINNA_CORE_PATH (default ../workflow-runner-core);
+# REF=<rev> renders core at that git revision instead of its working tree.
+kit-sync: ## Re-bundle the kit contract from cinna-core: make kit-sync [CORE=<path>] [REF=<rev>]
+	$(STRIP) scripts/kit-sync/sync.mjs $(if $(CORE),--core "$(CORE)") $(if $(REF),--ref "$(REF)")
 
 # The interface contract: every external CLI interface Cinna relies on, checked
 # against the REAL pinned binary with a loopback fake provider. No login, no

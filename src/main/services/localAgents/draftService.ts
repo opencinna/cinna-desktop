@@ -50,11 +50,26 @@ const MAX_META_CHARS = 2_000
 const EXAMPLE_PROMPT_COUNT = 3
 
 /**
- * Strings that only exist in the untouched scaffold template. One of them
- * present means nobody has written the document yet, so drafting over it takes
- * nothing away. Both come from `templates/agent/docs/WORKFLOW_PROMPT.md`.
+ * The line of core's `templates/agent/docs/WORKFLOW_PROMPT.md` (the bundled
+ * contract, synced by `make kit-sync` — re-check it when that template changes)
+ * that is nothing but a placeholder. Matched as a **whole line**: the rest of
+ * that template is example steps a user may keep while writing their own
+ * prompt around them, and matching one of those would draft over their work.
  */
-const SCAFFOLD_MARKERS = ['This file IS the agent.', '<!-- first step -->']
+const SCAFFOLD_PLACEHOLDER_LINE = 'Describe the single job this agent performs, in one or two sentences.'
+/**
+ * An example step from the same template, also matched as a whole line. Only
+ * together with the placeholder does it mean untouched: a user who wrote a
+ * prompt of their own and left the placeholder line in has not left the
+ * template's example steps in too.
+ */
+const SCAFFOLD_EXAMPLE_LINE = '1. Run `python scripts/<script>.py --<arg>` to fetch or compute the data.'
+
+/**
+ * Strings from the desktop's own pre-sync template, still on disk in folders
+ * scaffolded before it and never drafted. Neither survives a user's edit.
+ */
+const LEGACY_SCAFFOLD_MARKERS = ['This file IS the agent.', '<!-- first step -->']
 
 const WORKFLOW_SYSTEM_PROMPT = [
   'You write the system prompt for a small, single-purpose work agent.',
@@ -164,7 +179,9 @@ export function parseDraftMeta(raw: string): {
 
 /** True while the workflow document is still exactly what the scaffolder wrote. */
 export function isUntouchedWorkflowPrompt(contents: string): boolean {
-  return SCAFFOLD_MARKERS.some((marker) => contents.includes(marker))
+  if (LEGACY_SCAFFOLD_MARKERS.some((marker) => contents.includes(marker))) return true
+  const lines = contents.split(/\r?\n/).map((line) => line.trim())
+  return lines.includes(SCAFFOLD_PLACEHOLDER_LINE) && lines.includes(SCAFFOLD_EXAMPLE_LINE)
 }
 
 function readWorkflowPrompt(agentDir: string): string | null {

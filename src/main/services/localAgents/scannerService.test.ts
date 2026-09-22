@@ -27,7 +27,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..')
  * which is a property of the code, not of any particular version number.
  */
 const BUNDLED_CONTRACT = readFileSync(
-  join(repoRoot, 'resources/cinna-kit-contract/VERSION'),
+  join(repoRoot, 'resources/cinna-kit-contract/CONTRACT_VERSION'),
   'utf8'
 ).trim()
 
@@ -474,7 +474,7 @@ describe('scanning a workshop', () => {
     // Valid, not broken: the validator warns about the missing identity and
     // reports no error, so the agent is runnable as it stands.
     expect(result.agents[0].readiness).toBe('ok')
-    expect(result.agents[0].validation.warnings.some((w) => w.code === 'manifest.legacy')).toBe(
+    expect(result.agents[0].validation.warnings.some((w) => w.code === 'manifest.schema_version.restamp')).toBe(
       true
     )
     // And it is in the index, which is what `locate()` — and so the page, the

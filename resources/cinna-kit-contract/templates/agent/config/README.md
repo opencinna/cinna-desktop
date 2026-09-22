@@ -1,17 +1,37 @@
-# Config
+# Config — {{NAME}}
 
-Non-secret configuration the agent's scripts read: endpoints, field mappings,
-thresholds, the list of things to watch. JSON or YAML, one file per concern.
+User-editable parameters. Committed to git: this folder represents the agent's
+current operational configuration, and in the cloud it is bundle-owned — shipped
+with the agent and replaced on update.
+
+Anything a user might reasonably want to change without editing code belongs here:
+
+- date ranges and cut-offs
+- thresholds ("flag anything above 10000")
+- exclusion lists (accounts, senders, test records to skip)
+- feature toggles
+- mappings and display names
+
+Pick the simplest format: JSON for mixed structured settings, CSV for flat lists,
+YAML when a human edits it often.
 
 ```
 config/
-├── endpoints.json
-└── thresholds.json
+├── settings.json      # thresholds, date ranges, toggles
+└── exclusions.csv     # ids to skip
 ```
 
-Two rules:
+Scripts load config at startup; they never hardcode a value that belongs here:
 
-- **Never a secret.** Anything with a value that must not be seen goes in
-  `credentials/.env` and is read through `scripts/cinna_credentials.py`.
-- **Read it, do not hard-code it.** A number a human might want to change belongs
-  here, not inside a script.
+```python
+import json
+from pathlib import Path
+
+settings = json.loads((Path(__file__).resolve().parent.parent / "config" / "settings.json").read_text())
+threshold = settings["threshold"]
+```
+
+Document each config file in `docs/WORKFLOW_PROMPT.md` so the agent knows to edit
+the file rather than the code when the user asks to change a parameter.
+
+Never store a secret here. Secrets go to `credentials/.env`.

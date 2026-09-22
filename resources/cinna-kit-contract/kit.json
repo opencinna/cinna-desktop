@@ -1,19 +1,79 @@
 {
-  "name": "cinna-agent-contract",
-  "title": "Cinna agent folder contract",
-  "description": "The machine-readable half of the cinna-core start-kit: the manifest schema, the folder model and the agent/root templates. Everything a tool needs to create, read, validate and export an agent folder without reading a guide.",
-  "contract_version": "1.4.0",
-  "schema": "schema/cinna-agent.schema.json",
-  "layout": "layout.json",
-  "templates": {
-    "root": "templates/root",
-    "agent": "templates/agent"
+  "kit_version": "489ce0983d531c3c",
+  "contract_version": "1.5.0",
+  "platform_url": "https://opencinna.io",
+  "kit_base_url": "https://opencinna.io/api/agent-start",
+  "start_url": "https://opencinna.io/agent-start",
+  "instance_name": "Cinna",
+  "signup_url": "https://opencinna.io/signup",
+  "login_url": "https://opencinna.io/login",
+  "cli": {
+    "install_spec": "cinna-cli",
+    "min_version": "0.2.3"
   },
-  "refresh": {
-    "base_url": "https://cinna.dev/api/agent-start",
-    "version_path": "/contract/version",
-    "tarball_path": "/contract.tar.gz",
-    "install_dir": ".cinna-kit",
-    "notes": "base_url is the default; a linked Cinna instance serves the same two paths under its own origin. The desktop and kit.py refresh swap the install_dir atomically and never edit it by hand."
+  "entry": "START.md",
+  "index": "README.md",
+  "manifest_schema": "schema/cinna-agent.schema.json",
+  "publications_schema": "schema/publications.schema.json",
+  "agent_template": "templates/agent",
+  "root_template": "templates/root",
+  "tool": "tools/kit.py",
+  "ladder": [
+    {
+      "rung": "prompts",
+      "doc": "guides/02-prompts-and-description.md",
+      "trigger": "always, before the agent is tested for the first time"
+    },
+    {
+      "rung": "scripts",
+      "doc": "guides/03-scripts-and-data.md",
+      "trigger": "the agent does anything beyond answering from its prompts"
+    },
+    {
+      "rung": "design",
+      "doc": "guides/13-design-patterns.md",
+      "trigger": "an external system, a send/create/sign/post, a second kind of question, or the agent will serve other people"
+    },
+    {
+      "rung": "credentials",
+      "doc": "guides/04-credentials.md",
+      "trigger": "workflow calls any external system that needs a token, login or key"
+    },
+    {
+      "rung": "schedules",
+      "doc": "guides/05-schedules.md",
+      "trigger": "the user says daily/weekly/every/at, or the agent should run unattended"
+    },
+    {
+      "rung": "status",
+      "doc": "guides/06-status-reporting.md",
+      "trigger": "the agent runs unattended or performs long-running checks"
+    },
+    {
+      "rung": "cli_commands",
+      "doc": "guides/07-cli-commands.md",
+      "trigger": "the same operation is run repeatedly and deserves a name"
+    },
+    {
+      "rung": "knowledge",
+      "doc": "guides/08-knowledge-and-local-skills.md",
+      "trigger": "three or more distinct capabilities, domain docs longer than a page, or a finished skill worth publishing to the catalog"
+    },
+    {
+      "rung": "multi_agent",
+      "doc": "guides/09-multi-agent.md",
+      "trigger": "a second agent appears, or one agent should delegate to another"
+    },
+    {
+      "rung": "go_cloud",
+      "doc": "guides/11-go-cloud.md",
+      "trigger": "the user asks, or the agent needs 24/7, channels, sharing or webapps"
+    }
+  ],
+  "tool_command": "uv run .cinna-kit/tools/kit.py",
+  "runtime": {
+    "tool_runner": "uv",
+    "requires_python": ">=3.10",
+    "install_uv": "https://docs.astral.sh/uv/getting-started/installation/"
   }
 }

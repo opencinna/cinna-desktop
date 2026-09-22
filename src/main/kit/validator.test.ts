@@ -34,7 +34,7 @@ import type { CinnaAgentManifest } from '../../shared/kit/manifest'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const contractDir = join(repoRoot, 'resources/cinna-kit-contract')
-const CONTRACT_VERSION = readFileSync(join(contractDir, 'VERSION'), 'utf8').trim()
+const CONTRACT_VERSION = readFileSync(join(contractDir, 'CONTRACT_VERSION'), 'utf8').trim()
 const layout = createLayoutView(
   parseLayout(JSON.parse(readFileSync(join(contractDir, 'layout.json'), 'utf8')))
 )
@@ -262,6 +262,8 @@ describe('validateAgentFolder — manifest errors', () => {
     const report = validateAgentFolder(agentDir, OPTIONS)
     expect(report.errors).toEqual([])
     expect(codes(report.warnings)).toContain('manifest.runtime.engine')
+    // And it says where the agent runs instead: OpenCode, not the user's default.
+    expect(report.warnings.find((f) => f.code === 'manifest.runtime.engine')?.message).toMatch(/runs on OpenCode/)
   })
 
   it('warns when the Claude engine is paired with a credential', () => {
@@ -286,7 +288,7 @@ describe('validateAgentFolder — manifest errors', () => {
     patchManifest(agentDir, (m) => {
       m.runtime = { engine: 7 as never }
     })
-    expectError(validateAgentFolder(agentDir, OPTIONS), 'manifest.runtime.type')
+    expectError(validateAgentFolder(agentDir, OPTIONS), 'manifest.runtime.engine.type')
   })
 
   it('requires a prompt on a static_prompt schedule and a command on a script_trigger', () => {
@@ -329,7 +331,7 @@ describe('validateAgentFolder — manifest errors', () => {
     report = validateAgentFolder(agentDir, OPTIONS)
     expect(codes(report.warnings)).toContain('manifest.handovers.target_missing')
     patchManifest(agentDir, (m) => { m.handovers = [{ target_slug: 'writer', target_kind: 'coordinator' }] })
-    expectError(validateAgentFolder(agentDir, OPTIONS), 'manifest.handovers.coordinator_target')
+    expectError(validateAgentFolder(agentDir, OPTIONS), 'manifest.handovers.target_kind.coordinator_target')
   })
 
   it('rejects a publication with no platform', () => {
@@ -370,7 +372,7 @@ describe('validateAgentFolder — the contract gate', () => {
     })
     const report = validateAgentFolder(agentDir, OPTIONS)
     expect(report.errors).toEqual([])
-    expect(codes(report.warnings)).toContain('manifest.legacy')
+    expect(codes(report.warnings)).toContain('manifest.schema_version.restamp')
   })
 
   it('notes the deprecated cloud stamp', () => {
@@ -440,6 +442,64 @@ describe('validateAgentFolder — file-level checks', () => {
 
     writeFileSync(join(agentDir, '.gitignore'), 'app-data/\n')
     expectError(validateAgentFolder(agentDir, OPTIONS), 'secrets.not_ignored')
+  })
+
+  it('treats every dotenv shape as secret, and leaves examples, samples and templates alone', () => {
+    // core's `secret_files` dotenv rule: `.env`, `.env.<suffix>`, `<name>.env`.
+    writeFileSync(join(agentDir, '.env.production'), 'TOKEN=secret\n')
+    writeFileSync(join(agentDir, 'config/.env.sample'), 'TOKEN=\n')
+    writeFileSync(join(agentDir, 'config/vendor.env.template'), 'TOKEN=\n')
+    // The scaffolded .gitignore covers it and the contract keeps it home.
+    let report = validateAgentFolder(agentDir, OPTIONS)
+    expect(codes(report.errors)).not.toContain('secrets.not_ignored')
+    expect(codes(report.errors)).not.toContain('secrets.exported')
+
+    writeFileSync(join(agentDir, '.gitignore'), 'app-data/\n')
+    report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.warnings.filter((f) => f.code === 'secrets.not_ignored').map((f) => f.path)).toEqual([
+      '.env.production'
+    ])
+  })
+
+  it('keeps an agent scaffolded with the pre-1.5.0 .gitignore valid over a .env.<suffix>', () => {
+    // The secret rules of the agent `.gitignore` template bundled before
+    // contract 1.5.0, verbatim: they ignore `.env` and `*.env` but not `.env.local`. An ERROR here would turn
+    // every such folder `invalid` and drop it from the engine over a gap in its
+    // own template, so it warns and names the rule to add.
+    const preUnificationRules = [
+      'credentials.json',
+      '.env',
+      '*.env',
+      '!.env.example',
+      '!*.env.example',
+      '*.pem',
+      '*.key',
+      '*.p12',
+      'app-data/',
+      '*.tmp'
+    ].join('\n')
+    writeFileSync(join(agentDir, '.gitignore'), `${preUnificationRules}\n`)
+    writeFileSync(join(agentDir, '.env.local'), 'TOKEN=secret\n')
+    writeFileSync(join(agentDir, 'credentials/.env'), 'TOKEN=secret\n')
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(codes(report.errors)).not.toContain('secrets.not_ignored')
+    expect(codes(report.errors)).not.toContain('secrets.exported')
+    const warning = report.warnings.find((f) => f.code === 'secrets.not_ignored')
+    expect(warning?.path).toBe('.env.local')
+    expect(warning?.message).toContain("Add `.env.*` to the agent's .gitignore")
+  })
+
+  it('still errors for the shapes the old template covered, once their rule is gone', () => {
+    writeFileSync(join(agentDir, '.gitignore'), 'app-data/\n')
+    writeFileSync(join(agentDir, '.env'), 'TOKEN=secret\n')
+    writeFileSync(join(agentDir, 'config/vendor.env'), 'TOKEN=secret\n')
+    writeFileSync(join(agentDir, 'config/id.key'), 'k\n')
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.errors.filter((f) => f.code === 'secrets.not_ignored').map((f) => f.path).sort()).toEqual([
+      '.env',
+      'config/id.key',
+      'config/vendor.env'
+    ])
   })
 
   it('flags private key material the same way', () => {
@@ -515,9 +575,9 @@ describe('the contract drives the scaffold', () => {
   it('ships the pyproject.toml the local command rule tests for', () => {
     expect(statSync(join(agentDir, 'pyproject.toml')).isFile()).toBe(true)
     const command = readCommandCatalog(agentDir).commands[0].command
-    expect(command).toBe('python scripts/update_status.py')
+    expect(command).toBe('python scripts/update_status.py --status ok --summary "Ready"')
     expect(layout.localizeCommand(command, { hasPyproject: true })).toBe(
-      'uv run scripts/update_status.py'
+      'uv run scripts/update_status.py --status ok --summary "Ready"'
     )
   })
 })
@@ -676,7 +736,7 @@ describe('the shipped schema', () => {
     })
     const legacy = validateAgentFolder(agentDir, OPTIONS)
     expect(legacy.errors).toEqual([])
-    expect(codes(legacy.warnings)).toContain('manifest.legacy')
+    expect(codes(legacy.warnings)).toContain('manifest.schema_version.restamp')
 
     // Re-stamped but missing the id: the schema's `else` requires it, so does the validator.
     patchManifest(agentDir, (m) => {

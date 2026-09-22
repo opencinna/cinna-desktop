@@ -4,6 +4,9 @@
 Precedence: the injected CINNA_CREDENTIALS_PATH array, credentials/credentials.json
 (array or envelope), the legacy root object, environment, then credentials/.env.
 Attached entries replace a whole slot; placeholders never merge environment fields.
+An attached entry the host could not deliver carries ``unavailable_reason`` (the
+Core refusal reason, e.g. ``local_use_not_allowed``); it blocks the env fallback
+like a placeholder, and the error names the reason.
 
 Use one call either way::
 
@@ -51,13 +54,37 @@ def _slots() -> list[dict]:
 
 
 def _slot(name: str) -> dict:
-    for slot in _slots():
+    slots = _slots()
+    for slot in slots:
         if slot.get("name") == name:
             return slot
-    for slot in _slots():
-        if slot.get("type") == name or slot.get("service_uri") == name:
-            return slot
-    return {}
+    # A type or service_uri names a slot only when it is unambiguous; with two
+    # slots of one type the first would silently resolve the wrong credential.
+    matches = [s for s in slots if s.get("type") == name or s.get("service_uri") == name]
+    if len(matches) > 1:
+        names = ", ".join(repr(s.get("name")) for s in matches)
+        raise CredentialError(
+            f"credential {name!r} matches several declared slots ({names}). "
+            f"Ask for it by slot name."
+        )
+    return matches[0] if matches else {}
+
+
+# Why the host could not deliver an attached credential (Core refusal reasons).
+_UNAVAILABLE_HINTS = {
+    "local_use_not_allowed": "its owner has not allowed use on this computer",
+    "no_access": "it is no longer shared with you",
+    "not_found": "it no longer exists",
+    "unsupported_type": "this credential type cannot be used on this computer",
+}
+
+
+def _unavailable_hint(entries: list[dict]) -> str | None:
+    for entry in entries:
+        reason = entry.get("unavailable_reason")
+        if isinstance(reason, str) and reason:
+            return f"{_UNAVAILABLE_HINTS.get(reason, 'it could not be delivered')} ({reason})"
+    return None
 
 
 def derive_env_prefix(name: str) -> str:
@@ -114,7 +141,7 @@ def _entries() -> list[dict]:
 
 
 def _match(entries: list[dict]) -> dict | None:
-    filled = [e for e in entries if not e.get("is_placeholder")]
+    filled = [e for e in entries if not e.get("is_placeholder") and not e.get("unavailable_reason")]
     if not filled:
         return {} if entries else None
     data = filled[0].get("credential_data")
@@ -130,27 +157,41 @@ def by_slot(slot: str, credential_type: str | None = None) -> dict | None:
 def require_slot(slot: str, credential_type: str | None = None) -> dict:
     result = by_slot(slot, credential_type)
     if not result:
+        hint = _unavailable_hint([e for e in _entries() if e.get("service_uri") == slot
+                                  and (credential_type is None or e.get("type") == credential_type)])
+        if hint:
+            raise CredentialError(f"credential slot {slot!r} is unavailable: {hint}.")
         raise CredentialError(f"credential slot {slot!r} is not configured. Attach a filled credential to this agent.")
     return result
 
 
-def _cloud_payload(name: str) -> dict[str, Any] | None:
+def _candidate_groups(name: str) -> tuple[list[dict], ...]:
     entries = _entries()
     slot = _slot(name)
     if slot:
         # A declared name identifies a service, not every token of its type.
         candidates = [e for e in entries if e.get("type") == slot.get("type")]
         explicit = slot.get("service_uri")
-        groups = ([e for e in candidates if e.get("service_uri") == explicit],) if explicit else (
+        return ([e for e in candidates if e.get("service_uri") == explicit],) if explicit else (
             [e for e in candidates if e.get("name") == slot.get("name")],
             [e for e in candidates if e.get("service_uri") == slot.get("name")],
         )
-    else:
-        # Keep explicit type lookups compatible for callers without manifest slots.
-        groups = ([e for e in entries if e.get("name") == name],
-                  [e for e in entries if e.get("service_uri") == name],
-                  [e for e in entries if e.get("type") == name])
-    for candidates in groups:
+    # Keep explicit type lookups compatible for callers without manifest slots.
+    return ([e for e in entries if e.get("name") == name],
+            [e for e in entries if e.get("service_uri") == name],
+            [e for e in entries if e.get("type") == name])
+
+
+def unavailable_reason(name: str) -> str | None:
+    """Why an attached credential for ``name`` was not delivered, or None."""
+    for candidates in _candidate_groups(name):
+        if candidates:
+            return _unavailable_hint(candidates)
+    return None
+
+
+def _cloud_payload(name: str) -> dict[str, Any] | None:
+    for candidates in _candidate_groups(name):
         result = _match(candidates)
         if result is not None:
             return result
@@ -206,6 +247,9 @@ def get_credential(
         payload = _local_payload(name)
     if not payload:
         if required:
+            hint = unavailable_reason(name)
+            if hint:
+                raise CredentialError(f"credential {name!r} is unavailable: {hint}.")
             raise CredentialError(
                 f"credential {name!r} is not configured. "
                 f"Set {_env_prefix(name)}<FIELD> in credentials/.env "
@@ -249,7 +293,9 @@ def main() -> int:
         return 0
     for slot in slots:
         name = str(slot.get("name", ""))
-        state = "configured" if has_credential(name) else "missing"
+        configured = has_credential(name)
+        hint = None if configured else unavailable_reason(name)
+        state = "configured" if configured else (f"unavailable: {hint}" if hint else "missing")
         print(f"{name}: {state}")
     return 0
 

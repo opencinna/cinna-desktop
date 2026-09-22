@@ -71,6 +71,7 @@ describe('scaffoldAgent', () => {
     expect(leftovers).toEqual([])
   })
 
+  // Core's template sets the project description to the agent *name*.
   it('writes a pyproject.toml uv can parse, with the slug as the project name', () => {
     const { agentDir } = scaffoldService.scaffoldAgent({
       rootPath: workshop,
@@ -80,18 +81,32 @@ describe('scaffoldAgent', () => {
     })
     const toml = readFileSync(join(agentDir, 'pyproject.toml'), 'utf8')
     expect(toml).toContain('name = "alpha"')
-    expect(toml).toContain('description = "Reads invoices."')
+    expect(toml).toContain('description = "Alpha"')
   })
 
-  it('escapes the description for TOML rather than breaking the file', () => {
+  it('escapes the name for TOML rather than breaking the file', () => {
     const { agentDir } = scaffoldService.scaffoldAgent({
       rootPath: workshop,
       slug: 'alpha',
-      name: 'Alpha',
-      description: 'Says "hi" and C:\\path\nsecond line'
+      name: 'Says "hi" and C:\\path\nsecond line',
+      description: 'Reads invoices.'
     })
     const toml = readFileSync(join(agentDir, 'pyproject.toml'), 'utf8')
     expect(toml).toContain('description = "Says \\"hi\\" and C:\\\\path\\nsecond line"')
+  })
+
+  it('keeps a multi-line name inside the Makefile comment', () => {
+    const { agentDir } = scaffoldService.scaffoldAgent({
+      rootPath: workshop,
+      slug: 'alpha',
+      name: 'Alpha\nall:\n\trm -rf /',
+      description: 'Reads invoices.'
+    })
+    const makefile = readFileSync(join(agentDir, 'Makefile'), 'utf8')
+    const template = readFileSync(join(repoRoot, 'resources/cinna-kit-contract/templates/agent/Makefile'), 'utf8')
+    expect(makefile.split('\n')[0]).toBe('# Local convenience targets for Alpha all:  rm -rf /.')
+    // Nothing but the one token changed.
+    expect(makefile.split('\n').slice(1)).toEqual(template.split('\n').slice(1))
   })
 
   it('still copies scripts byte-for-byte', () => {

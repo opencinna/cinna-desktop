@@ -5,7 +5,6 @@
  */
 import type { AgentRow } from '../../db/agents'
 import {
-  isAcpLauncherId,
   isAgentDriverId,
   launcherOfConfig,
   type AcpLauncherId,
@@ -34,9 +33,10 @@ export function launcherOfRow(agent: Pick<AgentRow, 'driverConfig'>): AcpLaunche
 /**
  * The launcher a folder's runtime block names.
  *
- * The same tolerant read `runtimeService` makes: a runtime that names no engine
- * — or one this build has no name for — is the default engine, so a folder
- * written by a newer tool keeps running rather than disappearing from the list.
+ * The same tolerant read `runtimeService` makes (`effectiveEngine`): a runtime
+ * that names no engine is the machine default, and one naming an engine this
+ * build cannot run on a folder is OpenCode, so a folder written by a newer tool
+ * keeps running rather than disappearing from the list.
  *
  * **Never null, and that is the distinction that matters.** "The runtime was
  * read and names nothing" is an answer: the default. "The manifest could not be
@@ -57,11 +57,11 @@ export function launcherOfFolder(
    */
   defaultEngine: AgentEngine = DEFAULT_AGENT_ENGINE
 ): AcpLauncherId {
-  const raw = typeof runtime?.engine === 'string' ? runtime.engine.trim() : ''
-  // A launcher name this build knows, including the two it has no launcher for
-  // (`gemini`, `codex`): the driver refuses those in words, and reading them
-  // back as "the default" would run the agent on an engine its folder does not
-  // name. Only a runtime naming *nothing* usable reaches the machine default.
-  if (isAcpLauncherId(raw)) return raw
+  // Only an engine a folder can actually run on is honoured as named — the
+  // three `AgentEngine`s, which `effectiveEngine` returns as declared.
+  // `runtime.engine` is a preference, never refused: any other name, including
+  // the launcher ids no folder can use (`gemini` has no launcher; `custom` needs
+  // a command or endpoint only an external agent's row carries), runs on
+  // OpenCode, and only a runtime naming *nothing* reaches the machine default.
   return effectiveEngine(runtime, defaultEngine)
 }

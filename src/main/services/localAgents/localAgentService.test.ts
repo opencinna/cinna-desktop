@@ -478,7 +478,7 @@ describe('stamp_identity', () => {
     expect(readManifest(manifestPath(agentDir)).contract_version).toMatch(/^\d+\.\d+\.\d+$/)
     expect(after.readiness).toBe('ok')
     expect(after.validation.errors).toEqual([])
-    expect(after.validation.warnings.some((w) => w.code === 'manifest.legacy')).toBe(false)
+    expect(after.validation.warnings.some((w) => w.code === 'manifest.schema_version.restamp')).toBe(false)
   })
 
   /**

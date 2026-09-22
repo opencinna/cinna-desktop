@@ -1,7 +1,7 @@
 {
   "contract_version": "{{CONTRACT_VERSION}}",
   "id": "{{ID}}",
-  "kit_version": "{{KIT_VERSION}}",
+  "kit_version": "489ce0983d531c3c",
   "created_at": "{{CREATED_AT}}",
   "name": "{{NAME}}",
   "slug": "{{SLUG}}",
@@ -14,13 +14,12 @@
     "refiner": "docs/REFINER_PROMPT.md"
   },
   "runtime": null,
-  "status_refresh_command": null,
+  "status_refresh_command": "/run:status",
   "credentials": [],
   "schedules": [],
   "handovers": [],
   "features": {
     "webapp": false,
     "agent_api": false
-  },
-  "publications": []
+  }
 }

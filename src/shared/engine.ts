@@ -162,12 +162,23 @@ export function resolveDefaultEngine(setting: string, claudeAvailable: boolean, 
   return claudeAvailable ? 'claude' : codexAvailable ? 'codex' : DEFAULT_AGENT_ENGINE
 }
 
+/**
+ * The engine a folder agent runs on: what its manifest names, else what its
+ * credential or model implies, else this machine's Default Runtime.
+ *
+ * `runtime.engine` is a *preference* (contract decision: fallback to OpenCode).
+ * Absent or blank, the machine default applies. Named but not one this build
+ * recognises, the agent runs on **OpenCode** — never on the user's default,
+ * which could be a subscription the folder never asked for, and never refused,
+ * which would brick a folder a newer tool wrote.
+ */
 export function effectiveEngine(
   runtime: { engine?: unknown; credential?: unknown; model?: unknown } | null | undefined,
   defaultEngine: AgentEngine
 ): AgentEngine {
   const declared = typeof runtime?.engine === 'string' ? runtime.engine.trim() : ''
   if (isAgentEngine(declared)) return declared
+  if (declared !== '') return DEFAULT_AGENT_ENGINE
   const credential = typeof runtime?.credential === 'string' ? runtime.credential.trim() : ''
   const model = typeof runtime?.model === 'string' ? runtime.model.trim() : ''
   if (credential !== '' || model !== '') return DEFAULT_AGENT_ENGINE
@@ -381,6 +392,13 @@ export interface ResolvedRuntime {
 }
 
 /**
+ * `LocalAgentRuntimeInput.engine`'s "leave the file's engine as it is" value.
+ * Not an engine name (`isAgentEngine` rejects it), so it cannot be confused
+ * with a choice.
+ */
+export const KEEP_ENGINE = 'keep' as const
+
+/**
  * What the user picked in the Runtime card, on its way to the manifest.
  *
  * Both nullable: clearing them removes the `runtime` block and the agent falls
@@ -390,23 +408,25 @@ export interface ResolvedRuntime {
  */
 export interface LocalAgentRuntimeInput {
   /**
-   * Which engine to run on. `null` clears it, exactly as the other three fields
-   * behave — clearing every field removes the `runtime` block.
+   * Which engine to run on: an engine replaces what the file names, `null`
+   * removes it (clearing every field removes the `runtime` block), and
+   * {@link KEEP_ENGINE} leaves the file's value exactly as it is.
    *
-   * **Required, not optional, and that is the whole point.** `applyToManifest`
-   * deletes this key before rewriting it, so a caller that simply omits it
-   * *erases the user's engine choice* from a file they commit. While `engine`
-   * was merely an unknown key the manifest layer preserved it verbatim; making
-   * it known removed that protection for exactly the field being added. An
-   * optional field here is both silent and destructive when absent, so the
-   * compiler is made to ask every caller instead.
+   * **"Keep" is its own value, not `null` and not an absent key.** Every save
+   * that is not an engine pick — a model, a tier, a credential — must leave the
+   * engine alone, including one this build does not recognise (`gemini` from a
+   * newer tool): the renderer cannot write such a value back, because it is not
+   * an `AgentEngine`, and treating it as `null` erased the user's preference
+   * from a file they commit. An absent key also keeps (main treats `undefined`
+   * as keep), but the field stays required so every caller says which it
+   * means, and the explicit string survives any serialisation on the way.
    *
    * `claude` and {@link credential} are refused together — see
    * `runtimeService.validate`. They are not mutually meaningful: there is no
    * credential on the Claude path, and a manifest carrying one would make the
    * Runs-with panel name a key that pays for nothing.
    */
-  engine: AgentEngine | null
+  engine: AgentEngine | null | typeof KEEP_ENGINE
   /** A credential **name** — what the manifest carries, so it travels. */
   credential: string | null
   /** A concrete model id — the Advanced picker's answer. */

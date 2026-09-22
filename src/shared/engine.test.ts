@@ -73,13 +73,20 @@ describe('effectiveEngine', () => {
     expect(effectiveEngine({ engine: '', credential: '', model: '' }, 'claude')).toBe('claude')
   })
 
-  it('reads an engine this build has no launcher for as “not named”', () => {
-    // `gemini` and `codex` are names the manifest may legally carry and this
-    // build cannot run. The ACP dispatch refuses them in words on its own path
-    // (`launcherOfFolder` returns them verbatim); here — where the question is
-    // which of the *two* engines applies — an unrecognised value must not pin
-    // anything, or a folder written by a newer tool would be stuck.
-    expect(effectiveEngine({ engine: 'gemini' }, 'claude')).toBe('claude')
+  it('runs an engine this build does not recognise on OpenCode, not on the machine default', () => {
+    // `runtime.engine` is a preference: a named engine this build cannot run
+    // falls back to OpenCode (contract decision 4), so a folder a newer tool
+    // wrote keeps running without inheriting a Claude or Codex default it never
+    // asked for. That includes `gemini` and `custom`: they are launcher ids,
+    // but a folder cannot run on either, so `launcherOfFolder` sends them here.
+    expect(effectiveEngine({ engine: 'gemini' }, 'claude')).toBe('opencode')
+    expect(effectiveEngine({ engine: 'aider' }, 'codex')).toBe('opencode')
+    expect(effectiveEngine({ engine: ' something-new ' }, 'claude')).toBe('opencode')
+  })
+
+  it('still reads an absent or blank engine as the machine default', () => {
+    expect(effectiveEngine({ engine: null }, 'claude')).toBe('claude')
+    expect(effectiveEngine({ engine: '   ' }, 'codex')).toBe('codex')
   })
 })
 

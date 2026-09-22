@@ -4,17 +4,26 @@ Implementation reference for [Kit Contract & Manifest Layer](kit_contract.md).
 
 ## File Locations
 
-### Bundled contract (data, not code)
+### Bundled contract (data, not code — core's render, never edited here)
 
 | Path | What it is |
 |------|-----------|
-| `resources/cinna-kit-contract/kit.json` | Contract identity, `contract_version`, pointers to the schema/layout/templates, and the `refresh` endpoint shape a later phase will use |
-| `resources/cinna-kit-contract/VERSION` | Plain-text version. Fallback only — `kit.json`'s `contract_version` is the authority |
-| `resources/cinna-kit-contract/CHANGELOG.md` | Per-version Breaking / Added / Changed entries, plus the Compatibility table both sides apply |
-| `resources/cinna-kit-contract/schema/cinna-agent.schema.json` | JSON Schema 2020-12 for `cinna-agent.json` |
-| `resources/cinna-kit-contract/layout.json` | Folder model: workshop and agent roles, `survives_update` flags, `scaffold_ignore_files`, `desktop_owned`, `cloud_import_excludes`, `local_command_runner` |
+| `resources/cinna-kit-contract/kit.json` | Core's kit descriptor: `contract_version` (the authority), `kit_version`, core's public-cloud URLs, the CLI pin, the guide ladder. It also names files the contract bundle does not carry (`START.md`, `tools/kit.py`, `guides/`) — they belong to core's *full* kit, and nothing here reads those keys |
+| `resources/cinna-kit-contract/CONTRACT_VERSION` | Plain-text contract version. Fallback only — `kit.json`'s `contract_version` is the authority |
+| `resources/cinna-kit-contract/CHANGELOG.md` | Core's per-version entries, including the note on the versions the desktop minted before 1.5.0, plus the Compatibility table every host applies |
+| `resources/cinna-kit-contract/schema/cinna-agent.schema.json` | JSON Schema 2020-12 for `cinna-agent.json`; every property annotated with `x-scope` / `x-import` |
+| `resources/cinna-kit-contract/schema/publications.schema.json` | Schema for the sibling `publications.json` ledger |
+| `resources/cinna-kit-contract/layout.json` | Folder model: workshop and agent roles, `survives_update` flags, `scaffold_ignore_files`, `desktop_owned`, `cloud_import_excludes`, `secret_files`, `local_command_runner` |
+| `resources/cinna-kit-contract/conformance/` | `README.md` (format and matching rule) and `manifests/*.json`, the cases `conformance.test.ts` runs |
 | `resources/cinna-kit-contract/templates/root/` | Workshop skeleton: `AGENTS.md`, `CLAUDE.md`, `README.md`, dotless `gitignore` |
-| `resources/cinna-kit-contract/templates/agent/` | Agent skeleton: `cinna-agent.json` with `{{TOKEN}}` placeholders, `AGENTS.md`, `CLAUDE.md`, `README.md`, `Makefile`, `pyproject.toml`, `docs/`, `scripts/`, `credentials/`, `knowledge/`, `config/`, `files/`, `app-data/{storage,cache,uploads}/` |
+| `resources/cinna-kit-contract/templates/agent/` | Agent skeleton: `cinna-agent.json` with `{{TOKEN}}` placeholders, `AGENTS.md`, `CLAUDE.md`, `README.md`, `Makefile`, `pyproject.toml`, `.python-version`, `workspace_requirements.txt`, `.claude/settings.local.json`, `docs/`, `scripts/`, `credentials/`, `knowledge/`, `skills/`, `config/`, `files/`, `app-data/{storage,cache,uploads}/` |
+
+### Bundle tooling
+
+- `scripts/kit-sync/sync.mjs` — `make kit-sync`. Renders core's `docs/local_agent_kit/` as core's `LocalAgentKitService` does, keeps the contract members, and swaps the result into `resources/cinna-kit-contract/`. See [Updating the bundle](#updating-the-bundle)
+- `scripts/kit-sync/bundleFiles.ts` — `applyTarballModes()` (directories and `.py` 0755, other files 0644, as in core's tarball) and `swapInto()` (the previous tree is parked outside `resources/` and restored if the second rename fails, so the bundle is never missing)
+- `scripts/kit-sync/contract.lock.json` — what the last sync rendered: core commit, whether core's tree was dirty, `contract_version`, `kit_version`, `file_count`, `tree_hash`
+- `src/main/kit/contractTreeHash.ts` — the tree hash, shared by the script and the test: sha256 over `<path>\0<sha256 of file>\n` per file, POSIX paths sorted by UTF-8 bytes. Imports only `node:` builtins so `node --experimental-strip-types` can run it; a symlink or other non-regular entry is an error
 
 ### Shared (main + renderer, type-only and pure)
 
@@ -34,7 +43,10 @@ Implementation reference for [Kit Contract & Manifest Layer](kit_contract.md).
 
 ### Tests
 
-`src/main/kit/contractStore.test.ts`, `contractVersion.test.ts`, `exportTree.test.ts`, `layout.test.ts`, `manifestIo.test.ts`, `miniYaml.test.ts`, `validator.test.ts`.
+`src/main/kit/contractStore.test.ts`, `contractVersion.test.ts`, `exportTree.test.ts`, `layout.test.ts`, `manifestIo.test.ts`, `miniYaml.test.ts`, `validator.test.ts`, and two that are about the bundle itself:
+
+- `contractBundle.test.ts` — the bundle matches the lock's tree hash and file count (a hand edit fails here, naming `make kit-sync`); `CONTRACT_VERSION`, `kit.json`, `layout.json` and the lock agree on one version; the bundle has core's tarball modes; `swapInto` restores the previous tree on failure; and `isSecretFile()` agrees with the bundled `secret_files`, the export exclusion and each `gitignore` template on its own
+- `conformance.test.ts` — runs every `conformance/manifests/*.json` case through `validateManifest()`. A finding's code is turned into a field path by dropping `manifest.` and keeping the longest leading run of segments that names a field in the bundled schema; nothing is special-cased, so a code that does not name its field is a validator bug
 
 ## Database Schema
 
@@ -58,7 +70,7 @@ Implementation reference for [Kit Contract & Manifest Layer](kit_contract.md).
 - `readContractFile(relPath, workshopRoot?)` — contract-relative read with containment checks; `KitError('invalid_path')` for anything escaping the tree
 - `getContractVersion()`, `getSchema()`, `getLayout()`, `getLayoutView()`, `getTemplateRoot(kind)` — cached accessors
 
-`kit.json`'s `contract_version` is read first; `VERSION` is the fallback, because a workshop's `.cinna-kit/VERSION` may hold the *kit* version rather than the contract's when the full kit is installed there.
+`kit.json`'s `contract_version` is read first; `CONTRACT_VERSION` is the fallback. `VERSION` is **never** read: in core's full kit, which `kit.py` may install as a workshop's `.cinna-kit/`, it holds the *kit* content hash.
 
 ### `src/main/kit/manifestIo.ts`
 
@@ -83,12 +95,15 @@ Internal: `writeAtomically()` (temp → `writeSync` → `fsyncSync` → `renameS
 - `createLayoutView(layout)` → `LayoutView`:
   - `agentRoles()` / `workshopRoles()` — sorted longest-path-first, so the first hit is the most specific
   - `roleFor(relPath)` — the agent-folder role covering a path
-  - `isExcludedFromExport(relPath)` — `cloud_import_excludes` applied
+  - `isExcludedFromExport(relPath)` — `cloud_import_excludes` **or** `secret_files`. Applied in `collectExportFiles`, so it governs the files hashed as well as the ones copied
+  - `isSecretFile(relPath)` — `secret_files` alone
   - `survivesUpdate(relPath)` — unknown paths survive: a refresh never removes something the contract does not claim
   - `localizeCommand(command, {hasPyproject})` — first matching rule wins; an unevaluable condition runs the command unchanged and warns once per rule via `warnUnknownCondition()`
   - `scaffoldIgnoreFiles(kind)` — the dotless→dotted pairs for one template tree
   - `desktopOwned()`
 - `normalizeRelPath(relPath)` — POSIX, root-relative, no `./`, no trailing slash
+- `isSecretByRules(rules, relPath)` — the `secret_files` evaluator, answering as cinna-cli's `is_secret_filename` does: clauses (`basename_equals` / `basename_prefix` / `basename_suffix`) test the basename at any depth, rules OR together. Fail-safe by position: a rule that is not an object is secret outright; an unevaluable `match` clause (absent, empty, not an object, unknown key, no usable string) counts as a hit, an unevaluable `unless` as a miss
+- `DEFAULT_SECRET_FILE_RULES` — the dotenv rule, used when a layout has no non-empty `secret_files.rules`. `parseLayout` keeps the declared rules **unnarrowed** (`SecretFileRule = unknown`): filtering an unreadable entry at parse time would switch its fail-safe off one function early
 - `matchesPattern(pattern, relPath)` — the exclude-glob matcher: trailing slash = directory and everything under it, `*` within a segment, `**` across segments, anchored at the root unless it opens with `**`
 
 ### `src/main/kit/validator.ts`
@@ -105,7 +120,9 @@ Manifest handovers retain the existing slug schema. Contract 1.3 adds optional s
 
 Manifest checks: `checkIdentity()`, `checkString()`, `checkPrompts()`, `checkExamplePrompts()`, `checkRuntime()`, `checkCredentials()`, `checkSchedules()`, `checkHandovers()`, `checkPublications()`.
 
-`checkRuntime()` grades `runtime.complexity` as a **warning** in both of its cases — an unrecognised tier, and `model` plus `complexity` together — never an error, because an error here removes the folder from the engine rather than annotating it. See [Reading is tolerant, writing is strict](kit_contract.md#reading-is-tolerant-writing-is-strict).
+`checkRuntime()` grades `runtime.complexity` as a **warning** in both of its cases — an unrecognised tier, and `model` plus `complexity` together — never an error, because an error here removes the folder from the engine rather than annotating it. `runtime.engine` is the same: an unrecognised name warns `manifest.runtime.engine` ("…runs on OpenCode instead"), and `claude`/`codex` beside a credential warns. See [Reading is tolerant, writing is strict](kit_contract.md#reading-is-tolerant-writing-is-strict).
+
+**A finding's code names its field**, because the conformance set matches findings by field path and derives the path from the code. So a type error in the runtime block is `manifest.runtime.<key>.type` (`model`, `credential`, `engine`, `permissions`), and `manifest.runtime.type` is left for `runtime` itself not being an object; the coordinator-pair error is `manifest.handovers.target_kind.coordinator_target`, under the field that asked for a coordinator; and the legacy warning is `manifest.schema_version.restamp`. Each of those had a code naming no field, or the wrong one, until the conformance set ran against this validator. Anything that reads findings by code — tests, UI filters — must use these.
 
 Folder checks (`checkFiles()`), in order: prompt files exist and are non-empty → catalogued commands have Makefile targets and readable definitions → `status_refresh_command`'s `/run:<name>` resolves → every `scripts/*.py` is mentioned in `scripts/README.md` → `app-data/storage/STATUS.md` parses as frontmatter with a `status` field → `checkSecrets()` → an info when the folder predates the active contract.
 
@@ -115,7 +132,7 @@ Notable constants: `KNOWN_CREDENTIAL_TYPES` (unknown → warning, never rejectio
 
 #### `checkIdentity()` and the legacy exemption
 
-`isLegacy` is `contract_version === undefined && id === undefined && schema_version !== undefined`. A legacy manifest gets one `manifest.legacy` warning and returns. Anything else requires both fields and runs the gate:
+`isLegacy` is `contract_version === undefined && id === undefined && schema_version !== undefined`. A legacy manifest gets one `manifest.schema_version.restamp` warning and returns. Anything else requires both fields and runs the gate:
 
 | Gate status | Finding |
 |-------------|---------|
@@ -125,7 +142,7 @@ Notable constants: `KNOWN_CREDENTIAL_TYPES` (unknown → warning, never rejectio
 | `unknown` | error `manifest.contract_version.invalid` |
 | no `contractVersion` supplied | info `contract.unchecked` |
 
-This must stay identical to the conditional `allOf` in `schema/cinna-agent.schema.json` and to the CHANGELOG's Compatibility table. The schema's `$comment` says so; change all three in one commit.
+This must stay identical to the conditional `allOf` in `schema/cinna-agent.schema.json` and to the CHANGELOG's Compatibility table. The schema's `$comment` says so. Those two are core's: a change starts there, arrives through `make kit-sync`, and `checkIdentity()` follows in the same commit as the sync.
 
 #### `readCommandCatalog()` and issue attribution
 
@@ -133,9 +150,14 @@ This must stay identical to the conditional `allOf` in `schema/cinna-agent.schem
 
 #### `isSecretFile()` and `isIgnoredPath()`
 
-`isSecretFile(rel)` — true for `credentials.json`, `.env` / `*.env`, `*.pem`, `*.key`, `*.p12`; false for anything ending `.env.example`. It carries the **"change one, change all three"** comment: this list, `cloud_import_excludes` in `layout.json`, and `templates/agent/gitignore` are copies of one rule. (`templates/root/gitignore` is a fourth.)
+`isSecretFile(rel, layout?)` — true for `credentials.json`, `*.pem`, `*.key`, `*.p12`, and every dotenv shape (`.env`, `.env.<suffix>`, `<name>.env`) not ending `.example`, `.sample` or `.template`; with a layout, also for anything its `secret_files` rules call secret. The rule is built in so the check holds without a layout. Its other copies — `secret_files`, `cloud_import_excludes`, and the agent and root `gitignore` templates — are all core's; `contractBundle.test.ts` checks this function against them.
 
-`checkSecrets()` walks the folder (`listFilesRecursively()` skips dotfiles and `UNWALKED_DIRS`), then explicitly adds the dotted paths the contract names — `credentials/.env` and `.env` — because the walk would otherwise miss the file that matters most. For each hit it emits `secrets.not_ignored` when no ignore rule covers it, and `secrets.exported` when the contract's exclude list would let it travel.
+`isTemplateCoveredSecret(rel)` (private) — the shapes the desktop's agent `gitignore` template always ignored: `credentials.json`, `*.env` (not `.env.example`), `*.pem`, `*.key`, `*.p12`. It decides the grade below.
+
+`checkSecrets()` walks the folder with `listFilesRecursively(agentDir, '', true)` — dotfiles included for this check only, dot *directories* and `UNWALKED_DIRS` still skipped — and keeps what `isSecretFile(rel, layout)` accepts. For each hit:
+
+- no ignore rule covers it → `secrets.not_ignored`, an **error** when `isTemplateCoveredSecret` accepts the path (someone removed a rule), otherwise a **warning** whose message names the line to add (`.env.*` for a `.env.<suffix>`) — the pre-1.5.0 templates never had that line, so the folder is not at fault
+- the layout would let it travel → `secrets.exported`, an error
 
 `IGNORE_SOURCES` lists the `.gitignore` files that can cover a path, outermost first (`../../.gitignore`, `../.gitignore`, `.gitignore`, `credentials/.gitignore`), each with a function re-basing the agent-relative path into that file's own frame. **Scope is the trap here**: `credentials/.gitignore` governs `credentials/` and nothing else, so a `credentials.json` at the *agent root* is not covered by the `credentials.json` line inside it. Reading every ignore file into one flat set — which an earlier revision did — reports such a file as safe when it is committable.
 
@@ -189,10 +211,27 @@ cinna-core must be able to compute the identical value — see the handover's "S
 
 ## Configuration
 
-- **Contract version**: pinned at `1.3.0` in `resources/cinna-kit-contract/kit.json` and `VERSION`, and mirrored in `layout.json`'s `contract_version`. All three move together with the CHANGELOG entry and any schema change the bump describes; a scaffolded folder records whatever this build bundles, which is what the scanner and agents-home tests assert rather than a pinned literal. `1.1.0` added the optional `runtime.complexity` enum (`simple` | `medium` | `complex`), additively: a 1.0.0 folder is read and written unchanged, and a 1.0.0 tool ignores the key and reads `runtime.model` as before. `1.2.0` added optional `runtime.engine` the same way — and **deliberately without an enum**, since engines are expected to grow and a folder naming one this schema predates must still validate. The desktop recognizes `opencode`, `claude` and `codex`; CLI engine plus credential reads with a warning and ignores the credential, while desktop writes refuse it. See [The Claude Engine](claude_engine.md) and [The Codex Engine](codex_engine.md)
-- **Contract refresh endpoints**: declared but unused in Phase 1 — `kit.json`'s `refresh` block names `base_url`, `/contract/version`, `/contract.tar.gz` and `install_dir: .cinna-kit`. A later phase implements the fetch and the atomic swap
+- **Contract version**: whatever core minted, in `CONTRACT_VERSION`, `kit.json` and `layout.json` — `contractBundle.test.ts` holds all three and the lock to one value. `1.5.0` at the time of writing. A scaffolded folder records whatever this build bundles, which is what the scanner and agents-home tests assert rather than a pinned literal. The fields the desktop introduced — `runtime.complexity`, `runtime.engine` (deliberately without an enum), `handovers[].target_kind` — are core's schema since 1.5.0; see [The Claude Engine](claude_engine.md) and [The Codex Engine](codex_engine.md) for how the engine is read
+- **No refresh endpoint.** The desktop's retired `kit.json` declared a `refresh` block; core's has none, and nothing in the desktop fetches a contract. A workshop's `.cinna-kit/` is only ever read (see [Contract resolution](kit_contract.md#contract-resolution))
 - **`STALE_TEMP_MS`**: 60 000 ms, in `src/main/kit/manifestIo.ts`
 - No environment variables, no app settings, no user-facing configuration
+
+## Updating the bundle
+
+```
+make kit-sync                      # core at $CINNA_CORE_PATH, else ../workflow-runner-core, working tree
+make kit-sync CORE=<path>          # another checkout
+make kit-sync REF=<rev>            # core at a git revision instead of its working tree
+```
+
+The script reads core's kit tree, `backend/app/services/cli/local_agent_kit_service.py` and `backend/app/core/config.py`; mirrors the service's snapshot, render and content-version logic; checks every constant it mirrors against core's source; and **stops rather than guessing** when the member set, the CLI defaults or the token set cannot be read unambiguously. It builds in `scripts/kit-sync/.work/` (gitignored, outside `resources/` so packaging never sees a half-built tree), applies core's tarball modes, swaps the tree in, and rewrites `contract.lock.json`.
+
+Never edit `resources/cinna-kit-contract/` or the lock by hand; a change the desktop needs goes into core first. After a sync, in the same commit:
+
+- run `npm test` — `contractBundle.test.ts` and `conformance.test.ts` are where a new render first disagrees with the desktop's code
+- if `WORKFLOW_PROMPT.md` changed, re-check `SCAFFOLD_PLACEHOLDER_LINE` in `draftService.ts`, which is copied from it
+- if the template token set changed, re-check `SUBSTITUTED_FILES` in `scaffoldService.ts`
+- check the lock's `core_dirty`: `true` means the render came from uncommitted core work and cannot be reproduced from a commit
 
 ## Packaging
 

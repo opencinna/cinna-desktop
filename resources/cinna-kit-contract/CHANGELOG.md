@@ -1,12 +1,133 @@
-# Contract changelog
+# Kit changelog
 
-Structural conventions that changed between contract versions. Read this after
-every contract refresh that reports a new version. Newest entry first.
+Conventions that changed between kit versions. Read this after every
+`kit.py refresh` that reports a new version. Newest entry first.
+
+Your current kit is version `489ce0983d531c3c`.
+
+Entries are headed by the **contract version** they belong to — the number in
+`CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
+this kit scaffolds. The kit version above is a different number answering a
+different question: it moves with every guide, template and tool change, and it
+gates nothing.
 
 The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.5.0 — one contract for every host
+
+Additive. Every 1.x folder is still valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.5.0 folder, because the majors match.
+From this release the contract is minted in one place — this kit — and every
+host re-bundles it rather than keeping its own copy.
+
+### Added
+
+- **Three fields Cinna Desktop introduced are now part of the one schema**
+  (their history is in the note below):
+  - `runtime.engine` — which engine the author *prefers*: `opencode`, `claude`
+    (Claude Code) or `codex` (the Codex CLI). **A preference, never a
+    requirement.** Absent means the host's default engine; a named engine the
+    host does not support — including a value it does not recognise — runs the
+    agent **on OpenCode**, and the host never refuses the folder. It is
+    deliberately not an enum. `claude` or `codex` together with
+    `runtime.credential` is a warning: those engines run under their own CLI
+    login, so the credential is ignored. On cloud import the preference picks
+    the new agent's environment SDK — `claude` becomes Claude Code, anything
+    else OpenCode — and an existing agent's engine is left as it is.
+  - `runtime.complexity` — `simple` | `medium` | `complex`, a portable
+    alternative to a concrete model id that the host resolves against the
+    models its credential offers. Like `engine` it is deliberately not an enum,
+    so an older strict validator never rejects a tier a newer minor adds. An
+    unrecognised tier is a warning and reads as no tier; a manifest carrying it
+    together with `runtime.model` is a warning, and the model wins.
+  - `handovers[].target_kind` — an optional host role, without an enum. The
+    exact pair `target_kind: "coordinator"`, `target_slug: "coordinator"` is
+    Cinna Desktop's explicit return to the coordinator owning the current task;
+    `target_kind: "coordinator"` with any other slug is an error, a non-string
+    kind is an error, and any other kind is accepted and grants nothing.
+
+  `kit.py validate` checks all three with the desktop validator's severities.
+- **Every schema property is annotated with `x-scope` and `x-import`.** These
+  are JSON Schema annotations and change no validation outcome. `x-scope` is
+  `portable` (every host gives the field one meaning), `host` (interpreted by the
+  host that wrote it: `runtime.permissions`), or `host:<name>` (registered to one
+  host so nobody reuses the name: `handovers[].target_kind` is
+  `host:cinna-desktop`). `x-import` records what `cinna agent import` actually
+  does with the field — `imported`, `ignored`, or the mapping. Reading them
+  answers "does this reach the cloud?" without reading the importer:
+  `runtime.engine` is carried, while `runtime.model`, `runtime.complexity`,
+  `runtime.credential` and `runtime.permissions` stay local.
+  `publications.schema.json` is annotated too; its `x-import` describes how the
+  import reads and writes the ledger, since the file itself never travels.
+- **A host-registered or not-yet-registered field is preserved and ignored.** A
+  host may ship a field before this contract names it, or register one for
+  itself; every other host keeps the key untouched when it rewrites the
+  manifest, gives it no meaning, and the cloud import ignores it.
+- **`conformance/` — the contract's own test set.** `conformance/manifests/*.json`
+  pairs a manifest with the field paths a validator must report for it: errors
+  (the exact set), warnings that must appear, and warnings that must not.
+  `conformance/README.md` states the format and the matching rule. Every
+  validator of this contract — `kit.py` and the desktop's — runs the whole set
+  in its tests, so two hosts can no longer disagree about a manifest silently.
+  The directory ships in the contract bundle.
+
+### Changed
+
+- **`runtime.model` no longer claims to seed the cloud's model override.** The
+  cloud import has never read it; the description now says so. Likewise
+  `schedules[].timezone` is documented as what it is on import — the cloud
+  schedule's timezone, UTC when absent — rather than local-only metadata.
+- **`schedules` and `handovers` are described for both hosts.** Platform import
+  creates schedules; Cinna Desktop may also run `static_prompt` schedules
+  locally after a separate per-profile, per-device opt-in, only while the app is
+  open. Handovers name sibling agents unless a host-registered `target_kind`
+  says otherwise.
+- **The agent and root `gitignore` templates ignore every credential value the
+  contract names.** They covered only `credentials/.env` and
+  `credentials/credentials.json`, while `cloud_import_excludes` and
+  `secret_files` also treat a root `credentials.json`, every dotenv shape
+  (`.env`, `.env.<suffix>`, `<name>.env`) and `*.pem` / `*.key` / `*.p12` as
+  secret — so a scaffolded folder could commit a file the export would never
+  send. Files ending `.example`, `.sample` or `.template` stay tracked, matching
+  `secret_files`' `unless`. Existing folders keep their own `.gitignore`; copy
+  the Secrets block across by hand.
+
+### Note — contract versions minted outside this kit
+
+Before 1.5.0, Cinna Desktop kept its own copy of this contract and minted
+versions in it. The two histories diverged, and this note records them so this
+file is the complete one:
+
+- **1.1.0 was minted twice.** Here it is "skills are folders" (below). In Cinna
+  Desktop it was **work complexity**: optional `runtime.complexity`
+  (`simple` | `medium` | `complex`), mutually exclusive with `runtime.model`.
+  Writing both is refused by the desktop; reading both is a warning and the model
+  wins, and an unrecognised tier reads as no tier rather than a broken folder, so
+  a host keeps running what a newer tool wrote. It exists because a model id is
+  the least portable thing a manifest can carry — it is wrong on a machine with a
+  different credential and stale when the provider retires it — while `medium`
+  means the same everywhere; a host should resolve a tier against its live
+  catalogue by model family, not against a table of ids.
+- **1.2.0 — engine (Cinna Desktop).** Optional `runtime.engine`, first `opencode`
+  and `claude`, later `codex`. An unrecognised value read as "no engine
+  declared", and the schema deliberately left the value set open. `claude` with
+  `credential` was refused on write and a warning on read, with the credential
+  ignored, because that engine resolves its own login.
+- **1.3.0 — explicit coordinator handback (Cinna Desktop).** Optional
+  `handovers[].target_kind`, without an enum. Only the exact pair
+  `target_kind: "coordinator"`, `target_slug: "coordinator"` enables the
+  desktop's return to the coordinator already owning a handed-off task, and an
+  eligible agent may end a successful answer with `/handback <note>`, which the
+  desktop consumes only for an already handed-off owner after all questions are
+  settled. An absent kind keeps sibling-slug semantics, including for a sibling
+  literally named `coordinator`; an unknown kind grants no handback authority.
+- **1.4.0** is the first version both carried, and its entry below is shared.
+
+1.5.0 adopts all three fields as described above. Nothing in a folder written
+against any of these versions needs migrating: minors gate nothing.
 
 ## 1.4.0 — cloud and local credential delivery
 
@@ -14,164 +135,331 @@ older than the folder's must refuse to operate it and ask to be updated.
 - Exclude the entire credentials directory from exports and content hashes.
 - Reconcile the core skills folder definitions with Desktop runtime, schedule, and coordinator handback fields. Publication history remains in publications.json.
 - Desktop attachments and generated secrets are host-owned; no credential values enter the manifest.
+- An injected entry the host could not deliver may carry `unavailable_reason` (a Core refusal reason such as `local_use_not_allowed` when the owner has not allowed use on recipients' computers). The reader treats it like a placeholder (no env fallback) and names the reason in its error and in `cinna_credentials.py` status output.
+- Desktop only receives credential types that work locally out of the box (email IMAP/SMTP, Odoo, API token, Google service account). OAuth, SSH key, Agent API and MCP provider credentials are never delivered to Desktop; attach them in the cloud instead.
+- A type or `service_uri` resolves a slot only when exactly one declared slot matches; otherwise the reader raises an ambiguity error instead of picking the first.
 
-## 1.3.0 — explicit coordinator handback
+## 1.1.0 — skills are folders
 
-### Added
-
-- Optional `handovers[].target_kind`, deliberately without an enum. Only the
-  exact pair `target_kind: "coordinator"`, `target_slug: "coordinator"` enables
-  desktop return to the coordinator already owning a handed-off task.
-  An absent kind retains sibling-slug semantics, including a sibling literally
-  named `coordinator`. Unknown kinds grant no desktop handback authority.
-- An eligible kit agent may end its successful answer with `/handback <note>`.
-  The desktop consumes a bounded final answer line only for an already handed-off
-  owner after all questions are settled. Ordinary chats and delegates do not
-  acquire control from this text.
-
-Older desktop builds accept the additional key under the existing schema but
-still describe handovers as siblings; they do not activate this coordinator
-return. Existing folders need no restamp or automatic edit. External tooling
-support for the optional desktop role depends on that tool's implementation.
-
-## 1.2.0 — engine
-
-Additive. A 1.0.0 or 1.1.0 folder is read and written unchanged by a 1.2.0 tool,
-and an older tool ignores the new key and runs the agent on its own default
-engine.
+Additive. Every existing agent folder is still valid and needs no change; a tool
+built against 1.0.0 keeps operating a 1.1.0 folder, because the majors match.
 
 ### Added
 
-- Optional `runtime.engine` — which engine runs the agent. Known values:
-  `opencode` (a host-managed OpenCode server) and `claude` (the Claude Agent
-  SDK, driving a `claude` binary already installed on the machine, under that
-  install's own login). Absent means the host's default engine.
+- **`skills/` — one folder per skill, at the agent root.** A skill is one
+  standalone capability, packaged as `skills/<name>/SKILL.md` (YAML frontmatter
+  plus a markdown body) with optional `scripts/`, `references/` and `assets/`
+  beside it. It is shaped like the open Agent Skills standard, which is what
+  buys the behaviour the folder exists for: the engine reads only every skill's
+  `name` and `description` up front and loads a body when that skill is actually
+  invoked, so a capability can be as long as it needs to be without sitting in
+  the prompt all the time. `layout.json` declares the folder with role `skills`
+  and `survives_update: true`, and `templates/agent/skills/README.md` explains
+  the layout in the scaffold. Two frontmatter fields are validated: `name`
+  (`^[a-z0-9]+(-[a-z0-9]+)*$`, 1–64 characters, and it must equal the folder
+  name) and `description` (1–1024 characters). Everything else in the
+  frontmatter is passed through untouched. Caps: 50 skills per agent, 16 MB
+  across `skills/`; a body over 64 KB is still shipped but flagged. A skill name
+  may not collide with a platform command name (`files`, `files-all`, `run`,
+  `run-list`, `skills`, `session-recover`, `session-reset`, `session-improve`,
+  `webapp`, `rebuild-env`, `agent-status`). `skills/` is **not** in
+  `cloud_import_excludes`: it is part of what the agent *is*, so it travels.
 
-  **An unrecognised value reads as "no engine declared"**, not as a broken
-  folder — the same tolerance `runtime.complexity` gets, and for the same
-  reason: a host must keep running a folder a newer tool wrote. For this field
-  the point is sharper, because engines are expected to grow, so the schema
-  deliberately does **not** close the value set with an enum.
+- **Two sections on designing around skills, and on publishing one.**
+  `guides/08-knowledge-and-local-skills.md` gains both. *Designing around skills*
+  turns the split table around for the design phase: an agent with several distinct
+  internal workflows gets one skill folder per workflow by default, and a prompt
+  that only routes between them; the tiebreak for a workflow that argues otherwise
+  is separate trigger + separate output + reusable by another agent. *Publishing a
+  skill* covers the other end — `cinna skills publish <slug> <name>`, or the
+  **Addons** tab's **Share…** on the agent's page. Two facts that section exists to
+  state: publishing reads the **cloud** agent's workspace, never this folder, so the
+  agent must already be in the cloud (`guides/11-go-cloud.md`) and the local edit
+  must have travelled there first — a revision is immutable, and publishing a stale
+  copy cannot be undone, only appended to. A package is also **private by default**,
+  so the bare command succeeds, prints a catalog URL and shares the skill with
+  nobody — the guide hands over `--visibility public` (or `--visibility users
+  --grant <email>`) and never the bare form. And the secret gate is filename-based
+  only: nothing reads inside the files. `templates/agent/AGENTS.md` carries the rule
+  in one line; the `knowledge` rung's `trigger` in `kit.json` (and its two
+  restatements in `README.md`) widens to fire on a finished skill worth publishing,
+  not only on three capabilities or a page of domain docs. Guidance only — no folder
+  role, manifest field or validation rule moved, which is why this sits under
+  contract 1.1.0 rather than bumping it.
 
-  **`engine: "claude"` and `credential` are mutually exclusive.** That engine
-  spends no host credential — the binary it drives resolves its own login — so a
-  manifest naming one would make a host's runtime panel report a key that pays
-  for nothing. Writing both is refused; reading both is a *warning* and the
-  credential is ignored.
+- **A `design` rung, and guide 13 on the patterns behind it.**
+  `guides/13-design-patterns.md` lifts the house style of agents running in
+  production into one guide: the prompt routes and skills execute; an external
+  credential lives in one narrow producer, even for a private agent; one
+  pre-computed payload per question, so the model never does arithmetic; durable
+  state in SQLite under `app-data/storage/`; side effects behind a confirmation
+  gate, `--dry-run`, an idempotency key and an audit log; recorded test scenarios
+  under `docs/test_scenarios/`, re-run after any prompt, model or provider change;
+  a strong building model and a small conversation model; and a
+  `docs/AGENT_DEVELOPMENT.md` with a defects log. Its §0 is an advisor table: the
+  assistant *recommends* a pattern, with the reason, when its trigger fires, and
+  then builds what the user chooses. `kit.json`'s ladder gains the `design` rung
+  after `scripts` (`README.md` restates it), `START.md`, `templates/root/AGENTS.md`
+  and guide 01 carry the advisory duty in a sentence each, and
+  `templates/agent/docs/WORKFLOW_PROMPT.md` gains a scope stanza and an optional,
+  commented-out routing table. `kit.py list` reports the rung once an agent has
+  `docs/AGENT_DEVELOPMENT.md` or `docs/test_scenarios/`. Guidance only: both are
+  domain docs under the existing `docs/` role, nothing validates them, and no
+  folder role, manifest field or validation rule moved — contract 1.1.0 stands.
+  The same guide ships to cloud building sessions as
+  `/app/core/prompts/AGENT_DESIGN_PATTERNS.md`.
 
-## 1.1.0 — work complexity
+### Changed
 
-Additive. A 1.0.0 folder is read and written unchanged by a 1.1.0 tool, and a
-1.0.0 tool ignores the new key and reads `runtime.model` as it always did.
-
-### Added
-
-- Optional `runtime.complexity` — `simple` | `medium` | `complex`. Says how hard
-  the agent's work is instead of naming a model, and the host resolves it against
-  the models the chosen credential actually offers. **Mutually exclusive with
-  `runtime.model`**: a tool writes one or the other, never both. A manifest that
-  carries both is a *warning*, not an error, and the **model wins** — a host must
-  keep running a folder a newer tool wrote, so an unrecognised `complexity` value
-  likewise reads as "no complexity declared" rather than as a broken folder.
-
-  It exists because a model id is the least portable thing this file can carry.
-  The manifest is committed to a repository, read by a coding assistant and
-  uploaded to a Cinna instance on publish, and a model id means something only to
-  the catalogue that lists it — it is wrong on a machine with a different
-  credential, and stale the week the provider retires it. `medium` means the same
-  thing everywhere and does not go out of date.
-
-  A host that offers a choice should resolve a tier against its *live* catalogue
-  by model family, not against a table of ids, so a newly released model joins its
-  tier without a tool update.
+- **`docs/` is no longer where a local skill is documented.** Its `layout.json`
+  role text drops "one doc per local skill" — `docs/` is the three
+  document-backed prompts and the command catalog. **The `docs/skill_*.md` form
+  is legacy, not removed**: those files still ship, still travel to the cloud,
+  and are still read by an agent whose workflow prompt points at them. What they
+  do not get is the engine's own progressive disclosure, because nothing but the
+  prompt knows they exist. `guides/08-knowledge-and-local-skills.md` is rewritten
+  around the folder convention and carries the five-step migration for one
+  legacy doc — to be applied when you next touch that capability, never as a
+  sweep. Half a migration is worse than none: a capability living in both
+  `docs/skill_x.md` and `skills/x/SKILL.md` is two sources of truth, and the
+  agent follows whichever it reads first.
 
 ## 1.0.0 — first contract release
 
-Extracted from the start-kit as its own versioned tree, so the desktop can
-bundle and refresh the contract without carrying the assistant-facing guides.
+The kit's conventions become a versioned **contract**, so a second host — Cinna
+Desktop — can create, validate and export agent folders this kit accepts
+unchanged, and the other way round. `kit.json`, `layout.json`,
+`CONTRACT_VERSION`, this file, `schema/` and `templates/` are that contract; the
+guides and `tools/` stay kit-only.
 
 ### Breaking
 
 - **`contract_version` replaces `schema_version` as the compatibility gate.**
-  Every manifest records the contract version it was scaffolded with; every
-  publication records the one it was pushed with. The integer `schema_version`
-  is still *parsed* — a manifest that carries it is read, not rejected — but it
-  no longer decides anything. Re-stamp a legacy manifest by adding
-  `contract_version` and `id`.
-- **A manifest carries a stable `id`** (UUID v4), written once at scaffold.
-  Identity now survives a folder move or a slug rename, so chats, publications
-  and cloud twins stay attached. A manifest without an `id` is legacy.
+  Every manifest records the contract version it was scaffolded with, and
+  `kit.py validate` compares its major against this kit's: the same major runs
+  silently whatever the minor, a newer major is an error asking you to
+  `kit.py refresh`, an older major is a warning saying the folder can be
+  migrated. The integer `schema_version` is still *parsed* — a manifest carrying
+  it is read, never rejected — but nothing branches on its value any more.
+  Re-stamp a pre-1.0.0 manifest by adding `contract_version` and `id`.
+- **A manifest carries a stable `id`** (UUID v4), written once at scaffold and
+  never rewritten. Identity now survives a folder move or a slug rename, so
+  chats, publications and cloud twins stay attached to the agent rather than to
+  its path.
 - **Identity is required of everything but a legacy folder.** `contract_version`
-  and `id` are *not* in the schema's top-level `required` — a legacy folder must
-  still parse — but the schema's `allOf` requires both of any manifest that is
-  not legacy, where legacy means "carries `schema_version` and neither of them".
-  Every validator applies the same rule: a legacy folder is one warning asking
-  for a re-stamp; anything else missing them is an error.
-- **`cloud` becomes `publications[]`.** One entry per instance the agent was
-  published to — `{platform_url, agent_id, workspace, imported_at, updated_at,
-  contract_version, content_hash}` — because a single `cloud` object cannot
-  express an agent published to two servers. The old `cloud` object is still
-  accepted and still parsed, so an older folder keeps working; tools should
-  migrate it into `publications[]` on the next write.
+  and `id` are deliberately *not* in the schema's top-level `required`, because a
+  legacy folder must still parse — legacy meaning "carries `schema_version` and
+  neither of them". Such a folder gets one warning asking for a re-stamp;
+  anything else missing them is an error. The rule is encoded in three places —
+  the Compatibility table below, `schema/cinna-agent.schema.json`'s identity
+  `$comment`, and the desktop's `checkIdentity()` — and a change to one is a
+  change to all three.
+- **`cloud` becomes `publications[]`, in a new sibling file.** One entry per
+  instance the agent was published to — `{platform_url, agent_id, workspace,
+  imported_at, updated_at, contract_version, content_hash}` — because a single
+  `cloud` object cannot express an agent published to two servers. The ledger
+  lives in `publications.json` beside the manifest rather than inside it: it is
+  mutable per-instance sync state, not identity, and each entry records a
+  `content_hash` **of the exported tree** — a tree the manifest is a member of,
+  so a hash stored in the manifest could never match the tree it describes. The
+  old `cloud` object is still accepted and still parsed; every manifest write
+  migrates it, and a stale `publications` array with it, into the ledger — all of
+  one key or none of it, never half. `validate` names either key until it moves.
 
 ### Added
 
-- `layout.json` — the folder model as data: the role of every folder, whether a
-  contract refresh may replace it (`survives_update`), the `cloud_import_excludes`
-  glob list, the `local_command_runner` rule that turns a cloud-first
-  `python …` command into `uv run …` when the agent has a `pyproject.toml`, and
-  `desktop_owned` (`app-data/desktop.json`).
-- **Nothing that can hold a credential value travels or is committed.** One list,
+- **`layout.json` — the folder model as data**, so every host reads the rules
+  instead of hard-coding them: the role of each workshop and agent folder and
+  whether a refresh may replace it (`survives_update`), the
+  `cloud_import_excludes` list and the semantics its notes define, the
+  `secret_files` rules, the `scaffold_ignore_files` dotless-to-dotted pairs, the
+  `local_command_runner` rule that turns a cloud-first `python …` command into
+  `uv run …` when the agent has a `pyproject.toml`, and `desktop_owned`. The
+  contract's own version ships beside it in `CONTRACT_VERSION`.
+- **Nothing that can hold a credential value travels or is committed.** One rule,
   kept identical in three places: `cloud_import_excludes` (what never travels),
   `templates/agent/gitignore` (what is never committed) and every validator's
   secret check. It covers `credentials.json` — what the platform injects at the
   agent root, and what `scripts/cinna_credentials.py` reads in the cloud, so a
   folder that has run there can otherwise carry live values home — plus any
-  `.env`, `*.pem`, `*.key`, `*.p12`, and `*.tmp` files left by an interrupted
-  atomic write. `credentials/README.md` and `credentials/.env.example` still
-  travel: they document the slots without carrying a value.
-- Optional manifest `runtime` block — `{model, credential, permissions}`.
-  `credential` is a *reference* (a credential type, or the name of a configured
-  credential), never a key or a secret value. Absent means "use the host's
-  default runtime", which is what a freshly scaffolded agent does.
-- Optional manifest `created_at` (ISO 8601), written by the scaffolder.
-- `app-data/desktop.json` is named in the folder model as the single
-  desktop-owned file: per-machine runtime state, already git-ignored and already
-  excluded from cloud import.
-- The root `AGENTS.md` template tells an assistant what changes when the
-  workshop is managed by Cinna Desktop.
+  `.env`, `*.pem`, `*.key`, `*.p12` and `*.tmp`. What a glob cannot express is
+  declared instead as `layout.json`'s `secret_files` rules: every dotenv shape
+  (`.env`, `.env.<suffix>`, `<name>.env`) holds a value unless the name ends
+  `.example`, `.sample` or `.template`. A host applies that rule to the file set
+  it *hashes*, not only to the files it copies — a path withheld from the upload
+  but counted in the hash moves the hash for a change that can never be
+  published, which reads as unpublished changes forever.
+- **Optional manifest `runtime`** — `{model, credential, permissions}`.
+  `credential` is a *reference* (a credential type, or the name of a credential
+  configured in the host), never a key or a value: one that looks like a secret
+  is an error telling you to rotate it, because a value in the manifest is
+  already in every copy, export and hash of the folder. Absent means "use the
+  host's default runtime", which is what a freshly scaffolded agent does.
+- **Optional manifest `created_at`** (ISO 8601, UTC), written by the scaffolder.
+- **`app-data/desktop.json` is named as the single desktop-owned file.**
+  `layout.json`'s `desktop_owned` block freezes exactly the keys another tool may
+  read — `api_base_url`, `agent_token`, and an optional `chat_path` — and
+  everything else in that file is Cinna Desktop's to shape. `kit.py` reads those
+  keys and no others; it never writes the file, never commits it, and never
+  prints its contents. It is git-ignored and excluded from cloud import already.
+- **`kit.py chat <agent-folder> "<prompt>"`** — send one prompt to a locally
+  running agent through Cinna Desktop's local API and stream the answer back.
+  It is how you test an agent for real instead of role-playing it, so it **never
+  falls back to role-play**: every failure exits non-zero with one line that
+  could not be mistaken for the agent's answer. Nothing on any path prints the
+  token or the URL. It reads `app-data/desktop.json`, so it works only while the
+  desktop is running with this agent connected.
+- **`publications.json`, with its own schema** (`schema/publications.schema.json`).
+  Absent until the first publish, never travels to the cloud, and survives a kit
+  refresh — it is the user's own record of where their agent went.
 
 ### Changed
 
-- Ignore rules that exclude paths ship as **dotless `gitignore` files**
-  (`templates/root/gitignore`, `templates/agent/gitignore`,
-  `templates/agent/app-data/cache/gitignore`). The scaffolder restores the dot
-  in the created folder. Shipping them dotted would make them live ignore rules
-  wherever the contract is stored, hiding scaffold files from that repository.
-  `templates/agent/credentials/.gitignore` keeps its dot on purpose — it names
-  files no repository should ever track, and that has to be true of this one too.
-- `docs/CLI_COMMANDS.yaml` stays cloud-first (`python scripts/x.py`, paths
-  relative to the workspace root); the `Makefile` mirrors each command with
-  `uv run`. The rule is now declared in `layout.json` instead of being encoded
-  by hand in the Makefile, so a host can localize a command it never saw.
-- **Every scaffolded agent ships a `pyproject.toml`** (`requires-python >=3.10`,
-  no dependencies). It is what makes `uv run` provision a real interpreter
-  instead of falling back to the system `python`, and it is the condition the
-  `local_command_runner` rule tests — without it a scaffolded agent's
-  `/run:` command would run bare `python`, which on macOS is absent or 3.9.
-- `layout.json` carries `scaffold_ignore_files`: the dotless-to-dotted pairs a
-  scaffolder must restore, per template tree. It used to be prose in this file,
-  which meant a scaffolder could restore `gitignore` and miss
-  `app-data/cache/gitignore`.
+- **`schema_version` leaves the `/agent-start/version` response, and `kit.json`
+  with it.** `GET /agent-start/version` — the unauthenticated endpoint
+  `kit.py refresh` polls — returned a `schema_version` key on every response. It no
+  longer does, and the same field is gone from `kit.json`. The two moved in one
+  change on purpose: a number served on the wire with no backing field in the
+  shipped tree reads as a serving fault rather than as a deliberate removal, and
+  sends a reader hunting something that is not broken. Nothing could have been
+  computing from it — it was a constant, compiled into the payload, identical on
+  every instance, version and request — and `contract_version` is what answers the
+  version question now, on `/agent-start/contract/version`. **This is not the
+  manifest's `schema_version`**, which merely shares the name: that field is live,
+  it is the sole marker of a legacy folder, and it stays exactly as the Breaking
+  entries above describe.
+- **The cloud-import exclude list moves to `layout.json`.** It was `kit.json`'s
+  `cloud_import.exclude`; it is now `cloud_import_excludes`, with its semantics
+  written down beside it in `cloud_import_excludes_notes` and one matcher
+  implementing them on every host: a pattern with a trailing `/` excludes that
+  directory and everything under it, `*` and `?` match within one segment, `**`
+  matches zero or more whole segments, and a pattern without a leading `**` is
+  anchored at the agent root and must match the whole path. Alongside what it
+  already excluded, the list gains the remaining editor directories (`.cursor/`,
+  `.vscode/`, `.idea/`), the tool caches (`.mypy_cache/`, `.ruff_cache/`),
+  `node_modules/`, `venv/`, `Thumbs.db`, git's own metadata (`.gitignore`,
+  `.gitattributes`), `publications.json`, and the credential and key material
+  named above. A directory is listed in **both** the root-anchored and the `**/`
+  form on purpose: a `**/`-prefixed directory pattern cannot match at the root,
+  so `**/.mypy_cache/` alone would miss the only one that ever exists.
+
+  What that changes for an agent you already have:
+
+  - `AGENTS.md` and `CLAUDE.md` were dropped by basename at any depth, so
+    `knowledge/AGENTS.md` never reached the cloud. They are root-anchored now:
+    the agent's own assistant wrapper still stays behind, and one you wrote
+    inside `docs/` or `knowledge/` travels.
+  - `README.md` and `Makefile` **at the agent root** are newly excluded — the
+    platform provides its own, and catalogued commands resolve through
+    `docs/CLI_COMMANDS.yaml` rather than through `make`. `docs/README.md` and
+    `scripts/README.md` are untouched; that is what the anchoring buys.
+  - `.gitkeep` is newly excluded at any depth, so an agent whose `files/` holds
+    nothing else no longer creates an empty `files/` in the cloud workspace.
+  - `*.pyc` is now `**/*.pyc` rather than a basename match — the same files, by
+    a mechanism another host can implement from the list alone.
+  - The export no longer drops a file merely because its name starts with
+    `.env.`. That short-circuit also swallowed `.env.example`; the `secret_files`
+    rule decides now, and it spares `.example`, `.sample` and `.template`
+    explicitly.
+
+  **Two deliberate divergences from the desktop's authored list**, recorded here
+  because anyone comparing the two lists will otherwise read them as drift:
+
+  - **`credentials/` stays excluded wholesale**, documentation included; the
+    finer per-file list does not apply inside it. The platform generates its own
+    `credentials/credentials.json` and `credentials/README.md` on every
+    credential sync and feeds that README straight into the agent's system
+    prompt — so a local `credentials/README.md` that travelled would inject
+    local-machine `.env` instructions into a cloud agent's prompt until the first
+    sync silently overwrote them. `credentials/.env.example` is excluded with it:
+    on its own it buys nothing.
+  - **The pattern `**/*.env` is added.** The authored list carries `**/.env` and
+    `**/.env.local` but not `**/*.env`, so `prod.env` or `staging.env` at any
+    depth would travel under it. The three dotenv globs are a belt-and-braces
+    subset of the `secret_files` rule, kept for a host that has not implemented
+    that block yet; the rule is the authority.
+
+- **The export walk is the same walk on both hosts, and it refuses rather than
+  guessing.** Symlinks are never followed and never listed, an excluded directory
+  is never descended into, and a directory or file the walk could not read is
+  named and stops the export — a complete-looking tree with a subtree missing
+  from it yields a `content_hash` that reads "up to date" forever.
+  `kit.py export --hash` prints that hash: it is the number a publication entry
+  records.
+- **The scaffold's tokens are UPPER_SNAKE, and the manifest is filled by
+  substitution like every other template file.** The set is `NAME`, `SLUG`,
+  `DESCRIPTION`, `ID`, `CREATED_AT`, `CONTRACT_VERSION` and `KIT_VERSION`, each
+  written in the templates as its name between double braces. The template used
+  to carry literal sample text (`"New Agent"`, `"new-agent"`) that the tool
+  patched onto the parsed manifest afterwards; one substitution pass now fills
+  the whole tree, escaping values as JSON string bodies inside `.json` members,
+  which is what lets two hosts scaffold byte-identical folders. `kit.py new`
+  gains `--description` (it fills the DESCRIPTION token) and `--json`, which
+  prints `{path, slug, id, contract_version}` and nothing else.
+- **The dotless-to-dotted ignore-file pairs are declared data.** They live in
+  `layout.json`'s `scaffold_ignore_files`, per template tree, instead of being
+  prose in this file — which meant a scaffolder could restore `gitignore` and
+  miss `app-data/cache/gitignore`. The files still ship dotless, and
+  `templates/agent/credentials/.gitignore` still keeps its dot on purpose.
+- **`Cloud/` holds one workspace per instance, `Cloud/<host>/`.** An account on two
+  Cinna instances is two accounts, so a cloud workspace is named by the host it
+  belongs to — `Cloud/acme.opencinna.io/` — and `kit.py list` reports each of them
+  under its own heading. **An existing flat `Cloud/` keeps working**: it is still
+  recognised, still listed, and lists alongside per-instance workspaces in the same
+  run, so nothing has to be moved. Two smaller changes ride along: the heading above
+  a listed workspace now names which workspace it is, and the table gained a
+  `DESKTOP` column saying whether Cinna Desktop has that agent connected. `CLOUD`
+  now answers `yes` for a folder whose `publications.json` records a publication,
+  where it used to read only the deprecated `cloud` stamp — the same question, asked
+  of the file the answer moved into. `list` output is written for a person to read
+  and has never been a declared contract surface; nothing should parse it.
+
+## Pre-contract — the first kit
+
+First published kit, before the conventions were versioned as a contract.
+
+- **`uv` is the kit runtime.** Setup checks for `uv` and installs it when missing;
+  the kit tool is always invoked as `uv run .cinna-kit/tools/kit.py …` (it carries
+  PEP 723 inline metadata, `requires-python >= 3.10`), so the macOS system Python
+  3.9 is never a blocker. A bare `python3` below 3.10 now prints the `uv` fix
+  instead of a dead end.
+- `cinna-agent.json` carried **`schema_version` `1`**. Every agent this kit
+  scaffolded recorded it, and `kit.py` refused a manifest whose `schema_version`
+  was higher than the one it understood. **Superseded by 1.0.0:**
+  `contract_version` is the gate now and nothing branches on the integer; a
+  folder carrying `schema_version` and neither `contract_version` nor `id` is a
+  legacy folder — read, reported, and asked for a re-stamp.
+- Local agent layout mirrors the cloud workspace one-for-one: `docs/`, `scripts/`,
+  `knowledge/`, `files/`, `config/`, `credentials/`, `app-data/{storage,cache,uploads}/`.
+- Prompts live in `docs/WORKFLOW_PROMPT.md`, `docs/ENTRYPOINT_PROMPT.md` and
+  `docs/REFINER_PROMPT.md` — the same three files the platform reconciles.
+- `docs/CLI_COMMANDS.yaml` is cloud-first: commands use `python scripts/x.py` with
+  paths relative to the workspace root. The `Makefile` mirrors each command with
+  `uv run` for local use.
+- `scripts/cinna_credentials.py` is the portability shim: `credentials.json` in the
+  cloud, `credentials/.env` locally, one `get_credential()` call either way.
+- `scripts/update_status.py` writes `app-data/storage/STATUS.md` atomically with
+  YAML frontmatter (`status`, `summary`, `timestamp`).
+- The capability ladder in `README.md` is the discovery mechanism; nothing is added
+  to an agent until its trigger fires.
+- Ignore rules that exclude paths ship as dotless `gitignore` files
+  (`templates/agent/gitignore`, `templates/agent/app-data/cache/gitignore`,
+  `templates/root/gitignore`). `kit.py new` restores the dot in the created agent;
+  when you install `templates/root/` by hand, copy `gitignore` to
+  `<root>/.gitignore`. (Shipping them dotted would make them live ignore rules
+  wherever the kit is stored, hiding scaffold files from that repository.)
+  `credentials/.gitignore` keeps its dot — it names files no repository should track.
 
 ## How to read a future entry
 
 Each release lists, in this order:
 
-1. **Breaking** — a convention that makes an existing folder invalid. The entry
-   says how to migrate. A major bump is always a Breaking entry.
-2. **Added** — new optional artefacts. Existing folders keep working untouched.
-3. **Changed** — wording, defaults, reorganisation. No action needed.
+1. **Breaking** — a convention that makes an existing agent invalid. `kit.py validate`
+   will flag it; the entry says how to migrate.
+2. **Added** — new optional artefacts. Existing agents keep working untouched.
+3. **Changed** — wording, defaults, guide reorganisation. No action needed.
+
+A bump of the contract's **major** version is always a Breaking entry.
 
 ## Compatibility
 

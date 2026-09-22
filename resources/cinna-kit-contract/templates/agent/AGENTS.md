@@ -1,67 +1,52 @@
 # {{NAME}}
 
-{{DESCRIPTION}}
+This file wraps the agent for local use. It is **not** copied to the cloud — in the
+cloud the platform supplies the equivalent runtime wrapper. The agent's real
+instructions live in `docs/WORKFLOW_PROMPT.md` and nowhere else.
 
-This file is for an assistant working **on** this agent. What the agent *does* is
-in `docs/WORKFLOW_PROMPT.md` — the single source for its behaviour. Never
-duplicate that here.
+## When the user talks to you here, you are {{NAME}}
 
-## Two roles in this folder
+1. Read `docs/WORKFLOW_PROMPT.md` and follow it. That file is the single source of
+   truth for how this agent behaves; nothing is duplicated here.
+2. Run scripts with `uv run scripts/<script>.py` from this folder. `scripts/README.md`
+   is the catalog of what exists and what each script outputs.
+3. When `docs/WORKFLOW_PROMPT.md` names a skill, read `skills/<name>/SKILL.md` and
+   follow it before acting. The prompt names skills; the skill holds the steps.
+4. Get credentials through `scripts/cinna_credentials.py` — inside a script, never in
+   the conversation. **Never print, echo or log a credential value.**
+5. Write runtime output to `app-data/storage/`. Disposable snapshots go to
+   `app-data/cache/`. Never write to `docs/`, `skills/`, `scripts/`, `knowledge/`
+   or `files/` while acting as the agent.
+6. Read tunable parameters from `config/`, not from hardcoded values in scripts.
 
-| Role | When | What you read |
-|------|------|---------------|
-| **Builder** | the user asks to change, add, fix or extend the agent | this file, then the kit guides |
-| **Agent** | the user asks for the job the agent performs | `docs/WORKFLOW_PROMPT.md`, and nothing from the build session |
+## When the user asks to change or extend this agent
 
-Say which role you are in, in one line, before you start.
+Switch to the **Builder** role and say so in one line. Then:
 
-## Layout
+1. Read `../../.cinna-kit/README.md` (the kit index and the capability ladder).
+2. Make the change.
+3. Update `scripts/README.md`, `README.md` and `cinna-agent.json` in the same change.
+4. Run the ladder check and report the result in one line.
+5. Run `uv run ../../.cinna-kit/tools/kit.py validate .` before declaring done.
 
-```
-cinna-agent.json      identity and definitional metadata — keep it true
-docs/                 the three prompts, the command catalog, one doc per local skill
-scripts/              everything runnable, plus README.md cataloguing all of it
-knowledge/            reference material the agent reads to be correct
-config/               non-secret configuration the scripts read
-credentials/          credential docs and the local .env — values, never printed
-files/                static inputs that ship with the agent
-app-data/             everything written at runtime; the only place to write
-```
-
-## The build loop
-
-One cycle = one capability.
-
-1. Write the smallest script that does one step. Print machine-readable output
-   (JSON or CSV); write large results to `app-data/storage/`.
-2. Run it: `uv run scripts/<x>.py`. It works before it is described anywhere.
-3. Catalog it in `scripts/README.md`, in the same change.
-4. Wire it into `docs/WORKFLOW_PROMPT.md`: which script, how to read its output,
-   how to present it.
-5. Re-read `cinna-agent.json` and make `description` and `example_prompts` true again.
-
-Then validate:
+## Quick reference
 
 ```bash
-uv run ../../.cinna-kit/tools/kit.py validate .
+make help              # available commands
+make status            # refresh app-data/storage/STATUS.md
+make validate          # kit validation for this agent
 ```
 
-## Commands
+## Rules
 
-`docs/CLI_COMMANDS.yaml` is the catalog a host reads to offer `/run:<name>`. It is
-**cloud-first**: commands are written as the platform runs them
-(`python scripts/x.py`, paths relative to the agent root). The `Makefile` mirrors
-each one with `uv run` for local use — every command name there has a target here.
-A host that reads the contract's `layout.json` applies the same rule itself.
-
-To have a host refresh status before reading it, set `status_refresh_command` in
-`cinna-agent.json` to `/run:status`.
-
-## Non-negotiables
-
-- **Never print, echo or log a secret.** `credentials/.env` is read only from
-  inside a script, through `scripts/cinna_credentials.py`.
-- **Write only under `app-data/`.** Everything else in this folder is the agent's
-  definition, and is changed deliberately, not as a side effect of a run.
-- **`app-data/desktop.json`, if present, belongs to Cinna Desktop.** Read-only.
-- **Keep `scripts/README.md` and `cinna-agent.json` in sync** with what exists.
+- One step per script. Small, parameterised, composable.
+- Secrets never appear in output, commits, `STATUS.md` or chat.
+- `cinna-agent.json` describes this agent; keep it true.
+- A skill worth sharing reaches other people through the catalog —
+  `cinna skills publish <slug> <name> --visibility public`, which reads the agent's
+  **cloud** workspace, so the agent must be in the cloud and the skill must have
+  travelled there. Without a visibility the package is private and nobody else sees
+  it; `--visibility users --grant <email>` shares it with named people instead.
+- `app-data/desktop.json` is **Cinna Desktop's**, and read-only to you: never write it,
+  never commit it, never print its contents. It holds a bearer token. Read
+  `api_base_url` and `agent_token` if you need them, and nothing else in the file.

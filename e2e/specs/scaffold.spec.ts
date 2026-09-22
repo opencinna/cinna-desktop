@@ -37,7 +37,9 @@ test('a scaffolded agent has no leftover tokens and its status script runs under
   expect(leftovers).toEqual([])
 
   test.skip(!hasUv, 'uv is not on PATH')
-  const run = spawnSync('uv', ['run', 'scripts/update_status.py'], {
+  // The arguments are the contract catalog's own `status` command (core's
+  // update_status.py requires --status).
+  const run = spawnSync('uv', ['run', 'scripts/update_status.py', '--status', 'ok', '--summary', 'Ready'], {
     cwd: agent.path,
     encoding: 'utf8',
     timeout: 120_000

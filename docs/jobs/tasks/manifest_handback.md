@@ -12,7 +12,7 @@ Let a kit agent attach a concise, verified-work note when returning a handed-off
 
 ## User Stories / Flows
 
-1. The agent author adds the exact coordinator declaration to the kit manifest. The optional discriminator belongs to contract 1.3; it does not require restamping existing folders or using an `@coordinator` slug.
+1. The agent author adds the exact coordinator declaration to the kit manifest. The optional discriminator is part of core's contract since 1.5.0, registered to this host; it does not require restamping existing folders or using an `@coordinator` slug.
 2. An autonomous coordinator hands work to that agent. Main checks the actual local kit folder and supplies eligibility for that turn.
 3. After finishing and settling required questions, the agent ends its answer with a standalone `/handback <note>` line. The note describes what it did, verified and left open, within 4,000 characters.
 4. The existing coordinator receives the note with the ownership transition and decides what to do next. The original answer stays in the conversation. A successful specialist without a marker still returns normally.

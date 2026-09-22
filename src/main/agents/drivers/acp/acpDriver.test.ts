@@ -2413,11 +2413,17 @@ describe('a refusal', () => {
     expect(result.error?.message).toBe('Its manifest is not valid.')
   })
 
-  it('refuses an engine this build has no launcher for', async () => {
-    const result = await world({
-      folder: { ...FOLDER, runtime: { engine: 'gemini' } }
-    }).run()
-    expect(result.error?.message).toMatch(/does not support/)
+  it('runs an engine a folder cannot use on OpenCode instead of refusing it', async () => {
+    // `runtime.engine` is a preference, never refused: `gemini` has no launcher
+    // and `custom` needs an external agent's row, so both run on OpenCode.
+    for (const engine of ['gemini', 'custom', 'some-future-engine']) {
+      const result = await world({
+        script: SAYS_HELLO,
+        launcher: 'opencode',
+        folder: { ...FOLDER, runtime: { engine } }
+      }).run()
+      expect(result.error, engine).toBeUndefined()
+    }
   })
 })
 

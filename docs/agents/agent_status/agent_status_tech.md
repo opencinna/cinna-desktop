@@ -18,7 +18,7 @@ Status sources own reported data and refresh policy independently of agent trans
 | Manifest read for `status_refresh_command` | `src/main/kit/manifestIo.ts` — `manifestPath()`, `readManifest()` |
 | Status-file location (contract, never hard-coded) | `src/main/kit/layout.ts:46` — `status_file`; default `app-data/storage/STATUS.md` at `:101` |
 | Validator rule: a `/run:` reference must resolve | `src/main/kit/validator.ts:976` |
-| Normative status vocabulary | `resources/cinna-kit-contract/templates/agent/scripts/update_status.py:40` — `STATUSES` |
+| Normative status vocabulary | `resources/cinna-kit-contract/templates/agent/scripts/update_status.py:34` — `VALID_STATUSES` |
 | IPC handlers (`agent-status:list`, `agent-status:get`) | `src/main/ipc/agent_status.ipc.ts:30` |
 | IPC handler registration | `src/main/ipc/index.ts` — `registerAgentStatusHandlers()` |
 | Remote-agent repository helpers | `src/main/db/agents.ts` — `listRemote()`, `agentOverrideRepo.listForUser()`, `getOwned()` (`:125`) |
@@ -158,7 +158,7 @@ Three states, and the middle one exists so the caller can stay silent:
 
 ### Severity derivation
 
-Anchored on `update_status.py:40` (`STATUSES = ("ok", "attention", "error", "unknown")`), which normalises anything else to `unknown` *before writing*, so those four are normative.
+Anchored on `update_status.py:34` (`VALID_STATUSES = ("ok", "info", "warning", "error")`), which refuses anything else *before writing*, so those four are normative. `attention` is kept in the table for folders scaffolded from the desktop's own pre-1.5.0 template, whose script wrote it.
 
 | Frontmatter word (trimmed, lower-cased) | Severity |
 |---|---|

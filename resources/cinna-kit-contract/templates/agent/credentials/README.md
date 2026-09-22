@@ -1,53 +1,51 @@
-# Credentials
+# Credentials — {{NAME}}
 
-What this agent needs in order to reach the outside world, and how a value gets
-to it. **This folder documents slots; it never travels with a value.**
+**No secret value is ever written in this file.** This is the redacted description
+of what the agent needs and what each value is for — the same role the platform's
+generated `credentials/README.md` plays in the cloud.
 
-## Declare the slot first
+Actual values live in `credentials/.env`, which is git-ignored and never copied,
+exported or pushed anywhere. Scripts read them through
+`scripts/cinna_credentials.py`. Never read `.env` in a conversation, and never echo
+a value back to the user.
 
-Every credential is declared in `cinna-agent.json` under `credentials[]`:
+## Required credentials
 
-```json
-{
-  "name": "Vendor Portal",
-  "type": "api_token",
-  "description": "Read-only token for the vendor portal API.",
-  "env_prefix": "VENDOR_PORTAL_",
-  "fields": ["token"],
-  "optional": false
-}
-```
+<!-- One subsection per slot declared in cinna-agent.json's `credentials[]`.
+     Keep the two in sync: the slot name, type and env_prefix must match exactly. -->
 
-`type` is a platform credential type; `env_prefix` names the local variables for
-the slot (`<env_prefix><FIELD in upper case>`, so `VENDOR_PORTAL_TOKEN`).
+<!--
+### `billing-inbox` — type `email_imap`
 
-## Fill it in locally
+IMAP access to the mailbox the agent reads. Read-only use.
+
+| Field | Variable | Notes |
+|-------|----------|-------|
+| host | `BILLING_INBOX_HOST` | e.g. imap.example.org |
+| port | `BILLING_INBOX_PORT` | 993 for SSL |
+| login | `BILLING_INBOX_LOGIN` | full address |
+| password | `BILLING_INBOX_PASSWORD` | app password, not the account password |
+| is_ssl | `BILLING_INBOX_IS_SSL` | true |
+-->
+
+_None yet._
+
+## Setup
 
 ```bash
 cp credentials/.env.example credentials/.env
-$EDITOR credentials/.env
+# edit credentials/.env
 ```
 
-`credentials/.env` is git-ignored and excluded from anything published. It stays
-on this machine.
+Check that nothing leaked before committing:
 
-## Read it from a script
-
-```python
-from cinna_credentials import get_credential
-
-token = get_credential("Vendor Portal", "token")
+```bash
+git check-ignore -v credentials/.env    # must print a matching rule
+git status --short credentials/         # must never list .env
 ```
 
-The same call works in the cloud, where the platform provides `credentials.json`
-instead of the `.env`. Never read `.env` directly, and never accept a secret as a
-command-line argument.
+## In the cloud
 
-## Rules
-
-- **Never print, echo or log a value** — not in a conversation, not in an error
-  message, not in a debug line.
-- A host may check that a variable *exists*. It never reads what it holds.
-- In the cloud each slot becomes an empty draft to fill in on the server; the
-  local value is not uploaded.
-- Nothing secret goes in `config/`, `knowledge/`, `docs/` or a script.
+After import, the platform injects `credentials/credentials.json` instead, and
+`.env` is not copied. The same `require_credential("<name or type>")` call keeps
+working — that is the whole point of the shim.

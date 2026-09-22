@@ -199,6 +199,7 @@ function bareAgent(runtime: Record<string, string> | null): LocalAgentDto {
 }
 
 beforeEach(() => {
+  defaultRuntime = { engine: 'opencode' }
   codexBinary = { state: 'unresolved' }
   claudeBinary = { state: 'ready', path: '/data/runtimes/claude-2.1.276/claude', source: 'managed', version: '2.1.276 (Claude Code)' }
   codexInstalled = false
@@ -633,7 +634,7 @@ describe('RuntimePanel', () => {
       fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
       const [, second] = save.mock.calls as unknown as [unknown, [{ runtime: unknown }]]
       expect(second[0].runtime).toEqual({
-        engine: null,
+        engine: 'keep',
         credential: 'Anthropic',
         modelId: 'claude-haiku-4-5-20251001',
         complexity: null
@@ -915,9 +916,9 @@ describe('RuntimePanel', () => {
   describe('an engine the panel cannot yet change', () => {
     it('carries a declared engine through a save about something else', () => {
       // **The panel rewrites the whole `runtime` block**, so every save has to
-      // carry the engine or it deletes the user's choice out of a file they
-      // commit. Changing the *tier* is that case: it says nothing about which
-      // engine runs the agent, so the engine must come through untouched.
+      // say "keep the engine" or it deletes the user's choice out of a file
+      // they commit. Changing the *tier* is that case: it says nothing about
+      // which engine runs the agent, so main is told to leave it as it is.
       // (Changing the Runs-on select is no longer "something else" — that
       // control now sets the engine, and the two tests below cover it.)
       render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'complex' })} />)
@@ -925,7 +926,7 @@ describe('RuntimePanel', () => {
       const [vars] = save.mock.calls[0] as [
         { runtime: { engine: string | null; complexity: string | null } }
       ]
-      expect(vars.runtime.engine).toBe('claude')
+      expect(vars.runtime.engine).toBe('keep')
       expect(vars.runtime.complexity).toBe('simple')
     })
 
@@ -1215,7 +1216,7 @@ describe('RuntimePanel', () => {
         { runtime: { engine: string | null; credential: string | null; complexity: string | null } }
       ]
       expect(vars.runtime).toMatchObject({
-        engine: 'claude',
+        engine: 'keep',
         // Dropped, exactly as switching *to* Claude drops it: the panel stopped
         // showing it, so it must stop sending it.
         credential: null,
@@ -1278,7 +1279,7 @@ describe('RuntimePanel', () => {
       const [vars] = saveBare.mock.calls[0] as [{ agentId: string; runtime: unknown }]
       expect(vars).toEqual({
         agentId: 'folder:external:r1:support',
-        runtime: { engine: null, credential: 'OpenAI', modelId: null, complexity: null }
+        runtime: { engine: 'keep', credential: 'OpenAI', modelId: null, complexity: null }
       })
     })
 
@@ -1306,10 +1307,95 @@ describe('RuntimePanel', () => {
   })
 })
 
-it('shows an unsupported manifest engine explicitly in Runs on', () => {
-  render(<RuntimePanel agent={agent({ engine: 'gemini' })} />)
-  expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('unsupported-engine')
-  expect(screen.getByText('Unsupported engine: gemini')).toBeTruthy()
+describe('a manifest engine this build cannot run', () => {
+  // `runtime.engine` is a preference, never refused: the agent runs on
+  // OpenCode, so Runs on shows what runs and the file's value is told behind
+  // the (?) beside the label.
+  it('selects what actually runs, and names the preference only in the tip', () => {
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={agent({ engine: 'gemini', credential: 'OpenAI' })} />)
+    const runsOn = screen.getByLabelText('Runs on') as HTMLSelectElement
+    expect(runsOn.value).toBe('OpenAI')
+    expect(screen.queryByRole('option', { name: /gemini/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'About Runs on' }))
+    expect(screen.getByText('cinna-agent.json asks for gemini; this version runs it on OpenCode.')).toBeTruthy()
+    expect((screen.getByRole('option', { name: 'Claude Agent' }) as HTMLOptionElement).disabled).toBe(false)
+    expect((screen.getByLabelText('Work complexity') as HTMLSelectElement).disabled).toBe(false)
+    expect(screen.queryByText(/Unsupported/)).toBeNull()
+    expect(screen.queryByText(/Update required/)).toBeNull()
+  })
+
+  it('selects what runs — OpenCode on the fallback credential — when the file names no credential', () => {
+    // Not "Default runtime (Claude Agent)": the agent runs on OpenCode, and
+    // selecting Default made picking it a no-op, so gemini could not be dropped.
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={agent({ engine: 'gemini' })} />)
+    const runsOn = screen.getByLabelText('Runs on') as HTMLSelectElement
+    expect(runsOn.selectedOptions[0]?.textContent).toBe('OpenCode (Anthropic)')
+    expect(runsOn.selectedOptions[0]?.disabled).toBe(true)
+    expect(screen.getByRole('option', { name: 'Default runtime (Claude Agent)' })).toBeTruthy()
+  })
+
+  it('drops the engine when Runs on picks Default runtime, and says it dropped it', () => {
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={agent({ engine: 'gemini' })} />)
+    const runsOn = screen.getByLabelText('Runs on') as HTMLSelectElement
+    // A browser fires no change for the option already selected (jsdom does),
+    // so Default must not be the one selected or picking it does nothing.
+    expect(runsOn.value).not.toBe('')
+    fireEvent.change(runsOn, { target: { value: '' } })
+    const [vars] = save.mock.calls[0] as [{ runtime: unknown }]
+    expect(vars.runtime).toMatchObject({ engine: null, credential: null })
+    expect(screen.getByText(/Dropped engine “gemini”\./)).toBeTruthy()
+  })
+
+  it('has no tip for an engine it knows', () => {
+    render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+    expect(screen.queryByRole('button', { name: 'About Runs on' })).toBeNull()
+  })
+
+  it('keeps the engine through a change of work complexity', () => {
+    // Mutation: send `declaredEngine` (null here) instead of "keep" and main
+    // erases `gemini` from the file on an unrelated save.
+    render(<RuntimePanel agent={agent({ engine: 'gemini' })} />)
+    fireEvent.change(screen.getByLabelText('Work complexity'), { target: { value: 'complex' } })
+    const [vars] = save.mock.calls[0] as [{ runtime: { engine: unknown; complexity: unknown } }]
+    expect(vars.runtime.engine).toBe('keep')
+    expect(vars.runtime.complexity).toBe('complex')
+  })
+
+  it('replaces the engine when Runs on picks a credential, and says it dropped it', () => {
+    render(<RuntimePanel agent={agent({ engine: 'gemini' })} />)
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
+    const [vars] = save.mock.calls[0] as [{ runtime: unknown }]
+    expect(vars.runtime).toMatchObject({ engine: null, credential: 'OpenAI' })
+    expect(screen.getByText(/Dropped engine “gemini”\./)).toBeTruthy()
+  })
+
+  it('replaces the engine when Runs on picks Claude Agent, and says it dropped it', () => {
+    render(<RuntimePanel agent={agent({ engine: 'gemini' })} />)
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'engine:claude' } })
+    const [vars] = save.mock.calls[0] as [{ runtime: unknown }]
+    expect(vars.runtime).toMatchObject({ engine: 'claude', credential: null })
+    expect(screen.getByText(/Dropped engine “gemini”\./)).toBeTruthy()
+  })
+
+  it('summarises it as the OpenCode agent it runs as, not the machine default', () => {
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={agent({ engine: 'gemini', credential: 'Anthropic', model: 'claude-sonnet-4-5' })} compact />)
+    expect(screen.getByText('OpenCode with Anthropic')).toBeTruthy()
+    expect(screen.getByTitle('Model: Claude Sonnet 4.5')).toBeTruthy()
+    expect(screen.queryByText(/Unsupported runtime/)).toBeNull()
+    expect(screen.queryByText('Update required')).toBeNull()
+    expect(screen.queryByText(/Claude Agent/)).toBeNull()
+  })
+
+  it('does not wait for the machine default to know it runs on OpenCode', () => {
+    defaultRuntime = undefined
+    render(<RuntimePanel agent={agent({ engine: 'some-future-engine' })} compact />)
+    expect(screen.queryByText('Loading runtime…')).toBeNull()
+    expect(screen.getByText(/^OpenCode/)).toBeTruthy()
+  })
 })
 
 

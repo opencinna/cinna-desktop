@@ -241,6 +241,36 @@ describe('draft', () => {
     expect(ai.calls[0].label).toBe('local-agent-draft-meta')
   })
 
+  it('recognises only the untouched template, not an edited one that kept an example step', () => {
+    // The scaffolded template, read straight from the bundle.
+    const template = readFileSync(join(agentDir, WORKFLOW), 'utf8')
+    expect(isUntouchedWorkflowPrompt(template)).toBe(true)
+    const edited = template.replace(
+      'Describe the single job this agent performs, in one or two sentences.',
+      'Watch the invoice inbox and flag anything overdue.'
+    )
+    expect(edited).not.toBe(template)
+    expect(isUntouchedWorkflowPrompt(edited)).toBe(false)
+    // A user's own prompt that happens to keep the template's example step.
+    expect(
+      isUntouchedWorkflowPrompt('# Alpha\n\n1. Run `python scripts/<script>.py --<arg>` to fetch or compute the data.\n')
+    ).toBe(false)
+    // A user's own prompt that left the placeholder line in, but not the
+    // template's example steps.
+    expect(
+      isUntouchedWorkflowPrompt(
+        '# Alpha\n\n## What you do\n\nDescribe the single job this agent performs, in one or two sentences.\n\n## How you do it\n\n1. Run `uv run scripts/invoices.py` and list what is overdue.\n'
+      )
+    ).toBe(false)
+    // The placeholder quoted inside a sentence is not the placeholder line.
+    expect(
+      isUntouchedWorkflowPrompt('Do not write "Describe the single job this agent performs, in one or two sentences." here.\n')
+    ).toBe(false)
+    // Folders scaffolded from the desktop's pre-sync template.
+    expect(isUntouchedWorkflowPrompt('# Alpha\n\nThis file IS the agent.\n')).toBe(true)
+    expect(isUntouchedWorkflowPrompt('1. <!-- first step -->\n')).toBe(true)
+  })
+
   it('does not replace example prompts that are already there', async () => {
     const agent = localAgentService.get(USER, agentId)
     localAgentService.updateField(USER, {

@@ -45,7 +45,7 @@ Reproduce with these exact conditions or the results do not transfer.
 | CLI version | `2.1.266` (`claude --version`), reported as `claude_code_version` on the init message |
 | SDK version | `@anthropic-ai/claude-agent-sdk@0.3.266` |
 | Platform | `darwin-arm64` |
-| Binary | `/Users/evgenyl/.local/bin/claude` — **native installer**. Not Homebrew, not the npm shim |
+| Binary | `~/.local/bin/claude` — **native installer**. Not Homebrew, not the npm shim |
 | Credential | a claude.ai login, held in the **login Keychain** (`Claude Code-credentials`). A `~/.claude/.credentials.json` also exists and is a **stale decoy** — see the correction below |
 | Auth as reported | `apiKeySource: 'none'` on every successful init |
 | Model as served | `claude-opus-5[1m]`, chosen by the CLI with no `model` option passed |
