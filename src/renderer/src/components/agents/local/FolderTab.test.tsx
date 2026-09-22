@@ -150,7 +150,7 @@ describe('FolderTab — a kit agent keeps every card', () => {
     )
 
     expect(screen.getByText('docs/WORKFLOW_PROMPT.md')).toBeTruthy()
-    expect(screen.getByText('Credentials')).toBeTruthy()
+    expect(screen.queryByText('Credentials')).toBeNull()
     expect(screen.getByText('Kit')).toBeTruthy()
     expect(screen.getAllByText(/contract 1\.1\.0/).length).toBeGreaterThan(0)
   })
@@ -175,7 +175,7 @@ describe('FolderTab — credentials/.env opens rather than reveals', () => {
   /** The card header's link; the Files row below carries the same title. */
   const headerLink = (): HTMLElement => screen.getAllByTitle(OPEN_TIP)[0]
 
-  it('opens the file from the Credentials card header and from the Files list', async () => {
+  it('opens the file from the Files list; credential attachments live in their own tab', async () => {
     renderTab(kit())
 
     fireEvent.click(headerLink())
@@ -184,7 +184,7 @@ describe('FolderTab — credentials/.env opens rather than reveals', () => {
 
     // The Files row names the same file and does the same thing — not a reveal
     // of a path that may not exist.
-    fireEvent.click(screen.getAllByTitle(OPEN_TIP)[1])
+    fireEvent.click(screen.getAllByTitle(OPEN_TIP)[0])
     await waitFor(() => expect(openCredentials).toHaveBeenCalledTimes(2))
     expect(openPath).not.toHaveBeenCalled()
 
@@ -242,14 +242,14 @@ describe('FolderTab — credentials/.env opens rather than reveals', () => {
     const note = await screen.findByRole('status')
     // One note, under the card that was clicked — not one per card.
     expect(screen.getAllByRole('status')).toHaveLength(1)
-    expect(note.closest('section')?.textContent).toContain('Credentials')
+    expect(note.closest('section')?.textContent).toContain('Files')
     for (const link of screen.getAllByTitle(OPEN_TIP)) {
       expect((link as HTMLButtonElement).disabled).toBe(false)
     }
 
     // A click from the Files row moves the note there and clears the first.
     openCredentials.mockResolvedValueOnce({ created: false, revealed: true })
-    fireEvent.click(screen.getAllByTitle(OPEN_TIP)[1])
+    fireEvent.click(screen.getAllByTitle(OPEN_TIP)[0])
     await waitFor(() => {
       const notes = screen.getAllByRole('status')
       expect(notes).toHaveLength(1)

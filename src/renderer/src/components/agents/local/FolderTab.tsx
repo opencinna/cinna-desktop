@@ -9,7 +9,6 @@ import {
 } from '../../../../../shared/localAgents'
 import { AgentCard } from './AgentCard'
 import {
-  CredentialsCard,
   PublishedCard,
   RunsCard,
   useOpenCredentialsFile,
@@ -259,7 +258,6 @@ export function FolderTab({ agent }: { agent: LocalAgentDto }): React.JSX.Elemen
         the desktop never creates for such a folder — an absence presented as a
         configuration the user might fill in. What it needs, it reads itself.
       */}
-      {agent.kind !== 'bare' && <CredentialsCard agent={agent} env={env} />}
       <FilesCard agent={agent} env={env} />
       {/*
         Publishing is a kit operation: it walks the folder against the

@@ -207,6 +207,10 @@ const ALLOWLIST: string[] = [
  * A behavioural one moves into a driver.
  */
 const OWNERSHIP: { file: string; category: Category; count: number; why: string }[] = [
+  { file: 'src/main/services/serviceCredentials/files.ts', category: 'kind', count: 5, why: 'Owns credential placement, bare orphan cleanup, and service-account paths: kit folders versus Desktop-owned bare storage.' },
+  { file: 'src/main/services/serviceCredentials/service.ts', category: 'kind', count: 1, why: 'Kit attachment admission must check the authored git policy before writing intent.' },
+  { file: 'src/main/services/serviceCredentials/helper.ts', category: 'kind', count: 2, why: 'Only kit folders own a portable helper that Desktop can offer to update.' },
+  { file: 'src/renderer/src/components/agents/local/ServiceCredentialsTab.tsx', category: 'kind', count: 3, why: 'Presents actual credential location and kit-only helper/manifest slots.' },
   { file: 'src/main/services/delegationService.ts', category: 'kind', count: 7,
     why: 'the delegation bus owns target directory, file-versus-task carrier choice, bare-folder Git admission and source/target trust policy; engine execution remains behind taskExecutionService' },
   { file: 'src/main/services/conductorBridge.ts', category: 'source', count: 1,
@@ -274,7 +278,7 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   { file: 'src/main/services/localAgents/scannerService.ts', category: 'kind', count: 1, why: 'owns root layout traversal' },
   { file: 'src/main/services/localAgents/watcherService.ts', category: 'kind', count: 3, why: 'owns folder layout event classification and watch paths' },
   { file: 'src/renderer/src/components/agents/local/AgentActionsMenu.tsx', category: 'kind', count: 5, why: 'owns folder Remove versus Trash actions and consent' },
-  { file: 'src/renderer/src/components/agents/local/FolderTab.tsx', category: 'kind', count: 7, why: 'presents actual file and state ownership' },
+  { file: 'src/renderer/src/components/agents/local/FolderTab.tsx', category: 'kind', count: 6, why: 'presents actual file and state ownership' },
   { file: 'src/renderer/src/components/agents/local/LocalAgentPage.tsx', category: 'kind', count: 4, why: 'owns manifest versus bare instruction editing and declaration tabs' },
   { file: 'src/renderer/src/components/agents/local/PermissionsCard.tsx', category: 'kind', count: 1, why: 'presents the actual grants state source' },
   { file: 'src/renderer/src/components/agents/local/ReadOnlyCards.tsx', category: 'kind', count: 1, why: 'presents the actual desktop state storage' },

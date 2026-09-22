@@ -7,6 +7,7 @@ import {
   Users,
   Wrench,
   Sparkles,
+  KeyRound,
   Package,
   Cloud,
   FolderCog,
@@ -33,6 +34,7 @@ const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles
   { id: 'chats', label: 'Chats', icon: MessageSquare },
   { id: 'local-agents', label: 'Agents', icon: FolderCog },
   { id: 'local-dev', label: 'Local Development', icon: TerminalSquare },
+  { id: 'credentials', label: 'Credentials', icon: KeyRound },
   { id: 'llm', label: 'AI Credentials', icon: Sparkles },
   { id: 'mcp', label: 'MCP Providers', icon: Plug },
   { id: 'accounts', label: 'User Accounts', icon: Users },
@@ -44,6 +46,7 @@ const profileMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles
   { id: 'profile-chats', label: 'Chats', icon: MessageSquare },
   { id: 'profile-agents', label: 'Agents', icon: Waypoints },
   { id: 'profile-local-dev', label: 'Local Development', icon: TerminalSquare },
+  { id: 'profile-credentials', label: 'Credentials', icon: KeyRound },
   { id: 'profile-llm', label: 'AI Credentials', icon: Sparkles },
   { id: 'profile-catalog', label: 'Catalog', icon: Package },
   { id: 'profile-sync', label: 'Cloud Sync', icon: Cloud }

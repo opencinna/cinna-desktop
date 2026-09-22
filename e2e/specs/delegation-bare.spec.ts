@@ -27,6 +27,7 @@ const BRIEF = 'Implement basalt-4417 in the exporter.'
 const QUESTION = 'Should basalt be exported as CSV?'
 const REPLY = 'Use CSV with the basalt-4417 header.'
 const DONE_SUMMARY = 'Basalt feature implemented.'
+const EXECUTOR_SECRET = 'delegated-executor-secret-123'
 
 function parsed(held: ScriptAcpHeld): any {
   const responses = held.params.results as { result: { isError?: boolean; content: { type: string; text?: string }[] } }[]
@@ -70,6 +71,19 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
     const folder = homeDir(cinna, 'basalt-exporter')
     writeFileSync(join(folder, 'CLAUDE.md'), '# Basalt Exporter\n\nYou own this project.\n')
     const executorId = await adoptFolder(cinna, folder)
+    await cinna.electronApp.evaluate(({ safeStorage }) => {
+      safeStorage.isEncryptionAvailable = () => true
+      safeStorage.encryptString = text => Buffer.from([...Buffer.from(text)].map(b => b ^ 0x95))
+      safeStorage.decryptString = bytes => Buffer.from([...bytes].map(b => b ^ 0x95)).toString()
+    })
+    for (const [id, name, secret] of [[requester.id, 'Requester token', 'requester-fixture-secret-123'], [executorId, 'Executor token', EXECUTOR_SECRET]]) {
+      const attached = await cinna.page.evaluate(async ({ id, name, secret }) => {
+        const record = await window.api.serviceCredentials.save({ name, type: 'api_token', values: { api_token: secret } })
+        if (!record.ok) return record
+        return window.api.serviceCredentials.setAttachments(id, 'local', [record.value.id])
+      }, { id, name, secret })
+      expect(attached.ok).toBe(true)
+    }
     const handoverDir = join(folder, '.cinna', 'handovers', HANDOVER_ID)
     const briefFile = join(handoverDir, 'brief.md')
 
@@ -147,11 +161,14 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
 
       await expect.poll(() => fake.calls.length, { timeout: 60_000 }).toBe(2)
       expect(fake.calls[1].text).toContain('basalt-4417')
+      expect(fake.calls[1].text).toContain('Executor token')
+      expect(fake.calls[1].text).not.toContain('Requester token')
+      expect(fake.calls[1].text).not.toContain(EXECUTOR_SECRET)
       expect(realpathSync(fake.calls[1].cwd)).toBe(realpathSync(folder))
     })
 
     const executorChatId = await test.step('a blocked handover_report survives the executor turn ending', async () => {
-      fake.calls[1].release({ tools: [{ name: 'handover_report', args: { status: 'blocked', summary: 'Choose a basalt format.', question: QUESTION } }] })
+      fake.calls[1].release({ tools: [{ name: 'handover_report', args: { status: 'blocked', summary: `Choose a basalt format. ${EXECUTOR_SECRET}`, question: QUESTION } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(4)
       expect(fake.tools[3].params.offered).toContain('handover_report')
       expect(parsed(fake.tools[3])).toMatchObject({ delegationId: created.delegationId, status: 'blocked' })
@@ -170,10 +187,12 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
       await expect.poll(() => fake.calls.length, { timeout: 90_000 }).toBe(3)
       expect(fake.calls[2].sessionId).toBe(fake.calls[0].sessionId)
       expect(fake.calls[2].text).toContain(QUESTION)
+      expect(fake.calls[2].text).toContain('***REDACTED***')
+      expect(fake.calls[2].text).not.toContain(EXECUTOR_SECRET)
       // Read while the requester's turn is held, well after the executor's ended.
       expect(await taskOf(created.taskId)).toMatchObject({ status: 'blocked', chatId: executorChatId })
 
-      fake.calls[2].release({ tools: [{ name: 'handover_reply', args: { id: created.delegationId, message: REPLY } }] })
+      fake.calls[2].release({ tools: [{ name: 'handover_reply', args: { id: created.delegationId, message: `${REPLY} ${EXECUTOR_SECRET}` } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(5)
       const replied = parsed(fake.tools[4])
       expect(replied).toMatchObject({ delegationId: created.delegationId })
@@ -181,12 +200,14 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
       const revision = readFileSync(join(handoverDir, 'revisions', '001.md'), 'utf8')
       expect(revision).toContain('cinna_handover: 1')
       expect(revision).toContain(REPLY)
+      expect(revision).not.toContain(EXECUTOR_SECRET)
       fake.tools[4].release({ text: 'The executor has the requested format.' })
     })
 
     await test.step('the revision is a new turn in the same executor chat', async () => {
       await expect.poll(() => fake.calls.length, { timeout: 90_000 }).toBe(4)
       expect(fake.calls[3].text).toContain(REPLY)
+      expect(fake.calls[3].text).not.toContain(EXECUTOR_SECRET)
       expect(fake.calls[3].sessionId).toBe(fake.calls[1].sessionId)
       expect(await taskOf(created.taskId)).toMatchObject({ chatId: executorChatId })
       fake.calls[3].release({ tools: [{ name: 'handover_report', args: { status: 'done', summary: DONE_SUMMARY } }] })

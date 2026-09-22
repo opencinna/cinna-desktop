@@ -1,3 +1,4 @@
+import { ServiceCredentialsTab } from './ServiceCredentialsTab'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MessageSquare, Settings } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
@@ -27,11 +28,12 @@ import { PermissionsCard } from './PermissionsCard'
 import { FolderTab } from './FolderTab'
 import { SchedulesTab } from './SchedulesTab'
 
-export type AgentPageTab = 'overview' | 'prompts' | 'commands' | 'schedules' | 'permissions' | 'folder'
+export type AgentPageTab = 'overview' | 'prompts' | 'commands' | 'schedules' | 'permissions' | 'folder' | 'credentials'
 
 const TABS: { id: AgentPageTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'prompts', label: 'Prompts' },
+  { id: 'credentials', label: 'Credentials' },
   { id: 'commands', label: 'Commands' },
   { id: 'schedules', label: 'Schedules' },
   // Permissions is a tab and not a card on Overview: in the common case it is a
@@ -374,6 +376,7 @@ export function LocalAgentPage(): React.JSX.Element {
         </nav>
 
         <div role="tabpanel" className="space-y-3">
+          {activeTab === 'credentials' && <ServiceCredentialsTab key={agent.id} agent={agent} />}
           {activeTab === 'schedules' && <SchedulesTab agentId={agent.id} />}
           {activeTab === 'overview' &&
             /* Three of the four Overview cards name a file only a kit folder

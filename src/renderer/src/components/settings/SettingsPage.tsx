@@ -1,3 +1,4 @@
+import { ServiceCredentialsSection } from './ServiceCredentialsSection'
 import { useAuthStore } from '../../stores/auth.store'
 import { ProfileLocalDevSettingsSection } from './ProfileLocalDevSettingsSection'
 import { useUIStore } from '../../stores/ui.store'
@@ -19,6 +20,8 @@ import { CloudSyncSettingsSection } from './CloudSyncSettingsSection'
 const sectionTitles = {
   chats: 'Chat Modes',
   llm: 'AI Credentials',
+  credentials: 'Credentials',
+  'profile-credentials': 'Credentials',
   'local-agents': 'Agents',
   'local-dev': 'Local Development',
   mcp: 'MCP Providers',
@@ -42,6 +45,8 @@ export function SettingsPage(): React.JSX.Element {
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-2xl mx-auto px-5 pt-[calc(var(--topbar-h)+12px)] pb-5">
         <h1 className="text-base font-semibold mb-4">{sectionTitles[settingsTab]}</h1>
+        {settingsTab === 'credentials' && <ServiceCredentialsSection key="credentials" />}
+        {settingsTab === 'profile-credentials' && <ServiceCredentialsSection cloud key={profileId} />}
         {settingsTab === 'chats' && <ChatModesSection key="chats" />}
         {settingsTab === 'llm' && <LLMSettingsSection key="llm" />}
         {settingsTab === 'local-agents' && <LocalAgentsSettingsSection key="local-agents" />}

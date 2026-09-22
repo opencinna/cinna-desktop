@@ -5,7 +5,7 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 
 /**
  * "Open credentials/.env": the file itself, not its folder, from the header's
- * Open-in menu and from the Folder tab — and only for a kit agent.
+ * Open-in menu and from the Credentials tab — and only for a kit agent.
  *
  * Main's `openCredentials` seeds the file (0600, declared names commented out),
  * then tries `shell.openPath`, then on macOS `open -t`, then falls back to
@@ -20,7 +20,7 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  *   shim logs its argv, which is the witness that main really tried it.
  * - `shell.showItemInFolder` is recorded instead of opening Finder.
  *
- * The success path (`openPath` resolving to `''`) is used for the Folder tab,
+ * The success path (`openPath` resolving to `''`) is used for the Credentials tab,
  * where the assertion is that the same IPC is reached with the `.env` path and
  * that a plain success writes no line anywhere.
  *
@@ -101,7 +101,7 @@ function headerLine(cinna: CinnaApp) {
     .locator('xpath=following-sibling::div[1]')
 }
 
-test('Open credentials/.env seeds the file, falls back to the file manager, and the Folder tab reaches the same call', async ({
+test('Open credentials/.env seeds the file, falls back to the file manager, and the Credentials tab reaches the same call', async ({
   cinna
 }) => {
   test.setTimeout(90_000)
@@ -201,8 +201,8 @@ test('Open credentials/.env seeds the file, falls back to the file manager, and 
     }
   })
 
-  await test.step('Folder tab: both links carry the tooltip and reach the same call', async () => {
-    await page.getByRole('tab', { name: /^Folder/ }).click()
+  await test.step('Credentials tab: both links carry the tooltip and reach the same call', async () => {
+    await page.getByRole('tab', { name: /^Credentials/ }).click()
     const credentials = page
       .locator('section')
       .filter({ has: page.getByRole('heading', { level: 2, name: 'Credentials', exact: true }) })
@@ -212,9 +212,7 @@ test('Open credentials/.env seeds the file, falls back to the file manager, and 
     await expect(credentials).toBeVisible()
     await expect(credentials).toContainText('VENDOR_PORTAL_TOKEN')
     const headerLink = credentials.getByRole('button', { name: 'credentials/.env', exact: true })
-    const fileRow = files.getByRole('button', { name: 'credentials/.env', exact: true })
     await expect(headerLink).toHaveAttribute('title', ENV_TITLE)
-    await expect(fileRow).toHaveAttribute('title', ENV_TITLE)
 
     // Now the OS opens it: the same IPC with the file's path, no reveal, and a
     // plain success writes no line under either card.
@@ -225,6 +223,8 @@ test('Open credentials/.env seeds the file, falls back to the file manager, and 
     await expect(headerLink).toBeEnabled()
     await expect(credentials.getByRole('status')).toHaveCount(0)
     await expect(credentials.getByRole('alert')).toHaveCount(0)
+    await page.getByRole('tab', { name: /^Folder/ }).click()
+    await expect(files.getByRole('button', { name: 'credentials/.env', exact: true })).toHaveAttribute('title', ENV_TITLE)
     await expect(files.getByRole('status')).toHaveCount(0)
     await expect(files.getByRole('alert')).toHaveCount(0)
     // The file was already there, so nothing was rewritten.

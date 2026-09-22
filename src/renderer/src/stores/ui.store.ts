@@ -25,6 +25,7 @@ export type SidebarTab = 'chats' | 'jobs' | 'notes' | 'agents'
 export type SettingsMenu =
   | 'chats'
   | 'llm'
+  | 'credentials'
   | 'mcp'
   | 'local-agents'
   | 'local-dev'
@@ -35,6 +36,7 @@ export type SettingsMenu =
   | 'profile-agents'
   | 'profile-chats'
   | 'profile-llm'
+  | 'profile-credentials'
   | 'profile-catalog'
   | 'profile-sync'
   | 'trash'
@@ -49,6 +51,7 @@ export const PROFILE_SCOPE_TABS: readonly SettingsMenu[] = [
   'profile-agents',
   'profile-chats',
   'profile-llm',
+  'profile-credentials',
   'profile-catalog',
   'profile-sync'
 ]
