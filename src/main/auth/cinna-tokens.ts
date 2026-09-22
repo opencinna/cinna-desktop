@@ -43,6 +43,13 @@ function persistTokens(userId: string, tokens: {
   })
 }
 
+/** Stored identity only: no refresh, expiry check, or network request. */
+export function getStoredCinnaSubject(userId: string): string {
+  const state = userRepo.getCinnaTokenState(userId)
+  if (!state?.accessTokenEnc) throw new CinnaReauthRequired('No Cinna access token stored')
+  return decodeAccessTokenSubject(decryptApiKey(state.accessTokenEnc))
+}
+
 /**
  * Get a valid Cinna access token for a user.
  * Automatically refreshes if within 60s of expiry.

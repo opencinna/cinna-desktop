@@ -1,3 +1,7 @@
+import { userRepo } from './db/users'
+import { serviceCredentialService } from './services/serviceCredentials/service'
+import { stopPeriodicSync, startPeriodicSync, runSyncOnce } from './agents/remote-sync'
+import { stopAccountConfigPeriodicSync, startAccountConfigPeriodicSync, runAccountConfigSyncOnce } from './services/account-config-sync'
 import { initializeHubCore, shutdownHubCore } from './hub/core'
 import { installDesktopFeatures } from './host/desktopFeatures'
 import { developmentAgentContext, contextForDevelopmentAgent, restoreDevelopmentContext } from './localdev/developmentSessionService'
@@ -403,6 +407,9 @@ function startup(): void {
   // mid-flight and orphaned (→ rotation-replay self-logout on wake); re-arm +
   // catch up on resume. `powerMonitor` is only available after the app is ready.
   powerMonitor.on('suspend', () => {
+    serviceCredentialService.setSuspended(true)
+    stopPeriodicSync()
+    stopAccountConfigPeriodicSync()
     localScheduleScheduler.setSuspended(true)
     handoverScheduler.setSuspended(true)
     taskRuntimeService.interruptAll('Execution paused when this device went to sleep. Review the conversation before resuming.')
@@ -410,6 +417,11 @@ function startup(): void {
     taskSyncScheduler.setSuspended(true)
   })
   powerMonitor.on('resume', () => {
+    serviceCredentialService.setSuspended(false)
+    if (userActivation.isActivated() && userRepo.get(getCurrentUserId())?.type === 'cinna_user') {
+      startPeriodicSync(getCurrentUserId()); void runSyncOnce(getCurrentUserId())
+      startAccountConfigPeriodicSync(getCurrentUserId()); void runAccountConfigSyncOnce(getCurrentUserId())
+    }
     localScheduleScheduler.setSuspended(false)
     handoverScheduler.setSuspended(false)
     syncService.setSystemSuspended(false)

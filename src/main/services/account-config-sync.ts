@@ -13,6 +13,8 @@ const logger = createLogger('account-config-sync')
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
 
+let generation = 0
+let pending: Promise<void> | null = null
 let syncInterval: ReturnType<typeof setInterval> | null = null
 
 export type AccountConfigSyncError = 'reauth_required' | 'sync_failed'
@@ -34,10 +36,17 @@ export function notifyAccountConfigSynced(
 
 /** Run a single account-config sync pass and notify the renderer on completion. */
 export async function runAccountConfigSyncOnce(userId: string): Promise<void> {
+  const epoch = generation
+  if (pending) await pending.catch(() => {})
+  if (epoch !== generation) return
+  const current = () => epoch === generation
+  const operation = (async () => {
   try {
-    await accountConfigService.syncAccountConfig(userId)
+    await accountConfigService.syncAccountConfig(userId, current)
+    if (!current()) return
     notifyAccountConfigSynced()
   } catch (err) {
+    if (!current()) return
     if (err instanceof CinnaReauthRequired) {
       logger.error('account-config sync stopped: Cinna re-auth required', { userId })
       stopAccountConfigPeriodicSync()
@@ -47,6 +56,9 @@ export async function runAccountConfigSyncOnce(userId: string): Promise<void> {
     logger.warn('account-config sync failed', { error: String(err) })
     notifyAccountConfigSynced({ error: 'sync_failed' })
   }
+  })()
+  pending = operation
+  try { await operation } finally { if (pending === operation) pending = null }
 }
 
 /** Start periodic account-config sync for a user. Stops any existing interval first. */
@@ -59,6 +71,7 @@ export function startAccountConfigPeriodicSync(userId: string): void {
 
 /** Stop periodic account-config sync. */
 export function stopAccountConfigPeriodicSync(): void {
+  generation++
   if (syncInterval) {
     clearInterval(syncInterval)
     syncInterval = null

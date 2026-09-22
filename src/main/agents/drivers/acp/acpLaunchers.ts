@@ -132,6 +132,7 @@ export interface AcpSessionSetup {
 }
 
 export interface AcpLaunchPlan {
+  credentialPrompt?: string
   /** Main-only seal, set after verifying the native runtime's restricted launch. */
   conductorPolicy?: 'no-native-tools'
   /**

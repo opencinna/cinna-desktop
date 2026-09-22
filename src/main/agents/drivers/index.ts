@@ -631,6 +631,15 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
 }
 
 export const acpDriver = createAcpDriver({
+  prepareCredentials: async (userId, agent, plan) => {
+    if (agent.source !== 'folder' || isDevelopmentAgent(agent) || isChatConductor(agent) || plan.spec.remote) return plan
+    const { serviceCredentialService } = await import('../../services/serviceCredentials/service')
+    const prepared = await serviceCredentialService.prepare(userId, agent.id)
+    const env = { ...plan.spec.env }
+    delete env.CINNA_CREDENTIALS_PATH
+    if (prepared.path) env.CINNA_CREDENTIALS_PATH = prepared.path
+    return { ...plan, credentialPrompt: prepared.prompt, spec: { ...plan.spec, env, key: `${plan.spec.key}:credentials:${prepared.generation}` } }
+  },
   recordModelCatalog: (userId, launcher, metadata) => {
     if (isAgentEngine(launcher)) recordRuntimeModelCatalog(userId, launcher, metadata)
   },

@@ -1,3 +1,4 @@
+import type { ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialResult } from '../shared/serviceCredentials'
 import type { RuntimeModelCatalog } from '../shared/runtimeModelCatalog'
 import type { AiFunctionsBackendStatus } from '../shared/aiFunctions'
 import type { ChatModeRuntime } from '../shared/chatModeRuntime'
@@ -331,6 +332,21 @@ export interface McpProviderData {
 }
 
 const api = {
+  serviceCredentials: {
+    helper: (id: string): Promise<ServiceCredentialResult<{ needsUpdate: boolean; stamp: { mtimeMs: number; size: number; hash: string } | null } | null>> => ipcRenderer.invoke('service-credentials:helper', id),
+    updateHelper: (id: string, stamp: { mtimeMs: number; size: number; hash: string }): Promise<ServiceCredentialResult<void>> => ipcRenderer.invoke('service-credentials:update-helper', id, stamp),
+    list: (userId: string, serverUrl: string | null): Promise<ServiceCredentialResult<{ items: ServiceCredentialDto[]; lastSync: number | null; error: string | null; secureStorage: boolean }>> => ipcRenderer.invoke('service-credentials:list', userId, serverUrl),
+    save: (input: ServiceCredentialInput): Promise<ServiceCredentialResult<ServiceCredentialDto>> => ipcRenderer.invoke('service-credentials:save', input),
+    remove: (id: string): Promise<ServiceCredentialResult<void>> => ipcRenderer.invoke('service-credentials:remove', id),
+    sync: (userId: string, serverUrl: string): Promise<ServiceCredentialResult<void>> => ipcRenderer.invoke('service-credentials:sync', userId, serverUrl),
+    attachments: (id: string): Promise<ServiceCredentialResult<ServiceCredentialAttachmentDto[]>> => ipcRenderer.invoke('service-credentials:attachments', id),
+    setAttachments: (id: string, origin: 'local' | 'cloud', refs: string[]): Promise<ServiceCredentialResult<ServiceCredentialAttachmentDto[]>> => ipcRenderer.invoke('service-credentials:set-attachments', id, origin, refs),
+    onChanged: (cb: () => void): (() => void) => {
+      const listener = (): void => cb()
+      ipcRenderer.on('service-credentials:changed', listener)
+      return () => { ipcRenderer.removeListener('service-credentials:changed', listener) }
+    }
+  },
   app: {
     setTheme: (theme: 'dark' | 'light'): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('app:set-theme', theme)

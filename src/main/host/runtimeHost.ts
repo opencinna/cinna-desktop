@@ -10,6 +10,8 @@ export interface RuntimeHost {
   http: { fetch(input: string, init?: RequestInit): Promise<Response> }
   keystore: {
     isEncryptionAvailable(): boolean
+    /** Strong storage policy for service credentials; does not change legacy key decoding. */
+    isSecureStorageAvailable(): boolean
     encryptString(plaintext: string): Buffer
     decryptString(encrypted: Buffer): string
   }

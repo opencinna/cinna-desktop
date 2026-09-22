@@ -82,7 +82,7 @@ const { agentRootRepo } = await import('../../db/agentRoots')
 const { clearContractCache, getLayoutView } = await import('../../kit/contractStore')
 const { manifestPath, readManifest, writeManifest } = await import('../../kit/manifestIo')
 const { scaffoldService } = await import('./scaffoldService')
-const { scannerService } = await import('./scannerService')
+const { scannerService, installCredentialReadiness } = await import('./scannerService')
 const { desktopStatePath, desktopStateService } = await import('./desktopStateService')
 
 const USER = '__default__'
@@ -92,6 +92,7 @@ let root: Awaited<ReturnType<typeof agentRootRepo.create>>
 
 beforeEach(() => {
   holder.current = createTestDatabase()
+  installCredentialReadiness(() => [])
   walkCap.limit = null
   clearContractCache()
   scannerService.markAllRootsDirty()
@@ -1246,4 +1247,42 @@ describe('external roots', () => {
     scannerService.markRootDirty(externalRoot.id)
     expect(scannerService.scanRoot(USER, externalRoot).agents.map((a) => a.id)).toEqual(first)
   })
+})
+
+
+it('matches attached credentials by service and type without spurious env overlap', () => {
+  const dir = scaffold('slack-agent')
+  const manifest = readManifest(manifestPath(dir))
+  manifest.credentials = [{ name: 'Slack', type: 'api_token', env_prefix: 'SLACK_', fields: ['token', 'team'] }]
+  writeManifest(manifestPath(dir), manifest)
+  writeFileSync(join(dir, 'credentials/.env'), 'SLACK_TEAM=fixture-team\n')
+  const attached = { name: 'GitHub', type: 'api_token', serviceUri: 'github', state: 'ready' } as never
+  installCredentialReadiness(() => [attached])
+  let slot = scannerService.scanRoot(USER, root).agents[0].credentials[0]
+  expect(slot.satisfied).toBe(false); expect(slot.overlappingKeys).toEqual([])
+  installCredentialReadiness(() => [{ ...attached as object, name: 'Slack' } as never])
+  slot = scannerService.scanRoot(USER, root).agents[0].credentials[0]
+  expect(slot.satisfied).toBe(true); expect(slot.overlappingKeys).toEqual(['SLACK_TEAM'])
+  manifest.credentials[0].service_uri = 'slack-workspace'
+  writeManifest(manifestPath(dir), manifest)
+  slot = scannerService.scanRoot(USER, root).agents[0].credentials[0]
+  expect(slot.satisfied).toBe(false)
+  installCredentialReadiness(() => [{ ...attached as object, serviceUri: 'slack-workspace' } as never])
+  expect(scannerService.scanRoot(USER, root).agents[0].credentials[0].satisfied).toBe(true)
+})
+
+it('projects the sibling publication ledger with legacy fallback and no manifest mutation', () => {
+  const dir = scaffold('published-agent')
+  const manifest = readManifest(manifestPath(dir))
+  const legacy = { platform_url: 'https://legacy.test', agent_id: 'old' }
+  manifest.publications = [legacy]
+  writeManifest(manifestPath(dir), manifest)
+  const before = readFileSync(manifestPath(dir), 'utf8')
+  expect(scannerService.scanRoot(USER, root).agents[0].publications).toEqual([legacy])
+  const latest = { platform_url: 'https://current.test', agent_id: 'new', content_hash: 'fixture' }
+  writeFileSync(join(dir, 'publications.json'), JSON.stringify({ publications: [latest] }))
+  expect(scannerService.scanRoot(USER, root).agents[0].publications).toEqual([latest])
+  writeFileSync(join(dir, 'publications.json'), JSON.stringify({ publications: [] }))
+  expect(scannerService.scanRoot(USER, root).agents[0].publications).toEqual([])
+  expect(readFileSync(manifestPath(dir), 'utf8')).toBe(before)
 })

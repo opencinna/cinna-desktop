@@ -1,3 +1,4 @@
+import { serviceCredentialService } from '../services/serviceCredentials/service'
 import { setCurrentUser } from './session'
 import { reloadUserProviders } from './reload'
 import { clearAllAdapters } from '../llm/registry'
@@ -45,7 +46,7 @@ class UserActivation {
 
   /** A re-auth stored fresh Cinna tokens for `userId`. Only the active profile is told. */
   credentialsRenewed(userId: string): void {
-    if (this._activated && this._activeUserId === userId) this._notifyReady(userId)
+    if (this._activated && this._activeUserId === userId) { void serviceCredentialService.activate(userId).then(() => serviceCredentialService.sync()).catch(() => { /* Preparation retries cleanup before any turn. */ }); this._notifyReady(userId) }
   }
 
   private _notifyReady(userId: string): void {
@@ -107,6 +108,9 @@ class UserActivation {
   }
 
   private async _activate(userId: string): Promise<void> {
+    serviceCredentialService.retire()
+    stopPeriodicSync()
+    stopAccountConfigPeriodicSync()
     const epoch = ++this._epoch
     this._activated = false
     // Login, profile switching and logout all enter through activate(), without
@@ -122,6 +126,8 @@ class UserActivation {
     const operation = this._operations.catch(() => {}).then(async () => {
       if (!current()) return
       setCurrentUser(userId)
+      await serviceCredentialService.activate(userId)
+      if (!current()) return
       await reloadUserProviders(current)
       if (!current()) return
       this._activated = true
@@ -140,13 +146,13 @@ class UserActivation {
   private _startRemoteSync(userId: string): void {
     const user = userRepo.get(userId)
     if (user?.type === 'cinna_user' && user.cinnaServerUrl) {
-      void runSyncOnce(userId)
       startPeriodicSync(userId)
+      void runSyncOnce(userId)
       // Materialize account-provisioned LLM providers + default chat modes
       // ("ready on login"). Already-synced managed adapters were loaded by
       // reloadUserProviders; this refreshes them against the server.
-      void runAccountConfigSyncOnce(userId)
       startAccountConfigPeriodicSync(userId)
+      void runAccountConfigSyncOnce(userId)
       // Activate cloud data-sync (silent device-key unlock + periodic push/pull).
       void syncService.ensureActivated(userId)
       // Bring local development to its target state: the managed toolchain and
@@ -160,6 +166,9 @@ class UserActivation {
 
   /** Tear down the active session without loading any providers. */
   async deactivate(): Promise<void> {
+    serviceCredentialService.retire()
+    stopPeriodicSync()
+    stopAccountConfigPeriodicSync()
     const epoch = ++this._epoch
     this._pendingActivation = undefined
     this._activated = false

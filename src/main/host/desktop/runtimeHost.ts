@@ -17,6 +17,8 @@ export function createDesktopHost(): RuntimeHost {
     http: { fetch: (input, init) => net.fetch(input, init) },
     keystore: {
       isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+      isSecureStorageAvailable: () => safeStorage.isEncryptionAvailable() &&
+        (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend())),
       encryptString: (value) => safeStorage.encryptString(value),
       decryptString: (value) => safeStorage.decryptString(value)
     },

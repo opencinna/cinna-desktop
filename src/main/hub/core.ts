@@ -1,6 +1,13 @@
+import { setLogValueRedactor } from '../logger/logger'
+import { redactCredentialValues } from '../security/serviceCredentialRedaction'
+import { installCredentialReadiness } from '../services/localAgents/scannerService'
+import { installCommandCredentialPreparation } from '../services/localAgents/commandService'
 /** Shared runtime composition. Desktop calls this in process; the Phase 0
  * Node spike exercises the same boot without importing any desktop transport.
  */
+import { serviceCredentialService } from '../services/serviceCredentials/service'
+import { stopPeriodicSync } from '../agents/remote-sync'
+import { stopAccountConfigPeriodicSync } from '../services/account-config-sync'
 import { initDatabase } from '../db/client'
 import { getCurrentUserId, initSession } from '../auth/session'
 import { userActivation } from '../auth/activation'
@@ -21,8 +28,10 @@ import { mcpManager } from '../mcp/manager'
 import { installAgentReadiness } from './agentReadiness'
 
 export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>[0]): void {
+  setLogValueRedactor(redactCredentialValues)
   initDatabase(openDatabase)
   initSession()
+  installCommandCredentialPreparation(id => serviceCredentialService.prepare(getCurrentUserId(), id))
   taskRuntimeService.recover()
   registerRecoverer('a2a', a2aTurnRecoverer)
   registerRecoverer('managed', managedTurnRecoverer)
@@ -32,6 +41,7 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
     if (userActivation.isActivated() && getCurrentUserId() === userId) void remoteTurnRecoveryService.resume(userId)
   })
   localAgentService.configure(getSettingsScopeUserId)
+  installCredentialReadiness(path => serviceCredentialService.metadataForPath(path))
   installAgentReadiness()
 }
 
@@ -45,6 +55,9 @@ export { taskRuntimeService, userActivation }
  * closing their database. Detaching a viewer must never call this function.
  */
 export async function shutdownHubCore(reason = 'Execution stopped when the app closed. Review the conversation before resuming.'): Promise<void> {
+  serviceCredentialService.retire()
+  stopPeriodicSync()
+  stopAccountConfigPeriodicSync()
   a2aStreamingService.saveInFlight()
   localScheduleScheduler.stop()
   handoverScheduler.stop()

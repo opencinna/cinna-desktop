@@ -79,13 +79,14 @@ export const accountConfigService = {
    * Re-throws {@link CinnaReauthRequired} (via getCinnaAccessToken) so the
    * periodic runner can stop hammering a revoked token.
    */
-  async syncAccountConfig(userId: string): Promise<SyncAccountConfigResult> {
+  async syncAccountConfig(userId: string, current: () => boolean = () => true): Promise<SyncAccountConfigResult> {
     const user = userRepo.get(userId)
     if (!user || user.type !== 'cinna_user' || !user.cinnaServerUrl) {
       return { providers: 0, modes: 0, removed: 0, skipped: 0, unsupported: 0, failed: 0 }
     }
 
     const accessToken = await getCinnaAccessToken(userId)
+    if (!current()) return { providers: 0, modes: 0, removed: 0, skipped: 0, unsupported: 0, failed: 0 }
     const baseUrl = user.cinnaServerUrl.replace(/\/$/, '')
 
     // Time the external call for the Logger UI. Never log the response body — it
@@ -95,6 +96,7 @@ export const accountConfigService = {
     const response = await runtimeHost.http.fetch(`${baseUrl}/api/v1/external/account-config`, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }
     })
+    if (!current()) return { providers: 0, modes: 0, removed: 0, skipped: 0, unsupported: 0, failed: 0 }
     if (!response.ok) {
       logger.warn('account-config request failed', {
         baseUrl,
@@ -108,6 +110,7 @@ export const accountConfigService = {
     }
 
     const data = (await response.json()) as AccountConfigResponse
+    if (!current()) return { providers: 0, modes: 0, removed: 0, skipped: 0, unsupported: 0, failed: 0 }
     logger.info('account-config response', {
       baseUrl,
       status: response.status,

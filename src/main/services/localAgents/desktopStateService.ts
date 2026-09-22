@@ -1,3 +1,4 @@
+import type { ServiceCredentialAttachments } from '../../../shared/serviceCredentials'
 import { runtimeHost } from '../../host/runtimeHost'
 /**
  * `app-data/desktop.json` — the **one** file in an agent folder Cinna Desktop
@@ -40,6 +41,7 @@ export interface DesktopSessionState {
 }
 
 export interface DesktopState {
+  serviceCredentials?: ServiceCredentialAttachments
   /** Loopback base URL the engine last served this agent's API on. */
   localApiBaseUrl: string | null
   /** Token the agent authenticates its own callbacks with. Never leaves main. */
@@ -224,6 +226,7 @@ function coerce(raw: unknown): DesktopState {
   }
 
   return {
+    serviceCredentials: coerceServiceCredentials(raw.serviceCredentials),
     localApiBaseUrl: asString(raw.localApiBaseUrl),
     agentToken: asString(raw.agentToken),
     sessions,
@@ -490,4 +493,15 @@ export const desktopStateService = {
       cloudDelegations: state.cloudDelegations ?? null
     }
   }
+}
+
+function coerceServiceCredentials(raw: unknown): ServiceCredentialAttachments {
+  const refs = (value: unknown): { ref: string }[] => Array.isArray(value)
+    ? [...new Set(value.filter(isRecord).map(v => v.ref).filter((v): v is string => typeof v === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(v)))].map(ref => ({ ref })) : []
+  if (!isRecord(raw)) return { local: [], accounts: {} }
+  const accounts: ServiceCredentialAttachments['accounts'] = {}
+  if (isRecord(raw.accounts)) for (const [key, value] of Object.entries(raw.accounts)) {
+    if (/^[a-f0-9]{16}$/.test(key)) accounts[key] = refs(value)
+  }
+  return { local: refs(raw.local), accounts }
 }

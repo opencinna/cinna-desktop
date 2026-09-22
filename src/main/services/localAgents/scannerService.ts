@@ -1,3 +1,5 @@
+import { readPublications } from '../../kit/publications'
+import type { ServiceCredentialDto } from '../../../shared/serviceCredentials'
 /**
  * The scanner — the one place a folder on disk becomes an `agents` row.
  *
@@ -72,6 +74,8 @@ import { isWithin } from './pathRules'
 import type { BareInstructionsFile } from '../../../shared/localAgents'
 
 const logger = createLogger('local-agent-scan')
+let attachmentMetadata: (path: string) => (ServiceCredentialDto & { state: string })[] = () => []
+export function installCredentialReadiness(lookup: typeof attachmentMetadata): void { attachmentMetadata = lookup; markAllRootsDirty() }
 
 /** Local `.env` holding the credential values. Names are read; values never. */
 export const ENV_FILE = 'credentials/.env'
@@ -185,7 +189,8 @@ function expectedKeysFor(slot: CredentialSlot): string[] {
 
 function credentialStates(
   manifest: CinnaAgentManifest,
-  envKeys: ReadonlySet<string>
+  envKeys: ReadonlySet<string>,
+  attached: (ServiceCredentialDto & { state: string })[] = []
 ): LocalAgentCredentialState[] {
   const slots = Array.isArray(manifest.credentials) ? manifest.credentials : []
   return slots
@@ -194,6 +199,11 @@ function credentialStates(
       const expectedKeys = expectedKeysFor(slot)
       const presentKeys = expectedKeys.filter((key) => envKeys.has(key))
       const optional = slot.optional === true
+      const sameType = attached.filter(c => c.type === slot.type)
+      const matching = typeof slot.service_uri === 'string' && slot.service_uri
+        ? sameType.filter(c => c.serviceUri === slot.service_uri)
+        : [sameType.filter(c => c.name === slot.name), sameType.filter(c => c.serviceUri === slot.name)].find(group => group.length) ?? []
+      const attachment = matching.find(c => c.state === 'ready') ?? matching[0]
       return {
         name: typeof slot.name === 'string' ? slot.name : '(unnamed)',
         type: typeof slot.type === 'string' ? slot.type : 'unknown',
@@ -201,10 +211,11 @@ function credentialStates(
         envPrefix: typeof slot.env_prefix === 'string' ? slot.env_prefix : null,
         expectedKeys,
         presentKeys,
+        overlappingKeys: attachment ? presentKeys : [],
         // A slot that declares no keys cannot be checked; treat it as satisfied
         // rather than blocking the agent on something we cannot verify.
         satisfied:
-          optional || expectedKeys.length === 0 || presentKeys.length === expectedKeys.length
+          optional || (attachment ? attachment.state === 'ready' : expectedKeys.length === 0 || presentKeys.length === expectedKeys.length)
       }
     })
 }
@@ -315,7 +326,7 @@ function readiness(
     const names = missing.map((c) => c.name).join(', ')
     return {
       readiness: 'credentials_needed',
-      reason: `Add the credentials for ${names} in credentials/.env.`
+      reason: `Add the credentials for ${names} by attaching them or configuring credentials/.env.`
     }
   }
   return { readiness: 'ok', reason: null }
@@ -557,7 +568,7 @@ export const scannerService = {
       folderName
     })
     const compatibility = checkContractCompatibility(manifest.contract_version, contract.version)
-    const credentials = credentialStates(manifest, readEnvKeys(agentDir))
+    const credentials = credentialStates(manifest, readEnvKeys(agentDir), attachmentMetadata(agentDir))
     const catalog = commandsFor(agentDir, layout)
     const { readiness: state, reason } = readiness(
       compatibility,
@@ -601,7 +612,7 @@ export const scannerService = {
       readinessReason: reason,
       contractStatus: compatibility.status,
       manifest,
-      publications: Array.isArray(manifest.publications) ? manifest.publications : [],
+      publications: (() => { const { value } = readPublications(agentDir, manifest); return Array.isArray(value) ? value : [] })(),
       runtime: manifest.runtime ?? null,
       credentials,
       commands: catalog.commands,

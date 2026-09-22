@@ -250,6 +250,7 @@ const ENV_TEMPLATES = new Set(['.env.example', '.env.sample', '.env.template'])
 export function isCredentialFilePath(path: string, agentDir: string | null): boolean {
   const normalized = path.replace(/\\/g, '/')
   const base = normalized.slice(normalized.lastIndexOf('/') + 1).toLowerCase()
+  if (base === 'credentials.json' || normalized.toLowerCase().includes('/agent-credentials/')) return true
   if (base === '.env') return true
   if (base.startsWith('.env.') && !ENV_TEMPLATES.has(base)) return true
   if (base.endsWith('.pem') || base.endsWith('.key')) return true

@@ -1,3 +1,4 @@
+vi.mock('../services/serviceCredentials/service', () => ({ serviceCredentialService: { retire() {}, activate: async () => {} } }))
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({

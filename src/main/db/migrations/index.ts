@@ -1,3 +1,4 @@
+import { migrateServiceCredentials } from './service-credentials'
 import { migrateConductorSessions } from './conductor-sessions'
 import type Database from 'better-sqlite3'
 import { migrateProviders } from './providers'
@@ -60,6 +61,7 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // FK — `chat_on_demand_agents` references `agents`), then chats, messages,
   // chat-modes. FK enforcement is off during migrations (see initDatabase), so
   // this ordering is belt-and-suspenders, not the sole guard.
+  migrateServiceCredentials(sqlite)
   migrateProviders(sqlite)
   migrateMcp(sqlite)
   migrateAgents(sqlite)

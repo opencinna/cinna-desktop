@@ -61,6 +61,8 @@ import type { MessagePart } from '../../../shared/messageParts'
 import { RUN_REFERENCE_PATTERN } from '../../../shared/kit/manifest'
 
 const logger = createLogger('local-agent-command')
+let prepareCredentials: (agentId: string) => Promise<{ path?: string }> = async () => ({})
+export function installCommandCredentialPreparation(prepare: typeof prepareCredentials): void { prepareCredentials = prepare }
 
 /**
  * Combined stdout+stderr cap. A runaway script must not grow the DB row — or
@@ -350,7 +352,12 @@ export const commandService = {
     try {
       return await turnLock.withLock(agentId, 'command', async () => {
         const env = shellEnvForChild(await getShellEnv())
+        const prepared = await prepareCredentials(agentId)
+        delete env.CINNA_CREDENTIALS_PATH
+        if (prepared.path) env.CINNA_CREDENTIALS_PATH = prepared.path
         const outcome = await execute(localCommand, agentDir, env, signal, timeoutMs)
+        const { redactCredentialText } = await import('../../security/serviceCredentialRedaction')
+        outcome.output = redactCredentialText(outcome.output)
 
         if (outcome.spawnError) {
           return {

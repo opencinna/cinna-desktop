@@ -13,7 +13,7 @@ vi.mock('../db/users', () => ({ userRepo: {
 } }))
 vi.mock('../security/keystore', () => ({ encryptApiKey: (value: string) => Buffer.from(value), decryptApiKey: (value: Buffer) => value.toString() }))
 vi.mock('./cinna-oauth', () => ({ refreshCinnaTokens: refresh, CinnaReauthRequired: class extends Error {} }))
-const { storeCinnaTokens, getCinnaAccessToken } = await import('./cinna-tokens')
+const { storeCinnaTokens, getCinnaAccessToken, getStoredCinnaSubject } = await import('./cinna-tokens')
 const { CinnaReauthRequired } = await import('./cinna-oauth')
 const { CinnaSessionChanged } = await import('./cinna-session')
 
@@ -69,4 +69,14 @@ it('does not begin an old refresh after a synchronous login replacement', async 
   await expect(pending).rejects.toBeInstanceOf(CinnaSessionChanged)
   expect(refresh).not.toHaveBeenCalled()
   expect(await getCinnaAccessToken('u')).toBe('replacement')
+})
+
+it('reads the stored subject offline even when the access token is expired', () => {
+  const token = 'header.' + Buffer.from(JSON.stringify({ sub: 'stable-account', exp: 1 })).toString('base64url') + '.signature'
+  storeCinnaTokens('u', tokens(token))
+  expect(getStoredCinnaSubject('u')).toBe('stable-account')
+  expect(refresh).not.toHaveBeenCalled()
+  expect(clear).not.toHaveBeenCalled()
+  holder.state = null
+  expect(() => getStoredCinnaSubject('u')).toThrow('No Cinna access token')
 })

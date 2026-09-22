@@ -1032,3 +1032,5 @@ export const delegations = sqliteTable('delegations', {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull()
 })
+
+export const serviceCredentials = sqliteTable('service_credentials', { id: text('id').primaryKey(), userId: text('user_id').notNull() })

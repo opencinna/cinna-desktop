@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { getDb } from './client'
+import { serviceCredentials } from './schema'
 import {
   users,
   chats,
@@ -153,6 +154,7 @@ export const userRepo = {
   deleteWithCascade(id: string): void {
     const db = getDb()
     db.transaction((tx) => {
+      tx.delete(serviceCredentials).where(eq(serviceCredentials.userId, id)).run()
       tx.delete(chats).where(eq(chats.userId, id)).run()
       tx.delete(jobs).where(eq(jobs.userId, id)).run() // → job_runs, job_agents, job_mcp_providers
       // → task_input_requests by FK cascade. Tasks hold the goal, the

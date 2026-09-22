@@ -374,3 +374,18 @@ describe('runForTurn', () => {
     expect(turn.error?.message).toContain('No command named "missing"')
   })
 })
+
+it('injects the credential path under the command lock and redacts script output', async () => {
+  const { installCommandCredentialPreparation } = await import('./commandService')
+  const { rememberCredentialSecrets, clearCredentialRedaction } = await import('../../security/serviceCredentialRedaction')
+  const path = join(workshop, 'credential-fixture.json')
+  writeFileSync(path, 'command-fixture-secret-123')
+  rememberCredentialSecrets({ token: 'command-fixture-secret-123' })
+  installCommandCredentialPreparation(async () => { expect(turnLock.isLocked(AGENT_ID)).toBe(true); return { path } })
+  try {
+    writeCatalog('commands:\n  - name: secret\n    description: Read the dummy fixture\n    command: cat "$CINNA_CREDENTIALS_PATH"\n')
+    const result = await commandService.run(USER, AGENT_ID, 'secret')
+    expect(result.ok).toBe(true)
+    expect(result.output).toBe('***REDACTED***')
+  } finally { installCommandCredentialPreparation(async () => ({})); clearCredentialRedaction() }
+})

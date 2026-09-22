@@ -1,3 +1,4 @@
+import { registerServiceCredentialHandlers } from './service_credentials.ipc'
 import { registerAppHandlers } from './app.ipc'
 import { registerChatHandlers } from './chat.ipc'
 import { registerProviderHandlers } from './provider.ipc'
@@ -57,6 +58,7 @@ export function registerAllIpcHandlers(): void {
   registerSyncHandlers()
   registerLocalToolsHandlers()
   registerLocalAgentHandlers()
+  registerServiceCredentialHandlers()
   registerAgentFileHandlers()
   registerEngineHandlers()
   registerConnectHandlers()

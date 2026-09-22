@@ -137,6 +137,7 @@ export const ACP_FOLDER_NOT_FOUND = 'This agent’s folder could not be found on
 export interface ConductorOutcome { control?: import('../../../services/coordinatorToolProvider').CoordinatorControl; budget?: boolean; needsInput?: boolean }
 
 export interface AcpDriverDeps {
+  prepareCredentials?(userId: string, agent: AgentRow, plan: AcpLaunchPlan): Promise<AcpLaunchPlan>
   prepareConductor?(userId: string, agent: AgentRow, input: RunInput, plan: AcpLaunchPlan, stop: (outcome: ConductorOutcome) => void, wake: () => boolean): Promise<import('../../../services/conductorBridge').ConductorLease | undefined>
   /** A between-turn follow-up was dropped: conductor tool calls waiting for it must fail, not hang. */
   conductorAbandoned?(chatId: string, agentId: string, reason: string): void
@@ -557,11 +558,11 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
       if (isRefusal(plan)) return fail(plan.error)
 
       try {
-        if (input.queueWhenBusy) return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null }), input.signal)
-        return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null })
-        )
+        return await deps.withLock(agent.id, 'turn', async () => {
+          const prepared = deps.prepareCredentials ? await deps.prepareCredentials(userId, agent, plan) : plan
+          if (input.signal.aborted) return canceled()
+          return runTurn(deps, { userId, agent, runtime, launcherId, plan: prepared, input: prepared.credentialPrompt ? { ...input, wireContent: input.wireContent + '\n' + prepared.credentialPrompt } : input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null })
+        }, input.queueWhenBusy ? input.signal : undefined)
       } catch (err) {
         // `turnLock.acquire` throws rather than queueing, and its message is
         // already user-facing ("This agent is busy right now…"). Letting it

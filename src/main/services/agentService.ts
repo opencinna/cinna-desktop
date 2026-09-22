@@ -502,13 +502,14 @@ export const agentService = {
    *
    * Re-throws {@link CinnaReauthRequired} so callers (periodic loop) can stop.
    */
-  async syncRemoteAgents(userId: string): Promise<SyncRemoteResult> {
+  async syncRemoteAgents(userId: string, current: () => boolean = () => true): Promise<SyncRemoteResult> {
     const user = userRepo.get(userId)
     if (!user || user.type !== 'cinna_user' || !user.cinnaServerUrl) {
       return { synced: 0, removed: 0 }
     }
 
     const accessToken = await getCinnaAccessToken(userId)
+    if (!current()) return { synced: 0, removed: 0 }
 
     const baseUrl = user.cinnaServerUrl.replace(/\/$/, '')
     const response = await runtimeHost.http.fetch(`${baseUrl}/api/v1/external/agents`, {
@@ -517,6 +518,7 @@ export const agentService = {
         Accept: 'application/json'
       }
     })
+    if (!current()) return { synced: 0, removed: 0 }
     if (!response.ok) {
       throw new AgentError(
         'sync_failed',
@@ -524,6 +526,7 @@ export const agentService = {
       )
     }
     const data = (await response.json()) as { targets?: ExternalTarget[] }
+    if (!current()) return { synced: 0, removed: 0 }
     const rawTargets = data.targets ?? []
 
     const validTypes = new Set(['agent', 'app_mcp_route', 'identity'])

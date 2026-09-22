@@ -23,12 +23,15 @@ import { runtimeHost } from '../host/runtimeHost'
 import { userRepo } from '../db/users'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
+import { CinnaSessionChanged, cinnaSessionGeneration } from '../auth/cinna-session'
 import { CinnaApiError } from '../errors'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('cinna-http')
 
 export interface FetchOptions {
+  sensitive?: boolean
+  signal?: AbortSignal
   method?: string
   body?: unknown
 }
@@ -112,8 +115,12 @@ export async function cinnaFetch<T>(
   path: string,
   opts: FetchOptions = {}
 ): Promise<T> {
+  opts.signal?.throwIfAborted()
   const baseUrl = resolveBaseUrl(userId)
+  const generation = cinnaSessionGeneration(userId)
   const authHeader = await resolveAuthHeader(userId)
+  opts.signal?.throwIfAborted()
+  if (cinnaSessionGeneration(userId) !== generation || resolveBaseUrl(userId) !== baseUrl) throw new CinnaSessionChanged()
   const url = resolveUrl(baseUrl, path)
   const method = opts.method ?? 'GET'
 
@@ -130,15 +137,16 @@ export async function cinnaFetch<T>(
   const started = Date.now()
   let response: Response
   try {
-    response = await runtimeHost.http.fetch(url, { method, headers, body })
+    response = await runtimeHost.http.fetch(url, { method, headers, body, ...(opts.sensitive ? { cache: 'no-store' as const } : {}), ...(opts.signal ? { signal: opts.signal } : {}) })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    logger.error('network error', { url, method, error: msg, durationMs: Date.now() - started })
+    const msg = opts.sensitive ? 'Credential request failed' : err instanceof Error ? err.message : String(err)
+    logger.error('network error', { userId, url, method, error: msg, durationMs: Date.now() - started })
     throw new CinnaApiError('request_failed', msg)
   }
   if (!response.ok) {
     const text = await response.text().catch(() => '')
     logger.warn('request failed', {
+      userId,
       url,
       method,
       status: response.status,
@@ -158,7 +166,7 @@ export async function cinnaFetch<T>(
         response.status
       )
     }
-    const detail = extractErrorDetail(text) || response.statusText
+    const detail = opts.sensitive ? 'Credential request failed' : extractErrorDetail(text) || response.statusText
     // The status travels here as well as on `cinnaApiService`'s transport.
     // `CinnaApiError.status` is documented as an invariant of the *class* —
     // "undefined only for a failure that never became a response" — and a
@@ -174,8 +182,8 @@ export async function cinnaFetch<T>(
   try {
     return (await response.json()) as T
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    logger.error('invalid response', { url, method, error: msg })
+    const msg = opts.sensitive ? 'Credential request failed' : err instanceof Error ? err.message : String(err)
+    logger.error('invalid response', { userId, url, method, error: msg })
     throw new CinnaApiError('invalid_response', msg)
   }
 }

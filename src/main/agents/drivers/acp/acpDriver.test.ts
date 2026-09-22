@@ -2627,3 +2627,14 @@ describeDriverContract(
     }
   }
 )
+
+it('prepares credential-dependent launch data under the lock and refuses a cleanup failure before spawning', async () => {
+  let locked = false
+  const w = world({ deps: {
+    withLock: async (_id, _owner, run) => { locked = true; try { return await run() } finally { locked = false } },
+    prepareCredentials: async () => { expect(locked).toBe(true); throw new Error('Old credential cleanup failed') }
+  } })
+  const result = await w.run()
+  expect(result.error?.message).toContain('Old credential cleanup failed')
+  expect(w.fake.log().some(entry => entry.dir === 'start')).toBe(false)
+})

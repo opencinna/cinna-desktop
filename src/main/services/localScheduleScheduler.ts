@@ -4,7 +4,7 @@ import { createLogger } from '../logger/logger'
 const logger = createLogger('local-schedule-scheduler')
 
 /** A single current-minute pass, coalesced across focus/activation events. */
-export function createLocalScheduleScheduler(check: (scope: RunScope, current: () => boolean) => Promise<void> | void) {
+export function createLocalScheduleScheduler(check: (scope: RunScope, current: () => boolean) => Promise<void> | void, intervalMs = 60_000) {
   let scope: RunScope | null = null
   let generation = 0
   let suspended = false
@@ -15,7 +15,7 @@ export function createLocalScheduleScheduler(check: (scope: RunScope, current: (
   const schedule = () => {
     clear()
     if (!scope || suspended) return
-    timer = setTimeout(() => { void api.refresh() }, Math.max(1, 60000 - (Date.now() % 60000)))
+    timer = setTimeout(() => { void api.refresh() }, Math.max(1, intervalMs - (Date.now() % intervalMs)))
     timer.unref?.()
   }
   const cycle = async () => {

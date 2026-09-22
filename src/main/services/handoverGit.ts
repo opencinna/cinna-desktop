@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { HANDOVERS_DIR, type HandoverIgnoreCheck } from '../../shared/handovers'
 import { getShellEnv } from '../shell/env'
@@ -94,7 +94,7 @@ export function createHandoverGit(deps: HandoverGitDeps) {
      *
      * Never throws. Every failure is `unknown`, which forbids `auto`.
      */
-    async check(agentDir: string): Promise<HandoverIgnoreCheck> {
+    async check(agentDir: string, relativePath: string = HANDOVERS_DIR): Promise<HandoverIgnoreCheck> {
       const env = await deps.env().catch(() => process.env)
       const run = (args: string[]): Promise<{ stdout: string; stderr: string }> =>
         deps.execFile('git', ['-C', agentDir, ...args], { env, timeout: GIT_TIMEOUT_MS })
@@ -102,7 +102,7 @@ export function createHandoverGit(deps: HandoverGitDeps) {
       try {
         await run(['rev-parse', '--is-inside-work-tree'])
       } catch (error) {
-        if (errnoOf(error) === 'ENOENT') return staticCheck(agentDir)
+        if (errnoOf(error) === 'ENOENT') return relativePath === HANDOVERS_DIR ? staticCheck(agentDir) : { result: 'unknown', detail: 'Git is required to verify credential paths.' }
         // **A git that never answered is not a git that said "no repository".**
         // The 5 s timeout kills the child with a signal and no exit code, and so
         // does an OOM killer; `index.lock` contention and a slow network mount
@@ -122,28 +122,36 @@ export function createHandoverGit(deps: HandoverGitDeps) {
         if (!deps.exists(agentDir)) {
           return { result: 'unknown', detail: 'That folder is no longer on this machine.' }
         }
+        if (relativePath !== HANDOVERS_DIR) {
+          // A broken repository is unsafe for secret delivery. Inspect every
+          // ancestor because a kit can sit inside a larger working tree.
+          for (let parent = agentDir; ; parent = dirname(parent)) {
+            if (deps.exists(join(parent, '.git'))) return { result: 'unknown', detail: 'The repository could not be verified.' }
+            if (dirname(parent) === parent) break
+          }
+        }
         return { result: 'not_a_repo' }
       }
 
       try {
-        await run(['ls-files', '--error-unmatch', '--', HANDOVERS_DIR])
+        await run(['ls-files', '--error-unmatch', '--', relativePath])
         return {
           result: 'tracked',
           detail: 'This folder’s handovers are committed to git, so anything that can land a commit can plant one.'
         }
       } catch (error) {
-        if (errnoOf(error) === 'ENOENT') return staticCheck(agentDir)
-        if (exitCodeOf(error) === null) {
+        if (errnoOf(error) === 'ENOENT') return relativePath === HANDOVERS_DIR ? staticCheck(agentDir) : { result: 'unknown', detail: 'Git is required to verify credential paths.' }
+        if (exitCodeOf(error) === null || (relativePath !== HANDOVERS_DIR && exitCodeOf(error) !== 1)) {
           logger.warn('git ls-files did not answer', { agentDir })
           return { result: 'unknown', detail: 'git could not be asked about this folder.' }
         }
       }
 
       try {
-        await run(['check-ignore', '-q', '--', HANDOVERS_DIR])
+        await run(['check-ignore', '-q', '--', relativePath])
         return { result: 'ignored' }
       } catch (error) {
-        if (errnoOf(error) === 'ENOENT') return staticCheck(agentDir)
+        if (errnoOf(error) === 'ENOENT') return relativePath === HANDOVERS_DIR ? staticCheck(agentDir) : { result: 'unknown', detail: 'Git is required to verify credential paths.' }
         // `check-ignore -q`: 0 is ignored, 1 is not, anything else is an error.
         if (exitCodeOf(error) === 1) {
           return {

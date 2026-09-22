@@ -262,6 +262,8 @@ export interface LocalAgentCredentialState {
   expectedKeys: string[]
   /** The subset of `expectedKeys` that `credentials/.env` defines. */
   presentKeys: string[]
+  /** Environment fields shadowed by a matching attachment. Names only. */
+  overlappingKeys?: string[]
   satisfied: boolean
 }
 

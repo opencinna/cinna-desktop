@@ -12,6 +12,8 @@ const logger = createLogger('remote-sync')
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
 
+let generation = 0
+let pending: Promise<void> | null = null
 let syncInterval: ReturnType<typeof setInterval> | null = null
 
 export type RemoteSyncError = 'reauth_required' | 'sync_failed'
@@ -37,10 +39,17 @@ export function notifyRemoteSyncComplete(payload: RemoteSyncCompletePayload = {}
  * Stops the periodic timer on re-auth-required so we don't hammer a revoked token.
  */
 export async function runSyncOnce(userId: string): Promise<void> {
+  const epoch = generation
+  if (pending) await pending.catch(() => {})
+  if (epoch !== generation) return
+  const current = () => epoch === generation
+  const operation = (async () => {
   try {
-    await agentService.syncRemoteAgents(userId)
+    await agentService.syncRemoteAgents(userId, current)
+    if (!current()) return
     notifyRemoteSyncComplete()
   } catch (err) {
+    if (!current()) return
     if (err instanceof CinnaReauthRequired) {
       logger.error('sync stopped: Cinna re-auth required', { userId })
       stopPeriodicSync()
@@ -50,6 +59,9 @@ export async function runSyncOnce(userId: string): Promise<void> {
     logger.warn('remote sync failed', { error: String(err) })
     notifyRemoteSyncComplete({ error: 'sync_failed' })
   }
+  })()
+  pending = operation
+  try { await operation } finally { if (pending === operation) pending = null }
 }
 
 /** Start periodic sync for a user. Stops any existing interval first. */
@@ -62,6 +74,7 @@ export function startPeriodicSync(userId: string): void {
 
 /** Stop periodic sync. */
 export function stopPeriodicSync(): void {
+  generation++
   if (syncInterval) {
     clearInterval(syncInterval)
     syncInterval = null

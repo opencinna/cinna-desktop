@@ -1,3 +1,4 @@
+import { serviceCredentialService } from './serviceCredentials/service'
 import { taskRunnerBridge } from './taskRunnerBridge'
 import { nanoid } from 'nanoid'
 import { userRepo, UserRow } from '../db/users'
@@ -371,6 +372,7 @@ export const authService = {
   },
 
   async logout(): Promise<void> {
+    serviceCredentialService.clearProfile(getCurrentUserId())
     userActivation.clearUnlocks()
     await userActivation.activate(DEFAULT_USER_ID)
     logger.info('user.logout')
