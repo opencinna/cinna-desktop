@@ -84,3 +84,26 @@ Run Core’s UI regressions with `node --test tests/credentialForms.test.mjs` fr
 Credential list IPC now carries the renderer’s profile ID and server URL, as does manual sync. Both are checked against the active profile before returning its data or starting HTTP. The query key includes the server URL and discards cancelled responses. The shared HTTP client rejects session/server changes during token resolution and includes the profile ID in failure logs. Remote settings show the destination server explicitly.
 
 Validation: 40 credential regressions and 52 related HTTP-consumer tests passed, along with all typechecks and the production build. A two-host Electron regression switches from a server returning 404 to a working server through the real profile switcher, verifies the old error disappears, and proves Sync Now makes no additional request to the old host. The full live credential test also passed through `http://localhost:5173` (the frontend URL used by the local profile), including repeated sync, owned/shared delivery, rotation, revocation, and the Sync Now button. Disposable Core accounts were removed. This confirms local Core supports the route; the originally reported wrong-host click could not be directly inspected because computer-use access was unavailable.
+
+## Multi-account attachments — 2026-09-22
+
+Delivery now covers every eligible account rather than the current profile alone, so the earlier account-switch expectations above were replaced. A profile switch no longer retires the account, rewrites files, or rejects a queued attachment change. What is invalidated now is an account that leaves the eligible set.
+
+Service tests cover:
+- delivery across profile switches, with attachment intent restored after profile recreation;
+- two eligible accounts delivered to one agent, with `current_user` written only while a single account contributes;
+- one Core record attached under two accounts written once;
+- an attached record pruned once Core stops listing it;
+- a locked password profile's attachments held back until it is unlocked;
+- a logged-out account staying ineligible until that profile is activated again;
+- detaching a signed-out account's reference, which stays detached when the account returns;
+- a list or delivery discarded when its account becomes ineligible mid-flight;
+- a queued attachment change rejected when its account becomes ineligible, but not on a profile switch.
+
+Activation tests check that switching never retires, and that unlock changes and renewal of any profile recompute the set. The ACP driver test checks that preparation depends only on the agent. Renderer tests cover the picker (grouping, in-place **Attached** card, per-card pending and error, local-use refusal, cross-group search, Escape), an in-flight attach surviving a detach made before it lands, and **Detach** without **Move up** on a signed-out account's row. The E2E spec attaches through `attachOptions` and the picker.
+
+`ServiceCredentialsSection.test.tsx` covers the **About remote credentials** tip beside the remote title. No test asserts that renewing a newly eligible account syncs it once; `activation.test.ts` checks only that renewal of any profile reaches `renewed`.
+
+Focused run of those seven files (`service.test.ts`, `activation.test.ts`, `authService.test.ts`, `acpDriver.test.ts`, `CredentialAttachModal.test.tsx`, `ServiceCredentialsTab.test.tsx`, `ServiceCredentialsSection.test.tsx`): **221 passed**. `npm run typecheck` (main, renderer, E2E) passed. The full suite, build and isolated E2E were not rerun for this section.
+
+The live-Core case in `service-credentials.spec.ts` was rewritten for multi-account delivery and **has not been run against a live Core**. Both passwordless profiles are now eligible, so the agent holds the shared record under both accounts. The test now expects that revoking local use stops only the recipient's copy while the owner's keeps delivering (one `ready` attachment, rotated value still in the file), that switching back to the owner changes nothing, and that logging out of the owner removes the file. The earlier live results above were recorded against the single-account behaviour, where revocation removed the file.
