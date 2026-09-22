@@ -197,13 +197,10 @@ describe('reauthentication that outlives its activated profile', () => {
 
       expect(result.user.id).toBe(id)
       expect(storeCinnaTokens).toHaveBeenCalledExactlyOnceWith(id, tokens)
-      if (transition === 'unchanged') {
-        expect(localDevService.reconcile).toHaveBeenCalledExactlyOnceWith(id)
-        expect(userActivation.credentialsRenewed).toHaveBeenCalledExactlyOnceWith(id)
-      } else {
-        expect(localDevService.reconcile).not.toHaveBeenCalled()
-        expect(userActivation.credentialsRenewed).not.toHaveBeenCalled()
-      }
+      // Renewal always reaches service credentials: any signed-in account can deliver.
+      expect(userActivation.credentialsRenewed).toHaveBeenCalledExactlyOnceWith(id)
+      if (transition === 'unchanged') expect(localDevService.reconcile).toHaveBeenCalledExactlyOnceWith(id)
+      else expect(localDevService.reconcile).not.toHaveBeenCalled()
     }
   )
 })

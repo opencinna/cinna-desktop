@@ -2638,3 +2638,14 @@ it('prepares credential-dependent launch data under the lock and refuses a clean
   expect(result.error?.message).toContain('Old credential cleanup failed')
   expect(w.fake.log().some(entry => entry.dir === 'start')).toBe(false)
 })
+
+it('prepares credentials for the agent alone: delivery does not depend on the current profile', async () => {
+  const seen: unknown[][] = []
+  const w = world({ deps: {
+    prepareCredentials: async (...args) => { seen.push(args); return args[1] }
+  } })
+  await w.run()
+  expect(seen).toHaveLength(1)
+  expect(seen[0]).toHaveLength(2)
+  expect((seen[0][0] as { id: string }).id).toBe(ROW.id)
+})

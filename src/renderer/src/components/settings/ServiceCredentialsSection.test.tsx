@@ -135,3 +135,11 @@ it('keeps a late old-host error out of the new profile and syncs its displayed s
   await waitFor(() => expect(sync).toHaveBeenCalledWith('localhost-profile', 'http://localhost:5173'))
   expect(list).toHaveBeenLastCalledWith('localhost-profile', 'http://localhost:5173')
 })
+
+it('explains beside the remote title that only locally usable credentials are listed', async () => {
+  show(null, true)
+  fireEvent.click(await screen.findByRole('button', { name: 'About remote credentials' }))
+  expect(screen.getByRole('dialog', { name: 'About remote credentials' }).textContent).toContain('not the full list')
+  show(null)
+  expect(screen.getAllByRole('button', { name: 'About remote credentials' })).toHaveLength(1)
+})

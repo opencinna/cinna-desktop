@@ -631,10 +631,10 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
 }
 
 export const acpDriver = createAcpDriver({
-  prepareCredentials: async (userId, agent, plan) => {
+  prepareCredentials: async (agent, plan) => {
     if (agent.source !== 'folder' || isDevelopmentAgent(agent) || isChatConductor(agent) || plan.spec.remote) return plan
     const { serviceCredentialService } = await import('../../services/serviceCredentials/service')
-    const prepared = await serviceCredentialService.prepare(userId, agent.id)
+    const prepared = await serviceCredentialService.prepare(agent.id)
     const env = { ...plan.spec.env }
     delete env.CINNA_CREDENTIALS_PATH
     if (prepared.path) env.CINNA_CREDENTIALS_PATH = prepared.path

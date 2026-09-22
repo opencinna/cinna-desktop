@@ -69,7 +69,13 @@ test('live Core owned and allowed shared credentials rotate, revoke, and isolate
     const credential = listed.value.items.find(c => c.cloudId === fixture.credential_id)
     expect(credential?.relation).toBe(i === 0 ? 'owned' : 'shared')
     expect(credential?.hasValues).toBe(false)
-    const attached = await cinna.page.evaluate(({ agentId, ref }) => window.api.serviceCredentials.setAttachments(agentId, 'cloud', [ref]), { agentId: agent.id, ref: fixture.credential_id })
+    // Attach under the current profile's account group: the one holding this profile's cache row.
+    const attached = await cinna.page.evaluate(async ({ agentId, ref, rowId }) => {
+      const options = await window.api.serviceCredentials.attachOptions(agentId)
+      if (!options.ok) return options
+      const group = options.value.groups.find(g => g.items.some(item => item.id === rowId))
+      return window.api.serviceCredentials.setAttachments(agentId, group?.key ?? 'missing-group', [ref])
+    }, { agentId: agent.id, ref: fixture.credential_id, rowId: credential!.id })
     expect(attached.ok).toBe(true)
   }
   const path = join(agent.path, 'credentials/credentials.json')
@@ -81,10 +87,17 @@ test('live Core owned and allowed shared credentials rotate, revoke, and isolate
   const revoke = await fetch(`http://localhost:8000/api/v1/credentials/${fixture.credential_id}`, { method: 'PUT', headers: { ...fixture.accounts[0].headers, 'content-type': 'application/json' }, body: JSON.stringify({ allow_local_use: false }) })
   expect(revoke.ok).toBe(true)
   await cinna.page.evaluate(async () => { const user = (await window.api.auth.getCurrent())!; return window.api.serviceCredentials.sync(user.id, user.cinnaServerUrl!) })
-  await expect.poll(() => existsSync(path)).toBe(false)
+  // Both passwordless profiles are eligible accounts, so the agent holds the record
+  // under both. Revoking local use stops the recipient's copy only; the owner's
+  // copy keeps delivering, and switching profiles changes nothing.
+  const states = () => cinna.page.evaluate(async agentId => {
+    const result = await window.api.serviceCredentials.attachments(agentId)
+    return result.ok ? result.value.map(v => v.state) : [result.message]
+  }, agent.id)
+  await expect.poll(async () => (await states()).filter(state => state === 'ready').length).toBe(1)
+  expect(readFileSync(path, 'utf8')).toContain('live-delivery-rotated-fixture-456')
   await cinna.page.evaluate(userId => window.api.auth.login({ userId }), profileIds[0])
   await cinna.page.evaluate(async () => { const user = (await window.api.auth.getCurrent())!; return window.api.serviceCredentials.sync(user.id, user.cinnaServerUrl!) })
-  await expect.poll(() => existsSync(path)).toBe(true)
   expect(readFileSync(path, 'utf8')).toContain('live-delivery-rotated-fixture-456')
   // IPC seeding bypasses the renderer login hook; reload to hydrate the displayed profile.
   await cinna.page.reload()
@@ -99,6 +112,7 @@ test('live Core owned and allowed shared credentials rotate, revoke, and isolate
   const finalStatus = await cinna.page.evaluate(async () => { const user = (await window.api.auth.getCurrent())!; return window.api.serviceCredentials.list(user.id, user.cinnaServerUrl ?? null) })
   expect(finalStatus.ok && finalStatus.value.error).toBeNull()
   await cinna.page.screenshot({ path: '/tmp/cinna-remote-credentials.png' })
+  // Logging out of the owner leaves only the recipient's revoked copy: nothing to deliver.
   await cinna.page.evaluate(() => window.api.auth.logout())
   await expect.poll(() => existsSync(path)).toBe(false)
 })
@@ -129,8 +143,12 @@ test('credential UI creates a local record, attaches it, and detaches without de
   await page.getByRole('button', { name: 'UI credential reader', exact: true }).click()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   await page.getByRole('tab', { name: 'Credentials', exact: true }).click()
-  await page.getByLabel('Credential to attach').selectOption({ label: 'UI fixture (local)' })
   await page.getByRole('button', { name: 'Attach', exact: true }).click()
+  const picker = page.getByRole('dialog', { name: 'Attach credential' })
+  await picker.getByRole('region', { name: 'This computer' }).getByRole('button', { name: 'Attach UI fixture', exact: true }).click()
+  await expect(picker.getByRole('button', { name: 'UI fixture attached', exact: true })).toBeDisabled()
+  await page.screenshot({ path: '/tmp/cinna-credentials-attach-modal.png' })
+  await picker.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(page.getByText('UI fixture · ready · ui-fixture', { exact: true })).toBeVisible()
   await page.screenshot({ path: '/tmp/cinna-credentials-agent.png' })
   const path = join(agent.path, 'credentials/credentials.json')

@@ -1,4 +1,4 @@
-import type { ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialResult } from '../shared/serviceCredentials'
+import type { ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialAttachOptions, ServiceCredentialResult } from '../shared/serviceCredentials'
 import type { RuntimeModelCatalog } from '../shared/runtimeModelCatalog'
 import type { AiFunctionsBackendStatus } from '../shared/aiFunctions'
 import type { ChatModeRuntime } from '../shared/chatModeRuntime'
@@ -340,7 +340,9 @@ const api = {
     remove: (id: string): Promise<ServiceCredentialResult<void>> => ipcRenderer.invoke('service-credentials:remove', id),
     sync: (userId: string, serverUrl: string): Promise<ServiceCredentialResult<void>> => ipcRenderer.invoke('service-credentials:sync', userId, serverUrl),
     attachments: (id: string): Promise<ServiceCredentialResult<ServiceCredentialAttachmentDto[]>> => ipcRenderer.invoke('service-credentials:attachments', id),
-    setAttachments: (id: string, origin: 'local' | 'cloud', refs: string[]): Promise<ServiceCredentialResult<ServiceCredentialAttachmentDto[]>> => ipcRenderer.invoke('service-credentials:set-attachments', id, origin, refs),
+    attachOptions: (id: string): Promise<ServiceCredentialResult<ServiceCredentialAttachOptions>> => ipcRenderer.invoke('service-credentials:attach-options', id),
+    /** `group` is `'local'` or an eligible account key from `attachOptions`. */
+    setAttachments: (id: string, group: string, refs: string[]): Promise<ServiceCredentialResult<ServiceCredentialAttachmentDto[]>> => ipcRenderer.invoke('service-credentials:set-attachments', id, group, refs),
     onChanged: (cb: () => void): (() => void) => {
       const listener = (): void => cb()
       ipcRenderer.on('service-credentials:changed', listener)

@@ -15,16 +15,33 @@ import { rememberCredentialSecrets } from '../../security/serviceCredentialRedac
 import { checkCredentialPaths, collectOrphanBareCredentials, writeCredentials } from './files'
 import { serviceCredentialCloud } from './cloud'
 import { localBundle, validateLocal } from './transforms'
-import { SERVICE_CREDENTIALS_CHANGED, type ServiceCredentialAttachments, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
+import { SERVICE_CREDENTIALS_CHANGED, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
 import type { LocalAgentDto } from '../../../shared/localAgents'
 
 const LOCAL = '__default__', SHARED_TTL = 7 * 86400_000
-let epoch = 0, activeUser = LOCAL, accountKey: string | null = null, suspended = false
+const CHANGED_ERROR = 'The account changed. Start the turn again.'
+/**
+ * One eligible Cinna account. Delivery does not depend on the current profile:
+ * every eligible account contributes its attachments. Retiring an account bumps
+ * its epoch and aborts its requests, so no awaited response can write for it.
+ */
+interface Account {
+  key: string; userId: string; origin: string; label: string; detail: string
+  epoch: number; abort: AbortController; syncError: string | null; lastSync: number | null
+  synthetic: ServiceCredentialEntry[]
+  flight: { global: number; epoch: number; promise: Promise<void>; again: boolean } | null
+  scheduler: ReturnType<typeof createLocalScheduleScheduler>
+}
+type AccountInfo = Pick<Account, 'key' | 'userId' | 'origin' | 'label' | 'detail'>
+/** Global epoch/abort cover only suspend and shutdown; accounts carry their own. */
+let epoch = 0, suspended = false, currentUser = LOCAL, started = false
 let lifecycleAbort = new AbortController()
-let synthetic: ServiceCredentialEntry[] = []
-let syncError: string | null = null, lastSync: number | null = null
+let cleanupError: string | null = null
+const accounts = new Map<string, Account>()
+/** Profiles signed out in this app session stay ineligible until activated again. */
+const signedOut = new Set<string>()
+let unlocked: (userId: string) => boolean = () => false
 const logger = createLogger('service-credentials')
-let syncFlight: { epoch: number; userId: string; promise: Promise<void>; again: boolean } | null = null
 const pendingAgents = new Set<string>()
 const emptyAttachments = (): ServiceCredentialAttachments => ({ local: [], accounts: {} })
 function secure(): void { if (!runtimeHost.keystore.isSecureStorageAvailable()) throw new Error('Secure storage is unavailable. Unlock the system keychain before using credentials.') }
@@ -42,25 +59,44 @@ function decrypt(row: ServiceCredentialRow): ServiceCredentialBundle | null {
   rememberCredentialSecrets(bundle)
   return bundle
 }
-function current(captured = epoch): boolean { return captured === epoch && activeUser === getProfileScopeUserId() && !suspended }
-function checkCurrent(captured: number): void { if (!current(captured)) throw new Error('The active account changed. Start the turn again.') }
+interface Guard { global: number; accounts: [Account, number][] }
+function guard(list: Account[]): Guard { return { global: epoch, accounts: list.map(acc => [acc, acc.epoch]) } }
+function live(g: Guard): boolean { return g.global === epoch && !suspended && g.accounts.every(([acc, e]) => accounts.get(acc.key) === acc && acc.epoch === e) }
+function check(g: Guard): void { if (!live(g)) throw new Error(CHANGED_ERROR) }
 function checkProfile(userId: string, serverUrl?: string | null): void {
-  if (!userId || userId !== activeUser || userId !== getProfileScopeUserId() ||
+  if (!userId || userId !== currentUser || userId !== getProfileScopeUserId() ||
     (serverUrl !== undefined && (userRepo.get(userId)?.cinnaServerUrl?.replace(/\/$/, '') ?? null) !== (serverUrl?.replace(/\/$/, '') ?? null))) {
     throw new Error('The active profile changed. Open its credentials and try again.')
   }
 }
-function changed(): void { markAllRootsDirty(); publishEvent('local-agent:changed', {}, 'all'); publishEvent(SERVICE_CREDENTIALS_CHANGED, { lastSync, error: syncError }, 'all') }
+function accountOf(userId: string): Account | undefined { return [...accounts.values()].find(acc => acc.userId === userId) }
+/** Group order: local first, then accounts by profile name. */
+function ordered(): Account[] { return [...accounts.values()].sort((x, y) => x.label.localeCompare(y.label) || x.key.localeCompare(y.key)) }
+function status() {
+  const acc = currentUser === LOCAL ? undefined : accountOf(currentUser)
+  const u = currentUser === LOCAL ? undefined : userRepo.get(currentUser)
+  // A current Cinna profile without a derivable identity has no account entry: it needs reauth.
+  const own = acc ? acc.syncError : u?.type === 'cinna_user' && u.cinnaServerUrl && !signedOut.has(currentUser) ? 'reauth_required' : null
+  return { lastSync: acc?.lastSync ?? null, error: own ?? cleanupError, secureStorage: runtimeHost.keystore.isSecureStorageAvailable() }
+}
+function changed(): void { markAllRootsDirty(); publishEvent('local-agent:changed', {}, 'all'); const s = status(); publishEvent(SERVICE_CREDENTIALS_CHANGED, { lastSync: s.lastSync, error: s.error }, 'all') }
 function agent(id: string): LocalAgentDto { return localAgentService.get(LOCAL, id) }
 function allAgents(): LocalAgentDto[] { return localAgentService.list(LOCAL).agents }
 function state(a: Pick<LocalAgentDto, 'path' | 'kind'>): ServiceCredentialAttachments { return desktopStateService.read(a.path, a.kind).serviceCredentials ?? emptyAttachments() }
-function rows(): ServiceCredentialRow[] { return [...repo.list(LOCAL), ...(activeUser === LOCAL ? [] : repo.list(activeUser))] }
-function resolve(a: Pick<LocalAgentDto, 'path' | 'kind'>): { ref: string; origin: 'local' | 'cloud'; row?: ServiceCredentialRow }[] {
-  const s = state(a), available = rows()
-  return [...s.local.map(({ ref }) => ({ ref, origin: 'local' as const, row: available.find(r => r.origin === 'local' && r.id === ref) })),
-    ...(accountKey ? s.accounts[accountKey] ?? [] : []).map(({ ref }) => ({ ref, origin: 'cloud' as const, row: available.find(r => r.origin === 'cloud' && r.cloud_id === ref) }))]
+interface Resolved { ref: string; group: string; origin: 'local' | 'cloud'; account?: Account; available: boolean; row?: ServiceCredentialRow }
+/** Every stored attachment. Ones whose account is not eligible are kept but never delivered. */
+function resolve(a: Pick<LocalAgentDto, 'path' | 'kind'>): Resolved[] {
+  const s = state(a), local = repo.list(LOCAL)
+  const out: Resolved[] = s.local.map(({ ref }) => ({ ref, group: 'local', origin: 'local', available: true, row: local.find(r => r.origin === 'local' && r.id === ref) }))
+  for (const account of ordered()) {
+    const cached = repo.list(account.userId)
+    for (const { ref } of s.accounts[account.key] ?? []) out.push({ ref, group: account.key, origin: 'cloud', account, available: true, row: cached.find(r => r.origin === 'cloud' && r.cloud_id === ref) })
+  }
+  for (const [key, list] of Object.entries(s.accounts)) if (!accounts.has(key)) for (const { ref } of list) out.push({ ref, group: key, origin: 'cloud', available: false })
+  return out
 }
-function attachmentState(row?: ServiceCredentialRow): ServiceCredentialAttachmentDto['state'] {
+function attachedAccounts(a: Pick<LocalAgentDto, 'path' | 'kind'>): Account[] { const s = state(a); return ordered().filter(acc => s.accounts[acc.key]?.length) }
+function attachmentState(row?: ServiceCredentialRow): Exclude<ServiceCredentialAttachmentDto['state'], 'account_unavailable'> {
   if (!row) return 'missing'
   const m = credentialDto(row)
   if (!m.localUseAllowed) return 'local_use_not_allowed'
@@ -75,23 +111,24 @@ function queue(a: LocalAgentDto): void {
   turnLock.whenFree(a.id, () => {
     pendingAgents.delete(a.id)
     if (suspended) return
-    void turnLock.withLock(a.id, 'credentials', () => materialize(a, false)).catch(() => { syncError = 'cleanup_failed'; changed() })
+    void turnLock.withLock(a.id, 'credentials', () => materialize(a, false)).catch(() => { cleanupError = 'cleanup_failed'; changed() })
   })
 }
-function regenerate(): void { for (const a of allAgents()) queue(a) }
-async function fetchValues(selected: ServiceCredentialRow[], captured: number): Promise<void> {
+function regenerate(filter?: (a: LocalAgentDto) => boolean): void { for (const a of allAgents()) if (!filter || filter(a)) queue(a) }
+function signal(account: Account): AbortSignal { return AbortSignal.any([lifecycleAbort.signal, account.abort.signal]) }
+async function fetchValues(account: Account, selected: ServiceCredentialRow[], g: Guard): Promise<void> {
   if (!selected.length) return
   secure()
   for (let i = 0; i < selected.length; i += 50) {
     const batch = selected.slice(i, i + 50)
-    const delivery = await serviceCredentialCloud.materialize(activeUser, batch.map(r => r.cloud_id!), lifecycleAbort.signal)
-    checkCurrent(captured)
+    const delivery = await serviceCredentialCloud.materialize(account.userId, batch.map(r => r.cloud_id!), signal(account))
+    check(g)
     if (!Array.isArray(delivery.items) || !Array.isArray(delivery.refused)) throw new Error('Invalid credential delivery response.')
     for (const row of batch) {
-      const live = repo.get(row.id)
+      const current = repo.get(row.id)
       // A list may revoke access while this delivery is in flight. Never put
       // a previously authorized payload back into a changed/deleted cache row.
-      if (!live || live.metadata !== row.metadata || !credentialDto(live).localUseAllowed) continue
+      if (!current || current.metadata !== row.metadata || !credentialDto(current).localUseAllowed) continue
       const item = delivery.items.find(v => v.id === row.cloud_id)
       const refusal = delivery.refused.find(v => v.id === row.cloud_id)
       if (refusal) {
@@ -104,24 +141,25 @@ async function fetchValues(selected: ServiceCredentialRow[], captured: number): 
         repo.put({ ...row, metadata: JSON.stringify(m), payload_enc: encrypt(item, row.payload_enc), payload_fetched_at: Date.now(), expires_at: typeof expiry === 'number' ? expiry * 1000 : null, updated_at: Date.now() })
       } else throw new Error('Incomplete credential delivery response.')
     }
-    if (delivery.current_user) synthetic = [...synthetic.filter(e => e.type !== 'current_user'), delivery.current_user]
-    if (delivery.owner_identity) synthetic = [...synthetic.filter(e => e.type !== 'owner_identity_token'), delivery.owner_identity]
-    rememberCredentialSecrets(synthetic)
+    if (delivery.current_user) account.synthetic = [...account.synthetic.filter(e => e.type !== 'current_user'), delivery.current_user]
+    rememberCredentialSecrets(account.synthetic)
   }
 }
 async function materialize(a: LocalAgentDto, refresh: boolean): Promise<{ path?: string; generation: string; prompt: string }> {
-  const captured = epoch
-  checkCurrent(captured)
-  let attached = resolve(a)
+  const g = guard(attachedAccounts(a))
+  check(g)
+  let attached = resolve(a).filter(v => v.available)
   if (refresh) {
-    const stale = attached.flatMap(v => v.row && v.row.origin === 'cloud' && credentialDto(v.row).localUseAllowed &&
-      (!v.row.payload_enc || (credentialDto(v.row).type === 'agent_api' && !synthetic.some(e => e.type === 'owner_identity_token')) || (v.row.expires_at !== null && v.row.expires_at < Date.now() + 600_000) || (v.row.payload_fetched_at ?? 0) < Date.now() - 300_000) ? [v.row] : [])
-    try { await fetchValues(stale, captured) } catch { checkCurrent(captured) /* Same-account offline use is bounded below. */ }
-    attached = resolve(a)
+    for (const account of attachedAccounts(a)) {
+      const stale = attached.flatMap(v => v.account === account && v.row && credentialDto(v.row).localUseAllowed &&
+        (!v.row.payload_enc || (v.row.expires_at !== null && v.row.expires_at < Date.now() + 600_000) || (v.row.payload_fetched_at ?? 0) < Date.now() - 300_000) ? [v.row] : [])
+      try { await fetchValues(account, stale, g) } catch { check(g) /* Same-account offline use is bounded below. */ }
+    }
+    attached = resolve(a).filter(v => v.available)
   }
-  checkCurrent(captured)
+  check(g)
   if (!runtimeHost.keystore.isSecureStorageAvailable()) {
-    await writeCredentials(a.path, a.kind, [], [], 'empty', () => checkCurrent(captured))
+    await writeCredentials(a.path, a.kind, [], [], 'empty', () => check(g))
     if (refresh && attached.length) secure()
     return { generation: 'empty', prompt: '' }
   }
@@ -129,26 +167,132 @@ async function materialize(a: LocalAgentDto, refresh: boolean): Promise<{ path?:
     const status = attachmentState(v.row)
     if (!v.row || !['ready', 'incomplete'].includes(status)) return []
     const bundle = decrypt(v.row)
-    return bundle ? [bundle] : []
+    return bundle ? [{ bundle, account: v.account }] : []
   })
   // A filled duplicate slot wins without field-level merging. Preserve attachment order otherwise.
-  const effective = bundles.filter(b => b.entry.is_placeholder === false || !bundles.some(other => !other.entry.is_placeholder && other.entry.type === b.entry.type && other.entry.service_uri === b.entry.service_uri))
-  const hasCloud = attached.some(v => v.origin === 'cloud' && v.row && attachmentState(v.row) === 'ready')
-  const identity = hasCloud ? synthetic.filter(e => e.type === 'current_user' || effective.some(b => b.entry.type === 'agent_api' && b.entry.id === e.id) || (e.type === 'owner_identity_token' && effective.some(b => b.entry.type === 'agent_api'))) : []
-  const generation = effective.length ? createHash('sha256').update(JSON.stringify([hasCloud ? accountKey : null, effective, identity])).digest('hex') : 'empty'
-  const path = await writeCredentials(a.path, a.kind, effective, identity, generation, () => checkCurrent(captured))
-  checkCurrent(captured)
+  // One Core record attached under two accounts is written once (first group wins):
+  // duplicate entry ids would also collide on the service-account side file.
+  const effective = bundles.filter(({ bundle: b }) => b.entry.is_placeholder === false || !bundles.some(({ bundle: other }) => !other.entry.is_placeholder && other.entry.type === b.entry.type && other.entry.service_uri === b.entry.service_uri))
+    .filter((v, i, all) => all.findIndex(o => o.bundle.entry.id === v.bundle.entry.id) === i)
+  const contributing = ordered().filter(account => attached.some(v => v.account === account && v.row && attachmentState(v.row) === 'ready'))
+  // `current_user` is the only identity entry (Core delivers no Agent API credentials),
+  // and Core gives it one fixed id. With several accounts contributing it would name
+  // an arbitrary one of them, so it is written only when exactly one account does.
+  const identity = contributing.length === 1 ? contributing[0].synthetic.filter(e => e.type === 'current_user') : []
+  const keys = contributing.map(account => account.key)
+  // A single account fingerprints as its bare key, so upgraded single-account runtimes stay stable.
+  const generation = effective.length ? createHash('sha256').update(JSON.stringify([keys.length === 0 ? null : keys.length === 1 ? keys[0] : keys, effective.map(v => v.bundle), identity])).digest('hex') : 'empty'
+  const path = await writeCredentials(a.path, a.kind, effective.map(v => v.bundle), identity, generation, () => check(g))
+  check(g)
   return { path, generation, prompt: attached.length ? '\nAttached credentials (values are private):\n' + attached.map(v => v.row ? `${credentialDto(v.row).name} (${credentialDto(v.row).type}; slot ${credentialDto(v.row).serviceUri ?? 'none'}): ${attachmentState(v.row)}` : `Missing credential: ${v.ref}`).join('\n') : '' }
+}
+function hostOf(url: string): string { try { return new URL(url).host } catch { return url } }
+/** Eligible: a Cinna profile with a server and stored tokens, not signed out this session, and either passwordless or unlocked. */
+function eligible(): Map<string, AccountInfo> {
+  const out = new Map<string, AccountInfo>()
+  // The current profile wins a key shared with another row (a recreated profile).
+  const users = userRepo.list().sort((x, y) => Number(y.id === currentUser) - Number(x.id === currentUser))
+  for (const u of users) {
+    if (u.type !== 'cinna_user' || !u.cinnaServerUrl || signedOut.has(u.id)) continue
+    if (u.passwordHash && !unlocked(u.id) && u.id !== currentUser) continue
+    let subject: string, origin: string
+    try { subject = getStoredCinnaSubject(u.id); origin = new URL(u.cinnaServerUrl).origin } catch { continue }
+    const key = createHash('sha256').update(origin + '\n' + subject).digest('hex').slice(0, 16)
+    if (!out.has(key)) out.set(key, { key, userId: u.id, origin, label: u.displayName || u.username, detail: hostOf(u.cinnaServerUrl) })
+  }
+  return out
+}
+function retireAccount(account: Account): void {
+  account.abort.abort(); account.epoch++; account.flight = null; account.synthetic = []; account.scheduler.stop()
+  accounts.delete(account.key)
+}
+function createAccount(value: AccountInfo): Account {
+  const account: Account = { ...value, epoch: 0, abort: new AbortController(), syncError: null, lastSync: null, synthetic: [], flight: null,
+    scheduler: createLocalScheduleScheduler(async (_scope, current) => { if (current() && accounts.get(account.key) === account) await syncAccount(account) }, 300_000) }
+  account.scheduler.setSuspended(suspended)
+  return account
+}
+/** Recompute the eligible set; start/stop per-account sync and regenerate only agents attached to a changed account. */
+function refreshAccounts(): void {
+  if (!started) return
+  const next = eligible(), touched = new Set<string>()
+  for (const account of [...accounts.values()]) {
+    const wanted = next.get(account.key)
+    if (!wanted || wanted.userId !== account.userId || wanted.origin !== account.origin) { retireAccount(account); touched.add(account.key) }
+    else { account.label = wanted.label; account.detail = wanted.detail }
+  }
+  for (const [key, value] of next) {
+    if (accounts.has(key)) continue
+    const account = createAccount(value)
+    accounts.set(key, account); touched.add(key)
+    account.scheduler.start({ profileUserId: account.userId, settingsUserId: LOCAL })
+  }
+  if (touched.size) regenerate(a => Object.keys(state(a).accounts).some(key => touched.has(key)))
+  changed()
+}
+function syncAccount(account: Account): Promise<void> {
+  const g = guard([account])
+  if (account.flight?.epoch === account.epoch && account.flight.global === epoch) { account.flight.again = true; return account.flight.promise }
+  const flight = { global: epoch, epoch: account.epoch, promise: Promise.resolve(), again: false }
+  account.flight = flight
+  flight.promise = (async () => {
+    do { flight.again = false; await syncPass(account, g) } while (flight.again && live(g))
+  })().finally(() => { if (account.flight === flight) account.flight = null })
+  return flight.promise
+}
+async function syncPass(account: Account, g: Guard): Promise<void> {
+  if (!live(g)) return
+  try {
+    const response = await serviceCredentialCloud.list(account.userId, signal(account))
+    check(g)
+    if (!Array.isArray(response.items)) throw new Error('Invalid credential list.')
+    const userId = account.userId, origin = account.origin
+    const seen = new Set<string>(), previous = repo.list(userId)
+    for (const item of response.items) {
+      if (typeof item?.id !== 'string') throw new Error('Invalid credential identity.')
+      // Core decides what is usable locally and lists nothing else, so the list
+      // is taken as the full local set: a record it stops listing is pruned below.
+      seen.add(item.id)
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(item.id) || typeof item.name !== 'string' || typeof item.type !== 'string' || typeof item.revision !== 'string' || !['owned', 'shared'].includes(item.relation) || typeof item.local_use_allowed !== 'boolean' || typeof item.is_placeholder !== 'boolean' || !['complete', 'incomplete'].includes(item.status) || [item.notes, item.service_uri, item.owner_email].some(v => v !== null && typeof v !== 'string')) continue
+      const id = createHash('sha256').update(userId + '\n' + origin + '\n' + item.id).digest('hex')
+      const old = repo.get(id), allowed = item.local_use_allowed
+      const metadata: ServiceCredentialDto = { id, origin: 'cloud', cloudId: item.id, name: item.name, type: item.type, serviceUri: item.service_uri, notes: item.notes, status: item.status,
+        isPlaceholder: item.is_placeholder, relation: item.relation, ownerEmail: item.owner_email, localUseAllowed: allowed, revision: item.revision, hasValues: false, expiresAt: null }
+      repo.put({ id, user_id: userId, origin: 'cloud', cloud_id: item.id, server_origin: origin, metadata: JSON.stringify(metadata), payload_enc: allowed ? old?.payload_enc ?? null : null,
+        payload_fetched_at: old && credentialDto(old).revision === item.revision ? old.payload_fetched_at : null,
+        expires_at: typeof item.expires_at === 'number' ? item.expires_at * 1000 : null, created_at: old?.created_at ?? Date.now(), updated_at: Date.now() })
+    }
+    for (const row of previous) if (!seen.has(row.cloud_id!)) repo.remove(row.id)
+    const attachedIds = new Set(allAgents().flatMap(a => resolve(a).flatMap(v => v.account === account && v.row ? [v.row.id] : [])))
+    await fetchValues(account, repo.list(userId).filter(r => attachedIds.has(r.id) && credentialDto(r).localUseAllowed && (!r.payload_enc || r.payload_fetched_at === null || (r.expires_at !== null && r.expires_at < Date.now() + 600_000))), g)
+    check(g); account.lastSync = Date.now(); account.syncError = null
+  } catch (err) {
+    if (!live(g)) return
+    const failure = err as { code?: string; status?: number }
+    account.syncError = failure.status === 403 ? 'permission_denied' : failure.code === 'reauth_required' ? 'reauth_required'
+      : failure.status === 404 || failure.status === 405 ? 'not_supported'
+        : failure.status && failure.status >= 500 ? 'server_error'
+          : failure.code === 'invalid_response' ? 'invalid_response' : 'sync_failed'
+    logger.warn('Credential sync failed for profile', { userId: account.userId, status: failure.status, code: account.syncError })
+    if (account.syncError === 'reauth_required') account.scheduler.stop()
+  }
+  if (live(g)) { regenerate(a => !!state(a).accounts[account.key]?.length); changed() }
+}
+function toAttachmentDto(v: Resolved): ServiceCredentialAttachmentDto {
+  const account = v.group === 'local' ? undefined : accounts.get(v.group)
+  return { ref: v.ref, origin: v.origin, group: v.group, groupLabel: v.group === 'local' ? 'This computer' : account?.label ?? 'Signed-out account',
+    credential: v.available && v.row ? credentialDto(v.row) : null, state: v.available ? attachmentState(v.row) : 'account_unavailable' }
 }
 
 export const serviceCredentialService = {
-  metadataForPath(path: string) { return resolve({ path, kind: 'kit' }).filter(v => v.row).map(v => ({ ...credentialDto(v.row!), state: attachmentState(v.row) })) },
-  list(): ServiceCredentialDto[] { return rows().map(credentialDto) },
+  metadataForPath(path: string) { return resolve({ path, kind: 'kit' }).filter(v => v.available && v.row).map(v => ({ ...credentialDto(v.row!), state: attachmentState(v.row) })) },
+  /** Local records plus the current profile's cloud cache (the settings pages). */
+  list(): ServiceCredentialDto[] { return [...repo.list(LOCAL), ...(currentUser === LOCAL ? [] : repo.list(currentUser))].map(credentialDto) },
   snapshot(userId: string, serverUrl: string | null) {
     checkProfile(userId, serverUrl)
     return { items: this.list(), ...this.status() }
   },
-  status() { return { lastSync, error: syncError, secureStorage: runtimeHost.keystore.isSecureStorageAvailable() } },
+  status,
   save(input: ServiceCredentialInput): ServiceCredentialDto {
     secure()
     const old = input.id ? repo.get(input.id) : undefined
@@ -181,110 +325,102 @@ export const serviceCredentialService = {
     if (!row || row.origin !== 'local') throw new Error('Only local records can be deleted.')
     repo.remove(id); regenerate(); changed()
   },
-  attachments(id: string): ServiceCredentialAttachmentDto[] {
-    return resolve(agent(id)).map(v => ({ ref: v.ref, origin: v.origin, credential: v.row ? credentialDto(v.row) : null, state: attachmentState(v.row) }))
+  attachments(id: string): ServiceCredentialAttachmentDto[] { return resolve(agent(id)).map(toAttachmentDto) },
+  /** What can be attached to one agent: local records, then each eligible account's cache. Records the owner keeps off this computer are omitted. */
+  attachOptions(id: string): ServiceCredentialAttachOptions {
+    const s = state(agent(id))
+    return { groups: [
+      { key: 'local', label: 'This computer', detail: '', error: null, items: repo.list(LOCAL).filter(r => r.origin === 'local').map(r => ({ ...credentialDto(r), attached: s.local.some(v => v.ref === r.id) })) },
+      ...ordered().map(account => ({ key: account.key, label: account.label, detail: account.detail, error: account.syncError,
+        items: repo.list(account.userId).filter(r => r.origin === 'cloud' && credentialDto(r).localUseAllowed).map(r => ({ ...credentialDto(r), attached: (s.accounts[account.key] ?? []).some(v => v.ref === r.cloud_id) })) }))
+    ] }
   },
-  async setAttachments(id: string, origin: 'local' | 'cloud', refs: string[]): Promise<ServiceCredentialAttachmentDto[]> {
-    const a = agent(id), captured = epoch
-    if (!['local', 'cloud'].includes(origin) || !Array.isArray(refs) || refs.some(r => typeof r !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(r))) throw new Error('Invalid attachment references.')
-    if (origin === 'cloud' && !accountKey) throw new Error('Sign in to attach cloud credentials.')
+  async setAttachments(id: string, group: string, refs: string[]): Promise<ServiceCredentialAttachmentDto[]> {
+    const a = agent(id)
+    if (typeof group !== 'string' || !Array.isArray(refs) || refs.some(r => typeof r !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(r))) throw new Error('Invalid attachment references.')
+    const account = group === 'local' ? undefined : accounts.get(group)
+    // A signed-out or deleted account's intent can only shrink: removals need no
+    // rows, tokens or fetch, and a deleted profile's key may never be eligible again.
+    const inert = group !== 'local' && !account
+    if (inert && (!/^[a-f0-9]{16}$/.test(group) || refs.some(ref => !(state(a).accounts[group] ?? []).some(v => v.ref === ref)))) throw new Error('Sign in to that account to change its credentials.')
+    const g = guard(account ? [account] : [])
     await turnLock.withQueuedLock(id, 'credentials', new AbortController().signal, async () => {
-      checkCurrent(captured)
+      check(g)
       if (refs.length) secure()
       if (refs.length && a.kind === 'kit') await checkCredentialPaths(a.path)
-      checkCurrent(captured)
-      const s = state(a), before = origin === 'local' ? s.local : s.accounts[accountKey!] ?? []
+      check(g)
+      const s = state(a), before = group === 'local' ? s.local : s.accounts[group] ?? []
+      const available = inert ? [] : account ? repo.list(account.userId).filter(r => r.origin === 'cloud') : repo.list(LOCAL).filter(r => r.origin === 'local')
       for (const ref of refs.filter(ref => !before.some(v => v.ref === ref))) {
-        const row = rows().find(r => r.origin === origin && (origin === 'local' ? r.id : r.cloud_id) === ref)
+        const row = available.find(r => (account ? r.cloud_id : r.id) === ref)
         if (!row) throw new Error('Credential is no longer available.')
         if (!credentialDto(row).localUseAllowed) throw new Error('The owner has not allowed use on this computer.')
       }
       const next = [...new Set(refs)].map(ref => ({ ref }))
-      if (origin === 'local') s.local = next; else s.accounts[accountKey!] = next
+      if (group === 'local') s.local = next
+      else if (next.length) s.accounts[group] = next
+      else delete s.accounts[group]
       desktopStateService.patch(a.path, a.kind, { serviceCredentials: s })
       await materialize(a, true)
     })
     changed(); return this.attachments(id)
   },
-  async prepare(userId: string, id: string) {
-    if (userId !== activeUser) throw new Error('The active account changed. Start the turn again.')
-    return materialize(agent(id), true)
+  async prepare(id: string) { return materialize(agent(id), true) },
+  /** Supplies the session unlock state; installed by the activation owner. */
+  installUnlockCheck(fn: (userId: string) => boolean): void { unlocked = fn },
+  /** Recompute eligible accounts after unlock, lock, logout, deletion or renewal. */
+  refreshAccounts,
+  /** Shutdown: invalidates every awaited request and stops all account timers. */
+  retire(): void {
+    lifecycleAbort.abort(); lifecycleAbort = new AbortController(); epoch++
+    for (const account of [...accounts.values()]) retireAccount(account)
+    started = false
   },
-  /** Retirement invalidates awaited HTTP before any profile teardown. Busy turns clean up on release. */
-  retire(): void { lifecycleAbort.abort(); lifecycleAbort = new AbortController(); epoch++; accountKey = null; synthetic = []; syncFlight = null; scheduler.stop() },
+  /**
+   * Profile activation. Switching the current profile changes only settings
+   * pinning; delivered files change only when the eligible set does. The first
+   * activation also scans for orphaned bare secrets and brings every agent current.
+   */
   async activate(userId: string): Promise<void> {
-    this.retire(); activeUser = userId; syncError = null; lastSync = null; const captured = epoch
-    const u = userRepo.get(userId)
-    if (u?.type === 'cinna_user' && u.cinnaServerUrl) {
-      try {
-        const subject = getStoredCinnaSubject(userId)
-        accountKey = createHash('sha256').update(new URL(u.cinnaServerUrl).origin + '\n' + subject).digest('hex').slice(0, 16)
-      } catch { checkCurrent(captured); syncError = 'reauth_required' }
-    }
+    signedOut.delete(userId); currentUser = userId; cleanupError = null
+    const first = !started
+    started = true
+    const captured = epoch
+    refreshAccounts()
     markAllRootsDirty()
     const scanned = allAgents()
     try { collectOrphanBareCredentials(scanned.map(a => a.path)) }
-    catch { syncError = 'cleanup_failed' /* Each affected agent retries at preparation. */ }
+    catch { cleanupError = 'cleanup_failed' /* Each affected agent retries at preparation. */ }
+    if (!first) return
     // Try each folder independently; preparation refuses only the agent whose cleanup failed.
     for (const a of scanned) {
-      if (turnLock.isLocked(a.id)) queue(a)
-      else {
-        try { await turnLock.withLock(a.id, 'credentials', () => materialize(a, false)) }
-        catch { checkCurrent(captured); syncError = 'cleanup_failed' }
-      }
-      checkCurrent(captured)
+      if (captured !== epoch) return
+      if (turnLock.isLocked(a.id)) { queue(a); continue }
+      try { await turnLock.withLock(a.id, 'credentials', () => materialize(a, false)) }
+      catch { if (captured === epoch && !suspended) cleanupError = 'cleanup_failed' }
     }
-    if (accountKey) scheduler.start({ profileUserId: userId, settingsUserId: LOCAL })
-    changed()
+    if (captured === epoch) changed()
   },
+  /** Logout: drop the profile's cache and keep it ineligible for this app session. */
+  signOut(userId: string): void { signedOut.add(userId); repo.clearProfile(userId); refreshAccounts() },
   clearProfile(userId: string): void { repo.clearProfile(userId) },
-  setSuspended(value: boolean): void { lifecycleAbort.abort(); lifecycleAbort = new AbortController(); suspended = value; epoch++; scheduler.setSuspended(value); if (!value) regenerate() },
-  sync(userId = activeUser, serverUrl?: string | null): Promise<void> {
-    try { checkProfile(userId, serverUrl) } catch (error) { return Promise.reject(error) }
-    const captured = epoch
-    if (syncFlight?.epoch === captured && syncFlight.userId === userId) { syncFlight.again = true; return syncFlight.promise }
-    const flight = { epoch: captured, userId, promise: Promise.resolve(), again: false }
-    syncFlight = flight
-    flight.promise = (async () => {
-      do { flight.again = false; await this.syncPass(userId, captured) } while (flight.again && accountKey && current(captured))
-    })().finally(() => { if (syncFlight === flight) syncFlight = null })
-    return flight.promise
+  /** Fresh tokens for any profile, current or not: re-derive its account and sync it now. */
+  renewed(userId: string): void {
+    const existed = accountOf(userId)
+    refreshAccounts()
+    const account = accountOf(userId)
+    // A newly eligible account was just started by refreshAccounts; starting it again would sync twice.
+    if (account && account === existed) { account.syncError = null; account.scheduler.start({ profileUserId: userId, settingsUserId: LOCAL }) }
   },
-  async syncPass(userId: string, captured: number): Promise<void> {
-    if (!accountKey || !current(captured) || userId !== activeUser) return
-    try {
-      const response = await serviceCredentialCloud.list(userId, lifecycleAbort.signal)
-      checkCurrent(captured)
-      if (!Array.isArray(response.items)) throw new Error('Invalid credential list.')
-      const seen = new Set<string>(), previous = repo.list(userId)
-      const origin = new URL(userRepo.get(userId)!.cinnaServerUrl!).origin
-      for (const item of response.items) {
-        if (typeof item?.id !== 'string') throw new Error('Invalid credential identity.')
-        seen.add(item.id)
-        if (!/^[a-zA-Z0-9_-]{1,128}$/.test(item.id) || typeof item.name !== 'string' || typeof item.type !== 'string' || typeof item.revision !== 'string' || !['owned', 'shared'].includes(item.relation) || typeof item.local_use_allowed !== 'boolean' || typeof item.is_placeholder !== 'boolean' || !['complete', 'incomplete'].includes(item.status) || [item.notes, item.service_uri, item.owner_email].some(v => v !== null && typeof v !== 'string')) continue
-        const id = createHash('sha256').update(userId + '\n' + origin + '\n' + item.id).digest('hex')
-        const old = repo.get(id), allowed = item.local_use_allowed
-        const metadata: ServiceCredentialDto = { id, origin: 'cloud', cloudId: item.id, name: item.name, type: item.type, serviceUri: item.service_uri, notes: item.notes, status: item.status,
-          isPlaceholder: item.is_placeholder, relation: item.relation, ownerEmail: item.owner_email, localUseAllowed: allowed, revision: item.revision, hasValues: false, expiresAt: null }
-        repo.put({ id, user_id: userId, origin: 'cloud', cloud_id: item.id, server_origin: origin, metadata: JSON.stringify(metadata), payload_enc: allowed ? old?.payload_enc ?? null : null,
-          payload_fetched_at: old && credentialDto(old).revision === item.revision ? old.payload_fetched_at : null,
-          expires_at: typeof item.expires_at === 'number' ? item.expires_at * 1000 : null, created_at: old?.created_at ?? Date.now(), updated_at: Date.now() })
-      }
-      for (const row of previous) if (!seen.has(row.cloud_id!)) repo.remove(row.id)
-      const attachedIds = new Set(allAgents().flatMap(a => resolve(a).flatMap(v => v.row?.origin === 'cloud' ? [v.row.id] : [])))
-      await fetchValues(repo.list(userId).filter(r => attachedIds.has(r.id) && credentialDto(r).localUseAllowed && (!r.payload_enc || r.payload_fetched_at === null || (r.expires_at !== null && r.expires_at < Date.now() + 600_000))), captured)
-      checkCurrent(captured); lastSync = Date.now(); syncError = null
-    } catch (err) {
-      if (!current(captured)) return
-      const failure = err as { code?: string; status?: number }
-      syncError = failure.status === 403 ? 'permission_denied' : failure.code === 'reauth_required' ? 'reauth_required'
-        : failure.status === 404 || failure.status === 405 ? 'not_supported'
-          : failure.status && failure.status >= 500 ? 'server_error'
-            : failure.code === 'invalid_response' ? 'invalid_response' : 'sync_failed'
-      logger.warn('Credential sync failed for profile', { userId, status: failure.status, code: syncError })
-      if (syncError === 'reauth_required') scheduler.stop()
-    }
-    if (current(captured)) { regenerate(); changed() }
+  setSuspended(value: boolean): void {
+    lifecycleAbort.abort(); lifecycleAbort = new AbortController(); suspended = value; epoch++
+    for (const account of accounts.values()) account.scheduler.setSuspended(value)
+    if (!value) regenerate()
+  },
+  /** Manual sync stays pinned to the displayed current profile. */
+  sync(userId = currentUser, serverUrl?: string | null): Promise<void> {
+    try { checkProfile(userId, serverUrl) } catch (error) { return Promise.reject(error) }
+    const account = accountOf(userId)
+    return account ? syncAccount(account) : Promise.resolve()
   }
 }
-const scheduler = createLocalScheduleScheduler(async (scope, current) => { if (current()) await serviceCredentialService.sync(scope.profileUserId) }, 300_000)

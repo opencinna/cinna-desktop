@@ -1,4 +1,5 @@
-vi.mock('../services/serviceCredentials/service', () => ({ serviceCredentialService: { retire() {}, activate: async () => {} } }))
+const credentials = vi.hoisted(() => ({ retire: vi.fn(), activate: vi.fn(async (_id: string) => {}), renewed: vi.fn(), refreshAccounts: vi.fn() }))
+vi.mock('../services/serviceCredentials/service', () => ({ serviceCredentialService: credentials }))
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
@@ -135,5 +136,15 @@ describe('profile-ready listeners', () => {
     await userActivation.deactivate()
     userActivation.credentialsRenewed('b')
     expect(ready).toEqual(['b', 'b'])
+  })
+  it('refreshes service-credential accounts on unlock changes and renewal of any profile, and never retires them on a switch', async () => {
+    const { userActivation } = await import('./activation')
+    await userActivation.activate('a'); await userActivation.activate('b')
+    expect(credentials.retire).not.toHaveBeenCalled()
+    expect(credentials.activate.mock.calls.map(([id]) => id)).toEqual(['a', 'b'])
+    userActivation.markUnlocked('a'); userActivation.forgetUnlock('a'); userActivation.clearUnlocks()
+    expect(credentials.refreshAccounts).toHaveBeenCalledTimes(3)
+    userActivation.credentialsRenewed('a')
+    expect(credentials.renewed).toHaveBeenCalledWith('a')
   })
 })

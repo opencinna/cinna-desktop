@@ -44,9 +44,14 @@ class UserActivation {
     return () => { this._readyListeners.delete(listener) }
   }
 
-  /** A re-auth stored fresh Cinna tokens for `userId`. Only the active profile is told. */
+  /**
+   * A re-auth stored fresh Cinna tokens for `userId`. Service credentials
+   * refresh that account whether or not it is current; only the active
+   * profile's ready listeners are told.
+   */
   credentialsRenewed(userId: string): void {
-    if (this._activated && this._activeUserId === userId) { void serviceCredentialService.activate(userId).then(() => serviceCredentialService.sync()).catch(() => { /* Preparation retries cleanup before any turn. */ }); this._notifyReady(userId) }
+    serviceCredentialService.renewed(userId)
+    if (this._activated && this._activeUserId === userId) this._notifyReady(userId)
   }
 
   private _notifyReady(userId: string): void {
@@ -64,6 +69,7 @@ class UserActivation {
   /** Mark a user as unlocked for the remainder of this app session. */
   markUnlocked(userId: string): void {
     this._unlockedUserIds.add(userId)
+    serviceCredentialService.refreshAccounts()
   }
 
   /** Whether the user has already supplied their password in this app session. */
@@ -74,11 +80,13 @@ class UserActivation {
   /** Drop all unlock memory (e.g. on sign-out). */
   clearUnlocks(): void {
     this._unlockedUserIds.clear()
+    serviceCredentialService.refreshAccounts()
   }
 
   /** Remove a single user from the unlock set (e.g. on account deletion). */
   forgetUnlock(userId: string): void {
     this._unlockedUserIds.delete(userId)
+    serviceCredentialService.refreshAccounts()
   }
 
   /**
@@ -108,7 +116,8 @@ class UserActivation {
   }
 
   private async _activate(userId: string): Promise<void> {
-    serviceCredentialService.retire()
+    // Service credentials are not retired here: every eligible account keeps
+    // delivering across profile switches; activate() recomputes that set.
     stopPeriodicSync()
     stopAccountConfigPeriodicSync()
     const epoch = ++this._epoch
@@ -166,7 +175,6 @@ class UserActivation {
 
   /** Tear down the active session without loading any providers. */
   async deactivate(): Promise<void> {
-    serviceCredentialService.retire()
     stopPeriodicSync()
     stopAccountConfigPeriodicSync()
     const epoch = ++this._epoch

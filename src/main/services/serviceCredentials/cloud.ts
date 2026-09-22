@@ -7,7 +7,9 @@ export interface CloudCredentialMetadata {
 }
 export interface CloudDelivery {
   items: ServiceCredentialBundle[]; refused: { id: string; reason: string }[]
-  current_user: ServiceCredentialEntry | null; owner_identity: ServiceCredentialEntry | null
+  current_user: ServiceCredentialEntry | null
+  /** Always null: Core never delivers Agent API credentials. Kept so the response still types. */
+  owner_identity: ServiceCredentialEntry | null
 }
 export const serviceCredentialCloud = {
   list: (userId: string, signal?: AbortSignal) => cinnaFetch<{ items: CloudCredentialMetadata[] }>(userId, '/api/v1/external/credentials', { sensitive: true, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000) }),

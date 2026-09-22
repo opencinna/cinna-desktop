@@ -13,6 +13,8 @@ const credentialTypes: { type: LocalCredentialType; name: string; description: s
   { type: 'google_service_account', name: 'Google service account', description: 'Use a service account JSON key', icon: FileKey }
 ]
 export const credentialTypeName = (type: string) => credentialTypes.find(c => c.type === type)?.name ?? type.replaceAll('_', ' ')
+/** The type card's icon; cloud-only types fall back to a generic key. */
+export const credentialTypeIcon = (type: string): LucideIcon => credentialTypes.find(c => c.type === type)?.icon ?? KeyRound
 export const serviceUriHelp = 'A non-secret identifier for the service, such as slack.com or work-mail. Agents use it together with the credential type to match the correct credential to a required slot. Use the same Service URI on the credential and the agent’s requirement.'
 
 export function CredentialTypePicker({ onSelect, onClose }: { onSelect: (type: LocalCredentialType) => void; onClose: () => void }) {

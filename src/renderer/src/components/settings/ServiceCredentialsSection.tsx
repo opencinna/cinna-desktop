@@ -4,10 +4,10 @@ import { useAuthStore } from '../../stores/auth.store'
 import type { LocalCredentialType, ServiceCredentialDto } from '../../../../shared/serviceCredentials'
 import { credentialResult, useServiceCredentials } from '../../hooks/useServiceCredentials'
 import { unwrapIpcError } from '../../utils/ipcError'
-import { SettingsButton, SettingsCard, SettingsSection } from './SettingsLayout'
+import { SettingsButton, SettingsCard, SettingsInfoTip, SettingsSection } from './SettingsLayout'
 import { CredentialTypePicker, LocalCredentialForm, credentialTypeName } from './LocalCredentialForm'
 
-const cloudErrors: Record<string, string> = {
+export const cloudErrors: Record<string, string> = {
   reauth_required: 'Sign in again to sync credentials.',
   permission_denied: 'This account is not allowed to download credential values. Check access with the owner or administrator.',
   not_supported: 'This remote does not support credential sync yet. Update Cinna Core on that server.',
@@ -29,7 +29,9 @@ export function ServiceCredentialsSection({ cloud = false }: { cloud?: boolean }
     : cloud && data?.error ? cloudErrors[data.error] ?? 'Could not sync credentials from this profile. Try again.' : ''
   const errorMessage = error || (loadError ? unwrapIpcError(loadError) : statusError)
 
-  return <SettingsSection title={cloud ? 'Remote credentials' : 'Local credentials'} action={cloud ? <div className="flex items-center gap-2">
+  return <SettingsSection title={cloud ? 'Remote credentials' : 'Local credentials'} info={cloud ? <SettingsInfoTip label="About remote credentials">
+    This is not the full list of credentials on the server. The server sends only those that local agents on this computer can use; the rest, such as automatic, bundle and server-driven OAuth credentials, stay on the server. Manage all of them on the remote.
+  </SettingsInfoTip> : undefined} action={cloud ? <div className="flex items-center gap-2">
     {profile?.cinnaServerUrl && <SettingsButton disabled={pending} onClick={async () => {
       try {
         const result = await window.api.system.openExternal(new URL('/credentials', profile.cinnaServerUrl).toString())

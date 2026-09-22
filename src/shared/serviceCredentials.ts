@@ -18,9 +18,20 @@ export interface ServiceCredentialAttachments {
   accounts: Record<string, { ref: string }[]>
 }
 export interface ServiceCredentialAttachmentDto {
-  ref: string; origin: 'local' | 'cloud'; credential: ServiceCredentialDto | null
-  state: 'ready' | 'missing' | 'incomplete' | 'local_use_not_allowed' | 'not_cached' | 'expired'
+  ref: string; origin: 'local' | 'cloud'
+  /** `'local'` or the account key the reference is stored under. */
+  group: string
+  /** "This computer", the profile name, or "Signed-out account" when that account is not eligible. */
+  groupLabel: string
+  credential: ServiceCredentialDto | null
+  state: 'ready' | 'missing' | 'incomplete' | 'local_use_not_allowed' | 'not_cached' | 'expired' | 'account_unavailable'
 }
+/** One attach-picker section: local records, or one eligible account's cache. */
+export interface ServiceCredentialAttachGroup {
+  key: string; label: string; detail: string; error: string | null
+  items: (ServiceCredentialDto & { attached: boolean })[]
+}
+export interface ServiceCredentialAttachOptions { groups: ServiceCredentialAttachGroup[] }
 export interface ServiceCredentialEntry {
   id: string; name: string; type: string; notes: string | null; service_uri: string | null
   is_placeholder: boolean; credential_data: Record<string, unknown>

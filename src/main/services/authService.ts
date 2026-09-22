@@ -335,10 +335,10 @@ export const authService = {
     // a profile switch: save its tokens above, but do not reactivate its setup.
     if (userActivation.isActivated() && getCurrentUserId() === userId) {
       void desktopFeatures.reconcileDevelopment(userId)
-      // Work that waited on a usable session — a remote turn the app was
-      // closed under, say — can go on now.
-      userActivation.credentialsRenewed(userId)
     }
+    // Service credentials refresh any renewed account; only the active profile's
+    // waiting work (a remote turn the app was closed under, say) is told.
+    userActivation.credentialsRenewed(userId)
 
     const refreshed = userRepo.get(userId)
     if (!refreshed) throw new Error('User disappeared after reauth')
@@ -372,7 +372,7 @@ export const authService = {
   },
 
   async logout(): Promise<void> {
-    serviceCredentialService.clearProfile(getCurrentUserId())
+    serviceCredentialService.signOut(getCurrentUserId())
     userActivation.clearUnlocks()
     await userActivation.activate(DEFAULT_USER_ID)
     logger.info('user.logout')
@@ -410,6 +410,7 @@ export const authService = {
     } else if (input.password) {
       assertPasswordStrong(input.password)
       userRepo.setPassword(input.userId, hashPassword(input.password))
+      serviceCredentialService.refreshAccounts()
       logger.info('user.password_set', { userId: input.userId, username: row.username })
     }
 
@@ -495,6 +496,8 @@ export const authService = {
     // instead of holding by accident of how ids are minted. The case where it
     // does matter is `registerCinna`'s rebind, which keeps the id.
     taskSyncService.resetCursors(input.userId)
+    // The deleted profile's account leaves the eligible credential set.
+    serviceCredentialService.refreshAccounts()
 
     if (wasCurrent) {
       await userActivation.activate(DEFAULT_USER_ID)
