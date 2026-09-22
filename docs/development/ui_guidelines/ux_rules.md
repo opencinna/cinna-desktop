@@ -105,6 +105,8 @@ An action is discoverable before it is hovered or it is not discoverable. Colour
 
 Settings is the one place where every screen is a sibling of every other: the user reaches them from the same list, one click apart. A tab that is structured differently or set smaller than its neighbours does not read as a variation — it reads as a screen someone forgot to finish.
 
+The rule covers **any surface built from settings sections**, wherever it lives: an agent-page tab that lists and configures things (the Credentials tab's Attached Credentials) takes the same `SettingsSection` header, the verb beside the title on the right, and the explanation behind the (?). Judge by what the surface is made of, not by its folder.
+
 - **Titled sections, not a stack of cards.** The section title is what the user scans for; a card is one setting inside the answer. Name the sections after what the user came to change (Agent Folders, Runtime, Developer Tools), not after the data model. Two or three per tab; a tab needing seven is really two tabs.
 - **One type scale per surface.** Settings runs at 14/13/12 (see [UI Guidelines](ui_guidelines_llm.md) — Typography). `text-xs`, `text-[10px]` and `text-[9px]` are the app-chrome scale, and a settings tab written in them renders two steps smaller than the one beside it. A component shared with a denser surface takes the scale of the surface it renders *into*, and any reserved height it computes is written as a multiple of that scale's leading rather than a measured pixel count, so the two cannot drift apart.
 - **A fact lives in the section holding the control that changes it.** A "readiness" card that reports the engine is not running, three rows above the field that decides which binary starts, has separated the diagnosis from the fix. Give the status row the button that resolves it.
@@ -113,6 +115,22 @@ Settings is the one place where every screen is a sibling of every other: the us
 - **Below the control: a filled status line, or nothing.** Rule 1 applied to a settings field. A one-line slot is reserved only where it shows something in every state; a message that exists only on failure renders only then, last in its card, and moves nothing above it. Two-line reservations and empty `min-h` slots are findings: they read as a card with the wrong bottom padding. The copy of any status line fits one line at the 800px minimum; shorten the sentence rather than reserve a second line.
 
 **Origin:** Settings → Local Agents was four unlabelled cards and a loose button, at `text-xs`/`text-[10px]`/`text-[9px]` while Features, Local Development and AI Credentials next to it were titled sections at 14/13/12. Nothing in it was wrong on its own; it was reported as "wrong design" purely because it did not look like the screen one click away. The type scale had moved and the one screen that did not follow was the one nobody had compared side by side.
+
+## 13. The same object looks and acts the same wherever it is listed
+
+A user who meets one kind of record in three places learns it once. Draw it three ways and each place has to be learned again, and the differences read as differences in the record: a credential that shows a green check in one list and "complete" in another looks like two states.
+
+- **One row per object type.** Every list of the same record (a settings list, an agent's attachments, a picker) renders it with the same row component and the same vocabulary. A second row design for the same object is a finding even when it looks fine on its own.
+- **Facts are glyphs, badges and code, not a dotted sub-line.** A state is a coloured icon whose accessible name and tooltip are the sentence (check for fine, triangle for needs attention, cross for blocked). A category is a `SettingsBadge`. Ownership is an icon. An identifier (a Service URI, a key) is inline `code`. A raw enum on screen ("not cached", "complete", a `replaceAll('_', ' ')`) is a finding.
+- **Compact views show only the problems.** Where the row does not fit a full status (a picker card), show the glyph only when the state is not fine. A green check on every card is the healthy state wearing a badge (rule 2).
+- **Anything with a page of its own is reachable from the row,** including a page on a remote server: a record synced from Core has a Manage action that opens that record on Core. A URL shown on screen is a link, never plain text.
+- **An account is named in one form: `Name <email> host`.** The name is the person's full name, the email is dropped when it would repeat the name, and the host is a link that opens the server, with the full URL as its tooltip. No brackets, no "Server:" prefix, no bare URL standing in for "who, on which server".
+- **An editable collection behaves like its sibling collections.** MCP providers, AI Credentials and Local credentials are the pattern: a collapsible card per item, the header opens the inline edit form, a trash icon in the header opens the confirm inside that card, and a dashed Add button closes the list. A list of Edit/Delete text buttons over a separate confirm card is a different interaction for the same job.
+- **Row actions are icons; section actions are labelled.** A verb repeated on every row (Manage, Detach, Delete) is a `SettingsIconButton` with a `title` and an `aria-label` naming the row; a labelled button on each row turns the list into a column of words. A section-wide verb keeps its label (rule 12).
+- **An open form is not replaced by another control.** While a form holds input, the controls that would open a different form are disabled, and only the form's own Cancel or its own header closes it. Swapping it out discards what the user typed: that is lost work, and it is graded as high.
+- **Every control earns its place.** A control whose effect the user cannot see (Move up, where order has no visible consequence on screen) is removed rather than explained. Report it as a suggestion; it needs the user's decision.
+
+**Origin:** service credentials were listed in three places — Settings → Local and Remote credentials, the agent's Credentials tab and the attach picker — and each drew the record differently: "API token · complete · Owned" as prose in one, "name · ready · slack.com" in another, cards in the third. The server line read "Server: http://localhost:5173" as plain text, remote records had no way back to Core, and every row carried Edit, Delete, Move up and Detach as text buttons. None of it broke rule 12, because each surface matched its own neighbours; the user found it by looking at the same credential in two places.
 
 ## Checklist for a review
 
@@ -129,3 +147,8 @@ Settings is the one place where every screen is a sibling of every other: the us
 10. Every `aria-label`: does it match the visible text, including on the branch you did not open?
 11. Every clickable thing that is not a filled button: read its colour and weight against the static text nearest it. The same? Finding.
 12. Open the settings tab **above and below** the changed one and screenshot all three. Different structure (titled sections vs. bare cards) or a different type scale is a finding, even when the changed tab is internally consistent.
+13. List every other place the changed object is rendered (grep for its DTO type and its row component). Is it drawn with the same row, the same glyphs and the same wording everywhere? Any raw enum on screen? Finding.
+14. Every URL, host and remote record on the surface: is it a link, and does a synced record reach its page on the remote? Every account named: is it `Name <email> host`?
+15. An editable list: compare editing, deleting and adding an item with the sibling list in the neighbouring tab. Different pattern: finding.
+16. Open a form, type into it, then press every other control that opens a form. Is the input lost? High.
+17. Read one row's actions. A labelled verb repeated on every row (rather than an icon button with a title): finding.

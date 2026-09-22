@@ -31,7 +31,7 @@ Either way, match the surrounding code. For anything user-visible, read `docs/de
 
 **4. Review — not optional.** Launch `cinna-desktop-code-reviewer` before committing anything that crosses the main/renderer boundary, runs work concurrently, touches first run, or changes an IPC payload. Brief it with what changed and what you are unsure of; it starts cold, and the quality of what comes back tracks the quality of the briefing. Then **verify each finding yourself before acting on it** — some will be wrong, and one will be the thing you could not see.
 
-**4b. UX review — for any user-visible surface.** Launch `cinna-desktop-ux-reviewer` in parallel with the code reviewer when a component, dialog, page or settings section was added or changed. Brief it with the surfaces and the states they can be in (empty, loading, error, busy) so it can drive each one. Its findings cite `ux_rules.md` by number; verify them on the screen, not by reading the JSX.
+**4b. UX review — for any user-visible surface.** Launch `cinna-desktop-ux-reviewer` in parallel with the code reviewer when a component, dialog, page or settings section was added or changed. Brief it with the surfaces and the states they can be in (empty, loading, error, busy) so it can drive each one. Its findings cite `ux_rules.md` by number; verify them on the screen, not by reading the JSX. Ask for a **quick** pass (diff only, no build) when the change tunes an existing surface, and skip the reviewer when the user dictated the design and said they will check it by hand.
 
 **5. Fix, and re-review.** Findings often interact: a fix for one changes what another means. When the fixes are substantial, send the delta back. Two or three rounds is normal, not a sign something has gone wrong.
 
