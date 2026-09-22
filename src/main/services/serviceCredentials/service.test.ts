@@ -93,11 +93,11 @@ describe('credential delivery integration', () => {
     await login('account-b')
     expect(readFileSync(p.path!, 'utf8')).toBe(bytes); expect(statSync(p.path!).mtimeMs).toBe(modified)
     expect((await prepare(a.id)).generation).toBe(p.generation)
-    expect(service.attachments(a.id)).toMatchObject([{ ref: 'cloud-fixture', group: key('account-a'), groupLabel: 'account-a', state: 'ready' }])
+    expect(service.attachments(a.id)).toMatchObject([{ ref: 'cloud-fixture', group: key('account-a'), groupLabel: 'account-a', state: 'ready', serverUrl: 'http://localhost:8000', account: { name: 'account-a', email: 'account-a' } }])
     expect([...world.rows.values()].filter(r => r.cloud_id === 'cloud-fixture')).toHaveLength(2)
     service.signOut('account-a'); world.users.delete('account-a'); await sleep()
     expect(existsSync(p.path!)).toBe(false)
-    expect(service.attachments(a.id)).toMatchObject([{ ref: 'cloud-fixture', groupLabel: 'Signed-out account', state: 'account_unavailable', credential: null }])
+    expect(service.attachments(a.id)).toMatchObject([{ ref: 'cloud-fixture', groupLabel: 'Signed-out account', state: 'account_unavailable', credential: null, serverUrl: null, account: null }])
     await login('new-account-a')
     expect(service.attachments(a.id)[0]).toMatchObject({ ref: 'cloud-fixture', group: key('account-a'), state: 'ready' }); expect((await prepare(a.id)).generation).toBe(p.generation)
   })
@@ -354,7 +354,7 @@ describe('multiple eligible accounts', () => {
     // Local first, then accounts by profile name (Alpha = account-b before Beta = account-a).
     // Core gives every current_user entry the same id, so two contributing accounts write none.
     expect(read(p.path!).map(e => e.id)).toEqual([local.id, 'cred-b', 'cred-a'])
-    expect(service.attachments(a.id).map(v => [v.groupLabel, v.state])).toEqual([['This computer', 'ready'], ['Alpha', 'ready'], ['Beta', 'ready']])
+    expect(service.attachments(a.id).map(v => [v.groupLabel, v.state, v.serverUrl])).toEqual([['This computer', 'ready', null], ['Alpha', 'ready', 'http://localhost:8000'], ['Beta', 'ready', 'http://localhost:8000']])
     expect(service.attachOptions(a.id).groups.map(g => [g.label, g.detail, g.items.map(i => [i.cloudId ?? i.name, i.attached])])).toEqual([
       ['This computer', '', [['Local', true]]], ['Alpha', 'localhost:8000', [['cred-b', true]]], ['Beta', 'localhost:8000', [['cred-a', true]]]])
     // Switching the current profile does not change delivered files.

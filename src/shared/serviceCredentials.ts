@@ -24,8 +24,13 @@ export interface ServiceCredentialAttachmentDto {
   /** "This computer", the profile name, or "Signed-out account" when that account is not eligible. */
   groupLabel: string
   credential: ServiceCredentialDto | null
-  state: 'ready' | 'missing' | 'incomplete' | 'local_use_not_allowed' | 'not_cached' | 'expired' | 'account_unavailable'
+  state: ServiceCredentialAttachmentState
+  /** The account's Cinna server, for the per-credential Manage link. Null for local references and unavailable accounts. */
+  serverUrl: string | null
+  /** The account the group belongs to, for its "Name <email> host" heading. Null for local references and unavailable accounts. */
+  account: { name: string; email: string } | null
 }
+export type ServiceCredentialAttachmentState = 'ready' | 'missing' | 'incomplete' | 'local_use_not_allowed' | 'not_cached' | 'expired' | 'account_unavailable'
 /** One attach-picker section: local records, or one eligible account's cache. */
 export interface ServiceCredentialAttachGroup {
   key: string; label: string; detail: string; error: string | null

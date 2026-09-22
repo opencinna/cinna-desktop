@@ -46,7 +46,11 @@ function defaults(type: LocalCredentialType): Record<string, string | boolean> {
   if (type === 'email_smtp') return { port: '587', use_tls: true, use_ssl: false }
   return {}
 }
-export function LocalCredentialForm({ type, record, onBack, onClose }: { type: LocalCredentialType; record?: ServiceCredentialDto; onBack?: () => void; onClose: () => void }) {
+/**
+ * `framed={false}` renders the form without its own card or title, for the body
+ * of a list row whose header already names the record.
+ */
+export function LocalCredentialForm({ type, record, onBack, onClose, framed = true }: { type: LocalCredentialType; record?: ServiceCredentialDto; onBack?: () => void; onClose: () => void; framed?: boolean }) {
   const id = useId()
   const [name, setName] = useState(record?.name ?? '')
   const [serviceUri, setServiceUri] = useState(record?.serviceUri ?? '')
@@ -54,8 +58,7 @@ export function LocalCredentialForm({ type, record, onBack, onClose }: { type: L
   const [values, setValues] = useState<Record<string, string | boolean>>(() => defaults(type))
   const [replace, setReplace] = useState(!record)
   const [error, setError] = useState(''), [pending, setPending] = useState(false)
-  return <SettingsCard>
-    <form className="space-y-3" onSubmit={async e => {
+  const form = <form className="space-y-3" onSubmit={async e => {
       e.preventDefault(); setPending(true); setError('')
       try {
         let data: Record<string, unknown> | undefined
@@ -71,7 +74,7 @@ export function LocalCredentialForm({ type, record, onBack, onClose }: { type: L
         setValues({}); onClose()
       } catch (err) { setError(unwrapIpcError(err)) } finally { setPending(false) }
     }}>
-      <div className="flex items-center gap-2"><h3 className="flex-1 text-[14px] font-medium">{record ? 'Edit' : 'New'} {credentialTypeName(type)}</h3>{onBack && <SettingsButton disabled={pending} onClick={onBack}><ArrowLeft size={14} />Change type</SettingsButton>}</div>
+      {framed && <div className="flex items-center gap-2"><h3 className="flex-1 text-[14px] font-medium">{record ? 'Edit' : 'New'} {credentialTypeName(type)}</h3>{onBack && <SettingsButton disabled={pending} onClick={onBack}><ArrowLeft size={14} />Change type</SettingsButton>}</div>}
       <fieldset disabled={pending} className="space-y-3">
         <div className="space-y-1"><SettingsLabel htmlFor={`${id}-name`}>Name</SettingsLabel><input id={`${id}-name`} required autoFocus className={settingsInputClass} value={name} onChange={e => setName(e.target.value)} /></div>
         <div className="space-y-1"><SettingsLabel htmlFor={`${id}-service-uri`} info={serviceUriHelp}>Service URI</SettingsLabel><input id={`${id}-service-uri`} className={settingsInputClass} placeholder="e.g. slack.com or work-mail" value={serviceUri} onChange={e => setServiceUri(e.target.value)} /></div>
@@ -92,5 +95,5 @@ export function LocalCredentialForm({ type, record, onBack, onClose }: { type: L
       <div className="flex justify-end gap-2 pt-1"><SettingsButton disabled={pending} onClick={onClose}>Cancel</SettingsButton><button type="submit" disabled={pending || !name.trim()} className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-[14px] font-medium text-white transition-colors hover:bg-[var(--color-accent-hover)] disabled:cursor-not-allowed disabled:opacity-30">{pending ? 'Saving…' : 'Save'}</button></div>
       {error && <p role="alert" className="text-[var(--color-danger)] text-[13px]">{error}</p>}
     </form>
-  </SettingsCard>
+  return framed ? <SettingsCard>{form}</SettingsCard> : form
 }

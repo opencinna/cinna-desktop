@@ -100,10 +100,23 @@ Service tests cover:
 - a list or delivery discarded when its account becomes ineligible mid-flight;
 - a queued attachment change rejected when its account becomes ineligible, but not on a profile switch.
 
-Activation tests check that switching never retires, and that unlock changes and renewal of any profile recompute the set. The ACP driver test checks that preparation depends only on the agent. Renderer tests cover the picker (grouping, in-place **Attached** card, per-card pending and error, local-use refusal, cross-group search, Escape), an in-flight attach surviving a detach made before it lands, and **Detach** without **Move up** on a signed-out account's row. The E2E spec attaches through `attachOptions` and the picker.
+Activation tests check that switching never retires, and that unlock changes and renewal of any profile recompute the set. The ACP driver test checks that preparation depends only on the agent. Renderer tests cover the picker (grouping, in-place **Attached** card, per-card pending and error, local-use refusal, cross-group search, Escape), an in-flight attach surviving a detach made before it lands, and **Detach** on a signed-out account's row. The E2E spec attaches through `attachOptions` and the picker.
 
 `ServiceCredentialsSection.test.tsx` covers the **About remote credentials** tip beside the remote title. No test asserts that renewing a newly eligible account syncs it once; `activation.test.ts` checks only that renewal of any profile reaches `renewed`.
 
 Focused run of those seven files (`service.test.ts`, `activation.test.ts`, `authService.test.ts`, `acpDriver.test.ts`, `CredentialAttachModal.test.tsx`, `ServiceCredentialsTab.test.tsx`, `ServiceCredentialsSection.test.tsx`): **221 passed**. `npm run typecheck` (main, renderer, E2E) passed. The full suite, build and isolated E2E were not rerun for this section.
 
 The live-Core case in `service-credentials.spec.ts` was rewritten for multi-account delivery and **has not been run against a live Core**. Both passwordless profiles are now eligible, so the agent holds the shared record under both accounts. The test now expects that revoking local use stops only the recipient's copy while the owner's keeps delivering (one `ready` attachment, rotated value still in the file), that switching back to the owner changes nothing, and that logging out of the owner removes the file. The earlier live results above were recorded against the single-account behaviour, where revocation removed the file.
+
+## Shared credential rows — 2026-09-22
+
+The three lists now render one row, account groups are headed by the account reference, remote records link to their Core page, local rows edit and confirm deletion inline, and the agent tab lost **Move up**.
+
+Tests cover:
+- `credentialPresentation.test.ts`: status derived from a record, most blocking first, and an attachment state taking precedence over it; ownership labels; the Manage URL suffix-joined onto a server with and without a path prefix or trailing slash, and null without a Core id or with an unparseable server; the account reference preferring the Cinna full name, dropping an email that repeats the name, and keeping an unparseable host as stored;
+- `ServiceCredentialsSection.test.tsx`: the row's parts, including the Service URI as code; a local row edited inline, with the other rows, every trash icon and **Add Credential** disabled while the form is open; its header closing the form, and closing a delete confirm rather than switching to the form; the delete confirm inside the row; **Manage** opening Core's page and reporting a refused open; the remote header's account reference and host link; **Add Credential** as the dashed button;
+- `ServiceCredentialsTab.test.tsx`: the **Attached Credentials** heading, its **(?)** and **Attach**; row status and ownership icons; an account group's heading and host link; **Manage** for a cloud row only; no **Move up**; no **Manage** on a signed-out account's row;
+- `CredentialAttachModal.test.tsx`: the status icon on a card that needs attention and none on a healthy one;
+- `service.test.ts`: `serverUrl` and `account` on account attachments, null on local and signed-out ones.
+
+A focused run of those five files passed **69 tests**. Typecheck, build and the full suite were not rerun for this section. No test covers the display-name refresh in `authService.updateUser`. The E2E selectors in `service-credentials.spec.ts` were updated to the new rows, the **Detach** accessible name and the host link, but **the spec was not run** for this section, so the isolated and live Electron cases are unverified against the new UI.

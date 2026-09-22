@@ -36,6 +36,14 @@ beforeEach(() => { attachOptions.mockResolvedValue({ ok: true, value: options })
 afterEach(() => { attachOptions.mockReset() })
 
 describe('CredentialAttachModal', () => {
+  it('marks a card whose credential needs attention, and leaves healthy cards unmarked', async () => {
+    attachOptions.mockResolvedValue({ ok: true, value: { groups: [{ key: 'local', label: 'This computer', detail: '', error: null, items: [
+      credential({ id: 'ok', name: 'Healthy' }), credential({ id: 'part', name: 'Partial', isPlaceholder: true })] }] } })
+    renderModal(vi.fn())
+    expect(within(await screen.findByTestId('credential-card-part')).getByRole('img', { name: 'Some values are missing' })).toBeTruthy()
+    expect(within(screen.getByTestId('credential-card-ok')).queryByRole('img')).toBeNull()
+  })
+
   it('groups credentials by where they live, with account detail, sync errors and empty groups', async () => {
     renderModal(vi.fn())
     const work = await screen.findByRole('region', { name: 'Work' })

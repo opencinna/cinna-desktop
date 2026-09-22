@@ -27,12 +27,16 @@ const CHANGED_ERROR = 'The account changed. Start the turn again.'
  */
 interface Account {
   key: string; userId: string; origin: string; label: string; detail: string
+  /** The profile's server URL as stored, for links to the account's Core pages. */
+  serverUrl: string
+  /** How the account is named on screen: the Cinna full name, and the email it signs in with. */
+  name: string; email: string
   epoch: number; abort: AbortController; syncError: string | null; lastSync: number | null
   synthetic: ServiceCredentialEntry[]
   flight: { global: number; epoch: number; promise: Promise<void>; again: boolean } | null
   scheduler: ReturnType<typeof createLocalScheduleScheduler>
 }
-type AccountInfo = Pick<Account, 'key' | 'userId' | 'origin' | 'label' | 'detail'>
+type AccountInfo = Pick<Account, 'key' | 'userId' | 'origin' | 'label' | 'detail' | 'serverUrl' | 'name' | 'email'>
 /** Global epoch/abort cover only suspend and shutdown; accounts carry their own. */
 let epoch = 0, suspended = false, currentUser = LOCAL, started = false
 let lifecycleAbort = new AbortController()
@@ -198,7 +202,8 @@ function eligible(): Map<string, AccountInfo> {
     let subject: string, origin: string
     try { subject = getStoredCinnaSubject(u.id); origin = new URL(u.cinnaServerUrl).origin } catch { continue }
     const key = createHash('sha256').update(origin + '\n' + subject).digest('hex').slice(0, 16)
-    if (!out.has(key)) out.set(key, { key, userId: u.id, origin, label: u.displayName || u.username, detail: hostOf(u.cinnaServerUrl) })
+    if (!out.has(key)) out.set(key, { key, userId: u.id, origin, label: u.displayName || u.username, detail: hostOf(u.cinnaServerUrl), serverUrl: u.cinnaServerUrl,
+      name: u.cinnaFullName?.trim() || u.displayName || u.username, email: u.username })
   }
   return out
 }
@@ -219,7 +224,7 @@ function refreshAccounts(): void {
   for (const account of [...accounts.values()]) {
     const wanted = next.get(account.key)
     if (!wanted || wanted.userId !== account.userId || wanted.origin !== account.origin) { retireAccount(account); touched.add(account.key) }
-    else { account.label = wanted.label; account.detail = wanted.detail }
+    else { account.label = wanted.label; account.detail = wanted.detail; account.serverUrl = wanted.serverUrl; account.name = wanted.name; account.email = wanted.email }
   }
   for (const [key, value] of next) {
     if (accounts.has(key)) continue
@@ -281,7 +286,8 @@ async function syncPass(account: Account, g: Guard): Promise<void> {
 function toAttachmentDto(v: Resolved): ServiceCredentialAttachmentDto {
   const account = v.group === 'local' ? undefined : accounts.get(v.group)
   return { ref: v.ref, origin: v.origin, group: v.group, groupLabel: v.group === 'local' ? 'This computer' : account?.label ?? 'Signed-out account',
-    credential: v.available && v.row ? credentialDto(v.row) : null, state: v.available ? attachmentState(v.row) : 'account_unavailable' }
+    credential: v.available && v.row ? credentialDto(v.row) : null, state: v.available ? attachmentState(v.row) : 'account_unavailable',
+    serverUrl: account?.serverUrl ?? null, account: account ? { name: account.name, email: account.email } : null }
 }
 
 export const serviceCredentialService = {

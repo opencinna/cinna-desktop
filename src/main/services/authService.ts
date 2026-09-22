@@ -389,6 +389,8 @@ export const authService = {
 
     if (input.displayName !== undefined && input.displayName.trim()) {
       userRepo.updateProfile(input.userId, { displayName: input.displayName.trim() })
+      // Credential lists name the account by it.
+      serviceCredentialService.refreshAccounts()
     }
 
     // Changing or removing a password requires confirming the existing one
