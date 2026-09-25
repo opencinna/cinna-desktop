@@ -12,6 +12,7 @@ const jobState = vi.hoisted(() => ({ current: null as JobDetailData | null }))
 const runsState = vi.hoisted(() => ({ current: [] as Array<{ id: string }> }))
 vi.hoisted(() => { (window as unknown as { api: unknown }).api = { app: { setTheme: async () => undefined } } })
 
+vi.mock('./JobSchedules', () => ({ JobSchedules: () => <div data-testid="job-schedules" /> }))
 vi.mock('../../hooks/useJobs', () => ({
   useJob: () => ({ data: jobState.current, isLoading: false }),
   useJobRuns: () => ({ data: runsState.current }),
@@ -153,4 +154,14 @@ describe('the job page’s Tasks history', () => {
     const empty = within(history()).getByText('No tasks yet')
     expect(empty.className).not.toMatch(/\bp[xl]-/)
   })
+})
+
+it('offers device schedules only for desktop-owned Jobs', () => {
+  jobState.current = job({ type: 'local' })
+  const result = render(<JobDetail />)
+  expect(screen.getByTestId('job-schedules')).toBeTruthy()
+  result.unmount()
+  jobState.current = job({ type: 'cinna_task' })
+  render(<JobDetail />)
+  expect(screen.queryByTestId('job-schedules')).toBeNull()
 })

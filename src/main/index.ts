@@ -451,6 +451,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  localScheduleScheduler.stop()
   // shutdownHubCore persists partial turns and signals children synchronously;
   // Electron does not await the subsequent process-exit promises.
   void shutdownHubCore()

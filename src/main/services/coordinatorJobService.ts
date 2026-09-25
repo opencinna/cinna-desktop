@@ -1,4 +1,6 @@
-import { getDb } from '../db/client'
+import { getDb, getRawSqlite } from '../db/client'
+import { taskRuntimeRepo } from '../db/taskRuntimes'
+import { chatRunResultRepo } from '../db/chatRunResults'
 import { jobsRepo, jobAgentRepo, jobMcpRepo, jobRunsRepo, type JobRow } from '../db/jobs'
 import { agentOverrideRepo } from '../db/agents'
 import { mcpProviderRepo } from '../db/mcpProviders'
@@ -12,8 +14,18 @@ import type { RunScope } from './runExecutionService'
 import { agentIdentityKey, agentRowToDescriptor, normalizeUrl } from '../sync/identity'
 import { profileServerUrl } from '../sync/resolvers'
 
-/** Explicit coordinator Job admission; defaults and dispatch both belong to main. */
-export async function startCoordinatorJob(scope: RunScope, job: JobRow): Promise<{ chatId: string; taskId: string; runId: string }> {
+export interface PreparedCoordinatorJob {
+  chatId: string
+  taskId: string
+  runId: string
+  launch(): void
+  interrupt(reason: string): void
+}
+
+/** Async configuration lookup precedes the caller's atomic admission transaction. */
+export async function prepareCoordinatorJob(scope: RunScope, job: JobRow, current: () => boolean = () => true): Promise<() => PreparedCoordinatorJob> {
+  const assertScope = () => { if (!current()) throw new Error('The active profile changed before this job started.') }
+  assertScope()
   jobRuntimeDefinition(job)
   const budget = runtimeBudget(job.budget)
   if (budget.maxTokens !== undefined) throw new Error('Token limits require usage reporting from every participant. Use a time and round limit.')
@@ -48,10 +60,15 @@ export async function startCoordinatorJob(scope: RunScope, job: JobRow): Promise
   if (fields(before.current) !== fields(job)) throw new Error('The job changed before this attempt started.')
   const fingerprint = JSON.stringify(before)
   const model = await resolveTaskModelConfig(scope, job.modeId ?? undefined)
+  assertScope()
   model.assertCurrent()
   const fresh = snapshot()
   if (JSON.stringify(fresh) !== fingerprint) throw new Error('The job changed while its model was being prepared. Try again.')
-  const prepared = getDb().transaction(() => {
+  return () => {
+    assertScope()
+    model.assertCurrent()
+    if (JSON.stringify(snapshot()) !== fingerprint) throw new Error('The job changed before this attempt was admitted.')
+    const prepared = getDb().transaction(() => {
     const { chatId, runId } = jobRunsRepo.createLocalChatAndRun({ userId: scope.profileUserId, jobId: job.id,
       title: fresh.current.title, prompt: fresh.current.prompt, router: 'coordinator', rootAgentId: null,
       providerId: model.providerId, modelId: model.modelId, modeId: model.modeId,
@@ -61,7 +78,35 @@ export async function startCoordinatorJob(scope: RunScope, job: JobRow): Promise
     jobRunsRepo.setTaskId(runId, task.id)
     const accepted = taskRunnerService.prepare(scope, { chatId, goal: fresh.current.prompt, budget })
     return { ...accepted, runId }
-  })
+    })
+    let launched = false
+    return { chatId: prepared.chatId, taskId: prepared.taskId, runId: prepared.runId,
+      launch() {
+        assertScope()
+        if (getRawSqlite().inTransaction) throw new Error('Commit the job admission before launching it.')
+        if (launched) throw new Error('This prepared job was already launched.')
+        const checkpoint = taskRuntimeRepo.get(scope.profileUserId, prepared.taskId)
+        if (!checkpoint || checkpoint.state !== 'queued') throw new Error('This prepared job is no longer queued.')
+        prepared.launch()
+        launched = true
+      },
+      interrupt(reason) {
+        const checkpoint = taskRuntimeRepo.get(scope.profileUserId, prepared.taskId)
+        if (!checkpoint || checkpoint.state !== 'queued' || launched) throw new Error('This prepared job is no longer awaiting launch.')
+        getDb().transaction(() => {
+          taskRuntimeRepo.save(scope.profileUserId, prepared.taskId, { ...checkpoint, state: 'interrupted', reason, activeStartedAt: null })
+          taskService.applyRunState(scope.profileUserId, prepared.taskId, 'needs_input')
+          chatRunResultRepo.record(prepared.chatId, checkpoint.attemptId, 'needs_input')
+        })
+      }
+    }
+  }
+}
+
+/** Manual runs retain the same preparation and launch path as scheduled runs. */
+export async function startCoordinatorJob(scope: RunScope, job: JobRow): Promise<{ chatId: string; taskId: string; runId: string }> {
+  const prepare = await prepareCoordinatorJob(scope, job)
+  const prepared = prepare()
   prepared.launch()
   return { chatId: prepared.chatId, taskId: prepared.taskId, runId: prepared.runId }
 }

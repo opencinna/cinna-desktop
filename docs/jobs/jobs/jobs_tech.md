@@ -264,3 +264,17 @@ JobDetail uses an explicit coordinator/script router before ordinary newChatRout
 ## Local schedule integration
 
 [Local schedules](../tasks/local_schedules_tech.md) creates one-step script Jobs and admits them through scriptRuntimeService.prepareJob, linking its durable occurrence in the same transaction before launch. jobService.deleteRun notifies taskRunnerBridge.chatRemoved after the repository actually deletes the owned chat, so waiting gates/reservations are cancelled rather than stranded after Job-history deletion.
+
+## Local Job scheduling
+
+`jobScheduleService` adds device/profile-local timing rules to existing local
+Jobs through the shared local schedule binding/receipt store and
+`localScheduleScheduler`. Review fingerprints include source execution fields
+and attached agents/tools; Job sync transfers neither timing rules nor consent.
+Each occurrence prepares a task/run linked to the source Job before post-commit
+main dispatch, including ordinary Jobs whose manual execution still uses
+`renderer_turn`. Coordinator and script Jobs retain their established runtimes.
+All source Job runs participate in overlap, across manual and scheduled starts.
+Cinna Task Jobs remain outside this feature. See
+[local scheduling internals](../tasks/local_schedules_tech.md) for claims,
+catch-up, profile invalidation, storage, and recovery.

@@ -489,6 +489,7 @@ export type LocalAgentPromptKind = 'workflow' | 'entrypoint' | 'refiner'
  */
 export type LocalAgentFieldUpdate =
   | { field: 'name'; value: string }
+  | { field: 'schedules'; value: import('./kit/manifest').AgentSchedule[] }
   | { field: 'description'; value: string }
   | { field: 'example_prompts'; value: string[] }
   | { field: 'router_trigger_prompt'; value: string | null }

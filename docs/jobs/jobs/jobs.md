@@ -10,7 +10,8 @@ Let users save reusable units of work (title + description + prompt + execution 
   - **Local Job** — Runs against the user's local agents / chat mode / MCPs. A job can attach **any number of agents** plus MCPs (`job_agents` + `job_mcp_providers` join tables); at run time `newChatRouter(agentIds, mcpIds)` — the same helper the new-chat composer uses (`src/shared/chatRouting.ts`) — picks the spawned chat's router: one agent and no MCPs binds that agent (`direct`), several agents make a chat the user routes by hand (`human`), and agents mixed with MCP servers need the local model to coordinate (see [Chat Routing](../../chat/chat_routing/chat_routing.md) and [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md)). Each run spawns a new chat seeded with the job's prompt; the existing chat pipeline drives the conversation.
   - **Cinna Task Job** — Only available on Cinna-linked profiles. Each run creates a local task and hands it to the profile’s available remote adapter. The conversation lives on the service; the desktop keeps the task and its binding, with `cinnaTaskId` + `cinnaShortCode` retained on the run for its existing views.
 - **Autonomous job definition** — A programmatically authored local job can store an explicit script/coordinator router, script and budget. Run admits these definitions in main; the current form has no script or autonomous-definition editor. See [Script Definitions](../tasks/script_definitions.md).
-- **Scheduled Job** — [Local schedules](../tasks/local_schedules.md) creates a one-step script Job after explicit review. The Job may sync as a definition; device-local scheduling consent does not. Manual runs and historical generated Jobs participate in schedule overlap checks.
+- **Job schedule** — A device/profile-local timing rule on an existing local Job. Reviewed recurring occurrences create ordinary tasks and runs under that same Job, even when its page is closed. Job definition or agent/tool attachment changes require review again. Manual runs and every schedule for the source Job share overlap protection. See [Local schedules](../tasks/local_schedules.md).
+- **Agent-generated Job** — A kit agent schedule creates a one-step script Job for its prompt or a non-OK script result. These generated Job definitions may sync; device-local scheduling consent does not. Their manual runs and historical generated Jobs participate in the owning agent schedule's overlap checks.
 - **Job Run** — One execution of a job, with status `pending → running → succeeded | failed | cancelled`. Every new run links its durable task. The run keeps its original local/chat or remote/service provenance even if the task later changes executor. Refresh follows the current task binding; origin still determines historical conversation links and deletion disclosures. Active legacy remote runs without a task are adopted while the window is visible; the job page has no manual refresh, so terminal legacy history keeps what it recorded. A run whose task is gone — a legacy run that never had one, or one whose task was deleted, here or on another device, since runs do not sync — is **orphaned** (`taskLive` false): it has no task page, so its history row carries its own Delete run.
 - **Job Folder** — A user-defined sidebar grouping for jobs (profile-scoped, name + collapsed-state + sort position). Folders are thin collapsible separators — they own ordering but no execution config; their one action on jobs is **Run All Jobs**, which starts the runnable ones in turn. A job lives either in exactly one folder or at the root level.
 - **Group** — A bucket the sidebar can address by drag-drop: either the root level (`folderId = null`) or a specific folder. Each group has its own job ordering.
@@ -46,6 +47,23 @@ Let users save reusable units of work (title + description + prompt + execution 
    - Cinna Task: **Type** *Cinna Task*; **Cinna agent** (a muted *None* when missing — the absence is the fact); **Priority**, always shown.
    Type reads *This device* rather than *Local* because *Local* beside Routing's *Local* meant something else.
 5. The Details panel takes its turn in the secondary buttons' border glow, one element at a time — see [Appearance](../../ui/appearance/appearance.md).
+
+### Scheduling a local Job
+
+The Job detail page's **Schedules** section adds, edits, enables/disables, and
+shows history for recurring rules. Choose a workday preset, selected weekdays and
+whole hours, or advanced numeric cron; review the saved timezone, next run, and
+current Job definition before enabling. The same Job prompt and configuration
+run each time, with a fresh task/run and ordinary Inbox, Stop, and recovery
+controls. The Job page does not need to stay open.
+
+Schedules execute while Cinna is open with the profile active. Missed times
+collapse into one catch-up when it becomes available again. Enabling starts in
+the future; unfinished manual or scheduled work prevents overlap. Rules and
+permission stay on this device/profile, and edits to reviewed Job execution or
+agent/tool attachments require review again. Cinna Task Jobs have no local
+schedule control. See [Local schedules](../tasks/local_schedules.md) for the full
+timing and recovery rules.
 
 ### Editing a job
 1. From the Job Detail view, user clicks **Edit** — Main area swaps to the **Job Edit** page (the same form used at creation).
@@ -140,7 +158,7 @@ This flow applies to ordinary jobs with null runtime fields. Explicit coordinato
 
 ## Business Rules
 
-- **One dispatch owner.** Main selects the Job executor from the stored definition. Ordinary desktop preparation returns `renderer_turn`; the renderer resolves its existing chat defaults and sends once. Autonomous and remote work return `accepted`; the renderer may navigate but never sends another prompt. Unknown dispositions refuse dispatch. See [execution and refresh internals](execution_tech.md).
+- **One dispatch owner.** Scheduled local attempts dispatch from main after durable admission. Manual Run keeps its existing contract: main selects the Job executor from the stored definition. Ordinary desktop preparation returns `renderer_turn`; the renderer resolves its existing chat defaults and sends once. Autonomous and remote work return `accepted`; the renderer may navigate but never sends another prompt. Unknown dispositions refuse dispatch. See [execution and refresh internals](execution_tech.md).
 - **Preparation and acceptance have different failure boundaries.** Ordinary desktop chat/run/task preparation is atomic. Remote admission rechecks the Job and connection after availability; work already accepted by the service survives any later local bookkeeping failure and must not be run again as a retry.
 
 - **Profile scope.** Jobs and job runs live in the active profile's `userId` scope — they don't follow the user across profile switches and are invisible from other profiles.

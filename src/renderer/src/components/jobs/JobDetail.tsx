@@ -35,6 +35,8 @@ import { hasAgentPage, useOpenAgentPage } from '../../hooks/useOpenAgentPage'
 import { DeleteJobConfirm } from './JobItem'
 import { useTaskRowsInPlace } from '../tasks/useTaskRowsInPlace'
 import type { JobDetailData, JobRunData } from '../../../../shared/jobs'
+import { canScheduleJob } from '../../../../shared/localJobSchedules'
+import { JobSchedules } from './JobSchedules'
 import type { JobDependencyStatus as JobDependencyStatusDto } from '../../../../shared/sync'
 import { isFolderAgentId } from '../../../../shared/localAgents'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -266,6 +268,7 @@ export function JobDetail(): React.JSX.Element {
           {/* Keyed: the hook holds its row order for the life of the mount. */}
           <TasksHistory key={job.id} runs={runs ?? []} />
         </div>
+        {canScheduleJob(job.type) && <JobSchedules jobId={job.id} />}
       </div>
 
       {confirmingDelete && (

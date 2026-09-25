@@ -48,6 +48,25 @@ describe('local schedule clock and activation', () => {
     expect(profiles).toEqual(['a', 'b'])
     scheduler.stop()
   })
+  it('cancels tracked commands synchronously on profile replacement, suspend, and shutdown', async () => {
+    const cancel = vi.fn()
+    const check = vi.fn()
+    const scheduler = createLocalScheduleScheduler(check, 60000, cancel)
+    scheduler.start(scope); await flush()
+    cancel.mockClear()
+    scheduler.start({ ...scope, profileUserId: 'b' })
+    expect(cancel).toHaveBeenCalledTimes(1)
+    await flush()
+    scheduler.setSuspended(true)
+    expect(cancel).toHaveBeenCalledTimes(2)
+    scheduler.setSuspended(true)
+    expect(cancel).toHaveBeenCalledTimes(2)
+    scheduler.setSuspended(false); await flush()
+    expect(cancel).toHaveBeenCalledTimes(2)
+    scheduler.stop()
+    expect(cancel).toHaveBeenCalledTimes(3)
+    expect(vi.getTimerCount()).toBe(0)
+  })
   it.each(['stop', 'suspend'] as const)('revokes an awaited check on %s', async (action) => {
     let finish = () => {}
     let accepted = false

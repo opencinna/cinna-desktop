@@ -39,7 +39,7 @@ All handlers require activation and derive scope in main. `executeLocal` remains
 
 `desktopJobExecutor.prepareRendererTurn` preserves ordinary null-router behavior: validate portable dependencies and attached agents, resolve the captured settings-scoped mode/MCPs, and derive chat routing. Chat, attachments, run, task, task association and initial task status are written in one transaction. A failure while creating the task cannot leave a hidden chat or running attempt behind. No stream starts inside this transaction.
 
-`desktopJobExecutor.execute` sends explicit coordinator/script definitions through the existing main-owned admission services. Coordinator admission rechecks its Job/dependency/model snapshot after asynchronous preparation; script admission rechecks its current definition and resolved targets. Their prepare/launch seams commit before execution is queued. Ordinary jobs retain renderer model/default resolution; this contract does not silently migrate them to autonomous execution.
+`desktopJobExecutor.execute` sends explicit coordinator/script definitions through the existing main-owned admission services. Coordinator admission rechecks its Job/dependency/model snapshot after asynchronous preparation; script admission rechecks its current definition and resolved targets. Their prepare/launch seams commit before execution is queued. Ordinary manual runs retain renderer model/default resolution. A reviewed local Job schedule uses a separate main-owned prepare/launch path for the same Job so it can run while its page is closed; it does not change the manual execute result or turn the saved definition into an autonomous router. See [local scheduling internals](../tasks/local_schedules_tech.md).
 
 ### Remote admission
 

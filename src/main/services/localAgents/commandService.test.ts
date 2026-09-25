@@ -389,3 +389,147 @@ it('injects the credential path under the command lock and redacts script output
     expect(result.output).toBe('***REDACTED***')
   } finally { installCommandCredentialPreparation(async () => ({})); clearCredentialRedaction() }
 })
+
+describe('scheduled command execution', () => {
+  it('separates stdout and stderr and retains real execution times', async () => {
+    const before = Date.now()
+    const outcome = await commandService.runScheduled(USER, AGENT_ID, "printf ' OK\\n'; printf warning >&2")
+    expect(outcome).toMatchObject({ stdout: ' OK\n', stderr: 'warning', exitCode: 0,
+      timedOut: false, aborted: false, stdoutIsExactOk: true, stdoutTruncated: false, stderrTruncated: false })
+    expect(outcome.startedAt).toBeGreaterThanOrEqual(before)
+    expect(outcome.finishedAt).toBeGreaterThanOrEqual(outcome.startedAt)
+    expect(turnLock.isLocked(AGENT_ID)).toBe(false)
+  })
+
+  it('keeps nonzero exit evidence even with OK output', async () => {
+    const outcome = await commandService.runScheduled(USER, AGENT_ID, 'printf OK; exit 7')
+    expect(outcome).toMatchObject({ stdout: 'OK', stderr: '', exitCode: 7, aborted: false })
+  })
+
+  it('marks stdout truncation independently of stderr and never retains an unbounded stream', async () => {
+    const outcome = await commandService.runScheduled(USER, AGENT_ID,
+      `printf OK; head -c ${MAX_OUTPUT_BYTES + 1000} /dev/zero | tr '\\000' ' '; printf warning >&2`)
+    expect(outcome.stdout.trim()).toBe('OK')
+    expect(Buffer.byteLength(outcome.stdout)).toBe(MAX_OUTPUT_BYTES)
+    expect(outcome.stdoutTruncated).toBe(true)
+    expect(outcome.stdoutIsExactOk).toBe(false)
+    expect(outcome.stderr).toBe('warning')
+    expect(outcome.stderrTruncated).toBe(false)
+  })
+
+  it('retains stdout when stderr alone overflows', async () => {
+    const outcome = await commandService.runScheduled(USER, AGENT_ID,
+      `head -c ${MAX_OUTPUT_BYTES + 1000} /dev/zero >&2; printf OK`)
+    expect(outcome.stdout).toBe('OK')
+    expect(outcome.stdoutTruncated).toBe(false)
+    expect(outcome.stderrTruncated).toBe(true)
+    expect(Buffer.byteLength(outcome.stderr)).toBe(MAX_OUTPUT_BYTES)
+  })
+
+  it('records spawn failures and releases the command lock', async () => {
+    spawnShouldThrow.current = true
+    const outcome = await commandService.runScheduled(USER, AGENT_ID, 'printf OK')
+    expect(outcome.spawnError).toBe('synthetic spawn failure')
+    expect(outcome.exitCode).toBeNull()
+    expect(turnLock.isLocked(AGENT_ID)).toBe(false)
+  })
+
+  it('cancels before spawn if already aborted', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const outcome = await commandService.runScheduled(USER, AGENT_ID, 'printf must-not-run', controller.signal)
+    expect(outcome).toMatchObject({ stdout: '', stderr: '', aborted: true, exitCode: null })
+    expect(turnLock.isLocked(AGENT_ID)).toBe(false)
+  })
+
+  it('kills a timed-out process tree before releasing the lock', async () => {
+    const started = Date.now()
+    const outcome = await commandService.runScheduled(USER, AGENT_ID, 'sleep 3; printf late', undefined, 40)
+    expect(outcome.timedOut).toBe(true)
+    expect(outcome.stdout).toBe('')
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect(turnLock.isLocked(AGENT_ID)).toBe(false)
+  })
+
+  it('resolves a raw command without requiring a catalog', () => {
+    const result = commandService.resolve(USER, AGENT_ID, 'printf OK')
+    expect(result.localCommand).toBe('printf OK')
+    expect(result.revision).toHaveLength(64)
+    expect(commandService.resolve(USER, AGENT_ID, 'printf OK')).toEqual(result)
+    expect(commandService.resolve(USER, AGENT_ID, 'printf changed').revision).not.toBe(result.revision)
+  })
+
+  it('binds review to the catalog entry and localized command', () => {
+    writeFileSync(join(agentDir, 'pyproject.toml'), '[project]\nname = "example"\n')
+    writeCatalog('commands:\n  - name: check\n    description: first\n    command: python scripts/check.py\n')
+    const original = commandService.resolve(USER, AGENT_ID, '/run:check')
+    expect(original.localCommand).toBe('uv run scripts/check.py')
+    writeCatalog('commands:\n  - name: check\n    description: changed\n    command: python scripts/check.py\n')
+    expect(commandService.resolve(USER, AGENT_ID, '/run:check').revision).not.toBe(original.revision)
+    writeCatalog('commands:\n  - name: check\n    description: first\n    command: printf changed\n')
+    expect(commandService.resolve(USER, AGENT_ID, '/run:check').revision).not.toBe(original.revision)
+  })
+
+  it('rejects malformed and missing catalog references before admission', () => {
+    writeCatalog('commands: []\n')
+    expect(() => commandService.resolve(USER, AGENT_ID, '/run:missing')).toThrow('No unique command')
+    expect(() => commandService.resolve(USER, AGENT_ID, '/run:check please')).toThrow('exact /run:')
+    expect(() => commandService.resolve(USER, AGENT_ID, '\u0000')).toThrow('null bytes')
+  })
+
+  it('executes the reviewed resolved command even if the catalog changes later', async () => {
+    writeCatalog('commands:\n  - name: check\n    description: first\n    command: printf reviewed\n')
+    const reviewed = commandService.resolve(USER, AGENT_ID, '/run:check')
+    writeCatalog('commands:\n  - name: check\n    description: changed\n    command: printf changed\n')
+    const outcome = await commandService.runScheduled(USER, AGENT_ID, reviewed.localCommand)
+    expect(outcome.stdout).toBe('reviewed')
+  })
+
+  it('queues behind a busy agent instead of failing, then runs serially', async () => {
+    const chat = turnLock.acquire(AGENT_ID, 'turn')
+    const first = commandService.runScheduled(USER, AGENT_ID, 'sleep 0.1; printf first', new AbortController().signal)
+    const second = commandService.runScheduled(USER, AGENT_ID, 'printf second', new AbortController().signal)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    chat.release()
+    const [a, b] = await Promise.all([first, second])
+    expect(a).toMatchObject({ stdout: 'first', exitCode: 0, aborted: false })
+    expect(b).toMatchObject({ stdout: 'second', exitCode: 0, aborted: false })
+    expect([a.spawnError, b.spawnError]).toEqual([undefined, undefined])
+    expect(b.startedAt).toBeGreaterThanOrEqual(a.finishedAt)
+    expect(turnLock.isLocked(AGENT_ID)).toBe(false)
+  })
+
+  it('reports an abort while queued as aborted, not as a failure', async () => {
+    const chat = turnLock.acquire(AGENT_ID, 'turn')
+    const controller = new AbortController()
+    const pending = commandService.runScheduled(USER, AGENT_ID, 'printf must-not-run', controller.signal)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    controller.abort()
+    const outcome = await pending
+    expect(outcome).toMatchObject({ stdout: '', aborted: true, exitCode: null, started: false })
+    expect(outcome.spawnError).toBeUndefined()
+    expect(turnLock.isLocked(AGENT_ID)).toBe(true)
+    chat.release()
+  })
+
+  it('marks a run that got the lock as started, whether it finished or was aborted mid-run', async () => {
+    const done = await commandService.runScheduled(USER, AGENT_ID, 'printf OK', new AbortController().signal)
+    expect(done).toMatchObject({ exitCode: 0, aborted: false, started: true })
+    const controller = new AbortController()
+    const pending = commandService.runScheduled(USER, AGENT_ID, 'sleep 3', controller.signal)
+    await vi.waitFor(() => expect(turnLock.isLocked(AGENT_ID)).toBe(true))
+    await new Promise(resolve => setTimeout(resolve, 50))
+    controller.abort()
+    expect(await pending).toMatchObject({ aborted: true, started: true })
+  })
+})
+
+ it('classifies exact OK before redacting a whitespace-padded credential', async () => {
+  const { rememberCredentialSecrets, clearCredentialRedaction } = await import('../../security/serviceCredentialRedaction')
+  try {
+    rememberCredentialSecrets({ api_key: '   OK   ' })
+    const outcome = await commandService.runScheduled(USER, AGENT_ID, "printf '   OK   '")
+    expect(outcome.stdout).toBe('***REDACTED***')
+    expect(outcome.stdoutIsExactOk).toBe(true)
+  } finally { clearCredentialRedaction() }
+})

@@ -8,6 +8,7 @@ import type { JobDependencyStatus } from '../../../../shared/sync'
 const deps = vi.hoisted(() => ({ current: [] as JobDependencyStatus[] }))
 const ui = vi.hoisted(() => ({ view: '' as string, menu: '' as string, sidebarTab: '', externalAgentId: null as string | null }))
 
+vi.mock('./JobSchedules', () => ({ JobSchedules: () => <div data-testid="job-schedules" /> }))
 vi.mock('../../hooks/useJobs', () => ({
   useJob: () => ({
     data: {

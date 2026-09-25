@@ -21,6 +21,7 @@ import { migrateUsers, migrateUserIdColumns } from './users'
 import { migrateChatFiles } from './chat-files'
 import { migrateJobs } from './jobs'
 import { migrateTasks } from './tasks'
+import { migrateLocalScheduleCursors } from './local-schedule-cursors'
 import { migrateLocalSchedules } from './local-schedules'
 import { migrateHandovers } from './handovers'
 import { migrateDelegations } from './delegations'
@@ -93,6 +94,7 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateHandovers(sqlite)
   migrateDelegations(sqlite)
   migrateLocalSchedules(sqlite)
+  migrateLocalScheduleCursors(sqlite)
   migrateNotes(sqlite)
   migrateAppSettings(sqlite)
   // Sync bookkeeping tables (must come after notes/jobs exist).

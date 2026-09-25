@@ -1,6 +1,6 @@
 import type { DelegationOriginKind, DelegationTargetKind, DelegationChannel, DelegationState, DelegationDispatchState, DelegationReply } from '../../shared/delegations'
 import type { ScriptRuntimeCheckpoint } from '../tasks/scriptRuntimeTypes'
-import type { LocalScheduleDefinition, LocalScheduleOccurrence } from '../../shared/localSchedules'
+import type { LocalScheduleDefinition, LocalScheduleOccurrence, ScheduleCommandOutcome } from '../../shared/localSchedules'
 import type { TaskScript } from '../../shared/taskScript'
 import type { TaskRuntimeCheckpoint } from '../tasks/runtimeTypes'
 import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core'
@@ -763,7 +763,13 @@ export const localScheduleBindings = sqliteTable('local_schedule_bindings', {
   jobIds: text('job_ids', { mode: 'json' }).$type<string[]>().notNull(),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
   reason: text('reason'),
-  watermark: integer('watermark').notNull()
+  watermark: integer('watermark').notNull(),
+  nextDueAt: integer('next_due_at'),
+  enabledSince: integer('enabled_since'),
+  lastAttemptAt: integer('last_attempt_at'),
+  lastCompletedAt: integer('last_completed_at'),
+  cursorVersion: integer('cursor_version').notNull().default(0),
+  editorMetadata: text('editor_metadata', { mode: 'json' }).$type<import('../../shared/scheduleTemplates').ScheduleEditorMetadata>()
 })
 export const localScheduleOccurrences = sqliteTable('local_schedule_occurrences', {
   id: text('id').primaryKey(),
@@ -777,7 +783,15 @@ export const localScheduleOccurrences = sqliteTable('local_schedule_occurrences'
   taskId: text('task_id'),
   runId: text('run_id'),
   chatId: text('chat_id'),
-  reason: text('reason')
+  reason: text('reason'),
+  scheduledFor: integer('scheduled_for'),
+  observedAt: integer('observed_at'),
+  startedAt: integer('started_at'),
+  finishedAt: integer('finished_at'),
+  coveredThrough: integer('covered_through'),
+  triggerKind: text('trigger_kind').$type<'scheduled' | 'catch_up'>(),
+  resultKind: text('result_kind').$type<'quiet_ok' | 'agent_started' | 'execution_error'>(),
+  commandOutcome: text('command_outcome', { mode: 'json' }).$type<ScheduleCommandOutcome>()
 })
 
 export const taskRuntimes = sqliteTable('task_runtimes', {

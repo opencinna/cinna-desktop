@@ -207,6 +207,7 @@ const ALLOWLIST: string[] = [
  * A behavioural one moves into a driver.
  */
 const OWNERSHIP: { file: string; category: Category; count: number; why: string }[] = [
+  { file: 'src/shared/localJobSchedules.ts', category: 'jobType', count: 1, why: 'Device-local scheduling eligibility is shared Job ownership policy, not driver behavior.' },
   { file: 'src/main/services/serviceCredentials/files.ts', category: 'kind', count: 5, why: 'Owns credential placement, bare orphan cleanup, and service-account paths: kit folders versus Desktop-owned bare storage.' },
   { file: 'src/main/services/serviceCredentials/service.ts', category: 'kind', count: 1, why: 'Kit attachment admission must check the authored git policy before writing intent.' },
   { file: 'src/main/services/serviceCredentials/helper.ts', category: 'kind', count: 2, why: 'Only kit folders own a portable helper that Desktop can offer to update.' },

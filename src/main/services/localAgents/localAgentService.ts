@@ -772,6 +772,10 @@ export const localAgentService = {
         const path = manifestPath(agentDir)
         const { manifest } = readWithStamp(path)
         switch (update.field) {
+          case 'schedules':
+            if (!Array.isArray(update.value)) throw new LocalAgentError('invalid_input', 'Schedules must be an array.')
+            manifest.schedules = update.value
+            break
           case 'name':
             manifest.name = requireString(update.value, 'The name', 255)
             break

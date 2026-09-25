@@ -1165,7 +1165,22 @@ const api = {
       ipcRenderer.invoke('noteFolder:reorder', orderedIds)
   },
 
+  jobSchedules: {
+    list: (jobId: string): Promise<import('../shared/localJobSchedules').LocalJobScheduleSnapshot> => ipcRenderer.invoke('job-schedule:list', jobId),
+    save: (input: import('../shared/localJobSchedules').JobScheduleSaveInput): Promise<import('../shared/localJobSchedules').LocalJobScheduleSnapshot> => ipcRenderer.invoke('job-schedule:save', input),
+    enable: (input: import('../shared/localJobSchedules').JobScheduleEnableInput): Promise<import('../shared/localJobSchedules').LocalJobScheduleSnapshot> => ipcRenderer.invoke('job-schedule:enable', input),
+    disable: (input: import('../shared/localJobSchedules').JobScheduleMutationInput): Promise<void> => ipcRenderer.invoke('job-schedule:disable', input),
+    delete: (input: import('../shared/localJobSchedules').JobScheduleMutationInput): Promise<void> => ipcRenderer.invoke('job-schedule:delete', input),
+    history: (input: import('../shared/localSchedules').LocalScheduleHistoryInput): Promise<import('../shared/localSchedules').LocalScheduleHistoryPage> => ipcRenderer.invoke('job-schedule:history', input),
+    stop: (input: import('../shared/localSchedules').LocalScheduleStopInput): Promise<void> => ipcRenderer.invoke('job-schedule:stop', input),
+  },
   localSchedules: {
+    editor: (agentId: string): Promise<import('../shared/localSchedules').LocalScheduleEditorSnapshot> => ipcRenderer.invoke('local-schedule:editor', agentId),
+    save: (input: import('../shared/localSchedules').LocalScheduleSaveInput): Promise<import('../shared/localSchedules').LocalScheduleEditorSnapshot> => ipcRenderer.invoke('local-schedule:save', input),
+    delete: (input: import('../shared/localSchedules').LocalScheduleDeleteInput): Promise<import('../shared/localSchedules').LocalScheduleEditorSnapshot> => ipcRenderer.invoke('local-schedule:delete', input),
+    preview: (input: {cron: string; timezone: string; agentId?: string; command?: string; profileUserId?: string}): Promise<{nextDueAt: number; resolvedCommand?: string; commandRevision?: string}> => ipcRenderer.invoke('local-schedule:preview', input),
+    history: (input: import('../shared/localSchedules').LocalScheduleHistoryInput): Promise<import('../shared/localSchedules').LocalScheduleHistoryPage> => ipcRenderer.invoke('local-schedule:history', input),
+    stop: (input: import('../shared/localSchedules').LocalScheduleStopInput): Promise<void> => ipcRenderer.invoke('local-schedule:stop', input),
     list: (agentId: string): Promise<import('../shared/localSchedules').LocalScheduleItem[]> => ipcRenderer.invoke('local-schedule:list', agentId),
     enable: (review: import('../shared/localSchedules').LocalScheduleReview): Promise<import('../shared/localSchedules').LocalScheduleItem[]> => ipcRenderer.invoke('local-schedule:enable', review),
     disable: (id: string): Promise<void> => ipcRenderer.invoke('local-schedule:disable', id)

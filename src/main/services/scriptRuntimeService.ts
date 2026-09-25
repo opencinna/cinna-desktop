@@ -410,19 +410,19 @@ export const scriptRuntimeService = {
   },
 
   /** May join an occurrence transaction. No reservation or driver work until launch. */
-  prepareJob(scope: RunScope, job: JobRow): { chatId: string; taskId: string; runId: string; launch: () => void } {
+  prepareJob(scope: RunScope, job: JobRow, occurrenceGoal = job.prompt): { chatId: string; taskId: string; runId: string; launch: () => void } {
     jobRuntimeDefinition(job)
     const definition = validateTaskScript(job.script)
     const budget = runtimeBudget(job.budget)
     if (budget.maxTokens !== undefined) throw new Error('Token limits require usage reporting from every participant. Use a time and round limit.')
-    if (!job.prompt.trim() || job.prompt.length > 64000) throw new Error('The script goal must contain 1–64000 characters.')
+    if (!occurrenceGoal.trim() || occurrenceGoal.length > 64000) throw new Error('The script goal must contain 1–64000 characters.')
     const targets = resolveScriptTargets(scope, definition)
     const currentJob = jobsRepo.getById(scope.profileUserId, job.id)
     if (!currentJob || currentJob.deletedAt || JSON.stringify([currentJob.type, currentJob.userId, currentJob.title, currentJob.prompt, currentJob.router, currentJob.script, currentJob.budget]) !== JSON.stringify([job.type, job.userId, job.title, job.prompt, job.router, job.script, job.budget])) throw new Error('The job changed before this attempt started.')
     const result = getDb().transaction(() => {
-      const { chatId, runId } = jobRunsRepo.createLocalChatAndRun({ userId: scope.profileUserId, jobId: job.id, title: job.title, prompt: job.prompt,
+      const { chatId, runId } = jobRunsRepo.createLocalChatAndRun({ userId: scope.profileUserId, jobId: job.id, title: job.title, prompt: occurrenceGoal,
         rootAgentId: null, router: 'direct', modeId: null, providerId: null, modelId: null, onDemandAgentIds: [], onDemandMcpIds: [] })
-      const root = taskService.create(scope.profileUserId, { title: job.title, goal: job.prompt, router: 'script', script: definition, assigneeKind: 'script',
+      const root = taskService.create(scope.profileUserId, { title: job.title, goal: occurrenceGoal, router: 'script', script: definition, assigneeKind: 'script',
         budget, chatId, jobId: job.id, jobRunId: runId })
       taskService.start(scope.profileUserId, root.id)
       jobRunsRepo.setTaskId(runId, root.id)
@@ -430,14 +430,14 @@ export const scriptRuntimeService = {
       for (const step of definition.steps) {
         const target = step.agent === undefined ? null : targets[step.agent]
         const chat = chatRepo.create(scope.profileUserId, { title: `${job.title} · ${step.id}`, agentId: target?.agentId ?? null, router: 'direct', hiddenFromList: true })
-        const child = taskService.create(scope.profileUserId, { title: step.id, goal: `Script step ${step.id} for: ${job.prompt}`, chatId: chat.id, parentTaskId: root.id,
+        const child = taskService.create(scope.profileUserId, { title: step.id, goal: `Script step ${step.id} for: ${occurrenceGoal}`, chatId: chat.id, parentTaskId: root.id,
           assigneeKind: target ? 'agent' : 'human', assigneeAgentId: target?.agentId ?? null, assigneeName: target?.name ?? null })
         taskService.start(scope.profileUserId, child.id)
         steps[step.id] = { taskId: child.id, chatId: chat.id, state: 'pending', text: null, prompt: null, promptOrigin: 'runner', lastRunId: null, pendingRequestIds: [] }
       }
       scriptRuntimeRepo.save(scope.profileUserId, root.id, { jobRunId: runId, goal: root.goal, attemptId: nanoid(), chatId, settingsUserId: scope.settingsUserId,
         state: 'queued', reason: null, ownerTurns: 0, elapsedMs: 0, budget, definition, targets, steps, activeStartedAt: null })
-      messageRepo.saveUser({ chatId, content: job.prompt })
+      messageRepo.saveUser({ chatId, content: occurrenceGoal })
       return { chatId, runId, taskId: root.id }
     })
     const attemptId = checkpoint(scope.profileUserId, result.taskId).attemptId

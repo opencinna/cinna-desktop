@@ -1,10 +1,11 @@
 import type { RunScope } from './runExecutionService'
 import { createLogger } from '../logger/logger'
 
+let cancelCommands = () => {}
 const logger = createLogger('local-schedule-scheduler')
 
-/** A single current-minute pass, coalesced across focus/activation events. */
-export function createLocalScheduleScheduler(check: (scope: RunScope, current: () => boolean) => Promise<void> | void, intervalMs = 60_000) {
+/** A single due-cursor pass, coalesced across focus/activation events. */
+export function createLocalScheduleScheduler(check: (scope: RunScope, current: () => boolean) => Promise<void> | void, intervalMs = 60_000, cancel: () => void = () => {}) {
   let scope: RunScope | null = null
   let generation = 0
   let suspended = false
@@ -30,12 +31,12 @@ export function createLocalScheduleScheduler(check: (scope: RunScope, current: (
   }
   const api = {
     start(value: RunScope): void {
-      clear(); scope = { ...value }; generation++
+      cancel(); clear(); scope = { ...value }; generation++
       void this.refresh()
     },
-    stop(): void { clear(); scope = null; generation++; again = false },
+    stop(): void { cancel(); clear(); scope = null; generation++; again = false },
     setSuspended(value: boolean): void {
-      if (value !== suspended) generation++
+      if (value !== suspended) { generation++; if (value) cancel() }
       suspended = value; clear()
       if (!value) void this.refresh()
     },
@@ -58,5 +59,8 @@ export function createLocalScheduleScheduler(check: (scope: RunScope, current: (
 
 export const localScheduleScheduler = createLocalScheduleScheduler(async (scope, current) => {
   const { localScheduleService } = await import('./localScheduleService')
+  cancelCommands = () => localScheduleService.cancelCommands()
   if (current()) localScheduleService.check(scope, current)
-})
+  const { jobScheduleService } = await import('./jobScheduleService')
+  if (current()) await jobScheduleService.check(scope, current)
+}, 60_000, () => cancelCommands())

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseScheduleCron, scheduleMinute, scheduleTimezone } from './scheduleCron'
+import { nextScheduleOccurrence, parseScheduleCron, scheduleMinute, scheduleTimezone } from './scheduleCron'
 
 const match = (cron: string, instant: string, zone = 'UTC') => scheduleMinute(parseScheduleCron(cron), zone, Date.parse(instant))
 
@@ -38,5 +38,61 @@ describe('local schedule cron', () => {
     expect(scheduleTimezone('Europe/Berlin')).toBe('Europe/Berlin')
     expect(scheduleTimezone()).toBeTruthy()
     for (const zone of ['', 'Mars/Olympus', '+02:00']) expect(() => scheduleTimezone(zone)).toThrow()
+  })
+})
+
+describe('next local schedule occurrence', () => {
+  const next = (cron: string, after: string, zone = 'UTC', excludedCivilKey?: string) =>
+    new Date(nextScheduleOccurrence(cron, zone, Date.parse(after), excludedCivilKey)).toISOString()
+
+  it('is strictly future and skips missed occurrences directly', () => {
+    expect(next('0 8 * * 1-5', '2026-09-21T08:00:00Z')).toBe('2026-09-22T08:00:00.000Z')
+    expect(next('0 8 * * 1-5', '2026-09-26T11:00:00Z')).toBe('2026-09-28T08:00:00.000Z')
+    expect(next('0 9-18 * * 1-5', '2026-09-21T13:40:00Z')).toBe('2026-09-21T14:00:00.000Z')
+    expect(next('* * * * *', '2026-09-21T13:40:59.999Z')).toBe('2026-09-21T13:41:00.000Z')
+  })
+
+  it('keeps both workday templates and all selected custom hours', () => {
+    expect(next('0 9-18 * * 1-5', '2026-09-21T17:59:59Z')).toBe('2026-09-21T18:00:00.000Z')
+    expect(next('0 9-18 * * 1-5', '2026-09-25T18:00:00Z')).toBe('2026-09-28T09:00:00.000Z')
+    expect(next('0 0,12,23 * * 0,1', '2026-09-21T12:00:00Z')).toBe('2026-09-21T23:00:00.000Z')
+  })
+
+  it('searches sparse leap dates across a non-leap century and rejects impossible dates', () => {
+    expect(next('0 0 29 2 *', '2096-02-29T00:00:00Z')).toBe('2104-02-29T00:00:00.000Z')
+    expect(() => next('0 0 30 2 *', '2026-01-01T00:00:00Z')).toThrow('no possible occurrence')
+    // Restricted calendar fields are OR, so February 30 OR Monday is valid.
+    expect(next('0 0 30 2 1', '2026-01-01T00:00:00Z')).toBe('2026-02-02T00:00:00.000Z')
+    // A leading wildcard follows AND semantics and can have >8-year gaps.
+    expect(next('0 0 */30 2 1', '2027-02-01T00:00:00Z')).toBe('2038-02-01T00:00:00.000Z')
+  })
+
+  it('skips spring gaps and uses a frozen zone with fractional-hour offsets', () => {
+    expect(next('30 2 * * *', '2026-03-28T23:00:00Z', 'Europe/Berlin')).toBe('2026-03-30T00:30:00.000Z')
+    expect(next('0 8 * * *', '2026-09-21T00:00:00Z', 'Asia/Kathmandu')).toBe('2026-09-21T02:15:00.000Z')
+    expect(next('15 2 * * *', '2026-10-03T14:00:00Z', 'Australia/Lord_Howe')).toBe('2026-10-04T15:15:00.000Z')
+    expect(next('0 8 * * *', '2011-12-30T00:00:00Z', 'Pacific/Apia')).toBe('2011-12-30T18:00:00.000Z')
+  })
+
+  it('never returns the second mapping of a repeated civil minute', () => {
+    expect(next('30 2 * * *', '2026-10-25T00:30:00Z', 'Europe/Berlin')).toBe('2026-10-26T01:30:00.000Z')
+    expect(next('30 2 * * *', '2026-10-25T01:15:00Z', 'Europe/Berlin')).toBe('2026-10-26T01:30:00.000Z')
+    expect(next('45 1 * * *', '2026-04-04T14:45:00Z', 'Australia/Lord_Howe')).toBe('2026-04-05T15:15:00.000Z')
+    expect(next('* * * * *', '2026-10-25T00:59:00Z', 'Europe/Berlin')).toBe('2026-10-25T02:00:00.000Z')
+    expect(next('0 8 * * *', '2026-09-21T00:00:00Z', 'UTC', 'UTC|2026-09-21T08:00')).toBe('2026-09-22T08:00:00.000Z')
+  })
+
+  it('agrees with the matcher and returns a strictly future time for the supported grammar', () => {
+    for (const cron of ['*/7 2-20 * * 0,7', '5/10 * 1,15 * 1', '0 0 */2 2-5 2', '*/13 */3 * * *']) {
+      for (const zone of ['UTC', 'Europe/Berlin', 'America/New_York', 'Australia/Lord_Howe']) {
+        let after = Date.parse('2026-10-24T22:00:00Z')
+        for (let index = 0; index < 12; index++) {
+          const instant = nextScheduleOccurrence(cron, zone, after)
+          expect(instant).toBeGreaterThan(after)
+          expect(match(cron, new Date(instant).toISOString(), zone).matches).toBe(true)
+          after = instant
+        }
+      }
+    }
   })
 })

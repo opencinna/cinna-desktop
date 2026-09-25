@@ -4,14 +4,14 @@
  * {@link RunAgentTurnResult} the runner seam already knows how to persist and
  * stream (see `agents/drivers/driver.ts`).
  *
- * ## Why this returns a turn result instead of a new shape
+ * ## Interactive and scheduled adapters
  *
  * `runExecutionService` intercepts `/run:<name>` before the agent driver:
  * a desktop catalog command is a local script rather than a model prompt.
  * `streamToAgent`
  * downstream only knows how to persist and post one shape, so this module
- * produces that shape directly rather than inventing a second one the caller
- * would have to branch on.
+ * preserves that shape through an adapter. Scheduled commands share the same
+ * executor and expose separate bounded streams and lifecycle evidence.
  *
  * ## The turn-lock decision
  *
@@ -46,6 +46,8 @@
  */
 
 import { execFile, spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import type { ScheduleCommandOutcome } from '../../../shared/localSchedules'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { getLayoutView } from '../../kit/contractStore'
@@ -89,14 +91,9 @@ function fail(message: string, raw?: string): RunAgentTurnResult {
 
 const TRUNCATION_MARKER = '\n…output truncated…'
 
-interface SpawnOutcome {
+interface SpawnOutcome extends ScheduleCommandOutcome {
+  /** Original interleaved stream presentation for interactive commands. */
   output: string
-  /** Set when the process could not be started or ended abnormally (not a plain non-zero exit). */
-  spawnError?: string
-  exitCode: number | null
-  timedOut: boolean
-  /** The caller's `AbortSignal` fired — a cancel, not a failure of the command itself. */
-  aborted: boolean
 }
 
 /**
@@ -154,6 +151,10 @@ function execute(
   signal?: AbortSignal,
   timeoutMs: number = COMMAND_TIMEOUT_MS
 ): Promise<SpawnOutcome> {
+  const startedAt = Date.now()
+  const empty = (): SpawnOutcome => ({ output: '', stdout: '', stderr: '', exitCode: null,
+    startedAt, finishedAt: Date.now(), timedOut: false, aborted: false,
+    stdoutTruncated: false, stderrTruncated: false })
   return new Promise((resolve) => {
     // `run()` awaits `getShellEnv()` before reaching here, so an abort fired
     // in that gap — a cancel issued the instant a turn starts — would
@@ -162,7 +163,7 @@ function execute(
     // completion unkilled. Checking here closes that gap without spawning
     // anything at all.
     if (signal?.aborted) {
-      resolve({ output: '', exitCode: null, timedOut: false, aborted: true })
+      resolve({ ...empty(), aborted: true })
       return
     }
     let child: ReturnType<typeof spawn>
@@ -180,50 +181,52 @@ function execute(
       })
     } catch (err) {
       resolve({
-        output: '',
-        spawnError: err instanceof Error ? err.message : String(err),
-        exitCode: null,
-        timedOut: false,
-        aborted: false
+        ...empty(),
+        spawnError: err instanceof Error ? err.message : String(err)
       })
       return
     }
 
-    let output = ''
-    let overflowed = false
+    // Each collection is byte-bounded while pipes continue to drain. Keep the
+    // interleaved presentation independently so existing chat output is stable.
+    const collected = {
+      output: { chunks: [] as Buffer[], bytes: 0, truncated: false },
+      stdout: { chunks: [] as Buffer[], bytes: 0, truncated: false },
+      stderr: { chunks: [] as Buffer[], bytes: 0, truncated: false }
+    }
     let settled = false
     let timedOut = false
 
     const onAbort = (): void => killTree(child)
     signal?.addEventListener('abort', onAbort)
-
-    const ceiling = setTimeout(() => {
-      timedOut = true
-      onAbort()
-    }, timeoutMs)
+    const ceiling = setTimeout(() => { timedOut = true; onAbort() }, timeoutMs)
     ceiling.unref?.()
 
-    const append = (chunk: Buffer): void => {
-      // Past the cap, keep consuming (an unread pipe would stall the child
-      // once its buffer fills) but hold on to nothing more — the bound is on
-      // what this process keeps, not on what the script may print.
-      if (overflowed) return
-      output += chunk.toString('utf8')
-      if (output.length > MAX_OUTPUT_BYTES) {
-        output = output.slice(0, MAX_OUTPUT_BYTES)
-        overflowed = true
-      }
+    const append = (key: keyof typeof collected, chunk: Buffer): void => {
+      const target = collected[key]
+      const remaining = MAX_OUTPUT_BYTES - target.bytes
+      if (chunk.length > remaining) target.truncated = true
+      if (remaining <= 0) return
+      const kept = chunk.subarray(0, remaining)
+      target.chunks.push(kept)
+      target.bytes += kept.length
     }
-    child.stdout?.on('data', append)
-    child.stderr?.on('data', append)
+    child.stdout?.on('data', (chunk: Buffer) => { append('stdout', chunk); append('output', chunk) })
+    child.stderr?.on('data', (chunk: Buffer) => { append('stderr', chunk); append('output', chunk) })
 
-    const finish = (outcome: Omit<SpawnOutcome, 'output' | 'timedOut' | 'aborted'>): void => {
+    const finish = (outcome: { spawnError?: string; exitCode: number | null }): void => {
       if (settled) return
       settled = true
       clearTimeout(ceiling)
       signal?.removeEventListener('abort', onAbort)
+      const output = Buffer.concat(collected.output.chunks).toString('utf8')
       resolve({
-        output: overflowed ? output + TRUNCATION_MARKER : output,
+        ...empty(),
+        output: collected.output.truncated ? output + TRUNCATION_MARKER : output,
+        stdout: Buffer.concat(collected.stdout.chunks).toString('utf8'),
+        stderr: Buffer.concat(collected.stderr.chunks).toString('utf8'),
+        stdoutTruncated: collected.stdout.truncated,
+        stderrTruncated: collected.stderr.truncated,
         timedOut,
         aborted: signal?.aborted === true,
         ...outcome
@@ -233,6 +236,32 @@ function execute(
     child.once('error', (err) => finish({ spawnError: err.message, exitCode: null }))
     child.once('close', (code) => finish({ exitCode: code }))
   })
+}
+
+/**
+ * Shared environment/lock lifetime; resolves only after the command lock is released.
+ * Interactive callers are refused at once while the agent is busy (`busy`); a
+ * scheduled run passes `queueSignal` and waits its turn instead, until aborted.
+ */
+async function executeForAgent(agentId: string, agentDir: string, localCommand: string, signal?: AbortSignal,
+  timeoutMs = COMMAND_TIMEOUT_MS, queueSignal?: AbortSignal, onStart?: () => void): Promise<SpawnOutcome> {
+  const body = async (): Promise<SpawnOutcome> => {
+    // First statement under the lock: from here on the command may have had effects.
+    onStart?.()
+    const env = shellEnvForChild(await getShellEnv())
+    const prepared = await prepareCredentials(agentId)
+    delete env.CINNA_CREDENTIALS_PATH
+    if (prepared.path) env.CINNA_CREDENTIALS_PATH = prepared.path
+    const outcome = await execute(localCommand, agentDir, env, signal, timeoutMs)
+    const { redactCredentialText } = await import('../../security/serviceCredentialRedaction')
+    outcome.stdoutIsExactOk = !outcome.stdoutTruncated && outcome.stdout.trim() === 'OK'
+    outcome.output = redactCredentialText(outcome.output)
+    outcome.stdout = redactCredentialText(outcome.stdout)
+    outcome.stderr = redactCredentialText(outcome.stderr)
+    if (outcome.spawnError) outcome.spawnError = redactCredentialText(outcome.spawnError)
+    return outcome
+  }
+  return queueSignal ? turnLock.withQueuedLock(agentId, 'command', queueSignal, body) : turnLock.withLock(agentId, 'command', body)
 }
 
 export interface CommandRunOutcome {
@@ -266,6 +295,51 @@ export interface CommandRunOutcome {
 }
 
 export const commandService = {
+  /** Resolve once for review and compare again before scheduled admission. */
+  resolve(userId: string, agentId: string, command: string): { localCommand: string; revision: string } {
+    if (typeof command !== 'string' || !command.trim() || command.length > 64000 || command.includes('\0')) {
+      throw new Error('The schedule command must contain 1–64000 characters and no null bytes.')
+    }
+    const { root, agentDir } = localAgentService.locate(userId, agentId)
+    const match = RUN_REFERENCE_PATTERN.exec(command.trim())
+    let localCommand = command
+    let source: unknown = command
+    if (command.trim().startsWith('/run:') && !match) throw new Error('Use an exact /run:<name> catalog reference.')
+    if (match) {
+      const layout = getLayoutView(root.path)
+      const catalog = readCommandCatalog(agentDir, layout.layout.agent.command_catalog)
+      const entries = catalog.commands.filter((entry) => entry.name === match[1])
+      if (entries.length !== 1) throw new Error(`No unique command named "${match[1]}" in ${layout.layout.agent.command_catalog}.`)
+      source = entries[0]
+      localCommand = layout.localizeCommand(entries[0].command, { hasPyproject: existsSync(join(agentDir, 'pyproject.toml')) })
+    }
+    return { localCommand, revision: createHash('sha256').update(JSON.stringify([source, localCommand])).digest('hex') }
+  },
+
+  /** Run the captured reviewed command; never re-resolve an edited catalog here. */
+  async runScheduled(userId: string, agentId: string, resolvedCommand: string, signal?: AbortSignal,
+    timeoutMs = COMMAND_TIMEOUT_MS): Promise<ScheduleCommandOutcome> {
+    const startedAt = Date.now()
+    // Set by the lock body itself, never inferred from an error message: a run
+    // aborted while still queued for the turn lock never started.
+    let started = false
+    try {
+      const { agentDir } = localAgentService.locate(userId, agentId)
+      // A schedule waits behind a chat turn, editor save or another command on
+      // this agent rather than failing its occurrence; the signal ends the wait.
+      const { output: _output, ...outcome } = await executeForAgent(agentId, agentDir, resolvedCommand, signal, timeoutMs,
+        signal ?? new AbortController().signal, () => { started = true })
+      return { ...outcome, started }
+    } catch (error) {
+      const { redactCredentialText } = await import('../../security/serviceCredentialRedaction')
+      const aborted = signal?.aborted === true
+      return { stdout: '', stderr: '', exitCode: null, startedAt, finishedAt: Date.now(),
+        timedOut: false, aborted, started,
+        spawnError: aborted ? undefined : redactCredentialText(error instanceof Error ? error.message : String(error)),
+        stdoutTruncated: false, stderrTruncated: false }
+    }
+  },
+
   /**
    * `/run:<name>`, and only that — reuses the exact grammar
    * `validateAgentFolder` already checks `status_refresh_command` against
@@ -350,72 +424,64 @@ export const commandService = {
     }
 
     try {
-      return await turnLock.withLock(agentId, 'command', async () => {
-        const env = shellEnvForChild(await getShellEnv())
-        const prepared = await prepareCredentials(agentId)
-        delete env.CINNA_CREDENTIALS_PATH
-        if (prepared.path) env.CINNA_CREDENTIALS_PATH = prepared.path
-        const outcome = await execute(localCommand, agentDir, env, signal, timeoutMs)
-        const { redactCredentialText } = await import('../../security/serviceCredentialRedaction')
-        outcome.output = redactCredentialText(outcome.output)
+      const outcome = await executeForAgent(agentId, agentDir, localCommand, signal, timeoutMs)
 
-        if (outcome.spawnError) {
-          return {
-            ok: false,
-            name,
-            localCommand,
-            output: outcome.output,
-            exitCode: null,
-            aborted: false,
-            busy: false,
-            error: `"${localCommand}" could not run: ${outcome.spawnError}`
-          }
-        }
-        // Timeout before abort: the ceiling kills through the same path a
-        // cancel does, but the caller's signal never fires for it, so the two
-        // are distinguishable — and a run that hit the ceiling *and* was then
-        // cancelled is still a timeout, which is the fact worth reporting.
-        if (outcome.timedOut) {
-          return {
-            ok: false,
-            name,
-            localCommand,
-            output: outcome.output,
-            exitCode: outcome.exitCode,
-            aborted: false,
-            busy: false,
-            error: `"${localCommand}" did not finish within ${Math.ceil(timeoutMs / 1000)}s and was stopped.`
-          }
-        }
-        if (outcome.aborted) {
-          return {
-            ok: false,
-            name,
-            localCommand,
-            output: outcome.output,
-            exitCode: outcome.exitCode,
-            aborted: true,
-            busy: false,
-            error: `"${localCommand}" was cancelled.`
-          }
-        }
-        if (outcome.exitCode !== 0) {
-          return {
-            ok: false,
-            name,
-            localCommand,
-            output: outcome.output,
-            exitCode: outcome.exitCode,
-            aborted: false,
-            busy: false,
-            error: `"${localCommand}" exited with code ${outcome.exitCode}.`
-          }
-        }
+      if (outcome.spawnError) {
         return {
-          ok: true, name, localCommand, output: outcome.output, exitCode: 0,
-          aborted: false, busy: false
+          ok: false,
+          name,
+          localCommand,
+          output: outcome.output,
+          exitCode: null,
+          aborted: false,
+          busy: false,
+          error: `"${localCommand}" could not run: ${outcome.spawnError}`
         }
-      })
+      }
+      // Timeout before abort: the ceiling kills through the same path a
+      // cancel does, but the caller's signal never fires for it, so the two
+      // are distinguishable — and a run that hit the ceiling *and* was then
+      // cancelled is still a timeout, which is the fact worth reporting.
+      if (outcome.timedOut) {
+        return {
+          ok: false,
+          name,
+          localCommand,
+          output: outcome.output,
+          exitCode: outcome.exitCode,
+          aborted: false,
+          busy: false,
+          error: `"${localCommand}" did not finish within ${Math.ceil(timeoutMs / 1000)}s and was stopped.`
+        }
+      }
+      if (outcome.aborted) {
+        return {
+          ok: false,
+          name,
+          localCommand,
+          output: outcome.output,
+          exitCode: outcome.exitCode,
+          aborted: true,
+          busy: false,
+          error: `"${localCommand}" was cancelled.`
+        }
+      }
+      if (outcome.exitCode !== 0) {
+        return {
+          ok: false,
+          name,
+          localCommand,
+          output: outcome.output,
+          exitCode: outcome.exitCode,
+          aborted: false,
+          busy: false,
+          error: `"${localCommand}" exited with code ${outcome.exitCode}.`
+        }
+      }
+      return {
+        ok: true, name, localCommand, output: outcome.output, exitCode: 0,
+        aborted: false, busy: false
+      }
     } catch (err) {
       // `turnLock.acquire` throws `LocalAgentError('turn_in_progress', …)` and
       // never queues — see the module header. `runForTurn`'s contract (like
