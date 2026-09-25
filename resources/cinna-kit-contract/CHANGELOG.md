@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `489ce0983d531c3c`.
+Your current kit is version `e5c11a38d3e1fc8b`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,19 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## Desktop local scheduling guidance
+
+Documentation update, with no schema or contract-version change. Desktop supports
+reviewed `static_prompt` and `script_trigger` schedules while open with the owning
+profile active. Its editor saves presets, selected weekdays/hours, or advanced
+numeric cron with a frozen explicit timezone. One overdue execution covers missed
+times after sleep, shutdown, or profile inactivity; enabling starts in the future.
+A script is quiet only for exit 0 and untruncated stdout whose trimmed value is
+exactly `OK`; stderr is retained and does not change that decision. Other completed
+results start one agent task. Interrupted commands are never automatically replayed.
+Definitions travel with an agent, but consent, due cursors, and receipts stay on
+each device/profile. Imported or externally changed definitions require review.
 
 ## 1.5.0 — one contract for every host
 
@@ -81,7 +94,7 @@ host re-bundles it rather than keeping its own copy.
   `schedules[].timezone` is documented as what it is on import — the cloud
   schedule's timezone, UTC when absent — rather than local-only metadata.
 - **`schedules` and `handovers` are described for both hosts.** Platform import
-  creates schedules; Cinna Desktop may also run `static_prompt` schedules
+  creates schedules; Cinna Desktop can run `static_prompt` and `script_trigger` schedules
   locally after a separate per-profile, per-device opt-in, only while the app is
   open. Handovers name sibling agents unless a host-registered `target_kind`
   says otherwise.
