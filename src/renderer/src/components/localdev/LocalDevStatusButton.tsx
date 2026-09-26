@@ -5,16 +5,24 @@ import { useLocalDevStore } from '../../stores/localDev.store'
 
 const ICON_SIZE = 14
 
-/** One click opens the build composer, or the setup steps that lead to it. */
+/**
+ * One click opens the build composer, or the setup steps that lead to it.
+ *
+ * Before setup (`consent`, `declined`) the click opens the consent modal
+ * instead. It is the only way into that question: nothing asks it
+ * unprompted, so a user who never clicks here is never asked.
+ */
 export function LocalDevStatusButton(): React.JSX.Element | null {
   const state = useLocalDev()
 
+  const offered = state.phase === 'consent' || state.phase === 'declined'
   const visible =
-    state.phase === 'installing' || state.phase === 'attention' || state.phase === 'ready'
+    offered || state.phase === 'installing' || state.phase === 'attention' || state.phase === 'ready'
   if (!visible) return null
 
-  const title =
-    state.phase === 'installing'
+  const title = offered
+    ? 'Set up local development'
+    : state.phase === 'installing'
       ? state.percent === undefined
         ? `Setting up local development — ${state.step}`
         : `Setting up local development — ${state.step} (${Math.round(state.percent)}%)`
@@ -22,8 +30,9 @@ export function LocalDevStatusButton(): React.JSX.Element | null {
         ? `Local development needs attention — ${state.detail}`
         : 'Local development is ready — start building'
 
-  const label =
-    state.phase === 'installing'
+  const label = offered
+    ? 'Set up local development'
+    : state.phase === 'installing'
       ? 'Setting up local development'
       : state.phase === 'attention'
         ? 'Local development needs attention'
@@ -33,9 +42,14 @@ export function LocalDevStatusButton(): React.JSX.Element | null {
     <>
       <button
         type="button"
-        onClick={() => { useLocalDevStore.getState().setPageMode('chat'); useUIStore.getState().setActiveView('local-development') }}
+        onClick={() => {
+          if (offered) { useLocalDevStore.getState().setConsentOpen(true); return }
+          useLocalDevStore.getState().setPageMode('chat')
+          useUIStore.getState().setActiveView('local-development')
+        }}
         title={title}
         aria-label={label}
+        aria-haspopup={offered ? 'dialog' : undefined}
         className="relative p-1.5 rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
       >
         {state.phase === 'installing' ? (

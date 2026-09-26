@@ -199,6 +199,9 @@ test.describe('desktop + cinna-core + cinna-cli', () => {
     expect(state).toMatchObject({ phase: 'consent', host })
 
     await test.step('Set up installs the toolchain and creates the workspace', async () => {
+      // Never asked unprompted: the question opens from the sidebar button.
+      await expect(cinna.page.getByRole('dialog', { name: 'Set up local development' })).toHaveCount(0)
+      await cinna.page.getByRole('button', { name: 'Set up local development', exact: true }).click()
       await expect(
         cinna.page.getByText('Set up local development?', { exact: true })
       ).toBeVisible()

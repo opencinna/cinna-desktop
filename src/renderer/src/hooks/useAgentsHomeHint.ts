@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react'
  * `<AgentsHome>/Cloud` — the folder local development creates a per-server
  * workspace under, for the consent copy that promises where it will write.
  *
- * One hook because three surfaces ask the same question — the onboarding step,
- * the consent modal, and the connect screen's (?) — and the answer is only ever
+ * One hook because two surfaces ask the same question — the consent modal
+ * and the connect screen's (?) — and the answer is only ever
  * used to fill in a sentence. `Cloud` is the [kit contract]'s
  * `workshop.cloud_dir`; it is spelled here purely as a hint, and the main
  * process resolves the real path from the contract when it creates the folder.

@@ -101,7 +101,6 @@ test('live Core owned and allowed shared credentials rotate, revoke, and isolate
   expect(readFileSync(path, 'utf8')).toContain('live-delivery-rotated-fixture-456')
   // IPC seeding bypasses the renderer login hook; reload to hydrate the displayed profile.
   await cinna.page.reload()
-  await cinna.page.getByRole('button', { name: 'Skip', exact: true }).click()
   const current = await cinna.page.evaluate(() => window.api.auth.getCurrent())
   await cinna.page.getByTitle(current!.cinnaFullName ?? current!.displayName, { exact: true }).click()
   await cinna.page.getByRole('button', { name: 'Settings', exact: true }).click()

@@ -107,7 +107,7 @@ function DevelopmentWorkspace(): React.JSX.Element {
                   <SettingsButton onClick={() => openSettings(!!data && data.setupTarget !== 'local-dev', true)}><Settings2 size={13} />{data && data.setupTarget !== 'local-dev' ? 'Open Runtime settings' : 'Local Development settings'}</SettingsButton>
                   <DevelopmentRecheckButton fetching={context.isFetching} onCheck={checkWorkspace} />
                 </>}
-                {!['ready', 'installing', 'attention'].includes(state.phase) && <button type="button" className={actionClass} onClick={() => openSettings(false)}>Set up local development</button>}
+                {!['ready', 'installing', 'attention'].includes(state.phase) && <button type="button" className={actionClass} onClick={() => (state.phase === 'consent' || state.phase === 'declined') ? useLocalDevStore.getState().setConsentOpen(true) : openSettings(false)}>Set up local development</button>}
               </div>
               {state.phase === 'installing' && <p className="text-xs text-[var(--color-text-muted)]">You can leave this page. Setup continues in the background.</p>}
             </DevelopmentSetupNotice>}

@@ -25,7 +25,6 @@ import {
 import { pickDefaultModelId } from '../../../../shared/modelDefaults'
 import type { ConnectIntent } from '../../../../shared/connectIntent'
 import { ConnectIntentPanel } from './ConnectIntentPanel'
-import { LocalDevOnboardingStep } from '../localdev/LocalDevOnboardingStep'
 
 interface OnboardingScreenProps {
   onComplete: () => void
@@ -58,12 +57,6 @@ type Step =
   | 'cinna-waiting'
   /** The deep link's confirmation. Never reached by navigating; only by arriving. */
   | 'cinna-confirm'
-  /**
-   * Offered only after a Cinna account is connected, and only when the server
-   * and the account actually offer local development. It skips itself
-   * otherwise — see {@link LocalDevOnboardingStep}.
-   */
-  | 'localdev'
 
 type ProviderType = 'anthropic' | 'openai' | 'gemini'
 
@@ -255,10 +248,9 @@ export function OnboardingScreen({
       const next = prependSelfHostedHistory(selfHostedHistory, trimmedUrl)
       writeSelfHostedHistory(next)
       setSelfHostedHistory(next)
-      // Not straight to the app: the account is connected, and the one question
-      // left is whether to prepare this machine for building agents on it. The
-      // step gets out of the way by itself when there is nothing to ask.
-      setStep('localdev')
+      // Straight to the app. Local development is not asked here: it is offered
+      // behind the sidebar's development button, to whoever goes looking.
+      onComplete()
     } else {
       setCinnaError(result.error ?? 'Authentication failed')
       setStep('cinna-hosting')
@@ -295,15 +287,14 @@ export function OnboardingScreen({
             // what the rest of onboarding would otherwise be asking for. A
             // decline leaves the user needing the ordinary choices, so it falls
             // back to the welcome step rather than closing the screen.
+            // The panel's local-development box has already recorded its
+            // answer; a yes installs in the background, with progress on the
+            // sidebar button, so there is nothing left to ask here.
             if (outcome === 'declined') setStep('welcome')
-            else setStep('localdev')
+            else onComplete()
           }}
         />
       )
-    }
-
-    if (step === 'localdev') {
-      return <LocalDevOnboardingStep onDone={onComplete} />
     }
 
     if (step === 'welcome') {

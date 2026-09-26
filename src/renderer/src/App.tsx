@@ -204,9 +204,8 @@ function App(): React.JSX.Element {
               onboarding screen's own confirm step — is the right surface for a
               deep link. Outside it, both would show the same intent at once. */}
           <ConnectIntentModal />
-          {/* Also inside the gate: during first run the same question is a
-              step of the onboarding screen, and two surfaces asking it at once
-              would be two answers racing to be recorded. */}
+          {/* Opened only from the sidebar's development button, which lives
+              in the shell — so it belongs inside the gate with it. */}
           <LocalDevConsentModal />
           {/* Inside the gate for the same reason as its neighbours, and for one
               of its own: during first run nothing has asked for an agent yet,

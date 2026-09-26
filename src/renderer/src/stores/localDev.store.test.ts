@@ -63,24 +63,8 @@ describe('local development IPC response ordering', () => {
       reply.resolve(oldReady)
       await pending
       expect(useLocalDevStore.getState().state).toEqual({ phase: 'consent', host: 'profile-b.example.com' })
-      expect(useLocalDevStore.getState().answeredHosts).toEqual([])
     }
   )
-
-  it('keeps a newer same-host consent marker when the former profile answer rejects', async () => {
-    await useLocalDevStore.getState().subscribe()
-    const oldReply = deferred<LocalDevState>()
-    const newReply = deferred<LocalDevState>()
-    api.consent.mockReturnValueOnce(oldReply.promise).mockReturnValueOnce(newReply.promise)
-    const oldAnswer = useLocalDevStore.getState().consent('shared.example.com', true)
-    onState({ phase: 'idle' })
-    const newAnswer = useLocalDevStore.getState().consent('shared.example.com', true)
-    oldReply.reject(new Error('Old profile deactivated'))
-    await oldAnswer
-    expect(useLocalDevStore.getState().answeredHosts).toEqual(['shared.example.com'])
-    newReply.resolve({ phase: 'declined', host: 'shared.example.com' })
-    await newAnswer
-  })
 
   it('accepts the current action reply when no newer state has arrived', async () => {
     await useLocalDevStore.getState().subscribe()
