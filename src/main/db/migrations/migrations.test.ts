@@ -263,6 +263,29 @@ describe('agents.driver on an install that predates it', () => {
   })
 })
 
+describe('chats.pinned_rank and chats.sort_key on an install that predates them', () => {
+  it('adds both as nullable REAL columns and keeps the rows, replay after replay', () => {
+    const raw = freshDatabase()
+    raw.exec('ALTER TABLE chats DROP COLUMN pinned_rank')
+    raw.exec('ALTER TABLE chats DROP COLUMN sort_key')
+    raw
+      .prepare(
+        `INSERT INTO chats (id, user_id, title, router, hidden_from_list, created_at, updated_at)
+         VALUES ('c-1', '__default__', 'A chat', 'direct', 0, 1, 1)`
+      )
+      .run()
+    const sqlite = adaptDatabase(raw)
+    runAllMigrations(sqlite)
+    expect(() => runAllMigrations(sqlite)).not.toThrow()
+    const cols = raw.prepare("PRAGMA table_info('chats')").all() as Array<{ name: string; type: string; notnull: number }>
+    for (const name of ['pinned_rank', 'sort_key']) {
+      expect(cols.find((col) => col.name === name)).toMatchObject({ type: 'REAL', notnull: 0 })
+    }
+    expect(raw.prepare('SELECT id, pinned_rank, sort_key FROM chats').all()).toEqual([{ id: 'c-1', pinned_rank: null, sort_key: null }])
+    raw.close()
+  })
+})
+
 describe('chats.router on an install that predates it', () => {
   /**
    * The upgrade path for phase 4: an existing `chats` table whose only record of

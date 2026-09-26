@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import { and, asc, desc, eq, isNull, isNotNull, max, min, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, isNotNull, max, min, ne, or, sql } from 'drizzle-orm'
 import { getDb } from './client'
 import { chats, chatOnDemandAgents, messages } from './schema'
 import type { MessageRow } from './messages'
@@ -169,6 +169,8 @@ export const chatRepo = {
       router: init?.router ?? 'direct',
       originatingJobRunId: init?.originatingJobRunId ?? null,
       hiddenFromList: init?.hiddenFromList ?? false,
+      pinnedRank: null,
+      sortKey: null,
       deletedAt: null,
       createdAt: now,
       updatedAt: now
@@ -225,6 +227,75 @@ export const chatRepo = {
     const result = getDb()
       .update(chats)
       .set({ ...updates, updatedAt: new Date() })
+      .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
+      .run()
+    return result.changes > 0
+  },
+
+  /**
+   * The title alone. Unlike {@link chatRepo.updateMeta} it leaves `updatedAt`
+   * as it is: a rename is not activity, and must not move the chat in a list
+   * sorted by recency.
+   */
+  rename(userId: string, chatId: string, title: string): boolean {
+    const result = getDb()
+      .update(chats)
+      .set({ title })
+      .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
+      .run()
+    return result.changes > 0
+  },
+
+  /**
+   * Pin a chat at the top of the user's Pinned block: the highest rank among
+   * their chats + 1, read and written in one transaction. A chat already
+   * pinned moves to the top too. Returns the rank, or null for a chat not
+   * found. Leaves `updatedAt` alone.
+   */
+  pin(userId: string, chatId: string): number | null {
+    return getDb().transaction((tx) => {
+      const top = tx
+        .select({ rank: max(chats.pinnedRank) })
+        .from(chats)
+        .where(and(eq(chats.userId, userId), ne(chats.id, chatId)))
+        .get()
+      const rank = (top?.rank ?? 0) + 1
+      const result = tx
+        .update(chats)
+        .set({ pinnedRank: rank })
+        .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
+        .run()
+      return result.changes > 0 ? rank : null
+    })
+  },
+
+  unpin(userId: string, chatId: string): boolean {
+    const result = getDb()
+      .update(chats)
+      .set({ pinnedRank: null })
+      .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
+      .run()
+    return result.changes > 0
+  },
+
+  /**
+   * A new place inside Pinned. Only for a chat that is pinned: it never pins
+   * one as a side effect. Leaves `updatedAt` alone.
+   */
+  setPinnedRank(userId: string, chatId: string, rank: number): boolean {
+    const result = getDb()
+      .update(chats)
+      .set({ pinnedRank: rank })
+      .where(and(eq(chats.id, chatId), eq(chats.userId, userId), isNotNull(chats.pinnedRank)))
+      .run()
+    return result.changes > 0
+  },
+
+  /** A new place inside the chat's Chats-list group. Leaves `updatedAt` alone. */
+  setSortKey(userId: string, chatId: string, rank: number): boolean {
+    const result = getDb()
+      .update(chats)
+      .set({ sortKey: rank })
       .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
       .run()
     return result.changes > 0

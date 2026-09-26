@@ -37,6 +37,10 @@ export interface GroupableChat {
   agentId?: string | null
   modeId?: string | null
   updatedAt: Date
+  /** Place in the Pinned block, higher first; null or absent when not pinned. */
+  pinnedRank?: number | null
+  /** A place the user dragged the chat to; null or absent when never dragged. */
+  sortKey?: number | null
 }
 
 /**
@@ -123,35 +127,86 @@ export function chatDate(chat: GroupableChat, summary: ChatListSummary | undefin
   return summary?.lastMessageAt ? new Date(summary.lastMessageAt) : new Date(chat.updatedAt)
 }
 
+/**
+ * Where a chat sits in the flat list and in a "who" group: the place the user
+ * dragged it to, else its recency. Both are on one scale (ms), so a dragged
+ * chat holds its place while the chats around it keep sorting by activity.
+ */
+export function listRank(chat: GroupableChat): number {
+  return chat.sortKey ?? new Date(chat.updatedAt).getTime() + tieBreak(chat.id)
+}
+
+/** Where a chat sits inside a day group: dragged place, else the date that put it in the day. */
+export function dayRank(chat: GroupableChat, summary: ChatListSummary | undefined): number {
+  return chat.sortKey ?? chatDate(chat, summary).getTime() + tieBreak(chat.id)
+}
+
+/**
+ * A fixed fraction of a millisecond per chat, in [0, 0.5). The times are
+ * stored in whole seconds, so chats made in the same second tie, and a drop
+ * between two tied neighbours would get their own rank as its midpoint and
+ * stay where it was. Under a millisecond, it never reorders two different
+ * times; it only orders ties, the same way on every poll.
+ */
+export function tieBreak(id: string): number {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < id.length; i++) hash = Math.imul(hash ^ id.charCodeAt(i), 0x01000193)
+  return ((hash >>> 0) / 0x1_0000_0000) * 0.5
+}
+
+/** Where a chat sits inside Pinned. */
+export function pinnedRank(chat: GroupableChat): number {
+  return chat.pinnedRank ?? 0
+}
+
+/** Highest rank first; `sort` is stable, so a tie keeps the list's order. */
+function byRank<T>(chats: T[], rank: (chat: T) => number): T[] {
+  return chats
+    .map((chat) => ({ chat, rank: rank(chat) }))
+    .sort((a, b) => b.rank - a.rank)
+    .map(({ chat }) => chat)
+}
+
+const isPinned = (chat: GroupableChat): boolean => chat.pinnedRank !== null && chat.pinnedRank !== undefined
+
+/** The Pinned block: pinned chats only, flat, by rank. Grouping never applies. */
+export function pinnedChats<T extends GroupableChat>(chats: T[]): T[] {
+  return byRank(chats.filter(isPinned), pinnedRank)
+}
+
 function byDay<T extends GroupableChat>(
   chats: T[],
   parentKey: string,
   summaries: Record<string, ChatListSummary> | undefined,
   now: Date
 ): DateGroup<T>[] {
-  const dated = chats
-    .map((chat) => ({ chat, at: chatDate(chat, summaries?.[chat.id]).getTime() }))
-    .sort((a, b) => b.at - a.at)
+  // The bucket is the chat's date, never its dragged place: a drag reorders
+  // inside a day and cannot move a chat to another.
+  const dated = byRank(chats, (chat) => dayRank(chat, summaries?.[chat.id]))
+    .map((chat) => ({ chat, bucket: dateBucket(chatDate(chat, summaries?.[chat.id]), now) }))
   return DATE_BUCKETS.map(({ bucket, label }) => ({
     key: `${parentKey}|${bucket}`,
     bucket,
     label,
-    chats: dated.filter(({ at }) => dateBucket(new Date(at), now) === bucket).map(({ chat }) => chat)
+    chats: dated.filter((entry) => entry.bucket === bucket).map(({ chat }) => chat)
   })).filter((group) => group.chats.length > 0)
 }
 
 /**
- * `chats` in the list's order (most recently updated first). "Who" groups
- * follow the first chat of each, so the most recent conversation leads; days
- * are in fixed order, each sorted by the date that placed it there.
+ * Every chat that is not pinned — Pinned is its own block, see
+ * {@link pinnedChats} — sorted by {@link listRank}. "Who" groups are ordered
+ * by their most recent chat's activity, never by a dragged place: a drag
+ * reorders inside a group and must not move the group under the pointer.
+ * Days are in fixed order, each sorted by {@link dayRank}.
  */
 export function groupChats<T extends GroupableChat>(
-  chats: T[],
+  all: T[],
   summaries: Record<string, ChatListSummary> | undefined,
   fallback: ChatGroupFallback,
   options: ChatGroupOptions,
   now: Date
 ): ChatGrouping<T> {
+  const chats = byRank(all.filter((chat) => !isPinned(chat)), listRank)
   if (!options.byAgent && !options.byDate) return { kind: 'flat', chats }
   if (!options.byAgent) return { kind: 'date', groups: byDay(chats, DATE_ONLY_PARENT, summaries, now) }
   const groups = new Map<string, WhoGroup<T>>()
@@ -161,7 +216,13 @@ export function groupChats<T extends GroupableChat>(
     if (group) group.chats.push(chat)
     else groups.set(key, { key, who, chats: [chat], dates: null })
   }
+  // `sort` is stable: groups of equal recency keep their first-seen order.
+  const recency = (group: WhoGroup<T>): number =>
+    Math.max(...group.chats.map((chat) => new Date(chat.updatedAt).getTime() + tieBreak(chat.id)))
   const out = [...groups.values()]
+    .map((group) => ({ group, at: recency(group) }))
+    .sort((a, b) => b.at - a.at)
+    .map(({ group }) => group)
   if (options.byDate) for (const group of out) group.dates = byDay(group.chats, group.key, summaries, now)
   return { kind: 'who', groups: out }
 }
@@ -176,6 +237,51 @@ export function groupKeysOf<T extends GroupableChat>(grouping: ChatGrouping<T>, 
     return [group.key, ...(group.dates ?? []).filter((d) => has(d.chats)).map((d) => d.key)]
   }
   return []
+}
+
+/** The collapse key of the Pinned block, beside the group keys. */
+export const PINNED_GROUP = 'pinned'
+
+/**
+ * The drag rank that puts `draggedId` next to `targetId` in `chats` (a group
+ * as displayed, highest rank first): above the target for `before`, below it
+ * for `after`. Between two neighbours it is their midpoint; at the top, the
+ * top neighbour's rank + 1; at the bottom, the bottom one's − 1.
+ * `unchanged` when the drop leaves the chat where it was; `no-room` when no
+ * number lies strictly between the neighbours (the gap was halved until the
+ * float ran out), in which case nothing may be written.
+ */
+export function dropRank<T extends { id: string }>(
+  chats: readonly T[],
+  rank: (chat: T) => number,
+  draggedId: string,
+  targetId: string,
+  place: 'before' | 'after'
+): number | 'unchanged' | 'no-room' {
+  const from = chats.findIndex((chat) => chat.id === draggedId)
+  const rest = chats.filter((chat) => chat.id !== draggedId)
+  const target = rest.findIndex((chat) => chat.id === targetId)
+  if (from < 0 || target < 0) return 'unchanged'
+  const at = target + (place === 'after' ? 1 : 0)
+  if (at === from) return 'unchanged'
+  const above = at > 0 ? rank(rest[at - 1]) : undefined
+  const below = at < rest.length ? rank(rest[at]) : undefined
+  return rankBetween(above, below) ?? 'no-room'
+}
+
+/**
+ * The rank between the row above and the row below, either of which may be
+ * absent. Null when there is none: no neighbours, or a midpoint that is not
+ * strictly between them.
+ */
+export function rankBetween(above: number | undefined, below: number | undefined): number | null {
+  if (above !== undefined && below !== undefined) {
+    const mid = (above + below) / 2
+    return below < mid && mid < above ? mid : null
+  }
+  if (below !== undefined) return below + 1
+  if (above !== undefined) return above - 1
+  return null
 }
 
 /**

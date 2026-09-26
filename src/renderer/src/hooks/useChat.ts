@@ -178,6 +178,77 @@ export function useUpdateChat() {
   })
 }
 
+type ChatListRows = Awaited<ReturnType<typeof window.api.chat.list>>
+
+/**
+ * Write one row of the polled list ahead of main, so the sidebar shows the
+ * result at once rather than after the next poll. An in-flight poll is
+ * cancelled first: it would bring the old row back.
+ */
+async function patchListedChat(
+  queryClient: ReturnType<typeof useQueryClient>,
+  chatId: string,
+  patch: Partial<ChatListRows[number]>
+): Promise<{ prev: ChatListRows | undefined }> {
+  await queryClient.cancelQueries({ queryKey: ['chats'], exact: true })
+  const prev = queryClient.getQueryData<ChatListRows>(['chats'])
+  if (prev) queryClient.setQueryData<ChatListRows>(['chats'], prev.map((row) => (row.id === chatId ? { ...row, ...patch } : row)))
+  return { prev }
+}
+
+/**
+ * Rename from the sidebar. Main writes the title only, so the chat keeps its
+ * place; the row shows the new title at once.
+ */
+export function useRenameChat() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ chatId, title }: { chatId: string; title: string }) => window.api.chat.rename(chatId, title),
+    onMutate: ({ chatId, title }) => patchListedChat(queryClient, chatId, { title: title.trim() }),
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['chats'], ctx.prev)
+    },
+    onSettled: (_data, _err, { chatId }) => {
+      void queryClient.invalidateQueries({ queryKey: ['chats'], exact: true })
+      void queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
+    }
+  })
+}
+
+/** Pin a chat to the top of the Pinned block, or take it out. Main computes the rank. */
+export function useSetChatPinned() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ chatId, pinned }: { chatId: string; pinned: boolean }) => window.api.chat.setPinned(chatId, pinned),
+    onSuccess: ({ pinnedRank }, { chatId }) => {
+      const rows = queryClient.getQueryData<ChatListRows>(['chats'])
+      if (rows) queryClient.setQueryData<ChatListRows>(['chats'], rows.map((row) => (row.id === chatId ? { ...row, pinnedRank } : row)))
+      void queryClient.invalidateQueries({ queryKey: ['chats'], exact: true })
+    }
+  })
+}
+
+/**
+ * A drop in the sidebar, at the rank the list computed from the new
+ * neighbours. Optimistic: the dropped row stays where it was put instead of
+ * snapping back until the next poll.
+ */
+export function useMoveChat() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ chatId, list, rank }: { chatId: string; list: 'pinned' | 'chats'; rank: number }) =>
+      window.api.chat.move(chatId, { list, rank }),
+    onMutate: ({ chatId, list, rank }) =>
+      patchListedChat(queryClient, chatId, list === 'pinned' ? { pinnedRank: rank } : { sortKey: rank }),
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['chats'], ctx.prev)
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['chats'], exact: true })
+    }
+  })
+}
+
 /**
  * Move a chat onto a router — who answers a message here.
  *

@@ -94,6 +94,25 @@ export function registerChatHandlers(): void {
     }
   )
 
+  /** The sidebar's rename: the title only, so the chat keeps its place. */
+  ipcHandle('chat:rename', async (_event, chatId: string, title: string) => {
+    userActivation.requireActivated()
+    chatService.rename(getProfileScopeUserId(), chatId, title)
+    return { success: true }
+  })
+
+  ipcHandle('chat:set-pinned', async (_event, chatId: string, pinned: boolean) => {
+    userActivation.requireActivated()
+    return { pinnedRank: chatService.setPinned(getProfileScopeUserId(), chatId, pinned === true) }
+  })
+
+  /** A drop in the sidebar; the service validates the list and the rank. */
+  ipcHandle('chat:move', async (_event, chatId: string, target: { list: 'pinned' | 'chats'; rank: number }) => {
+    userActivation.requireActivated()
+    chatService.move(getProfileScopeUserId(), chatId, target)
+    return { success: true }
+  })
+
   ipcHandle(
     'chat:add-message',
     async (

@@ -167,6 +167,10 @@ export interface ChatData {
    * declared for the task page's "Show in the Chats list".
    */
   hiddenFromList?: boolean
+  /** Place in the sidebar's Pinned block, higher first; null when not pinned. */
+  pinnedRank?: number | null
+  /** A place the user dragged the chat to inside its Chats-list group; null when never dragged. */
+  sortKey?: number | null
   deletedAt: Date | null
   createdAt: Date
   updatedAt: Date
@@ -441,6 +445,15 @@ const api = {
         router?: ChatRouter
       }
     ): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:update', chatId, updates),
+    /** Rename without bumping `updatedAt`: the chat keeps its place in the list. */
+    rename: (chatId: string, title: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chat:rename', chatId, title),
+    /** Pin to the top of the Pinned block, or unpin. Resolves to the new rank, null once unpinned. */
+    setPinned: (chatId: string, pinned: boolean): Promise<{ pinnedRank: number | null }> =>
+      ipcRenderer.invoke('chat:set-pinned', chatId, pinned),
+    /** A drop inside Pinned or inside a Chats-list group, at a rank computed from the new neighbours. */
+    move: (chatId: string, target: { list: 'pinned' | 'chats'; rank: number }): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chat:move', chatId, target),
     addMessage: (
       chatId: string,
       message: {

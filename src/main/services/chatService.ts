@@ -143,6 +143,51 @@ export const chatService = {
   },
 
   /**
+   * Rename from the sidebar. Trimmed; an empty title is refused. Writes the
+   * title only, so the chat keeps its place in a list sorted by recency.
+   */
+  rename(userId: string, chatId: string, title: unknown): void {
+    requireOwnedChat(userId, chatId)
+    const trimmed = typeof title === 'string' ? title.trim() : ''
+    if (!trimmed) throw new ChatError('invalid_value', 'A chat needs a title.')
+    if (!chatRepo.rename(userId, chatId, trimmed)) throw new ChatError('not_found', 'Chat not found')
+  },
+
+  /**
+   * Pin a chat to the top of the sidebar's Pinned block, or take it out.
+   * Returns the new rank, null once unpinned.
+   */
+  setPinned(userId: string, chatId: string, pinned: boolean): number | null {
+    requireOwnedChat(userId, chatId)
+    if (!pinned) {
+      if (!chatRepo.unpin(userId, chatId)) throw new ChatError('not_found', 'Chat not found')
+      return null
+    }
+    const rank = chatRepo.pin(userId, chatId)
+    if (rank === null) throw new ChatError('not_found', 'Chat not found')
+    return rank
+  },
+
+  /**
+   * A drop in the sidebar: the rank the renderer computed from the chat's new
+   * neighbours. `pinned` places it inside Pinned, and refuses a chat that is
+   * not pinned; `chats` places it inside its Chats-list group.
+   */
+  move(userId: string, chatId: string, target: { list: unknown; rank: unknown }): void {
+    const chat = requireOwnedChat(userId, chatId)
+    const { list, rank } = target ?? {}
+    if (typeof rank !== 'number' || !Number.isFinite(rank)) throw new ChatError('invalid_value', 'A chat moves to a finite rank.')
+    if (list === 'pinned') {
+      if (chat.pinnedRank === null || !chatRepo.setPinnedRank(userId, chatId, rank)) {
+        throw new ChatError('invalid_value', 'Only a pinned chat moves inside Pinned.')
+      }
+      return
+    }
+    if (list !== 'chats') throw new ChatError('invalid_value', `Unknown chat list: ${String(list)}`)
+    if (!chatRepo.setSortKey(userId, chatId, rank)) throw new ChatError('not_found', 'Chat not found')
+  },
+
+  /**
    * Promote a hidden (job-spawned) chat into the main Chats list. No-op if
    * the chat is already visible; errors out if the chat doesn't exist.
    */

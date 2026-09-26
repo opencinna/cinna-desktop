@@ -3,7 +3,7 @@ import type { ScriptRuntimeCheckpoint } from '../tasks/scriptRuntimeTypes'
 import type { LocalScheduleDefinition, LocalScheduleOccurrence, ScheduleCommandOutcome } from '../../shared/localSchedules'
 import type { TaskScript } from '../../shared/taskScript'
 import type { TaskRuntimeCheckpoint } from '../tasks/runtimeTypes'
-import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core'
+import { sqliteTable, text, integer, blob, primaryKey, real } from 'drizzle-orm/sqlite-core'
 import type { MessagePart } from '../../shared/messageParts'
 import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 import type { MessageAttachment } from '../../shared/attachments'
@@ -159,6 +159,19 @@ export const chats = sqliteTable('chats', {
    * "Move to Chats" button on the run row (which clears this flag).
    */
   hiddenFromList: integer('hidden_from_list', { mode: 'boolean' }).notNull().default(false),
+  /**
+   * The chat's place in the sidebar's Pinned block, higher first; null when
+   * not pinned. Pinning takes the highest rank + 1, and a drag inside Pinned
+   * writes a rank between its new neighbours. Never bumps `updatedAt`.
+   */
+  pinnedRank: real('pinned_rank'),
+  /**
+   * A rank the user gave the chat by dragging it inside its Chats-list group,
+   * on the same scale as the recency (ms) it replaces; null for a chat never
+   * dragged, which sorts by its recency. It holds the chat's place against
+   * later activity. Never bumps `updatedAt`.
+   */
+  sortKey: real('sort_key'),
   deletedAt: integer('deleted_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()

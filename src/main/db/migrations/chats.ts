@@ -47,6 +47,15 @@ export function migrateChats(sqlite: Database.Database): void {
     sqlite.exec(`ALTER TABLE chats ADD COLUMN agent_id TEXT`)
   }
 
+  // The sidebar's Pinned block and drag order. Both nullable REAL: null is
+  // "not pinned" and "never dragged", and a drop writes a midpoint.
+  if (!hasColumn(sqlite, 'chats', 'pinned_rank')) {
+    sqlite.exec(`ALTER TABLE chats ADD COLUMN pinned_rank REAL`)
+  }
+  if (!hasColumn(sqlite, 'chats', 'sort_key')) {
+    sqlite.exec(`ALTER TABLE chats ADD COLUMN sort_key REAL`)
+  }
+
   // Multi-agent switchboard removed: agents-as-tools orchestration is now the
   // only multi-counterparty engine, so the per-chat active-agent target, the
   // Smart Rewrite toggle, and the catch-up cursor table are all obsolete.

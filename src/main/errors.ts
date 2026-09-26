@@ -40,6 +40,8 @@ export type ChatErrorCode =
   | 'not_activated'
   /** A `chats.router` value this build does not have. Never reachable from the app's own UI. */
   | 'invalid_router'
+  /** A rename to an empty title, a move to a non-finite rank or an unknown list, or a move inside Pinned of a chat not pinned. */
+  | 'invalid_value'
 
 export type ChatModeErrorCode = 'not_found' | 'read_only' | 'invalid_value'
 
