@@ -11,6 +11,8 @@ interface MenuState {
   x: number
   y: number
   text: string
+  /** The code block whose whole text the menu acts on; outlined while open. */
+  highlight?: HTMLElement
 }
 
 /**
@@ -48,6 +50,25 @@ export function messageContextText(root: HTMLElement, target: Element, selection
   return selected
 }
 
+/** A fenced block's `code` ends in the fence's newline; inline code is taken as is. */
+function codeText(element: HTMLElement): string {
+  return element.tagName === 'PRE' ? (element.textContent ?? '').replace(/\n$/, '') : element.textContent ?? ''
+}
+
+/**
+ * Without a selection, a right-click on code takes the whole block, or the
+ * whole inline span. A selection in the same code that the click missed takes
+ * nothing: the user chose part of it, so the whole block would surprise them.
+ */
+export function codeContextTarget(root: HTMLElement, target: Element, selection: Selection | null): { element: HTMLElement; text: string } | null {
+  const code = target.closest<HTMLElement>('code')
+  if (!code || !root.contains(code)) return null
+  const element = code.parentElement?.tagName === 'PRE' ? code.parentElement : code
+  if (selection && !selection.isCollapsed && selection.rangeCount > 0 && selection.getRangeAt(0).intersectsNode(element)) return null
+  const text = codeText(element)
+  return text.trim() ? { element, text } : null
+}
+
 export function useMessageContextMenu(chatId: string) {
   const [menu, setMenu] = useState<MenuState | null>(null)
   const nextId = useRef(0)
@@ -61,14 +82,16 @@ export function useMessageContextMenu(chatId: string) {
       return
     }
     const point = event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined
-    const text = messageContextText(event.currentTarget, event.target, window.getSelection(), point)
+    const selected = messageContextText(event.currentTarget, event.target, window.getSelection(), point)
+    const code = selected.trim() ? null : codeContextTarget(event.currentTarget, event.target, window.getSelection())
+    const text = code?.text ?? selected
     if (!text.trim()) {
       setMenu(null)
       return
     }
     event.preventDefault()
     const rect = event.target.getBoundingClientRect()
-    setMenu({ id: ++nextId.current, text, x: event.clientX || rect.left, y: event.clientY || rect.bottom })
+    setMenu({ id: ++nextId.current, text, highlight: code?.element, x: event.clientX || rect.left, y: event.clientY || rect.bottom })
   }, [])
   return {
     onContextMenu,
@@ -76,7 +99,7 @@ export function useMessageContextMenu(chatId: string) {
   }
 }
 
-function MessageContextMenu({ x, y, text, onClose }: MenuState & { onClose: () => void }) {
+function MessageContextMenu({ x, y, text, highlight, onClose }: MenuState & { onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState({ left: x, top: y })
   const [error, setError] = useState<string | null>(null)
@@ -84,6 +107,9 @@ function MessageContextMenu({ x, y, text, onClose }: MenuState & { onClose: () =
   const acting = useRef(false)
   const mounted = useRef(true)
   const saveMessageNote = useSaveMessageNote()
+  // A block right-clicked mid-stream keeps growing under its outline; the
+  // action takes the block as it is now, not as it was at the right-click.
+  const payload = (): string => (highlight?.isConnected ? codeText(highlight) : text)
 
   useLayoutEffect(() => {
     const menu = ref.current
@@ -95,6 +121,12 @@ function MessageContextMenu({ x, y, text, onClose }: MenuState & { onClose: () =
     })
     if (error) menu.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true })
   }, [x, y, error])
+
+  useLayoutEffect(() => {
+    if (!highlight) return
+    highlight.setAttribute('data-context-target', '')
+    return () => highlight.removeAttribute('data-context-target')
+  }, [highlight])
 
   useLayoutEffect(() => {
     mounted.current = true
@@ -137,7 +169,7 @@ function MessageContextMenu({ x, y, text, onClose }: MenuState & { onClose: () =
     setBusy(true)
     setError(null)
     try {
-      await navigator.clipboard.writeText(text)
+      await navigator.clipboard.writeText(payload())
       onClose()
     } catch (err) {
       setError(unwrapIpcError(err, 'Could not copy text.'))
@@ -153,7 +185,7 @@ function MessageContextMenu({ x, y, text, onClose }: MenuState & { onClose: () =
     setBusy(true)
     setError(null)
     try {
-      const note = await saveMessageNote(text)
+      const note = await saveMessageNote(payload())
       // Saving may finish after the user dismisses the menu or changes chats.
       if (note && mounted.current) {
         const ui = useUIStore.getState()

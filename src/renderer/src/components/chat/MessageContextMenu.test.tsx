@@ -41,9 +41,9 @@ function Harness({ chatId = 'chat-1', content = markdown }: { chatId?: string; c
     <textarea aria-label="Inline input" />
   </div>{context.menu}</>
 }
-function mount() {
+function mount(props: { content?: string } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const result = render(<Harness />, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> })
+  const result = render(<Harness {...props} />, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> })
   return { ...result, client }
 }
 function selectText(element: Node, start = 0, end = element.textContent!.length) {
@@ -225,5 +225,49 @@ it('leaves blank transcript areas and editable fields to their usual context men
   fireEvent.contextMenu(screen.getByTestId('transcript'))
   expect(screen.queryByRole('menu')).toBeNull()
   fireEvent.contextMenu(screen.getByRole('textbox', { name: 'Inline input' }))
+  expect(screen.queryByRole('menu')).toBeNull()
+})
+
+it('copies the whole code block, or inline code, a right-click without a selection lands on, and outlines it while open', async () => {
+  mount({ content: 'Run `npm test` first.\n\n```ts\nconst value = 1\nconst other = 2\n```' })
+  const inline = screen.getByText('npm test')
+  fireEvent.contextMenu(inline)
+  expect(inline.hasAttribute('data-context-target')).toBe(true)
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Copy text' }))
+  await waitFor(() => expect(copy).toHaveBeenCalledWith('npm test'))
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  expect(inline.hasAttribute('data-context-target')).toBe(false)
+  const block = document.querySelector('pre')!
+  // A highlighted token inside the block, as rehype-highlight renders it.
+  const token = block.querySelector('code span')
+  expect(token).not.toBeNull()
+  fireEvent.contextMenu(token!)
+  expect(block.hasAttribute('data-context-target')).toBe(true)
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Copy text' }))
+  await waitFor(() => expect(copy).toHaveBeenLastCalledWith('const value = 1\nconst other = 2'))
+})
+
+it('prefers a selection inside code over the whole block', async () => {
+  mount()
+  const code = document.querySelector('pre code')!
+  selectText(code.firstChild!.firstChild ?? code.firstChild!, 0, 5)
+  fireEvent.contextMenu(code)
+  expect(document.querySelector('[data-context-target]')).toBeNull()
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Copy text' }))
+  await waitFor(() => expect(copy).toHaveBeenCalledWith('const'))
+})
+
+it('copies a block that grew after the right-click, and opens no menu beside a selection inside the same block', async () => {
+  const content = '```ts\nconst value = 1\n```'
+  const { rerender } = mount({ content })
+  fireEvent.contextMenu(document.querySelector('pre code')!)
+  rerender(<Harness content={'```ts\nconst value = 1\nconst more = 2\n```'} />)
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Copy text' }))
+  await waitFor(() => expect(copy).toHaveBeenCalledWith('const value = 1\nconst more = 2'))
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  const code = document.querySelector('pre code')!
+  selectText(code.firstChild!.firstChild ?? code.firstChild!, 0, 5)
+  selectionRects([{ left: 100, top: 100, right: 160, bottom: 120 }])
+  fireEvent.contextMenu(code, { clientX: 400, clientY: 110 })
   expect(screen.queryByRole('menu')).toBeNull()
 })

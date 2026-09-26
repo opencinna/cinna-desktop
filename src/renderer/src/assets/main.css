@@ -690,6 +690,13 @@
     white-space: pre;
   }
 
+  /* The code a selection-less right-click acts on (`MessageContextMenu`),
+     while its menu is open. An outline takes no layout space. */
+  [data-context-target] {
+    outline: 1px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+
   /* highlight.js token colors (dark theme) */
   .hljs { color: var(--color-text); background: var(--color-bg); }
   .hljs-keyword, .hljs-selector-tag { color: #c678dd; }

@@ -16,7 +16,7 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 
 ### Saving a chat excerpt
 
-1. Select text in a chat transcript and right-click on the selection, then choose **Save to Notes**. Select a whole message to save its original Markdown. Without a selection under the pointer, no menu opens.
+1. Select text in a chat transcript and right-click on the selection, then choose **Save to Notes**. Select a whole message to save its original Markdown. Without a selection under the pointer, a right-click on code offers its whole block or inline span; anywhere else no menu opens.
 2. A normal note is created at the top of the root group with the captured text as its body. The title uses the first nonempty line, removes a leading Markdown heading marker and is capped at 80 characters; Chat excerpt is the fallback.
 3. The sidebar switches to the Notes tab with the new note's row selected and scrolled into view, and the note opens for the usual inline editing. If the menu was dismissed or navigation moved away before creation completed, the saved note stays in the list without taking the user back to its detail view or changing the tab.
 4. Pressing Chats afterwards reopens the chat the excerpt came from.
