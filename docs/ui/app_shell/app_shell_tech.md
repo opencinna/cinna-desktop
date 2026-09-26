@@ -58,6 +58,8 @@
 | `activeLocalAgentId`, `activeExternalAgentId` | Mutually exclusive agent selections; each setter clears the other |
 | `agentPageMode` | `chat` or `settings`, initially `chat`; row selection sets chat mode explicitly |
 | `pendingAgentId` | One-shot dashboard preselection consumed only by the non-embedded workspace |
+| `pendingModeId` | The chat-mode twin of `pendingAgentId` — a mode id, or `NO_CHAT_MODE` for none — set by a Chats-list group's start button and consumed only by the non-embedded workspace; a pending agent wins. See [Chats List Grouping](../../chat/chat_list_grouping/chat_list_grouping_tech.md#the-pendingmodeid-one-shot-chatworkspace) |
+| `chatGroupByAgent`, `chatGroupByDate`, `chatGroupCollapsed` | Chats-list grouping switches and the user's open/closed choice per group key, persisted as `cinna-chat-group-by-agent`, `cinna-chat-group-by-date` and `cinna-chat-groups-collapsed` |
 | `settingsTab` | Active settings sub-section (consumed by `Sidebar` + `SettingsPage`) |
 | `theme` | Resolved `'dark' \| 'light'`, applied via document `data-theme` and `window.api.app.setTheme(theme)` for dock/window icons |
 | `themePreference` | `'system' \| 'dark' \| 'light'`, persisted as `cinna-theme`; Features chooses any value, InterfaceMenu selects a fixed opposite resolved theme |
@@ -68,7 +70,7 @@
 
 Most shell components select individual store keys to limit unrelated renders; `ChatWorkspace` also reads the whole UI store for its view and pending selection.
 
-**What survives a relaunch.** `sidebarOpen`, `themePreference`, `extraUIAnimation` and `verboseMode` read `localStorage` at store creation. Everything navigational — `activeView` (`chat`), `sidebarTab` (`chats`), `settingsTab`, the agent/job/task/note selections, and `activeChatId` in `src/renderer/src/stores/chat.store.ts` (`null`) — starts from its literal default, which is what puts every launch on the new-chat screen. Persisting any of them would change that; the comment on `SIDEBAR_KEY` says so at the point someone would add one.
+**What survives a relaunch.** `sidebarOpen`, `themePreference`, `extraUIAnimation`, `verboseMode` and the Chats-list grouping fields read `localStorage` at store creation. Everything navigational — `activeView` (`chat`), `sidebarTab` (`chats`), `settingsTab`, the agent/job/task/note selections, and `activeChatId` in `src/renderer/src/stores/chat.store.ts` (`null`) — starts from its literal default, which is what puts every launch on the new-chat screen. Persisting any of them would change that; the comment on `SIDEBAR_KEY` says so at the point someone would add one.
 
 ## IPC Channels
 

@@ -28,7 +28,7 @@ Each joins `chats` on `listedChats` — owned by the user, not deleted, not hidd
 
 `chat:list` is unchanged and carries no summary: `useChatList` polls it every second. `src/main/services/chatService.setRouter.test.ts` asserts the list rows have no `summary` property, so the two cannot be merged by accident.
 
-`ChatListSummary.with` carries `kind` (`agent` | `mode` | `none`), `name`, `color` (a chat mode's colour preset id, otherwise null) and, for agents only, `agentId`, `source`, `driver`, `protocol` and `acpTransport` — the fields `AgentTypeIcon` draws from. For `none`, `name` is the chat's model id or empty; empty means no first line. `others` is names only. Dates cross IPC as `Date`.
+`ChatListSummary.with` carries `kind` (`agent` | `mode` | `none`), `name`, `color` (a chat mode's colour preset id, otherwise null), for agents only `agentId`, `source`, `driver`, `protocol` and `acpTransport` — the fields `AgentTypeIcon` draws from — and for modes only `modeId`, the chat mode's id, which the [Chats list grouping](../chat_list_grouping/chat_list_grouping_tech.md) keys its mode groups on and starts a new chat in (a mode's name is not unique enough to key on). For `none`, `name` is the chat's model id or empty; empty means no first line. `others` is names only. Dates cross IPC as `Date`.
 
 ## Services & Key Methods
 
@@ -37,7 +37,7 @@ Each joins `chats` on `listedChats` — owned by the user, not deleted, not hidd
   - `realAgent(id)` — the row if it exists and `isChatConductor` (`src/main/services/chatConductorService.ts`) is false. Used for the primary and for every participant, which is what keeps a hidden runtime and a deleted agent out of both.
   - Participants per chat: on-demand agents first, then `sourceAgentId` and `toolAgentId` of each message group, first occurrence kept.
   - Primary: `realAgent(chat.agentId)`; only when `chat.agentId` is null and `router === 'human'`, the first real participant.
-  - Otherwise `chat.modeId` through `findMerged` gives `mode`; else `none` with `chat.modelId`. There is deliberately no default-mode fallback.
+  - Otherwise `chat.modeId` through `findMerged` gives `mode`, carrying the mode's `id` as `modeId`; else `none` with `chat.modelId`. There is deliberately no default-mode fallback.
 - `acpTransportOf(row)` — `stdio` | `websocket` for a custom-launcher ACP row, otherwise undefined. Extracted from `agentService`'s DTO mapping so the agent DTO and the summary derive an agent's type from one function and the icon cannot differ between the Agents list and the tooltip.
 
 ## Renderer Components
@@ -46,7 +46,7 @@ Each joins `chats` on `listedChats` — owned by the user, not deleted, not hidd
 
 - `useChatSummaries` — query key `['chats', 'summaries']`, no `refetchInterval`. Sitting under the `['chats']` prefix is the refresh mechanism: every existing `invalidateQueries({ queryKey: ['chats'] })` (create, delete, title update, turn end in the open chat, show-in-list, …) refetches it too. The list's own optimistic writes in `useLiveRunWatch` and `useReadChatResult` use `exact: true` and `setQueryData(['chats'])`, so they neither cancel nor disturb it.
 - `ChatList` covers the one case no invalidation reaches. Only the open chat's turn end invalidates `['chats']`; a background turn ends silently and is noticed only by the polled list. A ref holds the set of chat ids with an `activeRunId` from the previous list result; when any id in it is absent from the current set, `['chats', 'summaries']` is invalidated — once per result however many rows ended, never on the first result, and not when a run starts.
-- `ChatList` passes each row `summary={summaries?.[chat.id]}` and its `index`.
+- `ChatList` passes each row `summary={summaries?.[chat.id]}` and its `index` — its position among the rows actually drawn, counted across [groups](../chat_list_grouping/chat_list_grouping_tech.md#renderer-components), so a group opening or closing above a row changes it.
 
 ### ChatItem
 
@@ -91,7 +91,7 @@ Reads are scoped by `listedChats(userId)` with the profile user id resolved in m
 
 ## Verification
 
-- `src/main/services/chatListSummary.test.ts` — bound agent and its type fields, profile-scope agent, mode with colour, conductor-bound chat naming its mode, model and empty fallbacks, first attached agent of a `human` chat, Others without the primary or a deleted agent, count vs span, empty chat, profile isolation.
+- `src/main/services/chatListSummary.test.ts` — bound agent and its type fields, profile-scope agent, mode with colour and id, conductor-bound chat naming its mode, model and empty fallbacks, first attached agent of a `human` chat, Others without the primary or a deleted agent, count vs span, empty chat, profile isolation.
 - `src/main/services/chatService.setRouter.test.ts` — summaries absent from list rows, keyed by chat id, per owner.
 - `src/renderer/src/components/chat/ChatItem.test.tsx` — immediate open and close on leave, mode tag, model/no first line, staying open across the action button with its title withheld, tooltip→row and row→tooltip crossings, one at a time, no navigation or close from inside, click still navigates, the three scroll cases, no summary, reorder, and the glow: present with its duration variable on a low roll, absent on a high roll, absent with Extra UI animation off whatever the roll. Reduced motion is CSS-only and not asserted.
 - `src/renderer/src/components/chat/ChatList.test.tsx` — rows before summaries, never polled, refreshed by prefix invalidation and untouched by exact-key writes, one refresh when background turns end.

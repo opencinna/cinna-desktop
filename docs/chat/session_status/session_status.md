@@ -29,7 +29,7 @@ Show which conversations are still working and which have new results to read, e
 ### A row pointed at from elsewhere
 
 1. On a task page, choose **⋯ → Show in the Chats list**. A chat a job spawned is moved out of hiding first.
-2. The sidebar opens on Chats, the chat's row scrolls into view and is outlined in the accent colour for under two seconds. The chat is not opened; the task stays on screen.
+2. The sidebar opens on Chats and any collapsed [group](../chat_list_grouping/chat_list_grouping.md) holding the chat opens; the chat's row scrolls into view and is outlined in the accent colour for under two seconds. The chat is not opened; the task stays on screen.
 
 ## Business Rules
 
