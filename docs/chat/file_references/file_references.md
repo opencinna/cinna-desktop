@@ -28,7 +28,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 3. The preview modal expands from the click point. It shows:
    - the file name and its path in the agent folder;
    - the **⋯** menu (**Open**, **Open folder**) and Close;
-   - the rendered content: markdown, JSON, a CSV table, or plain text for code and config.
+   - the rendered content: markdown, JSON, a CSV table, highlighted Python, or plain text for other code and config.
 4. From the **⋯** menu, **Open** hands the file to the user's editor or its system app, and **Open folder** selects it in Finder. A failure shows in a row under the header and closes nothing.
 
 ### Showing a folder

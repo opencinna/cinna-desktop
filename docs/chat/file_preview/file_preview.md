@@ -5,7 +5,7 @@
 One read-only modal for looking at a text file **in place**, reached two ways.
 
 **An attachment badge in a chat message.**
-- **What previews:** `txt`, `csv`, `md`, `json`, `yaml`/`yml`. These open the modal instead of the save dialog.
+- **What previews:** `txt`, `csv`, `md`, `json`, `yaml`/`yml`, and Python (`py`/`pyi`). These open the modal instead of the save dialog.
 - **Download stays:** the modal header keeps a **Download** button, so previewing never replaces saving the file.
 - **Everything else downloads:** images, PDF, Office binaries, archives and the rest still go straight to the save dialog. Preview is an extra shortcut, not a new gate.
 - **Both directions of attachment:**
@@ -14,15 +14,15 @@ One read-only modal for looking at a text file **in place**, reached two ways.
 
 **A [file reference](../file_references/file_references.md) in a folder agent's chat.** This is an inline code span that names a real file.
 - **Open instead of Download:** the file is already on disk, so the header's **⋯** menu offers **Open** and **Open folder**.
-- **More types:** code and config preview as plain text as well.
+- **More types:** other code and config preview as plain text as well; Python is highlighted, as it is for an attachment.
 
-**A long markdown file**, from either way in, also gets a **Contents** panel: its headings, beside the body or over its right edge, so the user can jump to a section and see where they are.
+**A long markdown file**, from either way in, also gets a **Contents** panel: its headings, beside the body or over its right edge, so the user can jump to a section and see where they are. **A Python file** with more than one definition gets the same panel as an outline: top-level functions and classes, and under each class its own methods (no nested functions, nested classes or constants).
 
 ## Core Concepts
 
 - **Previewable type**: a filename or MIME type the modal knows how to render.
-  - `previewKindFor(filename, mimeType)` (`src/shared/filePreview.ts`) maps it to a `PreviewRenderKind` (`markdown`, `json`, `csv` or `text`), or `null` when it is not previewable and should download. The extension wins over the MIME type, because the stores' MIME type is only a best guess.
-  - Agent files use `agentFilePreviewKindFor`, which adds code and config as `text` and leaves attachment behaviour unchanged.
+  - `previewKindFor(filename, mimeType)` (`src/shared/filePreview.ts`) maps it to a `PreviewRenderKind` (`markdown`, `json`, `csv`, `python` or `text`), or `null` when it is not previewable and should download. The extension wins over the MIME type, because the stores' MIME type is only a best guess.
+  - Agent files use `agentFilePreviewKindFor`, which adds other code and config as `text` and leaves attachment behaviour unchanged. A `.py` file resolves to `python` through `previewKindFor` first, so it is highlighted in both places.
 - **Preview read path**: the IPC call that reads a file's bytes into memory and returns decoded UTF-8 plus a `truncated` flag.
   - Attachments use `files:read-preview`, and agent files use `agent-files:read-preview`.
   - Both are **capped at `MAX_PREVIEW_BYTES` (512 KB)** in main and use the same truncation-safe decode.
@@ -37,14 +37,15 @@ One read-only modal for looking at a text file **in place**, reached two ways.
     A leading YAML frontmatter block is lifted out and shown as a key/value card above the body; see [Frontmatter](#frontmatter).
   - `json` is a collapsible tree, falling back to raw text if it does not parse; see [JSON tree](#json-tree).
   - `csv`/`tsv` renders as a table: quoted fields are honoured (loosely following RFC 4180) and the first 500 rows are shown.
+  - `python` is a wrapped `<pre>` highlighted by lowlight, the engine behind the chat's `rehype-highlight`, so a `.py` file is tokenised and coloured exactly like a fenced `python` block in a message (the same `.hljs-*` palette). If highlighting throws, it shows the plain text, so a file cut at the cap still previews.
   - `text` (including yaml) is a wrapped `<pre>`.
 - **Notice**: a body that is a sentence rather than content. For agent files it is either "Preview is off for credential files." or "No preview for this file type."
 - **Header actions**:
   - Attachments get an icon-only Download.
   - Agent files get an icon-only **⋯** button ("More file actions"). Its menu holds **Open**, then **Open folder**.
   - For `csv` only, a **Filter** toggle reveals per-column controls. It is hidden while a notice shows.
-  - For a long markdown file only, a labelled **Contents** toggle, at the app-chrome type scale, shows and hides the Contents panel.
-- **Contents panel**: a 240 px column listing a markdown file's H1–H4 headings, indented by depth, with the current section in the accent colour. See [The Contents panel](#the-contents-panel).
+  - For a long markdown file, or a Python file with several definitions, a labelled **Contents** toggle, at the app-chrome type scale, shows and hides the Contents panel.
+- **Contents panel**: a 240 px column listing a markdown file's H1–H4 headings, or a Python file's functions and classes (`name()` for a function or method, the bare name for a class) with methods one level in, indented by depth, with the current section in the accent colour. See [The Contents panel](#the-contents-panel).
 - **Entrance**: the card expands from the point the user clicked.
 - **Exit**: closing plays the entrance backwards, towards the same point.
 - **Header path**: an agent file's display path, beside its name. A click copies it.
@@ -57,7 +58,7 @@ One read-only modal for looking at a text file **in place**, reached two ways.
 ## User Stories / Flows
 
 ### Previewing a previewable attachment
-1. The user clicks a `txt` / `csv` / `md` / `json` / `yaml` badge under any message, their own or an agent's.
+1. The user clicks a `txt` / `csv` / `md` / `json` / `yaml` / `py` badge under any message, their own or an agent's.
 2. `useAttachmentOpen` gets a non-null `previewKindFor` result, so it calls `useFilePreviewStore.openPreview(attachment, kind)` instead of downloading.
 3. The store fetches `files:read-preview`. The modal expands from the badge and shows the rendered content.
 4. The user clicks the **Download** icon in the header to save the full file. This is the standard `files:download` save-as flow, through the shared `useFileDownloadStore`, so the spinner and reveal behave exactly as a badge download does.
@@ -264,6 +265,7 @@ File reference click (folder agent chat):
 
 Long markdown (either way in):
   markdownToc(body after frontmatter) → several H1s or H2s? → header Contents toggle
+  pythonOutline(text) → more than one def/class? → header Contents toggle (CodePreview marks each line)
     → FilePreviewContents beside the body (card widens) or over it (narrow window / slow load)
        entry click → scroll the body to [data-heading-line]
 
@@ -287,10 +289,10 @@ For file paths, IPC signatures and method-level detail see [File Preview — Tec
 ## Future Enhancements (Out of Scope)
 
 - **Image / PDF preview**: render image bytes and PDF pages inline. Today they download, or open in their system app for an agent file.
-- **Syntax highlighting for code** (`.py`, `.ts`, …): code attachments still download, and agent files show code as plain text.
+- **Syntax highlighting for code other than Python** (`.ts`, `.sh`, …): those attachments still download, and agent files show them as plain text. `CodePreview` registers only the python grammar; another language is a new `PreviewRenderKind` plus its grammar, not a switch to lowlight's whole `common` set.
 - **Copying the file's content** from the preview modal: only an agent file's header path copies today.
 - **A dialog role and a focus trap**: today, Shift+Tab from the card walks back into the page.
 
 ---
 
-*Last updated: 2026-09-19*
+*Last updated: 2026-09-26*

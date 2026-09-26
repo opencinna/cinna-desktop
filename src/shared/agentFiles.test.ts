@@ -104,10 +104,10 @@ describe('extractFileRefCandidates', () => {
 })
 
 describe('agentFilePreviewKindFor', () => {
-  it('keeps every attachment kind and adds code and config as text', () => {
+  it('keeps every attachment kind, including highlighted python, and adds other code and config as text', () => {
     expect(agentFilePreviewKindFor('a.csv')).toBe('csv')
     expect(agentFilePreviewKindFor('README.md')).toBe('markdown')
-    expect(agentFilePreviewKindFor('x/y/reforecast_common.py')).toBe('text')
+    expect(agentFilePreviewKindFor('x/y/reforecast_common.py')).toBe('python')
     expect(agentFilePreviewKindFor('pyproject.toml')).toBe('text')
   })
 

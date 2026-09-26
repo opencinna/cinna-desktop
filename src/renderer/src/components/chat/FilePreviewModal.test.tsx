@@ -528,6 +528,32 @@ describe('json', () => {
   })
 })
 
+describe('python', () => {
+  it('highlights the source with the code-block palette and keeps the text intact', () => {
+    render(<FilePreviewModal />)
+    const source = 'def main():\n    return "hi"  # done\n'
+    open({ target: agentTarget(), kind: 'python', text: source })
+    const pre = screen.getByTestId('code-preview')
+    expect(pre.textContent).toBe(source)
+    expect(pre.querySelector('.hljs-keyword')?.textContent).toBe('def')
+    expect(pre.querySelector('.hljs-string')?.textContent).toBe('"hi"')
+    expect(pre.querySelector('.hljs-comment')?.textContent).toBe('# done')
+    // A single definition is not worth a Contents panel.
+    expect(screen.queryByRole('button', { name: 'Contents' })).toBeNull()
+  })
+
+  it('marks each listed definition for the Contents panel and keeps the text intact', () => {
+    render(<FilePreviewModal />)
+    const source = 'import os\n\nclass A:\n    def run(self):\n        """x\n\ndef b(): ..."""\n\ndef b():\n    pass\n'
+    open({ target: agentTarget(), kind: 'python', text: source })
+    const pre = screen.getByTestId('code-preview')
+    expect(pre.textContent).toBe(source)
+    const marked = [...pre.querySelectorAll('[data-heading-line]')].map((el) => el.getAttribute('data-heading-line'))
+    expect(marked).toEqual(['3', '4', '9'])
+    expect(screen.getByRole('button', { name: 'Contents' })).toBeTruthy()
+  })
+})
+
 describe('a press outside the card straight after an open', () => {
   it('is ignored for the guard after each open, and closes once it has passed', () => {
     vi.useFakeTimers()

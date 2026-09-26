@@ -217,7 +217,7 @@ export function extractFileRefCandidates(markdowns: readonly string[]): string[]
 
 /** Code and config an agent folder is full of, previewed as plain text. */
 const AGENT_TEXT_EXTENSIONS = new Set([
-  'py', 'sh', 'bash', 'zsh', 'sql', 'toml', 'ini', 'cfg', 'conf', 'ts', 'tsx', 'js', 'jsx',
+  'sh', 'bash', 'zsh', 'sql', 'toml', 'ini', 'cfg', 'conf', 'ts', 'tsx', 'js', 'jsx',
   'mjs', 'cjs', 'xml', 'html', 'css', 'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp'
 ])
 

@@ -10,7 +10,7 @@
     - Matches CommonMark backtick runs within a paragraph.
     - Scans headings and table rows as standalone lines.
   - `extractFileRefCandidates(markdowns)`: spans across several documents, in order. Shape-filtered, de-duplicated (the first occurrence wins) and capped at `MAX_FILE_REF_CANDIDATES`.
-  - `agentFilePreviewKindFor(filename)`: `previewKindFor`, plus `AGENT_TEXT_EXTENSIONS` rendered as `text`.
+  - `agentFilePreviewKindFor(filename)`: `previewKindFor`, plus `AGENT_TEXT_EXTENSIONS` rendered as `text`. `py` is not in that set: `previewKindFor` already maps it to `python`, which is highlighted.
   - `isCredentialFilePath(path, agentDir)`: the credential-name rule. Passing `agentDir` enables the `credentials/` clause.
   - `agentFileExtension` and `agentFileName`.
   - `BINARY_DOCUMENT_EXTENSIONS`, `TEXT_DOCUMENT_EXTENSIONS`, and `DEFAULT_APP_EXTENSIONS` (the union of the two).

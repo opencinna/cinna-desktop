@@ -17,6 +17,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { useFrontmatter } from '../ui/FrontmatterTable'
 import { markdownToc } from '../../utils/markdownToc'
+import { pythonOutline } from '../../utils/pythonOutline'
 import { useUIStore } from '../../stores/ui.store'
 import { FileActionsMenu, PREVIEW_POPOVER_ATTR } from './FileActionsMenu'
 import {
@@ -26,6 +27,7 @@ import {
   previewMarkdownComponents
 } from './FilePreviewContents'
 import { JsonTree, JsonTreeBoundary, useParsedJson } from './JsonTree'
+import { CodePreview } from './CodePreview'
 import {
   actionErrorRepeatsBody,
   actionErrorText,
@@ -272,14 +274,17 @@ export function FilePreviewModal(): React.JSX.Element | null {
   const backdropRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
-  // Markdown only: the frontmatter split and the headings, computed here once
-  // because the header's Contents button needs the verdict too. The headings
-  // are parsed from exactly the body handed to <Markdown>.
+  // The frontmatter split (markdown only) and the Contents entries, computed
+  // here once because the header's Contents button needs the verdict too.
+  // Markdown headings are parsed from exactly the body handed to <Markdown>;
+  // a Python file lists its functions, classes and methods, and CodePreview
+  // marks their lines.
   const markdown = useFrontmatter(kind === 'markdown' ? text : '')
   const toc = useMemo(
-    () => (kind === 'markdown' ? markdownToc(markdown.body) : null),
-    [kind, markdown.body]
+    () => (kind === 'markdown' ? markdownToc(markdown.body) : kind === 'python' ? pythonOutline(text) : null),
+    [kind, markdown.body, text]
   )
+  const anchorLines = useMemo(() => toc?.entries.map((entry) => entry.line), [toc])
   const targetKey = !target
     ? null
     : target.type === 'attachment'
@@ -293,7 +298,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
   }, [targetKey])
 
   const loaded = target !== null && !isLoading && error === null && !notice && kind !== null
-  const showContents = loaded && kind === 'markdown' && toc?.show === true
+  const showContents = loaded && toc?.show === true
   const panelOpen = showContents && contentsOpen
   // The window width, followed for as long as the modal is mounted: a value
   // left stale between previews would widen the card by the wrong amount, and
@@ -608,7 +613,13 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 {kind === 'markdown' ? (
                   <MarkdownPreview key={targetKey} card={markdown.card} body={markdown.body} />
                 ) : (
-                  <PreviewBody key={targetKey} kind={kind} text={text} filtersEnabled={filtersEnabled} />
+                  <PreviewBody
+                    key={targetKey}
+                    kind={kind}
+                    text={text}
+                    filtersEnabled={filtersEnabled}
+                    anchorLines={anchorLines}
+                  />
                 )}
                 {truncated && (
                   <div className="mt-3 text-[10px] italic text-[var(--color-text-muted)]">
@@ -715,11 +726,13 @@ function CopyablePath({ path }: { path: string }): React.JSX.Element {
 function PreviewBody({
   kind,
   text,
-  filtersEnabled
+  filtersEnabled,
+  anchorLines
 }: {
   kind: PreviewRenderKind
   text: string
   filtersEnabled: boolean
+  anchorLines?: readonly number[]
 }): React.JSX.Element {
   if (kind === 'json') {
     return <JsonPreview text={text} />
@@ -727,6 +740,10 @@ function PreviewBody({
 
   if (kind === 'csv') {
     return <CsvPreview text={text} filtersEnabled={filtersEnabled} />
+  }
+
+  if (kind === 'python') {
+    return <CodePreview text={text} language="python" anchorLines={anchorLines} />
   }
 
   return (
