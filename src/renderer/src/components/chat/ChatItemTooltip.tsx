@@ -22,13 +22,16 @@ interface ChatItemTooltipProps {
   style: React.CSSProperties
 }
 
-/** An agent's type icon, as the Agents list shows it; a chat otherwise, in its mode's colour. */
-function WhoIcon({ who }: { who: ChatListSummary['with'] }): React.JSX.Element {
+/**
+ * An agent's type icon, as the Agents list shows it; a chat otherwise, in its
+ * mode's colour. Also the Chats list's group headers.
+ */
+export function WhoIcon({ who, className = 'mt-0.5' }: { who: ChatListSummary['with']; className?: string }): React.JSX.Element {
   if (who.kind === 'agent') {
-    return <AgentTypeIcon agent={{ source: who.source ?? '', driver: who.driver, protocol: who.protocol, acpTransport: who.acpTransport }} size={12} className="mt-0.5 pointer-events-none" />
+    return <AgentTypeIcon agent={{ source: who.source ?? '', driver: who.driver, protocol: who.protocol, acpTransport: who.acpTransport }} size={12} className={`${className} pointer-events-none`} />
   }
   const color = who.kind === 'mode' && who.color ? getPreset(who.color).border : 'var(--color-text-muted)'
-  return <MessageSquare size={12} aria-hidden="true" className="mt-0.5 shrink-0" style={{ color }} />
+  return <MessageSquare size={12} aria-hidden="true" className={`${className} shrink-0`} style={{ color }} />
 }
 
 /**

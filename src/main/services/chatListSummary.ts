@@ -80,7 +80,7 @@ export function buildChatListSummaries(
       // Neither: the model is the only thing left that tells this chat from
       // the next, and an empty name tells the tooltip to show no first line.
       who = mode
-        ? { kind: 'mode', name: mode.name, color: mode.colorPreset }
+        ? { kind: 'mode', name: mode.name, color: mode.colorPreset, modeId: mode.id }
         : { kind: 'none', name: chat.modelId ?? '', color: null }
     }
 

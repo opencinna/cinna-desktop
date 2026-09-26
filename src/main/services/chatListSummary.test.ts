@@ -104,7 +104,7 @@ it('resolves a bound agent that lives in the profile scope', () => {
 
 it('names the chat mode of a plain chat, with its colour preset', () => {
   const chat = chatRepo.create(USER, { modeId: 'research-mode' })
-  expect(summaryOf(chat.id).with).toEqual({ kind: 'mode', name: 'Research', color: 'violet' })
+  expect(summaryOf(chat.id).with).toEqual({ kind: 'mode', name: 'Research', color: 'violet', modeId: 'research-mode' })
 })
 
 it('names the mode of a conductor-bound chat, never the hidden runtime', () => {
@@ -115,7 +115,7 @@ it('names the mode of a conductor-bound chat, never the hidden runtime', () => {
   say(chat.id, 'tool_call', '2026-09-19T10:01:00Z', { toolAgentId: 'a-writer' })
 
   const summary = summaryOf(chat.id)
-  expect(summary.with).toEqual({ kind: 'mode', name: 'Research', color: 'violet' })
+  expect(summary.with).toEqual({ kind: 'mode', name: 'Research', color: 'violet', modeId: 'research-mode' })
   expect(summary.others).toEqual(['Writer'])
 })
 

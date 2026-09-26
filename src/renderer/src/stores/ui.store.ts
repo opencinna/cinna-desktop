@@ -62,6 +62,31 @@ const ANIMATION_KEY = 'cinna-extra-ui-animation'
 const SIDEBAR_KEY = 'cinna-sidebar-open'
 // Whether a long markdown preview opens with its Contents panel showing.
 const PREVIEW_CONTENTS_KEY = 'cinna-preview-contents-open'
+// How the Chats list is grouped, and which of its groups are collapsed.
+const CHAT_GROUP_BY_AGENT_KEY = 'cinna-chat-group-by-agent'
+const CHAT_GROUP_BY_DATE_KEY = 'cinna-chat-group-by-date'
+const CHAT_GROUPS_COLLAPSED_KEY = 'cinna-chat-groups-collapsed'
+
+/** `pendingModeId` for a new chat with no chat mode at all. */
+export const NO_CHAT_MODE = '__none__'
+
+/**
+ * The user's own open/closed choice per Chats-list group key (true = closed).
+ * A key with no entry follows the group's default (`chatGroupCollapsedByDefault`).
+ */
+function readChatGroupCollapsed(): Record<string, boolean> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(CHAT_GROUPS_COLLAPSED_KEY) ?? '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(Object.entries(parsed).filter(([, v]) => typeof v === 'boolean')) as Record<string, boolean>
+  } catch {
+    return {}
+  }
+}
+
+function writeChatGroupCollapsed(state: Record<string, boolean>): void {
+  localStorage.setItem(CHAT_GROUPS_COLLAPSED_KEY, JSON.stringify(state))
+}
 
 function applyTheme(theme: Theme): void {
   document.documentElement.setAttribute('data-theme', theme)
@@ -115,7 +140,20 @@ interface UIStore {
   /** Agent whose status detail the overlay should show (null = grid view). */
   agentStatusDetailId: string | null
   pendingAgentId: string | null
+  /**
+   * A chat mode to start the new-chat screen in — or `NO_CHAT_MODE` for none.
+   * One-shot, like `pendingAgentId`; from a Chats-list group's start button.
+   */
+  pendingModeId: string | null
   verboseMode: boolean
+  /** Chats list grouping; either, both or neither. */
+  chatGroupByAgent: boolean
+  chatGroupByDate: boolean
+  /**
+   * The user's open/closed choice per Chats-list group key (`chatGroups.ts`),
+   * true = closed. A key with no entry follows the group's default.
+   */
+  chatGroupCollapsed: Record<string, boolean>
   setAgentPageMode: (mode: 'chat' | 'settings') => void
   setActiveView: (view: ActiveView) => void
   setSettingsMenu: (tab: SettingsMenu) => void
@@ -138,7 +176,12 @@ interface UIStore {
   setAgentStatusOpen: (open: boolean) => void
   setAgentStatusDetailId: (id: string | null) => void
   setPendingAgentId: (id: string | null) => void
+  setPendingModeId: (id: string | null) => void
   toggleVerboseMode: () => void
+  toggleChatGroupByAgent: () => void
+  toggleChatGroupByDate: () => void
+  setChatGroupCollapsed: (key: string, collapsed: boolean) => void
+  expandChatGroups: (keys: string[]) => void
 }
 
 export const useUIStore = create<UIStore>((set, get) => ({
@@ -164,7 +207,11 @@ export const useUIStore = create<UIStore>((set, get) => ({
   agentStatusOpen: false,
   agentStatusDetailId: null,
   pendingAgentId: null,
+  pendingModeId: null,
   verboseMode: localStorage.getItem(VERBOSE_KEY) === '1',
+  chatGroupByAgent: localStorage.getItem(CHAT_GROUP_BY_AGENT_KEY) === '1',
+  chatGroupByDate: localStorage.getItem(CHAT_GROUP_BY_DATE_KEY) === '1',
+  chatGroupCollapsed: readChatGroupCollapsed(),
   setAgentPageMode: (mode) => set({ agentPageMode: mode }),
   setActiveView: (view) => set({ activeView: view }),
   setSettingsMenu: (tab) => set({ settingsTab: tab }),
@@ -206,11 +253,39 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setAgentStatusOpen: (open) => set({ agentStatusOpen: open }),
   setAgentStatusDetailId: (id) => set({ agentStatusDetailId: id }),
   setPendingAgentId: (id) => set({ pendingAgentId: id }),
+  setPendingModeId: (id) => set({ pendingModeId: id }),
   toggleVerboseMode: () =>
     set((state) => {
       const next = !state.verboseMode
       localStorage.setItem(VERBOSE_KEY, next ? '1' : '0')
       return { verboseMode: next }
+    }),
+  toggleChatGroupByAgent: () =>
+    set((state) => {
+      const next = !state.chatGroupByAgent
+      localStorage.setItem(CHAT_GROUP_BY_AGENT_KEY, next ? '1' : '0')
+      return { chatGroupByAgent: next }
+    }),
+  toggleChatGroupByDate: () =>
+    set((state) => {
+      const next = !state.chatGroupByDate
+      localStorage.setItem(CHAT_GROUP_BY_DATE_KEY, next ? '1' : '0')
+      return { chatGroupByDate: next }
+    }),
+  setChatGroupCollapsed: (key, collapsed) =>
+    set((state) => {
+      const next = { ...state.chatGroupCollapsed, [key]: collapsed }
+      writeChatGroupCollapsed(next)
+      return { chatGroupCollapsed: next }
+    }),
+  // An explicit "open", so a group closed only by default opens too.
+  expandChatGroups: (keys) =>
+    set((state) => {
+      if (keys.every((key) => state.chatGroupCollapsed[key] === false)) return state
+      const next = { ...state.chatGroupCollapsed }
+      for (const key of keys) next[key] = false
+      writeChatGroupCollapsed(next)
+      return { chatGroupCollapsed: next }
     })
 }))
 

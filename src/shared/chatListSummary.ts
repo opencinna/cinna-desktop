@@ -18,6 +18,9 @@ export interface ChatListSummary {
    *
    * `source`, `driver`, `protocol` and `acpTransport` are an agent's type as the
    * agent DTO carries it — what `AgentTypeIcon` draws from. Agents only.
+   *
+   * `modeId` is the chat mode's id, modes only: the Chats list groups by it
+   * and starts a new chat in it.
    */
   with: {
     kind: 'agent' | 'mode' | 'none'
@@ -28,6 +31,7 @@ export interface ChatListSummary {
     driver?: string | null
     protocol?: string
     acpTransport?: 'stdio' | 'websocket'
+    modeId?: string
   }
   /** Names of the other agents that took part: primary excluded, deduped, stable order. */
   others: string[]

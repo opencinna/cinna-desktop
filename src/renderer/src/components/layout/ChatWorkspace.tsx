@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { useUIStore } from '../../stores/ui.store'
+import { NO_CHAT_MODE, useUIStore } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useAgents } from '../../hooks/useAgents'
 import { MessageStream } from '../chat/MessageStream'
@@ -29,6 +29,8 @@ import { useComposerDraftStore } from '../../stores/composerDraft.store'
 export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string; embedded?: boolean }): React.JSX.Element {
   const { activeView, pendingAgentId, setPendingAgentId } = useUIStore()
   const agentStatusOpen = useUIStore((s) => s.agentStatusOpen)
+  const pendingModeId = useUIStore((s) => s.pendingModeId)
+  const setPendingModeId = useUIStore((s) => s.setPendingModeId)
   const storedChatId = useChatStore((s) => s.activeChatId)
   const activeChatId = embedded ? null : storedChatId
   const newChatDraftKey = useComposerDraftKey(null, embedded ? agentId : undefined)
@@ -204,6 +206,31 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
     // Focus after the new-chat screen mounts the input.
     requestAnimationFrame(() => chatInputRef.current?.focus())
   }, [embedded, pendingAgentId, agentList, setActiveChatId, setPendingAgentId, setPendingAgentIds])
+
+  // The same, for a chat mode (a Chats-list mode group's start button): the
+  // new-chat screen in that mode, with no agents. `NO_CHAT_MODE` is a plain
+  // chat with no mode at all. A mode that no longer exists is dropped. An agent
+  // pick still pending wins and this request is dropped: yielding alone would
+  // run it one render later and clear the agents the pick just set.
+  useEffect(() => {
+    if (embedded || pendingModeId === null) return
+    if (pendingAgentId) {
+      setPendingModeId(null)
+      return
+    }
+    if (pendingModeId !== NO_CHAT_MODE) {
+      if (!chatModes) return
+      if (!chatModes.some((m) => m.id === pendingModeId)) {
+        setPendingModeId(null)
+        return
+      }
+    }
+    setActiveChatId(null)
+    setPendingAgentIds([])
+    setModeSelection(pendingModeId === NO_CHAT_MODE ? 'none' : { id: pendingModeId })
+    setPendingModeId(null)
+    requestAnimationFrame(() => chatInputRef.current?.focus())
+  }, [embedded, pendingModeId, pendingAgentId, chatModes, setActiveChatId, setPendingModeId, setPendingAgentIds, setModeSelection])
 
   // When the agent-status overlay closes and we're on the chat view (new-chat
   // form or active chat), return focus to the chat input so the user can keep

@@ -36,12 +36,12 @@ vi.mock('../chat/ChatInput', () => ({ ChatInput: (props: {
 const { ChatWorkspace } = await import('./ChatWorkspace')
 const { useChatStore } = await import('../../stores/chat.store')
 const { useAuthStore } = await import('../../stores/auth.store')
-const { useUIStore } = await import('../../stores/ui.store')
+const { useUIStore, NO_CHAT_MODE } = await import('../../stores/ui.store')
 beforeEach(() => {
   window.ResizeObserver = class { observe() {} disconnect() {} } as never
   useChatStore.getState().reset()
   useAuthStore.setState({ currentUser: { id: 'alice' } as never })
-  useUIStore.setState({ activeView: 'chat', pendingAgentId: null })
+  useUIStore.setState({ activeView: 'chat', pendingAgentId: null, pendingModeId: null })
 })
 const selections = () => JSON.parse(screen.getByTestId('selections').textContent!)
 
@@ -67,4 +67,27 @@ it('keeps dashboard choices when visiting a chat and keeps each agent start page
   fourth.unmount()
   render(<ChatWorkspace />)
   expect(selections()).toEqual({ mode: 'm2', agents: ['a2'], mcps: ['server'] })
+})
+
+it('opens the new-chat screen in a mode group\'s mode, or in none, with no agents, once', () => {
+  act(() => useChatStore.getState().setActiveChatId('chat-1'))
+  act(() => useUIStore.setState({ pendingModeId: 'm2' }))
+  const view = render(<ChatWorkspace />)
+  expect(useChatStore.getState().activeChatId).toBeNull()
+  expect(useUIStore.getState().pendingModeId).toBeNull()
+  expect(selections()).toEqual({ mode: 'm2', agents: [], mcps: [] })
+  view.unmount()
+
+  act(() => useUIStore.setState({ pendingModeId: NO_CHAT_MODE }))
+  render(<ChatWorkspace />)
+  expect(useUIStore.getState().pendingModeId).toBeNull()
+  expect(selections()).toEqual({ mode: null, agents: [], mcps: [] })
+})
+
+it('lets a pending agent pick win over a pending mode, and drops the mode request', () => {
+  act(() => useUIStore.setState({ pendingAgentId: 'a2', pendingModeId: 'm2' }))
+  render(<ChatWorkspace />)
+  expect(useUIStore.getState().pendingAgentId).toBeNull()
+  expect(useUIStore.getState().pendingModeId).toBeNull()
+  expect(selections().agents).toEqual(['a2'])
 })
