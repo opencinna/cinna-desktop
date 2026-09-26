@@ -10,7 +10,7 @@ Prepare a signed-in Cinna account for local agent development, then offer a one-
 
 Setup prepares the machine; an explicit build prompt or Develop action performs later agent work. The following guarantees concern setup orchestration, not the commands an assistant may subsequently run:
 
-- **No agent is cloned.** First run prepares the machine; fetching an agent is a later, explicit action.
+- **No agent is cloned.** Setup prepares the machine; fetching an agent is a later, explicit action.
 - **No Mutagen session is started.** Mutagen is installed and put on the spawn `PATH` so cinna-cli finds *this app's* copy rather than prompting to `brew install` one. Nothing syncs.
 - **Setup never runs `cinna dev`.** The reconciler drives `cinna account setup`, `cinna account set-token`, `cinna account status` and `cinna account refresh-context` for workspace setup and maintenance. Build-session tools and the separate Develop action have their own command flows.
 - **Nothing is reimplemented that cinna-cli owns.** The desktop is *installer and orchestrator*: it puts the right binaries somewhere it controls, mints a token, spawns cinna-cli in the right directory, and reads the exit code. Workspace layout, the token exchange, the context package and sync are cinna-cli's, and the desktop reads only the defined CLI result contracts and a fixed set of public guide documents for the build briefing.
@@ -52,7 +52,7 @@ Every phase also carries `tasks` — the per-step checklist the build setup page
 **Idle, consent and declined are separate states.** The UI must distinguish a check that has not run from a question waiting for an answer and a remembered refusal:
 
 - `idle` vs `unsupported` — "we have not looked" and "this server does not offer it" produce the same empty screen but opposite answers to *why is there no Repair button*. A local profile is `idle`, and calling it `unsupported` would imply it could never be otherwise.
-- `declined` vs `consent` — asked-and-declined vs never-asked. Settings has to offer "Set up local development" in one and the consent question in the other, and a screen that has to guess which it is looking at will eventually guess wrong. `declined` is also what keeps the onboarding step and the consent modal from re-asking every launch.
+- `declined` vs `consent` — asked-and-declined vs never-asked. Settings has to offer "Set up local development" in one and the consent question in the other, and a screen that has to guess which it is looking at will eventually guess wrong. `declined` is also what leaves the connect panel's checkbox unticked for a host whose owner already said no.
 
 ## User Stories / Flows
 
@@ -65,38 +65,32 @@ Every phase also carries `tasks` — the per-step checklist the build setup page
 
 See [Account Build Sessions](build_sessions.md) for complete flows, runtime rules, draft lifetime and cancellation limits.
 
-### First run on a server that offers it
-1. The user connects a Cinna account through the ordinary Cinna Server path; activation fires `reconcile`
-2. The onboarding screen advances to its `localdev` step, which waits for the reconciler's first answer
-3. The reconciler discovers the instance's `local_dev` block, finds no recorded answer for this host, and lands on `consent`
-4. The step renders the question: what will be installed, into the app's own data folder, and which folder will be created under the Agents Home — plus "Nothing is synced and no agent is downloaded"
-5. **Set up** records consent and reconciles again. The same panel becomes the progress view rather than a second screen
-6. uv, Mutagen and cinna-cli install — Mutagen alongside the other two rather than after them — while the opencode engine is fetched in the same wait; `cinna account setup` creates the workspace; the account token is checked
-7. `ready`. The panel offers **Start using Cinna**
+### Setting up from the sidebar button
+1. The user connects a Cinna account — through the ordinary Cinna Server path or a `cinna://connect` link — and onboarding finishes straight into the app. Activation fires `reconcile`
+2. The reconciler discovers the instance's `local_dev` block, finds no recorded answer for this host, and lands on `consent`. **Nothing is asked.** The sidebar footer gains a quiet Local development icon, with no dot, titled *Set up local development*
+3. Clicking it opens `LocalDevConsentModal`: what will be installed, into the app's own data folder, and which folder will be created under the Agents Home — plus "Nothing is synced and no agent is downloaded"
+4. **Set up** records consent for the host. The button reads *Starting…* until main leaves `consent`, then the modal closes and the Local Development page opens, where the checklist shows the install running
+5. uv, Mutagen and cinna-cli install — Mutagen alongside the other two rather than after them — while the opencode engine is fetched in the same wait; `cinna account setup` creates the workspace; the account token is checked
+6. `ready`. The page offers the build composer
 
-### First run from a `cinna://connect` link
-1. The confirm screen for a [`cinna://connect` link](../../auth/onboarding/connect_link.md) carries **Enable local development** as a checkbox next to the **Connect** button, with a (?) showing the same "what gets installed" list the consent panel does
-2. Connecting a server that offers local development is already most of that decision, so it rides along with the button that acts on it instead of becoming a screen of its own after sign-in
+The build page's own **Set up local development** button opens the same modal in `consent` / `declined`, and Settings in `idle` / `unsupported`, where there is no question to ask.
+
+### Local development from a `cinna://connect` link
+1. The confirm screen for a [`cinna://connect` link](../../auth/onboarding/connect_link.md) carries **Enable local development** as a checkbox next to the **Connect** button, with a (?) showing the same "what gets installed" list the consent modal does
+2. Connecting a server that offers local development is already most of that decision, so it rides along with the button that acts on it. It is the one place the question appears without the user going to look for it, and it is kept because it costs no extra screen: the box is already beside the button being pressed
 3. **It is ticked only for a host nobody has answered for.** An answer this machine already holds wins over the default, because the same panel is what an already-onboarded install shows and **Switch to it** can name a profile whose owner declined on purpose — re-ticking it for them would spend a few hundred megabytes reversing a deliberate decision. On a genuine first run the read simply finds nothing and the tick stands. What a stored answer never beats is the **user's own click**: once they have touched the box it is theirs, and a stored answer that resolves a moment later leaves it alone
-4. Ticked or not, the answer is recorded for that host the moment the account exists, so the `localdev` step that follows has nothing left to ask: it shows the install running, or falls through
-5. **Unticking is a real decline**, remembered for that host like any other — not a "remind me later". Settings → Profile → Local Development turns it back on
+4. Ticked or not, the answer is recorded for that host the moment the account exists, and onboarding finishes. A tick installs in the background — no modal, progress on the sidebar icon
+5. **Unticking is a real decline**, remembered for that host like any other — not a "remind me later". The sidebar icon and Settings → Profile → Local Development both offer it again
 
-### First run where there is nothing to ask
-1. `unsupported` (either reason) and `declined` both mean *nothing to ask*, and the onboarding step falls straight through to the app
-2. Telling a new user about a feature they cannot have, on the screen whose job is to get out of the way, is an obstacle rather than information
-3. If the reconciler has not answered within eight seconds the step gives up and lets the user in anyway. Local development is not required to use Cinna, and a server that never answers must not leave a first-run user watching a spinner
-
-### An existing install that gains the feature
-1. Either the user updates to a build that has it, or their server starts offering it
-2. The next reconcile lands on `consent`, and `LocalDevConsentModal` asks — the only surface a running app has for a question the user did not go looking for
-3. The modal shows for `consent` **and nothing else**. Progress, failure and readiness belong to the sidebar button and Settings; a modal that reappeared for each step would be an app that interrupts you to say it is busy
-4. Escape and a backdrop click are deliberately *not* wired to a silent dismissal here (unlike the connect-intent modal): dismissing has to record an answer or the same modal returns on the next reconcile. **Skip is the dismissal**
+### Nothing to offer
+1. `unsupported` (either reason) and `idle` show no sidebar icon at all
+2. Telling a user about a feature they cannot have is an obstacle rather than information; Settings → Profile → Local Development is where the `role` reason is explained, for whoever goes looking
 
 ### Declining, and changing your mind
-1. **Skip** records `false` for that host. The prompt does not come back
-2. Settings → Profile → Local Development shows the `declined` line and a **Set up** button
-3. Pressing it calls `reconcile(force)`, which records `true` for that host and proceeds — pressing a button that says what it will do *is* the consent, and without recording it the press would loop straight back to the prompt
-4. **Reset consent** forgets the answer entirely, so the next reconcile asks the question again
+1. **Not now** in the modal — or Escape, or a backdrop click — closes it and **records nothing**. The question only ever appears on request, so there is no prompt a remembered "no" would have to suppress, and the icon stays where it was for next time
+2. A recorded decline comes from Settings' own **Not now** in `consent`, or from an unticked connect-panel checkbox. Settings then shows the `declined` line and a **Set up** button, and the sidebar icon still opens the modal
+3. Settings' **Set up** calls `reconcile(force)`, which records `true` for that host and proceeds — pressing a button that says what it will do *is* the consent, and without recording it the press would loop straight back to the question. The modal's **Set up** records `true` through `localdev:consent`, which reconciles
+4. **Reset consent** forgets the answer entirely, returning the host to `consent`
 
 ### Coming back to a machine that was ready
 1. Activation, a re-auth and an OS resume each fire a reconcile
@@ -188,14 +182,16 @@ A workspace someone created from a terminal at the same path is simply **adopted
 
 ### Consent
 
+- **Opt-in, and only for remote building.** What this asks about is building a server's agents from this machine through cinna-cli — the managed toolchain and the account workspace. Local folder (Kit) agents need none of it and work by default: their `opencode` engine resolves on demand at the agent's first turn, with no question asked ([The Local Engine](../local_agents/engine.md)). So declining, or never answering, costs a user nothing they did not go looking for
+- **Never asked unprompted.** The question opens only when the user clicks the sidebar footer's Local development icon (or the build page's **Set up local development** button). It used to be a first-run onboarding step and a modal that appeared by itself whenever a reconcile landed on `consent`; both asked about a remote-building toolchain before the user had shown any interest in it — the step on the screen whose job was to get them into the app, the modal over whatever they were doing
 - **Per host, installation-wide.** Accounts on the same server share the answer, including a decline. Moving the controls to Profile settings does not migrate consent to per-user storage. Agreeing for one instance says nothing about another
-- **`false` is a real answer**, stored, and is what keeps the prompt from reappearing on every launch. Absent means never asked
+- **`false` is a real answer**, stored, and keeps any reconcile without `force` at `declined`. Absent means never asked. Only Settings' **Not now** and an unticked connect-panel checkbox write it; the modal's **Not now** writes nothing
 - Stored in the **default-scoped** `localDevConsent` app setting as a JSON `{ "<host>": boolean }` object. A string rather than a nested object because that store is one flat key-value table validated by `typeof` — so the shape is checked once in `appSettingsService` rather than defended at every read, since the value is also reachable through the generic `settings:set` channel
 - A corrupt value reads as "nobody has been asked". The worst case is asking once more; never acting without an answer
 - **`force` is the one thing that skips the question**, because the only ways to pass it are Repair and Settings' **Set up** — a button whose copy says what it will do. Any other reconcile stops at `consent` or `declined`
-- **Where it is asked depends on how the account arrived.** A `cinna://connect` link asks it as a checkbox on the confirm screen, ticked unless this machine already holds an answer for that host; the ordinary Cinna Server path asks it as the `localdev` onboarding step; an install that gains the feature later is asked by the consent modal. All three render one explainer component, so no two of them can describe the same install differently
+- **Two surfaces carry the question.** The consent modal behind the sidebar icon, and the **Enable local development** checkbox on a `cinna://connect` confirm screen — ticked unless this machine already holds an answer for that host, and kept deliberately, because there it costs no extra screen. A ticked box installs in the background with no modal. Both render one explainer component, so they cannot describe the same install differently
 - **Recording an answer waits for the reconcile already in flight.** The connect screen answers within moments of activation, and the run that activation started read the consent *before* this one wrote it — joining that run, which is what a single-flight `reconcile` does, would answer "still waiting on the user" and quietly drop the answer just given. The waiting answer captures its profile before the wait; if that profile is replaced, it does not restart its setup afterward
-- **The renderer remembers which hosts *this window* has answered.** Until main's reconcile has moved off `consent` the broadcast state still says "waiting on the user", which is how a screen that has just taken the answer asks it again for half a second. Only the surfaces that ask consult that list — it is a fact about the window, not about the machine — and **Reset consent** clears that host. An `idle` profile reset clears every temporary marker, so an earlier profile cannot suppress the next question; a late rejection from the earlier profile cannot erase a newer same-host answer
+- **The modal's Set up waits for main, not for the install.** It shows *Starting…* until the broadcast phase leaves `consent`, then closes and opens the Local Development page, where progress lives. A refusal from main (the channel is gated on an activated profile) is shown under the buttons with the modal still open, rather than closing on an answer that was never recorded. A profile switch closes the modal in the same update that resets the state to `idle`, since the question belonged to the profile that left
 
 ### The toolchain
 
@@ -334,7 +330,7 @@ Three rules keep it readable:
 - **A component with nothing honest to measure gets no bar.** The account-token check is a single round trip; a bar for it would be decoration, and a bar that never moves is precisely what this list exists to remove.
 - **Reaching `ready` does not tick off a row that did not happen** — a failed one, or the engine row when its pre-fetch was skipped. The run can succeed while one row did not, and painting it green on the way past would erase the only notice the user gets that the first turn will still fetch the engine.
 
-The same list renders in the onboarding/progress panel and in the build setup page, from one component, so the two cannot describe the same install differently. Setup progress surfaces can also show the overall reconcile percentage; the build page renders the current step and per-component checklist.
+The list renders on the build setup page, from one component (`LocalDevTaskList`), which the legacy detail modal shares. The build page renders the current step and per-component checklist; the sidebar icon's title carries the overall percentage.
 
 ### The status checklist
 
@@ -346,7 +342,7 @@ While setup is incomplete, the sidebar button opens a build page with this check
 
 Only the **current** reconcile may publish progress or completion. Ownership ends both when the run finishes and when its profile is invalidated. An old engine prefetch or subprocess callback previously could restore an old progress bar after a failure or switch; generation checks now leave the current state intact.
 
-The button is now shown when everything is `ready` too, quietly and without a dot. That is a change from hiding it on success: clicking it opens the build composer; the settings pages also expose the managed CLI and workspace, and a control that vanishes when things work is a control nobody learns exists. The dot, not the icon, distinguishes "fine" from "wants you". It stays hidden for `idle`, `unsupported`, `consent` and `declined` — the consent question has its own surface, and the rest have nothing to report.
+The button is now shown when everything is `ready` too, quietly and without a dot. That is a change from hiding it on success: clicking it opens the build composer; the settings pages also expose the managed CLI and workspace, and a control that vanishes when things work is a control nobody learns exists. The dot, not the icon, distinguishes "fine" from "wants you". It is shown in `consent` and `declined` as well, where a click opens the consent modal instead of the page: it is the only way into that question, so hiding it there would make local development impossible to find. It stays hidden for `idle` and `unsupported`, which have nothing to offer.
 
 ### Toolchain failures are not all "try again"
 
@@ -396,9 +392,9 @@ localDevService.reconcile(userId, force)      ← serialized, same-profile dedup
         │
         ▼
   LocalDevState ──localdev:state──► renderer store
-                                      ├─ LocalDevOnboardingStep  (first run)
-                                      ├─ LocalDevConsentModal    (consent, after first run)
-                                      ├─ LocalDevStatusButton    (installing / attention / ready)
+                                      ├─ LocalDevStatusButton    (consent / declined → opens the modal;
+                                      │                           installing / attention / ready → page)
+                                      ├─ LocalDevConsentModal    (only while consentOpen, consent / declined)
                                       ├─ LocalDevelopmentPage (setup → composer / guide / build settings)
                                       └─ ProfileLocalDevSettingsSection (every phase)
 
@@ -413,8 +409,8 @@ localDevService.reconcile(userId, force)      ← serialized, same-profile dedup
 
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — the OAuth session whose bearer mints setup tokens; local development exists only for a `cinna_user` profile
 - [Cinna Re-authentication](../../auth/cinna_accounts/reauthentication.md) — a successful re-auth fires a reconcile only while that account is current and activated, because a dead session is the usual reason the workspace's account token went stale too. The build page's attention notice can start that same round trip in place for `token_expired` and `account_mismatch`, so the notice moves on by itself when it succeeds and a mismatched sign-in is reported on the page rather than nowhere
-- [Onboarding](../../auth/onboarding/onboarding.md) — the `localdev` step is the last step of the Cinna path
-- [The `cinna://connect` Link](../../auth/onboarding/connect_link.md) — the other route in, and the one that answers the consent question on its confirm screen rather than in a step of its own
+- [Onboarding](../../auth/onboarding/onboarding.md) — does not ask about local development; both Cinna paths finish onboarding as soon as the account is connected
+- [The `cinna://connect` Link](../../auth/onboarding/connect_link.md) — the other route in, and the one that answers the consent question on its confirm screen, as a pre-ticked checkbox
 - [Agents Home, Scanner & Folder Index](../local_agents/folder_index.md) — the account workspace is created under the Agents Home, and `Cloud/` is the [kit contract](../local_agents/kit_contract.md)'s `workshop.cloud_dir` rather than a literal in this feature's code
 - [The Agents Folder Question](../local_agents/home_access.md) — the reconciler creates the Agents Home itself, and treats it as already explained because the consent screen the user just read named it: two modals about one folder is worse than one. A home it cannot create stops the run at `attention/workspace` with the folder and the fix named. The consent surfaces themselves only ever *read* the path — a hint that created the folder is what raised the macOS Documents prompt mid sign-in
 - [The Local Engine](../local_agents/engine.md) — shares `managedAsset.ts`, is the other consumer of the "the directory existing is the proof its bytes were verified" invariant, and owns the binary this feature pre-fetches: the resolution order, the pin and the digest are all the engine's, unchanged

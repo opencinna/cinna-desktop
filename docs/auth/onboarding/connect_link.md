@@ -23,7 +23,7 @@ A landing page on a self-hosted cinna-core instance can hand a freshly installed
 4. In order: **"Connect to cinna.acme.com?"**, the full origin unabbreviated in its own box, an **Enable local development** checkbox directly under it and left-aligned — it is a setting for *this connection*, not a second action competing with the button — then **Connect** centred, then **Not now** as quiet text. The checkbox is ticked unless this machine already holds an answer for that host, and its (?) opens **upward**, so reading what will be installed never means covering the button that installs it
 5. **Connect** runs the ordinary self-hosted `auth:register` OAuth flow against that origin. The waiting state and its Cancel button are the same ones the typed-URL path uses
 6. On success the origin is written into the shared self-hosted history — the same history a typed URL populates, so the deep link and the paste fallback build one list rather than two — and the checkbox's answer is recorded for that host, ticked or not
-7. The screen advances to the [`localdev`](../../agents/local_dev/local_dev.md) step, which now has nothing left to ask and shows the install instead
+7. Onboarding finishes and the app opens. A ticked box installs [local development](../../agents/local_dev/local_dev.md) in the background, with progress on the sidebar's Local development icon and no modal; an unticked one is a remembered decline that icon can reverse
 
 ### A link while the app is already running
 1. The second launch is stopped by the single-instance lock; the primary instance receives the argv through `second-instance`

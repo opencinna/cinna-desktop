@@ -1,14 +1,13 @@
 # Onboarding — Technical Reference
 
-Implementation companion to [onboarding.md](onboarding.md). The onboarding logic itself is renderer-only — it adds no main-process IPC handlers. Two of its steps *read* main-process state owned by other features: `cinna-confirm` reads the buffered deep link (see [connect_link_tech.md](connect_link_tech.md)) and `localdev` reads the local-development reconciler's state (see [local_dev_tech.md](../../agents/local_dev/local_dev_tech.md)).
+Implementation companion to [onboarding.md](onboarding.md). The onboarding logic itself is renderer-only — it adds no main-process IPC handlers. One step *reads* main-process state owned by other features: `cinna-confirm` reads the buffered deep link (see [connect_link_tech.md](connect_link_tech.md)), and its local-development checkbox reads and records the per-host consent answer (see [local_dev_tech.md](../../agents/local_dev/local_dev_tech.md)). There is no local-development step.
 
 ## File Locations
 
 ### Renderer — components
 - `src/renderer/src/App.tsx` — `OnboardingGate` wrapper, mounted inside `AuthGate` and outside `Shell`
-- `src/renderer/src/components/auth/OnboardingScreen.tsx` — full-screen overlay with cinna-confirm / welcome / provider-type / provider-key / cinna-hosting / cinna-waiting / localdev steps
+- `src/renderer/src/components/auth/OnboardingScreen.tsx` — full-screen overlay with cinna-confirm / welcome / provider-type / provider-key / cinna-hosting / cinna-waiting steps
 - `src/renderer/src/components/auth/ConnectIntentPanel.tsx` — rendered by the `cinna-confirm` step (and by `ConnectIntentModal` past first run)
-- `src/renderer/src/components/localdev/LocalDevOnboardingStep.tsx` — rendered by the `localdev` step; wraps `LocalDevConsentPanel`
 - `src/renderer/src/components/settings/DevelopmentSettingsSection.tsx` — Settings → Development → Testing toggle ("Enable onboarding on restart")
 
 ### Renderer — constants
@@ -20,7 +19,6 @@ Implementation companion to [onboarding.md](onboarding.md). The onboarding logic
 - `src/renderer/src/hooks/useChatModes.ts` — `useUpsertChatMode()`
 - `src/renderer/src/hooks/useAuth.ts` — `useRegister()`, `useLogin()`, `useCinnaOAuthAbort()`
 - `src/renderer/src/hooks/useConnectIntent.ts` — `useConnectIntent()`, called by `OnboardingGate` so the gate (not the modal) decides which surface confirms a link
-- `src/renderer/src/hooks/useLocalDev.ts` — `useLocalDev()`, read by the `localdev` step
 
 ### Main process (no new files)
 The onboarding feature does not add any main-process files. It depends on the existing handlers:
@@ -28,7 +26,7 @@ The onboarding feature does not add any main-process files. It depends on the ex
 - `src/main/ipc/chat.ipc.ts` — `chatmode:upsert`
 - `src/main/ipc/auth.ipc.ts` — `auth:register`, `auth:login`, `auth:cinna-oauth-abort`
 - `src/main/ipc/connect.ipc.ts` — `connect:get-pending`, `connect:consume` (the deep-link feature's; see [connect_link_tech.md](connect_link_tech.md))
-- `src/main/ipc/localdev.ipc.ts` — `localdev:get-state`, `localdev:consent` (the local-development feature's; see [local_dev_tech.md](../../agents/local_dev/local_dev_tech.md))
+- `src/main/ipc/localdev.ipc.ts` — `localdev:get-consent`, `localdev:consent` (the local-development feature's; see [local_dev_tech.md](../../agents/local_dev/local_dev_tech.md))
 
 ## Database Schema
 
@@ -49,8 +47,8 @@ No schema changes. The feature only writes to existing tables via existing servi
 | `auth:cinna-oauth-abort` | Cancel button in the `cinna-waiting` step, and in `ConnectIntentPanel`'s waiting view |
 | `auth:login` | `cinna-confirm`'s **Switch to it**, when a profile for the link's origin already exists |
 | `connect:get-pending` / `connect:consume` / `connect:intent` | The buffered deep link that opens the screen on `cinna-confirm` |
-| `localdev:get-state` / `localdev:consent` / `localdev:state` | The `localdev` step's state and the consent answer |
-| `local-agent:home-state` | The `localdev` step reads the Agents Home purely to name the folder in the consent copy. **This channel creates nothing** and is the one local-agent channel with no activation gate, both for the same reason: it is called from a first-run screen, and it used to be `local-agent:roots-list`, which runs `ensureHome` — so naming the folder created it and raised the macOS Documents-folder prompt in the middle of signing in ([The Agents Folder Question](../../agents/local_agents/home_access.md)) |
+| `localdev:get-consent` / `localdev:consent` | The confirm step's **Enable local development** checkbox: seeded from a stored answer, recorded once the account exists (not awaited — a yes installs in the background) |
+| `local-agent:home-state` | The confirm step's (?) reads the Agents Home purely to name the folder in the local-development copy. **This channel creates nothing** and is the one local-agent channel with no activation gate, both for the same reason: it is called from a first-run screen, and it used to be `local-agent:roots-list`, which runs `ensureHome` — so naming the folder created it and raised the macOS Documents-folder prompt in the middle of signing in ([The Agents Folder Question](../../agents/local_agents/home_access.md)) |
 
 Onboarding introduces no IPC channels of its own; the last three rows belong to the deep-link, local-development and local-agents features.
 
@@ -63,14 +61,14 @@ The renderer-only feature delegates all server-side work through existing servic
 
 ## Renderer Components
 
-- `src/renderer/src/components/auth/OnboardingScreen.tsx` — state machine over the `Step` union (`welcome | provider-type | provider-key | cinna-hosting | cinna-waiting | cinna-confirm | localdev`); owns `selectedProvider`, `apiKey`, `selectedModelId`, `cinnaHostingType`, `cinnaServerUrl`, `selfHostedHistory`; renders all step contents inline via `renderStep()`. The initial step is `connectIntent ? 'cinna-confirm' : 'welcome'`, and a `lastIntentAt` ref re-enters `cinna-confirm` only for an intent with a **new** `receivedAt` — so the intent the step just consumed cannot bounce a user who declined straight back into it
-- `src/renderer/src/components/auth/OnboardingScreen.tsx` — the `cinna-confirm` step's `onDone(outcome)`: `declined` → `welcome`, `connected` / `switched` → `localdev`. `onConnectIntentDone?.()` fires first, in every case
-- `src/renderer/src/components/auth/OnboardingScreen.tsx` — `connectSelfHosted()` ends on `setStep('localdev')` rather than `onComplete()`; only the `localdev` step calls `onComplete`
+- `src/renderer/src/components/auth/OnboardingScreen.tsx` — state machine over the `Step` union (`welcome | provider-type | provider-key | cinna-hosting | cinna-waiting | cinna-confirm`); owns `selectedProvider`, `apiKey`, `selectedModelId`, `cinnaHostingType`, `cinnaServerUrl`, `selfHostedHistory`; renders all step contents inline via `renderStep()`. The initial step is `connectIntent ? 'cinna-confirm' : 'welcome'`, and a `lastIntentAt` ref re-enters `cinna-confirm` only for an intent with a **new** `receivedAt` — so the intent the step just consumed cannot bounce a user who declined straight back into it
+- `src/renderer/src/components/auth/OnboardingScreen.tsx` — the `cinna-confirm` step's `onDone(outcome)`: `declined` → `welcome`, `connected` / `switched` → `onComplete()`, since the panel's checkbox has already recorded the local-development answer. `onConnectIntentDone?.()` fires first, in every case
+- `src/renderer/src/components/auth/OnboardingScreen.tsx` — `connectSelfHosted()` ends on `onComplete()`: local development is not asked on this path at all
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — `handleSaveAndFinish()` orchestrates the API-key save: blocking `upsertProvider`, then non-blocking `upsertChatMode`, then `onComplete()`
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — `connectSelfHosted()` mirrors `RegisterForm.tsx:connectSelfHosted()`; on success it calls `prependSelfHostedHistory()` and persists via `writeSelfHostedHistory()`
 - `src/renderer/src/App.tsx` — `OnboardingGate` uses `useProviders()` + `useState` initializers seeded from `consumeForceOnboarding()` and `isOnboardingDismissed()`, plus `useConnectIntent()` for the `connectIntent` / `onConnectIntentDone` props. The first-run answer is latched in a `useRef<boolean | null>` **assigned during render**, not in an effect — an effect runs a frame late and that frame is a flash of the wrong screen — and the blank div is shown only while it is still `null`. `onComplete` sets a `finished` state (a state, not the ref: ending first run has to re-render) instead of writing back to `dismissed`/`forced`, so a `resetQueries()` on sign-in cannot unmount the screen mid-flow
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — the `Step` union carries the matching invariant: **every terminal step must call `onComplete`**. It is the contract the session change created, and the one thing a future step-adder has to know — nothing above the screen will end first run for them
-- `src/renderer/src/App.tsx` — `<ConnectIntentModal />` and `<LocalDevConsentModal />` are mounted **inside** `OnboardingGate`, i.e. among the children it renders only once first run is over. During first run each question is a step of the screen instead, and two surfaces asking it at once would be two answers racing to be recorded
+- `src/renderer/src/App.tsx` — `<ConnectIntentModal />` and `<LocalDevConsentModal />` are mounted **inside** `OnboardingGate`, i.e. among the children it renders only once first run is over. During first run the link is confirmed by the screen's own step, and two surfaces confirming it at once would be two answers racing to be recorded; the consent modal is there because the sidebar button that alone opens it lives in the shell
 - `src/renderer/src/components/settings/DevelopmentSettingsSection.tsx` — the "Testing" section: one `SettingsToggleRow` (`id="dev-force-onboarding"`, a `role="switch"` the label names), with the description behind its (?) and a `title` saying whether onboarding will show on the next restart
 
 ## State & Persistence

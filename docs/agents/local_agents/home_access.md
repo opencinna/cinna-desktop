@@ -39,7 +39,7 @@ The failure this replaced: `ensureHome` was on every read path that wanted the h
 Nothing is asked. A registered root row at the home's path, with the folder still on disk, is this install having created it once — which on a guarded path took a grant.
 
 ### Local development
-The `cinna://connect` confirm screen and the `localdev` onboarding step **name** the agents home in their copy and create nothing. When the reconciler later builds the account workspace it goes through the same preparation as the modal, and treats the folder as already explained: the consent screen the user just read named it, and two modals about one folder is worse than one. A home it cannot create stops local development with `attention / workspace` and a detail naming the folder and the fix — see [Local Development](../local_dev/local_dev.md).
+The `cinna://connect` confirm screen's (?) and the local-development consent modal **name** the agents home in their copy and create nothing. When the reconciler later builds the account workspace it goes through the same preparation as the modal, and treats the folder as already explained: the consent screen the user just read named it, and two modals about one folder is worse than one. A home it cannot create stops local development with `attention / workspace` and a detail naming the folder and the fix — see [Local Development](../local_dev/local_dev.md).
 
 ## Business Rules
 

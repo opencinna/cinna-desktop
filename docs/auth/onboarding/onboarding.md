@@ -4,7 +4,7 @@
 
 Greet a fresh install with a single guided choice — **API key** (bring-your-own-key) or **Cinna Server** (connect to a remote instance) — so the user reaches a working chat in one screen instead of hunting through Settings.
 
-Two later steps join the same screen without changing that shape: a `cinna://connect` deep link opens it on a **confirm** step instead of the welcome card, and a connected Cinna account is followed by a **local development** step — which the confirm step's own opt-in checkbox usually answers ahead of time. Both are covered below and in their own docs — [The `cinna://connect` Link](connect_link.md) and [Local Development](../../agents/local_dev/local_dev.md).
+A `cinna://connect` deep link opens the same screen on a **confirm** step instead of the welcome card; see [The `cinna://connect` Link](connect_link.md). Onboarding does **not** ask about [local development](../../agents/local_dev/local_dev.md) (building a server's agents through cinna-cli): both Cinna paths finish as soon as the account is connected, and the question lives behind the sidebar's Local development icon for whoever goes looking. The confirm step's pre-ticked opt-in checkbox is the one exception, because it rides along with the Connect button rather than adding a screen.
 
 ## Core Concepts
 
@@ -17,8 +17,7 @@ Two later steps join the same screen without changing that shape: a `cinna://con
 | **API Key Path** | User picks a provider type, validates the key via `provider:test-key`, then the app creates the provider plus a default chat mode bound to it. Card label in the UI: "API key" |
 | **Cinna Server Path** | Reuses the self-hosted OAuth flow from `RegisterForm` (URL input + history + bootstrap/authorize) — no LLM provider is created |
 | **Self-Hosted History** | Shared URL history between onboarding and the in-app "Add Account" flow. Single source of truth in `constants/selfHostedHistory.ts` |
-| **Confirm Step** (`cinna-confirm`) | The step a `cinna://connect` link opens the screen on. **Never reached by navigating — only by arriving.** Renders `ConnectIntentPanel`, the same component the past-first-run modal uses. Also carries the local-development opt-in, so that decision is a checkbox beside **Connect** rather than a step after it |
-| **Local Dev Step** (`localdev`) | The last step of the Cinna path. Renders `LocalDevOnboardingStep`, which asks the per-host consent question — or gets out of the way when there is nothing to ask, including when the confirm step has already answered it |
+| **Confirm Step** (`cinna-confirm`) | The step a `cinna://connect` link opens the screen on. **Never reached by navigating — only by arriving.** Renders `ConnectIntentPanel`, the same component the past-first-run modal uses. Also carries the local-development opt-in, a pre-ticked checkbox beside **Connect** — the only place first run records a local-development answer |
 
 ## User Stories / Flows
 
@@ -46,25 +45,16 @@ Two later steps join the same screen without changing that shape: a `cinna://con
 3. User enters a URL or clicks a "Recent servers" entry (history shared with `RegisterForm` via the same `selfHostedHistory` module)
 4. Connect → "Waiting for browser authorization…" spinner with a single Cancel button (calls `auth:cinna-oauth-abort`)
 5. Browser-based bootstrap + authorize completes; the new Cinna user is created and activated (existing flow)
-6. **Not straight into the app**: the screen advances to the `localdev` step. The account is connected, and the one question left is whether to prepare this machine for building agents on it
-7. Dismissed flag is set; onboarding screen unmounts; user lands in the app as the Cinna user
+6. Dismissed flag is set; onboarding screen unmounts; user lands in the app as the Cinna user. Nothing about local development is asked on the way: when the server offers it, the sidebar footer shows a quiet Local development icon that opens the question on click
 
 ### Deep-Link Path (`cinna://connect`)
 1. A landing page fires `cinna://connect?server=<origin>`; the main process validates and buffers it (see [The `cinna://connect` Link](connect_link.md))
 2. `OnboardingGate` passes the intent down, and the screen **opens on `cinna-confirm`** rather than the welcome card — the user clicked a button that named a server, so asking them to choose between "API key" and "Cinna Server" first would be asking a question they have already answered
 3. **Connect** runs the same self-hosted OAuth as the typed-URL path, against the link's origin. **Switch to it** appears instead when a profile for that exact origin already exists on this machine
-4. The panel also carries **Enable local development** with a (?) explaining what that installs — ticked unless this machine already holds an answer for that host, so **Switch to it** cannot reverse a deliberate decline. The answer, either way, is recorded for that host as soon as the account exists
-5. Either outcome advances to `localdev` — connecting (or switching into) a Cinna account *is* a finished first run, because the account's managed credentials and chat modes are what the rest of onboarding would otherwise be asking for. The step has nothing left to ask on this route, so it shows the install running or falls through
+4. The panel also carries **Enable local development** with a (?) explaining what that installs — ticked unless this machine already holds an answer for that host, so **Switch to it** cannot reverse a deliberate decline. The answer, either way, is recorded for that host as soon as the account exists; a tick installs in the background, with progress on the sidebar icon and no modal
+5. Either outcome finishes onboarding — connecting (or switching into) a Cinna account *is* a finished first run, because the account's managed credentials and chat modes are what the rest of onboarding would otherwise be asking for
 6. **Not now** falls back to the `welcome` step rather than closing the screen: a decline leaves the user needing the ordinary choices
 7. A *new* link arriving while the user is already on the screen redirects them back to `cinna-confirm`. It is matched on `receivedAt`, so a declined intent cannot bounce them straight back in
-
-### Local Development Step
-1. Reached only from a connected Cinna account — from either the `cinna-waiting` path or `cinna-confirm`
-2. It renders only when there is genuinely something to say. `unsupported` (this server does not offer local development, or this account lacks the role) and `declined` both mean *nothing to ask* and fall straight through to the app — as does a `consent` for a host the confirm step's checkbox has already answered, while main is still turning that answer into an install
-3. On `consent` it shows what will be installed and where: the toolchain inside Cinna's own data folder, the account workspace under the Agents Home, and "Nothing is synced and no agent is downloaded"
-4. **Set up** turns the same panel into the progress view. **Continue in the background** is always available — the reconciler runs in the main process and keeps going, and the sidebar picks the progress up
-5. **Skip** records a remembered "no" for that host, so the question does not return every launch. Settings → Local Development can undo it
-6. If the reconciler has not answered within **8 seconds** the step gives up and lets the user into the app. Local development is a courtesy, not a requirement, and a server that never answers must not leave a new user staring at a spinner on their first run
 
 ### Skip
 1. User clicks "Skip for now" on the welcome card
@@ -95,10 +85,10 @@ Two later steps join the same screen without changing that shape: a `cinna://con
 
 ## Business Rules
 
-- **First run is a session, not a derived boolean.** The gate takes the decision once and holds it; only the screen's own `onComplete` ends it. Re-deriving it each render was wrong on exactly the path that matters most: signing in calls `queryClient.resetQueries()`, so the providers query returns to loading, the gate renders its blank div and the onboarding screen **unmounts**. A Cinna account's managed providers arrive asynchronously, so a moment later it mounts again — freshly, with the deep link already consumed — and lands back on the welcome card. The user, who had just finished authorizing in their browser, got half a second of "API key or Cinna Server?", and the local-development step that should have been on screen was lost with the unmount
-- **Every terminal step must call `onComplete`.** That is the contract the session created: the gate no longer ends first run on its own — it used to end the moment a provider appeared — so a terminal step that does not report finishing strands the user on this screen. Every existing exit satisfies it, checked rather than assumed: Save & start, Skip for now, each branch of the local-dev panel, and `idle` / `unsupported` / `declined` / already-answered through the grace timer
-- The gate is **purely renderer-side** for the two original paths: it composes the existing `provider:list`, `provider:test-key`, `provider:upsert`, `chatmode:upsert`, and `auth:register` IPCs. The two later steps do read main-process state — `connect:get-pending` for the link and `localdev:get-state` for the local-dev step — but neither adds a decision to the gate itself.
-- **Two questions are never asked at once.** `ConnectIntentModal` and `LocalDevConsentModal` are both mounted *inside* `OnboardingGate`, so they render only once first run is over — which is exactly when a modal, rather than an onboarding step, is the right surface for each question. Outside the gate, each modal and its corresponding step would show the same question simultaneously.
+- **First run is a session, not a derived boolean.** The gate takes the decision once and holds it; only the screen's own `onComplete` ends it. Re-deriving it each render was wrong on exactly the path that matters most: signing in calls `queryClient.resetQueries()`, so the providers query returns to loading, the gate renders its blank div and the onboarding screen **unmounts**. A Cinna account's managed providers arrive asynchronously, so a moment later it mounts again — freshly, with the deep link already consumed — and lands back on the welcome card. The user, who had just finished authorizing in their browser, got half a second of "API key or Cinna Server?"
+- **Every terminal step must call `onComplete`.** That is the contract the session created: the gate no longer ends first run on its own — it used to end the moment a provider appeared — so a terminal step that does not report finishing strands the user on this screen. Every existing exit satisfies it, checked rather than assumed: Save & start, Skip for now, a connected self-hosted account, and a connected or switched account on the confirm step
+- The gate is **purely renderer-side** for the two original paths: it composes the existing `provider:list`, `provider:test-key`, `provider:upsert`, `chatmode:upsert`, and `auth:register` IPCs. The confirm step does read main-process state — `connect:get-pending` for the link — but adds no decision to the gate itself.
+- **Two questions are never asked at once.** `ConnectIntentModal` is mounted *inside* `OnboardingGate`, so it renders only once first run is over — which is exactly when a modal, rather than the confirm step, is the right surface for a link. Outside the gate, the modal and the step would show the same intent simultaneously. `LocalDevConsentModal` sits beside it for a simpler reason: the only thing that opens it is the sidebar button, which lives in the shell.
 - The `cinna-confirm` step is unreachable by navigation. There is no button anywhere that leads to it; it exists only for an intent that arrived.
 - Detection uses **provider count, not user type** — Cinna users start with zero providers too (providers are default-scoped, see [Settings Scope](../../core/settings_scope/settings_scope.md)), so a freshly created Cinna user would re-trigger the gate. The dismissed flag prevents that re-prompt because it's set when the Cinna path completes.
 - A successful API-key path **attempts** to create a default chat mode but doesn't block on it. The provider is the load-bearing step; the chat mode is convenience and a failure is non-fatal.
@@ -139,20 +129,15 @@ AuthGate (App.tsx)
                      ├─ cinna-waiting   │  Cinna Server path
                      │   useRegister    →  auth:register {accountType:'cinna'}
                      │                      (switches activated user)
-                     └─ localdev        ──  LocalDevOnboardingStep
-                         useLocalDev    →  localdev:get-state / 'localdev:state'
-                         consent        →  localdev:consent
 ```
 
 Step reachability, since the union is no longer a single line:
 
 ```
-(intent) ──► cinna-confirm ──┬─ connected / switched ─┐
-                             └─ declined ─► welcome   │
-welcome ──┬─ provider-type ─► provider-key ─► (app)   │
-          └─ cinna-hosting ─► cinna-waiting ──────────┤
-                                                      ▼
-                                                  localdev ──► (app)
+(intent) ──► cinna-confirm ──┬─ connected / switched ─► (app)
+                             └─ declined ─► welcome
+welcome ──┬─ provider-type ─► provider-key ─► (app)
+          └─ cinna-hosting ─► cinna-waiting ─► (app)
 ```
 
 ## Integration Points
@@ -163,5 +148,5 @@ welcome ──┬─ provider-type ─► provider-key ─► (app)   │
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — API key path creates a default chat mode that the new-chat screen auto-applies
 - [App Shell](../../ui/app_shell/app_shell.md) — `OnboardingGate` sits inside `AuthGate` and short-circuits `Shell` rendering when active
 - [The `cinna://connect` Link](connect_link.md) — supplies the `cinna-confirm` step's intent, and owns everything about how the link reaches the app
-- [Local Development](../../agents/local_dev/local_dev.md) — owns the `localdev` step's state machine; onboarding only renders it
+- [Local Development](../../agents/local_dev/local_dev.md) — not asked during onboarding; its consent opens from the sidebar icon once the user is in the app. Only the confirm step's opt-in checkbox records an answer during first run
 - [Settings](../../ui/settings/settings.md) — the Development section hosts the "Enable onboarding on restart" toggle
