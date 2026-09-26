@@ -6,7 +6,7 @@ The sidebar's Chats list can be grouped by who each chat is with, by the day of 
 
 ## Core Concepts
 
-- **Group chats menu** — the list-icon button beside **+** in the Chats header, shown only while the pointer is on the header, the button has keyboard focus, or its menu is open (opacity only, so nothing shifts). Two independent switches, **Group by Agent** and **Group by Date**, each checked while on. Either, both or neither; neither is the flat list as it has always been. Both off is the default.
+- **Group chats menu** — the list-icon button beside **+** in the Chats header, shown only while the pointer is on the header, the button has keyboard focus, or its menu is open (opacity only, so nothing shifts). Two independent switches, **Group by Agent** and **Group by Date**, each checked while on. Either, both or neither; neither is one flat list. Both off is the default.
 - **Who group** — one per counterpart, the same counterpart the [row summary](../chat_row_summary/chat_row_summary.md)'s who line names:
   - an **agent** — its type icon and name;
   - a **chat mode** — a chat icon in the mode's colour and the mode's name;
@@ -45,20 +45,20 @@ The sidebar's Chats list can be grouped by who each chat is with, by the day of 
 
 - **Grouping reads what the summary resolved.** The who group comes from the chat row summary, resolved in main, because only main can tell a hidden chat-owned runtime from an agent the user chose. A plain chat bound to such a runtime sits under its **mode**, never under a group named after the runtime.
 - **A row does not wait for its summary.** A chat created a moment ago has no summary yet; it is grouped from the renderer's own agent and mode lists (still never by a chat-owned runtime), and dated by the row itself. Without that, a new chat would be missing from the grouped list until the next summary read.
-- **Who groups follow the list's own order.** The chats list is most recently updated first, and a group sits where its first chat does, so the most recent conversation's group leads. A group therefore moves when a background turn finishes in one of its chats — the same way a row does in the flat list.
-- **Days are local calendar days.** A chat at 23:50 is "Yesterday" at 00:10, and a daylight-saving day of 23 or 25 hours still counts as one. A last message dated after now (a clock moved back) is Today. Inside a day, chats are sorted by the same last-message time that placed them there; the flat order sorts by the row's update time and the two can disagree.
+- **Who groups are ordered by recency, never by a drag.** A group sits by its most recently updated chat, so the most recent conversation's group leads, and a group moves when a background turn finishes in one of its chats — the same way a row does in the flat list. A chat [dragged](../chat_list_order/chat_list_order.md) inside its group does not count: ordering groups by dragged places would move the group under the pointer on drop.
+- **Days are local calendar days.** A chat at 23:50 is "Yesterday" at 00:10, and a daylight-saving day of 23 or 25 hours still counts as one. A last message dated after now (a clock moved back) is Today. Inside a day, chats the user has not dragged are sorted by the same last-message time that placed them there; the flat order sorts by the row's update time and the two can disagree. A drag reorders inside a day and never changes which day a chat is in.
 - **Today rolls over by itself.** The list is re-read every second to follow running sessions, and the day boundaries are recomputed with each read, so a chat moves from Today to Yesterday at midnight without a restart.
 - **The start button appears only where a chat can start.** For an agent it follows the Agents list's chat shortcut: the agent must still be listed and enabled, and a folder agent's manifest must not be invalid. A deleted, disabled or invalid agent's group keeps its count and has no button — a button that opens a composer the agent cannot answer in is worse than none. A chat mode or the plain **Chat** group can always start.
 - **A pending agent pick beats a pending mode.** If both requests reach the new-chat screen together, the agent is selected and the mode request dropped; letting the mode run afterwards would clear the agents the pick had just selected. A mode deleted since the list was drawn is dropped too, without closing the chat that was open.
 - **Nothing shifts under the pointer.** The start button has a fixed slot of its own; it is always rendered (invisible until hover or focus), so it is reachable by Tab and showing it moves nothing.
-- **Revealing only opens.** A reveal expands the groups it needs and never collapses others; a chat that is not listed yet is found when the list is next read.
+- **Revealing only opens.** A reveal expands the groups it needs — only the Pinned block for a pinned chat — and never collapses others; a chat that is not listed yet is found when the list is next read.
 - **An open row summary closes when a group above it opens or closes**, because the row has moved; it is positioned once, on opening.
 - **Preferences are per machine, not per profile.** The two switches and the open/closed choices live in the renderer's local storage. Group keys carry agent and mode ids, so a key from another profile simply matches nothing. Keys of groups that no longer exist are not pruned.
 
 ### What it does not do
 
-- It does not filter or hide chats: every listed chat appears in exactly one group. Hidden chats (job runs) stay hidden as before.
-- It does not group by model, by job or by folder, and there is no manual ordering of groups — that is what [Job folders](../../jobs/jobs/jobs.md) are for.
+- It does not filter or hide chats: every listed chat appears in exactly one group, or in the Pinned block above them — pinned chats are never grouped. Hidden chats (job runs) stay hidden as before.
+- It does not group by model, by job or by folder, and there is no manual ordering of groups — that is what [Job folders](../../jobs/jobs/jobs.md) are for. Chats inside a group can be reordered by hand; that is [Chats List Order](../chat_list_order/chat_list_order.md).
 - It does not change what the row, its tooltip or its session status show.
 
 ## Architecture Overview
@@ -66,7 +66,8 @@ The sidebar's Chats list can be grouped by who each chat is with, by the day of 
 ```
 Group chats menu -> ui.store (chatGroupByAgent / chatGroupByDate, localStorage)
 ChatList -> chats (polled) + summaries (unpolled) + agents / modes (fallback)
-         -> groupChats() -> flat | who groups [-> day groups] | day groups
+         -> pinnedChats() -> Pinned block (never grouped)
+         -> groupChats() (unpinned) -> flat | who groups [-> day groups] | day groups
          -> ChatGroupHeader (collapse: ui.store.chatGroupCollapsed ?? chatGroupCollapsedByDefault)
                 -> start button -> pendingAgentId | pendingModeId
                 -> ChatWorkspace consumes the one-shot -> new-chat screen
@@ -76,6 +77,7 @@ revealChatId -> ChatList expands the chat's groups -> ChatItem scrolls and outli
 ## Integration Points
 
 - [Technical details](chat_list_grouping_tech.md) — keys, store fields, the pure grouping module and tests.
+- [Chats List Order](../chat_list_order/chat_list_order.md) — the Pinned block above the groups, dragging inside the innermost group, and the row menu.
 - [Chat Row Summary](../chat_row_summary/chat_row_summary.md) — supplies who each chat is with and its last message time; the header icon is the tooltip's who icon.
 - [Sidebar Session Status](../session_status/session_status.md) — the rows inside the groups, and the reveal request that opens them.
 - [Agents Tab & Agent Page](../../agents/local_agents/agents_tab.md) — the chat shortcut whose behaviour and availability the agent group's button copies.

@@ -29,7 +29,7 @@
 ### Renderer
 
 - `src/renderer/src/stores/chat.store.ts` — selected chat, run ID, projection version, baseline message IDs, streaming blocks, input requests and optimistic user message. A matching successful terminal read replaces the projection with persisted messages; see [live-run state](live_runs.md#implementation-and-ownership).
-- `src/renderer/src/hooks/useChat.ts` — useChatList, useChatDetail, useCreateChat, useDeleteChat, useUpdateChat, trash hooks, `useSetChatRouter` (moves a chat between routers; replaced `usePromoteToOrchestrated`). The old `useSendMessage`, which looked up an A2A session to decide where a message went, is gone — main resolves that now
+- `src/renderer/src/hooks/useChat.ts` — useChatList, useChatDetail, useCreateChat, useDeleteChat, useUpdateChat, the sidebar's `useRenameChat` / `useSetChatPinned` / `useMoveChat`, trash hooks, `useSetChatRouter` (moves a chat between routers; replaced `usePromoteToOrchestrated`). The old `useSendMessage`, which looked up an A2A session to decide where a message went, is gone — main resolves that now
 - `src/renderer/src/hooks/useChatStream.ts` — `startRun` issues `run.start`; `useRunEventHandler` projects events only. `src/renderer/src/hooks/useLiveRunWatch.ts` owns the selected-chat subscription, replay and guarded terminal settlement, mounted once by `MainArea`. See [Live Run Attachment and Replay](live_runs.md).
 - `src/renderer/src/hooks/useNewChatFlow.ts` — `useNewChatFlow()` — orchestrates "create chat → set provider/model/MCPs (or agent) → send first message"; exports `resolveModel()` helper for picking a model that exists for a provider. Optional `isCurrent` protects entry-page/account lifetime across awaits and uses the `useCreateChat` mutation with `{ select: false }` until preparation succeeds. Same-account orphan cleanup soft-deletes and refreshes Chats/Trash only after success; account switches skip cleanup. Ordinary unguarded callers keep immediate selection. See [build-entry lifecycle](../../agents/local_dev/build_sessions_tech.md#first-chat-lifecycle)
 - `src/renderer/src/hooks/useChatModes.ts` — `useDefaultChatMode()` — picks the user's default chat mode (the one with `isDefault: true`); replaces the removed `useDefaultProvider` hook
@@ -41,14 +41,14 @@
 - `src/renderer/src/components/chat/MessageStream.tsx` — Scrollable message list. Follows the bottom of a streaming reply only while the user has not scrolled away from it (`useStickToBottom`); an arriving chunk never pulls the view back. See [Transcript Scrolling](../conversation_ui/scroll_following.md)
 - `src/renderer/src/components/chat/MessageBubble.tsx` — User/assistant message with markdown, avatar, metadata popup
 - `src/renderer/src/components/chat/ToolCallBlock.tsx` — Animated collapsible tool call display: provider-first badge layout, spinner during pending, CSS grid expand/collapse animation, structured JSON input/result rendering with MCP content block unwrapping
-- `src/renderer/src/components/chat/ChatList.tsx` — Sidebar chat list
-- `src/renderer/src/components/chat/ChatItem.tsx` — Selectable chat row with running spinner/interrupt action or stopped unread-result/delete action; mutations stay in useChat hooks. [Sidebar status details](../session_status/session_status_tech.md)
+- `src/renderer/src/components/chat/ChatList.tsx` — Sidebar chat list: Pinned block, [grouping](../chat_list_grouping/chat_list_grouping_tech.md) and [drag order](../chat_list_order/chat_list_order_tech.md)
+- `src/renderer/src/components/chat/ChatItem.tsx` — Selectable chat row with running spinner/interrupt action or stopped unread-result/delete action, a right-click `ChatRowMenu`, inline rename and drag; mutations stay in useChat hooks. [Sidebar status details](../session_status/session_status_tech.md)
 
 ## Database Schema
 
 | Table | Purpose | Key columns |
 |-------|---------|-------------|
-| `chats` | Conversations | id, title, model_id, provider_id, created_at, updated_at |
+| `chats` | Conversations | id, title, model_id, provider_id, pinned_rank, sort_key, created_at, updated_at. `pinned_rank` / `sort_key` are the sidebar's Pinned place and dragged place, both nullable REAL; see [Chats List Order](../chat_list_order/chat_list_order_tech.md#database-schema) |
 | `chat_run_results` | Latest local sidebar outcome | chat_id (PK, cascade from chats), run_id (result identity), status, unread; [ownership and acknowledgement](../session_status/session_status_tech.md#database-schema) |
 | `messages` | Chat messages | id, chat_id, role (user\|assistant\|tool_call\|error\|agent_transition), content, tool_call_id, tool_name, tool_input (json), tool_calls (json), tool_error (boolean), tool_provider, parts (json — `MessagePart[]`, optional, set by A2A agents with `cinna.content_kind`-tagged parts), source_agent_id, sort_order. `agent_transition` rows hold agent-side system notices (e.g. startup pings) emitted as `cinna.content_kind: 'notice'` parts — never sent back to the LLM and excluded from history rebuilds |
 | `chat_mcp_providers` | Junction: MCP servers active per chat | chat_id, mcp_provider_id (composite PK) |
@@ -59,13 +59,14 @@ DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-d
 
 | Channel | Type | Purpose |
 |---------|------|---------|
-| `chat:list` | invoke | List visible chats (sorted by updatedAt desc), including activeRunId and lastRunResult |
+| `chat:list` | invoke | List visible chats (sorted by updatedAt desc; the sidebar re-sorts by pin and dragged place), including activeRunId and lastRunResult |
 | `chat:list-summaries` | invoke | Per-chat sidebar tooltip data keyed by chat id. Separate from `chat:list` because that is polled every second and this reads every message row of every listed chat. See [Chat Row Summary](../chat_row_summary/chat_row_summary_tech.md) |
 | `chat:get` | invoke | Get owned chat + saved messages, activeRunId and lastRunResult; does not acknowledge reading |
 | `chat:mark-result-read` | invoke | Mark the owned chat's matching result ID read; stale IDs cannot clear a newer result |
 | `chat:create` | invoke | Create new empty chat |
 | `chat:delete` | invoke | Soft-delete stopped chat; active work refuses with run_active until interrupted. Permanent deletion performs cascade cleanup |
 | `chat:update` | invoke | Update title, modelId, providerId |
+| `chat:rename` / `chat:set-pinned` / `chat:move` | invoke | The sidebar's rename, pin/unpin and drop; none bumps `updated_at`. See [Chats List Order](../chat_list_order/chat_list_order_tech.md#ipc-channels) |
 | `chat:add-message` | invoke | Add a message to a chat |
 | `chat:set-mcp-providers` | invoke | Set active MCP providers for a chat |
 | `chat:get-mcp-providers` | invoke | Get active MCP providers for a chat |
@@ -80,9 +81,9 @@ DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-d
 ## Services & Key Methods
 
 - `src/main/db/messages.ts` — `messageRepo`: centralized message persistence: `saveUser()`, `saveAssistant()` (accepts optional `parts: MessagePart[]` for A2A structured messages), `saveToolCall()`, `saveError()`, `touchChat()`, `insertRaw()`, `getById()`. Re-exports `MessagePart` from `src/shared/messageParts.ts`. Single source of truth for all message writes.
-- `src/main/db/chats.ts` — `chatRepo`: `getOwned()`, `list()`, `listMessages()`, `listTrash()`, `create()`, `softDelete()`, `restore()`, `permanentDelete()`, `emptyTrash()`, `update()`. All writes scoped by `userId`.
+- `src/main/db/chats.ts` — `chatRepo`: `getOwned()`, `list()`, `listMessages()`, `listTrash()`, `create()`, `softDelete()`, `restore()`, `permanentDelete()`, `emptyTrash()`, `update()`, and the sidebar's `rename()`, `pin()`, `unpin()`, `setPinnedRank()`, `setSortKey()`, which leave `updatedAt` alone. All writes scoped by `userId`.
 - `src/main/db/chatMcp.ts` — `chatMcpRepo`: `list()`, `listProviderIds()`, `replaceForChat()` (transactional).
-- `src/main/services/chatService.ts` — `chatService.list/get/create/delete/listTrash/restore/permanentDelete/emptyTrash/update/addMessage/setMcpProviders/getMcpProviders`. Throws `ChatError('not_found', ...)` for missing/unowned rows.
+- `src/main/services/chatService.ts` — `chatService.list/get/create/delete/listTrash/restore/permanentDelete/emptyTrash/update/rename/setPinned/move/addMessage/setMcpProviders/getMcpProviders`. Throws `ChatError('not_found', ...)` for missing/unowned rows.
 - `src/main/services/messageRoutingService.ts` — `prepareLlmSend({ userId, chatId, userContent, attachments? })` and `prepareAgentSend({ userId, chatId, agentId, userContent, attachments? })`. Each verifies ownership, persists the user row (agent path stamps `addressedAgentId`), and fires background title generation. Returns `{ wireContent, userMessageId }` where `wireContent === userContent`.
 - `src/main/services/runExecutionService.ts` dispatches every conversational turn to an agent driver; `src/main/services/conductorBridge.ts` serves runtime tools and `src/main/services/conductorTranscript.ts` handles replacement-session history. SDK adapter calls are limited to AI Functions.
 - `src/main/ipc/chat.ipc.ts` — Thin handlers: each `ipcHandle('chat:*', ...)` calls `userActivation.requireActivated()` then delegates to `chatService` with `getCurrentUserId()`.

@@ -44,7 +44,7 @@ Each joins `chats` on `listedChats` — owned by the user, not deleted, not hidd
 
 ### Data
 
-- `useChatSummaries` — query key `['chats', 'summaries']`, no `refetchInterval`. Sitting under the `['chats']` prefix is the refresh mechanism: every existing `invalidateQueries({ queryKey: ['chats'] })` (create, delete, title update, turn end in the open chat, show-in-list, …) refetches it too. The list's own optimistic writes in `useLiveRunWatch` and `useReadChatResult` use `exact: true` and `setQueryData(['chats'])`, so they neither cancel nor disturb it.
+- `useChatSummaries` — query key `['chats', 'summaries']`, no `refetchInterval`. Sitting under the `['chats']` prefix is the refresh mechanism: every existing `invalidateQueries({ queryKey: ['chats'] })` (create, delete, title update, turn end in the open chat, show-in-list, …) refetches it too. The list's own optimistic writes in `useLiveRunWatch` and `useReadChatResult` use `exact: true` and `setQueryData(['chats'])`, so they neither cancel nor disturb it. The sidebar rename, pin and drop do the same (`exact: true`): none changes anything a summary shows.
 - `ChatList` covers the one case no invalidation reaches. Only the open chat's turn end invalidates `['chats']`; a background turn ends silently and is noticed only by the polled list. A ref holds the set of chat ids with an `activeRunId` from the previous list result; when any id in it is absent from the current set, `['chats', 'summaries']` is invalidated — once per result however many rows ended, never on the first result, and not when a run starts.
 - `ChatList` passes each row `summary={summaries?.[chat.id]}` and its `index` — its position among the rows actually drawn, counted across [groups](../chat_list_grouping/chat_list_grouping_tech.md#renderer-components), so a group opening or closing above a row changes it.
 
@@ -59,7 +59,7 @@ Each joins `chats` on `listedChats` — owned by the user, not deleted, not hidd
   - Moving from the tooltip straight back onto the row fires neither the row's leave nor its enter (React treats the row as the common ancestor), so nothing would cancel the close timer. The tooltip's `onMouseLeave` ignores a `relatedTarget` inside the row.
 - Closes on row `mousedown`; on a capture-phase `window` `scroll` whose target contains the row (scroll does not bubble; a scroller that does not hold the row, such as the streaming transcript, is ignored); and on a change of `index`.
 - While shown: `aria-describedby` on the row points at the tooltip id, the row gets the hover background explicitly (the portaled tooltip is not a DOM child, so `:hover` ends on the way onto it), and the action button's `title` is withheld. `aria-label` on the button is untouched.
-- Rendered only when open, a summary exists and `usePopover` has produced a style.
+- Rendered only when open, a summary exists, `usePopover` has produced a style, and neither a row menu (its own, or another row's through `ChatsDragContext.menuOpen`) nor a drag is live; `mouseenter` does not open it during either. See [Chats List Order](../chat_list_order/chat_list_order_tech.md#chatitem).
 
 ### ChatItemTooltip
 
