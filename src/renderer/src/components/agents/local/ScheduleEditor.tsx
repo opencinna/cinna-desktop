@@ -3,7 +3,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 import { createPortal } from 'react-dom'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { HelpCircle, X } from 'lucide-react'
+import { HelpCircle, MessageSquareText, SquareTerminal, X } from 'lucide-react'
 import type { FileStamp } from '../../../../../shared/localAgents'
 import type { LocalScheduleItem } from '../../../../../shared/localSchedules'
 import type { LocalJobScheduleSnapshot } from '../../../../../shared/localJobSchedules'
@@ -16,16 +16,19 @@ import { documentMarkdownComponents } from '../../../utils/markdownComponents'
 import { SettingsInfoTip } from '../../settings/SettingsLayout'
 import { relativeTimeUntil, scheduleTime, useNow } from './scheduleClock'
 import cronCheatsheet from './cronCheatsheet.md?raw'
+import { TimezonePicker } from './TimezonePicker'
 
 export const scheduleButtonClass = 'shrink-0 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-[13px] font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50'
+// The page's primary button (Start chat): accent fill, a darker accent on hover, not the secondary grey.
+export const schedulePrimaryButtonClass = 'shrink-0 rounded-md border border-transparent bg-[var(--color-accent)] px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-[var(--color-accent-hover)] disabled:opacity-50'
 export const scheduleInputClass = 'block w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-[13px] text-[var(--color-text)] disabled:opacity-60'
-export const scheduleDialogClass = 'm-auto w-[54rem] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-5 text-[var(--color-text)] shadow-lg backdrop:bg-black/25'
+export const scheduleDialogClass = 'm-auto w-[32rem] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-5 text-[var(--color-text)] shadow-lg backdrop:bg-black/25'
 /**
  * The editor grows while the user works in it (badges wrap onto a new line),
  * so its top edge is pinned rather than centred: a centred dialog would move
  * its title and every field above the one being edited (ux_rules rule 1).
  */
-const scheduleEditorDialogClass = 'mx-auto mt-[10vh] mb-auto w-[54rem] max-w-[calc(100vw-2rem)] max-h-[calc(90vh-1rem)] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-5 text-[var(--color-text)] shadow-lg backdrop:bg-black/25'
+const scheduleEditorDialogClass = 'mx-auto mt-[10vh] mb-auto w-[38rem] max-w-[calc(100vw-2rem)] max-h-[calc(90vh-1rem)] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-5 text-[var(--color-text)] shadow-lg backdrop:bg-black/25'
 export const catchUpExplanation = 'Runs while Cinna is open and this profile is active. If scheduled times pass while Cinna is closed or asleep, it runs once when Cinna is available again.'
 const days = [{ value: 1, label: 'Mon' }, { value: 2, label: 'Tue' }, { value: 3, label: 'Wed' }, { value: 4, label: 'Thu' }, { value: 5, label: 'Fri' }, { value: 6, label: 'Sat' }, { value: 0, label: 'Sun' }]
 const hourLabel = (hour: number) => `${String(hour).padStart(2, '0')}:00`
@@ -81,7 +84,7 @@ export function BadgeMultiSelect({ legend, options, selected, onChange, addLabel
 const hourOptions: BadgeOption[] = Array.from({ length: 24 }, (_, hour) => ({ value: hour, label: hourLabel(hour) }))
 
 export function ScheduleDaysHours({ rule, onChange, disabled = false }: { rule: ScheduleRule; onChange(rule: ScheduleRule): void; disabled?: boolean }) {
-  return <div className="grid min-w-0 items-start gap-3 sm:grid-cols-2">
+  return <div className="grid min-w-0 gap-3">
     <BadgeMultiSelect legend="Days" options={days} selected={rule.weekdays} addLabel="Add day" disabled={disabled} onChange={(weekdays) => onChange({ ...rule, weekdays })} />
     <BadgeMultiSelect legend="Hours" options={hourOptions} selected={rule.hours} addLabel="Add hour" disabled={disabled} onChange={(hours) => onChange({ ...rule, hours })} />
   </div>
@@ -120,6 +123,19 @@ function initialTiming(item?: LocalScheduleItem): { choice: string; rule: Schedu
   return { choice: 'advanced', rule: template.rule, advanced: item.cron }
 }
 
+/**
+ * How a schedule's timing reads in a list: the template it was made from, the
+ * days and hours of a custom one, or the cron text of an advanced one. The same
+ * classification the editor opens with, so the list names the choice the user
+ * will see selected.
+ */
+export function scheduleTimingLabel(item: LocalScheduleItem): { label: string; detail?: string; mono?: boolean } {
+  const timing = initialTiming(item)
+  if (timing.choice === 'advanced') return { label: 'Cron', detail: item.cron, mono: true }
+  if (timing.choice === 'custom') return { label: 'Custom', detail: scheduleRuleSummary(timing.rule) }
+  return { label: SCHEDULE_TEMPLATES.find((entry) => entry.id === timing.choice)!.label }
+}
+
 type ScheduleEditorProps = {
   item?: LocalScheduleItem; onClose(): void; onSaved(warning?: string): void
 } & ({ target?: 'agent'; agentId: string; profileUserId: string; stamp: FileStamp }
@@ -133,10 +149,13 @@ export function ScheduleEditor(props: ScheduleEditorProps) {
   const dialog = useRef<HTMLDialogElement>(null)
   const cronHelp = useRef<HTMLButtonElement>(null)
   const cronId = useId()
+  const timezoneLabelId = useId()
   const pendingRef = useRef(false)
   const [pending, setPending] = useState(false)
   const [name, setName] = useState(item?.name ?? '')
   const [executionType, setExecutionType] = useState(item?.executionType ?? 'static_prompt')
+  // A new agent schedule starts with its type, picked on cards: it cannot change once created.
+  const [typeChosen, setTypeChosen] = useState(!!item || props.target === 'job')
   const [prompt, setPrompt] = useState(item?.prompt ?? '')
   const [command, setCommand] = useState(item?.command ?? '')
   const [timezone, setTimezone] = useState(item?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone)
@@ -228,9 +247,27 @@ export function ScheduleEditor(props: ScheduleEditorProps) {
   const incomplete = !cron.trim() || !timezone.trim()
   const nextText = incomplete ? 'Next scheduled time: —' : !current ? 'Checking the next scheduled time…'
     : current.errorText ?? `Next scheduled time: ${scheduleTime(current.nextDueAt, timezone)} · ${relativeTimeUntil(current.nextDueAt!, now)}`
-  const title = item ? 'Edit schedule' : 'New schedule'
+  const kind = isJob || !typeChosen ? '' : executionType === 'script_trigger' ? 'script ' : 'prompt '
+  const title = `${item ? 'Edit' : 'New'} ${kind}schedule`
   return <>{createPortal(<dialog ref={dialog} aria-label={title} className={scheduleEditorDialogClass}
     onCancel={(event) => { event.preventDefault(); if (!pendingRef.current) onClose() }}>
+    {!typeChosen ? <div className="min-w-0 space-y-4">
+      <h2 className="text-[16px] font-semibold">{title}</h2>
+      <div role="group" aria-label="Schedule type" className="grid grid-cols-2 gap-2">
+        {([
+          ['static_prompt', MessageSquareText, 'Prompt schedule', 'Starts an agent task with your prompt at the chosen times.'],
+          ['script_trigger', SquareTerminal, 'Script schedule', 'Runs a command in the agent’s folder; the agent starts only when the result needs it.']
+        ] as const).map(([value, Icon, label, sub], index) => (
+          <button key={value} type="button" autoFocus={index === 0} onClick={() => { setExecutionType(value); setTypeChosen(true) }}
+            className="flex flex-col items-start gap-1.5 rounded-lg border border-[var(--color-border)] p-3 text-left transition-colors hover:bg-[var(--color-bg-hover)]">
+            <Icon size={16} className="shrink-0 text-[var(--color-accent)]" />
+            <span className="text-[13px] font-medium text-[var(--color-text)]">{label}</span>
+            <span className="text-[12px] leading-relaxed text-[var(--color-text-muted)]">{sub}</span>
+          </button>
+        ))}
+      </div>
+      <div className="flex justify-end"><button type="button" className={scheduleButtonClass} onClick={onClose}>Cancel</button></div>
+    </div> :
     <form className="min-w-0 space-y-4" onSubmit={(event) => { event.preventDefault(); void submit() }}>
       <div className="flex items-center gap-1.5">
         <h2 className="text-[16px] font-semibold">{title}</h2>
@@ -240,29 +277,22 @@ export function ScheduleEditor(props: ScheduleEditorProps) {
         </SettingsInfoTip>
       </div>
       <fieldset disabled={pending} className="min-w-0 space-y-4">
-        <div className={isJob ? 'min-w-0' : 'grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]'}>
-          <label className="block min-w-0 space-y-1.5 text-[13px] font-medium">Name<input className={scheduleInputClass} value={name} onChange={(event) => setName(event.target.value)} autoFocus required /></label>
-          {!isJob && <label className="block min-w-0 space-y-1.5 text-[13px] font-medium">Execution type
-            <select className={scheduleInputClass} value={executionType} disabled={!!item} onChange={(event) => setExecutionType(event.target.value as typeof executionType)}>
-              <option value="static_prompt">Prompt scheduler</option><option value="script_trigger">Script scheduler</option>
-            </select>
-          </label>}
+        <div className="min-w-0">
+          <label className="block min-w-0 text-[13px] font-medium"><span className="mb-1.5 block">Name</span><input className={`${scheduleInputClass} h-9`} value={name} onChange={(event) => setName(event.target.value)} autoFocus required /></label>
         </div>
-        {!isJob && (executionType === 'static_prompt' ? <label className="block space-y-1.5 text-[13px] font-medium">Prompt
-          <textarea className={scheduleInputClass} rows={3} value={prompt} onChange={(event) => setPrompt(event.target.value)} required />
-        </label> : <label className="block space-y-1.5 text-[13px] font-medium">Command
-          <textarea className={`${scheduleInputClass} font-mono`} rows={3} value={command} onChange={(event) => setCommand(event.target.value)} placeholder="Shell command or /run:name" required />
+        {!isJob && (executionType === 'static_prompt' ? <label className="block min-w-0 text-[13px] font-medium"><span className="mb-1.5 block">Prompt</span><textarea className={scheduleInputClass} rows={3} value={prompt} onChange={(event) => setPrompt(event.target.value)} required />
+        </label> : <label className="block min-w-0 text-[13px] font-medium"><span className="mb-1.5 block">Command</span><textarea className={`${scheduleInputClass} font-mono`} rows={3} value={command} onChange={(event) => setCommand(event.target.value)} placeholder="Shell command or /run:name" required />
         </label>)}
-        <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_14rem]">
-          <label className="block min-w-0 space-y-1.5 text-[13px] font-medium">Schedule
-            <select className={scheduleInputClass} value={choice} onChange={(event) => changeChoice(event.target.value)}>
+        <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_15rem]">
+          <label className="block min-w-0 text-[13px] font-medium"><span className="mb-1.5 block">Schedule</span><select className={`${scheduleInputClass} h-9 py-0`} value={choice} onChange={(event) => changeChoice(event.target.value)}>
               {SCHEDULE_TEMPLATES.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
               <option value="custom">Custom</option><option value="advanced">CRON advanced</option>
             </select>
           </label>
-          <label className="block min-w-0 space-y-1.5 text-[13px] font-medium">Timezone
-            <input className={scheduleInputClass} value={timezone} onChange={(event) => setTimezone(event.target.value)} placeholder="Europe/Berlin" required />
-          </label>
+          <div className="min-w-0 text-[13px] font-medium">
+            <span id={timezoneLabelId} className="mb-1.5 block">Timezone</span>
+            <TimezonePicker value={timezone} onChange={setTimezone} labelledBy={timezoneLabelId} className={`${scheduleInputClass} h-9 py-0`} />
+          </div>
         </div>
         {choice === 'custom' && <ScheduleDaysHours rule={rule} onChange={setRule} />}
         {choice === 'advanced' && <div className="space-y-1.5">
@@ -283,11 +313,11 @@ export function ScheduleEditor(props: ScheduleEditorProps) {
         </div>
         {executionType === 'script_trigger' && <div className="text-[12px] text-[var(--color-text-secondary)]"><p className="mb-1 font-medium">Resolved command to review</p><pre className="h-24 overflow-auto whitespace-pre-wrap break-words rounded border border-[var(--color-border)] bg-[var(--color-bg)] p-2">{current?.resolvedCommand ?? 'Checking command…'}</pre></div>}
       </fieldset>
-      <div className="flex justify-end gap-2"><button type="button" className={scheduleButtonClass} disabled={pending} onClick={onClose}>Cancel</button>
-        <button type="submit" disabled={pending} className={`${scheduleButtonClass} bg-[var(--color-accent)] text-white`}>{pending ? 'Saving…' : item ? 'Save schedule' : 'Create schedule'}</button>
+      <div className="flex justify-end gap-2">{!item && !isJob && <button type="button" className={`${scheduleButtonClass} mr-auto`} disabled={pending} onClick={() => { setError(null); setTypeChosen(false) }}>Back</button>}<button type="button" className={scheduleButtonClass} disabled={pending} onClick={onClose}>Cancel</button>
+        <button type="submit" disabled={pending} className={schedulePrimaryButtonClass}>{pending ? 'Saving…' : item ? 'Save schedule' : 'Create schedule'}</button>
       </div>
       {error && <p role="alert" className="text-[13px] text-[var(--color-danger)]">{error}</p>}
-    </form>
+    </form>}
   </dialog>, document.body)}
   {cheatsheet && <CronCheatsheet onClose={() => { setCheatsheet(false); cronHelp.current?.focus() }} />}
   </>

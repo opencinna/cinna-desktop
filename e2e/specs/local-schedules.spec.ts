@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
+import type { Locator } from '@playwright/test'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import { installFakeAcpEngine } from '../fixtures/fakeAcpEngine'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
@@ -74,6 +75,19 @@ async function openSchedules(cinna: CinnaApp) {
 }
 function scheduleRow(cinna: CinnaApp) { return cinna.page.getByRole('article', { name: NAME, exact: true }) }
 async function list(cinna: CinnaApp, agentId: string) { return cinna.page.evaluate((id) => window.api.localSchedules.list(id), agentId) }
+/** A new agent schedule opens on the type chooser; pick a card and return the form. */
+async function chooseType(cinna: CinnaApp, type: 'Prompt schedule' | 'Script schedule') {
+  const chooser = cinna.page.getByRole('dialog', { name: 'New schedule', exact: true }).getByRole('group', { name: 'Schedule type', exact: true })
+  await chooser.getByRole('button', { name: new RegExp(`^${type}`) }).click()
+  return cinna.page.getByRole('dialog', { name: `New ${type.toLowerCase()}`, exact: true })
+}
+async function pickTimezone(editor: Locator, search: string, zone: string) {
+  await editor.getByRole('button', { name: 'Timezone', exact: true }).click()
+  await editor.getByRole('textbox', { name: 'Search timezones', exact: true }).fill(search)
+  await editor.getByRole('textbox', { name: 'Search timezones', exact: true }).press('Enter')
+  await expect(editor.getByRole('listbox', { name: 'Timezones', exact: true })).toHaveCount(0)
+  await expect(editor.getByRole('button', { name: 'Timezone', exact: true })).toContainText(zone)
+}
 function scheduleSwitch(cinna: CinnaApp, name = NAME) {
   return cinna.page.getByRole('article', { name, exact: true }).getByRole('switch', { name: `Run “${name}” on this device`, exact: true })
 }
@@ -217,9 +231,8 @@ test('the editor saves a quiet script and its edited non-OK result starts one ta
     const { agent, acp, manifestPath } = await arrange(cinna, fake.host)
     await openSchedules(cinna)
     await cinna.page.getByRole('button', { name: 'New schedule', exact: true }).click()
-    const editor = cinna.page.getByRole('dialog', { name: 'New schedule', exact: true })
+    const editor = await chooseType(cinna, 'Script schedule')
     await editor.getByRole('textbox', { name: 'Name', exact: true }).fill(scriptName)
-    await editor.getByRole('combobox', { name: 'Execution type', exact: true }).selectOption('script_trigger')
     await editor.getByRole('textbox', { name: 'Command', exact: true }).fill("printf ' OK\\n'; printf retained-warning >&2")
     await editor.getByRole('combobox', { name: 'Schedule', exact: true }).selectOption('custom')
     const hours = editor.getByRole('group', { name: 'Hours', exact: true })
@@ -236,7 +249,16 @@ test('the editor saves a quiet script and its edited non-OK result starts one ta
     await cinna.page.setViewportSize(normalViewport)
     await editor.getByRole('combobox', { name: 'Schedule', exact: true }).selectOption('advanced')
     await editor.getByRole('textbox', { name: 'Cron expression', exact: true }).fill('* * * * *')
-    await editor.getByRole('textbox', { name: 'Timezone', exact: true }).fill('UTC')
+    await test.step('the timezone picker opens over the editor and Escape closes only it', async () => {
+      await editor.getByRole('button', { name: 'Timezone', exact: true }).click()
+      const zones = editor.getByRole('listbox', { name: 'Timezones', exact: true })
+      await expect(zones.getByRole('option', { selected: true })).toBeVisible()
+      await cinna.page.screenshot({ path: '/tmp/cinna-schedule-timezone-wide.png' })
+      await cinna.page.keyboard.press('Escape')
+      await expect(zones).toHaveCount(0)
+      await expect(editor).toBeVisible()
+    })
+    await pickTimezone(editor, 'UTC', 'UTC')
     await test.step('the cron cheatsheet opens over the editor and Escape closes only it', async () => {
       await editor.getByRole('button', { name: 'Cron expression help', exact: true }).click()
       const sheet = cinna.page.getByRole('dialog', { name: 'Cron expression help', exact: true })
@@ -275,8 +297,12 @@ test('the editor saves a quiet script and its edited non-OK result starts one ta
     await cinna.page.screenshot({ path: '/tmp/cinna-schedule-quiet-history.png' })
     await row.getByRole('button', { name: `Actions for ${scriptName}`, exact: true }).click()
     await cinna.page.getByRole('menuitem', { name: 'Edit schedule', exact: true }).click()
-    const edit = cinna.page.getByRole('dialog', { name: 'Edit schedule', exact: true })
+    const edit = cinna.page.getByRole('dialog', { name: 'Edit script schedule', exact: true })
     await expect(edit.getByRole('textbox', { name: 'Cron expression', exact: true })).toHaveValue('* * * * *')
+    // The type is fixed once created: no type control, no chooser, no Back.
+    await expect(edit.getByRole('combobox', { name: 'Execution type', exact: true })).toHaveCount(0)
+    await expect(edit.getByRole('group', { name: 'Schedule type', exact: true })).toHaveCount(0)
+    await expect(edit.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0)
     await edit.getByRole('textbox', { name: 'Command', exact: true }).fill('printf inspect-this-result; printf diagnostic-context >&2; exit 9')
     await expect(edit).toContainText('Next scheduled time:')
     await edit.getByRole('button', { name: 'Save schedule', exact: true }).click()
@@ -312,9 +338,13 @@ test('the narrow schedule editor keeps the custom days and hours and reviewed co
     await openSchedules(cinna)
     await cinna.page.setViewportSize({ width: 800, height: 800 })
     await cinna.page.getByRole('button', { name: 'New schedule', exact: true }).click()
-    const editor = cinna.page.getByRole('dialog', { name: 'New schedule', exact: true })
+    const cards = cinna.page.getByRole('group', { name: 'Schedule type', exact: true }).getByRole('button')
+    await expect(cards).toHaveCount(2)
+    const heights = await cards.evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height))
+    expect(heights[0], 'the two type cards are the same height').toBe(heights[1])
+    await cinna.page.screenshot({ path: '/tmp/cinna-schedule-chooser-800.png' })
+    const editor = await chooseType(cinna, 'Script schedule')
     await editor.getByRole('textbox', { name: 'Name', exact: true }).fill('Narrow script preview')
-    await editor.getByRole('combobox', { name: 'Execution type', exact: true }).selectOption('script_trigger')
     await editor.getByRole('textbox', { name: 'Command', exact: true }).fill('printf OK')
     await editor.getByRole('combobox', { name: 'Schedule', exact: true }).selectOption('custom')
     const hours = editor.getByRole('group', { name: 'Hours', exact: true })
@@ -339,6 +369,16 @@ test('the narrow schedule editor keeps the custom days and hours and reviewed co
       await expect(editor).toBeVisible()
     })
     await cinna.page.screenshot({ path: '/tmp/cinna-schedule-custom-editor-800.png' })
+    const scheduleBox = (await editor.getByRole('combobox', { name: 'Schedule', exact: true }).boundingBox())!
+    const timezoneBox = (await editor.getByRole('button', { name: 'Timezone', exact: true }).boundingBox())!
+    expect(timezoneBox.y, 'Schedule and Timezone share a top edge').toBeCloseTo(scheduleBox.y, 0)
+    expect(timezoneBox.height, 'and a bottom edge').toBeCloseTo(scheduleBox.height, 0)
+    await editor.getByRole('button', { name: 'Timezone', exact: true }).click()
+    await editor.getByRole('textbox', { name: 'Search timezones', exact: true }).fill('gmt+9')
+    await expect(editor.getByRole('option', { name: /Tokyo/ })).toBeVisible()
+    await cinna.page.screenshot({ path: '/tmp/cinna-schedule-timezone-800.png' })
+    await cinna.page.keyboard.press('Escape')
+    await expect(editor).toBeVisible()
     const save = editor.getByRole('button', { name: 'Create schedule', exact: true })
     await save.scrollIntoViewIfNeeded()
     await expect(save).toBeVisible()
@@ -367,10 +407,11 @@ test('a local Job schedule starts the source Job task with its page closed and t
     await schedules.getByRole('button', { name: 'New schedule', exact: true }).click()
     const editor = cinna.page.getByRole('dialog', { name: 'New schedule', exact: true })
     await editor.getByRole('textbox', { name: 'Name', exact: true }).fill(scheduleName)
-    await expect(editor.getByRole('combobox', { name: 'Execution type', exact: true })).toHaveCount(0)
+    await expect(editor.getByRole('group', { name: 'Schedule type', exact: true })).toHaveCount(0)
+    await expect(editor.getByRole('textbox', { name: 'Command', exact: true })).toHaveCount(0)
     await editor.getByRole('combobox', { name: 'Schedule', exact: true }).selectOption('advanced')
     await editor.getByRole('textbox', { name: 'Cron expression', exact: true }).fill('* * * * *')
-    await editor.getByRole('textbox', { name: 'Timezone', exact: true }).fill('UTC')
+    await pickTimezone(editor, 'UTC', 'UTC')
     // The editor does not repeat the Job the user is already on.
     await expect(editor.getByRole('textbox', { name: 'Job prompt', exact: true })).toHaveCount(0)
     await expect(editor).toContainText('Next scheduled time:')

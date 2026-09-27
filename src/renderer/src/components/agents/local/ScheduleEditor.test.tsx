@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { ScheduleDaysHours, ScheduleEditor } from './ScheduleEditor'
+import { ScheduleDaysHours, ScheduleEditor, scheduleTimingLabel } from './ScheduleEditor'
+import { SCHEDULE_TEMPLATES, scheduleRuleSummary } from '../../../../../shared/scheduleTemplates'
 import type { LocalScheduleItem } from '../../../../../shared/localSchedules'
 
 const save = vi.fn()
@@ -13,8 +14,11 @@ const item = (overrides: Partial<LocalScheduleItem> = {}): LocalScheduleItem => 
   profileUserId: 'profile', name: 'Morning', cron: '15 */2 1,15 2-11 1-5', timezone: 'Europe/Berlin',
   executionType: 'static_prompt', prompt: 'Check everything', revision: 'review-token', problem: null, binding: null, ...overrides
 })
-function editor(existing?: LocalScheduleItem) {
-  return render(<ScheduleEditor agentId="agent" profileUserId="profile" stamp={stamp} item={existing} onSaved={saved} onClose={close} />)
+/** A new agent schedule opens on the type chooser; `type` picks a card, `null` stays there. */
+function editor(existing?: LocalScheduleItem, type: 'Prompt schedule' | 'Script schedule' | null = 'Prompt schedule') {
+  const result = render(<ScheduleEditor agentId="agent" profileUserId="profile" stamp={stamp} item={existing} onSaved={saved} onClose={close} />)
+  if (!existing && type) fireEvent.click(within(screen.getByRole('group', { name: 'Schedule type' })).getByRole('button', { name: new RegExp(`^${type}`) }))
+  return result
 }
 function fillNew() {
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Daily check' } })
@@ -91,7 +95,7 @@ describe('custom timing', () => {
   it('allows every fieldset to shrink so nothing widens the dialog', () => {
     editor()
     fireEvent.change(screen.getByLabelText('Schedule'), { target: { value: 'custom' } })
-    const dialog = screen.getByRole('dialog', { name: 'New schedule' })
+    const dialog = screen.getByRole('dialog', { name: 'New prompt schedule' })
     // Fieldset defaults to min-inline-size:min-content in Chromium.
     for (const fieldset of dialog.querySelectorAll('fieldset')) expect(fieldset.classList.contains('min-w-0')).toBe(true)
   })
@@ -135,14 +139,14 @@ describe('the editor itself', () => {
 
   it('pins the editor’s top edge so content growing below moves nothing above it', () => {
     editor()
-    const dialog = screen.getByRole('dialog', { name: 'New schedule' })
+    const dialog = screen.getByRole('dialog', { name: 'New prompt schedule' })
     expect(dialog.className).not.toContain('m-auto')
     expect(dialog.className).toContain('mb-auto')
   })
 
   it('keeps the standing explanation behind the (?) beside the title', () => {
     editor()
-    const dialog = screen.getByRole('dialog', { name: 'New schedule' })
+    const dialog = screen.getByRole('dialog', { name: 'New prompt schedule' })
     expect(dialog.textContent).not.toContain('runs once when Cinna is available again')
     expect(within(dialog).queryByLabelText('Enable on this device')).toBeNull()
     fireEvent.click(within(dialog).getByRole('button', { name: 'How schedules run' }))
@@ -158,12 +162,30 @@ describe('the editor itself', () => {
     expect(within(sheet).getAllByRole('table').length).toBeGreaterThan(0)
     fireEvent(sheet, new Event('cancel', { cancelable: true }))
     expect(screen.queryByRole('dialog', { name: 'Cron expression help' })).toBeNull()
-    expect(screen.getByRole('dialog', { name: 'Edit schedule' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'Edit prompt schedule' })).toBeTruthy()
     expect(close).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Cron expression help' }))
     fireEvent.click(within(screen.getByRole('dialog', { name: 'Cron expression help' })).getByRole('button', { name: 'Close' }))
     expect(screen.queryByRole('dialog', { name: 'Cron expression help' })).toBeNull()
     expect(close).not.toHaveBeenCalled()
+  })
+
+  it('saves the zone picked in the timezone picker, and Escape in the picker leaves the editor open', async () => {
+    editor(); fillNew()
+    fireEvent.click(screen.getByRole('button', { name: 'Timezone' }))
+    const search = screen.getByRole('textbox', { name: 'Search timezones' })
+    // The list renders inside the modal editor, or it would sit behind it.
+    expect(screen.getByRole('dialog', { name: 'New prompt schedule' }).contains(search)).toBe(true)
+    expect(fireEvent.keyDown(search, { key: 'Escape' })).toBe(false)
+    expect(screen.getByRole('dialog', { name: 'New prompt schedule' })).toBeTruthy()
+    expect(close).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Timezone' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search timezones' }), { target: { value: 'tokyo' } })
+    fireEvent.click(screen.getByRole('option', { name: /Tokyo/ }))
+    await waitFor(() => expect(preview).toHaveBeenLastCalledWith(expect.objectContaining({ timezone: 'Asia/Tokyo' })))
+    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
+    await waitFor(() => expect(save).toHaveBeenCalled())
+    expect(save.mock.calls[0][0]).toMatchObject({ timezone: 'Asia/Tokyo' })
   })
 
   it('creates a new schedule enabled', async () => {
@@ -185,7 +207,11 @@ describe('advanced rules and reviewed saves', () => {
   it('round trips an existing advanced expression exactly, preserving minutes, dates, months, and steps', async () => {
     editor(item())
     expect((screen.getByLabelText('Schedule') as HTMLSelectElement).value).toBe('advanced')
-    expect((screen.getByLabelText('Execution type') as HTMLSelectElement).disabled).toBe(true)
+    // The type is fixed once created: an edit names it in the title and offers no control for it.
+    expect(screen.getByRole('dialog', { name: 'Edit prompt schedule' })).toBeTruthy()
+    expect(screen.queryByLabelText('Execution type')).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Schedule type' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
     await waitFor(() => expect(save).toHaveBeenCalled())
     expect(save.mock.calls[0][0]).toMatchObject({ originalName: 'Morning', revision: 'review-token', expectedStamp: stamp, cron: '15 */2 1,15 2-11 1-5', editorMetadata: { mode: 'advanced' }, enabled: false })
@@ -221,7 +247,7 @@ describe('advanced rules and reviewed saves', () => {
     editor(); fillNew()
     fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('The manifest changed'))
-    expect(screen.getByRole('dialog', { name: 'New schedule' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'New prompt schedule' })).toBeTruthy()
     expect((screen.getByLabelText('Prompt') as HTMLTextAreaElement).value).toBe('Check the reports')
     expect(save.mock.calls[0][0]).toMatchObject({ enabled: true, cron: '0 8 * * 1,2,3,4,5' })
     expect(close).not.toHaveBeenCalled()
@@ -229,14 +255,83 @@ describe('advanced rules and reviewed saves', () => {
 
   it('reviews resolved catalog commands and sends the command revision with the enabled save', async () => {
     preview.mockResolvedValue({ nextDueAt: Date.UTC(2026, 8, 23, 6), resolvedCommand: 'node scripts/check.js', commandRevision: 'resolved-revision' })
-    editor()
+    editor(undefined, 'Script schedule')
+    expect(screen.getByRole('dialog', { name: 'New script schedule' })).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Check inbox' } })
-    fireEvent.change(screen.getByLabelText('Execution type'), { target: { value: 'script_trigger' } })
     fireEvent.change(screen.getByLabelText('Command'), { target: { value: '/run:check' } })
     await screen.findByText('node scripts/check.js')
     fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
     await waitFor(() => expect(save).toHaveBeenCalled())
     expect(save.mock.calls[0][0]).toMatchObject({ command: '/run:check', commandRevision: 'resolved-revision', executionType: 'script_trigger', enabled: true })
     expect(preview).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: 'agent', profileUserId: 'profile', command: '/run:check' }))
+  })
+})
+
+describe('the schedule type chooser', () => {
+  it('opens a new agent schedule on two cards, and a card opens the form with its title', () => {
+    editor(undefined, null)
+    const chooser = screen.getByRole('group', { name: 'Schedule type' })
+    expect(within(chooser).getAllByRole('button').map((button) => button.textContent?.split(/Starts|Runs/)[0])).toEqual(['Prompt schedule', 'Script schedule'])
+    expect(screen.queryByLabelText('Name')).toBeNull()
+    fireEvent.click(within(chooser).getByRole('button', { name: /^Script schedule/ }))
+    expect(screen.getByRole('dialog', { name: 'New script schedule' })).toBeTruthy()
+    expect(screen.getByLabelText('Command')).toBeTruthy()
+    expect(screen.queryByLabelText('Prompt')).toBeNull()
+  })
+
+  it('goes back to the chooser from the form, and Cancel on the chooser closes', () => {
+    editor()
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Kept' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.getByRole('group', { name: 'Schedule type' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'New schedule' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /^Script schedule/ }))
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Kept')
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(close).toHaveBeenCalled()
+  })
+
+  it('saves the type of the card that was picked', async () => {
+    editor(undefined, 'Script schedule')
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Prompt schedule/ }))
+    fillNew()
+    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
+    await waitFor(() => expect(save).toHaveBeenCalled())
+    expect(save.mock.calls[0][0]).toMatchObject({ executionType: 'static_prompt', prompt: 'Check the reports' })
+  })
+
+  it('names a script schedule by its type when editing it', () => {
+    editor(item({ executionType: 'script_trigger', command: 'check' }))
+    expect(screen.getByRole('dialog', { name: 'Edit script schedule' })).toBeTruthy()
+    expect(screen.getByLabelText('Command')).toBeTruthy()
+  })
+
+  it('has no chooser for a Job schedule, whose title names no type', () => {
+    render(<ScheduleEditor target="job" snapshot={{ profileUserId: 'profile', jobId: 'job', jobTitle: 'Job', jobPrompt: 'p', jobSummary: 's', jobRevision: 'r', items: [] }} onSaved={saved} onClose={close} />)
+    expect(screen.queryByRole('group', { name: 'Schedule type' })).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'New schedule' })).toBeTruthy()
+    expect(screen.getByLabelText('Name')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull()
+  })
+})
+
+describe('scheduleTimingLabel', () => {
+  it('names the template a schedule was made from', () => {
+    expect(scheduleTimingLabel(item({ cron: '0 8 * * 1-5', editorMetadata: { mode: 'template', templateId: 'workday-morning', templateVersion: 1, weekdays: [1, 2, 3, 4, 5], hours: [8] } })))
+      .toEqual({ label: SCHEDULE_TEMPLATES.find((entry) => entry.id === 'workday-morning')!.label })
+  })
+
+  it('lists the days and hours of a custom schedule, and of a template whose rule no longer matches', () => {
+    expect(scheduleTimingLabel(item({ cron: '0 8 * * 1,3', editorMetadata: { mode: 'custom', weekdays: [1, 3], hours: [8] } })))
+      .toEqual({ label: 'Custom', detail: scheduleRuleSummary({ weekdays: [1, 3], hours: [8] }) })
+    expect(scheduleTimingLabel(item({ cron: '0 7 * * 1-5', editorMetadata: { mode: 'template', templateId: 'workday-morning', templateVersion: 1, weekdays: [1, 2, 3, 4, 5], hours: [7] } })))
+      .toEqual({ label: 'Custom', detail: scheduleRuleSummary({ weekdays: [1, 2, 3, 4, 5], hours: [7] }) })
+  })
+
+  it('shows the cron text of an advanced schedule, and of one whose stored days and hours are stale', () => {
+    expect(scheduleTimingLabel(item())).toEqual({ label: 'Cron', detail: '15 */2 1,15 2-11 1-5', mono: true })
+    expect(scheduleTimingLabel(item({ editorMetadata: { mode: 'custom', weekdays: [1], hours: [8] } }))).toEqual({ label: 'Cron', detail: '15 */2 1,15 2-11 1-5', mono: true })
   })
 })

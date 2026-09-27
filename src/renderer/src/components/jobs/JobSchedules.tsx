@@ -9,7 +9,7 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { SettingsInfoTip, SettingsSection } from '../settings/SettingsLayout'
 import { ScheduleEditor, catchUpExplanation, scheduleButtonClass, scheduleDialogClass } from '../agents/local/ScheduleEditor'
 import { ScheduleHistory, scheduleStatusLabels, scheduleTime } from '../agents/local/ScheduleHistory'
-import { ScheduleActions, ScheduleNextLine, ScheduleSwitch, scheduleRowVersion } from '../agents/local/SchedulesTab'
+import { ScheduleActions, ScheduleNextLine, ScheduleSwitch, ScheduleTimingLine, scheduleRowVersion } from '../agents/local/SchedulesTab'
 import { useNow } from '../agents/local/scheduleClock'
 
 function DeleteJobSchedule({ item, pending, error, onClose, onDelete }: { item: LocalScheduleItem; pending: boolean; error: string | null; onClose(): void; onDelete(): void }) {
@@ -90,7 +90,7 @@ function JobSchedulesContent({ jobId, profileUserId }: { jobId: string; profileU
       {!query.isPending && !query.error && query.data?.items.length === 0 && <p className="text-[13px] text-[var(--color-text-muted)]">No schedules yet. Choose when this Job should start a task.</p>}
       {query.data?.items.map((item) => <article key={item.binding?.id ?? item.name} aria-label={item.name} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0"><h3 className="break-words text-[14px] font-medium">{item.name}</h3><p className="mt-1 break-words font-mono text-[12px] text-[var(--color-text-secondary)]">{item.cron} · {item.timezone}</p></div>
+          <div className="min-w-0"><h3 className="break-words text-[14px] font-medium">{item.name}</h3><ScheduleTimingLine item={item} /></div>
           <div className="flex items-center gap-3">
             {/* A Job-changed problem does not block turning it on: enabling
                 records the Job as it is now, which is what the list shows. */}

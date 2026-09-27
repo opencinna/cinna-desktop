@@ -10,7 +10,7 @@ import { unwrapIpcError } from '../../../utils/ipcError'
 import { SettingsInfoTip, SettingsSection } from '../../settings/SettingsLayout'
 import { usePopover } from '../../ui/usePopover'
 import { MENU_ITEM, MENU_SURFACE } from './OpenInMenu'
-import { ScheduleEditor, catchUpExplanation, scheduleButtonClass as buttonClass, scheduleDialogClass } from './ScheduleEditor'
+import { ScheduleEditor, catchUpExplanation, scheduleButtonClass as buttonClass, scheduleDialogClass, scheduleTimingLabel } from './ScheduleEditor'
 import { ScheduleHistory, scheduleStatusLabels, scheduleTime } from './ScheduleHistory'
 import { relativeTimeUntil, useNow } from './scheduleClock'
 
@@ -26,6 +26,14 @@ export function ScheduleSwitch({ item, checked, disabled, onToggle }: { item: Lo
     className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${checked ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}>
     <div className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'left-[18px]' : 'left-0.5'}`} />
   </button>
+}
+
+/** The card's timing line: template, custom days and hours, or cron, then the zone. The raw cron is the tooltip. */
+export function ScheduleTimingLine({ item }: { item: LocalScheduleItem }) {
+  const timing = scheduleTimingLabel(item)
+  return <p title={`${item.cron} · ${item.timezone}`} className="mt-1 break-words text-[12px] text-[var(--color-text-secondary)]">
+    {timing.label}{timing.detail && <> · <span className={timing.mono ? 'font-mono' : undefined}>{timing.detail}</span></>} · {item.timezone}
+  </p>
 }
 
 /**
@@ -129,7 +137,7 @@ function SchedulesContent({ agentId, profileUserId }: { agentId: string; profile
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h3 className="break-words text-[14px] font-medium">{item.name}</h3>
-            <p className="mt-1 break-words font-mono text-[12px] text-[var(--color-text-secondary)]">{item.cron} · {item.timezone}</p>
+            <ScheduleTimingLine item={item} />
           </div>
           <div className="flex items-center gap-3">
             <ScheduleSwitch item={item} checked={!!item.binding?.enabled} onToggle={() => void toggle(item)}

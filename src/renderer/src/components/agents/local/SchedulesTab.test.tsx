@@ -30,7 +30,7 @@ it('opens editing through row actions and preserves the stamped review snapshot'
   view()
   fireEvent.click(await screen.findByRole('button', { name: 'Actions for Check reports' }))
   fireEvent.click(screen.getByRole('menuitem', { name: 'Edit schedule' }))
-  const dialog = screen.getByRole('dialog', { name: 'Edit schedule' })
+  const dialog = screen.getByRole('dialog', { name: 'Edit prompt schedule' })
   fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Renamed report' } })
   fireEvent.click(within(dialog).getByRole('button', { name: 'Save schedule' }))
   await screen.findByRole('alert')
