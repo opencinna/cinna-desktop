@@ -269,7 +269,7 @@ export function JobDetail(): React.JSX.Element {
                 <nav
                   role="tablist"
                   aria-label="Job details"
-                  className="flex gap-1 overflow-x-auto border-b border-[var(--color-border)]"
+                  className="flex gap-1 overflow-x-auto shadow-[inset_0_-1px_0_var(--color-border)]"
                 >
                   {(['prompt', 'schedules'] as const).map((id) => {
                     const active = id === tab
@@ -280,7 +280,7 @@ export function JobDetail(): React.JSX.Element {
                         role="tab"
                         aria-selected={active}
                         onClick={() => setTab(id)}
-                        className={`-mb-px border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
+                        className={`border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
                           active
                             ? 'border-[var(--color-accent)] text-[var(--color-text)]'
                             : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
