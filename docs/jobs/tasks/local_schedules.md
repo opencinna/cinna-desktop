@@ -8,25 +8,33 @@ Local scheduling does not install an operating-system service. Agent schedule de
 
 ## Schedule a local Job
 
-Open a local Job and add a schedule in its **Schedules** section. Name the schedule,
-choose the same workday presets, custom weekdays/hours, or advanced cron described
-below, and review the timezone and next run. The schedule starts the saved Job's
-work: its prompt, routing, attached agents, tools, mode, script, and execution
-limits remain the Job's configuration. There is no second prompt or command to
-maintain in the timing form.
+Open a local Job and choose its **Schedules** tab (beside **Prompt**; the tab
+shows how many schedules the Job has). Use **New schedule**, name it, and choose
+the same workday presets, custom days/hours, or advanced cron described below.
+The editor holds only the timing: the schedule starts the saved Job's work, and
+its prompt, routing, attached agents, tools, mode, script, and execution limits
+remain the Job's configuration. The editor does not repeat the Job's prompt,
+summary, or script — they are on the Job page under it (the Prompt tab and the
+Details panel), and a second copy in the form is a second thing to read before
+every save.
 
-Review the Job's execution configuration before enabling. Each due occurrence
-creates a new task and run under that same Job, visible in its ordinary task
-history as well as the schedule's execution history. The main process starts it
-even when the Job page and conversation are closed. Normal tasks, explicit
-coordinator Jobs, and script Jobs keep their existing execution behavior and
-controls; Cinna Task Jobs do not expose this local schedule control.
+Each due occurrence creates a new task and run under that same Job, visible in
+its ordinary task history as well as the schedule's execution history. The main
+process starts it even when the Job page and conversation are closed. Normal
+tasks, explicit coordinator Jobs, and script Jobs keep their existing execution
+behavior and controls; Cinna Task Jobs have no Schedules tab — their page shows
+the prompt alone.
 
-Changes to the Job's reviewed execution definition or attached agents/tools
-suspend its schedules until reviewed again. A stale timing form cannot authorize
-a different Job definition. Creating, editing, or re-enabling a schedule starts
-strictly in the future. Imported or synced Job definitions carry no local timing
-rule or scheduling permission.
+A schedule is tied to the Job as it was when the schedule was turned on. When the
+Job's execution definition or attached agents/tools change, its schedules turn
+off and the list says why ("The Job changed since this schedule was turned on.
+Turn it on again to use the Job as it is now."). Turning the switch back on
+records the Job as the page now shows it. A stale list cannot turn a schedule on
+for a Job it has not seen: the switch sends the Job revision the list was read
+at, and main refuses with "The Job changed a moment ago. Try again." if it moved.
+Creating, editing, or turning a schedule on starts strictly in the future.
+Imported or synced Job definitions carry no local timing rule or scheduling
+permission.
 
 All schedules attached to a Job share its overlap protection. Any unfinished
 manual or scheduled run—including waiting questions, interruption, and stopping
@@ -53,17 +61,25 @@ Choose one of these timing options:
 | Custom | Every selected whole hour on every selected weekday | Compiled from the selections |
 | CRON advanced | The entered five-field numeric rule | The entered rule |
 
-Workdays do not include a public-holiday calendar. Custom presents Monday–Sunday and all 24 hours in two rows of 12. Select at least one day and one hour. There is no per-day timetable or minute picker in Custom. Advanced retains minutes, month/day constraints, and steps when a schedule is reopened.
+Workdays do not include a public-holiday calendar. Custom shows the chosen days and hours as badges, each with its own × to remove it, and an **Add day** / **Add hour** picker at the end offering the rest. Badges stay in Monday–Sunday and clock order whatever order they were picked in. Select at least one day and one hour. There is no per-day timetable or minute picker in Custom. Advanced retains minutes, month/day constraints, and steps when a schedule is reopened; the (?) beside **Cron expression** opens a cron reference (fields, syntax, examples, and the day-of-month/weekday OR rule) over the editor, and Escape closes the reference without closing the editor.
 
-Check the timing summary, timezone, next scheduled time, and exact prompt or command before saving. The timezone defaults to the current system timezone and is saved explicitly; changing the computer's timezone later does not move existing schedules. Presets copy their timing into the schedule, so future changes to a template do not change saved schedules.
+The schedule and its timezone sit on one row. Under them the form shows the timing summary with the zone, and the next scheduled time with how far away it is ("in 8 hours 32 minutes", "in 3 days 4 hours"). While the rule or timezone is incomplete that line reads "Next scheduled time: —" rather than a check that never finishes. A script scheduler also shows the resolved command. How schedules run — catch-up, the future-only first run, overlap, and the per-type limits — is behind the (?) beside the editor's title. The timezone defaults to the current system timezone and is saved explicitly; changing the computer's timezone later does not move existing schedules. Presets copy their timing into the schedule, so future changes to a template do not change saved schedules.
 
-Saving with execution enabled reviews the definition in that form. Imported or externally changed definitions require **Review and enable**. A save conflict keeps the form's edits. If the manifest was saved but local enablement could not finish, the saved definition needs review before execution.
+The editor has no enable control. A new schedule is created on (**Create schedule**). Saving an edit (**Save schedule**) keeps the state the list's switch shows: an enabled schedule stays on, one that is off stays off, and one that was turned off because it or its Job changed is saved off with that reason cleared — the switch is where it is turned back on. A save conflict keeps the form's edits. If the manifest was saved but the schedule could not be turned on, the list says "Saved, but not turned on." with the reason, and the schedule stays off until its switch is used.
 
-A schedule that shows a problem — an invalid cron, a missing command, a duplicate name — can still be opened, saved, and deleted from the editor, because the editor is how the problem gets fixed. It cannot be enabled until the problem is gone.
+A schedule that shows a problem — an invalid cron, a missing command, a duplicate name — can still be opened, saved, and deleted from the editor, because the editor is how the problem gets fixed. Its switch cannot be turned on until the problem is gone.
 
-Enabling is a device choice, not part of the definition. The editor never writes an `enabled` field into `cinna-agent.json`. If the agent's author set `enabled: false` on an entry, the editor keeps that value and the entry stays editable. Saving it with the enable toggle off updates it without a warning. Saving it with the toggle on saves the definition and warns that it cannot be enabled, because the author's `false` takes precedence over this device's opt-in. Only the author can lift it, by changing the manifest.
+Running on this device is a device choice, not part of the definition. The editor never writes an `enabled` field into `cinna-agent.json`. If the agent's author set `enabled: false` on an entry, the editor keeps that value and the entry stays editable. Saving it while it is off updates it without a warning. Saving it while it is on saves the definition and warns that it was not turned on, because the author's `false` takes precedence over this device's opt-in. Only the author can lift it, by changing the manifest.
 
-Each enablement is tied to the exact definition it reviewed. A prompt schedule runs through a generated Job, and that Job is reused only while the definition is unchanged. If you save an edit with the schedule disabled and enable it later, Cinna generates a fresh Job for the new definition. It never re-enables the Job built for the old definition. Earlier generated Jobs remain in the schedule's history and overlap checks.
+Each opt-in is tied to the exact definition it was turned on for. A prompt schedule runs through a generated Job, and that Job is reused only while the definition is unchanged. If you save an edit while the schedule is off and turn it on later, Cinna generates a fresh Job for the new definition. It never re-enables the Job built for the old definition. Earlier generated Jobs remain in the schedule's history and overlap checks.
+
+## Schedule lists
+
+The agent's **Schedules** tab and the Job's **Schedules** tab list schedules the same way. Each card has the name, the cron and timezone, an on/off switch, and a ⋯ menu with **Edit schedule**, **Execution history**, and **Delete schedule…**. Under it: the reason when there is one (a problem, or why the schedule was turned off), then one line that is always present — "Next scheduled time: … · in 2 hours" when on, "Off on this device" when off — so flipping the switch moves nothing below the card, then the latest run.
+
+The switch acts at once; there is no confirmation dialog. The editor already showed the timing and the instructions, and the card shows the timing, so turning a schedule on is not a second review of the same thing. A refused switch shows its error in that card only while the card still looks as it did when the action failed; once a poll brings a different state, the stale error goes. On an agent a schedule with a problem cannot be switched on; on a Job a "Job changed" reason does not block the switch, because turning it on records the Job as it is now.
+
+Lists have no Refresh button. They re-read whenever the tab is opened, and every five seconds while open, so what the scheduler did since is always on screen.
 
 ## Execution and history
 
@@ -83,11 +99,11 @@ A script runs with the agent's command environment and folder lock, with a five-
 
 Truncated stdout cannot qualify as exact `OK`. Command output passed to the follow-up task is identified as execution output. A script's follow-up uses the same agent and normal task controls. A running command has Stop in its history even when no task exists.
 
-**Disable** prevents future occurrences without stopping admitted work. Deleting a definition also prevents new admission; existing work retains its history and ordinary Stop/recovery lifecycle. Renaming a schedule in the editor preserves its history. Renaming it outside Cinna creates a new, unreviewed declaration.
+Turning a schedule off prevents future occurrences without stopping admitted work. Deleting a definition also prevents new admission; existing work retains its history and ordinary Stop/recovery lifecycle. Renaming a schedule in the editor preserves its history. Renaming it outside Cinna creates a new declaration, off on this device.
 
 ## Catch-up and overlap
 
-Enabling or re-enabling a schedule, or reviewing a changed execution definition, starts its timing strictly after the current time. Disabled periods and time before first enablement do not create overdue work. Upgrading from the former scheduler also starts a future baseline, without turning old downtime into owed executions.
+Turning a schedule on, including after its definition or Job changed, starts its timing strictly after the current time. Disabled periods and time before first enablement do not create overdue work. Upgrading from the former scheduler also starts a future baseline, without turning old downtime into owed executions.
 
 After a later interruption, the oldest due instant represents all eligible times through recovery:
 
@@ -98,7 +114,7 @@ After a later interruption, the oldest due instant represents all eligible times
 
 Each overdue schedule is considered separately. Running work, saved questions, stopping, interrupted work, or an unfinished manual/historical run of its source or generated Job prevents overlap. A blocked due period records one skip and advances to a future time; completion does not release a backlog. An admitted error consumes its occurrence, so repeated startup, focus, and resume events do not retry it.
 
-Unavailable folders leave one overdue schedule pending. Changed, removed, or invalid definitions suspend future execution for review. A crash after admission can require explicit task recovery, but never silently repeats an uncertain command. Durable records prevent duplicate admission; they cannot guarantee exactly-once effects in external systems.
+Unavailable folders leave one overdue schedule pending. Changed, removed, or invalid definitions turn the schedule off with a reason; the switch turns it back on for the definition as it is now. A crash after admission can require explicit task recovery, but never silently repeats an uncertain command. Durable records prevent duplicate admission; they cannot guarantee exactly-once effects in external systems.
 
 ## Definition and consent rules
 
@@ -106,12 +122,12 @@ Unavailable folders leave one overdue schedule pending. Changed, removed, or inv
 - `cinna-agent.json` owns the named `schedules[]` definitions. Names are unique, trimmed, and 1–255 characters. Prompt schedules require a nonblank literal prompt of at most 64,000 characters, without a hidden entrypoint fallback.
 - Cron has five numeric fields: minute, hour, day of month, month, weekday. Numbers, wildcards, lists, ranges, positive steps, and Sunday 0/7 are supported. Restricted day-of-month and weekday fields use OR. Seconds, weekday names, macros, and Quartz modifiers are unsupported; impossible rules are rejected.
 - Spring-forward times that do not exist are skipped. A repeated fall-back civil minute runs once. Clock rollback cannot repeat admitted work; a forward jump can create one catch-up.
-- Consent binds the actual profile, reviewed definition, saved timezone, and resolved catalog command. Editing a catalog entry requires review; ordinary script file contents remain the agent's code. Generated Jobs cannot be silently replaced after deletion or editing.
+- Consent — the switch being on — binds the actual profile, the definition it was turned on for, the saved timezone, and the resolved catalog command. Editing a catalog entry turns the schedule off; ordinary script file contents remain the agent's code. Generated Jobs cannot be silently replaced after deletion or editing.
 - Bindings, due cursors, editor metadata, and execution receipts do not sync. Importing a definition, syncing a generated Job, or enabling an agent never authorizes scheduling on another device.
 
 ## Integration points
 
-- [Technical details](local_schedules_tech.md) — durable admission, storage, and review checks.
+- [Technical details](local_schedules_tech.md) — durable admission, storage, and revision checks.
 - [Script execution](script_execution.md), [Jobs](../jobs/jobs.md), and [Inbox](inbox.md) — agent work and human continuation.
 - [Agent page](../../agents/local_agents/agents_tab.md) and [kit contract](../../agents/local_agents/kit_contract.md) — definition ownership.
 - [Resource activation](../../core/resource_activation/resource_activation.md) — profile lifetime and readiness.

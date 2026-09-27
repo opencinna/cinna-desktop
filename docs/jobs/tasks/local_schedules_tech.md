@@ -12,25 +12,49 @@ Key implementation areas:
 - `src/main/db/localSchedules.ts`, `schema.ts`, and migrations: profile-local bindings and receipts.
 - `src/main/services/localAgents/localAgentService.ts` and `commandService.ts`: stamped manifest edits, catalog resolution, and structured subprocess execution.
 - `src/main/services/jobExecution/scheduled.ts`, `scriptRuntimeService.ts`, and `coordinatorJobService.ts`: transaction-safe Job preparation and post-commit dispatch.
-- `src/main/ipc/localSchedule.ipc.ts`, `src/preload/index.ts`, `src/renderer/src/components/agents/local/SchedulesTab.tsx`, and `src/renderer/src/components/jobs/JobSchedules.tsx`: scoped editor, enablement, history, and Stop surfaces.
+- `src/main/ipc/localSchedule.ipc.ts`, `src/preload/index.ts`, `src/renderer/src/components/agents/local/SchedulesTab.tsx`, and `src/renderer/src/components/jobs/JobSchedules.tsx`: scoped lists with the on/off switch, history, and Stop surfaces. `SchedulesTab.tsx` exports the pieces both lists share (`ScheduleSwitch`, `ScheduleNextLine`, `scheduleRowVersion`, `ScheduleActions`); `JobSchedules.tsx` also exports `useJobScheduleCount` for the Job page's tab badge.
+- `src/renderer/src/components/agents/local/ScheduleEditor.tsx` (the one editor for both targets, with `BadgeMultiSelect` and the cron reference dialog), `cronCheatsheet.md` (the reference text, imported with `?raw` and rendered as markdown), `scheduleClock.ts` (`scheduleTime`, `relativeTimeUntil`, `useNow`), and `ScheduleHistory.tsx`.
+- `src/renderer/src/components/jobs/JobDetail.tsx`: the **Prompt | Schedules** tabs on a schedulable Job.
 
 ## Timing authority and editor
 
 Built-in `ScheduleTemplate` records have stable IDs, versions, labels, and structured weekday/hour rules. `workday-morning` is `0 8 * * 1-5`; `workday-hourly` is `0 9-18 * * 1-5`, including 18:00. Custom and Advanced are form modes, not templates. Shared/main logic validates unique sorted numeric day/hour sets and compiles Custom as minute zero across all selected combinations.
 
-The effective cron and explicit canonical IANA timezone determine execution. Optional editor metadata stays device-local; template updates cannot change saved definitions. Metadata that disagrees with an externally changed cron is discarded. Existing definitions without metadata remain valid, and rules that cannot be represented by the checkbox editor reopen in Advanced. Switching away from advanced text must make replacement explicit and retain the unsaved advanced value within the form.
+The effective cron and explicit canonical IANA timezone determine execution. Optional editor metadata stays device-local; template updates cannot change saved definitions. Metadata that disagrees with an externally changed cron is discarded. Existing definitions without metadata remain valid, and rules that cannot be represented by the days/hours editor reopen in Advanced. Switching away from advanced text must make replacement explicit and retain the unsaved advanced value within the form.
 
-The form shows the execution definition, timezone, timing summary, next occurrence, and single-catch-up behavior. Saving an enabled definition serves as review; imported and external changes use the separate review flow. Execution type is immutable after creation.
+The form shows the agent schedule's prompt or command (a Job schedule's editor has neither: the Job page behind it shows the Job), the schedule and timezone on one row, the timing summary, the next occurrence, and a script's resolved command. Catch-up and per-type limits sit in a `SettingsInfoTip` beside the title. Execution type is immutable after creation.
+
+The editor has no enable control; `enabled` is derived, not state. A new schedule is `true`; an edit sends `item.binding?.enabled ?? false`, the value the list's switch shows. Main already reports a binding held back by a reason as `enabled: false` (`binding.enabled && !reason` in `rowsFor`, `row.enabled && !problem` in `jobScheduleService.list`), so editing such a schedule saves it off and `save` writes `reason: null`. That is deliberate: a save must not turn a schedule on that the user has not seen go on. The submit button reads **Create schedule** or **Save schedule**; the save warning reads "Saved, but not turned on."
+
+The next-time line is "Next scheduled time: <time in the zone> · <relativeTimeUntil>", "Next scheduled time: —" while cron or timezone is blank (the preview effect never fires then, so "Checking…" would never resolve), and the preview's error text on failure. `relativeTimeUntil` names the two largest units and drops a zero second unit ("in 3 days", never "in 3 days 0 hours" or a jump to minutes), says "now" within the minute just past and "overdue" beyond it. `useNow` re-reads the clock every 30 seconds so the suffix stays current in an open editor or list.
+
+Custom days and hours are two `BadgeMultiSelect`s side by side: chosen values as badges with a × each, and a `<select>` offering the rest. Values are re-sorted into the options' order on every change, so the saved rule does not depend on pick order. A × ignores `event.detail > 1`: the next badge slides under the pointer, and the second click of a double click would remove a value nobody aimed at. After a removal, focus moves to the × now in that place, else the one before, else the picker — never `<body>`.
+
+The editor `<dialog>` is pinned to `mt-[10vh]` rather than centred, because it grows while the user works (badges wrap, the advanced field appears) and a centred dialog would move its title and every field above the one being edited (ux_rules rule 1). The cron reference is a second modal `<dialog>` portaled to `<body>`; its `onCancel` calls `preventDefault` and `stopPropagation`, because React bubbles the cancel through the component tree into the editor's own `onCancel`, and Escape would otherwise close both. Closing it returns focus to the (?) that opened it.
+
+## Schedule lists and the switch
+
+`SchedulesTab` (agent) and `JobSchedulesContent` (Job) render the same card: name, cron and timezone, `ScheduleSwitch` (`role="switch"`, labelled "Run “<name>” on this device"), `ScheduleActions`, then the reason line only when there is one, `ScheduleNextLine`, and the latest run. `ScheduleNextLine` is rendered in both states ("Next scheduled time: … · in …" or "Off on this device"), so the switch never adds or removes a line below it.
+
+The switch calls the API directly; there is no enable dialog. Agent: on → `localSchedules.enable({ profileUserId, agentId, name, revision, timezone })`, off → `localSchedules.disable(binding.id)`; it is disabled while the row has a `problem` or no `revision`, which `enable` would refuse anyway. A successful turn-on clears a standing "Saved, but not turned on" warning, which no longer holds. Job: on → `jobSchedules.enable` with `jobRevision` from the list's own snapshot, so the Job revision recorded is the one the user is looking at; main compares it and refuses "The Job changed a moment ago. Try again." if the Job moved. A Job-changed `problem` does not disable the Job switch — turning it on is how the schedule adopts the current Job — whereas an agent `problem` does.
+
+A switch error is stored with `scheduleRowVersion(item)` (revision, problem, enabled, reason) and shown only while the row still has that version. The lists poll every five seconds; without the check, a later poll that brings a new reason line would leave the earlier error under it, describing a state the card no longer shows.
+
+Both list queries use `refetchInterval: 5000` and `refetchOnMount: 'always'`, and neither has a Refresh button: opening the tab must show what the scheduler did since, not a cached list from a few seconds ago. `useJobScheduleCount` reads the same `['job-schedules', profileUserId, jobId]` key for the Job page's tab badge, with no poll of its own (the list polls while it is on screen) and `enabled` false for a Job that cannot be scheduled.
+
+The Job page's tab state lives in `JobDetail` above its early returns, so the chosen tab survives moving from Job to Job, as the agent page's tabs do (ux_rules rule 2). A Job for which `canScheduleJob(job.type)` is false gets no tabs, only its **Prompt** section.
+
+The editor and the cards put explanation in `SettingsInfoTip`. Inside a modal `<dialog>` the tip portals into `triggerRef.current.closest('dialog')` rather than `<body>` — a modal dialog is in the top layer and makes the rest of the document inert, so a tip on `<body>` would render behind it — and its Escape handler calls `preventDefault`, so Escape closes the tip and not the dialog.
 
 ## Manifest edits and review
 
 All mutations capture the active profile/settings scope in main and validate the caller's profile and stale-write/review tokens. The renderer does not authorize execution or write files. Folder edits use the existing per-agent editor lock, expected file stamp, validation, atomic replacement, and preservation of unrelated/unknown fields.
 
-Filesystem and SQLite changes cannot be one transaction. Save the stamped manifest first, reread and validate the resulting definition, then update local consent. A failed binding update leaves the definition saved but requiring review; the old reviewed revision cannot admit new work. A stale editor must not overwrite external edits. An in-app rename moves the existing binding, receipts, and historical Job overlap set. An external rename is a removed declaration plus a new unreviewed declaration.
+Filesystem and SQLite changes cannot be one transaction. Save the stamped manifest first, reread and validate the resulting definition, then update local consent. A failed binding update leaves the definition saved but off; the old revision cannot admit new work. A stale editor must not overwrite external edits. An in-app rename moves the existing binding, receipts, and historical Job overlap set. An external rename is a removed declaration plus a new declaration with no binding (off on this device).
 
 `localScheduleService.save`/`delete` compare the caller's `revision` against the row's current one, including `null`. A row with a `problem` has a null revision, so the editor can still save or delete it. Rejecting those rows would leave the problem unfixable in the one place built to fix it. `enable` still refuses any row that has a problem or no revision.
 
-The manifest's `enabled` field is the author's portable intent; device opt-in lives only in the binding. `save` builds the entry from the original, keeping any existing `enabled` value exactly, and never adds one. It validates the form with `enabled` masked, so an author-disabled entry stays editable. After the write, a disabled save masks `enabled` again and updates the binding without a warning. An enabled save re-reads the entry unmasked, so `definitionFor` refuses it with "This schedule is disabled in the manifest". The caller gets the usual "Saved; enablement needs review" warning.
+The manifest's `enabled` field is the author's portable intent; device opt-in lives only in the binding. `save` builds the entry from the original, keeping any existing `enabled` value exactly, and never adds one. It validates the form with `enabled` masked, so an author-disabled entry stays editable. After the write, a disabled save masks `enabled` again and updates the binding without a warning. An enabled save re-reads the entry unmasked, so `definitionFor` refuses it with "This schedule is disabled in the manifest". The caller gets the usual "Saved, but not turned on" warning.
 
 A generated Job belongs to one reviewed revision. `save` and `enable` reuse `binding.jobId` only when `prior.revision` equals the revision being saved or reviewed, and the Job's fingerprint still matches. Otherwise an enabling prompt schedule creates a fresh Job. A disabled save carries no Job forward (`jobId: ''`), so a later `enable` generates one for the definition it reviews. `jobIds` keeps every earlier Job for history and overlap.
 
@@ -42,7 +66,7 @@ Bindings retain profile, manifest identity, schedule name, reviewed definition/r
 
 Receipts retain the captured definition/revision, original due civil key and UTC instant, observation/coverage time, scheduled versus catch-up trigger, actual start/finish times, lifecycle status, structured command outcome, and any task/run/chat links. Lifecycle and result are distinct: storing a command result or linking a follow-up task is not equivalent to completing that task. Receipt references survive deletion of task/run/chat evidence. Bindings and receipts cascade with their profile and never enter sync.
 
-The idempotent migration preserves old reviewed prompt definitions, history, generated Jobs, historical overlap, and enablement. Old bindings receive a next-due baseline strictly after migration time, preventing retroactive catch-up for downtime the old scheduler deliberately skipped. It never enables disabled or previously unsupported declarations.
+The idempotent migration preserves old prompt definitions, history, generated Jobs, historical overlap, and enablement. Old bindings receive a next-due baseline strictly after migration time, preventing retroactive catch-up for downtime the old scheduler deliberately skipped. It never enables disabled or previously unsupported declarations. An enabled binding it cannot carry forward (a script schedule, or a definition whose next time cannot be computed) is turned off with the stored reason "Review this schedule after upgrading." — that string is persisted in existing databases and shown as the card's reason; the switch turns such a schedule back on like any other.
 
 Polls use enabled/profile/due indexes and bounded unfinished-work predicates. Ordinary lists fetch latest receipts; history is paginated. Terminal history must not be deserialized on each tick.
 
@@ -50,7 +74,7 @@ Polls use enabled/profile/due indexes and bounded unfinished-work predicates. Or
 
 One scheduler handles startup/profile activation, aligned minute ticks, focus, and resume. Scope/generation invalidation remains authoritative after asynchronous boundaries. Stopping or switching profiles cancels/interrupts tracked execution and stops new admission; it does not disable consent or reset the due cursor.
 
-1. Capture scope, generation, and observation time; validate the live definition and binding revision. Unreadable/transiently unavailable folders retain their pending due time; confirmed changed or removed definitions suspend admission for review.
+1. Capture scope, generation, and observation time; validate the live definition and binding revision. Unreadable/transiently unavailable folders retain their pending due time; confirmed changed or removed definitions turn the binding off with a reason (only the scheduler pass persists that; a list read reports it without writing).
 2. Reconcile unfinished receipts from durable task/run evidence and active reservations. Unknown or interrupted work requires explicit recovery and counts for overlap.
 3. If the stored next-due instant is after the observation, do nothing. Otherwise consider one occurrence for that stored instant, covering eligible times through the observation.
 4. In one SQLite transaction, compare-and-claim the binding cursor/revision, insert the receipt, prepare a prompt Job attempt if needed, and advance next due strictly beyond the observation. Overlap inserts one skipped receipt and consumes the same covered period. Never iterate from old due times to enqueue a historical replay.
@@ -59,7 +83,7 @@ One scheduler handles startup/profile activation, aligned minute ticks, focus, a
 
 Preparation failure rolls back partial task writes. A separate transaction records the failed observation and advances its cursor together; if this cannot commit, launch nothing. Lost processes after committed admission become interrupted work rather than unclaimed due events. This is durable deduplication, not exactly-once external execution.
 
-Every admitted failure consumes the occurrence. Re-enable or a reviewed execution-definition change establishes a future-only baseline. Disabled intervals are not due. Later due times during unfinished work are skipped rather than queued; completion never drains a backlog. Distinct overdue schedules each get at most one catch-up.
+Every admitted failure consumes the occurrence. Turning a schedule on, or saving a changed definition while it is on, establishes a future-only baseline. Disabled intervals are not due. Later due times during unfinished work are skipped rather than queued; completion never drains a backlog. Distinct overdue schedules each get at most one catch-up.
 
 ## Script execution and follow-up
 
@@ -90,7 +114,7 @@ Spring-forward civil gaps have no occurrence. Repeated fall-back minutes share a
 
 ## Validation
 
-Focused coverage belongs in cron/timing, schedule service/scheduler, command, migration, and script-runtime tests. Use injected clocks and lifecycle triggers for deterministic multi-day catch-up, enablement baselines, exact-minute/weekend recovery, concurrency, crash stages, overlap, profile changes, catalog edits, output truncation, and DST cases. Renderer coverage verifies the two rows of twelve hour controls and advanced-rule round-trip. The built-app schedule flow exercises editor save, quiet script history without a chat, and non-OK follow-up through ordinary task navigation.
+Focused coverage belongs in cron/timing, schedule service/scheduler, command, migration, and script-runtime tests. Use injected clocks and lifecycle triggers for deterministic multi-day catch-up, enablement baselines, exact-minute/weekend recovery, concurrency, crash stages, overlap, profile changes, catalog edits, output truncation, and DST cases. Renderer coverage verifies the day/hour badges (order, add, remove, double-click, focus), the next-time line and its relative suffix, the pinned dialog, the cron reference's Escape, create-on and edit-keeps-state, the list switch in both directions, the stale-error rule, refetch on mount, the Job page tabs, and advanced-rule round-trip. The built-app schedule flow exercises editor save, quiet script history without a chat, and non-OK follow-up through ordinary task navigation.
 
 Kit schema descriptions are generated from Core's kit source through `make kit-sync`; do not hand-edit the bundle or its tree hash. The existing bundled schema already accepts both schedule types and all fields used by the editor, so this desktop feature requires no schema or contract-version change. The scheduling guidance in the bundle comes from Core's kit source (Core commit `b06af0da`), re-bundled with `make kit-sync` and pinned in `scripts/kit-sync/contract.lock.json`. Contract bundle/conformance tests verify compatibility. Test inventory is not a claim that every validation pass has run; record actual commands and results with the change.
 
@@ -103,7 +127,7 @@ scheduling. Agent and Job bindings have distinct ownership identities in the
 shared local schedule tables; agent listing/admission must never treat a Job
 binding as a manifest declaration.
 
-The reviewed Job revision includes its execution fields and dependency
+The Job revision a schedule records includes its execution fields and dependency
 attachments, not only a Job timestamp: prompt, mode, router/script/budget,
 attached agent IDs, attached MCP IDs, and portable dependency evidence all affect
 what can execute. Normalize attachment ordering for fingerprints. Re-read and
@@ -112,7 +136,7 @@ preparation boundary. A changed/deleted source Job cannot execute under stale
 consent. Unavailable dependencies must preserve ordinary execution refusal
 rather than silently falling back to a different participant.
 
-Job schedule CRUD uses validated profile, source Job, and binding/review revision
+Job schedule CRUD uses validated profile, source Job, and binding revision
 tokens. It requires no manifest filesystem write. The rule, timezone, editor
 metadata, consent, next due instant, cursor revision, and receipts remain in
 SQLite and outside Job definition sync. Deleting a timing rule stops future

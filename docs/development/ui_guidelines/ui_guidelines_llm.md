@@ -72,7 +72,7 @@ Build a new tab from `src/renderer/src/components/settings/SettingsLayout.tsx`, 
 | `SettingsSection` | `<section>` + uppercase muted title + optional section-wide `action`, wrapping `space-y-3` |
 | `SettingsCard` | One setting: `rounded-lg border bg-[var(--color-bg)] p-4` |
 | `SettingsRows` / `SettingsRow` | A card holding like rows, `divide-y`; `insetDividers` adds 16 px group insets and removes child horizontal padding. Features and Agents Runtime/Tasks use it; root lists retain full-width dividers |
-| `SettingsLabel` / `SettingsInfoTip` | A control's label, with its explanation behind the (?) beside it (`info` prop; tip named `About <label>`, and a non-string label must pass `infoLabel`) |
+| `SettingsLabel` / `SettingsInfoTip` | A control's label, with its explanation behind the (?) beside it (`info` prop; tip named `About <label>`, and a non-string label must pass `infoLabel`). `SettingsInfoTip` also works inside a modal `<dialog>`: it portals into the enclosing dialog, since one portaled to `<body>` would render behind the top layer, and its Escape closes the tip without closing the dialog |
 | `SettingsToggleRow` | One line in a `SettingsRows` list: label, (?) tip and switch. `id` is required so the label names the switch |
 | `SettingsHint` | One line of live value under a label (a path, what a choice resolves to) — never standing prose |
 | `SettingsStatusRow` | A prerequisite as a dot + line + the one button that fixes it |

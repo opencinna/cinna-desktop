@@ -270,4 +270,4 @@ Not covered, and why:
 
 ## Schedules tab
 
-LocalAgentPage mounts SchedulesTab only for kit agents. It remounts review/query state by profile and agent; five-second reads do not replace an open review. Main owns consent, definition checks and dispatch. See [Local schedules](../../jobs/tasks/local_schedules_tech.md) for the IPC and lifecycle contract. Bare agents retain four tabs and no schedule authoring source.
+LocalAgentPage mounts SchedulesTab only for kit agents. It remounts its query and editor state by profile and agent. The list refetches on every mount and every five seconds, with no Refresh button; each schedule has an on/off switch that enables or disables it directly, and **New schedule** / Edit open the shared `ScheduleEditor`. Main owns consent, definition checks and dispatch. See [Local schedules](../../jobs/tasks/local_schedules_tech.md) for the IPC and lifecycle contract. Bare agents retain four tabs and no schedule authoring source.

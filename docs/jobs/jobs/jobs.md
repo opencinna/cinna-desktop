@@ -10,7 +10,7 @@ Let users save reusable units of work (title + description + prompt + execution 
   - **Local Job** — Runs against the user's local agents / chat mode / MCPs. A job can attach **any number of agents** plus MCPs (`job_agents` + `job_mcp_providers` join tables); at run time `newChatRouter(agentIds, mcpIds)` — the same helper the new-chat composer uses (`src/shared/chatRouting.ts`) — picks the spawned chat's router: one agent and no MCPs binds that agent (`direct`), several agents make a chat the user routes by hand (`human`), and agents mixed with MCP servers need the local model to coordinate (see [Chat Routing](../../chat/chat_routing/chat_routing.md) and [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md)). Each run spawns a new chat seeded with the job's prompt; the existing chat pipeline drives the conversation.
   - **Cinna Task Job** — Only available on Cinna-linked profiles. Each run creates a local task and hands it to the profile’s available remote adapter. The conversation lives on the service; the desktop keeps the task and its binding, with `cinnaTaskId` + `cinnaShortCode` retained on the run for its existing views.
 - **Autonomous job definition** — A programmatically authored local job can store an explicit script/coordinator router, script and budget. Run admits these definitions in main; the current form has no script or autonomous-definition editor. See [Script Definitions](../tasks/script_definitions.md).
-- **Job schedule** — A device/profile-local timing rule on an existing local Job. Reviewed recurring occurrences create ordinary tasks and runs under that same Job, even when its page is closed. Job definition or agent/tool attachment changes require review again. Manual runs and every schedule for the source Job share overlap protection. See [Local schedules](../tasks/local_schedules.md).
+- **Job schedule** — A device/profile-local timing rule on an existing local Job. Recurring occurrences create ordinary tasks and runs under that same Job, even when its page is closed. A change to the Job's definition or agent/tool attachments turns its schedules off until their switch is turned on again. Manual runs and every schedule for the source Job share overlap protection. See [Local schedules](../tasks/local_schedules.md).
 - **Agent-generated Job** — A kit agent schedule creates a one-step script Job for its prompt or a non-OK script result. These generated Job definitions may sync; device-local scheduling consent does not. Their manual runs and historical generated Jobs participate in the owning agent schedule's overlap checks.
 - **Job Run** — One execution of a job, with status `pending → running → succeeded | failed | cancelled`. Every new run links its durable task. The run keeps its original local/chat or remote/service provenance even if the task later changes executor. Refresh follows the current task binding; origin still determines historical conversation links and deletion disclosures. Active legacy remote runs without a task are adopted while the window is visible; the job page has no manual refresh, so terminal legacy history keeps what it recorded. A run whose task is gone — a legacy run that never had one, or one whose task was deleted, here or on another device, since runs do not sync — is **orphaned** (`taskLive` false): it has no task page, so its history row carries its own Delete run.
 - **Job Folder** — A user-defined sidebar grouping for jobs (profile-scoped, name + collapsed-state + sort position). Folders are thin collapsible separators — they own ordering but no execution config; their one action on jobs is **Run All Jobs**, which starts the runnable ones in turn. A job lives either in exactly one folder or at the root level.
@@ -42,7 +42,7 @@ Let users save reusable units of work (title + description + prompt + execution 
 1. User opens a job from the sidebar — Main area renders the read-only **Job Detail** view, built like the task page so moving between the two moves nothing.
 2. The header is one row: the title (one line, full text in its tooltip) with the description under it clamped to two lines (full text in its tooltip), and level with it **Run** (green, primary), **Edit** (labelled, outlined) and a **⋯** holding **Delete job…**. Delete is occasional and destructive, so it is not a button beside Run. There is no type pill: the type is a row in Details. When the job's manifest names an agent that does not resolve on this device, **Run is disabled** with the tooltip *"This job can't run on this device — incomplete setup"* (the tooltip hangs on a wrapper `<span>`, because a disabled button swallows its own mouse events), and a red **Incomplete setup** panel heads the left column reading *"This job needs an agent that isn't available on this device, so it can't run here."* The panel gives no repair instruction, on purpose — see [Local Agents Are Not Synced](../../agents/local_agents/local_only.md).
 3. Under the header, one always-present one-line error slot carries a refused run, so a refusal cannot push the page down under the pointer.
-4. The left column holds **Prompt**, then the dependency panel when something did not resolve, then **Tasks history**. A **Details** panel sits to the right; on a narrow page it drops below the prompt and dependencies and above the history, so the work comes first and the facts before the record. One fact per row, label left, value right, a row with nothing to say left out:
+4. The left column holds the dependency panel when something did not resolve, then **Prompt**, then **Tasks history**. On a Job this device can schedule, Prompt is a tab beside **Schedules** (with the schedule count as a badge once there are any); the chosen tab stays chosen when moving to another Job. A Cinna Task Job has no tabs, just its Prompt. A **Details** panel sits to the right; on a narrow page it drops below the prompt and dependencies and above the history, so the work comes first and the facts before the record. One fact per row, label left, value right, a row with nothing to say left out:
    - Local: **Type** *This device*; **Agent / Agents** — each a link to the agent's own page when it has one (a server-owned agent hidden from the desktop is plain text), plus a muted *Agent unavailable* line on a blocked job so the row never reads as "no agents"; **Chat mode** with its colour dot; **Tools** (the attached MCPs); **Routing** — the router badge (`Direct` / `You route` / `Model routes`), which for a direct job names where its agent runs (*Local* / *Remote*), as the new-chat composer does. No badge on a blocked job, nor on a direct job with no agent: there is nothing true to claim.
    - Cinna Task: **Type** *Cinna Task*; **Cinna agent** (a muted *None* when missing — the absence is the fact); **Priority**, always shown.
    Type reads *This device* rather than *Local* because *Local* beside Routing's *Local* meant something else.
@@ -50,20 +50,24 @@ Let users save reusable units of work (title + description + prompt + execution 
 
 ### Scheduling a local Job
 
-The Job detail page's **Schedules** section adds, edits, enables/disables, and
-shows history for recurring rules. Choose a workday preset, selected weekdays and
-whole hours, or advanced numeric cron; review the saved timezone, next run, and
-current Job definition before enabling. The same Job prompt and configuration
-run each time, with a fresh task/run and ordinary Inbox, Stop, and recovery
-controls. The Job page does not need to stay open.
+The Job detail page's **Schedules** tab lists the Job's recurring rules; each has
+an on/off switch that takes effect at once, and a ⋯ menu to edit, show history,
+or delete. **New schedule** opens an editor holding only the name and timing — a
+workday preset, selected weekdays and whole hours, or advanced numeric cron — and
+the saved timezone, with the next run and how far away it is. It does not repeat
+the Job's prompt or configuration: the same Job runs each time, with a fresh
+task/run and ordinary Inbox, Stop, and recovery controls. A new schedule is
+created on. The Job page does not need to stay open.
 
 Schedules execute while Cinna is open with the profile active. Missed times
-collapse into one catch-up when it becomes available again. Enabling starts in
-the future; unfinished manual or scheduled work prevents overlap. Rules and
-permission stay on this device/profile, and edits to reviewed Job execution or
-agent/tool attachments require review again. Cinna Task Jobs have no local
-schedule control. See [Local schedules](../tasks/local_schedules.md) for the full
-timing and recovery rules.
+collapse into one catch-up when it becomes available again. Turning a schedule
+on starts it in the future; unfinished manual or scheduled work prevents
+overlap. Rules and the on/off state stay on this device/profile. Editing the
+Job's execution or agent/tool attachments turns its schedules off with a reason
+on the card, and turning the switch back on adopts the Job as it is now. Cinna
+Task Jobs have no local schedule control. See
+[Local schedules](../tasks/local_schedules.md) for the full timing and recovery
+rules.
 
 ### Editing a job
 1. From the Job Detail view, user clicks **Edit** — Main area swaps to the **Job Edit** page (the same form used at creation).
@@ -233,7 +237,8 @@ Reorder posting paths
 MainArea (activeView === 'job-detail')
   -> JobDetail  (read-only view)
        -> header (title + description, Run, Edit, ⋯ → Delete job… → DeleteJobConfirm → useDeleteJob)
-       -> left: Incomplete setup panel?, Prompt, JobDependencyStatus?, TasksHistory
+       -> left: Incomplete setup panel?, JobDependencyStatus?, [Prompt | Schedules] tabs (schedulable) or Prompt, TasksHistory
+       -> Schedules tab: JobSchedules (switch per schedule, ScheduleEditor); badge from useJobScheduleCount
        -> right (below the work when narrow): JobDetailsPanel (Type, Agents, Chat mode, Tools, Routing | Cinna agent, Priority)
        -> TasksHistory -> useTaskRowsInPlace(runs, 10, …, 'prepend') -> JobRunRow[]
             task live : row click → useOpenTask(taskId)
