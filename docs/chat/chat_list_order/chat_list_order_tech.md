@@ -31,7 +31,7 @@ All three go through `ipcHandle`, require activation and are scoped by `getProfi
 
 ## Services & Key Methods
 
-- `chatRepo.pin` — in one transaction, `max(pinned_rank)` over the user's other chats (trashed and hidden ones included) + 1, then written. Re-pinning an already pinned chat moves it to the top. The first pin of a profile is rank 1.
+- `chatRepo.pin(owner, chatId, rankOwners)` — in one transaction, `max(pinned_rank)` over the other chats of `rankOwners` (trashed and hidden ones included) + 1, then written under the chat's owner. `chatService.setPinned` passes every owner the profile lists (`chatScopesFor`), so with shared local chats on the rank spans the profile and the guest profile. Re-pinning an already pinned chat moves it to the top. The first pin of a profile is rank 1.
 - `chatRepo.setPinnedRank` — guarded by `pinned_rank IS NOT NULL`, so a race with an unpin cannot re-pin.
 - `chatService.move` — `requireOwnedChat`, then validates `rank` and `list` as above. The renderer computed the rank; main does not check that it is between any neighbours.
 
@@ -87,11 +87,11 @@ None. The Pinned block's open/closed state is the `pinned` key of `cinna-chat-gr
 
 ## Security
 
-Every write is `WHERE id = ? AND user_id = ?` under the active profile, after `requireOwnedChat`. The rank is a number the renderer chose; main accepts any finite value, since the worst a wrong one does is misplace the user's own chat.
+Every write is `WHERE id = ? AND user_id = ?` under the chat's owner, after `requireOwnedChat` found the chat visible to the active profile — its own, or the guest's while shared local chats are on (`src/main/auth/chatScope.ts:visibleChat()`). The rank is a number the renderer chose; main accepts any finite value, since the worst a wrong one does is misplace the user's own chat.
 
 ## Verification
 
-- `src/main/services/chatService.listOrder.test.ts` — against a real database: rename trims and keeps `updatedAt`, refuses empty and another profile's chat; pinning puts a new pin above the others, re-pinning after a drag goes back on top, unpinning keeps `updatedAt`, ranks count the owner's pins only; `move` writes `sort_key` without touching `updatedAt`, refuses non-finite ranks, an unknown list and a chat not pinned, and never pins.
+- `src/main/services/chatService.listOrder.test.ts` — against a real database: rename trims and keeps `updatedAt`, refuses empty and another profile's chat; pinning puts a new pin above the others, re-pinning after a drag goes back on top, unpinning keeps `updatedAt`, ranks count the owner's pins only (`chatService.sharedChats.test.ts` covers the rank spanning a shared chat and the profile's own); `move` writes `sort_key` without touching `updatedAt`, refuses non-finite ranks, an unknown list and a chat not pinned, and never pins.
 - `src/main/db/migrations/migrations.test.ts` — both columns added as nullable `REAL` to an install without them, rows kept, replay-safe.
 - `src/renderer/src/components/chat/chatGroups.test.ts` (`drag order and Pinned`, `tieBreak`, `dropRank`) — dragged place else recency; a dragged chat holding against newer activity; a sort key never changing the day; day sort; who groups ordered by activity; pinned chats out of the grouping; tie ordering under a millisecond; midpoint, ends, unchanged, no-room, a group of one.
 - `src/renderer/src/components/chat/ChatList.test.tsx` (`Pinned, the row menu and drag order`) — Pinned drawn first; the menu's items and Open Folder only for a folder agent; pin/unpin; rename commit, Escape and unchanged; Delete disabled while running; a drop within a group and inside Pinned; rename failure and pending title; no-room notice with no write; drop placement after a `dragleave`; a document-level drag end; no tooltip while a menu is open; a drop from another group refused.

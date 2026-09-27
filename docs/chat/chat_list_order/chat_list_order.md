@@ -56,7 +56,8 @@ The user decides where a chat sits in the sidebar's Chats list instead of leavin
 - **A row menu or a drag holds tooltips back.** While any row's menu is open, or a drag is in progress, no row opens its [summary tooltip](../chat_row_summary/chat_row_summary.md) over it.
 - **The row menu closes** on Escape, Tab, an outside click, a scroll that moves the row, a window resize or losing focus, and after a pick that succeeds. A pick that fails keeps it open with the reason. It opens at the pointer and is kept inside the window.
 - **While renaming, the row is a text field.** It cannot be dragged, a click does not open the chat, and right-click gives the text field's own menu.
-- **Profile-scoped.** Pins and dragged places belong to the chat, so they travel with the profile's chats, not with the machine. A new pin is ranked against the profile's own pins only.
+- **Stored on the chat.** Pins and dragged places belong to the chat, so they travel with it: a profile's own chats keep theirs in that profile, and a chat shared from the guest profile ([Settings Scope](../../core/settings_scope/settings_scope.md#shared-local-chats)) shows the same pin and place in every profile that lists it.
+- **A new pin is ranked against every chat in the list the user sees**, the profile's own and the shared ones together. Ranked per owner, a shared chat and one of the profile's would get the same rank and tie in Pinned, and the newest pin would not reliably land on top.
 
 ### What it does not do
 

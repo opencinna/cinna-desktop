@@ -251,7 +251,7 @@ Gone with the runners: `ENGINE_READY_MS` (a cold shared server could answer its 
 - **No engine response is ever logged wholesale.** The rule outlived OpenCode's HTTP `/config`, which returned the resolved config with keys substituted
 - **The child's environment is constructed, never inherited.** `spawn` receives `spec.env` verbatim. For Claude that environment is `buildClaudeEnv`'s: the shared child allowlist, then stripped by name of every API key, auth token, base URL, third-party-provider switch and `CINNA_ENGINE_KEY_*`
 - **The child leads its own process group**, and app quit kills the group — otherwise a `claude` (~260 MB) outlives the app that started it
-- **Chat ownership is checked on both request channels** with `chatRepo.getOwned(getProfileScopeUserId(), chatId)` **before** the request is consumed, and both are activation-gated
+- **Chat ownership is checked on both request channels** with `visibleChat(getProfileScopeUserId(), chatId)` (its own chat, or one shared from the guest profile) **before** the request is consumed, and both are activation-gated
 - **Answer shapes are validated**, not trusted from the renderer: a wrong shape is refused before it reaches a driver
 - **A persisted request block is read-only.** `isEngineRequestId` separates a live desktop-minted address (`per_*` / `que_*`) from a cloud agent's question id
 - **The permission tool name is reserved and un-model-emittable** (`cinna_permission_request`), so an agent's own call to `bash` or `edit` can never be mistaken for a request to run one

@@ -36,7 +36,7 @@
 
 ## Database Schema
 
-None. The queue is a `Map` in `runQueueService`, keyed by `JSON.stringify([profileUserId, chatId])`. A steered message becomes an ordinary `messages` user row with `addressed_agent_id` set to the answering agent; the assistant parts around it are ordinary assistant rows.
+None. The queue is a `Map` in `runQueueService`, keyed by `JSON.stringify([chatOwner, chatId])` — the profile for its own chat, `__default__` for a chat shared across profiles (`src/main/auth/chatScope.ts`). Each queue keeps the `RunScope` it was queued under, so the drained turn runs as the profile that queued it. A steered message becomes an ordinary `messages` user row with `addressed_agent_id` set to the answering agent; the assistant parts around it are ordinary assistant rows.
 
 ## IPC Channels
 
@@ -47,9 +47,9 @@ None. The queue is a `Map` in `runQueueService`, keyed by `JSON.stringify([profi
 | `run:queue-take` | invoke | `chatId` → `string[]`, every queued text in order; the queue is empty afterwards, held or not. |
 | `run:queue-remove` | invoke | `chatId, id` → `boolean`; false when the item is no longer queued. |
 | `run:queue-edit` | invoke | `chatId, id, content` → `boolean`; false when the item is no longer queued; empty text rejects. |
-| `run:queue-changed` | main → renderer | `{ chatId, view }` after every change. Sent only for chats the active profile owns and only while activated: another profile's chat IDs mean nothing to this window. |
+| `run:queue-changed` | main → renderer | `{ chatId, view }` after every change. Sent only for chats the active profile sees (its own, or shared) and only while activated: another profile's chat IDs mean nothing to this window. |
 
-Every queue channel resolves its scope through `ownedChatScope` (activation, active profile, `chatRepo.getOwned`).
+Every queue channel resolves its scope through `ownedChatScope` (activation, active profile, `visibleChat`).
 
 ## Services & Key Methods
 
@@ -67,7 +67,7 @@ Every queue channel resolves its scope through `ownedChatScope` (activation, act
 - `deliverFlush` — `active.steer` with the texts joined by blank lines; a throw counts as `unavailable`. The steer races a timer that **starts only once the turn has ended**: `ended` calls `startFlushGrace`, and the timer runs `flushGraceMs` (`RUN_QUEUE_FLUSH_GRACE_MS`, 3 s). Nothing is bounded while the turn runs, because its driver settles every steer, or gives up on it, before the turn finishes. A hand-off nobody ever answered would leave the queue `flushing` for good, though: files refused and every text queued behind it, until a restart. Running out counts as `unavailable`. A steer that answers `injected` or `saved` after that is only logged as possibly reaching the agent twice: the messages are already back in the queue, and nothing takes text back from an agent. Then `deliverFlush` clears `flushing` and takes `endedDuringFlush`. If the queue was cleared meanwhile (chat or profile gone), the items are dropped, with a warning when undelivered. `unavailable` unshifts them ahead of anything queued meanwhile and announces, but does **not** flush again, so a turn that refuses while still steerable is not asked in a loop; the next `onSteerable`, or the `flush` at the end of the next `submit`, tries again. `saved` is logged, because no reply carries it to a view and no signal makes one read the chat again. Then a kept outcome goes through `ended`; otherwise a delivered hand-off calls `flush` again for anything queued behind it.
 - `forget` keeps a `flushing` queue even when `items` is empty, so a message sent during the hand-off finds it.
 - `list`, `take`, `remove`, `edit` — scoped by profile; `take` deletes the whole queue and clears `held`.
-- `clear(profileUserId, chatId)` and `clearProfile(profileUserId)` — called from the task-runner hooks. `chatService` calls `chatRemoved` on trash and permanent delete; `jobService` calls it when a run's delete removed its chat; `authService` calls `profileRemoved`.
+- `clear(profileUserId, chatId)` drops every queue for the chat id, whatever its owner key — a hard-deleted chat no longer says who owned it. `clearProfile(profileUserId)` drops the profile's own queues and whatever it queued into a shared chat. Both are called from the task-runner hooks. `chatService` calls `chatRemoved` on trash and permanent delete; `jobService` calls it when a run's delete removed its chat; `authService` calls `profileRemoved`.
 - `onChange(listener)` — `run.ipc.ts` is the one listener. A throwing listener is logged, never propagated into the queue.
 
 ### `RunHandle.steer` (`runExecutionService.ts`)

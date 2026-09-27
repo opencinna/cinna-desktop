@@ -87,9 +87,9 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 
 ### Local store
 
-- Local files live at `userData/files/<userId>/<chatId>/<uuid><ext>`. Metadata in the `chat_files` table.
+- Local files live at `userData/files/<owner>/<chatId>/<uuid><ext>`, where `<owner>` is the chat's owner — the guest profile for a chat shared across profiles, whoever attaches. Metadata in the `chat_files` table, under the same owner, so every profile that sees the chat sees the same files.
 - `chat_files` has `ON DELETE CASCADE` to `chats` — deleting a chat purges its file rows.
-- Chat ownership is verified before any local ingest: `chatRepo.getOwned(userId, chatId)` runs in `fileService.ingest` before disk writes or row inserts.
+- Chat visibility is verified before any local ingest: `visibleChat(userId, chatId)` runs in `fileService.ingest` before disk writes or row inserts.
 
 ### Path-guard allowlist
 
@@ -147,8 +147,8 @@ Active chat — pick or drag-drop:
        → pathGuard.filterAllowed(paths)         [drop/ingest-paths only]
        → fileService.ingest({ userId, scope, chatId, filePaths })
           ├─ scope === 'local':
-          │    chatRepo.getOwned(userId, chatId)  [ownership check]
-          │    localFileStore.ingest()           [copy bytes, insert chat_files row]
+          │    visibleChat(userId, chatId)       [visibility check]
+          │    localFileStore.ingest(chat owner) [copy bytes, insert chat_files row]
           └─ scope === 'cinna':
                cinnaFileService.uploadMany()    [multipart POST]
     → MessageAttachment[] back to renderer

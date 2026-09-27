@@ -53,6 +53,12 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 2. Switch it off to show a flat agent list, or click the switch's associated label to toggle it. Ordering, profile ownership and visibility stay the same.
 3. The boolean `showAgentSidebarSections` is installation-wide and survives restart. Controls disable during loading/saving. Failed optimistic writes roll back and display the failure; an unknown setting names the need to restart the running app. This feedback prevents a rejected write from appearing to be an inert switch.
 
+### Local agents and chats in all profiles
+
+1. Open Features → Interface → **Show local agents and chats in all profiles**, the row right after Show sections in Agents sidebar (on by default). Both modes are explained behind the (?) tip, not under the label; the switch's tooltip names the current mode.
+2. **On:** chats owned by the guest profile — made while signed out, or new chats whose agents, chat mode and credential are all local — are listed and fully usable in every profile, so signing out keeps them. **Off:** each chat stays in the profile it was started in.
+3. Local agents are available in every profile either way; the switch governs chats only. The boolean `showLocalDataInAllProfiles` is installation-wide; changing it re-fetches the Chats list, trash and open chat at once, and moves no chat. Rules in [Settings Scope](../../core/settings_scope/settings_scope.md#shared-local-chats).
+
 ## Autonomous task concurrency
 
 Default → Agents → Tasks exposes **Autonomous task concurrency**, a device-wide integer from one to eight, default two. It limits separate autonomous-task and runner-agent admission queues; it does not cap all ordinary chat turns. Busy local agents wait cancelably for their lock. The control uses the existing app-settings read/write path and disables while loading or saving. Its explanation is behind the (?) beside its label. A read or save failure is rendered under the select only while one exists. See [autonomous configuration](../../jobs/tasks/autonomous_tasks_tech.md#configuration).

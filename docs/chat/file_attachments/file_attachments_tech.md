@@ -160,7 +160,7 @@ Index: `idx_chat_files_chat_id ON chat_files(chat_id)`. Migration is additive �
 - Cinna access tokens decrypt only in main via `getCinnaAccessToken(userId)`; never reach the renderer
 - File bytes never traverse the renderer — paths come from native dialog or `webUtils.getPathForFile`, main reads from disk and either uploads (Cinna) or copies into the local store
 - Renderer-supplied paths must clear three gates before any I/O: `isAbsolute(p)` (no relative paths), `pathGuard.isAllowed(p)` (must have been surfaced via dialog or drop), `assertFileScope(scope)` (typed union narrow)
-- Local-scope ingest verifies `chatRepo.getOwned(userId, chatId)` so a compromised renderer can't pollute another user's chat directory
+- Local-scope ingest verifies `visibleChat(userId, chatId)` (`src/main/auth/chatScope.ts`) and stores under the chat's owner, so a compromised renderer can't pollute another user's chat directory; reads and removes resolve rows through `visibleChatFile`
 - `basename(filename)` strips any `..` from save-dialog default paths
 - `shell.showItemInFolder` (not `shell.openPath`) — reveals, never executes
 - `chat_files.ON DELETE CASCADE` purges file metadata when a chat is deleted; orphan on-disk blobs are removed by `LocalFileStore.remove` (called from `fileService.remove`)

@@ -144,14 +144,14 @@ Main: runExecutionService.runAgentTurn
            ▼
 chatTitleService.autoGenerateForFirstMessage
    ├── appSettingsRepo.get('autoChatTitles')        → feature_disabled?
-   ├── chatRepo.getOwned(userId, chatId)            → chat_not_found?
+   ├── visibleChat(userId, chatId)                  → chat_not_found?
    ├── messageRepo.countByRole(chatId, 'user')       → not_first_message?
    ├── messageRepo.firstByRole(chatId, 'user')       → first user text
    ├── isUntouchedAutoTitle(chat.title, firstText)   → chat_renamed_initial?
    ├── aiFunctions.resolveBackend(userId)            → credential, else Default runtime
    ├── aiFunctions.runSingleShot(... warmOnly)       → deferred / llm_failed / empty_output?
    ├── sanitizeTitle(raw)                            → empty_output?
-   ├── chatRepo.getOwned(...) re-read                → chat_renamed_mid_flight?
+   ├── visibleChat(...) re-read                     → chat_renamed_mid_flight?
    ├── chatRepo.updateMeta({ title })
    └── win.webContents.send('chats:title-updated', { chatId, title })
            │

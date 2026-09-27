@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Local user accounts for the desktop app, similar to OS-level login. Users can create password-protected profiles; all data (chats, providers, agents, settings) is scoped to the active user. Switching users changes the entire app context. Accounts can be managed (edited, deleted) from the Settings screen.
+Local user accounts for the desktop app, similar to OS-level login. Users can create password-protected profiles; account data (its chats, remote agents, tokens) is scoped to the active user, while the machine's own setup — providers, MCP servers, chat modes, local agents — and, by default, the chats made with it are shared by every profile (see [Settings Scope](../../core/settings_scope/settings_scope.md)). Switching users changes the account context. Accounts can be managed (edited, deleted) from the Settings screen.
 
 ## Core Concepts
 
@@ -28,7 +28,7 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 3. Chooses account type via **horizontal cards**: "Local Account" or "Cinna Account" (see [Cinna Accounts](../cinna_accounts/cinna_accounts.md))
 4. For local: fills in username, display name (optional), and optional password — fields have labels above them
 5. Account is created and app immediately switches to the new user
-6. All data queries refetch — the new user starts with a clean slate
+6. All data queries refetch — the new user starts with no chats of its own; the guest's chats are listed alongside while **Show local agents and chats in all profiles** is on
 
 ### Switch User (No Password / Already Unlocked)
 1. User opens the user menu dropdown — all profiles shown in a stable list, active profile highlighted with accent color
@@ -51,7 +51,7 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 
 ### Sign Out (Account Removal)
 1. User clicks "Sign Out" in the dropdown (only shown for non-default users)
-2. Centered confirmation modal appears with warning: all **local** chat history, providers, agents, and settings for this account will be permanently erased
+2. Centered confirmation modal appears with warning: all **local** chat history, providers, agents, and settings for this account will be permanently erased. Chats shared from the guest profile are not the account's and survive
 3. For Cinna accounts: modal notes that the cloud account will not be affected
 4. If the account has a password set, the user must enter it to confirm
 5. On confirmation: account is fully deleted (same cascade-delete flow as Settings → Delete Account), session falls back to default user
@@ -92,10 +92,11 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 - Changing or removing an existing password requires confirming the **current** password (verified in `authService.updateUser` via `verifyPassword`); first-time set has no current-password gate
 - Password is required to delete a password-protected account (security confirmation)
 - Cinna account profile fields (username, display name) come from OAuth and cannot be edited locally — only local password can be set/changed
-- Data is split into two scopes — see [Settings Scope](../../core/settings_scope/settings_scope.md): **Default scope** (LLM providers, MCP providers, chat modes, local agents) is shared across all profiles; **Profile scope** (chats, remote agents, agent overrides, Cinna tokens) is per-account and changes on user switch
+- Data is split into two scopes — see [Settings Scope](../../core/settings_scope/settings_scope.md): **Default scope** (LLM providers, MCP providers, chat modes, local agents) is shared across all profiles; **Profile scope** (the profile's own chats, remote agents, agent overrides, Cinna tokens) is per-account and changes on user switch
+- Chats owned by the guest profile — made while signed out, or new chats whose runtime is entirely local — are listed and usable in every profile while the installation-wide **Show local agents and chats in all profiles** switch is on (the default). With it off, every profile sees exactly its own chats. The guest profile never sees a signed-in profile's chats either way
 - Messages and chat-MCP links inherit profile scope through their chat foreign key
 - On user switch: LLM adapters are cleared and re-initialized, MCP connections are disconnected and reconnected for the new user's providers (see [Resource Activation](../../core/resource_activation/resource_activation.md))
-- On account deletion: deactivate session → clear Cinna tokens → cascade-delete all profile-scope data (chats, remote agents, `agent_overrides`) → delete user row → re-activate as default user. Default-scope settings remain untouched.
+- On account deletion: deactivate session → clear Cinna tokens → cascade-delete all profile-scope data (chats the profile owns, remote agents, `agent_overrides`) → delete user row → re-activate as default user. Default-scope settings remain untouched.
 - Password verification uses PBKDF2 (100k iterations, SHA-512) — no plaintext storage
 - Session persistence stores only the last user ID, not credentials
 - Per-session unlock tracking resets on app restart or sign-out (password required again)

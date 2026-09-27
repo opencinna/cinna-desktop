@@ -59,7 +59,7 @@ A message typed while an agent or model is still answering is neither refused no
 
 ### Where a message goes
 
-- **Main owns the queue**, per profile and chat, for the reason it owns the turn: the view that queued a message may be gone when the turn ends — another chat opened, the renderer reloaded. A queue kept in the composer would drain into nothing.
+- **Main owns the queue**, per chat (keyed by the chat's owner, so a chat shared across profiles has one queue while each message still sends as the profile that queued it), for the reason it owns the turn: the view that queued a message may be gone when the turn ends — another chat opened, the renderer reloaded. A queue kept in the composer would drain into nothing.
 - **The queue is memory only.** A queued message is a moment's intent. A restart that replayed it into a chat the user has since moved on from would be worse than losing it, so there is no table and no recovery.
 - **Steer only into the turn the message is for.** The running turn must be an agent turn, its agent must be the one routing would send this message to, and its driver must currently be offering mid-turn delivery — which an ACP turn does not do until the agent has started streaming the turn, and stops doing while a tool call runs. A message for another agent in a `human` chat, and every message during a model or coordinator turn, is queued.
 - **Never steer past the queue.** When anything is already queued in the chat, a new message queues behind it even if the turn could take it. Otherwise a later message would reach the agent before an earlier one. Messages that are being handed to the turn count as queued until it answers, so a message sent during a hand-off queues behind them, even if the turn has ended by then.

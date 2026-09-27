@@ -57,7 +57,7 @@ The task Details panel shows **Delegated from** on requested work and **Delegate
 
 ### Ownership and permissions come from main
 
-Tool callers cannot supply a profile, origin chat, task or depth. Each operation validates that the active profile still owns the session and that the chat still answers to its agent. Admission rechecks after asynchronous directory reads, and cloud operations reject stale connection/profile generations. A validated file origin pins its owning profile; another active profile does not take the request over.
+Tool callers cannot supply a profile, origin chat, task or depth. Each operation validates that the active profile still owns the session and that the chat still answers to its agent. Admission rechecks after asynchronous directory reads, and cloud operations reject stale connection/profile generations. A validated file origin pins its owning profile; another active profile does not take the request over. The one exception is an origin chat shared across profiles ([Settings Scope](../../core/settings_scope/settings_scope.md#shared-local-chats)): the chat is the guest's, but the work started from it is the active profile's, so the active profile takes the handover in, keys its rows to itself and pays for it. With sharing off, the same brief resolves to the guest profile and stays foreign to a signed-in one.
 
 Delegations and Cloud delegations permissions live under `userData` for both bare and kit agents. A kit manifest, a pulled folder or a synced task cannot grant them. Removing the agent's local state removes these grants. Engine approvals remain a separate boundary: admitting a task does not waive permissions for the commands it runs.
 

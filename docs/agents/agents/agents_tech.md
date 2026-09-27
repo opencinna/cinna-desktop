@@ -141,7 +141,7 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 - The executor resolves routing, prepares the user message once, chooses driverFor and supplies a bound run to streamToAgent. Folder catalog commands are intercepted by capability before driver.run; endpoint/token resolution stays inside A2A.
 - `agent:fetch-card` handler — Calls `agentService.fetchCardPreview()`, returns `{ success, card?, protocol?, error? }`.
 - `agent:test` handler — Calls `agentService.testAgent()`, which updates cached card metadata in DB.
-- `agent:get-session` handler — Verifies chat ownership via `chatRepo.getOwned()`, returns `agentSessionRepo.getByChat(chatId) ?? null`. Returns continuity metadata; routing is resolved by main from the chat and addressed agent.
+- `agent:get-session` handler — Verifies the active profile can see the chat via `visibleChat()` (`src/main/auth/chatScope.ts`), returns `agentSessionRepo.getByChat(chatId) ?? null`. Returns continuity metadata; routing is resolved by main from the chat and addressed agent.
 - `agent:cancel-message` handler — Delegates to `a2aStreamingService.cancel(requestId)`.
 
 ### A2A Streaming Service — `src/main/services/a2aStreamingService.ts`

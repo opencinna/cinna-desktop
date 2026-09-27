@@ -92,7 +92,7 @@ Added to: `llm_providers`, `mcp_providers`, `chats`, `chat_modes`, `agents`
 
 ### `src/main/services/authService.ts`
 - `authService.listUsers()` — returns `UserDto[]` (id, type, username, displayName, hasPassword, Cinna fields)
-- `authService.register(input)` — local account creation; validates uniqueness + password strength, hashes via `hashPassword()`
+- `authService.register(input)` — local account creation; validates uniqueness + password strength, hashes via `hashPassword()`, then activates the new profile (`userActivation.activate()`, after `markUnlocked()` when a password was set) so main switches with the renderer
 - `authService.registerCinna(input)` — runs OAuth flow via `startCinnaOAuthFlow()`, inserts user, stores tokens, activates; rolls back user row if token store fails
 - `authService.login(input)` — verifies password (only if user is locked), `markUnlocked()` + `activate()`
 - `authService.logout()` — `clearUnlocks()` + `activate('__default__')`

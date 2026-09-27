@@ -43,12 +43,12 @@ Table: `chat_on_demand_mcps` (see `src/main/db/migrations/chats.ts`)
 - `chat:on-demand-mcp-add` — `(chatId: string, mcpProviderId: string) => { success: true }`
 - `chat:on-demand-mcp-remove` — `(chatId: string, mcpProviderId: string) => { success: true }`
 
-All three require `userActivation.requireActivated()` and use `getProfileScopeUserId()` (chats are profile-scoped, MCP providers are settings-scoped).
+All three require `userActivation.requireActivated()` and use `getProfileScopeUserId()` (the chat must be visible to the active profile — its own, or one shared from the guest profile; MCP providers are settings-scoped).
 
 ## Services & Key Methods
 
 - `chatService.listOnDemandMcps(userId, chatId)` — ownership-checks the chat, returns rows from `chatOnDemandMcpRepo.list`
-- `chatService.addOnDemandMcp(userId, chatId, mcpProviderId)` — ownership-checks chat + verifies MCP exists in settings scope (`mcpProviderRepo.getOwned`), then `chatOnDemandMcpRepo.add` (upsert that re-arms `pendingAnnounce`)
+- `chatService.addOnDemandMcp(userId, chatId, mcpProviderId)` — checks the chat is visible to the profile (`requireOwnedChat` → `visibleChat`) + verifies MCP exists in settings scope (`mcpProviderRepo.getOwned`), then `chatOnDemandMcpRepo.add` (upsert that re-arms `pendingAnnounce`)
 - `chatService.removeOnDemandMcp(userId, chatId, mcpProviderId)` — ownership-checks then `chatOnDemandMcpRepo.remove`
 - `src/main/services/conductorBridge.ts` unions baseline/on-demand connected MCP providers and refreshes the injected endpoint on chat/tool changes.
 

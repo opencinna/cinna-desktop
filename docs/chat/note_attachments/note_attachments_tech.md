@@ -48,7 +48,7 @@ No new tables. The feature reads from the existing `notes` table (see [Notes —
 - `src/main/services/notesService.ts:materializeAsAttachments(userId, { chatId, scope, noteIds })` — Per-id `requireNote(userId, id)` (rejects missing / deleted / cross-profile) before any I/O, maps to `{ filename, content }` items, delegates to `fileService.ingestSyntheticContent`. Emits a `materializing notes as attachments` log line with scope / chatId / count.
 - `src/main/services/notesService.ts:safeNoteFilename(title)` — `<allowed>.md` sanitizer; collapses spaces, caps at 80 characters, falls back to `note.md` for empty input.
 - `src/main/services/fileService.ts:ingestSyntheticContent(opts)` — Pre-checks `scope === 'local'` requires `chatId`, creates a `cinna-synth-*` tempdir via `mkdtemp`, writes each item, calls `this.ingest`, removes the tempdir in `finally`. Logs `synthetic content ingested` with scope / chatId / count / durationMs.
-- `src/main/services/fileService.ts:ingest(input)` — Existing entry point. Local scope verifies `chatRepo.getOwned`; Cinna scope delegates to `cinnaFileService.uploadMany`.
+- `src/main/services/fileService.ts:ingest(input)` — Existing entry point. Local scope verifies `visibleChat` (`src/main/auth/chatScope.ts`) and stores under the chat's owner; Cinna scope delegates to `cinnaFileService.uploadMany`.
 
 ## Renderer Components
 
@@ -77,7 +77,7 @@ No new tables. The feature reads from the existing `notes` table (see [Notes —
 - **Ownership chain.** Renderer supplies only `noteIds`. The main process enforces in order:
   1. `userActivation.requireActivated()` at handler entry.
   2. `notesService.materializeAsAttachments` runs `requireNote(userId, id)` per id — fails fast on missing / soft-deleted / cross-profile.
-  3. `fileService.ingest` runs `chatRepo.getOwned(userId, chatId)` for local scope.
+  3. `fileService.ingest` runs `visibleChat(userId, chatId)` for local scope.
 - **No renderer path injection.** Synthetic file paths are generated inside `fileService.ingestSyntheticContent` via `mkdtemp` — the renderer never supplies a path, so the `pathGuard` allowlist is intentionally bypassed.
 - **Filename sanitization.** `safeNoteFilename` strips path separators and shell-hostile characters; `fileService.ingestSyntheticContent` re-applies `basename()` before writing as defense in depth.
 - **Attach pipeline keeps body in main.** When notes are materialized as `.md` attachments, body bytes travel SQLite → main-process tempfile → ingest pipeline. The renderer only sees the resulting `MessageAttachment` (id, filename, size, mimeType, source) — never the body via that path. The body *is* fetched into the renderer for two intentional flows (`useNote` for the preview modal, `useFetchNote` for the double-Enter inline expansion), both gated by `notesService.requireNote`'s ownership check at the `note:get` IPC.
