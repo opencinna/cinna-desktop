@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { createHash } from 'node:crypto'
 import { agentRepo, type AgentRow } from '../db/agents'
-import { chatRepo } from '../db/chats'
+import { chatOwnerFor, visibleChat } from '../auth/chatScope'
 import { llmProviderRepo } from '../db/llmProviders'
 import { managedAgentSessionRepo } from '../db/managedAgentSessions'
 import { getManagedResourceScopes, getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
@@ -56,7 +56,7 @@ export const managedAgentService = {
     const fingerprint = createHash('sha256').update(JSON.stringify([profileId, ownerId, agent.id, configIdentity, account.fingerprint])).digest('hex')
     const validate = (): void => {
       account.validate()
-      if (!chatRepo.getOwned(profileId, chatId)) throw new Error('This Managed conversation is no longer available.')
+      if (!visibleChat(profileId, chatId)) throw new Error('This Managed conversation is no longer available.')
       const current = agentRepo.getOwned(ownerId, agent.id)
       if (!current || !current.enabled || current.driver !== 'managed' || JSON.stringify(current.driverConfig) !== configIdentity) {
         throw new Error('This Managed agent configuration changed. Start a new chat with its current configuration.')
@@ -65,10 +65,10 @@ export const managedAgentService = {
     validate()
     return {
       client: account.client, config, validate,
-      checkpoint: managedAgentSessionRepo.get(profileId, chatId, agent.id, fingerprint),
+      checkpoint: managedAgentSessionRepo.get(chatOwnerFor(profileId, chatId), chatId, agent.id, fingerprint),
       save(checkpoint) {
         validate()
-        managedAgentSessionRepo.save(profileId, ownerId, chatId, agent.id, fingerprint, checkpoint)
+        managedAgentSessionRepo.save(chatOwnerFor(profileId, chatId), ownerId, chatId, agent.id, fingerprint, checkpoint)
       }
     }
   },

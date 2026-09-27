@@ -62,8 +62,14 @@ let history: MessageRow[] = []
 const listMessages = vi.fn(() => history)
 const recordChatResult = vi.fn()
 vi.mock('../db/chatRunResults', () => ({ chatRunResultRepo: { record: (...args: unknown[]) => recordChatResult(...args) } }))
+/** Which user id owns `chatRow`; null = whoever asks (most tests do not care). */
+let chatOwner: string | null = null
 vi.mock('../db/chats', () => ({
-  chatRepo: { listMessageIds: vi.fn(() => []), getOwned: vi.fn(() => chatRow), listMessages }
+  chatRepo: { listMessageIds: vi.fn(() => []), getOwned: vi.fn((userId: string) => chatOwner === null || userId === chatOwner ? chatRow : undefined), listMessages }
+}))
+let sharedChats = true
+vi.mock('../db/appSettings', () => ({
+  appSettingsRepo: { get: (key: string) => key === 'showLocalDataInAllProfiles' ? sharedChats : undefined }
 }))
 
 /**
@@ -257,6 +263,8 @@ beforeEach(() => {
   history = []
   attached = []
   chatRow = { id: 'chat-1', router: 'direct', agentId: 'a-1' }
+  chatOwner = null
+  sharedChats = true
   registerRunHandlers()
 })
 
@@ -787,6 +795,33 @@ describe('run:watch native subscription', () => {
     expect(runExecutionService.isRunning('chat-1')).toBe(true)
     source.close()
     await handle.completed
+  })
+  it('runs a chat the default profile shares with the active profile, looking its agent up for that profile', async () => {
+    chatOwner = '__default__'
+    chatRow = { ...chatRow, userId: '__default__' }
+    const handle = runExecutionService.start({ profileUserId: 'profile-user', settingsUserId: 'settings-user' },
+      { chatId: 'chat-1', content: 'Continue' }, { observe: vi.fn() })
+    await handle.accepted
+    // The agent and its credentials are the active profile's to resolve, not the chat owner's.
+    expect(findAgent).toHaveBeenLastCalledWith('settings-user', 'profile-user', 'a-1')
+    const source = portGivenToTheStream()
+    source.postMessage({ type: 'delta', kind: 'text', text: 'shared' })
+    // The live run is keyed by the chat's owner, and a viewer in the profile finds it.
+    const port = watchPort()
+    expect(port.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'snapshot', runId: handle.id,
+      events: expect.arrayContaining([{ type: 'delta', kind: 'text', text: 'shared' }]) }))
+    port.close()
+    source.close()
+    await handle.completed
+  })
+  it('refuses a chat the default profile owns once local chats stay in their own profile', () => {
+    chatOwner = '__default__'
+    sharedChats = false
+    expect(() => runExecutionService.start({ profileUserId: 'profile-user', settingsUserId: 'settings-user' },
+      { chatId: 'chat-1', content: 'Continue' }, { observe: vi.fn() })).toThrow('Chat not found')
+    const port = watchPort()
+    expect(port.close).toHaveBeenCalled()
+    expect(port.postMessage).not.toHaveBeenCalled()
   })
   it('revokes a watcher before delivery after a profile change', async () => {
     const port = watchPort()

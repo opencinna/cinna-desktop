@@ -5,7 +5,7 @@ import { taskRunnersByChat } from './taskRunnerState'
 import { handingOffChats } from './taskOperationState'
 import { installTaskRunnerHooks } from './taskRunnerBridge'
 import { taskHandoffRepo } from '../db/taskHandoffs'
-import { chatRepo } from '../db/chats'
+import { chatOwnerFor, ownerOfVisible, visibleChat } from '../auth/chatScope'
 import { createLogger } from '../logger/logger'
 import type { RunQueueItem, RunQueueView, RunSendPayload, RunStartResult } from '../../shared/ipcPayloads'
 
@@ -89,6 +89,10 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
   const watched = new WeakSet<RunHandle>()
   const listeners = new Set<QueueListener>()
   const keyOf = (userId: string, chatId: string): string => JSON.stringify([userId, chatId])
+  // A queue is the chat's, so it is keyed by the chat's owner — the default
+  // profile for a chat shared across profiles — while `scope` keeps the
+  // profile that sends, for the agent lookup and the task rows of the turn.
+  const chatKey = (scope: RunScope, chatId: string): string => keyOf(chatOwnerFor(scope.profileUserId, chatId), chatId)
 
   const announce = (key: string): void => {
     const [, chatId] = JSON.parse(key) as [string, string]
@@ -262,13 +266,16 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
      */
     async submit(scope: RunScope, payload: RunSendPayload, options: QueueStartOptions): Promise<RunStartResult> {
       const { chatId } = payload
-      const key = keyOf(scope.profileUserId, chatId)
+      // One read: the chat decides the queue's key (its owner) and, below,
+      // whether it may be queued into at all.
+      const visible = visibleChat(scope.profileUserId, chatId)
+      const key = keyOf(visible ? ownerOfVisible(scope.profileUserId, visible) : scope.profileUserId, chatId)
       const active = activeRunsByChat.get(chatId)
       if ((!active && !queues.get(key)?.flushing) || taskRunnersByChat.has(chatId) || handingOffChats.has(chatId) ||
         taskHandoffRepo.unresolvedForChat(scope.profileUserId, chatId)) {
         return { kind: 'started', runId: runExecutionService.start(scope, payload, options(payload)).id }
       }
-      const chat = chatRepo.getOwned(scope.profileUserId, chatId)
+      const chat = visible
       if (!chat) throw new Error('Chat not found')
       if (payload.attachments?.length) throw new Error(RUN_QUEUE_ATTACHMENTS_REFUSAL)
       if (!payload.content.trim()) throw new Error('Type a message to send while the turn runs.')
@@ -314,12 +321,12 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
     },
 
     list(scope: RunScope, chatId: string): RunQueueView {
-      return viewOf(queues.get(keyOf(scope.profileUserId, chatId)))
+      return viewOf(queues.get(chatKey(scope, chatId)))
     },
 
     /** Every queued message's text, in order; the queue is empty afterwards. */
     take(scope: RunScope, chatId: string): string[] {
-      const key = keyOf(scope.profileUserId, chatId)
+      const key = chatKey(scope, chatId)
       const queue = queues.get(key)
       if (!queue) return []
       queues.delete(key)
@@ -328,7 +335,7 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
     },
 
     remove(scope: RunScope, chatId: string, id: string): boolean {
-      const key = keyOf(scope.profileUserId, chatId)
+      const key = chatKey(scope, chatId)
       const queue = queues.get(key)
       const index = queue?.items.findIndex((item) => item.id === id) ?? -1
       if (!queue || index < 0) return false
@@ -344,7 +351,7 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
      */
     edit(scope: RunScope, chatId: string, id: string, content: string): boolean {
       if (typeof content !== 'string' || !content.trim()) throw new Error('A queued message cannot be empty.')
-      const key = keyOf(scope.profileUserId, chatId)
+      const key = chatKey(scope, chatId)
       const item = queues.get(key)?.items.find((entry) => entry.id === id)
       if (!item) return false
       item.content = content
@@ -352,17 +359,28 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
       return true
     },
 
-    /** Drop a chat's queue — the chat is gone. */
-    clear(profileUserId: string, chatId: string): void {
-      const key = keyOf(profileUserId, chatId)
-      if (queues.delete(key)) announce(key)
+    /**
+     * Drop a chat's queue — the chat is gone. By chat id alone: the queue is
+     * keyed by the chat's owner, which for a shared chat is not the profile
+     * deleting it, and a hard-deleted chat no longer says who owned it.
+     */
+    clear(_profileUserId: string, chatId: string): void {
+      for (const key of [...queues.keys()]) {
+        if ((JSON.parse(key) as [string, string])[1] !== chatId) continue
+        queues.delete(key)
+        announce(key)
+      }
     },
 
-    /** Drop every queue a profile holds — the profile is gone. */
+    /**
+     * Drop every queue a profile holds — the profile is gone. That is its own
+     * chats' queues and what it queued into a shared chat, which is keyed by
+     * the default profile but would still send as this one.
+     */
     clearProfile(profileUserId: string): void {
       const prefix = JSON.stringify([profileUserId]).slice(0, -1) + ','
-      for (const key of [...queues.keys()]) {
-        if (!key.startsWith(prefix)) continue
+      for (const [key, queue] of [...queues.entries()]) {
+        if (!key.startsWith(prefix) && queue.scope.profileUserId !== profileUserId) continue
         queues.delete(key)
         announce(key)
       }

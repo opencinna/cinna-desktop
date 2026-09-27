@@ -99,7 +99,7 @@ import { taskHandoffRepo } from '../db/taskHandoffs'
 import { delegationRepo } from '../db/delegations'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { messageRepo } from '../db/messages'
-import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { getDb } from '../db/client'
 import { taskFileService } from './taskFileService'
 import { activeRunsByChat } from './runExecutionState'
@@ -755,7 +755,7 @@ export const taskSyncService = {
   },
 
   pendingHandoffForChat(userId: string, chatId: string): TaskHandoffReceipt | null {
-    if (!chatRepo.getOwned(userId, chatId)) throw new TaskError('not_found', 'Conversation not found')
+    if (!visibleChat(userId, chatId)) throw new TaskError('not_found', 'Conversation not found')
     return taskHandoffRepo.pendingForChat(userId, chatId)
   },
   async resolveHandoff(userId: string, taskId: string): Promise<void> {
@@ -1756,7 +1756,7 @@ async function performHandoff(
       return updated
     })
     taskFileService.exportHandoff(task)
-    if (original.chatId && chatRepo.getOwned(userId, original.chatId)) {
+    if (original.chatId && visibleChat(userId, original.chatId)) {
       try { messageRepo.saveTransition({ chatId: original.chatId,
         content: `Handed off to ${assignee?.name ?? 'the connected service'}${binding.key ? ` (${binding.key})` : ''}.` }) }
       catch (error) { logger.warn('could not write handoff chat receipt', { taskId, error: describe(error) }) }

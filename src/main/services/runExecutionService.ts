@@ -11,6 +11,7 @@ import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { syncRepo } from '../db/sync'
 import { messageRepo } from '../db/messages'
 import { chatRepo } from '../db/chats'
+import { ownerOfVisible, visibleChat } from '../auth/chatScope'
 import { chatAgentCursorRepo } from '../db/chatAgentCursors'
 import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { agentService } from './agentService'
@@ -39,6 +40,14 @@ import type { AgentRow } from '../db/agents'
 import type { TurnRun } from './a2aStreamingService'
 
 const logger = createLogger('run')
+/**
+ * Who a turn runs for. `profileUserId` is the **active profile**, always: the
+ * agent and credential lookups, the task, delegation and handover rows, and the
+ * in-flight marker are the profile's. The chat itself can be owned by the
+ * default profile (a chat shared across profiles, `auth/chatScope.ts`), so
+ * every read or write of the chat row, and the live-run key a viewer watches
+ * by, resolves the chat's owner from this profile instead of using it as is.
+ */
 export interface RunScope { profileUserId: string; settingsUserId: string }
 export type RunObserver = (ctx: RunEventContext, event: RunEvent) => void
 export interface RunOutcome extends TurnOutcome {
@@ -134,7 +143,7 @@ export const runExecutionService = {
   isRunning(chatId: string): boolean { return activeChats.has(chatId) || !!taskRunnersByChat.get(chatId)?.working },
 
   cancelChat(userId: string, chatId: string): void {
-    if (!chatRepo.getOwned(userId, chatId)) throw new Error('Chat not found')
+    if (!visibleChat(userId, chatId)) throw new Error('Chat not found')
     const runner = taskRunnersByChat.get(chatId)
     if (runner?.userId === userId) runner.cancel()
     else activeChats.get(chatId)?.cancel()
@@ -158,9 +167,11 @@ export const runExecutionService = {
       taskHandoffRepo.unresolvedForChat(scope.profileUserId, chatId)) {
       throw new Error('This conversation already has a turn running.')
     }
-    if (!chatRepo.getOwned(scope.profileUserId, chatId)) throw new Error('Chat not found')
+    const owned = visibleChat(scope.profileUserId, chatId)
+    if (!owned) throw new Error('Chat not found')
+    const chatOwner = ownerOfVisible(scope.profileUserId, owned)
     const hidden = new Set(input.hiddenMessageIds ?? [])
-    const live = liveRunHub.begin(scope.profileUserId, chatId, runId,
+    const live = liveRunHub.begin(chatOwner, chatId, runId,
       chatRepo.listMessageIds(chatId).filter((id) => !hidden.has(id)))
     live.setAgentId(agentId)
     const controller = new AbortController()
@@ -287,7 +298,7 @@ export const runExecutionService = {
       throw new Error('This conversation belongs to an autonomous task. Answer in the Inbox or use the task controls.')
     }
     if (activeChats.has(payload.chatId)) throw new Error('This conversation already has a turn running.')
-    const chat = chatRepo.getOwned(scope.profileUserId, payload.chatId)
+    const chat = visibleChat(scope.profileUserId, payload.chatId)
     if (!chat) throw new Error('Chat not found')
     if (options.coordinator && (routingOf(chat).router !== 'coordinator' || options.agentId)) {
       throw new Error('Coordinator tools are only available to the coordinator model.')
@@ -301,7 +312,7 @@ export const runExecutionService = {
       }
     }
     const runId = nanoid()
-    const live = liveRunHub.begin(scope.profileUserId, payload.chatId, runId,
+    const live = liveRunHub.begin(ownerOfVisible(scope.profileUserId, chat), payload.chatId, runId,
       chatRepo.listMessageIds(payload.chatId))
     let accept!: () => void
     let refuse!: (error: Error) => void
@@ -485,7 +496,8 @@ async function resolveAndRun(
   const { chatId, content: userContent, attachments } = payload
   const { profileUserId, settingsUserId } = scope
   lifecycle.context({ userId: profileUserId, chatId, agentId: null })
-  if (!chat.agentId && chat.router !== 'human' && !lifecycle.agentId) chat = chatConductorService.bind(profileUserId, chat)
+  // The conductor row lives under the chat's owner, like the chat.
+  if (!chat.agentId && chat.router !== 'human' && !lifecycle.agentId) chat = chatConductorService.bind(ownerOfVisible(profileUserId, chat), chat)
   const routing = routingOf(chat)
   const target: RunTarget = lifecycle.agentId
     ? { kind: 'agent' as const, agentId: lifecycle.agentId }
@@ -612,7 +624,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
   // is stored as the user typed it; the packet travels on the wire only.
   // A chat whose root runs on Codex is named by Codex's own thread title.
   const engineTitles = !input.nested && agentTitlesChat(agent)
-    && routingOf(chatRepo.getOwned(profileUserId, chatId) ?? {}).rootAgentId === agentId
+    && routingOf(visibleChat(profileUserId, chatId) ?? {}).rootAgentId === agentId
   const { wireContent, userMessageId } = messageRoutingService.prepareAgentSend({
     userId: profileUserId,
     chatId,
@@ -830,7 +842,7 @@ async function resendAgentTurn(port: StreamPort, input: {
   }
   const located = agentService.findAgent(settingsUserId, profileUserId, agentId)
   if (!located) return refuse('Agent not found or not configured')
-  const chat = chatRepo.getOwned(profileUserId, chatId)
+  const chat = visibleChat(profileUserId, chatId)
   const messages = chatRepo.listMessages(chatId)
   const row = messages.find((message) => message.id === userMessageId)
   if (!chat || !row || row.role !== 'user') return refuse('The message to send again is no longer in the chat.')

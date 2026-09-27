@@ -1,4 +1,4 @@
-import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { messageRepo } from '../db/messages'
 import { chatTitleService, ChatTitleError } from './chatTitleService'
 import { ChatError } from '../errors'
@@ -114,7 +114,7 @@ export const messageRoutingService = {
   prepareAgentSend(input: PrepareAgentSendInput): PreparedSend {
     const { userId, chatId, agentId, userContent, attachments } = input
 
-    if (!chatRepo.getOwned(userId, chatId)) {
+    if (!visibleChat(userId, chatId)) {
       throw new ChatError('not_found', 'Chat not found')
     }
 

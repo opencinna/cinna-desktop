@@ -6,10 +6,14 @@ import { chatMcpRepo } from '../db/chatMcp'
 import { chatOnDemandMcpRepo } from '../db/chatOnDemandMcp'
 import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { mcpProviderRepo } from '../db/mcpProviders'
+import { llmProviderRepo } from '../db/llmProviders'
 import { messageRepo } from '../db/messages'
 import { agentService } from './agentService'
 import { chatConductorService, canConduct, isChatConductor } from './chatConductorService'
 import { getSettingsScopeUserId } from '../auth/scope'
+import { chatOwnerFor, chatScopesFor, localDataInAllProfiles, visibleChat } from '../auth/chatScope'
+import { agentRepo } from '../db/agents'
+import { DEFAULT_USER_ID } from '../../shared/userIds'
 import { ChatError, McpError, AgentError } from '../errors'
 import { routerOf, type ChatRouter } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
@@ -32,16 +36,90 @@ export interface AddMessageInput {
   toolInput?: Record<string, unknown>
 }
 
+/**
+ * Every method takes the **active profile** as `userId` and resolves the chat's
+ * owner itself (`auth/chatScope.ts`): a profile can use a chat the default
+ * profile owns. Writes to the chat row go to `chat.userId`, the owner; agent
+ * lookups keep the profile.
+ */
 function requireOwnedChat(userId: string, chatId: string): ChatRow {
-  const chat = chatRepo.getOwned(userId, chatId)
+  const chat = visibleChat(userId, chatId)
   if (!chat) throw new ChatError('not_found', 'Chat not found')
   return chat
 }
 
+/** The owners argument for a list read: a lone owner stays a string. */
+function listOwners(userId: string): string | string[] {
+  const scopes = chatScopesFor(userId)
+  return scopes.length === 1 ? scopes[0] : scopes
+}
+
+/**
+ * Who should own a new chat, from the runtime it is being bound to. Anything
+ * of the account — a `remote:` agent, a profile-scoped or development agent,
+ * an agent that does not resolve, a profile-managed chat mode or credential —
+ * keeps it in the profile; local agents, local chat modes and local
+ * credentials, or no binding at all, make it the computer's (the default
+ * profile's), listed in every profile. The chat's own conductor runtime is not
+ * a choice the user made and is skipped — but what it will run on is: a chat
+ * the model answers, with no mode or credential of its own, runs on the
+ * effective default mode, and an account default keeps it in the profile.
+ */
+function ownerForBinding(profileUserId: string, chatId: string, next: Pick<ChatRow, 'agentId' | 'modeId' | 'providerId' | 'router'>): string {
+  const agentIds = [next.agentId, ...chatOnDemandAgentRepo.listAgentIds(chatId)].filter((id): id is string => !!id)
+  let rootIsAgent = false
+  for (const agentId of agentIds) {
+    if (agentId.startsWith('remote:')) return profileUserId
+    const located = agentService.findAgent(getSettingsScopeUserId(), profileUserId, agentId)
+    if (!located) return profileUserId
+    if (isChatConductor(located.row)) continue
+    // Only machine-local agents (hand-added A2A and folder agents) resolve in
+    // the default scope; a development agent is still the profile's.
+    if (located.userId !== DEFAULT_USER_ID || located.row.driverConfig?.developmentProfileId) return profileUserId
+    if (agentId === next.agentId) rootIsAgent = true
+  }
+  if (next.modeId) {
+    const mode = chatModeService.findMerged(next.modeId)
+    if (!mode || mode.managed || mode.userId !== DEFAULT_USER_ID) return profileUserId
+  }
+  if (next.providerId) {
+    const provider = llmProviderRepo.getOwned(DEFAULT_USER_ID, next.providerId)
+    if (!provider || provider.managed) return profileUserId
+  }
+  // A `human` chat, or a `direct` one rooted on a local agent, never runs a
+  // conductor; every other chat does, on the effective default when it names
+  // neither a mode nor a credential.
+  const conducted = next.router === 'coordinator' || (next.router !== 'human' && !rootIsAgent)
+  if (conducted && !next.modeId && !next.providerId) {
+    const mode = chatModeService.resolveEffectiveDefault()
+    if (mode && (mode.managed || mode.userId !== DEFAULT_USER_ID)) return profileUserId
+  }
+  return DEFAULT_USER_ID
+}
+
+/**
+ * Decide a new chat's owner at its runtime binding, before any conductor is
+ * made for it (a conductor row lives under the chat owner's id). Only while
+ * the chat is empty — once something was said or attached its owner never
+ * changes — only with `showLocalDataInAllProfiles` on, and never in the
+ * default profile, which owns everything it makes anyway.
+ */
+function settleNewChatOwner(profileUserId: string, chat: ChatRow, next: Pick<ChatRow, 'agentId' | 'modeId' | 'providerId' | 'router'>): ChatRow {
+  if (profileUserId === DEFAULT_USER_ID || chatRepo.hasContent(chat.id) || !localDataInAllProfiles()) return chat
+  const owner = ownerForBinding(profileUserId, chat.id, next)
+  if (owner === chat.userId) return chat
+  const conductors = agentRepo.list(chat.userId)
+    .filter((agent) => agent.driverConfig?.conductorChatId === chat.id).map((agent) => agent.id)
+  if (!chatRepo.reassignOwner(chat.id, chat.userId, owner, conductors)) throw new ChatError('not_found', 'Chat not found')
+  logger.info('new chat owner settled', { chatId: chat.id, shared: owner === DEFAULT_USER_ID })
+  return { ...chat, userId: owner }
+}
+
 export const chatService = {
   list(userId: string): (ChatRow & { activeRunId: string | null; lastRunResult: ChatRunResult | null })[] {
-    const results = chatRunResultRepo.list(userId)
-    return chatRepo.list(userId).map((chat) => ({ ...chat, activeRunId: activeRunId(chat.id), lastRunResult: results.get(chat.id) ?? null }))
+    const owners = listOwners(userId)
+    const results = chatRunResultRepo.list(owners)
+    return chatRepo.list(owners).map((chat) => ({ ...chat, activeRunId: activeRunId(chat.id), lastRunResult: results.get(chat.id) ?? null }))
   },
 
   /**
@@ -49,7 +127,8 @@ export const chatService = {
    * `list`: that is polled every second, and this scans the messages table.
    */
   listSummaries(userId: string): Record<string, ChatListSummary> {
-    return Object.fromEntries(buildChatListSummaries(getSettingsScopeUserId(), userId, chatRepo.list(userId)))
+    const owners = listOwners(userId)
+    return Object.fromEntries(buildChatListSummaries(getSettingsScopeUserId(), userId, chatRepo.list(owners), owners))
   },
 
   markResultRead(userId: string, chatId: string, runId: string): void {
@@ -58,10 +137,10 @@ export const chatService = {
   },
 
   get(userId: string, chatId: string): (ChatRow & { messages: MessageRow[]; activeRunId: string | null; lastRunResult: ChatRunResult | null }) | null {
-    const chat = chatRepo.getOwned(userId, chatId)
+    const chat = visibleChat(userId, chatId)
     if (!chat) return null
     const messages = chatRepo.listMessages(chatId)
-    return { ...chat, messages, activeRunId: activeRunId(chatId), lastRunResult: chatRunResultRepo.get(userId, chatId) }
+    return { ...chat, messages, activeRunId: activeRunId(chatId), lastRunResult: chatRunResultRepo.get(chat.userId, chatId) }
   },
 
   create(userId: string): ChatRow {
@@ -71,9 +150,9 @@ export const chatService = {
   },
 
   delete(userId: string, chatId: string): void {
-    requireOwnedChat(userId, chatId)
+    const { userId: owner } = requireOwnedChat(userId, chatId)
     if (activeRunId(chatId)) throw new ChatError('run_active', 'Interrupt the session before deleting it.')
-    const ok = chatRepo.softDelete(userId, chatId)
+    const ok = chatRepo.softDelete(owner, chatId)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
     taskRunnerBridge.chatRemoved(userId, chatId)
     // Activity is held per chat in memory; a trashed chat shows none, and
@@ -84,31 +163,33 @@ export const chatService = {
   },
 
   listTrash(userId: string): ChatRow[] {
-    return chatRepo.listTrash(userId)
+    return chatRepo.listTrash(listOwners(userId))
   },
 
   restore(userId: string, chatId: string): void {
-    const ok = chatRepo.restore(userId, chatId)
+    const ok = chatRepo.restore(chatOwnerFor(userId, chatId), chatId)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
     logger.info('chat restored', { chatId })
   },
 
   permanentDelete(userId: string, chatId: string): void {
-    const ok = chatRepo.permanentDelete(userId, chatId)
+    const owner = chatOwnerFor(userId, chatId)
+    const ok = chatRepo.permanentDelete(owner, chatId)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
-    chatHardDeleted(userId, chatId)
+    chatHardDeleted(userId, chatId, owner)
     logger.info('chat permanently deleted', { chatId })
   },
 
   emptyTrash(userId: string): void {
-    const chats = chatRepo.listTrash(userId)
-    const removed = chatRepo.emptyTrash(userId)
-    for (const chat of chats) chatConductorService.remove(userId, chat.id)
+    const owners = listOwners(userId)
+    const chats = chatRepo.listTrash(owners)
+    const removed = chatRepo.emptyTrash(owners)
+    for (const chat of chats) chatConductorService.remove(chat.userId, chat.id)
     logger.info('trash emptied', { removed })
   },
 
   update(userId: string, chatId: string, updates: ChatMetaUpdate): void {
-    const chat = requireOwnedChat(userId, chatId)
+    let chat = requireOwnedChat(userId, chatId)
     if (taskRunnersByChat.has(chatId) && Object.keys(updates).some((key) => key !== 'title')) {
       throw new ChatError('not_configured', 'Stop the autonomous task before changing its model or routing.')
     }
@@ -119,23 +200,27 @@ export const chatService = {
       const mode = chatModeService.findMerged(updates.modeId)
       if (mode) updates = { ...updates, providerId: mode.providerId, modelId: mode.modelId }
     }
+    const binds = updates.agentId !== undefined || updates.modeId !== undefined || updates.router !== undefined
+    if (binds) chat = settleNewChatOwner(userId, chat, { ...chat, ...updates })
+    // The chat's owner: its conductor runtime is made and looked up under it.
+    const owner = chat.userId
     const next = { ...chat, ...updates }
     const bound = next.agentId ? agentService.findAgent(getSettingsScopeUserId(), userId, next.agentId) : null
     if (bound && isChatConductor(bound.row) && bound.row.driverConfig?.conductorChatId !== chatId) throw new ChatError('not_configured', 'This runtime belongs to another chat.')
     if (bound && isChatConductor(bound.row) && (updates.modeId !== undefined || updates.providerId !== undefined || updates.modelId !== undefined)) {
-      chatConductorService.ensure(userId, next, true)
+      chatConductorService.ensure(owner, next, true)
       releaseChatSessions(chatId, bound.row.id)
     }
     if (next.router === 'coordinator') {
       const located = next.agentId ? agentService.findAgent(getSettingsScopeUserId(), userId, next.agentId) : null
       if (!located || !canConduct(located.row)) {
         if (next.agentId) chatOnDemandAgentRepo.add(chatId, next.agentId)
-        updates = { ...updates, agentId: chatConductorService.ensure(userId, { ...next, agentId: null }).id }
+        updates = { ...updates, agentId: chatConductorService.ensure(owner, { ...next, agentId: null }).id }
       }
     } else if (next.router === 'direct' && !next.agentId) {
-      updates = { ...updates, agentId: chatConductorService.ensure(userId, next).id }
+      updates = { ...updates, agentId: chatConductorService.ensure(owner, next).id }
     }
-    const ok = chatRepo.updateMeta(userId, chatId, updates)
+    const ok = chatRepo.updateMeta(owner, chatId, updates)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
     // Who answers here changed: the old sessions are no longer this chat's.
     if (updates.router !== undefined && updates.router !== routerOf(chat) && updates.agentId !== chat.agentId && !(updates.agentId === undefined && next.agentId === chat.agentId)) releaseChatSessions(chatId)
@@ -147,10 +232,10 @@ export const chatService = {
    * title only, so the chat keeps its place in a list sorted by recency.
    */
   rename(userId: string, chatId: string, title: unknown): void {
-    requireOwnedChat(userId, chatId)
+    const { userId: owner } = requireOwnedChat(userId, chatId)
     const trimmed = typeof title === 'string' ? title.trim() : ''
     if (!trimmed) throw new ChatError('invalid_value', 'A chat needs a title.')
-    if (!chatRepo.rename(userId, chatId, trimmed)) throw new ChatError('not_found', 'Chat not found')
+    if (!chatRepo.rename(owner, chatId, trimmed)) throw new ChatError('not_found', 'Chat not found')
   },
 
   /**
@@ -158,12 +243,14 @@ export const chatService = {
    * Returns the new rank, null once unpinned.
    */
   setPinned(userId: string, chatId: string, pinned: boolean): number | null {
-    requireOwnedChat(userId, chatId)
+    const { userId: owner } = requireOwnedChat(userId, chatId)
     if (!pinned) {
-      if (!chatRepo.unpin(userId, chatId)) throw new ChatError('not_found', 'Chat not found')
+      if (!chatRepo.unpin(owner, chatId)) throw new ChatError('not_found', 'Chat not found')
       return null
     }
-    const rank = chatRepo.pin(userId, chatId)
+    // Ranked among every chat of the merged list, so a shared chat and one of
+    // the profile's never share a place in Pinned.
+    const rank = chatRepo.pin(owner, chatId, listOwners(userId))
     if (rank === null) throw new ChatError('not_found', 'Chat not found')
     return rank
   },
@@ -178,13 +265,13 @@ export const chatService = {
     const { list, rank } = target ?? {}
     if (typeof rank !== 'number' || !Number.isFinite(rank)) throw new ChatError('invalid_value', 'A chat moves to a finite rank.')
     if (list === 'pinned') {
-      if (chat.pinnedRank === null || !chatRepo.setPinnedRank(userId, chatId, rank)) {
+      if (chat.pinnedRank === null || !chatRepo.setPinnedRank(chat.userId, chatId, rank)) {
         throw new ChatError('invalid_value', 'Only a pinned chat moves inside Pinned.')
       }
       return
     }
     if (list !== 'chats') throw new ChatError('invalid_value', `Unknown chat list: ${String(list)}`)
-    if (!chatRepo.setSortKey(userId, chatId, rank)) throw new ChatError('not_found', 'Chat not found')
+    if (!chatRepo.setSortKey(chat.userId, chatId, rank)) throw new ChatError('not_found', 'Chat not found')
   },
 
   /**
@@ -192,8 +279,8 @@ export const chatService = {
    * the chat is already visible; errors out if the chat doesn't exist.
    */
   showInList(userId: string, chatId: string): void {
-    requireOwnedChat(userId, chatId)
-    chatRepo.showInList(userId, chatId)
+    const { userId: owner } = requireOwnedChat(userId, chatId)
+    chatRepo.showInList(owner, chatId)
     logger.info('chat promoted to main list', { chatId })
   },
 
@@ -310,7 +397,7 @@ export const chatService = {
     if (router === 'coordinator') {
       const candidateId = chat.agentId ?? attached[0]
       const candidate = candidateId ? agentService.findAgent(getSettingsScopeUserId(), userId, candidateId) : null
-      bindRoot = candidate && canConduct(candidate.row) ? candidate.row.id : chatConductorService.ensure(userId, { ...chat, agentId: null }).id
+      bindRoot = candidate && canConduct(candidate.row) ? candidate.row.id : chatConductorService.ensure(chat.userId, { ...chat, agentId: null }).id
     } else if (router === 'direct') {
       if (attached.length > 1) {
         throw new ChatError(
@@ -321,7 +408,7 @@ export const chatService = {
       bindRoot = attached[0] ?? null
     }
 
-    chatRepo.setRouter(userId, chatId, router, {
+    chatRepo.setRouter(chat.userId, chatId, router, {
       // The root is only ever detached on the way *out* of `direct`; the other
       // routers never have one.
       detachRoot: current === 'direct' ? chat.agentId : null,

@@ -1,7 +1,6 @@
 import { customAgentService } from '../services/customAgentService'
 import type { CustomAgentConfig } from '../../shared/customAgents'
 import { replyAnswerUncertainty } from '../services/replyAnswerClaims'
-import { chatRepo } from '../db/chats'
 import { inboxService } from '../services/inboxService'
 import { agentSessionRepo } from '../db/agents'
 import { type ProtocolResolution } from '../agents/a2a-client'
@@ -13,6 +12,7 @@ import { parseAnswerPayload } from '../services/askDelivery'
 import type { AskAnswerPayload, InboxAnswerResult } from '../../shared/inbox'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
+import { visibleChat } from '../auth/chatScope'
 import { AgentError, ipcErrorShape } from '../errors'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
@@ -135,7 +135,7 @@ export function registerA2AHandlers(): void {
   // Look up the A2A session for a chat (used by renderer to detect agent chats)
   ipcHandle('agent:get-session', async (_event, chatId: string) => {
     userActivation.requireActivated()
-    if (!chatRepo.getOwned(getProfileScopeUserId(), chatId)) return null
+    if (!visibleChat(getProfileScopeUserId(), chatId)) return null
     return agentSessionRepo.getByChat(chatId) ?? null
   })
 
@@ -143,7 +143,7 @@ export function registerA2AHandlers(): void {
     const nestedChatId = nestedAgentTurns.chatFor(requestId)
     if (nestedChatId) {
       userActivation.requireActivated()
-      if (!chatRepo.getOwned(getProfileScopeUserId(), nestedChatId)) throw new Error('Chat not found')
+      if (!visibleChat(getProfileScopeUserId(), nestedChatId)) throw new Error('Chat not found')
       nestedAgentTurns.cancel(requestId)
       return { success: true }
     }
@@ -191,14 +191,14 @@ export function registerA2AHandlers(): void {
   ipcHandle('agent:reply-uncertainty', (_event, requestId: string): string | null => {
     userActivation.requireActivated()
     const owner = pendingRequests.owner(requestId)
-    if (!owner || !chatRepo.getOwned(getProfileScopeUserId(), owner.chatId)) return null
+    if (!owner || !visibleChat(getProfileScopeUserId(), owner.chatId)) return null
     return replyAnswerUncertainty(pendingRequests.registration(requestId))
   })
 
   /** What a chat is currently blocked on, so a reload can re-open the prompt. */
   ipcHandle('agent:pending-requests', async (_event, chatId: string) => {
     userActivation.requireActivated()
-    if (!chatRepo.getOwned(getProfileScopeUserId(), chatId)) return []
+    if (!visibleChat(getProfileScopeUserId(), chatId)) return []
     return pendingRequests.listForChat(chatId)
   })
 }

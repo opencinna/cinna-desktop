@@ -1,6 +1,6 @@
 import type { TaskInputRequestRow } from '../db/taskInputRequests'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
-import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { taskService } from './taskService'
 import { runExecutionService, type RunHandle, type RunScope } from './runExecutionService'
 import { inboxService } from './inboxService'
@@ -29,7 +29,7 @@ export async function completeNestedContinuation(
     if (taskInputRequestRepo.listOpenForChat(row.chatId).some((request) => request.agentId === row.agentId && request.resume === 'next_message')) return
     const deadline = Date.now() + REQUEST_PARK_TIMEOUT_MS + 20 * 60_000
     while (true) {
-      const chat = chatRepo.getOwned(scope.profileUserId, row.chatId)
+      const chat = visibleChat(scope.profileUserId, row.chatId)
       if (!chat || chat.deletedAt || chat.router !== 'coordinator') return
       const task = taskService.getById(scope.profileUserId, row.taskId)
       if (!task.runsHere || task.executor !== 'desktop' || !['blocked', 'in_progress'].includes(task.status)) return

@@ -4,7 +4,7 @@ import type { StreamParams, StreamResult } from '../llm/types'
 import type { AgentDriver } from '../agents/drivers/driver'
 import type { AgentRow } from '../db/agents'
 
-const state = vi.hoisted(() => ({ database: null as TestDatabase | null, agents: [] as AgentRow[] }))
+const state = vi.hoisted(() => ({ database: null as TestDatabase | null, agents: [] as AgentRow[], boundUnder: [] as string[] }))
 const stream = vi.hoisted(() => vi.fn<(input: StreamParams) => Promise<StreamResult>>())
 const driverRun = vi.hoisted(() => vi.fn<AgentDriver['run']>())
 vi.mock('../db/client', () => ({ getDb: () => state.database!.db, getRawSqlite: () => state.database!.sqlite }))
@@ -13,7 +13,8 @@ vi.mock('../logger/logger', () => ({ createLogger: () => ({ info() {}, debug() {
 vi.mock('../auth/scope', () => ({ getSettingsScopeUserId: () => '__default__', getAgentLookupScope: () => '__default__' }))
 vi.mock('../mcp/manager', () => ({ mcpManager: { getConnection: () => null } }))
 vi.mock('./fileStore', () => ({ attachmentToMediaPart: async () => null }))
-vi.mock('./chatConductorService', () => ({ chatConductorService: { remove() {}, bind: (_user: string, chat: { id: string }) => {
+vi.mock('./chatConductorService', () => ({ chatConductorService: { remove() {}, bind: (user: string, chat: { id: string }) => {
+  state.boundUnder.push(user)
   state.database!.raw.prepare('UPDATE chats SET agent_id = ? WHERE id = ?').run('runtime', chat.id)
   return { ...chat, agentId: 'runtime' }
 } } }))
@@ -120,6 +121,17 @@ describe('autonomous coordinator runner', () => {
     await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('completed'))
     expect(stream).not.toHaveBeenCalled()
     expect(taskRuntimeRepo.get(USER, taskId)).toMatchObject({ coordinator: { agentId: 'writer', providerId: null, modelId: null }, toolCalls: 1 })
+  })
+
+  it('binds the conductor of a chat the default profile shares under the default profile, not the active one', () => {
+    // A profile runs a task in a shared chat that has no conductor yet: the
+    // conductor row is looked up under the chat's owner, so it must be made there.
+    const shared = chatRepo.create(USER, { title: 'Shared', router: 'coordinator', providerId: 'provider', modelId: 'model' })
+    state.boundUnder.length = 0
+    try {
+      taskRunnerService.prepare({ profileUserId: 'profile-1', settingsUserId: USER }, { chatId: shared.id, goal: 'Finish this task' })
+    } catch { /* what happens after the bind is not this test's question */ }
+    expect(state.boundUnder).toEqual([USER])
   })
 
   it('refuses autonomous work before launch when the chat mode disables tools', () => {

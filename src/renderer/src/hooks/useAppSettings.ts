@@ -85,8 +85,17 @@ export function useSetAppSetting() {
         error: err instanceof Error ? err.message : String(err)
       })
     },
-    onSettled: () => {
+    onSettled: (_data, _error, input) => {
       queryClient.invalidateQueries({ queryKey: APP_SETTINGS_KEY })
+      // Main decides which profiles' chats are listed from this key, so the
+      // Chats list, its summaries and the trash are asked again at once.
+      if (input.key === 'showLocalDataInAllProfiles') {
+        queryClient.invalidateQueries({ queryKey: ['chats'] })
+        queryClient.invalidateQueries({ queryKey: ['trash'] })
+        // The open chat too (`['chat', chatId]`): a shared chat stops (or
+        // starts) resolving in this profile.
+        queryClient.invalidateQueries({ queryKey: ['chat'] })
+      }
       queryClient.invalidateQueries({ queryKey: ['local-development-context'] })
       // `localAgentsDefaultCredentialId` lives here and outranks the default
       // chat mode in an agent's runtime chain, so pinning or clearing it moves

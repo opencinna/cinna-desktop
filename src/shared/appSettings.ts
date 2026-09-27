@@ -31,6 +31,15 @@ export interface AppSettingsSchema {
   /** Show source/root section labels in the Agents sidebar. */
   showAgentSidebarSections: boolean
   /**
+   * When true (the default), chats owned by the default (signed-out) profile —
+   * chats made while signed out, and new chats with local agents or chat modes
+   * — are listed and usable in every profile, and a new chat's owner follows
+   * its first runtime binding. When false, every chat stays in the profile it
+   * was started in. Local agents are visible in every profile either way.
+   * Main resolves it in `auth/chatScope.ts`.
+   */
+  showLocalDataInAllProfiles: boolean
+  /**
    * When true, an account-provisioned (Cinna) default chat mode takes precedence
    * over the local default-profile default. Off by default — the local default
    * wins, and the account default only applies when no local default is set.

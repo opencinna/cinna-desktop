@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import { getDb } from './client'
 import { chatRunResults, chats } from './schema'
 import type { ChatRunResult, ChatRunResultStatus } from '../../shared/chatRunResult'
@@ -14,11 +14,12 @@ export const chatRunResultRepo = {
     getDb().insert(chatRunResults).values({ chatId, runId, status, unread })
       .onConflictDoUpdate({ target: chatRunResults.chatId, set: { runId, status, unread } }).run()
   },
-  list(userId: string): Map<string, ChatRunResult> {
+  /** One owner, or every owner a profile sees (`auth/chatScope.ts`). */
+  list(owners: string | readonly string[]): Map<string, ChatRunResult> {
     const rows = getDb().select({ chatId: chatRunResults.chatId, runId: chatRunResults.runId,
       status: chatRunResults.status, unread: chatRunResults.unread })
       .from(chatRunResults).innerJoin(chats, eq(chats.id, chatRunResults.chatId))
-      .where(eq(chats.userId, userId)).all()
+      .where(typeof owners === 'string' ? eq(chats.userId, owners) : inArray(chats.userId, [...owners])).all()
     return new Map(rows.map(({ chatId, ...result }) => [chatId, result]))
   },
   /** The service verifies ownership; an old view cannot mark a newer result read. */

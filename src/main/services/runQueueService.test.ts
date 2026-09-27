@@ -282,7 +282,8 @@ describe('runQueueService.submit', () => {
   it('refuses a chat the profile does not own', async () => {
     const service = createRunQueueService()
     running()
-    ownedChat.mockReturnValueOnce(undefined)
+    // Neither the profile nor the default profile (whose chats every profile sees) owns it.
+    ownedChat.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined)
     await expect(service.submit(SCOPE, payload('hi'), options)).rejects.toThrow('Chat not found')
   })
 })

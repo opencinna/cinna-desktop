@@ -9,7 +9,7 @@ import { getDb } from '../db/client'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { jobRunChatId, jobRunsRepo, jobsRepo, type JobRunRow } from '../db/jobs'
-import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { syncRepo } from '../db/sync'
 import {
   taskRepo,
@@ -1230,10 +1230,10 @@ export const taskService = {
     if (run) {
       // Hard-deleted with the run wherever it is, the Trash included.
       const chatId = jobRunChatId(run)
-      const chat = chatId ? chatRepo.getOwned(userId, chatId) : undefined
+      const chat = chatId ? visibleChat(userId, chatId) : undefined
       return { deletesRun: true, chat: chat ? 'deleted_with_run' : 'none', jobStays }
     }
-    const chat = task.chatId ? chatRepo.getOwned(userId, task.chatId) : undefined
+    const chat = task.chatId ? visibleChat(userId, task.chatId) : undefined
     return {
       deletesRun: false,
       chat: !chat ? 'none' : chat.deletedAt ? 'in_trash' : 'kept',

@@ -1,7 +1,7 @@
 import { nanoid } from 'nanoid'
-import { and, asc, desc, eq, isNull, isNotNull, max, min, ne, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, isNotNull, max, min, ne, or, sql } from 'drizzle-orm'
 import { getDb } from './client'
-import { chats, chatOnDemandAgents, messages } from './schema'
+import { agents, chatFiles, chats, chatOnDemandAgents, messages } from './schema'
 import type { MessageRow } from './messages'
 import type { ChatRouter } from '../../shared/chatRouting'
 
@@ -24,9 +24,18 @@ export interface ChatMetaUpdate {
   router?: ChatRouter
 }
 
+/**
+ * One owner, or the owners a profile sees (`auth/chatScope.ts`): the list
+ * reads take either, so a merged list is one statement with the same ordering.
+ */
+export type ChatOwners = string | readonly string[]
+
+const ownedBy = (owners: ChatOwners) =>
+  typeof owners === 'string' ? eq(chats.userId, owners) : inArray(chats.userId, [...owners])
+
 /** The chats `chatRepo.list` returns, as a condition other tables can join on. */
-const listedChats = (userId: string) =>
-  and(eq(chats.userId, userId), isNull(chats.deletedAt), eq(chats.hiddenFromList, false))
+const listedChats = (owners: ChatOwners) =>
+  and(ownedBy(owners), isNull(chats.deletedAt), eq(chats.hiddenFromList, false))
 
 export interface ChatMessageStats {
   chatId: string
@@ -60,6 +69,13 @@ export const chatRepo = {
     return !!row?.deletedAt
   },
 
+  /** Whether anything has been said or attached in the chat yet. */
+  hasContent(chatId: string): boolean {
+    const db = getDb()
+    return !!db.select({ id: messages.id }).from(messages).where(eq(messages.chatId, chatId)).limit(1).get() ||
+      !!db.select({ id: chatFiles.id }).from(chatFiles).where(eq(chatFiles.chatId, chatId)).limit(1).get()
+  },
+
   /** Load the full message history for an owned chat (caller must pre-verify ownership). */
   listMessageIds(chatId: string): string[] {
     return getDb().select({ id: messages.id }).from(messages).where(eq(messages.chatId, chatId)).all().map((row) => row.id)
@@ -74,17 +90,11 @@ export const chatRepo = {
       .all()
   },
 
-  list(userId: string): ChatRow[] {
+  list(owners: ChatOwners): ChatRow[] {
     return getDb()
       .select()
       .from(chats)
-      .where(
-        and(
-          eq(chats.userId, userId),
-          isNull(chats.deletedAt),
-          eq(chats.hiddenFromList, false)
-        )
-      )
+      .where(listedChats(owners))
       .orderBy(desc(chats.updatedAt))
       .all()
   },
@@ -97,7 +107,7 @@ export const chatRepo = {
    * every message row of every listed chat is still read, so the cost grows
    * with the messages table. Never call these from a polled path.
    */
-  listMessageStats(userId: string): ChatMessageStats[] {
+  listMessageStats(owners: ChatOwners): ChatMessageStats[] {
     return getDb()
       .select({
         chatId: messages.chatId,
@@ -107,39 +117,39 @@ export const chatRepo = {
       })
       .from(messages)
       .innerJoin(chats, eq(chats.id, messages.chatId))
-      .where(listedChats(userId))
+      .where(listedChats(owners))
       .groupBy(messages.chatId)
       .all()
   },
 
   /** Distinct agents named on a chat's messages, in order of first appearance. */
-  listMessageAgentIds(userId: string): { chatId: string; sourceAgentId: string | null; toolAgentId: string | null }[] {
+  listMessageAgentIds(owners: ChatOwners): { chatId: string; sourceAgentId: string | null; toolAgentId: string | null }[] {
     return getDb()
       .select({ chatId: messages.chatId, sourceAgentId: messages.sourceAgentId, toolAgentId: messages.toolAgentId })
       .from(messages)
       .innerJoin(chats, eq(chats.id, messages.chatId))
-      .where(and(listedChats(userId), or(isNotNull(messages.sourceAgentId), isNotNull(messages.toolAgentId))))
+      .where(and(listedChats(owners), or(isNotNull(messages.sourceAgentId), isNotNull(messages.toolAgentId))))
       .groupBy(messages.chatId, messages.sourceAgentId, messages.toolAgentId)
       .orderBy(asc(min(messages.sortOrder)))
       .all()
   },
 
   /** On-demand agents of every listed chat, in the order they were attached. */
-  listOnDemandAgentIds(userId: string): { chatId: string; agentId: string }[] {
+  listOnDemandAgentIds(owners: ChatOwners): { chatId: string; agentId: string }[] {
     return getDb()
       .select({ chatId: chatOnDemandAgents.chatId, agentId: chatOnDemandAgents.agentId })
       .from(chatOnDemandAgents)
       .innerJoin(chats, eq(chats.id, chatOnDemandAgents.chatId))
-      .where(listedChats(userId))
+      .where(listedChats(owners))
       .orderBy(asc(chatOnDemandAgents.createdAt), asc(chatOnDemandAgents.agentId))
       .all()
   },
 
-  listTrash(userId: string): ChatRow[] {
+  listTrash(owners: ChatOwners): ChatRow[] {
     return getDb()
       .select()
       .from(chats)
-      .where(and(eq(chats.userId, userId), isNotNull(chats.deletedAt)))
+      .where(and(ownedBy(owners), isNotNull(chats.deletedAt)))
       .orderBy(desc(chats.deletedAt))
       .all()
   },
@@ -215,10 +225,10 @@ export const chatRepo = {
     return result.changes > 0
   },
 
-  emptyTrash(userId: string): number {
+  emptyTrash(owners: ChatOwners): number {
     const result = getDb()
       .delete(chats)
-      .where(and(eq(chats.userId, userId), isNotNull(chats.deletedAt)))
+      .where(and(ownedBy(owners), isNotNull(chats.deletedAt)))
       .run()
     return result.changes
   },
@@ -248,16 +258,17 @@ export const chatRepo = {
 
   /**
    * Pin a chat at the top of the user's Pinned block: the highest rank among
-   * their chats + 1, read and written in one transaction. A chat already
-   * pinned moves to the top too. Returns the rank, or null for a chat not
-   * found. Leaves `updatedAt` alone.
+   * the chats listed with it (`rankOwners`, the owner alone by default) + 1,
+   * read and written in one transaction. A chat already pinned moves to the
+   * top too. Returns the rank, or null for a chat not found. Leaves
+   * `updatedAt` alone.
    */
-  pin(userId: string, chatId: string): number | null {
+  pin(userId: string, chatId: string, rankOwners: ChatOwners = userId): number | null {
     return getDb().transaction((tx) => {
       const top = tx
         .select({ rank: max(chats.pinnedRank) })
         .from(chats)
-        .where(and(eq(chats.userId, userId), ne(chats.id, chatId)))
+        .where(and(ownedBy(rankOwners), ne(chats.id, chatId)))
         .get()
       const rank = (top?.rank ?? 0) + 1
       const result = tx
@@ -363,6 +374,27 @@ export const chatRepo = {
         .set(set)
         .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
         .run()
+    })
+  },
+
+  /**
+   * Hand an empty chat to another owner (`chatService.update` deciding a new
+   * chat's owner from its first runtime binding). Moves the chat's generated
+   * conductor runtime with it, in the same transaction, because that row is
+   * looked up under the chat owner's id. Only for a chat with no messages and
+   * no files: nothing else is keyed by the chat owner. False when the chat is
+   * not `from`'s.
+   */
+  reassignOwner(chatId: string, from: string, to: string, conductorAgentIds: readonly string[]): boolean {
+    return getDb().transaction((tx) => {
+      const result = tx.update(chats).set({ userId: to })
+        .where(and(eq(chats.id, chatId), eq(chats.userId, from))).run()
+      if (result.changes === 0) return false
+      if (conductorAgentIds.length) {
+        tx.update(agents).set({ userId: to })
+          .where(and(inArray(agents.id, [...conductorAgentIds]), eq(agents.userId, from))).run()
+      }
+      return true
     })
   },
 

@@ -25,9 +25,11 @@ export function activeChatRunId(chatId: string): string | null {
  * a waiting script's gates, the chat's agent sessions and activity, and its
  * conductor runtime. Call after the delete has committed, never before.
  */
-export function chatHardDeleted(userId: string, chatId: string): void {
+export function chatHardDeleted(userId: string, chatId: string, ownerUserId = userId): void {
+  // Tasks and runners belong to the profile; the conductor row to the chat's
+  // owner, which is the default profile for a chat shared across profiles.
   taskRunnerBridge.chatRemoved(userId, chatId)
   forgetChatSessions(chatId)
   sessionActivityHub.clear(chatId)
-  chatConductorService.remove(userId, chatId)
+  chatConductorService.remove(ownerUserId, chatId)
 }

@@ -4,6 +4,7 @@ import { taskRepo } from '../db/tasks'
 import { taskRuntimeRepo } from '../db/taskRuntimes'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { chatRepo } from '../db/chats'
+import { chatOwnerFor, ownerOfVisible, visibleChat } from '../auth/chatScope'
 import { chatRunResultRepo } from '../db/chatRunResults'
 import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { messageRepo } from '../db/messages'
@@ -41,7 +42,7 @@ function owned(userId: string, taskId: string, requireChat = true) {
   if (task.executor !== 'desktop' || !task.runsHere || !['in_progress', 'blocked'].includes(task.status)) {
     throw new Error('The task is no longer runnable on this device.')
   }
-  if (requireChat && (!task.chatId || !chatRepo.getOwned(userId, task.chatId) || chatRepo.getOwned(userId, task.chatId)?.deletedAt)) {
+  if (requireChat && (!task.chatId || !visibleChat(userId, task.chatId) || visibleChat(userId, task.chatId)?.deletedAt)) {
     throw new Error('The task conversation is no longer available.')
   }
   return task
@@ -52,7 +53,7 @@ function checkpoint(userId: string, taskId: string): TaskRuntimeCheckpoint {
   return value
 }
 function agents(scope: RunScope, chatId: string): CoordinatorAgent[] {
-  const conductorId = chatRepo.getOwned(scope.profileUserId, chatId)?.agentId
+  const conductorId = visibleChat(scope.profileUserId, chatId)?.agentId
   return chatOnDemandAgentRepo.listAgentIds(chatId).flatMap((id) => {
     if (id === conductorId) return []
     const located = agentService.findAgent(scope.settingsUserId, scope.profileUserId, id)
@@ -80,7 +81,7 @@ function finish(userId: string, taskId: string, state: 'completed' | 'error' | '
     taskService.setStatus(userId, taskId, state, { errorMessage: reason })
     // A failed/canceled task must not strand any gate from a prior invocation.
     taskInputRequestRepo.expireNextMessageForTask(task.id)
-    if (chatRepo.getOwned(userId, saved.chatId)) {
+    if (visibleChat(userId, saved.chatId)) {
       chatRunResultRepo.record(saved.chatId, nanoid(), state === 'error' ? 'failed' : state === 'cancelled' ? 'canceled' : 'completed')
     }
   })
@@ -123,8 +124,8 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
       owned(userId, taskId)
       saved = checkpoint(userId, taskId)
       if (saved.owner.kind === 'coordinator' && !saved.coordinator.agentId) {
-        const chat = chatRepo.getOwned(userId, saved.chatId)!
-        const bound = chat.agentId ? chat : chatConductorService.bind(userId, chat)
+        const chat = visibleChat(userId, saved.chatId)!
+        const bound = chat.agentId ? chat : chatConductorService.bind(ownerOfVisible(userId, chat), chat)
         if (bound.agentId) {
           const root = agentService.findAgent(saved.settingsUserId, userId, bound.agentId)?.row
           saved = { ...saved, coordinator: { ...saved.coordinator, agentId: bound.agentId, name: root?.name } }
@@ -212,7 +213,7 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
           assertCurrent()
           taskService.setHandoffNote(userId, taskId, handoff.note)
           taskService.setAssignee(userId, taskId, { kind: 'agent', agentId: handoff.agentId, name: handoff.agentName })
-          chatRepo.updateMeta(userId, next.chatId, { router: 'human' })
+          chatRepo.updateMeta(chatOwnerFor(userId, next.chatId), next.chatId, { router: 'human' })
           messageRepo.saveTransition({ chatId: next.chatId, content: `Task handed to ${handoff.agentName}.\n${handoff.note}`, sourceAgentId: handoff.agentId })
           store(userId, taskId, { ...saved, state: 'queued', owner: { kind: 'agent', agentId: handoff.agentId, name: handoff.agentName, note: handoff.note },
             prompt: `Goal:\n${owned(userId, taskId).goal}\n\nContinue the task with this handoff note:\n${handoff.note}`, promptOrigin: 'runner' })
@@ -224,7 +225,7 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
             taskService.setAssignee(userId, taskId, saved.coordinator.agentId
               ? { kind: 'agent', agentId: saved.coordinator.agentId, name: saved.coordinator.name ?? null }
               : { kind: 'model', agentId: null, name: null })
-            chatRepo.updateMeta(userId, next.chatId, { router: 'coordinator', agentId: saved.coordinator.agentId ?? null,
+            chatRepo.updateMeta(chatOwnerFor(userId, next.chatId), next.chatId, { router: 'coordinator', agentId: saved.coordinator.agentId ?? null,
               ...(saved.coordinator.providerId ? { providerId: saved.coordinator.providerId } : {}),
               ...(saved.coordinator.modelId ? { modelId: saved.coordinator.modelId } : {}) })
             const note = outcome.handback?.note
@@ -299,11 +300,12 @@ export const taskRunnerService = {
   /** Main-only admission seam: a job transaction commits before launch is called. */
   prepare(scope: RunScope, input: AutonomousTaskStart): { taskId: string; chatId: string; launch(): void } {
     if (!input || typeof input.goal !== 'string' || !input.goal.trim() || input.goal.length > 64000) throw new Error('Enter a task goal of at most 64000 characters.')
-    let chat = chatRepo.getOwned(scope.profileUserId, input.chatId)
+    let chat = visibleChat(scope.profileUserId, input.chatId)
     if (!chat || chat.deletedAt || chat.router !== 'coordinator') {
       throw new Error('Choose a coordinator before running on its own.')
     }
-    if (!chat.agentId) chat = chatConductorService.bind(scope.profileUserId, chat)
+    // The conductor lives under the chat's owner — the default profile for a shared chat.
+    if (!chat.agentId) chat = chatConductorService.bind(ownerOfVisible(scope.profileUserId, chat), chat)
     const conductor = chat.agentId ? agentService.findAgent(scope.settingsUserId, scope.profileUserId, chat.agentId)?.row : undefined
     if (chat.agentId) {
       if (!conductor || !(agentOverrideRepo.get(scope.profileUserId, conductor.id)?.enabled ?? conductor.enabled) ||
@@ -427,7 +429,7 @@ export const taskRunnerService = {
           if (!taskInputRequestRepo.settle(requestId, 'answered', resolution)) throw new Error('This question has already been answered.')
           store(userId, request.taskId, { ...saved, pendingRequestIds: saved.pendingRequestIds.filter((id) => id !== requestId),
             state: 'queued', reason: null, owner, prompt: answer, promptOrigin: 'user', gateRequestId: null, gateToolCallId: null })
-          chatRepo.updateMeta(userId, saved.chatId, { router: owner.kind === 'coordinator' ? 'coordinator' : 'human' })
+          chatRepo.updateMeta(chatOwnerFor(userId, saved.chatId), saved.chatId, { router: owner.kind === 'coordinator' ? 'coordinator' : 'human' })
           taskService.applyRunState(userId, request.taskId, taskInputRequestRepo.listOpenForTask(request.taskId).length ? 'needs_input' : 'working')
         })
         enqueue(userId, request.taskId)
@@ -477,7 +479,7 @@ installTaskRunnerHooks({
         getDb().transaction(() => {
           taskRuntimeRepo.save(userId, taskId, { ...saved, state: 'interrupted', activeStartedAt: null, reason: 'Execution stopped because this device no longer owns a runnable task.' })
           const task = taskRepo.getById(userId, taskId)
-          if (task?.chatId === saved.chatId && chatRepo.getOwned(userId, saved.chatId)) {
+          if (task?.chatId === saved.chatId && visibleChat(userId, saved.chatId)) {
             const status = task.deletedAt || ['cancelled', 'archived'].includes(task.status)
               ? 'canceled' : task.status === 'completed' ? 'completed' : task.status === 'error' ? 'failed' : 'needs_input'
             // Metadata edits after an external stop do not produce a new result.

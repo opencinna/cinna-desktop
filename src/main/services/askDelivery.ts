@@ -1,5 +1,5 @@
 import { claimReplyAnswer } from './replyAnswerClaims'
-import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { driverFor, respondToOrphanedAsk } from '../agents/drivers'
 import { agentService } from './agentService'
 import { pendingRequests } from '../agents/drivers/pendingRequests'
@@ -81,7 +81,7 @@ export function deliverAnswer(
   // reported plainly rather than logged as a fault.
   if (!owner) return { ok: false, reason: ASK_NO_LONGER_WAITING, code: 'no_longer_waiting' }
 
-  if (!chatRepo.getOwned(userId, owner.chatId)) {
+  if (!visibleChat(userId, owner.chatId)) {
     logger.warn('answer rejected: the caller does not own that chat', { requestId })
     return { ok: false, reason: 'Chat not found', code: 'not_owned' }
   }
@@ -152,7 +152,7 @@ export function deliverAnswerWithCommit(
     const settingsUserId = getSettingsScopeUserId()
     const validate = (): void => {
       if (getProfileScopeUserId() !== userId || getSettingsScopeUserId() !== settingsUserId ||
-        !chatRepo.getOwned(userId, owner.chatId)) throw new Error('The conversation or profile changed.')
+        !visibleChat(userId, owner.chatId)) throw new Error('The conversation or profile changed.')
       // The original binding validates agent, credential and session identity.
       // A current row never selects a replacement destination for this answer.
       validateDelivery()

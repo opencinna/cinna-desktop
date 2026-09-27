@@ -1,6 +1,7 @@
 import { publishEvent } from '../host/events'
 import { MAX_TITLE_CHARS, TITLE_SYSTEM_PROMPT } from './aiFunctionPrompts'
 import { chatRepo } from '../db/chats'
+import { ownerOfVisible, visibleChat } from '../auth/chatScope'
 import { messageRepo } from '../db/messages'
 import { appSettingsRepo } from '../db/appSettings'
 import { aiFunctions, AiFunctionError } from './aiFunctionsService'
@@ -93,7 +94,8 @@ export const chatTitleService = {
   applyEngineTitle(input: { userId: string; chatId: string; agentId: string; title: string }): boolean {
     const { userId, chatId } = input
     try {
-      const chat = chatRepo.getOwned(userId, chatId)
+      // `userId` is the profile; a chat shared across profiles is the default profile's.
+      const chat = visibleChat(userId, chatId)
       if (!chat || chat.deletedAt) return false
       // Only the chat's root names it: an agent @-addressed in a human-routed
       // chat, or a specialist, answers top-level too, but speaks for itself.
@@ -102,7 +104,7 @@ export const chatTitleService = {
       if (!isUntouchedAutoTitle(chat.title, firstUserText)) return false
       const title = sanitizeTitle(input.title)
       if (!title || title === chat.title) return false
-      chatRepo.updateMeta(userId, chatId, { title })
+      chatRepo.updateMeta(ownerOfVisible(userId, chat), chatId, { title })
       logger.info('chat titled by its engine', { chatId, titleLen: title.length })
       broadcastTitleUpdate(chatId, title)
       return true
@@ -137,7 +139,7 @@ export const chatTitleService = {
       throw new ChatTitleError('feature_disabled', 'Auto chat titles are off')
     }
 
-    const chat = chatRepo.getOwned(userId, chatId)
+    const chat = visibleChat(userId, chatId)
     if (!chat) {
       throw new ChatTitleError('chat_not_found', 'Chat not found')
     }
@@ -210,7 +212,7 @@ export const chatTitleService = {
     // Re-check the title hasn't changed between the read above and now —
     // a slow LLM call gives plenty of window for the user to manually
     // rename the chat. Re-read instead of trusting the snapshot.
-    const fresh = chatRepo.getOwned(userId, chatId)
+    const fresh = visibleChat(userId, chatId)
     if (!fresh) {
       throw new ChatTitleError('chat_not_found', 'Chat deleted during generation')
     }
@@ -221,7 +223,7 @@ export const chatTitleService = {
       )
     }
 
-    chatRepo.updateMeta(userId, chatId, { title })
+    chatRepo.updateMeta(ownerOfVisible(userId, fresh), chatId, { title })
     logger.info('chat title generated', {
       chatId,
       backend: resolved.kind,

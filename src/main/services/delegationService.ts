@@ -3,6 +3,7 @@ import { delegationRepo, type DelegationRow } from '../db/delegations'
 import { handoverRepo } from '../db/handovers'
 import { taskRepo } from '../db/tasks'
 import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { agentOverrideRepo } from '../db/agents'
 import {
@@ -160,7 +161,7 @@ function gateQuestion(scope: RunScope, row: DelegationRow): string {
 function openGate(scope: RunScope, row: DelegationRow): void {
   if (!row.taskId || row.gateRequestId) return
 
-  const existingChat = row.gateChatId ? chatRepo.getOwned(scope.profileUserId, row.gateChatId) : undefined
+  const existingChat = row.gateChatId ? visibleChat(scope.profileUserId, row.gateChatId) : undefined
   const chat = existingChat ?? createGateChat(scope, row)
   const requestId = `${GATE_PREFIX}${row.id}`
 

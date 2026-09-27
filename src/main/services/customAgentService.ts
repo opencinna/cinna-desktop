@@ -2,7 +2,7 @@ import { runtimeHost } from '../host/runtimeHost'
 import { createHash, randomUUID } from 'node:crypto'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { agentRepo, agentSessionRepo, type AgentRow } from '../db/agents'
-import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { getShellEnv, shellEnvForChild } from '../shell/env'
 import { parseCustomAgentConfig, parseAcpAccessToken, type CustomAgentConfig, type CustomAgentTestResult } from '../../shared/customAgents'
@@ -67,7 +67,7 @@ export const customAgentService = {
     const validate = (chatId?: string): void => {
       const current = agentRepo.getOwned(ownerId, row.id)
       if (getProfileScopeUserId() !== profileId || !current || !current.enabled || identity(current) !== original) throw new Error('This ACP configuration or active profile changed. Start a new chat with the current configuration.')
-      if (chatId && !chatRepo.getOwned(profileId, chatId)) throw new Error('This conversation is no longer available.')
+      if (chatId && !visibleChat(profileId, chatId)) throw new Error('This conversation is no longer available.')
     }
     const state = () => { validate(); return desktopStateService.readExternal(key) }
     return {

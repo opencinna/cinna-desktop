@@ -23,6 +23,7 @@ const { managedAgentSessionRepo } = await import('../db/managedAgentSessions')
 const { llmProviderRepo } = await import('../db/llmProviders')
 const { agentRepo, agentSessionRepo } = await import('../db/agents')
 const { registerA2AHandlers } = await import('../ipc/agent_a2a.ipc')
+const { appSettingsRepo } = await import('../db/appSettings')
 const OWNER = '__default__'
 const KEY = 'sk-ant-api-synthetic-managed-secret'
 let credentialId: string
@@ -186,6 +187,9 @@ describe('Managed binding ownership and persistence through real SQLite', () => 
     expect(JSON.stringify(dto)).not.toContain(String(privateRow.binding))
     expect(JSON.stringify(dto)).not.toContain(KEY)
     expect(JSON.stringify(dto)).not.toContain('credentialId')
+    // The chat is the default profile's, which every profile sees while
+    // `showLocalDataInAllProfiles` is on; with it off, another profile does not.
+    appSettingsRepo.set('showLocalDataInAllProfiles', false)
     state.profile = 'other'
     expect(await handler({}, 'chat')).toBeNull()
     expect(fetchSpy).not.toHaveBeenCalled()

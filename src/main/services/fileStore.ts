@@ -3,6 +3,7 @@ import { join, basename, extname } from 'path'
 import { mkdir, readFile, stat, writeFile, unlink } from 'fs/promises'
 import { nanoid } from 'nanoid'
 import { chatFileRepo } from '../db/chatFiles'
+import { visibleChatFile } from '../auth/chatScope'
 import { createLogger } from '../logger/logger'
 import { DomainError } from '../errors'
 import { extractText, isTextExtractableMime } from './textExtractor'
@@ -186,7 +187,7 @@ class LocalFileStore implements FileStore {
     userId: string
     attachment: MessageAttachment
   }): Promise<{ bytes: Buffer; mimeType: string; filename: string }> {
-    const row = chatFileRepo.getOwned(userId, attachment.id)
+    const row = visibleChatFile(userId, attachment.id)
     if (!row) throw new FileStoreError('not_found', `Local file ${attachment.id} not found`)
     let bytes: Buffer
     try {
@@ -207,7 +208,7 @@ class LocalFileStore implements FileStore {
     userId: string
     attachment: MessageAttachment
   }): Promise<void> {
-    const row = chatFileRepo.getOwned(userId, attachment.id)
+    const row = visibleChatFile(userId, attachment.id)
     if (!row) return
     try {
       await unlink(row.storagePath)
@@ -215,7 +216,7 @@ class LocalFileStore implements FileStore {
       // The on-disk blob may already be gone (manual cleanup, prior crash).
       // The row still needs to disappear so the metadata stays consistent.
     }
-    chatFileRepo.delete(userId, attachment.id)
+    chatFileRepo.delete(row.userId, attachment.id)
   }
 }
 

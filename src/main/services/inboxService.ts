@@ -2,7 +2,7 @@ import { DEFAULT_USER_ID } from '../../shared/userIds'
 import { nanoid } from 'nanoid'
 import { taskInputRequestRepo, type TaskInputRequestRow } from '../db/taskInputRequests'
 import { taskRepo, type TaskRow } from '../db/tasks'
-import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { jobRunsRepo } from '../db/jobs'
 import { delegationRepo } from '../db/delegations'
 import { handoverRepo } from '../db/handovers'
@@ -163,7 +163,7 @@ function markAfterAskChange(userId: string, taskId: string): void {
  * missing task before.
  */
 function taskForChat(ctx: RunEventContext): TaskRow | null {
-  const chat = chatRepo.getOwned(ctx.userId, ctx.chatId)
+  const chat = visibleChat(ctx.userId, ctx.chatId)
   if (!chat) {
     logger.debug('an ask arrived in a chat that is not there; it stays in the transcript', {
       chatId: ctx.chatId
@@ -304,7 +304,7 @@ export const inboxService = {
    * first wins and the other does nothing.
    */
   closeAsk(ctx: RunEventContext, requestId: string, resolution: RequestResolution): void {
-    if (!chatRepo.getOwned(ctx.userId, ctx.chatId)) return
+    if (!visibleChat(ctx.userId, ctx.chatId)) return
     const row = taskInputRequestRepo.settle(requestId, settledStatus(resolution), resolution,
       { chatId: ctx.chatId, rootRunId: ctx.rootRunId, invocationId: ctx.turnId })
     // Missing/settled rows are harmless. Next-message requests settle through
@@ -324,7 +324,7 @@ export const inboxService = {
     event: Extract<RunEvent, { type: 'done' | 'error' }>
   ): void {
     const normalEnd = event.type === 'done' && (!event.stopReason || event.stopReason === 'end_turn')
-    if (!chatRepo.getOwned(ctx.userId, ctx.chatId)) return
+    if (!visibleChat(ctx.userId, ctx.chatId)) return
     const expired = ctx.rootRunId
       ? taskInputRequestRepo.expireOpenForRun(ctx.chatId, ctx.rootRunId, normalEnd,
           ctx.turnId !== ctx.rootRunId ? ctx.turnId : undefined)
@@ -399,13 +399,13 @@ export const inboxService = {
   },
 
   hasNextMessage(userId: string, chatId: string): boolean {
-    return !!chatRepo.getOwned(userId, chatId) && taskInputRequestRepo.listOpenForChat(chatId)
+    return !!visibleChat(userId, chatId) && taskInputRequestRepo.listOpenForChat(chatId)
       .some((row) => row.resume === 'next_message')
   },
 
   /** A typed chat message and an Inbox answer resume the same waiting turn. */
   resumeChat(ctx: RunEventContext, content: string): void {
-    if (!chatRepo.getOwned(ctx.userId, ctx.chatId)) return
+    if (!visibleChat(ctx.userId, ctx.chatId)) return
     const linked = taskRepo.getByChatId(ctx.userId, ctx.chatId)
     if (linked && ['new', 'refining', 'open', 'in_progress', 'blocked'].includes(linked.status)) {
       const task = taskService.getById(ctx.userId, linked.id)
@@ -539,7 +539,7 @@ export const inboxService = {
         return { ok: false, reason: 'This task is now running elsewhere.', code: 'not_here' }
       }
       const settingsUserId = getSettingsScopeUserId()
-      if (!chatRepo.getOwned(userId, row.chatId) ||
+      if (!visibleChat(userId, row.chatId) ||
         !agentService.findAgent(settingsUserId, userId, row.agentId)) {
         return { ok: false, reason: 'The conversation or its agent is no longer available.', code: 'not_here' }
       }

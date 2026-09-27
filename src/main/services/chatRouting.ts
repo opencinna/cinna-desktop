@@ -1,4 +1,4 @@
-import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { routingOf } from '../../shared/chatRouting'
 
@@ -24,7 +24,7 @@ export function chatAnswersToAgent(
   chatId: string,
   agentId: string
 ): string | null {
-  const chat = chatRepo.getOwned(profileUserId, chatId)
+  const chat = visibleChat(profileUserId, chatId)
   if (!chat) return 'the chat is gone'
   if (chat.deletedAt) return 'the chat is in the trash'
   const routing = routingOf(chat)

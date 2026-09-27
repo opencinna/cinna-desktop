@@ -1,6 +1,7 @@
 import { chatRepo } from '../db/chats'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
+import { visibleChat } from '../auth/chatScope'
 import { sessionActivityHub } from '../services/sessionActivityHub'
 import { stopSessionActivity } from '../services/sessionActivityStop'
 import { getMainWindow } from '../index'
@@ -32,9 +33,9 @@ export function registerSessionActivityHandlers(): void {
       sessionActivityHub.clear(chatId)
       return
     }
-    // Only the active profile's chats reach the window, as with the run queue.
+    // Only the chats the active profile sees reach the window, as with the run queue.
     if (!userActivation.isActivated()) return
-    const chat = chatRepo.getOwned(getProfileScopeUserId(), chatId)
+    const chat = visibleChat(getProfileScopeUserId(), chatId)
     if (!chat || chat.deletedAt) return
     const win = getMainWindow()
     const payload: SessionActivityChangedPayload = { chatId, snapshot }
@@ -43,7 +44,7 @@ export function registerSessionActivityHandlers(): void {
 
   ipcHandle('sessionActivity:get', (_event, chatId: unknown): SessionActivityGetResult => {
     userActivation.requireActivated()
-    if (typeof chatId !== 'string' || !chatRepo.getOwned(getProfileScopeUserId(), chatId)) {
+    if (typeof chatId !== 'string' || !visibleChat(getProfileScopeUserId(), chatId)) {
       return { ok: false, code: 'chat_not_found' }
     }
     return { ok: true, snapshot: sessionActivityHub.snapshot(chatId) }
@@ -52,7 +53,7 @@ export function registerSessionActivityHandlers(): void {
   ipcHandle('sessionActivity:stop', async (_event, chatId: unknown, itemId: unknown): Promise<SessionActivityStopResult> => {
     userActivation.requireActivated()
     if (typeof chatId !== 'string') return sessionActivityStopRefusal('chat_not_found')
-    const chat = chatRepo.getOwned(getProfileScopeUserId(), chatId)
+    const chat = visibleChat(getProfileScopeUserId(), chatId)
     // A trashed chat's processes are not the user's to steer from here.
     if (!chat || chat.deletedAt) return sessionActivityStopRefusal('chat_not_found')
     if (typeof itemId !== 'string' || itemId === '') return sessionActivityStopRefusal('not_stoppable')

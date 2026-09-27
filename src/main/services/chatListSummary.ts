@@ -1,5 +1,5 @@
 import { agentRepo, type AgentRow } from '../db/agents'
-import { chatRepo, type ChatRow } from '../db/chats'
+import { chatRepo, type ChatOwners, type ChatRow } from '../db/chats'
 import { chatModeService } from './chatModeService'
 import { isChatConductor } from './chatConductorService'
 import { acpTransportOf } from './agentTypeFields'
@@ -17,7 +17,9 @@ import type { ChatListSummary } from '../../shared/chatListSummary'
 export function buildChatListSummaries(
   settingsUserId: string,
   profileUserId: string,
-  chats: ChatRow[]
+  chats: ChatRow[],
+  /** Whose listed chats `chats` are: the profile, or every owner it sees. */
+  owners: ChatOwners = profileUserId
 ): Map<string, ChatListSummary> {
   const out = new Map<string, ChatListSummary>()
   if (chats.length === 0) return out
@@ -34,7 +36,7 @@ export function buildChatListSummaries(
     return row && !isChatConductor(row) ? row : null
   }
 
-  const stats = new Map(chatRepo.listMessageStats(profileUserId).map((row) => [row.chatId, row]))
+  const stats = new Map(chatRepo.listMessageStats(owners).map((row) => [row.chatId, row]))
   const participants = new Map<string, string[]>()
   const note = (chatId: string, agentId: string | null): void => {
     if (!agentId) return
@@ -44,8 +46,8 @@ export function buildChatListSummaries(
   }
   // Attached agents first, in the order they were attached: that order is what
   // decides the primary of a `human` chat with nothing bound.
-  for (const row of chatRepo.listOnDemandAgentIds(profileUserId)) note(row.chatId, row.agentId)
-  for (const row of chatRepo.listMessageAgentIds(profileUserId)) {
+  for (const row of chatRepo.listOnDemandAgentIds(owners)) note(row.chatId, row.agentId)
+  for (const row of chatRepo.listMessageAgentIds(owners)) {
     note(row.chatId, row.sourceAgentId)
     note(row.chatId, row.toolAgentId)
   }

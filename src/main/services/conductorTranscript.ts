@@ -1,4 +1,5 @@
 import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import type { AcpConnection } from '../agents/drivers/acp/types'
 import { buildAcpPrompt } from './acpAttachments'
@@ -7,7 +8,7 @@ import { buildAcpPrompt } from './acpAttachments'
 export async function replayTranscript(chatId: string, currentMessageId: string | undefined, connection: AcpConnection, userId: string, agentId: string): Promise<ContentBlock[]> {
   // Only the chat's answerer owns the whole conversation. A participant the
   // user addresses gets the catch-up packet, not every past turn on top of it.
-  if (chatRepo.getOwned(userId, chatId)?.agentId !== agentId) return []
+  if (visibleChat(userId, chatId)?.agentId !== agentId) return []
   const messages = chatRepo.listMessages(chatId)
   const index = currentMessageId ? messages.findIndex((message) => message.id === currentMessageId) : -1
   const history = index < 0 ? messages.slice(0, -1) : messages.slice(0, index)

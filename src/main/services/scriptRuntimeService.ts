@@ -2,6 +2,7 @@ import { nanoid } from 'nanoid'
 import { getDb, getRawSqlite } from '../db/client'
 import { taskRepo } from '../db/tasks'
 import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { chatRunResultRepo } from '../db/chatRunResults'
 import { jobsRepo, jobRunsRepo, type JobRow } from '../db/jobs'
 import { messageRepo } from '../db/messages'
@@ -50,7 +51,7 @@ function checkpoint(userId: string, taskId: string): ScriptRuntimeCheckpoint {
 function owned(userId: string, taskId: string, requireChat = true) {
   const task = taskService.getById(userId, taskId)
   if (task.executor !== 'desktop' || !task.runsHere || !['in_progress', 'blocked'].includes(task.status)) throw new Error('This device no longer owns a runnable script task.')
-  if (requireChat && (!task.chatId || !chatRepo.getOwned(userId, task.chatId) || chatRepo.getOwned(userId, task.chatId)?.deletedAt)) throw new Error('The script conversation was deleted.')
+  if (requireChat && (!task.chatId || !visibleChat(userId, task.chatId) || visibleChat(userId, task.chatId)?.deletedAt)) throw new Error('The script conversation was deleted.')
   return task
 }
 function releaseReservations(userId: string, taskId: string): void {
@@ -104,7 +105,7 @@ function assertBindings(userId: string, taskId: string, saved: ScriptRuntimeChec
   for (const step of Object.values(saved.steps)) {
     const child = taskService.getById(userId, step.taskId)
     if (child.executor !== 'desktop' || !child.runsHere || child.parentTaskId !== taskId || child.chatId !== step.chatId ||
-      !chatRepo.getOwned(userId, step.chatId) || chatRepo.getOwned(userId, step.chatId)?.deletedAt) {
+      !visibleChat(userId, step.chatId) || visibleChat(userId, step.chatId)?.deletedAt) {
       throw new Error('A script step no longer belongs to this execution on this device. Stop this attempt and review its tasks.')
     }
     if (!terminalSteps.has(step.state)) owned(userId, step.taskId)
@@ -166,18 +167,18 @@ function finish(userId: string, taskId: string, state: 'completed' | 'error' | '
           if (state === 'completed') {
             const summary = saved.definition.steps.map((step) => `${step.id}:\n${saved.steps[step.id].text ?? ''}`).join('\n\n')
             messageRepo.saveAssistant({ chatId: saved.chatId, content: `Script completed.\n\n${summary}` })
-          } else if (state === 'error' && reason && chatRepo.getOwned(userId, saved.chatId)) {
+          } else if (state === 'error' && reason && visibleChat(userId, saved.chatId)) {
             messageRepo.saveError({ chatId: saved.chatId, short: reason, code: 'script_runtime' })
           }
           taskService.setStatus(userId, taskId, state, { errorMessage: reason })
-          if (chatRepo.getOwned(userId, saved.chatId)) {
+          if (visibleChat(userId, saved.chatId)) {
             chatRunResultRepo.record(saved.chatId, nanoid(), state === 'error' ? 'failed' : state === 'cancelled' ? 'canceled' : 'completed')
           }
-        } else if (row.chatId === saved.chatId && chatRepo.getOwned(userId, saved.chatId)) {
+        } else if (row.chatId === saved.chatId && visibleChat(userId, saved.chatId)) {
           // Ordinary task controls have already written the authoritative root status.
           chatRunResultRepo.record(saved.chatId, nanoid(), row.status === 'completed' ? 'completed' : row.status === 'error' ? 'failed' : 'canceled')
         }
-      } else if (chatRepo.getOwned(userId, saved.chatId)) {
+      } else if (visibleChat(userId, saved.chatId)) {
         chatRunResultRepo.record(saved.chatId, nanoid(), 'canceled')
       }
       const run = jobRunsRepo.getById(userId, saved.jobRunId)

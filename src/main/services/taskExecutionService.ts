@@ -3,6 +3,7 @@ import { handingOffTasks, taskOperationKey } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import { taskFileService } from './taskFileService'
 import { chatRepo, type ChatRow } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { messageRepo } from '../db/messages'
 import { chatMcpRepo } from '../db/chatMcp'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
@@ -67,7 +68,7 @@ function adoptChat(scope: RunScope, task: TaskDto, agentId: string | null, chatI
     throw new TaskError('invalid_input', reason)
   }
   if (task.chatId) refuse('This task already has a conversation. Continue it there.')
-  const chat = chatRepo.getOwned(scope.profileUserId, chatId)
+  const chat = visibleChat(scope.profileUserId, chatId)
   if (!chat || chat.deletedAt) return refuse('That conversation is no longer available.')
   if (chat.router !== 'direct' || chat.agentId !== agentId) {
     refuse('That conversation belongs to another agent.')
@@ -125,7 +126,7 @@ export const taskExecutionService = {
       if (task.chatId && runExecutionService.isRunning(task.chatId)) {
         throw new TaskError('invalid_input', 'This task already has a turn running. Stop it before starting another.')
       }
-      if (task.chatId && chatRepo.getOwned(scope.profileUserId, task.chatId)?.deletedAt === null) {
+      if (task.chatId && visibleChat(scope.profileUserId, task.chatId)?.deletedAt === null) {
         throw new TaskError('invalid_input', 'This task already has a conversation. Continue it there.')
       }
       if (taskInputRequestRepo.listOpen(scope.profileUserId).some(({ row }) => row.taskId === taskId)) {

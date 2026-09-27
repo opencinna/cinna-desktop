@@ -79,6 +79,7 @@ import { getAgentLookupScope, getProfileScopeUserId, getSettingsScopeUserId } fr
 import { userActivation } from '../auth/activation'
 import { createLogger } from '../logger/logger'
 import { chatAnswersToAgent } from './chatRouting'
+import { handoverOriginProfile } from './handoverOrigin'
 import { handoverGit } from './handoverGit'
 import { localAgentService } from './localAgents/localAgentService'
 import { installTaskRunnerHooks } from './taskRunnerBridge'
@@ -1753,13 +1754,7 @@ export type HandoverService = ReturnType<typeof createHandoverService>
 function productionDeps(): HandoverDeps {
   return {
     repo: handoverRepo,
-    originProfile: (brief) => {
-      const profile = delegationRepo.originProfile(brief.origin?.chatId, brief.origin?.taskId)
-      if (!profile) return null
-      if (brief.origin?.chatId && brief.origin.agentId && chatAnswersToAgent(profile, brief.origin.chatId, brief.origin.agentId) === null) return profile
-      if (!brief.origin?.chatId && brief.origin?.taskId) return profile
-      return null
-    },
+    originProfile: (brief) => handoverOriginProfile(brief, getProfileScopeUserId()),
     chainDepth: (userId, origin) => delegationRepo.parentOfOrigin(userId, origin)?.depth ?? null,
     applyResult: (scope, row, report) => {
       const delegation = delegationRepo.getById(row.userId, row.id)

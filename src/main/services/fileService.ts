@@ -1,7 +1,6 @@
-import { chatRepo } from '../db/chats'
 import { cinnaFileService } from './cinnaFileService'
 import { localFileStore, FileStoreError, guessLocalMime } from './fileStore'
-import { chatFileRepo } from '../db/chatFiles'
+import { visibleChat, visibleChatFile } from '../auth/chatScope'
 import { FileError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { createReadStream, createWriteStream } from 'fs'
@@ -97,12 +96,15 @@ export const fileService = {
       // for a write that creates rows + on-disk blobs under that chat's
       // directory. Without this check a compromised renderer could
       // pollute arbitrary chat directories.
-      if (!chatRepo.getOwned(userId, chatId)) {
+      // Stored under the chat's owner, which for a chat shared across
+      // profiles is the default profile, not the one attaching.
+      const chat = visibleChat(userId, chatId)
+      if (!chat) {
         throw new FileError('chat_not_found', 'Chat not found')
       }
       const out: MessageAttachment[] = []
       for (const path of filePaths) {
-        const att = await localFileStore.ingest({ userId, chatId, filePath: path })
+        const att = await localFileStore.ingest({ userId: chat.userId, chatId, filePath: path })
         out.push(att)
       }
       logger.info('local files ingested', { chatId, count: out.length })
@@ -211,7 +213,7 @@ export const fileService = {
     destPath: string
   }): Promise<void> {
     if (opts.source === 'local') {
-      const row = chatFileRepo.getOwned(opts.userId, opts.attachmentId)
+      const row = visibleChatFile(opts.userId, opts.attachmentId)
       if (!row) throw new FileError('not_found', 'Local attachment not found')
       try {
         await pipeline(
@@ -247,7 +249,7 @@ export const fileService = {
     let bytes: Buffer
     let truncated = false
     if (opts.source === 'local') {
-      const row = chatFileRepo.getOwned(opts.userId, opts.attachmentId)
+      const row = visibleChatFile(opts.userId, opts.attachmentId)
       if (!row) throw new FileError('not_found', 'Local attachment not found')
       try {
         const full = await readFile(row.storagePath)

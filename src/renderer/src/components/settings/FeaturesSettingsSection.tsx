@@ -69,6 +69,7 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const enableTrayIcon = settings?.enableTrayIcon === true
   const showHints = settings?.showHints === true
   const showAgentSidebarSections = settings?.showAgentSidebarSections !== false
+  const showLocalDataInAllProfiles = settings?.showLocalDataInAllProfiles !== false
   const prioritizeAccountDefaults = settings?.prioritizeAccountDefaults === true
 
   // Hint retirement counters live in localStorage (renderer-local UI state),
@@ -220,6 +221,18 @@ export function FeaturesSettingsSection(): React.JSX.Element {
               setSetting.mutate({ key: 'showAgentSidebarSections', value: !showAgentSidebarSections })
             }}
             title={showAgentSidebarSections ? 'Agents are shown in sections' : 'Agents are shown in a flat list'}
+          />
+          <SettingsToggleRow
+            id="feature-local-data-all-profiles"
+            label="Show local agents and chats in all profiles"
+            description="On: chats made while signed out, or with local agents or chat modes, appear in every profile, so signing out keeps them. Off: each chat stays in the profile it was started in. Local agents are available in every profile either way."
+            checked={showLocalDataInAllProfiles}
+            disabled={disabled}
+            onToggle={() => {
+              if (!settings || disabled) return
+              setSetting.mutate({ key: 'showLocalDataInAllProfiles', value: !showLocalDataInAllProfiles })
+            }}
+            title={showLocalDataInAllProfiles ? 'Local chats appear in every profile' : 'Chats stay in the profile they were started in'}
           />
           <SettingsToggleRow
             id="feature-show-hints"

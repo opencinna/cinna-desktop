@@ -22,7 +22,7 @@ import {
   type JobPatch,
   type JobRunStatus
 } from '../db/jobs'
-import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { agentRepo } from '../db/agents'
 import { taskRepo } from '../db/tasks'
@@ -116,7 +116,7 @@ function enrichRun(userId: string, run: JobRunRow): JobRunRowWithMeta {
   if (run.type !== 'local' || !run.localChatId) {
     return { ...run, chatHidden: false, refreshMode, taskLive }
   }
-  const chat = chatRepo.getOwned(userId, run.localChatId)
+  const chat = visibleChat(userId, run.localChatId)
   return { ...run, chatHidden: !!chat?.hiddenFromList, refreshMode, taskLive }
 }
 

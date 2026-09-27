@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { conductorSessionRepo } from '../db/conductorSessions'
 import { applyConductorToolPolicy } from '../agents/drivers/acp/conductorToolPolicy'
 import type { AgentRow } from '../db/agents'
-import { chatRepo } from '../db/chats'
+import { visibleChat } from '../auth/chatScope'
 import { chatMcpRepo } from '../db/chatMcp'
 import { chatOnDemandMcpRepo } from '../db/chatOnDemandMcp'
 import { messageRepo } from '../db/messages'
@@ -55,7 +55,7 @@ export interface ConductorLease {
 }
 
 async function providers(entry: Entry): Promise<ToolProvider[]> {
-  const chat = chatRepo.getOwned(entry.scope.profileUserId, entry.chatId)
+  const chat = visibleChat(entry.scope.profileUserId, entry.chatId)
   if (!chat || chat.deletedAt || (chat.agentId !== entry.agent.id && chat.router !== 'human')) return []
   if (isChatConductor(entry.agent) && conductorContext(entry.agent).toolPolicy === 'none') return []
   const controls = entry.binding?.input.coordinator

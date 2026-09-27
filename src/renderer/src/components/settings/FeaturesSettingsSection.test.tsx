@@ -46,7 +46,7 @@ describe('FeaturesSettingsSection', () => {
 
     expect(screen.getByRole('heading', { name: 'AI Functions' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Interface' })).toBeTruthy()
-    expect(screen.getAllByRole('switch')).toHaveLength(6)
+    expect(screen.getAllByRole('switch')).toHaveLength(7)
     // The label names the switch (rule 10), not the branching title.
     expect(screen.getByRole('switch', { name: 'Auto-generate chat titles' })).toBeTruthy()
     expect(screen.queryByText(/Couldn’t load settings/)).toBeNull()
@@ -72,6 +72,32 @@ describe('FeaturesSettingsSection', () => {
     expect(tray.getAttribute('title')).toBe('Menu-bar tray icon is hidden')
     fireEvent.click(tray)
     expect(setSetting).toHaveBeenCalledWith({ key: 'enableTrayIcon', value: true })
+  })
+
+  it('shows local agents and chats in all profiles unless it was turned off, right after the sidebar-sections row', () => {
+    const { unmount } = render(<FeaturesSettingsSection />)
+
+    const shared = screen.getByRole('switch', { name: 'Show local agents and chats in all profiles' })
+    const switches = screen.getAllByRole('switch')
+    expect(switches.indexOf(shared)).toBe(switches.indexOf(screen.getByRole('switch', { name: 'Show sections in Agents sidebar' })) + 1)
+    // Absent from the store means the default, which is on.
+    expect(shared.getAttribute('aria-checked')).toBe('true')
+    expect(shared.getAttribute('title')).toBe('Local chats appear in every profile')
+    fireEvent.click(shared)
+    expect(setSetting).toHaveBeenCalledWith({ key: 'showLocalDataInAllProfiles', value: false })
+    // Both modes are explained behind the tip, not under the label.
+    expect(screen.queryByText(/belong to this computer/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'About Show local agents and chats in all profiles' }))
+    expect(screen.getByText(/Off: each chat stays in the profile it was started in/)).toBeTruthy()
+    unmount()
+
+    settings = { ...HEALTHY, showLocalDataInAllProfiles: false }
+    render(<FeaturesSettingsSection />)
+    const off = screen.getByRole('switch', { name: 'Show local agents and chats in all profiles' })
+    expect(off.getAttribute('aria-checked')).toBe('false')
+    expect(off.getAttribute('title')).toBe('Chats stay in the profile they were started in')
+    fireEvent.click(off)
+    expect(setSetting).toHaveBeenCalledWith({ key: 'showLocalDataInAllProfiles', value: true })
   })
 
   it('saves appearance changes immediately, including while service settings are unavailable', () => {

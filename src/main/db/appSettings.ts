@@ -22,6 +22,7 @@ export const DEFAULTS: AppSettingsSchema = {
   enableTrayIcon: true,
   showHints: true,
   showAgentSidebarSections: true,
+  showLocalDataInAllProfiles: true,
   prioritizeAccountDefaults: false,
   // Empty = the built-in default (`~/Documents/CinnaAgents`). Kept as a string
   // rather than `string | null` so `appSettingsService`'s typeof check works.

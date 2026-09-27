@@ -1,8 +1,8 @@
-import { chatRepo } from '../db/chats'
 import { liveRunHub } from '../services/liveRunHub'
 import { ipcMain, type MessagePortMain } from 'electron'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
+import { ownerOfVisible, visibleChat } from '../auth/chatScope'
 import { inboxService } from '../services/inboxService'
 import { runExecutionService, type RunScope } from '../services/runExecutionService'
 import { runQueueService } from '../services/runQueueService'
@@ -14,19 +14,22 @@ import { RUN_QUEUE_CHANGED_CHANNEL, type RunSendPayload, type RunStartResult } f
 
 const logger = createLogger('run')
 
-/** The active profile's scope, for a chat it owns. Every queue channel asks. */
+/**
+ * The active profile's scope, for a chat it can see — its own, or one the
+ * default profile shares with every profile. Every queue channel asks.
+ */
 function ownedChatScope(chatId: unknown): RunScope {
   userActivation.requireActivated()
   const profileUserId = getProfileScopeUserId()
-  if (typeof chatId !== 'string' || !chatRepo.getOwned(profileUserId, chatId)) throw new Error('Chat not found')
+  if (typeof chatId !== 'string' || !visibleChat(profileUserId, chatId)) throw new Error('Chat not found')
   return { profileUserId, settingsUserId: getSettingsScopeUserId() }
 }
 
 export function registerRunHandlers(): void {
   runQueueService.onChange((chatId, view) => {
-    // Only the active profile's queues reach the window; another profile's
-    // chat ids mean nothing to it.
-    if (!userActivation.isActivated() || !chatRepo.getOwned(getProfileScopeUserId(), chatId)) return
+    // Only the queues of chats the active profile sees reach the window;
+    // another profile's chat ids mean nothing to it.
+    if (!userActivation.isActivated() || !visibleChat(getProfileScopeUserId(), chatId)) return
     const win = getMainWindow()
     if (win && !win.isDestroyed()) win.webContents.send(RUN_QUEUE_CHANGED_CHANNEL, { chatId, view })
   })
@@ -59,15 +62,19 @@ export function registerRunHandlers(): void {
     const port = event.ports?.[0]
     if (!port) return
     const userId = getProfileScopeUserId()
-    if (!userActivation.isActivated() || typeof chatId !== 'string' || !chatRepo.getOwned(userId, chatId)) {
+    const chat = userActivation.isActivated() && typeof chatId === 'string' ? visibleChat(userId, chatId) : undefined
+    if (!chat) {
       port.close()
       return
     }
+    // A live run is keyed by the chat's owner; the subscription still ends
+    // when the active profile changes.
+    const chatOwner = ownerOfVisible(userId, chat)
     let unwatch = (): void => {}
     const close = (): void => { unwatch(); port.close() }
     port.on('close', () => unwatch())
     port.start()
-    unwatch = liveRunHub.watch(userId, chatId, (message) => {
+    unwatch = liveRunHub.watch(chatOwner, chatId, (message) => {
       if (!userActivation.isActivated() || getProfileScopeUserId() !== userId) {
         close()
         throw new Error('Run subscription no longer belongs to the active profile')

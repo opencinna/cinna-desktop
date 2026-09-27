@@ -263,7 +263,8 @@ describe('agent:answer-request — what reaches the driver', () => {
 describe('agent:reply-uncertainty ownership', () => {
   it('does not expose a registered answer from another profile’s chat', async () => {
     const { chatRepo } = await import('../db/chats')
-    vi.mocked(chatRepo.getOwned).mockReturnValueOnce(undefined)
+    // Neither the profile nor the default profile (whose chats every profile sees) owns it.
+    vi.mocked(chatRepo.getOwned).mockReturnValueOnce(undefined).mockReturnValueOnce(undefined)
     expect(await handlers.get('agent:reply-uncertainty')!({}, 'per_1')).toBeNull()
     expect(chatRepo.getOwned).toHaveBeenCalledWith('profile-user', 'chat-1')
   })
