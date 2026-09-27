@@ -43,7 +43,7 @@ export function registerAuthHandlers(): void {
           })
           return { success: true as const, user }
         }
-        const { user } = authService.register({
+        const { user } = await authService.register({
           username: data.username ?? '',
           displayName: data.displayName,
           password: data.password

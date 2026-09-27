@@ -132,7 +132,7 @@ export const authService = {
     return row ? toDto(row) : null
   },
 
-  register(input: LocalRegisterInput): { user: UserDto } {
+  async register(input: LocalRegisterInput): Promise<{ user: UserDto }> {
     const username = input.username?.trim()
     if (!username) {
       throw new AuthError('username_required', 'Username is required')
@@ -157,6 +157,13 @@ export const authService = {
     })
 
     logger.info('user.created', { userId: id, username, type: 'local_user' })
+
+    // The renderer switches to the new profile as soon as this returns, so main
+    // must switch too — otherwise the screen shows the new profile while every
+    // read still answers for the previous one. The password was just typed, so
+    // it counts as unlocked, exactly as a `login` with it would.
+    if (creds) userActivation.markUnlocked(id)
+    await userActivation.activate(id)
 
     return { user: toDto(row) }
   },

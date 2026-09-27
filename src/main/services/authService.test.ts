@@ -66,6 +66,7 @@ vi.mock('../auth/activation', () => ({
     activate: vi.fn(async () => {}),
     deactivate: vi.fn(async () => {}),
     forgetUnlock: vi.fn(),
+    markUnlocked: vi.fn(),
     credentialsRenewed: vi.fn(),
     isActivated: () => holder.activated
   }
@@ -203,4 +204,22 @@ describe('reauthentication that outlives its activated profile', () => {
       else expect(localDevService.reconcile).not.toHaveBeenCalled()
     }
   )
+})
+
+describe('creating a local profile', () => {
+  // The renderer shows the new profile as soon as `register` returns; main
+  // staying on the previous one showed that profile's data under the new name.
+  it('makes the new profile the active one', async () => {
+    vi.mocked(userActivation.activate).mockClear()
+    const { user } = await authService.register({ username: 'second-local' })
+    expect(userActivation.activate).toHaveBeenCalledExactlyOnceWith(user.id)
+    expect(userActivation.markUnlocked).not.toHaveBeenCalled()
+  })
+
+  it('counts a password set at creation as unlocked', async () => {
+    vi.mocked(userActivation.markUnlocked).mockClear()
+    const { user } = await authService.register({ username: 'locked-local', password: 'Correct-Horse-9-Battery' })
+    expect(userActivation.markUnlocked).toHaveBeenCalledExactlyOnceWith(user.id)
+    expect(userActivation.activate).toHaveBeenLastCalledWith(user.id)
+  })
 })
