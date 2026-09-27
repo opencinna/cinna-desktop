@@ -42,7 +42,7 @@ Let users save reusable units of work (title + description + prompt + execution 
 1. User opens a job from the sidebar — Main area renders the read-only **Job Detail** view, built like the task page so moving between the two moves nothing.
 2. The header is one row: the title (one line, full text in its tooltip) with the description under it clamped to two lines (full text in its tooltip), and level with it **Run** (green, primary), **Edit** (labelled, outlined) and a **⋯** holding **Delete job…**. Delete is occasional and destructive, so it is not a button beside Run. There is no type pill: the type is a row in Details. When the job's manifest names an agent that does not resolve on this device, **Run is disabled** with the tooltip *"This job can't run on this device — incomplete setup"* (the tooltip hangs on a wrapper `<span>`, because a disabled button swallows its own mouse events), and a red **Incomplete setup** panel heads the left column reading *"This job needs an agent that isn't available on this device, so it can't run here."* The panel gives no repair instruction, on purpose — see [Local Agents Are Not Synced](../../agents/local_agents/local_only.md).
 3. Under the header, one always-present one-line error slot carries a refused run, so a refusal cannot push the page down under the pointer.
-4. The left column holds the dependency panel when something did not resolve, then **Prompt**, then **Tasks history**. On a Job this device can schedule, Prompt is a tab beside **Schedules** (with the schedule count as a badge once there are any); the chosen tab stays chosen when moving to another Job. A Cinna Task Job has no tabs, just its Prompt. A **Details** panel sits to the right; on a narrow page it drops below the prompt and dependencies and above the history, so the work comes first and the facts before the record. One fact per row, label left, value right, a row with nothing to say left out:
+4. The left column holds the dependency panel when something did not resolve, then **Prompt**, then **Tasks history**. The prompt is rendered as markdown in a card, as an agent's prompt files are on its page. On a Job this device can schedule, Prompt is a tab beside **Schedules** (with the schedule count as a badge once there are any); the chosen tab stays chosen when moving to another Job. A Cinna Task Job has no tabs, just its Prompt. A **Details** panel sits to the right; on a narrow page it drops below the prompt and dependencies and above the history, so the work comes first and the facts before the record. One fact per row, label left, value right, a row with nothing to say left out:
    - Local: **Type** *This device*; **Agent / Agents** — each a link to the agent's own page when it has one (a server-owned agent hidden from the desktop is plain text), plus a muted *Agent unavailable* line on a blocked job so the row never reads as "no agents"; **Chat mode** with its colour dot; **Tools** (the attached MCPs); **Routing** — the router badge (`Direct` / `You route` / `Model routes`), which for a direct job names where its agent runs (*Local* / *Remote*), as the new-chat composer does. No badge on a blocked job, nor on a direct job with no agent: there is nothing true to claim.
    - Cinna Task: **Type** *Cinna Task*; **Cinna agent** (a muted *None* when missing — the absence is the fact); **Priority**, always shown.
    Type reads *This device* rather than *Local* because *Local* beside Routing's *Local* meant something else.
@@ -50,14 +50,16 @@ Let users save reusable units of work (title + description + prompt + execution 
 
 ### Scheduling a local Job
 
-The Job detail page's **Schedules** tab lists the Job's recurring rules; each has
-an on/off switch that takes effect at once, and a ⋯ menu to edit, show history,
-or delete. **New schedule** opens an editor holding only the name and timing — a
-workday preset, selected weekdays and whole hours, or advanced numeric cron — and
-the saved timezone, with the next run and how far away it is. It does not repeat
-the Job's prompt or configuration: the same Job runs each time, with a fresh
-task/run and ordinary Inbox, Stop, and recovery controls. A new schedule is
-created on. The Job page does not need to stay open.
+The Job detail page's **Schedules** tab lists the Job's recurring rules, each
+named by its preset, custom days and hours, or cron, with an on/off switch that
+takes effect at once, and a ⋯ menu to edit, show history, or delete. **New
+schedule** opens an editor holding only the name and timing — a workday preset,
+selected weekdays and whole hours, or advanced numeric cron — and the saved
+timezone (a searchable list showing each zone's offset), with the next run and
+how far away it is. It does not repeat the Job's prompt or configuration: the
+same Job runs each time, with a fresh task/run and ordinary Inbox, Stop, and
+recovery controls. A new schedule is created on. The Job page does not need to
+stay open.
 
 Schedules execute while Cinna is open with the profile active. Missed times
 collapse into one catch-up when it becomes available again. Turning a schedule
