@@ -184,6 +184,19 @@ describe('the Prompt and Schedules tabs', () => {
     expect(screen.getByTestId('job-schedules')).toBeTruthy()
   })
 
+  it('renders the prompt as markdown in a Prompt card, on both kinds of Job', () => {
+    jobState.current = job({ type: 'local', prompt: 'Check **every** invoice\n\n- first\n- second' })
+    const result = render(<JobDetail />)
+    const card = screen.getByRole('region', { name: 'Prompt' })
+    expect(card.querySelector('strong')?.textContent).toBe('every')
+    expect(within(card).getAllByRole('listitem').map((entry) => entry.textContent)).toEqual(['first', 'second'])
+    expect(card.textContent).not.toContain('**')
+    result.unmount()
+    jobState.current = job({ type: 'cinna_task', prompt: 'Run **now**' })
+    render(<JobDetail />)
+    expect(screen.getByRole('region', { name: 'Prompt' }).querySelector('strong')?.textContent).toBe('now')
+  })
+
   it('has no tabs and no schedules for a Job this device cannot schedule', () => {
     jobState.current = job({ type: 'cinna_task' })
     render(<JobDetail />)

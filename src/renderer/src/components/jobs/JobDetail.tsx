@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { createPortal } from 'react-dom'
 import {
   Play,
@@ -30,7 +32,7 @@ import { RouterBadge } from '../chat/RouterBadge'
 import { usePopover } from '../ui/usePopover'
 import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
 import { JobRunRow } from './JobRunRow'
-import { Detail, DETAIL_LINK, HEADER_BUTTON, Prose, Section } from '../tasks/DetailParts'
+import { Detail, DETAIL_LINK, HEADER_BUTTON, Section } from '../tasks/DetailParts'
 import { hasAgentPage, useOpenAgentPage } from '../../hooks/useOpenAgentPage'
 import { DeleteJobConfirm } from './JobItem'
 import { useTaskRowsInPlace } from '../tasks/useTaskRowsInPlace'
@@ -40,6 +42,7 @@ import { JobSchedules, useJobScheduleCount } from './JobSchedules'
 import type { JobDependencyStatus as JobDependencyStatusDto } from '../../../../shared/sync'
 import { isFolderAgentId } from '../../../../shared/localAgents'
 import { unwrapIpcError } from '../../utils/ipcError'
+import { documentMarkdownComponents } from '../../utils/markdownComponents'
 
 const CINNA_DEFAULT_PRIORITY = 'normal'
 
@@ -297,12 +300,12 @@ export function JobDetail(): React.JSX.Element {
                   })}
                 </nav>
                 <div role="tabpanel" className="pt-3">
-                  {tab === 'schedules' ? <JobSchedules jobId={job.id} /> : <Prose>{job.prompt}</Prose>}
+                  {tab === 'schedules' ? <JobSchedules jobId={job.id} /> : <JobPrompt prompt={job.prompt} />}
                 </div>
               </div>
             ) : (
               <Section title="Prompt">
-                <Prose>{job.prompt}</Prose>
+                <JobPrompt prompt={job.prompt} />
               </Section>
             )}
           </div>
@@ -331,6 +334,25 @@ export function JobDetail(): React.JSX.Element {
         />
       )}
     </div>
+  )
+}
+
+/**
+ * The job's prompt as a document in a card, the way the local agent page shows
+ * its prompt files, minus the card header: the tab already names it.
+ */
+function JobPrompt({ prompt }: { prompt: string }): React.JSX.Element {
+  return (
+    <section
+      aria-label="Prompt"
+      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-3"
+    >
+      <div className="markdown-body text-xs leading-relaxed text-[var(--color-text)]">
+        <Markdown remarkPlugins={[remarkGfm]} components={documentMarkdownComponents}>
+          {prompt}
+        </Markdown>
+      </div>
+    </section>
   )
 }
 
