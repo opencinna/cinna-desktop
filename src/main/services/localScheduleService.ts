@@ -39,7 +39,7 @@ const folderCanRun = (agent: LocalAgentDto) => agent.readiness === 'ok' || agent
 
 function definitionFor(scope: RunScope, agent: LocalAgentDto, raw: unknown, fallbackZone?: string): LocalScheduleDefinition {
   if (agent.kind !== 'kit' || typeof agent.manifest.id !== 'string' || agent.id !== `folder:${agent.manifest.id}`) throw new Error('Local schedules require a kit agent with a stable manifest identity.')
-  if (!(agentOverrideRepo.get(scope.profileUserId, agent.id)?.enabled ?? agent.enabled)) throw new Error('Enable this agent before reviewing its schedules.')
+  if (!(agentOverrideRepo.get(scope.profileUserId, agent.id)?.enabled ?? agent.enabled)) throw new Error('Enable this agent to manage its schedules.')
   // Missing credentials only warn, as they do for chat and tasks: a folder under
   // development often has a half-filled credentials/.env.
   if (!folderCanRun(agent)) throw new Error(agent.readinessReason ?? 'Finish this agent’s setup before enabling schedules.')
@@ -142,8 +142,8 @@ function rowsFor(scope: RunScope, agentId: string, reconcile = false): LocalSche
     let reason = binding?.reason ?? null
     if (binding?.enabled) {
       const job = jobsRepo.getById(scope.profileUserId, binding.jobId)
-      reason = problem ?? (revision !== binding.revision ? 'The schedule changed. Review it before enabling again.' :
-        binding.jobId && (!job || job.deletedAt || jobFingerprint(job) !== binding.jobFingerprint) ? 'The scheduled job changed or was deleted. Review the schedule again.' : null)
+      reason = problem ?? (revision !== binding.revision ? 'The schedule changed since it was turned on. Turn it on again to use it as it is now.' :
+        binding.jobId && (!job || job.deletedAt || jobFingerprint(job) !== binding.jobFingerprint) ? 'What this schedule runs changed or was removed. Turn it on again to use it as it is now.' : null)
       // Only the scheduler persists confirmed definition/job changes. Reads
       // and transient folder failures cannot revoke the user's opt-in.
       if (reconcile && reason && agent && folderCanRun(agent)) localScheduleRepo.save({ ...binding, enabled: false, reason })
@@ -189,8 +189,8 @@ export const localScheduleService = {
   list(scope: RunScope, agentId: string): LocalScheduleItem[] { return rowsFor(scope, agentId) },
 
   enable(scope: RunScope, review: LocalScheduleReview, now = Date.now()): LocalScheduleItem[] {
-    if (!review || typeof review.agentId !== 'string' || typeof review.name !== 'string' || typeof review.revision !== 'string' || typeof review.timezone !== 'string') throw new Error('Review this schedule before enabling it.')
-    if (review.profileUserId !== scope.profileUserId) throw new Error('The active profile changed. Review this schedule again.')
+    if (!review || typeof review.agentId !== 'string' || typeof review.name !== 'string' || typeof review.revision !== 'string' || typeof review.timezone !== 'string') throw new Error('This schedule could not be turned on. Try again.')
+    if (review.profileUserId !== scope.profileUserId) throw new Error('The active profile changed. Try again.')
     const rows = rowsFor(scope, review.agentId)
     const row = rows.find((item) => item.name === review.name)
     if (!row || row.problem || !row.revision) throw new Error(row?.problem ?? 'The schedule is no longer available.')
@@ -199,10 +199,10 @@ export const localScheduleService = {
     const agent = localAgentService.get(scope.settingsUserId, review.agentId)
     const candidates = Array.isArray(agent.manifest.schedules) ? agent.manifest.schedules.filter((item) =>
       item && typeof item === 'object' && item.name === review.name) : []
-    if (candidates.length !== 1) throw new Error('The schedule was removed or its name is no longer unique. Refresh and review again.')
+    if (candidates.length !== 1) throw new Error('The schedule was removed or its name is no longer unique.')
     const raw = candidates[0]
     const definition = definitionFor(scope, agent, raw, review.timezone)
-    if (revisionOf(definition) !== review.revision || definition.timezone !== review.timezone) throw new Error('The schedule changed while you were reviewing it. Refresh and review again.')
+    if (revisionOf(definition) !== review.revision || definition.timezone !== review.timezone) throw new Error('The schedule changed a moment ago. Try again.')
     const nextDueAt = nextScheduleOccurrence(definition.cron, definition.timezone, now)
     const prior = agentBindings(scope.profileUserId).find((item) => item.manifestId === definition.manifestId && item.name === definition.name)
     getDb().transaction(() => {
@@ -295,7 +295,7 @@ export const localScheduleService = {
           enabledSince: input.enabled ? now : null, lastAttemptAt: prior?.lastAttemptAt ?? null, lastCompletedAt: prior?.lastCompletedAt ?? null,
           cursorVersion: (prior?.cursorVersion ?? 0) + 1, editorMetadata: metadata })
       })
-    } catch (error) { warning = `Saved; enablement needs review. ${message(error)}` }
+    } catch (error) { warning = `Saved, but not turned on. ${message(error)}` }
     return { ...this.editor(scope, input.agentId), warning }
   },
 

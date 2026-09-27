@@ -36,7 +36,7 @@ import { DeleteJobConfirm } from './JobItem'
 import { useTaskRowsInPlace } from '../tasks/useTaskRowsInPlace'
 import type { JobDetailData, JobRunData } from '../../../../shared/jobs'
 import { canScheduleJob } from '../../../../shared/localJobSchedules'
-import { JobSchedules } from './JobSchedules'
+import { JobSchedules, useJobScheduleCount } from './JobSchedules'
 import type { JobDependencyStatus as JobDependencyStatusDto } from '../../../../shared/sync'
 import { isFolderAgentId } from '../../../../shared/localAgents'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -65,6 +65,13 @@ export function JobDetail(): React.JSX.Element {
   const deleteJob = useDeleteJob()
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  /*
+    Held here, above the early returns, so the chosen tab persists from job to
+    job, as the local agent page's tabs do (ux_rules rule 2).
+  */
+  const [tab, setTab] = useState<'prompt' | 'schedules'>('prompt')
+  const schedulable = !!job && canScheduleJob(job.type)
+  const scheduleCount = useJobScheduleCount(activeJobId ?? '', schedulable && !!activeJobId)
   useCinnaRunPoll(runs)
 
   if (!activeJobId) {
@@ -255,12 +262,49 @@ export function JobDetail(): React.JSX.Element {
               </section>
             )}
 
-            <Section title="Prompt">
-              <Prose>{job.prompt}</Prose>
-            </Section>
-
             <JobDependencyStatus jobId={job.id} />
 
+            {schedulable ? (
+              <div>
+                <nav
+                  role="tablist"
+                  aria-label="Job details"
+                  className="flex gap-1 overflow-x-auto border-b border-[var(--color-border)]"
+                >
+                  {(['prompt', 'schedules'] as const).map((id) => {
+                    const active = id === tab
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        role="tab"
+                        aria-selected={active}
+                        onClick={() => setTab(id)}
+                        className={`-mb-px border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
+                          active
+                            ? 'border-[var(--color-accent)] text-[var(--color-text)]'
+                            : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+                        }`}
+                      >
+                        {id === 'prompt' ? 'Prompt' : 'Schedules'}
+                        {id === 'schedules' && scheduleCount > 0 && (
+                          <span className="ml-1.5 rounded bg-[var(--color-bg-tertiary)] px-1 text-[10px] text-[var(--color-text-muted)]">
+                            {scheduleCount}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </nav>
+                <div role="tabpanel" className="pt-3">
+                  {tab === 'schedules' ? <JobSchedules jobId={job.id} /> : <Prose>{job.prompt}</Prose>}
+                </div>
+              </div>
+            ) : (
+              <Section title="Prompt">
+                <Prose>{job.prompt}</Prose>
+              </Section>
+            )}
           </div>
 
           <JobDetailsPanel job={job} />
@@ -268,7 +312,6 @@ export function JobDetail(): React.JSX.Element {
           {/* Keyed: the hook holds its row order for the life of the mount. */}
           <TasksHistory key={job.id} runs={runs ?? []} />
         </div>
-        {canScheduleJob(job.type) && <JobSchedules jobId={job.id} />}
       </div>
 
       {confirmingDelete && (

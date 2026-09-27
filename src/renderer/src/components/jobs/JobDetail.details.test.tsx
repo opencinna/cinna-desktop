@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { JobDetailData } from '../../../../shared/jobs'
 
@@ -12,7 +12,8 @@ const jobState = vi.hoisted(() => ({ current: null as JobDetailData | null }))
 const runsState = vi.hoisted(() => ({ current: [] as Array<{ id: string }> }))
 vi.hoisted(() => { (window as unknown as { api: unknown }).api = { app: { setTheme: async () => undefined } } })
 
-vi.mock('./JobSchedules', () => ({ JobSchedules: () => <div data-testid="job-schedules" /> }))
+vi.mock('./JobSchedules', () => ({ JobSchedules: () => <div data-testid="job-schedules" />, useJobScheduleCount: () => scheduleCount.current }))
+const scheduleCount = vi.hoisted(() => ({ current: 0 }))
 vi.mock('../../hooks/useJobs', () => ({
   useJob: () => ({ data: jobState.current, isLoading: false }),
   useJobRuns: () => ({ data: runsState.current }),
@@ -156,12 +157,39 @@ describe('the job page’s Tasks history', () => {
   })
 })
 
-it('offers device schedules only for desktop-owned Jobs', () => {
-  jobState.current = job({ type: 'local' })
-  const result = render(<JobDetail />)
-  expect(screen.getByTestId('job-schedules')).toBeTruthy()
-  result.unmount()
-  jobState.current = job({ type: 'cinna_task' })
-  render(<JobDetail />)
-  expect(screen.queryByTestId('job-schedules')).toBeNull()
+describe('the Prompt and Schedules tabs', () => {
+  it('shows the prompt first and the schedules behind a tab with their count', () => {
+    scheduleCount.current = 2
+    jobState.current = job({ type: 'local' })
+    render(<JobDetail />)
+    const tabs = screen.getByRole('tablist', { name: 'Job details' })
+    expect(within(tabs).getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Prompt', 'Schedules2'])
+    expect(within(tabs).getByRole('tab', { name: 'Prompt' }).getAttribute('aria-selected')).toBe('true')
+    expect(within(screen.getByRole('tabpanel')).getByText('Check the invoices')).toBeTruthy()
+    expect(screen.queryByTestId('job-schedules')).toBeNull()
+    fireEvent.click(within(tabs).getByRole('tab', { name: /Schedules/ }))
+    expect(within(screen.getByRole('tabpanel')).getByTestId('job-schedules')).toBeTruthy()
+    expect(screen.queryByText('Check the invoices')).toBeNull()
+  })
+
+  it('keeps the chosen tab when moving to another job', () => {
+    scheduleCount.current = 0
+    jobState.current = job({ type: 'local' })
+    const result = render(<JobDetail />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Schedules' }))
+    jobState.current = job({ id: 'job-2', type: 'local', prompt: 'Another prompt' })
+    act(() => useUIStore.setState({ activeJobId: 'job-2' }))
+    result.rerender(<JobDetail />)
+    expect(screen.getByRole('tab', { name: 'Schedules' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('job-schedules')).toBeTruthy()
+  })
+
+  it('has no tabs and no schedules for a Job this device cannot schedule', () => {
+    jobState.current = job({ type: 'cinna_task' })
+    render(<JobDetail />)
+    expect(screen.queryByRole('tablist')).toBeNull()
+    expect(screen.queryByRole('tab', { name: /Schedules/ })).toBeNull()
+    expect(screen.queryByTestId('job-schedules')).toBeNull()
+    expect(screen.getByText('Check the invoices')).toBeTruthy()
+  })
 })

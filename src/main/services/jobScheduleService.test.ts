@@ -118,7 +118,7 @@ describe('device-local Job schedules', () => {
     }
     expect(jobScheduleService.list(scope, job.id).items[0].binding?.enabled).toBe(false)
     await check(Date.parse('2026-09-14T08:00:00Z'))
-    expect(localScheduleRepo.get(USER, binding.id)).toMatchObject({ enabled: false, reason: expect.stringContaining('instructions or configuration changed') })
+    expect(localScheduleRepo.get(USER, binding.id)).toMatchObject({ enabled: false, reason: 'The Job changed since this schedule was turned on. Turn it on again to use the Job as it is now.' })
     expect(state.prepare).not.toHaveBeenCalled()
     expect(localScheduleRepo.occurrences(USER, binding.id)).toEqual([])
   })

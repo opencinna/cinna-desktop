@@ -74,13 +74,16 @@ async function openSchedules(cinna: CinnaApp) {
 }
 function scheduleRow(cinna: CinnaApp) { return cinna.page.getByRole('article', { name: NAME, exact: true }) }
 async function list(cinna: CinnaApp, agentId: string) { return cinna.page.evaluate((id) => window.api.localSchedules.list(id), agentId) }
-async function review(cinna: CinnaApp, prompt: string) {
-  await scheduleRow(cinna).getByRole('button', { name: 'Review and enable', exact: true }).click()
-  const dialog = cinna.page.getByRole('dialog', { name: 'Enable schedule', exact: true })
-  await expect(dialog.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveValue(prompt)
-  await expect(dialog).toContainText('* * * * * · UTC')
-  await expect(dialog).toContainText('Each run has a 20-turn and 60-minute limit.')
-  return dialog
+function scheduleSwitch(cinna: CinnaApp, name = NAME) {
+  return cinna.page.getByRole('article', { name, exact: true }).getByRole('switch', { name: `Run “${name}” on this device`, exact: true })
+}
+async function openJobSchedules(cinna: CinnaApp, title: string) {
+  await cinna.page.getByRole('button', { name: 'Jobs', exact: true }).click()
+  await cinna.page.getByText(title, { exact: true }).first().click()
+  await cinna.page.getByRole('tablist', { name: 'Job details', exact: true }).getByRole('tab', { name: /^Schedules/ }).click()
+  const schedules = cinna.page.getByRole('region', { name: 'Job schedules', exact: true })
+  await expect(schedules).toBeVisible()
+  return schedules
 }
 async function openInbox(cinna: CinnaApp) {
   await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
@@ -95,20 +98,18 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
   try {
     const { agent, acp, manifestPath } = await arrange(cinna, fake.host)
     await openSchedules(cinna)
-    await expect(scheduleRow(cinna)).toContainText('Not enabled on this device.')
+    // An imported schedule is listed, off, until turned on on this device.
+    await expect(scheduleSwitch(cinna)).toHaveAttribute('aria-checked', 'false')
+    await expect(scheduleRow(cinna)).toContainText('* * * * * · UTC')
     expect(await cinna.page.evaluate(() => window.api.jobs.list())).toEqual([])
     expect(await cinna.page.evaluate(() => window.api.tasks.list())).toEqual([])
     expect(acp.received('session/prompt')).toEqual([])
-    const cancelledReview = await review(cinna, PROMPT)
-    await cancelledReview.getByRole('button', { name: 'Cancel', exact: true }).click()
-    expect(await cinna.page.evaluate(() => window.api.jobs.list())).toEqual([])
     expect((await list(cinna, agent.id))[0].binding).toBeNull()
 
-    const dialog = await review(cinna, PROMPT)
     const beforeEnableMinute = await mainMinute(cinna)
-    await dialog.getByRole('button', { name: 'Enable on this device', exact: true }).click()
-    await expect(dialog).toHaveCount(0)
-    await expect(scheduleRow(cinna).getByRole('button', { name: 'Disable', exact: true })).toBeVisible()
+    await scheduleSwitch(cinna).click()
+    await expect(scheduleSwitch(cinna)).toHaveAttribute('aria-checked', 'true')
+    await expect(cinna.page.getByRole('dialog')).toHaveCount(0)
     const [enabled] = await list(cinna, agent.id)
     expect(enabled).toMatchObject({ profileUserId: expect.any(String), name: NAME, timezone: 'UTC', prompt: PROMPT,
       problem: null, binding: { enabled: true, reason: null } })
@@ -170,13 +171,14 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
     writeSchedule(manifestPath, CHANGED)
     await cinna.page.evaluate(() => window.api.localAgents.rescan())
     await openSchedules(cinna)
-    await expect(scheduleRow(cinna)).toContainText('The schedule changed. Review it before enabling again.')
+    await expect(scheduleRow(cinna)).toContainText('The schedule changed since it was turned on. Turn it on again to use it as it is now.')
     expect((await list(cinna, agent.id))[0].binding).toMatchObject({ id: bindingId, enabled: false })
-    const changedReview = await review(cinna, CHANGED)
-    await changedReview.getByRole('button', { name: 'Enable on this device', exact: true }).click()
-    await expect(changedReview).toHaveCount(0)
-    await scheduleRow(cinna).getByRole('button', { name: 'Disable', exact: true }).click()
-    await expect(scheduleRow(cinna)).toContainText('Not enabled on this device.')
+    await expect(scheduleSwitch(cinna)).toHaveAttribute('aria-checked', 'false')
+    await scheduleSwitch(cinna).click()
+    await expect(scheduleSwitch(cinna)).toHaveAttribute('aria-checked', 'true')
+    expect((await list(cinna, agent.id))[0]).toMatchObject({ prompt: CHANGED, binding: { id: bindingId, enabled: true } })
+    await scheduleSwitch(cinna).click()
+    await expect(scheduleSwitch(cinna)).toHaveAttribute('aria-checked', 'false')
     const disabled = (await list(cinna, agent.id))[0]
     expect(disabled.binding).toMatchObject({ id: bindingId, enabled: false, reason: null })
     expect(acp.received('session/prompt')).toHaveLength(1)
@@ -186,7 +188,7 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
     await cinna.skipOnboarding()
     await cinna.page.evaluate(() => window.api.localAgents.rescan())
     await openSchedules(cinna)
-    await expect(scheduleRow(cinna)).toContainText('Not enabled on this device.')
+    await expect(scheduleSwitch(cinna)).toHaveAttribute('aria-checked', 'false')
     expect((await list(cinna, agent.id))[0].binding).toMatchObject({ id: bindingId, enabled: false })
     await test.step('disabled opt-in survives restart and another observed real minute without replay', async () => {
       await expect.poll(() => mainMinute(cinna), { timeout: MINUTE_TIMEOUT, intervals: [250, 500] }).toBeGreaterThan(disabledMinute)
@@ -195,7 +197,7 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
       await cinna.electronApp.evaluate(({ BrowserWindow }) => {
         BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('index.html'))?.emit('focus')
       })
-      await scheduleRow(cinna).getByRole('button', { name: 'Review and enable', exact: true }).waitFor({ state: 'visible' })
+      await expect(scheduleSwitch(cinna)).toHaveAttribute('aria-checked', 'false')
       expect((await list(cinna, agent.id))[0].binding).toMatchObject({ id: bindingId, enabled: false })
       expect(acp.received('session/prompt')).toHaveLength(1)
       const allRuns = await cinna.page.evaluate(async (ids) => (await Promise.all(ids.map((id) => window.api.jobs.listRuns(id)))).flat(), jobIds)
@@ -220,12 +222,13 @@ test('the editor saves a quiet script and its edited non-OK result starts one ta
     await editor.getByRole('combobox', { name: 'Execution type', exact: true }).selectOption('script_trigger')
     await editor.getByRole('textbox', { name: 'Command', exact: true }).fill("printf ' OK\\n'; printf retained-warning >&2")
     await editor.getByRole('combobox', { name: 'Schedule', exact: true }).selectOption('custom')
-    const hours = editor.getByTestId('schedule-hour-grid')
-    await expect(hours.getByRole('checkbox')).toHaveCount(24)
-    const geometry = await hours.getByRole('checkbox').evaluateAll((inputs) => inputs.map(input => input.getBoundingClientRect().top))
-    expect(new Set(geometry).size).toBe(2)
-    expect(geometry.slice(0, 12).every(top => top === geometry[0])).toBe(true)
-    expect(geometry.slice(12).every(top => top === geometry[12])).toBe(true)
+    const hours = editor.getByRole('group', { name: 'Hours', exact: true })
+    await expect(hours.getByRole('button', { name: 'Remove 08:00', exact: true })).toBeVisible()
+    await hours.getByRole('combobox', { name: 'Add hour', exact: true }).selectOption('14')
+    await expect(hours.getByRole('button', { name: 'Remove 14:00', exact: true })).toBeVisible()
+    await expect(hours.getByRole('combobox', { name: 'Add hour', exact: true })).toHaveValue('')
+    await hours.getByRole('button', { name: 'Remove 14:00', exact: true }).click()
+    await expect(hours.getByRole('button')).toHaveCount(1)
     await cinna.page.screenshot({ path: '/tmp/cinna-schedule-custom-editor.png' })
     const normalViewport = await cinna.page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
     await cinna.page.setViewportSize({ width: 800, height: 800 })
@@ -234,14 +237,21 @@ test('the editor saves a quiet script and its edited non-OK result starts one ta
     await editor.getByRole('combobox', { name: 'Schedule', exact: true }).selectOption('advanced')
     await editor.getByRole('textbox', { name: 'Cron expression', exact: true }).fill('* * * * *')
     await editor.getByRole('textbox', { name: 'Timezone', exact: true }).fill('UTC')
-    await editor.getByRole('checkbox', { name: 'Enable on this device', exact: true }).check()
-    await expect(editor).toContainText('Next scheduled time:')
+    await test.step('the cron cheatsheet opens over the editor and Escape closes only it', async () => {
+      await editor.getByRole('button', { name: 'Cron expression help', exact: true }).click()
+      const sheet = cinna.page.getByRole('dialog', { name: 'Cron expression help', exact: true })
+      await expect(sheet).toContainText('0 9-17/2 * * 1-5')
+      await cinna.page.keyboard.press('Escape')
+      await expect(sheet).toHaveCount(0)
+      await expect(editor).toBeVisible()
+    })
+    await expect(editor).toContainText(/Next scheduled time: .* · (in |now)/)
     await expect(editor).toContainText("printf ' OK\\n'; printf retained-warning >&2")
     await cinna.page.setViewportSize({ width: 800, height: 800 })
-    await editor.getByRole('button', { name: 'Save and enable', exact: true }).scrollIntoViewIfNeeded()
+    await editor.getByRole('button', { name: 'Create schedule', exact: true }).scrollIntoViewIfNeeded()
     await cinna.page.screenshot({ path: '/tmp/cinna-schedule-review-800.png' })
     await cinna.page.setViewportSize(normalViewport)
-    await editor.getByRole('button', { name: 'Save and enable', exact: true }).click()
+    await editor.getByRole('button', { name: 'Create schedule', exact: true }).click()
     await expect(editor).toHaveCount(0)
     const saved = (await list(cinna, agent.id)).find(row => row.name === scriptName)!
     expect(saved.binding?.enabled).toBe(true)
@@ -269,9 +279,10 @@ test('the editor saves a quiet script and its edited non-OK result starts one ta
     await expect(edit.getByRole('textbox', { name: 'Cron expression', exact: true })).toHaveValue('* * * * *')
     await edit.getByRole('textbox', { name: 'Command', exact: true }).fill('printf inspect-this-result; printf diagnostic-context >&2; exit 9')
     await expect(edit).toContainText('Next scheduled time:')
-    await edit.getByRole('button', { name: 'Save and enable', exact: true }).click()
+    await edit.getByRole('button', { name: 'Save schedule', exact: true }).click()
     await expect(edit).toHaveCount(0)
-    expect((await list(cinna, agent.id)).find(item => item.name === scriptName)?.binding?.id).toBe(saved.binding!.id)
+    // Editing an enabled schedule keeps it enabled.
+    expect((await list(cinna, agent.id)).find(item => item.name === scriptName)?.binding).toMatchObject({ id: saved.binding!.id, enabled: true })
     await expect.poll(() => acp.received('session/prompt').length,
       { timeout: MINUTE_TIMEOUT, intervals: [250, 500] }).toBe(1)
     const latest = (await list(cinna, agent.id)).find(item => item.name === scriptName)!.binding!.last!
@@ -294,7 +305,7 @@ test('the editor saves a quiet script and its edited non-OK result starts one ta
   } finally { await fake.close() }
 })
 
-test('the narrow schedule editor keeps the custom grid and reviewed command reachable', async ({ cinna }) => {
+test('the narrow schedule editor keeps the custom days and hours and reviewed command reachable', async ({ cinna }) => {
   const fake = await catalogue()
   try {
     await arrange(cinna, fake.host)
@@ -306,22 +317,29 @@ test('the narrow schedule editor keeps the custom grid and reviewed command reac
     await editor.getByRole('combobox', { name: 'Execution type', exact: true }).selectOption('script_trigger')
     await editor.getByRole('textbox', { name: 'Command', exact: true }).fill('printf OK')
     await editor.getByRole('combobox', { name: 'Schedule', exact: true }).selectOption('custom')
-    await expect(editor.getByTestId('schedule-hour-grid').getByRole('checkbox')).toHaveCount(24)
+    const hours = editor.getByRole('group', { name: 'Hours', exact: true })
+    for (const hour of ['00', '03', '06', '09', '12', '15', '18', '21', '23']) await hours.getByRole('combobox', { name: 'Add hour', exact: true }).selectOption(String(Number(hour)))
+    await expect(hours.getByRole('button')).toHaveCount(10)
     await expect(editor).toContainText('Next scheduled time:')
     const layout = await editor.evaluate(dialog => {
       const bounds = dialog.getBoundingClientRect()
-      const hourGrid = dialog.querySelector('[data-testid="schedule-hour-grid"]')!
-      const hourScroll = hourGrid.parentElement!
-      return { right: bounds.right, controls: [...dialog.querySelectorAll('input:not([type="checkbox"]), select, textarea')]
+      return { right: bounds.right, controls: [...dialog.querySelectorAll('input, select, textarea')]
         .map(control => ({ tag: control.tagName, right: control.getBoundingClientRect().right })),
-        hourViewport: hourScroll.clientWidth, hourContent: hourScroll.scrollWidth,
         dialogViewport: dialog.clientWidth, dialogContent: dialog.scrollWidth }
     })
     for (const control of layout.controls) expect(control.right, `${control.tag} stays within the dialog padding`).toBeLessThanOrEqual(layout.right - 12)
     expect(layout.dialogContent).toBeLessThanOrEqual(layout.dialogViewport)
-    expect(layout.hourViewport).toBeLessThan(layout.hourContent)
+    await test.step('the explanation behind the (?) is visible over the editor and Escape closes only it', async () => {
+      await editor.getByRole('button', { name: 'How schedules run', exact: true }).click()
+      const tip = editor.getByRole('dialog', { name: 'How schedules run', exact: true })
+      await expect(tip).toContainText('runs once when Cinna is available again')
+      await cinna.page.screenshot({ path: '/tmp/cinna-schedule-tip-800.png' })
+      await cinna.page.keyboard.press('Escape')
+      await expect(tip).toHaveCount(0)
+      await expect(editor).toBeVisible()
+    })
     await cinna.page.screenshot({ path: '/tmp/cinna-schedule-custom-editor-800.png' })
-    const save = editor.getByRole('button', { name: 'Save schedule', exact: true })
+    const save = editor.getByRole('button', { name: 'Create schedule', exact: true })
     await save.scrollIntoViewIfNeeded()
     await expect(save).toBeVisible()
     await expect(editor).toContainText('Resolved command to review')
@@ -332,7 +350,7 @@ test('the narrow schedule editor keeps the custom grid and reviewed command reac
   } finally { await fake.close() }
 })
 
-test('a local Job schedule starts the source Job task with its page closed and requires review after a prompt edit', async ({ cinna }) => {
+test('a local Job schedule starts the source Job task with its page closed and turns off after a prompt edit', async ({ cinna }) => {
   test.setTimeout(180_000)
   const fake = await catalogue()
   const jobTitle = 'Scheduled source Job verifier'
@@ -345,9 +363,7 @@ test('a local Job schedule starts the source Job task with its page closed and r
       return created
     }, { title: jobTitle, prompt: PROMPT, agentId: agent.id })
     expect(job.router).toBeNull()
-    await cinna.page.getByRole('button', { name: 'Jobs', exact: true }).click()
-    await cinna.page.getByText(jobTitle, { exact: true }).first().click()
-    const schedules = cinna.page.getByRole('region', { name: 'Job schedules', exact: true })
+    const schedules = await openJobSchedules(cinna, jobTitle)
     await schedules.getByRole('button', { name: 'New schedule', exact: true }).click()
     const editor = cinna.page.getByRole('dialog', { name: 'New schedule', exact: true })
     await editor.getByRole('textbox', { name: 'Name', exact: true }).fill(scheduleName)
@@ -355,11 +371,11 @@ test('a local Job schedule starts the source Job task with its page closed and r
     await editor.getByRole('combobox', { name: 'Schedule', exact: true }).selectOption('advanced')
     await editor.getByRole('textbox', { name: 'Cron expression', exact: true }).fill('* * * * *')
     await editor.getByRole('textbox', { name: 'Timezone', exact: true }).fill('UTC')
-    await editor.getByRole('checkbox', { name: 'Enable on this device', exact: true }).check()
-    await expect(editor.getByRole('textbox', { name: 'Job prompt', exact: true })).toHaveValue(PROMPT)
+    // The editor does not repeat the Job the user is already on.
+    await expect(editor.getByRole('textbox', { name: 'Job prompt', exact: true })).toHaveCount(0)
     await expect(editor).toContainText('Next scheduled time:')
     await cinna.page.screenshot({ path: '/tmp/cinna-job-schedule-editor.png' })
-    await editor.getByRole('button', { name: 'Save and enable', exact: true }).click()
+    await editor.getByRole('button', { name: 'Create schedule', exact: true }).click()
     await expect(editor).toHaveCount(0)
     expect(await cinna.page.evaluate(() => window.api.jobs.list())).toHaveLength(1)
     expect(await cinna.page.evaluate(() => window.api.tasks.list())).toEqual([])
@@ -383,34 +399,35 @@ test('a local Job schedule starts the source Job task with its page closed and r
     expect(acp.received('session/prompt')).toHaveLength(1)
     expect(await cinna.page.evaluate(() => window.api.jobs.list())).toHaveLength(1)
     expect(await cinna.page.evaluate(() => window.api.tasks.list({ rootOnly: true }))).toHaveLength(1)
-    await cinna.page.getByRole('button', { name: 'Jobs', exact: true }).click()
-    await cinna.page.getByText(jobTitle, { exact: true }).first().click()
+    await openJobSchedules(cinna, jobTitle)
     const row = schedules.getByRole('article', { name: scheduleName, exact: true })
+    const toggle = scheduleSwitch(cinna, scheduleName)
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
     await expect(row.getByRole('button', { name: 'Open task', exact: true })).toBeVisible()
     await row.getByRole('button', { name: `Actions for ${scheduleName}`, exact: true }).click()
     await cinna.page.getByRole('menuitem', { name: 'Execution history', exact: true }).click()
     await expect(cinna.page.getByRole('region', { name: `Execution history for ${scheduleName}`, exact: true })).toContainText('Completed')
     await cinna.page.screenshot({ path: '/tmp/cinna-job-schedule-history.png' })
     await cinna.page.evaluate(({ id, prompt }) => window.api.jobs.update(id, { prompt }), { id: job.id, prompt: CHANGED })
-    await expect(row.getByRole('button', { name: 'Review and enable', exact: true })).toBeVisible()
-    await row.getByRole('button', { name: 'Review and enable', exact: true }).click()
-    const reviewDialog = cinna.page.getByRole('dialog', { name: 'Enable schedule', exact: true })
-    await expect(reviewDialog.getByRole('textbox', { name: 'Job prompt', exact: true })).toHaveValue(CHANGED)
+    // A changed Job turns the schedule off and says why; the switch turns it
+    // back on against the Job as it is now.
+    await expect(toggle).toHaveAttribute('aria-checked', 'false')
+    await expect(row).toContainText('The Job changed since this schedule was turned on. Turn it on again to use the Job as it is now.')
     const beforeReviewEnable = await cinna.electronApp.evaluate(() => Date.now())
-    await reviewDialog.getByRole('button', { name: 'Enable on this device', exact: true }).click()
-    await expect(reviewDialog).toHaveCount(0)
-    await expect(row.getByRole('button', { name: 'Disable', exact: true })).toBeVisible()
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
     const reviewed = await cinna.page.evaluate(id => window.api.jobSchedules.list(id), job.id)
     const reenabled = reviewed.items.find(item => item.name === scheduleName)!
     expect(reenabled.binding?.enabled).toBe(true)
     expect(reenabled.binding?.nextDueAt).toBeGreaterThan(beforeReviewEnable)
     expect(acp.received('session/prompt')).toHaveLength(1)
-    await row.getByRole('button', { name: 'Disable', exact: true }).click()
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-checked', 'false')
     expect(fake.unexpected).toEqual([])
   } finally { await fake.close() }
 })
 
-test('a narrow Job schedule editor exposes the full script and keeps timing controls inside its dialog', async ({ cinna }) => {
+test('a narrow Job schedule editor keeps timing controls inside its dialog without repeating the Job', async ({ cinna }) => {
   const fake = await catalogue()
   const title = 'Reviewed script Job schedule'
   const stepPrompt = 'Check the invoice total; report discrepancies before changing anything.'
@@ -421,30 +438,25 @@ test('a narrow Job schedule editor exposes the full script and keeps timing cont
         script: { version: 1, agents: { worker: { kind: 'agent', source: 'folder', manifestId, name: agentName } },
           steps: [{ id: 'verify', agent: 'worker', prompt: stepPrompt }] } })
     }, { title, prompt: PROMPT, manifestId: agent.manifestId, agentName: AGENT, stepPrompt })
-    await cinna.page.getByRole('button', { name: 'Jobs', exact: true }).click()
-    await cinna.page.getByText(title, { exact: true }).first().click()
     await cinna.page.setViewportSize({ width: 800, height: 800 })
-    await cinna.page.getByRole('region', { name: 'Job schedules', exact: true }).getByRole('button', { name: 'New schedule', exact: true }).click()
+    const schedules = await openJobSchedules(cinna, title)
+    await schedules.getByRole('button', { name: 'New schedule', exact: true }).click()
     const editor = cinna.page.getByRole('dialog', { name: 'New schedule', exact: true })
     await editor.getByRole('textbox', { name: 'Name', exact: true }).fill('Reviewed script timing')
     await editor.getByRole('combobox', { name: 'Schedule', exact: true }).selectOption('custom')
-    await expect(editor.getByTestId('schedule-hour-grid').getByRole('checkbox')).toHaveCount(24)
+    await expect(editor.getByRole('group', { name: 'Days', exact: true }).getByRole('button')).toHaveCount(5)
     const layout = await editor.evaluate(dialog => ({ right: dialog.getBoundingClientRect().right,
-      controlRight: Math.max(...[...dialog.querySelectorAll('input:not([type="checkbox"]),select,textarea')].map(control => control.getBoundingClientRect().right)),
+      controlRight: Math.max(...[...dialog.querySelectorAll('input,select,textarea')].map(control => control.getBoundingClientRect().right)),
       width: dialog.clientWidth, content: dialog.scrollWidth }))
     expect(layout.controlRight).toBeLessThanOrEqual(layout.right - 12)
     expect(layout.content).toBeLessThanOrEqual(layout.width)
     await cinna.page.screenshot({ path: '/tmp/cinna-job-schedule-editor-800.png' })
-    const instructions = editor.getByLabel('Instructions for verify', { exact: true })
-    await expect(editor).not.toContainText('Agents: none')
-    await expect(editor).toContainText(`Agents: ${AGENT}`)
-    await instructions.scrollIntoViewIfNeeded()
-    await expect(instructions).toHaveText(stepPrompt)
-    await expect(editor.getByRole('textbox', { name: 'Job prompt', exact: true })).toHaveValue(PROMPT)
-    const save = editor.getByRole('button', { name: 'Save schedule', exact: true })
+    await expect(editor.getByLabel('Instructions for verify', { exact: true })).toHaveCount(0)
+    await expect(editor.getByRole('textbox', { name: 'Job prompt', exact: true })).toHaveCount(0)
+    await expect(editor).not.toContainText(stepPrompt)
+    const save = editor.getByRole('button', { name: 'Create schedule', exact: true })
     await save.scrollIntoViewIfNeeded()
     await expect(save).toBeVisible()
-    await cinna.page.screenshot({ path: '/tmp/cinna-job-schedule-review-800.png' })
     await editor.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(editor).toHaveCount(0)
     expect(await cinna.page.evaluate(() => window.api.tasks.list())).toEqual([])

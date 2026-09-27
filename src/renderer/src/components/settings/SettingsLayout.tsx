@@ -533,7 +533,11 @@ export function SettingsInfoTip({
   useEffect(() => {
     if (!popover.open) return
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') popover.setOpen(false)
+      if (event.key !== 'Escape') return
+      // Inside a modal <dialog>, Escape would otherwise also close the dialog.
+      // Cancelling the keydown keeps the close request to the tip alone.
+      event.preventDefault()
+      popover.setOpen(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -567,7 +571,10 @@ export function SettingsInfoTip({
           >
             {children}
           </div>,
-          document.body
+          // A modal <dialog> sits in the top layer and makes the rest of the
+          // document inert, so a tip portaled to <body> from inside one would
+          // render behind it. Portal into the dialog instead.
+          popover.triggerRef.current?.closest('dialog') ?? document.body
         )}
     </>
   )

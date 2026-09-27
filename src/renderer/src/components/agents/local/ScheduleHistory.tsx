@@ -4,15 +4,12 @@ import type { LocalScheduleItem, LocalScheduleOccurrence } from '../../../../../
 import { useOpenTask } from '../../../hooks/useTasks'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { scheduleButtonClass } from './ScheduleEditor'
+import { scheduleTime } from './scheduleClock'
 
 export const scheduleStatusLabels: Record<LocalScheduleOccurrence['status'], string> = {
   prepared: 'Queued', dispatched: 'In progress', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Needs review', skipped_overlap: 'Skipped: previous run unfinished'
 }
-export function scheduleTime(timestamp: number | null | undefined, timezone: string): string {
-  if (timestamp == null) return 'Not started'
-  try { return new Date(timestamp).toLocaleString(undefined, { timeZone: timezone }) }
-  catch { return new Date(timestamp).toLocaleString() }
-}
+export { scheduleTime }
 
 export function ScheduleHistory({ item, onChanged, target = 'agent' }: { item: LocalScheduleItem; onChanged(): void; target?: 'agent' | 'job' }) {
   const api = target === 'job' ? window.api.jobSchedules : window.api.localSchedules

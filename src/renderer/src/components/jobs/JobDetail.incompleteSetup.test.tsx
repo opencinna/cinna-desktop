@@ -30,7 +30,7 @@ const exec = vi.hoisted(() => ({
   error: null as Error | null
 }))
 
-vi.mock('./JobSchedules', () => ({ JobSchedules: () => <div data-testid="job-schedules" /> }))
+vi.mock('./JobSchedules', () => ({ JobSchedules: () => <div data-testid="job-schedules" />, useJobScheduleCount: () => 0 }))
 vi.mock('../../hooks/useJobs', () => ({
   useJob: () => ({ data: jobState.current, isLoading: false }),
   useJobRuns: () => ({ data: [] }),

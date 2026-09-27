@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import type { LocalScheduleItem } from '../../../../../shared/localSchedules'
 import { SchedulesTab } from './SchedulesTab'
@@ -11,6 +11,7 @@ const editor = vi.fn()
 const remove = vi.fn()
 const save = vi.fn()
 const enable = vi.fn()
+const disable = vi.fn()
 const preview = vi.fn()
 const item: LocalScheduleItem = { profileUserId: 'profile', name: 'Check reports', prompt: 'Review the reports', cron: '0 8 * * 1-5', timezone: 'UTC', revision: 'revision', problem: null, binding: null }
 function view() {
@@ -20,12 +21,12 @@ function view() {
 beforeEach(() => {
   vi.clearAllMocks()
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.setAttribute('open', '') } })
-  Object.defineProperty(window, 'api', { configurable: true, value: { localSchedules: { editor, delete: remove, save, enable, preview } } })
+  Object.defineProperty(window, 'api', { configurable: true, value: { localSchedules: { editor, delete: remove, save, enable, disable, preview } } })
   editor.mockResolvedValue({ items: [item], stamp })
   preview.mockResolvedValue({ nextDueAt: 100000 })
 })
 it('opens editing through row actions and preserves the stamped review snapshot', async () => {
-  save.mockResolvedValue({ items: [item], stamp, warning: 'Saved; enablement needs review' })
+  save.mockResolvedValue({ items: [item], stamp, warning: 'Saved, but not turned on' })
   view()
   fireEvent.click(await screen.findByRole('button', { name: 'Actions for Check reports' }))
   fireEvent.click(screen.getByRole('menuitem', { name: 'Edit schedule' }))
@@ -33,7 +34,7 @@ it('opens editing through row actions and preserves the stamped review snapshot'
   fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Renamed report' } })
   fireEvent.click(within(dialog).getByRole('button', { name: 'Save schedule' }))
   await screen.findByRole('alert')
-  expect(screen.getByRole('alert').textContent).toBe('Saved; enablement needs review')
+  expect(screen.getByRole('alert').textContent).toBe('Saved, but not turned on')
   expect(save.mock.calls[0][0]).toMatchObject({ expectedStamp: stamp, originalName: 'Check reports', name: 'Renamed report', revision: 'revision', profileUserId: 'profile' })
   expect(screen.queryByRole('dialog')).toBeNull()
 })
@@ -49,14 +50,63 @@ it('keeps a failed deletion confirmation open and reports the failure beside its
   expect(screen.getByRole('dialog', { name: 'Delete schedule' })).toBeTruthy()
   expect(remove).toHaveBeenCalledWith({ expectedStamp: stamp, name: 'Check reports', revision: 'revision', agentId: 'agent', profileUserId: 'profile' })
 })
-it('reviews imported prompts with the single catch-up behavior before enabling', async () => {
+it('turns a schedule on from its switch without a review dialog', async () => {
   enable.mockResolvedValue([])
   view()
-  fireEvent.click(await screen.findByRole('button', { name: 'Review and enable' }))
-  const dialog = screen.getByRole('dialog', { name: 'Enable schedule' })
-  expect(dialog.textContent).toContain('it runs once when Cinna is available again')
-  expect((within(dialog).getByLabelText('Prompt') as HTMLTextAreaElement).value).toBe('Review the reports')
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Enable on this device' }))
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-  expect(enable).toHaveBeenCalledWith({ agentId: 'agent', profileUserId: 'profile', name: 'Check reports', revision: 'revision', timezone: 'UTC' })
+  const toggle = await screen.findByRole('switch', { name: 'Run “Check reports” on this device' })
+  expect(toggle.getAttribute('aria-checked')).toBe('false')
+  fireEvent.click(toggle)
+  await waitFor(() => expect(enable).toHaveBeenCalledWith({ agentId: 'agent', profileUserId: 'profile', name: 'Check reports', revision: 'revision', timezone: 'UTC' }))
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(disable).not.toHaveBeenCalled()
+})
+it('turns an enabled schedule off from its switch and shows the next time with how far away it is', async () => {
+  const next = Date.now() + 3 * 24 * 3_600_000 + 4 * 3_600_000 + 60_000
+  editor.mockResolvedValue({ items: [{ ...item, binding: { id: 'binding', enabled: true, reason: null, jobId: null, nextDueAt: next, last: null } }], stamp })
+  disable.mockResolvedValue(undefined)
+  view()
+  const toggle = await screen.findByRole('switch', { name: 'Run “Check reports” on this device' })
+  expect(toggle.getAttribute('aria-checked')).toBe('true')
+  const row = screen.getByRole('article', { name: 'Check reports' })
+  expect(row.textContent).toContain(' · in 3 days 4 hours')
+  // The healthy state is the switch, not a sentence.
+  expect(row.textContent).not.toContain('Enabled for this profile')
+  fireEvent.click(toggle)
+  await waitFor(() => expect(disable).toHaveBeenCalledWith('binding'))
+  expect(enable).not.toHaveBeenCalled()
+})
+it('shows a refused enable in the card and cannot turn on a schedule with a problem', async () => {
+  enable.mockRejectedValue(new Error("Error invoking remote method 'local-schedule:enable': Error: The manifest changed."))
+  editor.mockResolvedValue({ items: [item, { ...item, name: 'Broken', problem: 'This schedule is invalid.' }], stamp })
+  view()
+  expect((await screen.findByRole('switch', { name: 'Run “Broken” on this device' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByRole('article', { name: 'Broken' }).textContent).toContain('This schedule is invalid.')
+  fireEvent.click(screen.getByRole('switch', { name: 'Run “Check reports” on this device' }))
+  await waitFor(() => expect(within(screen.getByRole('article', { name: 'Check reports' })).getByRole('alert').textContent).toBe('The manifest changed.'))
+})
+it('keeps the next-time line in both states, so the switch moves nothing below the card', async () => {
+  view()
+  const row = await screen.findByRole('article', { name: 'Check reports' })
+  expect(row.textContent).toContain('Off on this device')
+})
+it('drops a switch error once the next poll brings the row a different state', async () => {
+  enable.mockRejectedValue(new Error('The schedule changed a moment ago. Try again.'))
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(<QueryClientProvider client={client}><SchedulesTab agentId="agent" /></QueryClientProvider>)
+  fireEvent.click(await screen.findByRole('switch', { name: 'Run “Check reports” on this device' }))
+  const row = screen.getByRole('article', { name: 'Check reports' })
+  await waitFor(() => expect(within(row).getByRole('alert').textContent).toBe('The schedule changed a moment ago. Try again.'))
+  act(() => client.setQueryData(['local-schedules', 'profile', 'agent'], { items: [{ ...item, revision: 'newer', problem: 'This schedule is invalid.' }], stamp }))
+  await waitFor(() => expect(within(screen.getByRole('article', { name: 'Check reports' })).queryByRole('alert')).toBeNull())
+  expect(screen.getByRole('article', { name: 'Check reports' }).textContent).toContain('This schedule is invalid.')
+})
+it('has no Refresh button and refetches whenever the tab is opened', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 60_000 } } })
+  const first = render(<QueryClientProvider client={client}><SchedulesTab agentId="agent" /></QueryClientProvider>)
+  await screen.findByRole('article', { name: 'Check reports' })
+  expect(screen.queryByRole('button', { name: 'Refresh' })).toBeNull()
+  first.unmount()
+  editor.mockClear()
+  render(<QueryClientProvider client={client}><SchedulesTab agentId="agent" /></QueryClientProvider>)
+  await waitFor(() => expect(editor).toHaveBeenCalledTimes(1))
 })

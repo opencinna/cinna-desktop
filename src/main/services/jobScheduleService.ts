@@ -50,7 +50,7 @@ function requireBinding(scope: RunScope, id: string, jobId?: string, includeDele
 function reviewedBinding(scope: RunScope, input: JobScheduleMutationInput): JobBinding {
   assertScope(scope, input)
   const row = requireBinding(scope, input.id, input.jobId)
-  if (row.revision !== input.revision) throw new Error('This schedule changed while you were editing it. Reload and review again.')
+  if (row.revision !== input.revision) throw new Error('This schedule changed a moment ago. Try again.')
   return row
 }
 function rows(scope: RunScope, jobId: string): JobBinding[] {
@@ -59,7 +59,7 @@ function rows(scope: RunScope, jobId: string): JobBinding[] {
 function jobProblem(scope: RunScope, binding: JobBinding): string | null {
   try {
     const job = requireJob(scope, binding.jobId)
-    if (jobScheduleRevision(job) !== binding.definition.jobRevision) return 'The Job’s instructions or configuration changed. Review this schedule before enabling it again.'
+    if (jobScheduleRevision(job) !== binding.definition.jobRevision) return 'The Job changed since this schedule was turned on. Turn it on again to use the Job as it is now.'
     return null
   } catch (error) { return message(error) }
 }
@@ -91,7 +91,7 @@ export const jobScheduleService = {
   save(scope: RunScope, input: JobScheduleSaveInput, now = Date.now()): LocalJobScheduleSnapshot {
     assertScope(scope, input)
     const job = requireJob(scope, input.jobId), jobRevision = jobScheduleRevision(job)
-    if (jobRevision !== input.jobRevision) throw new Error('The Job changed while you were reviewing it. Reload its schedules before saving.')
+    if (jobRevision !== input.jobRevision) throw new Error('The Job changed a moment ago. Try again.')
     if (typeof input.name !== 'string' || !input.name.trim() || input.name !== input.name.trim() || input.name.length > 255) throw new Error('Enter a schedule name of 1–255 characters without surrounding spaces.')
     if (typeof input.enabled !== 'boolean' || typeof input.cron !== 'string' || typeof input.timezone !== 'string') throw new Error('The schedule form is invalid.')
     const cron = input.cron.trim().replace(/\s+/g, ' '), timezone = scheduleTimezone(input.timezone)

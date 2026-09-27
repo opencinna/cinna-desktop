@@ -183,7 +183,7 @@ describe('schedule editor uses stamped manifest ownership', () => {
     const save = vi.spyOn(localScheduleRepo, 'save').mockImplementation(() => { throw new Error('disk full') })
     try {
       const result = localScheduleService.save(scope, { ...editInput(), prompt: 'Changed prompt' }, NOW)
-      expect(result.warning).toContain('Saved; enablement needs review')
+      expect(result.warning).toContain('Saved, but not turned on')
       expect(result.items[0].binding?.enabled).toBe(false)
       expect(JSON.parse(readFileSync(join(agentDir, MANIFEST), 'utf8')).schedules[0].prompt).toBe('Changed prompt')
     } finally { save.mockRestore() }
