@@ -197,6 +197,24 @@ describe('agent connection page', () => {
     expect(container.querySelector('svg.lucide-trash-2')).toBeNull()
     expect(screen.getByRole('button', { name: 'Test Connection' })).toBeTruthy()
   })
+  it('builds the tab from settings sections: the test is a button, its prose behind the (?), its result under it', async () => {
+    api.test.mockResolvedValueOnce({ success: false, error: 'fetch failed' } as never)
+    render(createElement(AgentCard, { agent: agent() as never, connectionOnly: true }), { wrapper })
+    expect(screen.getByRole('heading', { name: 'Connection test' })).toBeTruthy()
+    expect(screen.queryByText(/Check that Desktop can reach this agent/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'About the connection test' })).toBeTruthy()
+    // Save is there before anything is typed, so typing moves nothing.
+    const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Access Token'), { target: { value: 'tok' } })
+    expect(save.disabled).toBe(false)
+    const test = screen.getByRole('button', { name: 'Test Connection' })
+    expect(test.className).toContain('ambient-button')
+    fireEvent.click(test)
+    const error = await screen.findByText('fetch failed')
+    expect(test.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(test.contains(error)).toBe(false)
+  })
   it('uses profile authentication for Cinna agents without exposing a token editor', () => {
     render(createElement(AgentCard, { agent: agent({ source: 'remote' }) as never, connectionOnly: true }), { wrapper })
     expect(screen.getByText(/Uses your active Cinna profile/)).toBeTruthy()

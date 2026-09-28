@@ -192,7 +192,7 @@ test('an unreachable A2A agent is refused in the composer, and Check again lets 
       await openAgentsSettings(cinna)
       const testConnection = page.getByRole('button', { name: 'Test Connection', exact: true })
       await expect(testConnection).toBeVisible()
-      // The row Test Connection sits in: "beside Test" is being in that row.
+      // The card Test Connection sits in: the reason is its line under the button.
       const row = testConnection.locator('..')
       // The row shows the short reason; its tooltip is the underlying error the
       // driver kept (`detail`), and only falls back to the reason without one.

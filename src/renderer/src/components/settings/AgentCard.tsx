@@ -27,6 +27,15 @@ import {
 } from '../chat/ComposerReadiness'
 import { deriveBundleUpdate } from '../../utils/bundleVersion'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
+import {
+  SettingsBadge,
+  SettingsButton,
+  SettingsCard,
+  SettingsInfoTip,
+  SettingsLabel,
+  SettingsSection,
+  settingsInputClass
+} from './SettingsLayout'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 
@@ -40,15 +49,16 @@ interface AgentCardProps {
   connectionOnly?: boolean
 }
 
-function ConnectionRow({ label, children, technical = false }: { label: string; children: ReactNode; technical?: boolean }): React.JSX.Element {
-  return <div className="grid grid-cols-[8rem_minmax(0,1fr)] gap-4 py-2.5 text-xs">
+/**
+ * One fact about the connection. `settings` is the agent page's Connection tab,
+ * which sits beside the other settings tabs and so takes their 13px / 12px-mono
+ * scale (ux_rules rule 12); the collapsible Settings-list card keeps its own.
+ */
+function ConnectionRow({ label, children, technical = false, settings = false }: { label: string; children: ReactNode; technical?: boolean; settings?: boolean }): React.JSX.Element {
+  return <div className={`grid grid-cols-[8rem_minmax(0,1fr)] gap-4 py-2.5 ${settings ? 'text-[13px] first:pt-0 last:pb-0' : 'text-xs'}`}>
     <dt className="text-[var(--color-text-muted)]">{label}</dt>
-    <dd className={`min-w-0 break-words text-[var(--color-text)] ${technical ? 'font-mono text-[11px] [overflow-wrap:anywhere]' : ''}`}>{children}</dd>
+    <dd className={`min-w-0 break-words text-[var(--color-text)] ${technical ? `font-mono ${settings ? 'text-[12px]' : 'text-[11px]'} [overflow-wrap:anywhere]` : ''}`}>{children}</dd>
   </div>
-}
-
-function ConnectionBody({ standalone, open, children }: { standalone: boolean; open: boolean; children: ReactNode }): React.JSX.Element {
-  return standalone ? <>{children}</> : <AnimatedCollapse open={open}>{children}</AnimatedCollapse>
 }
 
 export function AgentCard({ agent, initiallyExpanded = false, connectionOnly = false }: AgentCardProps): React.JSX.Element {
@@ -162,9 +172,190 @@ export function AgentCard({ agent, initiallyExpanded = false, connectionOnly = f
       }
     | undefined
 
+  const connectionFacts: Array<{ label: string; value: ReactNode; technical?: boolean }> = [
+    { label: 'Protocol', value: <>{PROTOCOL_LABELS[agent.protocol] ?? agent.protocol}{agent.protocolInterfaceVersion && ` v${agent.protocolInterfaceVersion}`}</> },
+    ...(agent.protocolInterfaceVersion ? [{ label: 'Transport', value: (() => {
+      const iface = cardData?.supportedInterfaces?.find((item) => item.url === agent.protocolInterfaceUrl)
+      return iface?.protocolBinding ?? iface?.transport ?? 'JSONRPC'
+    })() }] : []),
+    ...(agent.protocolInterfaceUrl || agent.endpointUrl ? [{ label: 'Endpoint', value: agent.protocolInterfaceUrl || agent.endpointUrl, technical: true }] : []),
+    ...(agent.cardUrl ? [{ label: 'Agent card URL', value: agent.cardUrl, technical: true }] : []),
+    ...(cardData?.version ? [{ label: 'Agent version', value: cardData.version }] : []),
+    ...(cardData?.protocolVersions?.length ? [{ label: 'Supported versions', value: cardData.protocolVersions.join(', ') }] : []),
+    ...(typeof cardData?.capabilities?.streaming === 'boolean' ? [{ label: 'Streaming', value: cardData.capabilities.streaming ? 'Supported' : 'Not supported' }] : [])
+  ]
+
+  // Bundle update banner — applies the publisher's latest revision in place
+  // (App Data + credentials preserved).
+  const bundleUpdateBlock = <>
+    {showUpdate && (
+      <div
+        className="flex items-center gap-2 px-2.5 py-2 rounded-md
+          border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10"
+      >
+        <ArrowUpCircle size={14} className="shrink-0 text-[var(--color-warning)]" />
+        <div className="flex-1 min-w-0 text-[12px] text-[var(--color-text-secondary)]">
+          Bundle update available
+          {transitionLabel && (
+            <span className="text-[var(--color-text-muted)]"> · {transitionLabel}</span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={handleUpdate}
+          disabled={applyUpdate.isPending}
+          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium
+            bg-[var(--color-warning)] hover:opacity-90 text-white
+            disabled:opacity-50 disabled:cursor-not-allowed transition-opacity shrink-0"
+        >
+          {applyUpdate.isPending ? (
+            <>
+              <Loader2 size={10} className="animate-spin" />
+              Updating…
+            </>
+          ) : (
+            bundleUpdate.latestLabel ? `Update to ${bundleUpdate.latestLabel}` : 'Update'
+          )}
+        </button>
+      </div>
+    )}
+    {updateError && (
+      <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-danger)]">
+        <XCircle size={10} />
+        <span>{updateError}</span>
+      </div>
+    )}
+  </>
+
+  /* A failed test and a refusal describe the same failure, and the refusal
+     says it in the user's words: the test's raw error ("fetch failed")
+     replaced "Can't reach this agent." with nothing to explain it. Only a
+     passing test outranks the reason — the re-check the same press started
+     clears it moments later. `settings` renders it on its own line under the
+     button (the agent page), otherwise beside it (the Settings-list card). */
+  const renderTestResult = (settings: boolean): React.JSX.Element | null => {
+    const text = settings ? 'text-[13px]' : 'text-[12px]'
+    const width = settings ? 'min-w-0' : ''
+    return readinessIssue && !testAgent.data?.success ? (
+      <span className={`flex items-center gap-1 ${text} min-w-0`}>
+        <ReadinessIcon
+          size={settings ? 12 : 10}
+          aria-hidden="true"
+          data-readiness-icon={readinessSeverity(readinessIssue)}
+          className={`shrink-0 ${readinessTone(readinessIssue)}`}
+        />
+        <span
+          className={`truncate ${settings ? 'min-w-0' : 'max-w-[260px]'} ${readinessTone(readinessIssue)}`}
+          title={readinessTitle(readinessIssue)}
+        >
+          {readinessText(readinessIssue)}
+        </span>
+      </span>
+    ) : testAgent.data ? (
+      <span className={`flex items-center gap-1 ${text} ${width}`}>
+        {testAgent.data.success ? (
+          <>
+            <CheckCircle size={settings ? 12 : 10} className="shrink-0 text-[var(--color-success)]" />
+            <span className="text-[var(--color-success)]">Connected</span>
+          </>
+        ) : (
+          <>
+            <XCircle size={settings ? 12 : 10} className="shrink-0 text-[var(--color-danger)]" />
+            <span
+              className={`text-[var(--color-danger)] truncate ${settings ? 'min-w-0' : 'max-w-[200px]'}`}
+              title={testAgent.data.error}
+            >
+              {testAgent.data.error}
+            </span>
+          </>
+        )}
+      </span>
+    ) : null
+  }
+
+  // The agent page's Connection tab: a stack of titled settings sections built
+  // from the same primitives as the tabs beside it (ux_rules rule 12), rather
+  // than the collapsible card's grey in-card panels.
+  if (connectionOnly) {
+    const testResult = renderTestResult(true)
+    return (
+      <div className="space-y-6">
+        {(showUpdate || updateError) && <div className="space-y-2">{bundleUpdateBlock}</div>}
+
+        <SettingsSection title="Connection details">
+          <SettingsCard>
+            <dl className="divide-y divide-[var(--color-border)]">
+              {connectionFacts.map((fact) => <ConnectionRow key={fact.label} label={fact.label} technical={fact.technical} settings>{fact.value}</ConnectionRow>)}
+            </dl>
+          </SettingsCard>
+        </SettingsSection>
+
+        <SettingsSection title="Authentication">
+          <SettingsCard>
+            {isRemote ? (
+              <p className="text-[13px] text-[var(--color-text-secondary)]">Uses your active Cinna profile. Desktop manages the connection with your Cinna session.</p>
+            ) : (
+              <>
+                <div className="mb-2 flex items-center gap-1.5">
+                  <SettingsLabel htmlFor={`agent-token-${agent.id}`}>Access Token</SettingsLabel>
+                  {agent.hasAccessToken && <SettingsBadge>Saved</SettingsBadge>}
+                </div>
+                {/* Save is always there and only enabled with something to
+                    save: appearing on the first keystroke would narrow the
+                    field the user is typing into (ux_rules rule 1). */}
+                <div className="flex gap-1.5">
+                  <div className="relative flex-1">
+                    <input
+                      id={`agent-token-${agent.id}`}
+                      type={showToken ? 'text' : 'password'}
+                      value={accessToken}
+                      onChange={(e) => setAccessToken(e.target.value)}
+                      placeholder={agent.hasAccessToken ? 'Enter new token to replace' : 'Enter access token'}
+                      className={`${settingsInputClass} pr-8`}
+                    />
+                    <button
+                      type="button"
+                      aria-label={showToken ? 'Hide access token' : 'Show access token'}
+                      onClick={() => setShowToken(!showToken)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+                    >
+                      {showToken ? <EyeOff size={13} /> : <Eye size={13} />}
+                    </button>
+                  </div>
+                  <SettingsButton onClick={handleSaveToken} disabled={!accessToken || upsert.isPending}>Save</SettingsButton>
+                </div>
+                {saveError && (
+                  <div className="mt-2 flex items-center gap-1.5 text-[13px] text-[var(--color-danger)]">
+                    <XCircle size={12} className="shrink-0" />
+                    <span>{saveError}</span>
+                  </div>
+                )}
+              </>
+            )}
+          </SettingsCard>
+        </SettingsSection>
+
+        <SettingsSection
+          title="Connection test"
+          info={<SettingsInfoTip label="About the connection test"><p>Check that Desktop can reach this agent with the current connection settings.</p></SettingsInfoTip>}
+        >
+          {/* The button and its result share the card, the result on its own
+              line under the button and only when there is one (ux_rules
+              rule 1): nothing reserved in the healthy state. */}
+          <SettingsCard>
+            <SettingsButton onClick={handleTest} disabled={testAgent.isPending}>
+              {testAgent.isPending ? <><Loader2 size={12} className="animate-spin" /> Testing...</> : 'Test Connection'}
+            </SettingsButton>
+            {testResult && <div className="mt-2 flex min-w-0">{testResult}</div>}
+          </SettingsCard>
+        </SettingsSection>
+      </div>
+    )
+  }
+
   return (
-    <div className={connectionOnly ? 'space-y-4' : 'rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden'}>
-      {!connectionOnly && <div
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
+      <div
         className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
@@ -230,68 +421,21 @@ export function AgentCard({ agent, initiallyExpanded = false, connectionOnly = f
         <div className={`p-1 text-[var(--color-text-muted)] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
           <ChevronDown size={12} />
         </div>
-      </div>}
+      </div>
 
-      <ConnectionBody standalone={connectionOnly} open={expanded}>
-        <div className={connectionOnly ? 'space-y-4' : 'border-t border-[var(--color-border)] px-4 py-3 space-y-3'}>
-          {/* Bundle update banner — applies the publisher's latest revision in
-              place (App Data + credentials preserved). */}
-          {showUpdate && (
-            <div
-              className="flex items-center gap-2 px-2.5 py-2 rounded-md
-                border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10"
-            >
-              <ArrowUpCircle size={14} className="shrink-0 text-[var(--color-warning)]" />
-              <div className="flex-1 min-w-0 text-[12px] text-[var(--color-text-secondary)]">
-                Bundle update available
-                {transitionLabel && (
-                  <span className="text-[var(--color-text-muted)]"> · {transitionLabel}</span>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={handleUpdate}
-                disabled={applyUpdate.isPending}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium
-                  bg-[var(--color-warning)] hover:opacity-90 text-white
-                  disabled:opacity-50 disabled:cursor-not-allowed transition-opacity shrink-0"
-              >
-                {applyUpdate.isPending ? (
-                  <>
-                    <Loader2 size={10} className="animate-spin" />
-                    Updating…
-                  </>
-                ) : (
-                  bundleUpdate.latestLabel ? `Update to ${bundleUpdate.latestLabel}` : 'Update'
-                )}
-              </button>
-            </div>
-          )}
-          {updateError && (
-            <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-danger)]">
-              <XCircle size={10} />
-              <span>{updateError}</span>
-            </div>
-          )}
+      <AnimatedCollapse open={expanded}>
+        <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-3">
+          {bundleUpdateBlock}
 
           <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-3">
             <h2 className="mb-1 text-sm font-medium">Connection details</h2>
             <dl className="divide-y divide-[var(--color-border)]">
-              <ConnectionRow label="Protocol">{PROTOCOL_LABELS[agent.protocol] ?? agent.protocol}{agent.protocolInterfaceVersion && ` v${agent.protocolInterfaceVersion}`}</ConnectionRow>
-              {agent.protocolInterfaceVersion && <ConnectionRow label="Transport">{(() => {
-                const iface = cardData?.supportedInterfaces?.find((item) => item.url === agent.protocolInterfaceUrl)
-                return iface?.protocolBinding ?? iface?.transport ?? 'JSONRPC'
-              })()}</ConnectionRow>}
-              {(agent.protocolInterfaceUrl || agent.endpointUrl) && <ConnectionRow label="Endpoint" technical>{agent.protocolInterfaceUrl || agent.endpointUrl}</ConnectionRow>}
-              {agent.cardUrl && <ConnectionRow label="Agent card URL" technical>{agent.cardUrl}</ConnectionRow>}
-              {cardData?.version && <ConnectionRow label="Agent version">{cardData.version}</ConnectionRow>}
-              {!!cardData?.protocolVersions?.length && <ConnectionRow label="Supported versions">{cardData.protocolVersions.join(', ')}</ConnectionRow>}
-              {typeof cardData?.capabilities?.streaming === 'boolean' && <ConnectionRow label="Streaming">{cardData.capabilities.streaming ? 'Supported' : 'Not supported'}</ConnectionRow>}
+              {connectionFacts.map((fact) => <ConnectionRow key={fact.label} label={fact.label} technical={fact.technical}>{fact.value}</ConnectionRow>)}
             </dl>
           </section>
 
           {/* Skills */}
-          {!connectionOnly && agent.skills && agent.skills.length > 0 && (
+          {agent.skills && agent.skills.length > 0 && (
             <div>
               <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
                 Skills ({agent.skills.length})
@@ -383,50 +527,11 @@ export function AgentCard({ agent, initiallyExpanded = false, connectionOnly = f
               )}
             </button>
 
-            {/* A failed test and a refusal describe the same failure, and the
-                refusal says it in the user's words: the test's raw error
-                ("fetch failed") replaced "Can't reach this agent." with nothing
-                to explain it. Only a passing test outranks the reason — the
-                re-check the same press started clears it moments later. */}
-            {readinessIssue && !testAgent.data?.success ? (
-              <span className="flex items-center gap-1 text-[12px] min-w-0">
-                <ReadinessIcon
-                  size={10}
-                  aria-hidden="true"
-                  data-readiness-icon={readinessSeverity(readinessIssue)}
-                  className={`shrink-0 ${readinessTone(readinessIssue)}`}
-                />
-                <span
-                  className={`truncate max-w-[260px] ${readinessTone(readinessIssue)}`}
-                  title={readinessTitle(readinessIssue)}
-                >
-                  {readinessText(readinessIssue)}
-                </span>
-              </span>
-            ) : testAgent.data ? (
-              <span className="flex items-center gap-1 text-[12px]">
-                {testAgent.data.success ? (
-                  <>
-                    <CheckCircle size={10} className="text-[var(--color-success)]" />
-                    <span className="text-[var(--color-success)]">Connected</span>
-                  </>
-                ) : (
-                  <>
-                    <XCircle size={10} className="text-[var(--color-danger)]" />
-                    <span
-                      className="text-[var(--color-danger)] truncate max-w-[200px]"
-                      title={testAgent.data.error}
-                    >
-                      {testAgent.data.error}
-                    </span>
-                  </>
-                )}
-              </span>
-            ) : null}
+            {renderTestResult(false)}
           </div>
           </section>
         </div>
-      </ConnectionBody>
+      </AnimatedCollapse>
     </div>
   )
 }

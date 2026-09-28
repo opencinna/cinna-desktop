@@ -9,6 +9,8 @@ import { AgentTypeIcon } from './AgentTypeIcon'
 import { ExternalAgentActionsMenu } from './ExternalAgentActionsMenu'
 import { AgentCard } from '../settings/AgentCard'
 import { CustomAgentModal } from './CustomAgentModal'
+import { AgentInterfaceTab } from './AgentInterfaceTab'
+import { SettingsButton, SettingsCard, SettingsRow, SettingsRows, SettingsSection } from '../settings/SettingsLayout'
 import { ManagedAgentModal } from './ManagedAgentModal'
 import { ChatWorkspace } from '../layout/ChatWorkspace'
 import { canDevelopAgent, serverLabel } from '../../utils/agentNavigation'
@@ -85,18 +87,30 @@ export function ExternalAgentPage(): React.JSX.Element {
           <div hidden={settingsMode} className={settingsMode ? undefined : 'flex flex-1 flex-col'}><ChatWorkspace key={`${profile?.id}:${agent.id}`} agentId={agent.id} embedded /></div>
           {settingsMode && <>
             <nav role="tablist" aria-label="Agent settings" className="flex gap-1 border-b border-[var(--color-border)]">
-              {['overview', 'connection'].map((id) => <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`border-b-2 px-3 py-2 text-xs font-medium ${tab === id ? 'border-[var(--color-accent)] text-[var(--color-text)]' : 'border-transparent text-[var(--color-text-muted)]'}`}>{id === 'overview' ? 'Overview' : 'Connection'}</button>)}
+              {['overview', 'connection', 'interface'].map((id) => <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`border-b-2 px-3 py-2 text-xs font-medium ${tab === id ? 'border-[var(--color-accent)] text-[var(--color-text)]' : 'border-transparent text-[var(--color-text-muted)]'}`}>{id === 'overview' ? 'Overview' : id === 'connection' ? 'Connection' : 'Interface'}</button>)}
             </nav>
-            <div role="tabpanel" className="space-y-4">
-              {tab === 'overview' ? <>
-                <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4 space-y-2">
-                  <h2 className="text-sm font-medium">About this agent</h2>
-                  <p className="text-xs text-[var(--color-text-secondary)]">{agent.description || 'No description provided.'}</p>
-                  <p className="text-xs text-[var(--color-text-muted)]">{!agent.enabled ? 'Disabled in Desktop App' : agent.readiness?.reason || (agent.readiness?.state === 'ok' ? 'Ready to chat' : 'Status not checked yet')}</p>
-                </section>
-                {!!agent.skills?.length && <section className="rounded-lg border border-[var(--color-border)] p-4 space-y-2"><h2 className="text-sm font-medium">Skills</h2>{agent.skills.map((skill) => <div key={skill.id}><h3 className="text-xs font-medium">{skill.name}</h3>{skill.description && <p className="text-xs text-[var(--color-text-muted)]">{skill.description}</p>}</div>)}</section>}
+            <div role="tabpanel" className="space-y-6">
+              {tab === 'interface' ? <AgentInterfaceTab key={agent.id} agent={agent} /> : tab === 'overview' ? <>
+                <SettingsSection title="About this agent">
+                  <SettingsCard>
+                    <p className="text-[13px] text-[var(--color-text-secondary)]">{agent.description || 'No description provided.'}</p>
+                    <p className="mt-1 text-[13px] text-[var(--color-text-muted)]">{!agent.enabled ? 'Disabled in Desktop App' : agent.readiness?.reason || (agent.readiness?.state === 'ok' ? 'Ready to chat' : 'Status not checked yet')}</p>
+                  </SettingsCard>
+                </SettingsSection>
+                {!!agent.skills?.length && <SettingsSection title="Skills">
+                  <SettingsRows>
+                    {agent.skills.map((skill) => <SettingsRow key={skill.id}>
+                      <h3 className="text-[13px] font-medium text-[var(--color-text)]">{skill.name}</h3>
+                      {skill.description && <p className="mt-0.5 text-[13px] text-[var(--color-text-muted)]">{skill.description}</p>}
+                    </SettingsRow>)}
+                  </SettingsRows>
+                </SettingsSection>}
               </> : agent.driver === 'managed' || agent.driver === 'acp' ? (
-                <section className="rounded-lg border border-[var(--color-border)] p-4"><h2 className="mb-3 text-sm font-medium">{agent.driver === 'managed' ? 'Claude workspace' : agent.acpTransport === 'websocket' ? 'Remote ACP connection' : 'Command-line connection'}</h2><button type="button" onClick={() => setEditing(agent.id)} className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-accent)]">Configure</button></section>
+                <SettingsSection title="Connection" action={<SettingsButton onClick={() => setEditing(agent.id)}>Configure</SettingsButton>}>
+                  <SettingsCard>
+                    <p className="text-[13px] text-[var(--color-text)]">{agent.driver === 'managed' ? 'Claude workspace' : agent.acpTransport === 'websocket' ? 'Remote ACP connection' : 'Command-line connection'}</p>
+                  </SettingsCard>
+                </SettingsSection>
               ) : <AgentCard key={agent.id} agent={agent} connectionOnly />}
             </div>
           </>}
