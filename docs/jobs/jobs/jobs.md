@@ -87,9 +87,15 @@ rules.
 1. User hovers a job row in the sidebar — a small **green Play-icon pill** appears on the right of the row.
 2. Click the Play pill → fires the job immediately. The user is **not** redirected to the spawned chat — they stay in the Jobs sidebar so they can kick off multiple jobs in sequence.
 3. While the run is in progress (any non-terminal `pending` / `running` row exists for the job), the Play pill is replaced by a small **green spinner** that is shown **unconditionally** (i.e. not gated on hover). This lets the user scan the sidebar at a glance and tell which jobs are still working.
-4. When the run finalizes, the chat-stream `done` hook invalidates `['jobs']`, the spinner disappears, and the row returns to its idle state.
+4. When the run finalizes, the chat-stream `done` hook invalidates `['jobs']` and the spinner disappears. If the run left a result, the row now shows it (next section); otherwise it returns to its idle state.
 5. The user can step into the job at any time to inspect the latest run via the run-history list.
-6. Both the Play pill and the spinner are pinned to the same 16×16 footprint (matching the row's text line-height) so hover/run state changes never shift the row's height.
+6. The Play pill, the spinner, the result icon and both setup markers are pinned to the same 16×16 footprint (matching the row's text line-height) so hover/run state changes never shift the row's height.
+
+### Seeing what the last run said
+1. When a job's **latest** run ends, its row shows the same unread-result icon a chat row does, with the same colours and names: a green check (*Completed — unread results*), an amber question mark (*Needs input — unread results*) or a red alert (*Failed — unread results*). A run the user stopped leaves no icon. See [Sidebar Session Status](../../chat/session_status/session_status.md).
+2. Hovering the row swaps the icon for the Play pill, whose tooltip then reads *‹result› · Run this job* — the chat row folds its result into its Delete action the same way, so hovering never hides what the icon said.
+3. The icon clears when the user opens that run's chat, or opens the job's page once the page has loaded that same run. Opening either with the window in the background, or with the job selected but another view on screen, does not count.
+4. The icon comes back only with a newer run's result; an acknowledged result stays read across restarts.
 
 ### Deleting a job (always confirmed)
 1. From the job page's **⋯ → Delete job…**, or from the **Edit** screen's icon-only **Trash** button immediately left of "Save".
@@ -181,6 +187,9 @@ This flow applies to ordinary jobs with null runtime fields. Explicit coordinato
 - **A job whose manifest names an agent that resolves to nothing here is blocked, not degraded.** `executeLocal` recomputes that set from `jobs.sync_deps` and throws `JobError('incomplete_setup', …)` naming the missing agents. This closed a defect, not a design choice: the join rows `executeLocal` reads are the *resolved* subset, so an absent agent left no row, the pre-existing `missing_dependency` check compared `[]` against `[]`, the router answered "a chat with the local model", and the job **ran as a plain-LLM chat with the agent silently absent and recorded a success**. A wrong run reported as a success is worse than a job that refuses to start.
 - **The block covers agents only — MCPs and `source: 'local'` A2A agents are deliberately outside it.** Both auto-create a disabled shell the user finishes configuring in the app, so blocking them would break the ordinary sync-then-configure path. A present-but-disabled row is likewise outside it: that is a toggle with a working "Set up" button behind it, and `getDependencyStatus` calls it `needs-setup`. **Known and still open:** a `source: 'local'` shell the user later *deletes* reproduces the identical agentless-success failure, and is knowingly not covered (see [Folder Agents as Counterparties](../../agents/local_agents/counterparty.md)).
 - **`incompleteSetup` is advisory in the renderer and authoritative in main.** `JobData.incompleteSetup` (on both `job:list` and `job:get`) disables the Run button, drives the red sidebar marker, and adds an *Agent unavailable* line to the Details panel's Agent row. It is deliberately **not** `needsSetup`, which is also true for a disabled MCP shell — gating "can't run here" on that would refuse jobs that run fine. The refusal itself is recomputed in `executeLocal`, so a renderer working from a stale job list still cannot start a run.
+- **One trailing element, in a fixed precedence.** The row's trailing slot shows, first that applies: the spinner (a run is going), the red incomplete-setup marker, the Play pill (on hover), the unread-result icon, the amber needs-setup marker. The result sits above the amber marker at rest because what the last run said is news and the setup hint is not; it sits under the spinner because a running job's previous result is already out of date.
+- **The row reports the latest run, not the latest run that has a result.** "Latest" is by `created_at`, then insertion order for runs in the same second. If that run has not recorded a result yet, or its chat was permanently deleted, the row shows no icon rather than an older run's result: an older outcome shown beside a newer run reads as that run's outcome. A remote Cinna Task job never shows one — its runs have no local chat, and so no recorded result.
+- **Reading a result is reading the run's own chat.** The icon is the `chat_run_results` row of the latest run's chat, not a second record, so opening the chat and opening the job page clear the same flag. The job page marks only the result it was shown (`job:mark-result-read(jobId, runId)`): a result that lands between the page loading and the acknowledgement stays unread.
 - **Stale MCP refs.** MCP provider IDs attached to a job that no longer exist are silently filtered before the chat is created (an MCP delete elsewhere shouldn't crash a run).
 - **Atomic local execution.** Chat row (with `hidden_from_list = 1`), on-demand agent/MCP attachments, job_runs row, and the chat's `originating_job_run_id` back-pointer all write in one transaction. A crash mid-way leaves the DB unchanged.
 - **Hidden-from-list chats.** Job-spawned chats are marked `hidden_from_list = 1` and excluded from `chatRepo.list` (the main Chats sidebar). The user opts each chat into the visible Chats list explicitly via **Show in the Chats list** in the task page's ⋯ menu, which clears the flag and then points the Chats sidebar at the row. Hidden chats are otherwise fully functional — they still appear in run-history rows, still receive streaming updates, and are not in the trash (only soft delete hides a chat from the trash filter, not from this flag).
@@ -224,6 +233,7 @@ JobsList
   -> + button -> JobTypePicker modal (Cinna users)  OR  direct useCreateJob (local users)
   -> JobItem hover green Play pill -> useExecuteJob({ jobId, navigate: false })  (fire-and-forget run from sidebar)
   -> JobItem spinner (green Loader2) shown unconditionally while `inProgressRunsCount > 0` (read off JobData from job:list)
+  -> JobItem unread-result icon from `lastRunResult` (JobData from job:list) via unreadResultIndicator — hidden on hover and while running
 
 JobFolderRow
   -> draggable header (folder reorder source / target)
@@ -240,6 +250,7 @@ Reorder posting paths
   folder reordered     → useReorderJobFolders.mutate(orderedIds)                  -> jobFolder:reorder
 
 MainArea (activeView === 'job-detail')
+  -> useReadJobResult(activeJobId)  (foreground + job:get shows the list's unread runId -> job:mark-result-read)
   -> JobDetail  (read-only view)
        -> header (title + description, Run, Edit, ⋯ → Delete job… → DeleteJobConfirm → useDeleteJob)
        -> left: Incomplete setup panel?, JobDependencyStatus?, [Prompt | Schedules] tabs (schedulable) or Prompt, TasksHistory
@@ -283,6 +294,7 @@ Execution and refresh
 - [Tasks and the Inbox](../tasks/tasks.md) — each attempt has a durable work record; local and remote asks are answerable from the shared Inbox without opening the run conversation.
 
 - [Messaging](../../chat/messaging/messaging.md) — Local runs spawn a chat that the existing send pipeline drives end-to-end.
+- [Sidebar Session Status](../../chat/session_status/session_status.md) — owns the recorded result, its unread flag and the read rule; the job row shows the latest run's chat result with the chat row's icons.
 - [Chat Routing](../../chat/chat_routing/chat_routing.md) — a job run makes the same `newChatRouter` decision the new-chat composer makes, and spawns a chat already on that router. `src/shared/chatRouting.ts` is shared by the composer, the job runner and main's send path.
 - [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — a job that mixes agents with MCP servers spawns a coordinated chat that calls each agent/MCP as a tool.
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — Local jobs reference a chat mode by id for provider/model/MCP defaults.
