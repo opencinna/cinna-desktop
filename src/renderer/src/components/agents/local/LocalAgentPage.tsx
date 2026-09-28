@@ -27,8 +27,9 @@ import { CommandsCard, StatusCard } from './ReadOnlyCards'
 import { PermissionsCard } from './PermissionsCard'
 import { FolderTab } from './FolderTab'
 import { SchedulesTab } from './SchedulesTab'
+import { AgentInterfaceTab } from '../AgentInterfaceTab'
 
-export type AgentPageTab = 'overview' | 'prompts' | 'commands' | 'schedules' | 'permissions' | 'folder' | 'credentials'
+export type AgentPageTab = 'overview' | 'prompts' | 'commands' | 'schedules' | 'permissions' | 'folder' | 'credentials' | 'interface'
 
 const TABS: { id: AgentPageTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -43,7 +44,8 @@ const TABS: { id: AgentPageTab; label: string }[] = [
   // mounts on selection, so its query cannot render an empty state for an agent
   // that has grants.
   { id: 'permissions', label: 'Permissions' },
-  { id: 'folder', label: 'Folder' }
+  { id: 'folder', label: 'Folder' },
+  { id: 'interface', label: 'Interface' }
 ]
 
 
@@ -326,7 +328,7 @@ export function LocalAgentPage(): React.JSX.Element {
         <nav
           role="tablist"
           aria-label="Agent details"
-          className="flex gap-1 overflow-x-auto shadow-[inset_0_-1px_0_var(--color-border)]"
+          className="flex flex-wrap gap-x-1 shadow-[inset_0_-1px_0_var(--color-border)]"
         >
           {tabs.map((entry) => {
             const active = entry.id === activeTab
@@ -450,6 +452,7 @@ export function LocalAgentPage(): React.JSX.Element {
           {activeTab === 'commands' && <CommandsCard agent={agent} />}
           {activeTab === 'permissions' && <PermissionsCard agent={agent} />}
           {activeTab === 'folder' && <FolderTab agent={agent} />}
+          {activeTab === 'interface' && <AgentInterfaceTab key={agent.id} agent={agent} />}
         </div>
         </>}
       </div>

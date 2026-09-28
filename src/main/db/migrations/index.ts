@@ -16,6 +16,7 @@ import { migrateAgentDrivers } from './agent-drivers'
 import { migrateAgentRoots } from './agent-roots'
 import { migrateA2aSessions } from './a2a-sessions'
 import { migrateAgentOverrides } from './agent-overrides'
+import { migrateAgentShortcuts } from './agent-shortcuts'
 import { migrateAccountConfig } from './account-config'
 import { migrateUsers, migrateUserIdColumns } from './users'
 import { migrateChatFiles } from './chat-files'
@@ -80,6 +81,7 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // Must come after providers + chat-modes tables exist.
   migrateAccountConfig(sqlite)
   migrateAgentOverrides(sqlite)
+  migrateAgentShortcuts(sqlite)
   migrateA2aSessions(sqlite)
   migrateConductorSessions(sqlite)
   migrateChatFiles(sqlite)

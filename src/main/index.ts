@@ -34,6 +34,7 @@ import {
   registerConnectScheme
 } from './host/desktop/connectIntentService'
 import { BACKGROUND_WINDOW, focusMainWindow, installWindowResolver } from './window/focus'
+import { AGENT_SHORTCUT_SLOTS, type AppShortcut } from '../shared/appShortcuts'
 import {
   loadWindowState,
   MIN_WINDOW_HEIGHT,
@@ -326,6 +327,15 @@ function startup(): void {
     }
   }
 
+  // One channel for every chat-starting shortcut; the renderer decides what
+  // the key means on the screen the user is looking at.
+  const sendShortcut = (shortcut: AppShortcut): void => {
+    const win = getMainWindow()
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('app:shortcut', shortcut)
+    }
+  }
+
   const menu = Menu.buildFromTemplate([
     {
       label: app.name,
@@ -345,6 +355,30 @@ function startup(): void {
         { role: 'unhide' },
         { type: 'separator' },
         { role: 'quit' }
+      ]
+    },
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'New Chat',
+          accelerator: 'CommandOrControl+N',
+          click: () => sendShortcut({ kind: 'new-chat' })
+        },
+        {
+          label: 'New Chat with This Agent',
+          accelerator: 'CommandOrControl+Shift+N',
+          click: () => sendShortcut({ kind: 'new-chat-same-agent' })
+        },
+        // ⌘1–⌘9: hidden, since which agent a digit starts is per-profile data
+        // the menu does not know; the renderer resolves the binding.
+        ...AGENT_SHORTCUT_SLOTS.map((slot) => ({
+          label: `Start Chat with Agent Shortcut ${slot}`,
+          accelerator: `CommandOrControl+${slot}`,
+          visible: false,
+          acceleratorWorksWhenHidden: true,
+          click: () => sendShortcut({ kind: 'agent', slot })
+        }))
       ]
     },
     {

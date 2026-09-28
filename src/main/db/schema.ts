@@ -391,6 +391,25 @@ export const agentOverrides = sqliteTable(
 )
 
 /**
+ * Per-profile ⌘1–⌘9 bindings: which agent a digit starts a chat with. Kept out
+ * of {@link agentOverrides} because an override row carries `enabled`, and one
+ * created only for a shortcut would enable a disabled agent. `(user_id,
+ * agent_id)` is also unique — see `migrations/agent-shortcuts.ts`.
+ */
+export const agentShortcuts = sqliteTable(
+  'agent_shortcuts',
+  {
+    userId: text('user_id').notNull(),
+    slot: integer('slot').notNull(),
+    agentId: text('agent_id').notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date())
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.slot] })]
+)
+
+/**
  * Per-profile enable/disable preference for sync-managed LLM providers and
  * chat modes (materialized from the Cinna account-config endpoint). The synced
  * rows in `llm_providers` / `chat_modes` are owned by account-config sync, so

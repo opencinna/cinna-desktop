@@ -24,6 +24,7 @@ import { useConnectIntent } from './hooks/useConnectIntent'
 import { useTrayIcon } from './hooks/useTrayIcon'
 import { useLocalAgentWatch } from './hooks/useLocalAgents'
 import { useEngineWatch } from './hooks/useEngine'
+import { useAppShortcuts } from './hooks/useAppShortcuts'
 import { useSyncEvents, useSyncOnViewOpen } from './hooks/useSync'
 import {
   consumeForceOnboarding,
@@ -110,6 +111,9 @@ function Shell(): React.JSX.Element {
   // turns — happen while nobody is watching a particular screen, so the
   // subscription is here rather than in the card that renders the state.
   useEngineWatch()
+  // ⌘N, ⇧⌘N and ⌘1–⌘9 from the application menu. Here, and not beside the
+  // LogsOverlay, so the keys start nothing on the login or onboarding screens.
+  useAppShortcuts()
   // TopBar overlays the content (absolute, inset by `pt-2`/`px-2`) so the chat
   // area can claim full window height instead of losing the bar's height. The
   // sidebar card offsets its top via CSS so it still sits below the buttons.

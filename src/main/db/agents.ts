@@ -6,6 +6,7 @@ import {
   agents,
   a2aSessions,
   agentOverrides,
+  agentShortcuts,
   chatOnDemandAgents,
   chats,
   jobAgents,
@@ -35,6 +36,7 @@ type FolderIndexTx = Parameters<Parameters<ReturnType<typeof getDb>['transaction
 export type AgentRow = typeof agents.$inferSelect
 export type A2ASessionRow = typeof a2aSessions.$inferSelect
 export type AgentOverrideRow = typeof agentOverrides.$inferSelect
+export type AgentShortcutRow = typeof agentShortcuts.$inferSelect
 
 export interface CreateAgentInput {
   id?: string
@@ -662,6 +664,17 @@ export const agentRepo = {
           .where(and(eq(agentOverrides.agentId, oldId), eq(agentOverrides.userId, userId)))
           .run().changes
       )
+      // Keyed by the *profile* that bound the digit, not by the row's owner (a
+      // folder agent lives in the default scope while any profile may bind
+      // it), so every profile's binding follows the agent.
+      count(
+        'agent_shortcuts',
+        tx
+          .update(agentShortcuts)
+          .set({ agentId: newId })
+          .where(eq(agentShortcuts.agentId, oldId))
+          .run().changes
+      )
       // Message-level attributions: which agent a turn was addressed to, which
       // produced it, which backs an orchestrated tool call. They drive the
       // per-agent colour and the sub-thread grouping, so a stale id here is a
@@ -797,6 +810,48 @@ export const agentOverrideRepo = {
         .values({ userId, agentId, enabled, updatedAt: now })
         .run()
     }
+  }
+}
+
+/**
+ * Per-profile ⌘1–⌘9 bindings. One digit per agent and one agent per digit
+ * (both enforced by the table's keys); {@link agentShortcutRepo.set} keeps
+ * that true by moving rather than refusing.
+ */
+export const agentShortcutRepo = {
+  listForUser(userId: string): AgentShortcutRow[] {
+    return getDb()
+      .select()
+      .from(agentShortcuts)
+      .where(eq(agentShortcuts.userId, userId))
+      .orderBy(agentShortcuts.slot)
+      .all()
+  },
+
+  /**
+   * Bind `agentId` to `slot`, or unbind it with `null`. One transaction: the
+   * agent's previous digit is released, whoever held `slot` loses it, and the
+   * new row goes in — so choosing a taken digit moves it to this agent.
+   */
+  set(userId: string, agentId: string, slot: number | null): void {
+    getDb().transaction((tx) => {
+      tx.delete(agentShortcuts)
+        .where(and(eq(agentShortcuts.userId, userId), eq(agentShortcuts.agentId, agentId)))
+        .run()
+      if (slot === null) return
+      tx.delete(agentShortcuts)
+        .where(and(eq(agentShortcuts.userId, userId), eq(agentShortcuts.slot, slot)))
+        .run()
+      tx.insert(agentShortcuts).values({ userId, slot, agentId, updatedAt: new Date() }).run()
+    })
+  },
+
+  /**
+   * Release a deleted agent's digit in every profile. Only for agents that are
+   * really gone: a remote row sync drops may come back with the same id.
+   */
+  deleteForAgent(agentId: string): void {
+    getDb().delete(agentShortcuts).where(eq(agentShortcuts.agentId, agentId)).run()
   }
 }
 

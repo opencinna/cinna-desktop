@@ -355,7 +355,18 @@ const api = {
   },
   app: {
     setTheme: (theme: 'dark' | 'light'): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('app:set-theme', theme)
+      ipcRenderer.invoke('app:set-theme', theme),
+    /** ⌘N, ⇧⌘N and ⌘1–⌘9 from the application menu. Returns an unsubscribe. */
+    onShortcut: (
+      handler: (shortcut: import('../shared/appShortcuts').AppShortcut) => void
+    ): (() => void) => {
+      const listener = (
+        _event: IpcRendererEvent,
+        shortcut: import('../shared/appShortcuts').AppShortcut
+      ): void => handler(shortcut)
+      ipcRenderer.on('app:shortcut', listener)
+      return () => ipcRenderer.off('app:shortcut', listener)
+    }
   },
 
   auth: {
@@ -649,6 +660,15 @@ const api = {
       enabled: boolean
     ): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('agent:set-enabled', { agentId, enabled }),
+    /** The active profile's ⌘1–⌘9 bindings. */
+    listShortcuts: (): Promise<import('../shared/appShortcuts').AgentShortcutDto[]> =>
+      ipcRenderer.invoke('agent:list-shortcuts'),
+    /** Bind an agent to a digit (a taken one moves), or clear it with `null`. */
+    setShortcut: (
+      agentId: string,
+      slot: number | null
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('agent:set-shortcut', { agentId, slot }),
     syncRemote: (): Promise<{
       success: boolean
       synced?: number

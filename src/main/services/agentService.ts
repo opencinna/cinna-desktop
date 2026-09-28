@@ -1,7 +1,8 @@
 import { runtimeHost } from '../host/runtimeHost'
 import { isDevelopmentAgent } from '../../shared/developmentSession'
 import { isAgentEngine, type AgentEngine } from '../../shared/engine'
-import { agentRepo, agentOverrideRepo, AgentRow, RemoteTarget } from '../db/agents'
+import { agentRepo, agentOverrideRepo, agentShortcutRepo, AgentRow, RemoteTarget } from '../db/agents'
+import { isAgentShortcutSlot, type AgentShortcutDto } from '../../shared/appShortcuts'
 import { userRepo } from '../db/users'
 import { encryptApiKey } from '../security/keystore'
 import { fetchAgentCard, resolveProtocol, type ProtocolResolution } from '../agents/a2a-client'
@@ -261,6 +262,38 @@ export const agentService = {
     return owned && typeof owned.driverConfig?.conductorChatId === 'string' ? { row: owned, userId: profileUserId } : null
   },
 
+  /** The active profile's ⌘1–⌘9 bindings, by digit. */
+  listShortcuts(profileUserId: string): AgentShortcutDto[] {
+    return agentShortcutRepo
+      .listForUser(profileUserId)
+      .map((row) => ({ slot: row.slot, agentId: row.agentId }))
+  },
+
+  /**
+   * Bind an agent to a digit for the active profile, or clear its binding with
+   * `null`. A digit another agent holds moves to this one. Binding needs the
+   * agent to exist in this profile's view; clearing does not, so a binding
+   * whose agent is gone can still be removed.
+   */
+  setShortcut(
+    defaultUserId: string,
+    profileUserId: string,
+    agentId: string,
+    slot: number | null
+  ): void {
+    if (typeof agentId !== 'string' || agentId === '') {
+      throw new AgentError('invalid_id', 'Agent id is required')
+    }
+    if (slot !== null && !isAgentShortcutSlot(slot)) {
+      throw new AgentError('invalid_shortcut', 'Choose a shortcut from 1 to 9')
+    }
+    if (slot !== null && !this.findAgent(defaultUserId, profileUserId, agentId)) {
+      throw new AgentError('not_found', 'Agent not found')
+    }
+    agentShortcutRepo.set(profileUserId, agentId, slot)
+    logger.info('agent shortcut set', { agentId, slot })
+  },
+
   /**
    * Toggle the enabled flag for an agent. Default-scope agents — hand-added A2A
    * and folder agents — update the row directly; remote (sync-managed) agents
@@ -379,6 +412,7 @@ export const agentService = {
       )
     }
     agentRepo.delete(userId, agentId)
+    agentShortcutRepo.deleteForAgent(agentId)
     agentReadinessService.forget(agentId)
     logger.info('agent deleted', { agentId })
   },

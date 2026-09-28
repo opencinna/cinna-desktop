@@ -9,6 +9,7 @@ import {
   chatModes,
   agents,
   agentOverrides,
+  agentShortcuts,
   managedOverrides,
   jobs,
   jobFolders,
@@ -171,6 +172,7 @@ export const userRepo = {
       tx.delete(chatModes).where(eq(chatModes.userId, id)).run()
       tx.delete(agents).where(eq(agents.userId, id)).run()
       tx.delete(agentOverrides).where(eq(agentOverrides.userId, id)).run()
+      tx.delete(agentShortcuts).where(eq(agentShortcuts.userId, id)).run()
       // Managed providers/modes are profile-scoped (deleted via llmProviders /
       // chatModes above); drop their local enable/disable overrides too.
       tx.delete(managedOverrides).where(eq(managedOverrides.userId, id)).run()

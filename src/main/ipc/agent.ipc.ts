@@ -84,6 +84,31 @@ export function registerAgentHandlers(): void {
     }
   )
 
+  // ⌘1–⌘9 bindings belong to the active profile, like the enabled overrides.
+  ipcHandle('agent:list-shortcuts', async () => {
+    userActivation.requireActivated()
+    return agentService.listShortcuts(getProfileScopeUserId())
+  })
+
+  ipcHandle(
+    'agent:set-shortcut',
+    async (_event, data: { agentId: string; slot: number | null }) => {
+      userActivation.requireActivated()
+      try {
+        agentService.setShortcut(
+          getSettingsScopeUserId(),
+          getProfileScopeUserId(),
+          data.agentId,
+          data.slot
+        )
+        return { success: true as const }
+      } catch (err) {
+        const e = ipcErrorShape(err)
+        return { success: false as const, error: e.message }
+      }
+    }
+  )
+
   ipcHandle('agent:delete', async (_event, agentId: string) => {
     userActivation.requireActivated()
     try {

@@ -53,7 +53,8 @@ vi.mock('../db/agents', () => ({
     update: db.update,
     delete: db.delete
   },
-  agentOverrideRepo: { listForUser: () => db.overrides, set: db.overrideSet }
+  agentOverrideRepo: { listForUser: () => db.overrides, set: db.overrideSet },
+  agentShortcutRepo: { deleteForAgent: () => {} }
 }))
 
 const readiness = vi.hoisted(() => ({

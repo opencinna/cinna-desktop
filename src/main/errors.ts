@@ -73,6 +73,8 @@ export type AgentErrorCode =
   | 'sync_reauth_required'
   | 'sync_failed'
   | 'update_failed'
+  /** A keyboard shortcut slot outside ⌘1–⌘9. */
+  | 'invalid_shortcut'
 
 export type AgentStatusErrorCode =
   | 'not_found'

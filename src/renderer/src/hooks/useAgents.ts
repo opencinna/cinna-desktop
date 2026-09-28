@@ -49,6 +49,35 @@ export function useAgents() {
 }
 
 /**
+ * The active profile's ⌘1–⌘9 bindings. Under the `['agents']` prefix, so every
+ * agents invalidation refreshes it, and a profile switch (which resets every
+ * query) re-reads it for the new profile.
+ */
+export const AGENT_SHORTCUTS_KEY = ['agents', 'shortcuts'] as const
+
+export function useAgentShortcuts() {
+  return useQuery({
+    queryKey: AGENT_SHORTCUTS_KEY,
+    queryFn: () => window.api.agents.listShortcuts()
+  })
+}
+
+/** Bind an agent to a digit, or clear it with `null`; errors come back as data. */
+export function useSetAgentShortcut() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ agentId, slot }: { agentId: string; slot: number | null }) => {
+      const res = await window.api.agents.setShortcut(agentId, slot)
+      if (!res.success) throw new Error(res.error ?? 'Could not save the shortcut.')
+      return res
+    },
+    // Returned, so the mutation stays pending until the list has re-read and
+    // the select never flashes back to the value it replaced.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: AGENT_SHORTCUTS_KEY })
+  })
+}
+
+/**
  * Ask one agent's driver again whether it can take a turn — "Check again" in
  * the composer, and the Settings card's Test.
  *

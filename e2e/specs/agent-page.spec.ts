@@ -78,10 +78,12 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
     await expect(tabs.getByRole('tab')).toHaveText([
       'Overview',
       'Prompts',
+      'Credentials',
       'Commands1',
       'Schedules',
       'Permissions',
-      'Folder2'
+      'Folder2',
+      'Interface'
     ])
     await expect(page.getByRole('button', { name: 'Open in…' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Start chat' })).toBeVisible()
