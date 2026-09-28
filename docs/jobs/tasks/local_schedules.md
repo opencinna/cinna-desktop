@@ -36,13 +36,25 @@ Creating, editing, or turning a schedule on starts strictly in the future.
 Imported or synced Job definitions carry no local timing rule or scheduling
 permission.
 
-All schedules attached to a Job share its overlap protection. Any unfinished
-manual or scheduled run—including waiting questions, interruption, and stopping
-work—blocks another scheduled attempt. A due period records one skip and moves
-to the next future time. Multiple schedules never create a backlog behind the
-same Job. Disable or delete a schedule to prevent future admission; existing
-attempts keep their normal Stop and recovery controls. Deleting the source Job
-also prevents its schedules from starting new work.
+A due occurrence always starts its own attempt, whatever earlier runs of the
+Job are doing: an unfinished manual or scheduled run, a waiting question, or a
+task that needs review never skips it. Whether to hold the Job back is the
+user's call, made from the work that needs attention, not a rule the scheduler
+applies across tasks. The one thing that stops an occurrence is its agent still
+being in a turn when it launches (below). Disable or delete a schedule to
+prevent future admission; existing attempts keep their normal Stop and recovery
+controls. Deleting the source Job also prevents its schedules from starting new
+work.
+
+If an ordinary Job's agent is busy with another turn at launch, the occurrence
+does not start and does not fail (script and coordinator Jobs run through their
+own runtimes instead): its task is set **blocked** with "The agent was still
+busy with an earlier turn, so this scheduled run did not start. Re-run it from
+the task, or dismiss it.", and the history shows it as **Needs review**. It
+stays that way across restarts until the user re-runs or dismisses it.
+*Re-run from the last message* on that task — or on a failed task from a Job
+schedule — reopens the task and its run together, so the re-run's outcome finishes the
+run, the task, and the occurrence in the history.
 
 Job schedule rules, enablement, saved timezone, editor metadata, due cursor, and
 receipts are device/profile-local. They use the same single-catch-up, daylight
@@ -63,7 +75,7 @@ Choose one of these timing options:
 
 Workdays do not include a public-holiday calendar. Custom shows the chosen days and hours as badges, each with its own × to remove it, and an **Add day** / **Add hour** picker at the end offering the rest. Badges stay in Monday–Sunday and clock order whatever order they were picked in. Select at least one day and one hour. There is no per-day timetable or minute picker in Custom. Advanced retains minutes, month/day constraints, and steps when a schedule is reopened; the (?) beside **Cron expression** opens a cron reference (fields, syntax, examples, and the day-of-month/weekday OR rule) over the editor, and Escape closes the reference without closing the editor.
 
-The schedule and its timezone sit on one row, the same height and level with each other; the custom **Days** and **Hours** pickers stack under them rather than sharing a row, so each has the editor's full width to wrap badges into. The timezone is a searchable list of every zone with its current offset beside it ("Europe/Berlin · GMT+2"): typing filters by city or region, with spaces and underscores treated alike, or by offset ("gmt+9"), and the arrow keys and Enter pick one. The list opens over the form rather than pushing it down, and Escape closes the list without closing the editor. A zone saved earlier stays in the list even if this computer does not know it, so opening an old schedule never silently swaps its zone. Under the row the form shows the timing summary with the zone, and the next scheduled time with how far away it is ("in 8 hours 32 minutes", "in 3 days 4 hours"). While the rule or timezone is incomplete that line reads "Next scheduled time: —" rather than a check that never finishes. A script schedule also shows the resolved command. How schedules run — catch-up, the future-only first run, overlap, and the per-type limits — is behind the (?) beside the editor's title. The timezone defaults to the current system timezone and is saved explicitly; changing the computer's timezone later does not move existing schedules. Presets copy their timing into the schedule, so future changes to a template do not change saved schedules.
+The schedule and its timezone sit on one row, the same height and level with each other; the custom **Days** and **Hours** pickers stack under them rather than sharing a row, so each has the editor's full width to wrap badges into. The timezone is a searchable list of every zone with its current offset beside it ("Europe/Berlin · GMT+2"): typing filters by city or region, with spaces and underscores treated alike, or by offset ("gmt+9"), and the arrow keys and Enter pick one. The list opens over the form rather than pushing it down, and Escape closes the list without closing the editor. A zone saved earlier stays in the list even if this computer does not know it, so opening an old schedule never silently swaps its zone. Under the row the form shows the timing summary with the zone, and the next scheduled time with how far away it is ("in 8 hours 32 minutes", "in 3 days 4 hours"). While the rule or timezone is incomplete that line reads "Next scheduled time: —" rather than a check that never finishes. A script schedule also shows the resolved command. How schedules run — catch-up, the future-only first run, runs starting even while an earlier one is unfinished, and the per-type limits — is behind the (?) beside the editor's title. The timezone defaults to the current system timezone and is saved explicitly; changing the computer's timezone later does not move existing schedules. Presets copy their timing into the schedule, so future changes to a template do not change saved schedules.
 
 The editor has no enable control. A new schedule is created on (**Create schedule**). Saving an edit (**Save schedule**) keeps the state the list's switch shows: an enabled schedule stays on, one that is off stays off, and one that was turned off because it or its Job changed is saved off with that reason cleared — the switch is where it is turned back on. A save conflict keeps the form's edits. If the manifest was saved but the schedule could not be turned on, the list says "Saved, but not turned on." with the reason, and the schedule stays off until its switch is used.
 
@@ -71,7 +83,7 @@ A schedule that shows a problem — an invalid cron, a missing command, a duplic
 
 Running on this device is a device choice, not part of the definition. The editor never writes an `enabled` field into `cinna-agent.json`. If the agent's author set `enabled: false` on an entry, the editor keeps that value and the entry stays editable. Saving it while it is off updates it without a warning. Saving it while it is on saves the definition and warns that it was not turned on, because the author's `false` takes precedence over this device's opt-in. Only the author can lift it, by changing the manifest.
 
-Each opt-in is tied to the exact definition it was turned on for. A prompt schedule runs through a generated Job, and that Job is reused only while the definition is unchanged. If you save an edit while the schedule is off and turn it on later, Cinna generates a fresh Job for the new definition. It never re-enables the Job built for the old definition. Earlier generated Jobs remain in the schedule's history and overlap checks.
+Each opt-in is tied to the exact definition it was turned on for. A prompt schedule runs through a generated Job, and that Job is reused only while the definition is unchanged. If you save an edit while the schedule is off and turn it on later, Cinna generates a fresh Job for the new definition. It never re-enables the Job built for the old definition. Earlier generated Jobs remain in the schedule's history.
 
 ## Schedule lists
 
@@ -85,7 +97,7 @@ Lists have no Refresh button. They re-read whenever the tab is opened, and every
 
 A prompt occurrence becomes an ordinary one-step script Job attempt, with twenty agent turns and sixty minutes as defaults. Each occurrence starts new work. Open its task from schedule history, answer questions in the Inbox, and use the usual Stop or explicit recovery controls.
 
-A script runs with the agent's command environment and folder lock, with a five-minute timeout and bounded output collection. If the agent is busy when the occurrence is due (a chat turn, an editor save, or another command), the script waits for the agent to become free instead of failing. The five-minute limit starts only when the command itself starts. While a script is waiting, its occurrence counts as unfinished, so later due times are skipped in the usual way. History retains its exit code, stdout, stderr, intended due time, and actual execution times.
+A script runs with the agent's command environment and folder lock, with a five-minute timeout and bounded output collection. If the agent is busy when the occurrence is due (a chat turn, an editor save, or another command), the script waits for the agent to become free instead of failing. The five-minute limit starts only when the command itself starts. A later due time while a script is still waiting admits its own occurrence, which waits in the same way. History retains its exit code, stdout, stderr, intended due time, and actual execution times.
 
 | Script result | What happens |
 | --- | --- |
@@ -93,15 +105,15 @@ A script runs with the agent's command environment and folder lock, with a five-
 | Exit 0, stdout `OK`, and stderr contains a warning | Quiet success; stderr remains in history |
 | Blank stdout, lowercase `ok`, other output, or a nonzero exit | One agent task receives the command's execution context |
 | Spawn failure or timeout | Execution error; this occurrence is not automatically retried |
-| Stopped while still waiting for the agent (Stop, sleep, profile switch, or quit) | Cancelled with "Stopped before the command started"; nothing ran, so later occurrences are not held back |
+| Stopped while still waiting for the agent (Stop, sleep, profile switch, or quit) | Cancelled with "Stopped before the command started"; nothing ran |
 | Stopped after the command started | Stop records a cancellation. Sleep, a profile switch, or quit records an interruption, which needs review. The command is not automatically repeated |
-| Uncertain process outcome (no exit code) | Interruption, which needs review before later runs; the command is not automatically repeated |
+| Uncertain process outcome (no exit code) | Interruption, shown as Needs review in the history; the command is never replayed, and later occurrences still run |
 
 Truncated stdout cannot qualify as exact `OK`. Command output passed to the follow-up task is identified as execution output. A script's follow-up uses the same agent and normal task controls. A running command has Stop in its history even when no task exists.
 
 Turning a schedule off prevents future occurrences without stopping admitted work. Deleting a definition also prevents new admission; existing work retains its history and ordinary Stop/recovery lifecycle. Renaming a schedule in the editor preserves its history. Renaming it outside Cinna creates a new declaration, off on this device.
 
-## Catch-up and overlap
+## Catch-up
 
 Turning a schedule on, including after its definition or Job changed, starts its timing strictly after the current time. Disabled periods and time before first enablement do not create overdue work. Upgrading from the former scheduler also starts a future baseline, without turning old downtime into owed executions.
 
@@ -112,7 +124,7 @@ After a later interruption, the oldest due instant represents all eligible times
 - Opening on Saturday after missing Friday morning still runs one catch-up; Monday 08:00 remains next.
 - Recovering exactly at a scheduled minute includes that minute in the same catch-up.
 
-Each overdue schedule is considered separately. Running work, saved questions, stopping, interrupted work, or an unfinished manual/historical run of its source or generated Job prevents overlap. A blocked due period records one skip and advances to a future time; completion does not release a backlog. An admitted error consumes its occurrence, so repeated startup, focus, and resume events do not retry it.
+Each overdue schedule is considered separately, and earlier work never gates it: running work, saved questions, stopping, or an occurrence that needs review do not skip the next due time. There is no backlog either, because missed times still collapse into one catch-up. Older history can show "Skipped: previous run unfinished" rows from before this; no new ones are written. An admitted error consumes its occurrence, so repeated startup, focus, and resume events do not retry it.
 
 Unavailable folders leave one overdue schedule pending. Changed, removed, or invalid definitions turn the schedule off with a reason; the switch turns it back on for the definition as it is now. A crash after admission can require explicit task recovery, but never silently repeats an uncertain command. Durable records prevent duplicate admission; they cannot guarantee exactly-once effects in external systems.
 

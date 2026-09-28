@@ -81,23 +81,23 @@ Polls use enabled/profile/due indexes and bounded unfinished-work predicates. Or
 One scheduler handles startup/profile activation, aligned minute ticks, focus, and resume. Scope/generation invalidation remains authoritative after asynchronous boundaries. Stopping or switching profiles cancels/interrupts tracked execution and stops new admission; it does not disable consent or reset the due cursor.
 
 1. Capture scope, generation, and observation time; validate the live definition and binding revision. Unreadable/transiently unavailable folders retain their pending due time; confirmed changed or removed definitions turn the binding off with a reason (only the scheduler pass persists that; a list read reports it without writing).
-2. Reconcile unfinished receipts from durable task/run evidence and active reservations. Unknown or interrupted work requires explicit recovery and counts for overlap.
+2. Reconcile unfinished receipts from durable task/run evidence and active reservations. Unknown or interrupted work requires explicit recovery; it does not gate the new occurrence.
 3. If the stored next-due instant is after the observation, do nothing. Otherwise consider one occurrence for that stored instant, covering eligible times through the observation.
-4. In one SQLite transaction, compare-and-claim the binding cursor/revision, insert the receipt, prepare a prompt Job attempt if needed, and advance next due strictly beyond the observation. Overlap inserts one skipped receipt and consumes the same covered period. Never iterate from old due times to enqueue a historical replay.
+4. In one SQLite transaction, compare-and-claim the binding cursor/revision, insert the receipt, prepare a prompt Job attempt if needed, and advance next due strictly beyond the observation. Earlier unfinished work is not consulted: there is no overlap check, and `skipped_overlap` is never written (it stays in the `finished` set only so old history rows settle). Never iterate from old due times to enqueue a historical replay.
 5. Commit before launching a process or agent. Recheck scope and persist dispatch intent before the side effect. Actual execution times remain separate from intended due time. The claim's validity check requires both a current scope and the same observed wall-clock minute (`valid()`). The pre-launch gate in `localScheduleService` and `jobScheduleService` checks only `current()`, meaning the profile and scheduler generation. An admitted run that crosses a minute boundary during preparation still launches. Requiring the same minute there would turn a slow but committed occurrence into an interrupted task that needs review.
 6. For script results requiring an agent, persist the command result before preparing the task, then atomically link the prepared task before its launch. Never rerun the command because follow-up preparation or launch failed.
 
 Preparation failure rolls back partial task writes. A separate transaction records the failed observation and advances its cursor together; if this cannot commit, launch nothing. Lost processes after committed admission become interrupted work rather than unclaimed due events. This is durable deduplication, not exactly-once external execution.
 
-Every admitted failure consumes the occurrence. Turning a schedule on, or saving a changed definition while it is on, establishes a future-only baseline. Disabled intervals are not due. Later due times during unfinished work are skipped rather than queued; completion never drains a backlog. Distinct overdue schedules each get at most one catch-up.
+Every admitted failure consumes the occurrence. Turning a schedule on, or saving a changed definition while it is on, establishes a future-only baseline. Disabled intervals are not due. Later due times during unfinished work each admit their own occurrence; the catch-up collapse, not an overlap rule, is what keeps a backlog from forming. Holding a schedule back while earlier work needs attention is the user's decision, through the task and the switch, not scheduler logic that reads other tasks. Distinct overdue schedules each get at most one catch-up.
 
 ## Script execution and follow-up
 
 The shared command executor returns separate bounded stdout/stderr, exit code, start/finish times, timeout/abort/spawn errors, and truncation flags. The existing interactive `/run:` behavior is an adapter over this executor. Both use the established shell environment, localized catalog resolution, credential preparation, owning folder, folder turn lock, five-minute timeout, abort handling, and process-tree termination.
 
-The two differ in lock acquisition (`commandService.ts` `executeForAgent`). An interactive `/run:` takes `turnLock.withLock` and is refused with `turn_in_progress` while the agent is busy. `runScheduled` passes a queue signal and waits in `turnLock.withQueuedLock` behind a chat turn, an editor save, or another command. A due occurrence that failed just because a chat happened to be streaming would count as a lost run. The five-minute ceiling starts only inside the lock body, so time spent waiting does not count against it. While a run waits, its receipt is `dispatched` and unfinished, so later due times record overlap skips.
+The two differ in lock acquisition (`commandService.ts` `executeForAgent`). An interactive `/run:` takes `turnLock.withLock` and is refused with `turn_in_progress` while the agent is busy. `runScheduled` passes a queue signal and waits in `turnLock.withQueuedLock` behind a chat turn, an editor save, or another command. A due occurrence that failed just because a chat happened to be streaming would count as a lost run. The five-minute ceiling starts only inside the lock body, so time spent waiting does not count against it. While a run waits, its receipt is `dispatched`; a later due time admits another receipt, which queues behind it on the same lock.
 
-`runScheduled` reports `started`, which is set by the first statement inside the lock body and is never inferred from an error message. When the tracked controller aborts before that point (Stop, sleep/suspend, profile switch, or scheduler stop), `executeScheduledCommand` records the receipt as `cancelled` with "Stopped before the command started; it will not be replayed". It does not hold later occurrences. Once the command has started, the existing rules apply: a user Stop is `cancelled`, while suspend, a profile change, or shutdown is `interrupted` and needs review.
+`runScheduled` reports `started`, which is set by the first statement inside the lock body and is never inferred from an error message. When the tracked controller aborts before that point (Stop, sleep/suspend, profile switch, or scheduler stop), `executeScheduledCommand` records the receipt as `cancelled` with "Stopped before the command started; it will not be replayed". Once the command has started, the existing rules apply: a user Stop is `cancelled`, while suspend, a profile change, or shutdown is `interrupted` and needs review. An `interrupted` command receipt, like one whose process ended without an exit code, is never replayed and does not hold later occurrences.
 
 Quiet success requires exit code 0, untruncated stdout, and `stdout.trim() === 'OK'`. Capture that exact-output classification before credential redaction, then redact retained stdout, stderr, and spawn errors. Stderr does not affect that test and remains in history. Other normally completed outcomes, including nonzero exits, start one agent task. Spawn errors and timeouts record an execution error; cancellation and uncertain process outcomes record cancellation/interruption, without automatic rerun. Bounded output belongs in occurrence history rather than general diagnostic logs.
 
@@ -164,11 +164,25 @@ ordinary task attempt, and dispatches once from main. Explicit coordinator and
 script definitions reuse their existing preparation/execution seams. This does
 not alter the manual Run button's dispatch contract.
 
-Overlap includes every unfinished run of the source Job, whether created manually
-or by any of its schedules, plus active ordinary turns and held runtime cleanup reservations. Waiting or
-interrupted tasks remain unfinished. A second schedule cannot evade overlap by
-having a different binding ID. One blocked due interval produces one skip and
-advances its cursor; completion never releases a backlog.
+No occurrence is gated on earlier runs of the source Job, manual or scheduled.
+The ordinary launch refuses one case itself: `launch()` checks
+`turnLock.isLocked(agentId)` before `runExecutionService.start` and throws "The
+agent was still busy with an earlier turn, so this scheduled run did not start.
+Re-run it from the task, or dismiss it." A turn started into a held lock would
+be refused as a failure; the throw takes `admit`'s interrupt path instead, where
+`interruptScheduledOrdinaryJob` sets the task `blocked` with the reason and the
+receipt becomes `interrupted` ("Needs review"). The boot orphan-run sweep skips
+a run whose task is `blocked`, so this survives restarts (see
+[Interrupted Turn Recovery](../../agents/turn_recovery/turn_recovery_tech.md)).
+Script schedules do not take this path: their commands queue on the lock.
+
+`jobService.reportRunCompletion` settles every receipt whose `runId` is the
+finished run (`localScheduleRepo.settleByRun`: succeeded → `completed`, else the
+run status with its message) and moves `lastCompletedAt`. It is best-effort;
+`reconcileOccurrence` derives the same result from the run on a later pass. This
+is what lets *Re-run from the last message* (`taskService.reopenForRerun`, which
+reopens the terminal run with the task) turn a failed or needs-review occurrence
+into a completed one.
 
 Startup reconciliation marks an orphaned ordinary desktop attempt interrupted
 when its receipt was committed before launch and no live local turn remains.
@@ -178,7 +192,8 @@ still reconcile their unfinished receipts.
 
 Regression coverage should prove source Job/run/task identity, renderer-closed
 execution, ordinary/direct/model/coordinator/script routing, dependency review
-changes, stale save/profile rejection, manual and cross-schedule overlap,
+changes, stale save/profile rejection, admission despite unfinished earlier runs, busy-agent
+refusal to needs-review, re-run settling the occurrence,
 interrupted recovery, single catch-up, disabled/deleted source behavior, local-only
 sync state, and unchanged agent schedule admission. Built-app coverage saves a
 Job schedule through the detail page and follows the resulting ordinary task.
