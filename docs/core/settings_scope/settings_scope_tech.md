@@ -12,7 +12,8 @@
 - `src/main/auth/reload.ts` — `reloadUserProviders()` now loads via `getSettingsScopeUserId()` so the LLM + MCP set is identical across profiles.
 - `src/main/auth/activation.ts` — `userActivation.activate(userId)` calls `reloadUserProviders()` (Default scope) and starts `runSyncOnce(userId)` / `startPeriodicSync(userId)` for Cinna users (Profile scope).
 - `src/main/db/agents.ts` — `agentOverrideRepo.{listForUser, get, set}`; `agentRepo` unchanged.
-- `src/main/db/users.ts` — `deleteWithCascade(id)` includes `agent_overrides` in the same transaction as the other Profile-scope deletions.
+- `src/main/db/agents.ts` — `agentShortcutRepo.{listForUser, set, deleteForAgent}` for the per-profile `⌘1`–`⌘9` bindings.
+- `src/main/db/users.ts` — `deleteWithCascade(id)` includes `agent_overrides` and `agent_shortcuts` in the same transaction as the other Profile-scope deletions.
 - `src/main/db/schema.ts` — `agentOverrides` table; composite primary key `(userId, agentId)`.
 - `src/main/db/migrations/agent-overrides.ts` — table creation with documented absence of FK/cascade.
 - `src/main/services/agentService.ts` — `listMerged()`, `findAgent()`, `setEnabled()`. `agentService.list(userId)` removed.
@@ -47,6 +48,9 @@
   - Composite PK `(user_id, agent_id)`
   - Columns: `enabled` (bool), `updated_at` (int)
   - No FK to `agents.id` — overrides intentionally survive a sync remove+re-add cycle. Per-user cleanup happens in `userRepo.deleteWithCascade`.
+- `agent_shortcuts` (migration: `src/main/db/migrations/agent-shortcuts.ts`)
+  - PK `(user_id, slot)`, `UNIQUE (user_id, agent_id)`; columns `agent_id`, `updated_at`
+  - Keyed by the profile that bound the digit, not by the agent row's owner. No FK to `agents.id`, same reason as `agent_overrides`. Details: [Keyboard Shortcuts — Technical Details](../../ui/keyboard_shortcuts/keyboard_shortcuts_tech.md#database-schema)
 
 `chats.user_id` is the chat owner. `chatRepo` list reads (`list`, `listMessageStats`, `listMessageAgentIds`, `listOnDemandAgentIds`, `listTrash`, `emptyTrash`) and `chatRunResultRepo.list` accept `ChatOwners` — one id or an array — so the merged list is one statement with one ordering. `chatRepo.pin(userId, chatId, rankOwners)` ranks among `rankOwners`. `chatRepo.hasContent(chatId)` (any message or `chat_files` row) gates `chatRepo.reassignOwner(chatId, from, to, conductorAgentIds)`, which moves the chat row and its generated conductor `agents` rows in one transaction; nothing else is keyed by the chat owner while a chat is empty.
 
@@ -59,6 +63,7 @@ All other tables (`llm_providers`, `mcp_providers`, `chat_modes`, `agents`, `cha
 - `agent:delete` — Default scope only; remote agents return inline `remote_immutable` error.
 - `agent:set-enabled` — payload `{ agentId, enabled }`. Routes by id prefix (`remote:` → override table, else local row).
 - `agent:sync-remote` — Profile scope (active Cinna user).
+- `agent:list-shortcuts` / `agent:set-shortcut` — Profile scope for the binding; `set-shortcut` resolves the agent through `findAgent(default, profile, id)`, so a local agent can be bound too.
 - `chatmode:*`, `provider:*`, `mcp:*` — all Default scope.
 - `chat:*`, `agent-status:*`, `run:start` / `run:watch`, `auth:get-current` — Profile scope, with chats resolved through `auth/chatScope.ts` (own chats, plus guest-owned ones while sharing is on).
 

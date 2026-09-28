@@ -35,6 +35,7 @@ Parents before children; pure table-creation before backfills; legacy-table back
 8. `migrateChatModes` — `chat_modes`
 9. `migrateAccountConfig` — managed-provider/mode columns + `managed_overrides` (after providers + chat-modes)
 10. `migrateAgentOverrides` — `agent_overrides` (no FK, survives resync)
+    - Followed by `migrateAgentShortcuts` (`migrations/agent-shortcuts.ts`) — `agent_shortcuts` (no FK, same reason; creation only). See [Keyboard Shortcuts](../../ui/keyboard_shortcuts/keyboard_shortcuts_tech.md#database-schema)
 11. `migrateA2aSessions` — `a2a_sessions` (FK → agents), `managed_agent_sessions`, and its `hasColumn`-gated `kickoff_event_id` / `kickoff_message_id` columns
 12. `migrateChatFiles` — chat file tables
 13. `migrateJobs` — `jobs`, `job_mcp_providers`, `job_runs`, `job_folders`, `job_agents` (FK → jobs/chats/mcp_providers/agents)

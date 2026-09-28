@@ -96,7 +96,7 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 - Chats owned by the guest profile — made while signed out, or new chats whose runtime is entirely local — are listed and usable in every profile while the installation-wide **Show local agents and chats in all profiles** switch is on (the default). With it off, every profile sees exactly its own chats. The guest profile never sees a signed-in profile's chats either way
 - Messages and chat-MCP links inherit profile scope through their chat foreign key
 - On user switch: LLM adapters are cleared and re-initialized, MCP connections are disconnected and reconnected for the new user's providers (see [Resource Activation](../../core/resource_activation/resource_activation.md))
-- On account deletion: deactivate session → clear Cinna tokens → cascade-delete all profile-scope data (chats the profile owns, remote agents, `agent_overrides`) → delete user row → re-activate as default user. Default-scope settings remain untouched.
+- On account deletion: deactivate session → clear Cinna tokens → cascade-delete all profile-scope data (chats the profile owns, remote agents, `agent_overrides`, `agent_shortcuts`) → delete user row → re-activate as default user. Default-scope settings remain untouched.
 - Password verification uses PBKDF2 (100k iterations, SHA-512) — no plaintext storage
 - Session persistence stores only the last user ID, not credentials
 - Per-session unlock tracking resets on app restart or sign-out (password required again)

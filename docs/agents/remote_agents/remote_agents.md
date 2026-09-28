@@ -59,7 +59,7 @@ Automatically discovers and syncs agents from a connected Cinna backend so users
 
 ### Agent Page and Profile Settings
 
-- The page opens in chat mode; **Settings** exposes Overview and Connection, and **Start chat** returns to the same draft. Overview contains skills and readiness. Connection contains labeled protocol/endpoint details, automatic profile authentication and connection testing.
+- The page opens in chat mode; **Settings** exposes Overview, Connection and Interface, and **Start chat** returns to the same draft. Overview contains skills and readiness. Connection contains labeled protocol/endpoint details, automatic profile authentication and connection testing. Interface holds the agent's `⌘1`–`⌘9` shortcut; sync dropping the agent does not release it, so it re-applies if the agent returns under the same id.
 - Profile → Agents is a visibility and sync list for the active Cinna server only. Enabled rows have a Settings shortcut; hidden rows remain available to Enable. Sync failures and reauthentication remain on this page. Target types are backend metadata, not separate My Agents/Shared with Me/People settings groups.
 - The header server domain opens the configured Cinna server externally; the ⋯ menu's **Open on the server** opens this agent's own page there.
 - **Develop** prepares an eligible remote agent as a local coding connection when Local Development is ready; see [Local Development](../local_dev/local_dev.md#develop-a-remote-agent).

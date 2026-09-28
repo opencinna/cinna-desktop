@@ -7,6 +7,14 @@
 | File | Role |
 |------|------|
 | `src/main/index.ts` | Registers the `View > Toggle App Logs` menu items with accelerators `CommandOrControl+`` (visible) and `CommandOrControl+Shift+`` (hidden with `acceleratorWorksWhenHidden: true`). The `click` handler calls `toggleLogsOverlay` which invokes `webContents.send('logger:toggle-overlay')`. |
+| `src/main/index.ts` (File menu) | **New Chat** (`CommandOrControl+N`), **New Chat with This Agent** (`CommandOrControl+Shift+N`) and one item per `AGENT_SHORTCUT_SLOTS` digit (`CommandOrControl+<n>`, `visible: false`, `acceleratorWorksWhenHidden: true`). Every `click` calls the local `sendShortcut(shortcut)`, which sends `app:shortcut` with an `AppShortcut` payload to `getMainWindow()` unless it is missing or destroyed. |
+| `src/shared/appShortcuts.ts` | `AppShortcut` (`{kind: 'new-chat'}` · `{kind: 'new-chat-same-agent'}` · `{kind: 'agent', slot}`), `AGENT_SHORTCUT_SLOTS` (1–9), `isAgentShortcutSlot` (integer 1–9), `AgentShortcutDto` (`{slot, agentId}`). Shared by main, preload and renderer. |
+| `src/main/db/schema.ts` / `src/main/db/migrations/agent-shortcuts.ts` | `agent_shortcuts` table — see Database Schema. |
+| `src/main/db/agents.ts` | `agentShortcutRepo.{listForUser, set, deleteForAgent}`; `agentRepo.rekeyFolderRow` repoints `agent_shortcuts.agent_id` for every profile. |
+| `src/main/db/users.ts` | `userRepo.deleteWithCascade` deletes the profile's `agent_shortcuts` rows in its transaction. |
+| `src/main/services/agentService.ts` | `listShortcuts(profileUserId)`, `setShortcut(defaultUserId, profileUserId, agentId, slot)`; `delete` calls `agentShortcutRepo.deleteForAgent` after `agentRepo.delete`. |
+| `src/main/ipc/agent.ipc.ts` | `agent:list-shortcuts`, `agent:set-shortcut`. |
+| `src/main/errors.ts` | `AgentErrorCode` `invalid_shortcut`. |
 
 ### Renderer — Components
 
@@ -16,6 +24,7 @@
 | `src/renderer/src/components/layout/ChatWorkspace.tsx` | Wires `onDoubleEscape={() => setPendingAgentIds([])}` on the new-chat `ChatInput` instance only. The active-chat instance omits the prop; there the chord reaches `ChatInput`'s own stop branch instead, and only while a turn runs. |
 | `src/renderer/src/components/logger/LogsOverlay.tsx` | `useEffect` attaches a `window` `keydown` listener gated on `logsOpen`; `Escape` closes the overlay via `setLogsOpen(false)`. |
 | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` | `useEffect` attaches a `window` `keydown` listener gated on `agentStatusOpen`; `Escape` back-navigates if `detailAgentId` is set, otherwise closes the overlay. |
+| `src/renderer/src/components/agents/AgentInterfaceTab.tsx` | The agent page's Interface tab. A `SettingsSection` "Keyboard shortcut" with one `select` (None, `⌘1`–`⌘9`); an option held by another agent is labelled `agentShortcutLabel(slot) · truncateName(name)`. While the mutation is pending the select shows `setShortcut.variables.slot`, not the saved value, so it never snaps back before the list re-reads. Errors render as `role="alert"` under the select through `unwrapIpcError`. Mounted with `key={agent.id}` by `ExternalAgentPage` (`tab === 'interface'`) and `LocalAgentPage` (`activeTab === 'interface'`, last `TABS` entry, also on bare agents). |
 | `src/renderer/src/components/settings/ChatModeCard.tsx` | Inline `onKeyDown` on the mode-name input: `Enter` calls `e.currentTarget.blur()` to commit the edit. |
 | `src/renderer/src/components/chat/AgentMentionPopup.tsx` / `ExamplePromptPopup.tsx` | Render-only — they own no key handling. All navigation keys are processed by `ChatInput.handleKeyDown` and the popups receive `selectedIndex` / `onSelect` / `onClose` as props. |
 
@@ -23,19 +32,38 @@
 
 | File | Role |
 |------|------|
-| `src/renderer/src/stores/ui.store.ts` | Holds the open-state flags the context shortcuts gate on: `logsOpen`, `agentStatusOpen`, plus the persisted `loggerEnabled` toggle that gates the `⌘` ` menu-accelerator handler. |
+| `src/renderer/src/stores/ui.store.ts` | `activeView`, `activeExternalAgentId`, `activeLocalAgentId` are what `⇧⌘N` reads; `setActiveJobId(null)` + `setPendingAgentId` + `setActiveView('chat')` + `setSidebarTab('chats')` is the landing `startAgentChat` performs (`ChatWorkspace` consumes `pendingAgentId`). Also holds the open-state flags the context shortcuts gate on: `logsOpen`, `agentStatusOpen`, plus the persisted `loggerEnabled` toggle that gates the `⌘` ` menu-accelerator handler. |
+
+### Renderer — Hooks & utils
+
+| File | Role |
+|------|------|
+| `src/renderer/src/hooks/useAppShortcuts.ts` | Mounted once in `App.tsx` `Shell`, after the auth and onboarding gates. Subscribes to `window.api.app.onShortcut` once (deps: `queryClient`); `useStartNewChat` is read through a ref. Everything else — screen, chat, bindings, agent list — is read at key time: `fetchQuery` on `['chat', id]`, `['agents']` and `AGENT_SHORTCUTS_KEY`, so an invalidated cache is re-read before it is trusted. Returns early while `document.querySelector('[aria-modal="true"]')` matches. Failures are logged (`app-shortcuts` logger), not surfaced. |
+| `src/renderer/src/utils/appShortcuts.ts` | Pure rules: `startableAgent(agents, id)` (listed, `enabled`, not `conductor`), `resolveShortcutAgent(screen, agents)` (`chat` view → `routingOf(chat)` with `router === 'direct'` → `rootAgentId`; `external-agent` / `local-agent` → the page's id; anything else → null), `agentShortcutLabel(slot)` (`⌘3` or `Ctrl+3`), `truncateName(name, 24)`. |
+| `src/renderer/src/hooks/useAgents.ts` | `AGENT_SHORTCUTS_KEY = ['agents', 'shortcuts']` — under the `['agents']` prefix, so every agents invalidation and the profile-switch reset re-read it. `useAgentShortcuts()`; `useSetAgentShortcut()` throws on `success: false` and returns its `onSettled` invalidation so the mutation stays pending until the list has re-read. |
+| `src/renderer/src/hooks/useStartNewChat.ts` | The TopBar `+` action `⌘N` reuses. |
 
 ### Preload
 
 | File | Role |
 |------|------|
-| `src/preload/index.ts` | Exposes `window.api.logger.onToggleOverlay(handler)` which the renderer uses to receive the `logger:toggle-overlay` broadcast from the main-process menu `click`. |
+| `src/preload/index.ts` | Exposes `window.api.logger.onToggleOverlay(handler)` which the renderer uses to receive the `logger:toggle-overlay` broadcast from the main-process menu `click`; `window.api.app.onShortcut(handler)` for `app:shortcut` (returns an unsubscribe); `window.api.agents.listShortcuts()` and `window.api.agents.setShortcut(agentId, slot)`. |
+
+## Database Schema
+
+- `agent_shortcuts` (migration `src/main/db/migrations/agent-shortcuts.ts`, registered after `migrateAgentOverrides`): `user_id`, `slot`, `agent_id`, `updated_at`. `PRIMARY KEY (user_id, slot)` and `UNIQUE (user_id, agent_id)` — one agent per digit and one digit per agent, per profile, enforced by the table. The Drizzle definition declares only the primary key; the unique constraint lives in the migration.
+- **A table of its own, not a column on `agent_overrides`.** Many readers take `agentOverrideRepo.get(...)?.enabled ?? row.enabled`; an override row created only to hold a digit would have silently enabled a disabled agent.
+- **No FK to `agents.id`**, for the reason `agent_overrides` has none: sync may drop and re-create a remote row under the same id, and the binding must survive that. Cleanup is explicit — `agentService.delete` (hand-added connections only; remote and folder rows refuse that path), `userRepo.deleteWithCascade`, and `rekeyFolderRow` repointing by `agent_id` across every profile, since a folder agent lives in the default scope while any profile may bind it.
+- `agentShortcutRepo.set` is one transaction: delete the agent's current row, return on `null`, delete whoever holds `slot`, insert. That order is what turns a taken digit into a move instead of a constraint error.
 
 ## IPC Channels
 
 | Channel | Direction | Purpose |
 |---------|-----------|---------|
 | `logger:toggle-overlay` | main → renderer | Fired from the `⌘` ` / `⌘⇧` ` menu accelerator; renderer flips `ui.store.logsOpen` when the logger is enabled. |
+| `app:shortcut` | main → renderer | `AppShortcut` payload from the File menu's chat-starting items. |
+| `agent:list-shortcuts` | renderer → main | `() → AgentShortcutDto[]` for the active profile (`getProfileScopeUserId()`), ordered by slot. Requires an activated user. |
+| `agent:set-shortcut` | renderer → main | `({agentId, slot: number \| null}) → {success, error?}`. Validates the id (`invalid_id`), the slot (`invalid_shortcut`) and — only when binding — that `findAgent(default, profile, agentId)` resolves (`not_found`). Clearing needs no agent, so a binding whose agent is gone can still be removed. Errors are returned as data, not thrown. |
 
 ## Key Flows
 
@@ -46,6 +74,14 @@
 3. The `click` handler invokes `toggleLogsOverlay`, which calls `BrowserWindow.getAllWindows()[0].webContents.send('logger:toggle-overlay')`.
 4. The renderer listener registered via `window.api.logger.onToggleOverlay` flips `logsOpen` on `ui.store` — gated on `loggerEnabled` so the shortcut is a no-op when the logger is off.
 5. `LogsOverlay` reacts to the flag and mounts / unmounts.
+
+### Chat-starting accelerator → new chat
+
+1. The user presses `⌘N`, `⇧⌘N` or `⌘<digit>`; the File menu item's `click` calls `sendShortcut`, which sends `app:shortcut` to the main window.
+2. `useAppShortcuts` receives it. An `aria-modal="true"` element in the document ends it here.
+3. `new-chat` → `useStartNewChat()`.
+4. `new-chat-same-agent` → when `activeView === 'chat'` and a chat is active, `fetchQuery(['chat', id])`; then `resolveShortcutAgent` over the screen and a fresh `['agents']` list. An id → `startAgentChat`; null → `useStartNewChat()`.
+5. `agent` → `fetchQuery(AGENT_SHORTCUTS_KEY)`; no binding for the slot → return. Otherwise `startableAgent` on a fresh `['agents']` list: a row → `startAgentChat`; none → a toast, "*Name* is disabled" when the row is listed, disabled and not a conductor, else "The agent for *label* is no longer available".
 
 ### Double-ESC → clear agent
 
@@ -83,10 +119,13 @@
 ## Configuration
 
 - `DOUBLE_ESC_WINDOW_MS` — module-level constant in `src/renderer/src/components/chat/ChatInput.tsx`. Tune if the chord window needs to be tighter or looser.
-- Menu accelerators in `src/main/index.ts` — adding or changing global shortcuts means editing this menu. Prefer `CommandOrControl` over `Cmd`/`Ctrl` literals so bindings stay cross-platform.
+- Menu accelerators in `src/main/index.ts` — adding or changing global shortcuts means editing this menu. Another chat-starting key is a new `AppShortcut` variant plus a File menu item, not a new channel.
+- `AGENT_SHORTCUT_SLOTS` in `src/shared/appShortcuts.ts` — the digits offered; menu items, select options and `isAgentShortcutSlot` all derive from it (the last hard-codes 1–9). Prefer `CommandOrControl` over `Cmd`/`Ctrl` literals so bindings stay cross-platform.
 
 ## Security
 
 - No raw `keydown` listeners in the preload or main process — all key handling happens either via Electron menu accelerators or inside the sandboxed renderer.
 - The `logger:toggle-overlay` broadcast carries no payload — the renderer treats it as a pure "toggle" event and cannot be coerced into toggling other state.
-- No shortcut writes to persistent storage directly; every effect is a store action that the renderer already gates (e.g. `loggerEnabled` prevents the toggle from running when the logger is off).
+- `app:shortcut` carries only which key was pressed; the renderer resolves bindings itself through `agent:list-shortcuts`, scoped to the active profile in main, so one profile's bindings never reach another.
+- `agent:set-shortcut` refuses a slot outside 1–9 and a binding to an agent the active profile cannot see. The table holds ids and digits only.
+- No shortcut writes to persistent storage directly (bindings are written from the Interface tab, never by a key); every effect is a store action that the renderer already gates (e.g. `loggerEnabled` prevents the toggle from running when the logger is off).

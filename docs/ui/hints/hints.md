@@ -63,7 +63,7 @@ The shortcuts (`@`, `#`, `/`, `?`, `~`, double-ESC, the `?`-then-Enter note expa
 
 ## Hint Catalog
 
-**Ambient** hints teach: `?` (attach a note), the `?`-then-Enter inline expansion, `#` (suggested prompts), `/` (agent commands), `@` (add agents / MCP), `~` (switch chat mode), picker navigation keys, `Shift`+`Enter`, double-ESC, drag-drop attach, the `[+]` menu as the mouse equivalent, attachment and note preview, chat modes, and the app-logs accelerator.
+**Ambient** hints teach: `?` (attach a note), the `?`-then-Enter inline expansion, `#` (suggested prompts), `/` (agent commands), `@` (add agents / MCP), `~` (switch chat mode), picker navigation keys, `Shift`+`Enter`, double-ESC, drag-drop attach, the `[+]` menu as the mouse equivalent, attachment and note preview, chat modes, the app-logs accelerator, and the three chat-starting shortcuts: `⌘N` from any screen, `⇧⌘N` for a new chat with the same agent, and binding a digit on an agent page's Interface tab to use as `⌘1`–`⌘9`. These four global-key hints (logs and the three chat-starting ones) carry no availability predicate and no retirement signal: the keys work from anywhere, and no hint event reports a menu accelerator being pressed — so they stay in the rotation.
 
 **Contextual** hints fire on: attaching a note (→ the inline-expansion gesture), opening the note picker (→ picker keys), picking a mode via the `[+]` menu (→ `~`), picking a capability via the picker modal (→ `@`), selecting an agent that declares prompts (→ `#`) or commands (→ `/`), attaching files via the menu (→ drag-drop), and a lone ESC with agents selected (→ press it again).
 

@@ -41,7 +41,7 @@ Universal agent integration that lets users chat with external AI agents through
 
 ### Managing Agents
 
-- **Open agent** — Select its sidebar row to open a composer bound to the agent. **Settings** reveals Overview and Connection; **Start chat** returns to the composer without creating an empty conversation. Switching modes keeps the current draft mounted.
+- **Open agent** — Select its sidebar row to open a composer bound to the agent. **Settings** reveals Overview, Connection and Interface; **Start chat** returns to the composer without creating an empty conversation. Switching modes keeps the current draft mounted.
 - **Overview** — Description, readiness and advertised skills.
 - **Update Token** — Open **Settings → Connection → Authentication**, enter a replacement token and save. Connection details and Connection test are separate visible sections.
 - **Test Connection** — Re-fetches card, re-runs protocol negotiation, and updates cached metadata (skills, endpoint, protocol version, transport). The same press re-asks the agent's readiness, so the page readiness and the composer follow the test just run
@@ -143,8 +143,10 @@ Chat Flow — Subsequent Messages:
 ## Integration Points
 
 - **Chat system** — Agent messages are saved to the same `messages` table as LLM messages, using the same `role` values (`user`, `assistant`). The chat row stores `agentId` for display/identification, while `a2a_sessions` stores the remote session state for protocol-level continuity
+- **Keyboard shortcuts** — The Interface tab writes the per-profile `⌘1`–`⌘9` binding; `⇧⌘N` on this page starts a new chat with its agent. See [Keyboard Shortcuts](../../ui/keyboard_shortcuts/keyboard_shortcuts.md)
 - **Streaming infrastructure** — Reuses the `MessagePort` streaming pattern from [Messaging](../../chat/messaging/messaging.md), including `chat.store` streaming state (`startStreaming`, `appendDelta`, `stopStreaming`). Agent deltas extend the protocol with `kind` and `toolName` fields — see [Streaming Pipeline](streaming_pipeline.md)
 - **Conversation rendering** — `thinking` and `tool` parts render via dedicated collapsible blocks (`ThinkingBlock`, `ToolNarrationBlock`) — see [Conversation UI](../../chat/conversation_ui/conversation_ui.md)
 - **Security** — Token encryption uses the same `encryptApiKey`/`decryptApiKey` from [safeStorage keystore](../../llm/adapters/adapters.md) as LLM API keys
 - **Settings UI** — [Settings](../../ui/settings/settings.md) separates installation-wide **Default → Agents** configuration from the active server visibility list in **Profile → Agents**. Direct A2A connection configuration belongs to its agent page.
-- **Other agent kinds** — ACP and Managed agents share the chat landing page and Overview/Connection tabs; Connection opens their existing configuration dialogs.
+- **Other agent kinds** — ACP and Managed agents share the chat landing page and Overview/Connection/Interface tabs; Connection opens their existing configuration dialogs.
+- **Interface tab** — The last Settings tab, on every agent this page shows. It holds the agent's keyboard shortcut: a digit 1–9 that starts a new chat with it from any screen as `⌘<digit>`, bound per profile. A digit another agent holds is labelled with that agent's name, and choosing it moves it here. Development agents do not reach this page's Settings and so have no Interface tab. See [Keyboard Shortcuts](../../ui/keyboard_shortcuts/keyboard_shortcuts.md).

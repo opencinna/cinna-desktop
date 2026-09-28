@@ -2,11 +2,13 @@
 
 ## Purpose
 
-Catalog of every keyboard shortcut exposed by the app — both global (window-level menu accelerators) and in-context (focused input, open overlay). A single reference so contributors can discover, reuse, and avoid collisions when adding new bindings.
+Catalog of every keyboard shortcut exposed by the app — both global (window-level menu accelerators) and in-context (focused input, open overlay). A single reference so contributors can discover, reuse, and avoid collisions when adding new bindings. It also owns the one set of shortcuts the user assigns: the per-agent `⌘1`–`⌘9` digits.
 
 ## Core Concepts
 
 - **Global shortcut** — Registered as an Electron `Menu` accelerator in the main process. Active whenever the window has focus, regardless of which element is focused. Broadcast to the renderer via `webContents.send`.
+- **Chat-starting shortcut** — `⌘N`, `⇧⌘N` and `⌘1`–`⌘9`. Global shortcuts from the **File** menu that all end on the new-chat screen; they share one main → renderer event, and the renderer decides what the key means on the screen the user is looking at.
+- **Agent shortcut** — A digit 1–9 the user binds to one agent on that agent page's **Interface** tab (Settings mode). Per profile: one digit per agent, one agent per digit. `⌘<digit>` starts a new chat with that agent from any screen.
 - **Context shortcut** — Handled in a React component via `onKeyDown` on a specific element, or a `window.addEventListener('keydown', ...)` gated on some open-state flag (e.g. `logsOpen`, `agentStatusOpen`). Only fires when that context is active.
 - **Chord shortcut** — A double-press within a short time window (currently only ESC–ESC at 400 ms, which clears the agent selection on the new-chat screen and stops a running turn in an existing chat). Tracked via a `useRef` timestamp so consecutive presses can be correlated without re-rendering.
 - **Trigger character** — Not a keyboard shortcut per se, but a single-character input in the chat textarea (`@`, `#`, `/`) that opens a popup. Documented here for completeness because the popup then hijacks certain keys (`↑ ↓ Enter Tab Esc`).
@@ -20,6 +22,11 @@ Catalog of every keyboard shortcut exposed by the app — both global (window-le
 |-------|--------|
 | `⌘` / `⌃`` | Toggle the App Logs overlay (`Logger`). Registered as a visible menu accelerator so macOS does not consume it for window cycling. No-op when the logger toggle is disabled in Settings. |
 | `⌘⇧` / `⌃⇧`` | Alt accelerator for the same toggle, registered hidden so the shortcut still fires when `⇧` is held. |
+| `⌘N` / `⌃N` | **File → New Chat.** The new-chat screen, exactly as the TopBar `+` does: the active chat and any job highlight are left behind, no agent is preselected. |
+| `⇧⌘N` / `⌃⇧N` | **File → New Chat with This Agent.** A new chat with the agent of what is on screen: the agent of an open **direct** chat, or the agent of an open agent page. Anywhere else — the new-chat screen, a coordinator or human-routed chat, a direct chat with the model, Settings, a job — or when that agent is disabled, internal or no longer listed, it behaves as `⌘N`. |
+| `⌘1`–`⌘9` / `⌃1`–`⌃9` | A new chat with the agent bound to that digit (hidden menu items). An unbound digit does nothing. A bound agent that is disabled shows the toast "*Name* is disabled"; one that is gone, "The agent for ⌘*n* is no longer available". Neither navigates. |
+
+When `⇧⌘N` or a digit has an agent to start, it lands where every "chat with this agent" button lands — the new-chat screen with the agent preselected and the sidebar on Chats. All the chat-starting keys do nothing while a modal dialog is open, and nothing on the login or onboarding screens.
 
 ### Chat input — `ChatInput` (new-chat screen or active chat)
 
@@ -97,6 +104,10 @@ A resolved file reference in a folder agent's chat is a focusable `code` with `r
 |-------|--------|
 | `Esc` | Back-navigate if an agent detail view is open; otherwise close the overlay. Registered on `window` and gated on `agentStatusOpen`. |
 
+### Agent page — Interface tab (`AgentInterfaceTab`)
+
+The last tab of an agent page's Settings mode, on folder agent pages and on every other agent page (A2A, Cinna, ACP, Managed). Development agents have none: their Settings opens Local Development instead. One **Shortcut** select: **None**, then `⌘1`–`⌘9`. A digit another agent holds names that agent beside it ("⌘3 · Research"), so choosing it reads as moving it — which is what it does. Saves on change; a failure shows beneath the select and leaves the saved binding as it was.
+
 ### Settings — Chat Mode card (`ChatModeCard`)
 
 | Combo | Action |
@@ -105,15 +116,22 @@ A resolved file reference in a folder agent's chat is a focusable `code` with `r
 
 ## Business Rules
 
-- **Menu accelerators are the preferred wiring for global shortcuts.** Registering the logs toggle as an Electron menu accelerator (rather than `globalShortcut.register` or a renderer-side window listener) is what keeps `⌘`` from being swallowed by macOS's built-in "Cycle Through Windows" binding. New global shortcuts should follow the same pattern — add them to the View/Window menus in `src/main/index.ts` and send an IPC event to the renderer from the `click` handler.
+- **Menu accelerators are the preferred wiring for global shortcuts.** Registering the logs toggle as an Electron menu accelerator (rather than `globalShortcut.register` or a renderer-side window listener) is what keeps `⌘`` from being swallowed by macOS's built-in "Cycle Through Windows" binding. New global shortcuts should follow the same pattern — add them to the File/View/Window menus in `src/main/index.ts` and send an IPC event to the renderer from the `click` handler.
+- **Main knows the key, the renderer knows what it means.** The menu is built once at startup and knows nothing about profiles, chats or bindings, so every chat-starting key sends only *which* key it was; the renderer resolves the screen, the chat and the binding at key time. That is also why the nine digit items are hidden: their labels would need per-profile data the menu does not have.
+- **Chat-starting keys are ignored under a modal.** A menu accelerator fires regardless of focus, including over an open dialog. Leaving the view would unmount the dialog and throw away the form in it, so while any element with `aria-modal="true"` is in the document the key does nothing.
+- **Chat-starting keys start nothing before the shell.** The listener is mounted in the signed-in, onboarded shell, after the login and onboarding gates, so on those screens the keys are inert rather than navigating behind them.
+- **`⇧⌘N` carries over only one agent the user is talking to.** A direct chat has one. A coordinator chat's root is an internal conductor, and a human-routed chat has several agents and no single one to carry over, so both fall back to a plain new chat — as does any agent a new chat could not start with (disabled, internal, unlisted).
+- **A bound digit that cannot start its agent says so and stays put.** Navigating to an empty new-chat screen would read as the key having worked. A disabled agent is named, because re-enabling it is the fix; a missing one is not, because there is nothing left to name.
+- **Agent shortcuts are one-to-one, and choosing a taken digit moves it.** Refusing would make the user find and clear the other agent first; the select names the current holder instead, so the move is visible before it is made.
 - **Context shortcuts must be gated.** A `window`-level `keydown` listener that is always live will fire inside text inputs and interfere with typing. Every context listener (`LogsOverlay`, `AgentStatusOverlay`) checks the relevant open-state flag first and only calls `preventDefault` when it actually handles the key.
 - **Double-press windows use a ref, not state.** Chord timestamps (`lastEscapeAt`) are tracked in a `useRef` so consecutive presses don't trigger re-renders. The window length is 400 ms — short enough to avoid accidental triggers, long enough to survive a casual double-tap.
 - **Popup keys take priority.** When a chat-input popup is open, `Esc` closes the popup and resets the double-ESC timer to 0. This prevents the sequence "popup Esc → typing delay → stray Esc" from accidentally firing a reset. Popups are also handled before history recall, the edit-mode `Esc` and the stop chord, so `↑` / `↓` inside a popup never recall a message.
 - **History cycles only while the input is empty or unmodified.** In a message being written, the arrow keys move the caret; taking them over there would make multi-line editing impossible. Once a recalled message is edited, the arrows belong to the caret again. Inside a recalled message of several lines they belong to the caret too, except `↑` on the first line and `↓` on the last: that text is still unchanged, so without the exception the arrows could never move between its lines to start an edit.
 - **Leaving an edit is its own `Esc`.** `Esc` while editing a queued message resets the chord timer, so leaving the edit and stopping the turn can never be one gesture.
 - **The stop chord is taught where it applies.** The running composer's placeholder and Stop's tooltip name it; the rotating hints stay on the new-chat screen, where no turn runs.
-- **Shortcuts are not user-configurable.** There is no remapping UI; any change requires editing the relevant handler. Document new shortcuts in this file when adding them.
-- **Shortcuts are surfaced in-product by [Hints](../hints/hints.md).** The hint catalog (`src/renderer/src/constants/hints.ts`) is documentation shipped inside the UI. Changing a binding below means checking whether a hint teaches it — a stale hint is worse than no hint. Hints exist today for `?`, the `?`-then-Enter note expansion, `#`, `/`, `@`, `~`, the picker navigation keys, `Shift`+`Enter`, double-ESC, and `⌘`/`⌃` + `` ` ``.
+- **Only the agent digits are user-configurable.** Which agent `⌘1`–`⌘9` start is the user's choice, per profile — see [Settings Scope](../../core/settings_scope/settings_scope.md). The keys themselves, and every other shortcut here, cannot be remapped; any change requires editing the relevant handler. Document new shortcuts in this file when adding them.
+- **Agent bindings follow the agent, not its row.** Re-keying a folder agent (Stamp identity) moves every profile's binding to the new id. Deleting a hand-added connection releases its digit in every profile, and deleting a profile releases that profile's digits. A folder agent moved to the Trash and a Cinna agent that sync stops listing keep their digit — the folder may be restored and the remote agent re-synced under the same id — so until then that digit shows the "no longer available" toast and can be given to another agent.
+- **Shortcuts are surfaced in-product by [Hints](../hints/hints.md).** The hint catalog (`src/renderer/src/constants/hints.ts`) is documentation shipped inside the UI. Changing a binding below means checking whether a hint teaches it — a stale hint is worse than no hint. Hints exist today for `?`, the `?`-then-Enter note expansion, `#`, `/`, `@`, `~`, the picker navigation keys, `Shift`+`Enter`, double-ESC, `⌘`/`⌃` + `` ` ``, `⌘N`, `⇧⌘N`, and binding and using `⌘1`–`⌘9`.
 - **Modifier disambiguation.** Use `CommandOrControl` in Electron menu accelerators so bindings work on both macOS (`⌘`) and Linux/Windows (`⌃`). Context shortcuts that rely on raw DOM events should generally avoid modifier keys to keep behaviour predictable on every platform.
 
 ## Architecture Overview
@@ -125,6 +143,13 @@ Global shortcut
                                                           │
                                                           ▼
                                                  ui.store flag flips
+
+Chat-starting shortcut (⌘N, ⇧⌘N, ⌘1–⌘9)
+  File menu accelerator (main process)
+    └── webContents.send('app:shortcut', { kind, slot? }) ──► useAppShortcuts (Shell)
+          └── aria-modal open? → ignore
+          └── resolve: screen's agent (⇧⌘N) / profile binding (⌘digit)
+                └── new-chat screen, agent preselected — or a toast
 
 Context shortcut (component-scoped)
   Component mount
@@ -141,7 +166,9 @@ Chord shortcut
 ## Integration Points
 
 - [Logger](../../development/logger/logger.md) — Owns the `⌘` ` toggle; the shortcut is registered there, this doc only indexes it.
-- [Agents](../../agents/agents/agents.md) / [Agent Status](../../agents/agent_status/agent_status.md) — `Esc` handling for the agent status overlay lives alongside those features.
+- [Agents](../../agents/agents/agents.md) / [Agent Status](../../agents/agent_status/agent_status.md) — `Esc` handling for the agent status overlay lives alongside those features. The external agent page carries the Interface tab.
+- [Agents Tab & Agent Page](../../agents/local_agents/agents_tab.md) — the folder agent page carries the Interface tab; Stamp identity is what moves a folder agent's bindings.
+- [Settings Scope](../../core/settings_scope/settings_scope.md) — agent digit bindings are profile-bound data.
 - [Messaging](../../chat/messaging/messaging.md) — `Enter` / `Shift+Enter` send/newline behaviour is part of the chat input.
 - [Pending Messages](../../chat/pending_messages/pending_messages.md) — what a send, a recall and an edit do while a turn runs; Esc Esc stops that turn.
 - [Example Prompts](../../chat/example_prompts/example_prompts.md) — `#` trigger + popup navigation keys.

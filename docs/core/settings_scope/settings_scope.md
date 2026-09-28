@@ -11,10 +11,11 @@ Cross-cutting model that splits app data into two scopes: **Default** (shared ac
 | **Default Scope** | Storage under the built-in guest user id (`__default__`). Holds shared settings visible to every profile. |
 | **Profile Scope** | Storage under the currently activated user id. Holds account-bound data and is hidden from other profiles. |
 | **Shared Settings** | Settings that always live in Default scope: LLM providers, MCP providers, chat modes, locally-registered agents. |
-| **Profile-Bound Data** | Data that stays in Profile scope: chats made with account resources (with messages, trash), remote agents synced from Cinna, Cinna OAuth tokens, agent enable/disable overrides, and every task, delegation, handover and Inbox row — even one started from a shared chat. |
+| **Profile-Bound Data** | Data that stays in Profile scope: chats made with account resources (with messages, trash), remote agents synced from Cinna, Cinna OAuth tokens, agent enable/disable overrides, agent keyboard shortcuts, and every task, delegation, handover and Inbox row — even one started from a shared chat. |
 | **Chat Owner** | The user id a chat row belongs to (`chats.user_id`). Not always the active profile: a shared local chat is owned by `__default__` while a signed-in profile uses it. |
 | **Shared Local Chat** | A chat owned by the default profile, listed and usable in every profile while `showLocalDataInAllProfiles` is on (the default): chats made while signed out, and new chats whose runtime is entirely local. |
 | **Agent Override** | Per-profile boolean preference (`agent_overrides` table) that overlays the `enabled` flag of a sync-managed agent so the user's toggle survives subsequent syncs. |
+| **Agent Shortcut** | Per-profile binding of a digit 1–9 to one agent (`agent_shortcuts` table), set on the agent page's Interface tab and used as `⌘1`–`⌘9`. Any agent the profile can see may be bound, including a Default-scope local agent. See [Keyboard Shortcuts](../../ui/keyboard_shortcuts/keyboard_shortcuts.md) |
 | **Sidebar Groups** | The Settings sidebar shows two headed sections: "Default" and "Profile {name}" (only when the active profile has profile-scope settings to offer). |
 
 ## User Stories / Flows
@@ -62,7 +63,7 @@ Cross-cutting model that splits app data into two scopes: **Default** (shared ac
 ## Business Rules
 
 - **Default scope is the only write target for shared settings.** Mutations to LLM providers, MCP providers, chat modes, and locally-registered agents always target `__default__` regardless of which profile is active.
-- **Profile scope is the only read/write target for profile-bound data.** Remote agents, agent overrides, Cinna tokens, tasks, delegations, handovers and Inbox rows always use the active profile's id. Chats use their owner, which is the active profile except for a shared local chat.
+- **Profile scope is the only read/write target for profile-bound data.** Remote agents, agent overrides, agent shortcuts, Cinna tokens, tasks, delegations, handovers and Inbox rows always use the active profile's id. Chats use their owner, which is the active profile except for a shared local chat.
 - **Only the chat is shared, never the work started from it.** A task, delegation, handover or Inbox row made from a shared chat is keyed to the active profile, and the turn resolves agents and credentials as that profile. A check that asks "is this still the same profile" compares profiles, never chat owners; comparing the chat owner would make every shared chat look like it had moved to the guest mid-turn. A handover found from a shared chat is therefore the active profile's to take in and pay for, not dropped as foreign.
 - **What a chat is attached to follows its owner.** Its conductor runtime, local attachment files (`files/<owner>/<chatId>`), live-run subscription key, pending-message queue and Managed-agent checkpoint are stored under the chat owner, so every profile that sees the chat finds the same ones.
 - **A new chat's owner is decided once, while it is empty.** At a chat update that sets its agent, chat mode or routing, a chat with no messages and no files is given to the default profile only if everything it would run on is machine-local: every bound or attached agent is a local agent (not `remote:`, not a development agent, and resolvable), its chat mode is a local unmanaged one, its credential a local unmanaged one, and — for a chat the model answers with neither mode nor credential named — the effective default chat mode is local. A human-routed chat with no agents counts as local. Anything else keeps it in the profile. Once something is said or attached the owner never changes: messages, files and runs are keyed by it, and moving them would be a migration, not a binding. While still empty, rebinding may move it either way; its conductor runtime moves with it in the same transaction.
@@ -75,6 +76,7 @@ Cross-cutting model that splits app data into two scopes: **Default** (shared ac
   - Remote agents (id starts with `remote:`) → upsert `(profileUserId, agentId, enabled)` in `agent_overrides`.
 - **Override survives sync.** `agent_overrides` has no FK / no cascade against `agents.id` — if sync removes and re-adds the same remote agent, the override re-applies on the next list.
 - **Override does NOT survive profile deletion.** `userRepo.deleteWithCascade` deletes all override rows owned by the user being removed.
+- **Agent shortcuts are profile data about agents of either scope.** Two profiles sharing the same folder agents each keep their own digits. They sit in their own table rather than on `agent_overrides`, because an override row made only to hold a digit would carry an `enabled` value and switch a disabled agent back on. Like overrides they have no FK to `agents.id` and survive a sync remove+re-add; they go with the profile on deletion, go in every profile when a hand-added connection is deleted, and follow a folder agent that is re-keyed.
 - **Reload on activation loads Default-scope providers/MCP.** The adapter registry and `mcpManager` are populated from Default scope on every activation, so the set never depends on which profile is active.
 - **Profile group visibility.** The sidebar only renders "Profile {name}" when the active profile is a Cinna user (only profile-scope settings shipped so far). When hidden, the renderer auto-resets `settingsTab` to a Default-scope tab.
 - **The default guest user is treated as the only profile when active.** No "Profile" group is shown; the agent list collapses to Default-scope-only.
@@ -96,7 +98,8 @@ Cross-cutting model that splits app data into two scopes: **Default** (shared ac
                         │                              │
   Profile data ─────►   │  getProfileScopeUserId()     │  ──► getCurrentUserId()
   (remote agents,       │                              │
-   overrides, tasks,    │                              │
+   overrides, agent     │                              │
+   shortcuts, tasks,    │                              │
    Inbox, handovers)    │                              │
                         │                              │
   Chats ────────────►   │  visibleChat(profile, id)    │  ──► own chat, or a
@@ -121,7 +124,7 @@ Sidebar (Settings view)
 ## Integration Points
 
 - [Resource Activation](../resource_activation/resource_activation.md) — activation now loads Default-scope providers/MCP, and starts remote sync for the Profile if applicable.
-- [User Accounts](../../auth/user_accounts/user_accounts.md) — `userRepo.deleteWithCascade` cleans up both Profile-scope data and `agent_overrides`.
+- [User Accounts](../../auth/user_accounts/user_accounts.md) — `userRepo.deleteWithCascade` cleans up both Profile-scope data, `agent_overrides` and `agent_shortcuts`.
 - [Settings](../../ui/settings/settings.md) — sidebar splits menu items into Default and Profile groups.
 - [Chat Modes](../../chat/chat_modes/chat_modes.md), [Adapters](../../llm/adapters/adapters.md), [MCP Connections](../../mcp/connections/connections.md) — all live in Default scope and are mutated only via Default scope.
 - [Agents](../../agents/agents/agents.md), [Remote Agents](../../agents/remote_agents/remote_agents.md) — local agents live in Default scope; remote agents live in Profile scope with overrides for enable/disable.
