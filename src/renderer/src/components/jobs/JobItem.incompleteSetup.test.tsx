@@ -63,6 +63,7 @@ function job(over: Partial<JobData> = {}): JobData {
     inProgressRunsCount: 0,
     needsSetup: false,
     incompleteSetup: false,
+    lastRunResult: null,
     ...over
   }
 }

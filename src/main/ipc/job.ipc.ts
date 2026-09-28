@@ -51,6 +51,11 @@ export function registerJobHandlers(): void {
     return { success: true }
   })
 
+  ipcHandle('job:mark-result-read', async (_event, jobId: string, runId: string) => {
+    userActivation.requireActivated()
+    jobService.markLatestResultRead(getProfileScopeUserId(), jobId, runId)
+  })
+
   ipcHandle('job:list-runs', async (_event, jobId: string) => {
     userActivation.requireActivated()
     return jobService.listRuns(getProfileScopeUserId(), jobId)

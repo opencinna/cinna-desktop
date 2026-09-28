@@ -1,5 +1,6 @@
 import type { TaskScript } from './taskScript'
 import type { TaskBudget } from './tasks'
+import type { ChatRunResult } from './chatRunResult'
 
 /** Null/omitted preserves the ordinary job's derived single-turn routing. */
 export interface JobRuntimeDefinition {
@@ -78,6 +79,13 @@ export interface JobData extends JobRuntimeDefinition {
    * still cannot start the run. Populated by both `job:list` and `job:get`.
    */
   incompleteSetup: boolean
+  /**
+   * The `chat_run_results` row of the chat of the job's latest local run (by
+   * creation); null with none, or when that chat is gone. The sidebar row shows
+   * the chat rows' unread-result icon from it. Populated by `job:list` and
+   * `job:get`.
+   */
+  lastRunResult: ChatRunResult | null
 }
 
 /**

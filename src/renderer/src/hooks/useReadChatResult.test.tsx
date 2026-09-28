@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { beforeEach, afterEach, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 import { useReadChatResult } from './useReadChatResult'
 
@@ -86,4 +86,36 @@ it('keeps results unread while the app is in the background and reads them on fo
     window.dispatchEvent(new Event('focus'))
   })
   await waitFor(() => expect(markResultRead).toHaveBeenCalledWith('a', 'run-a'))
+})
+
+describe('a job-spawned chat kept out of the Chats list', () => {
+  const hidden = (over: Record<string, unknown> = {}) =>
+    ({ id: 'h', activeRunId: null, lastRunResult: { runId: 'run-h', status: 'completed', unread: true }, messages: [], ...over })
+
+  it('reads its result from the transcript query, and refreshes the jobs list', async () => {
+    get.mockImplementation(async () => hidden())
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    renderHook(() => useReadChatResult('h'), { wrapper })
+    await waitFor(() => expect(markResultRead).toHaveBeenCalledWith('h', 'run-h'))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['jobs'], exact: true }))
+    expect(client.getQueryData<ReturnType<typeof hidden>>(['chat', 'h'])!.lastRunResult.unread).toBe(false)
+    expect(cached().every((chat) => chat.lastRunResult.unread)).toBe(true)
+  })
+
+  it('does not acknowledge while its run is still going', async () => {
+    get.mockImplementation(async () => hidden({ activeRunId: 'run-next' }))
+    renderHook(() => useReadChatResult('h'), { wrapper })
+    await waitFor(() => expect(client.getQueryState(['chat', 'h'])?.status).toBe('success'))
+    expect(markResultRead).not.toHaveBeenCalled()
+  })
+
+  it('does not acknowledge a result already read, or a failed transcript read', async () => {
+    get.mockImplementation(async () => hidden({ lastRunResult: { runId: 'run-h', status: 'failed', unread: false } }))
+    renderHook(() => useReadChatResult('h'), { wrapper })
+    await waitFor(() => expect(client.getQueryState(['chat', 'h'])?.status).toBe('success'))
+    get.mockRejectedValue(new Error('Database unavailable'))
+    renderHook(() => useReadChatResult('x'), { wrapper })
+    await waitFor(() => expect(client.getQueryState(['chat', 'x'])?.status).toBe('error'))
+    expect(markResultRead).not.toHaveBeenCalled()
+  })
 })

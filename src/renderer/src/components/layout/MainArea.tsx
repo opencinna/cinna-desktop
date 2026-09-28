@@ -1,6 +1,7 @@
 import { LocalDevelopmentPage } from '../localdev/LocalDevelopmentPage'
 import { useLiveRunWatch } from '../../hooks/useLiveRunWatch'
 import { useReadChatResult } from '../../hooks/useReadChatResult'
+import { useReadJobResult } from '../../hooks/useReadJobResult'
 import { useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
 import { ChatWorkspace } from './ChatWorkspace'
@@ -18,9 +19,11 @@ import { LocalAgentPage } from '../agents/local/LocalAgentPage'
 export function MainArea(): React.JSX.Element {
   const activeView = useUIStore((s) => s.activeView)
   const activeChatId = useChatStore((s) => s.activeChatId)
+  const activeJobId = useUIStore((s) => s.activeJobId)
   const extraUIAnimation = useUIStore((s) => s.extraUIAnimation)
   useLiveRunWatch()
   useReadChatResult(activeView === 'chat' ? activeChatId : null)
+  useReadJobResult(activeView === 'job-detail' ? activeJobId : null)
   switch (activeView) {
     case 'settings': return <SettingsPage />
     case 'inbox': return <InboxView />

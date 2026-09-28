@@ -17,9 +17,11 @@ import {
   agents,
   mcpProviders,
   tasks,
-  taskHandoffs
+  taskHandoffs,
+  chatRunResults
 } from './schema'
 import type { JobSyncManifest } from '../../shared/sync'
+import type { ChatRunResult } from '../../shared/chatRunResult'
 
 export type JobRow = typeof jobs.$inferSelect
 export type JobFolderRow = typeof jobFolders.$inferSelect
@@ -722,6 +724,31 @@ export const jobRunsRepo = {
       .groupBy(jobRuns.jobId)
       .all()
     return new Map(rows.map((r) => [r.jobId, Number(r.count)]))
+  },
+
+  /**
+   * Each job's latest local run (by `created_at`, then insertion order), with
+   * its chat's `chat_run_results` row — one query for all jobs, served by
+   * `idx_job_runs_job_created`. `result` is null when the chat has no recorded
+   * result yet or was deleted: an older run's result must not resurface. A job
+   * with only remote `cinna_task` runs, or none, is absent.
+   */
+  latestRunResults(userId: string, jobId?: string): Map<string, { chatId: string | null; result: ChatRunResult | null }> {
+    const latest = sql`${jobRuns.id} = (select j2.id from job_runs j2
+      where j2.job_id = ${jobRuns.jobId} and j2.user_id = ${jobRuns.userId}
+        and j2.type = 'local'
+      order by j2.created_at desc, j2.rowid desc limit 1)`
+    const rows = getDb()
+      .select({ jobId: jobRuns.jobId, chatId: jobRuns.localChatId, runId: chatRunResults.runId,
+        status: chatRunResults.status, unread: chatRunResults.unread })
+      .from(jobRuns)
+      .leftJoin(chatRunResults, eq(chatRunResults.chatId, jobRuns.localChatId))
+      .where(and(eq(jobRuns.userId, userId), jobId ? eq(jobRuns.jobId, jobId) : undefined, latest))
+      .all()
+    return new Map(rows.map((r) => [r.jobId, {
+      chatId: r.chatId,
+      result: r.runId && r.status ? { runId: r.runId, status: r.status, unread: !!r.unread } : null
+    }]))
   },
 
   listByJob(userId: string, jobId: string): JobRunRowWithMeta[] {

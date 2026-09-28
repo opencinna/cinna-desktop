@@ -1095,6 +1095,9 @@ const api = {
       ipcRenderer.invoke('job:set-agents', jobId, agentIds),
     listRuns: (jobId: string): Promise<JobRunData[]> =>
       ipcRenderer.invoke('job:list-runs', jobId),
+    /** Marks the job's latest run result read — only if it is still `runId`. */
+    markResultRead: (jobId: string, runId: string): Promise<void> =>
+      ipcRenderer.invoke('job:mark-result-read', jobId, runId),
     depStatus: (jobId: string): Promise<JobDependencyStatus[]> =>
       ipcRenderer.invoke('job:dep-status', jobId),
     runOrigin: (runId: string): Promise<JobRunOrigin | null> =>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { CircleAlert, CircleCheck, CircleHelp, Loader2, Square, Trash2 } from 'lucide-react'
+import { Loader2, Square, Trash2 } from 'lucide-react'
 import { useChatStore } from '../../stores/chat.store'
 import { useDeleteChat, useInterruptChat, useRenameChat, useSetChatPinned } from '../../hooks/useChat'
 import { useOpenAgentPath } from '../../hooks/useLocalAgents'
@@ -13,12 +13,7 @@ import { ChatItemTooltip } from './ChatItemTooltip'
 import { hasChatSummaryContent } from '../../utils/chatSummaryFormat'
 import { ChatRowMenu } from './ChatRowMenu'
 import { useChatsDrag } from './chatDragContext'
-
-const resultIndicators = {
-  completed: { icon: CircleCheck, label: 'Completed — unread results', color: 'text-[var(--color-success)]' },
-  needs_input: { icon: CircleHelp, label: 'Needs input — unread results', color: 'text-[var(--color-warning)]' },
-  failed: { icon: CircleAlert, label: 'Failed — unread results', color: 'text-[var(--color-danger)]' }
-}
+import { unreadResultIndicator } from '../ui/runResultIndicators'
 
 /**
  * Closes whichever row's tooltip is open. One at a time: a closing delay on
@@ -70,8 +65,7 @@ export function ChatItem({ chat, summary: loaded, index, folderAgentId, dragGrou
   const interrupt = useInterruptChat(chat.id)
   const isRunning = isStreaming || !!chat.activeRunId
   const isInterrupting = interrupt.isPending
-  const unread = !isRunning && chat.lastRunResult?.unread && chat.lastRunResult.status !== 'canceled'
-    ? resultIndicators[chat.lastRunResult.status] : null
+  const unread = unreadResultIndicator(chat.lastRunResult, isRunning)
   const ResultIcon = unread?.icon
   const actionLabel = isInterrupting ? 'Interrupting session…' : isRunning ? 'Interrupt session' : 'Delete session'
   // A rename is allowed mid-turn, so its failure shows whether or not the chat runs.

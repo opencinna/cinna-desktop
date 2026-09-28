@@ -44,6 +44,8 @@ export function migrateJobs(sqlite: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_jobs_user_id ON jobs(user_id);
     CREATE INDEX IF NOT EXISTS idx_job_runs_job_id ON job_runs(job_id);
+    -- A job's latest run (the sidebar's result icon) without a sort per run.
+    CREATE INDEX IF NOT EXISTS idx_job_runs_job_created ON job_runs(job_id, created_at);
   `)
 
   for (const column of ['router', 'script', 'budget']) {

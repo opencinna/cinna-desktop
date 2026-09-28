@@ -1,6 +1,8 @@
 import { jobRunRefreshMode } from '../db/jobRunRefresh'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import { getDb } from '../db/client'
+import { chatRunResultRepo } from '../db/chatRunResults'
+import type { ChatRunResult } from '../../shared/chatRunResult'
 import { executorFor } from './jobExecution'
 import { unresolvableAgentLabels } from './jobExecution/dependencies'
 import { jobRuntimeDefinition } from '../tasks/jobRuntimeDefinition'
@@ -81,6 +83,8 @@ export interface JobDetail extends JobRow {
    * this is what the detail view's Run button is disabled on.
    */
   incompleteSetup: boolean
+  /** As on `JobListItem`. */
+  lastRunResult: ChatRunResult | null
 }
 
 /**
@@ -149,12 +153,19 @@ export interface JobListItem extends JobRow {
    * means the run is refused rather than merely unconfigured.
    */
   incompleteSetup: boolean
+  /**
+   * The result recorded on the chat of the job's latest local run — the
+   * sidebar's unread-result icon. Null with no run, before it records, or once
+   * its chat is deleted; never an older run's result.
+   */
+  lastRunResult: ChatRunResult | null
 }
 
 export const jobService = {
   list(userId: string): JobListItem[] {
     const rows = jobsRepo.list(userId)
     const counts = jobRunsRepo.countInProgressByJob(userId)
+    const results = jobRunsRepo.latestRunResults(userId)
     // Only build the resolution index (4 table scans) when at least one job
     // actually carries a synced manifest — non-Cinna / never-synced workspaces
     // skip the work entirely.
@@ -163,6 +174,7 @@ export const jobService = {
     return rows.map((j) => ({
       ...j,
       inProgressRunsCount: counts.get(j.id) ?? 0,
+      lastRunResult: results.get(j.id)?.result ?? null,
       needsSetup: index ? manifestNeedsSetup(j.syncDeps, index) : false,
       incompleteSetup: index
         ? unresolvableAgentLabels(j.syncDeps, index, serverUrl).length > 0
@@ -182,7 +194,20 @@ export const jobService = {
     const incompleteSetup = index
       ? unresolvableAgentLabels(job.syncDeps, index, profileServerUrl(userId)).length > 0
       : false
-    return { ...job, agentIds, mcpProviderIds, recentRuns, needsSetup, incompleteSetup }
+    const lastRunResult = jobRunsRepo.latestRunResults(userId, jobId).get(jobId)?.result ?? null
+    return { ...job, agentIds, mcpProviderIds, recentRuns, needsSetup, incompleteSetup, lastRunResult }
+  },
+
+  /**
+   * Opening a job's page reads its latest run's result. Only the result the
+   * page was shown (`runId`) is marked: one that landed after stays unread.
+   * A run of another profile, or a chat this profile cannot see, is ignored.
+   */
+  markLatestResultRead(userId: string, jobId: string, runId: string): void {
+    requireJob(userId, jobId)
+    const latest = jobRunsRepo.latestRunResults(userId, jobId).get(jobId)
+    if (!latest?.chatId || latest.result?.runId !== runId || !visibleChat(userId, latest.chatId)) return
+    chatRunResultRepo.markRead(latest.chatId, runId)
   },
 
   create(userId: string, input: JobCreateInput): JobRow {

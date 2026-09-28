@@ -5,6 +5,7 @@ import { useUIStore } from '../../stores/ui.store'
 import { useExecuteJob } from '../../hooks/useJobs'
 import type { JobData } from '../../../../shared/jobs'
 import { useJobsDrag } from './dragContext'
+import { unreadResultIndicator } from '../ui/runResultIndicators'
 
 interface JobItemProps {
   job: JobData
@@ -38,6 +39,9 @@ export function JobItem({ job, onDropJob }: JobItemProps): React.JSX.Element {
   // run lifecycle until the stream's `done` event invalidates `['jobs']`.
   // OR-ing them avoids a flicker between the two windows.
   const isRunning = executeJob.isPending || job.inProgressRunsCount > 0
+  // The latest run's result the user has not opened — the chat rows' icon.
+  const result = unreadResultIndicator(job.lastRunResult, isRunning)
+  const ResultIcon = result?.icon
 
   const handleRunNow = (e: React.MouseEvent): void => {
     e.stopPropagation()
@@ -141,8 +145,13 @@ export function JobItem({ job, onDropJob }: JobItemProps): React.JSX.Element {
         still shows exactly one 16px trailing element in every state; the
         cleanliness the hover rule protects is untouched, because a blocked job
         is not a resting one.
+
+        An unread result of the latest run sits between the two: under the
+        run-now button on hover (like the amber marker), above the amber marker
+        at rest — what the last run said is news, the setup hint is not.
+        Precedence: spinner > red marker > run-now (hover) > result > amber.
       */}
-      {(job.incompleteSetup || (job.needsSetup && !hovering)) && !isRunning && (
+      {(job.incompleteSetup || (job.needsSetup && !hovering && !result)) && !isRunning && (
         <span
           className={`inline-flex items-center justify-center w-4 h-4 shrink-0 ${
             job.incompleteSetup
@@ -157,6 +166,13 @@ export function JobItem({ job, onDropJob }: JobItemProps): React.JSX.Element {
           aria-label={job.incompleteSetup ? 'Incomplete setup' : 'Needs setup'}
         >
           <AlertTriangle size={11} />
+        </span>
+      )}
+      {result && ResultIcon && !job.incompleteSetup && !hovering && (
+        <span
+          className={`inline-flex items-center justify-center w-4 h-4 shrink-0 ${result.color}`}
+        >
+          <ResultIcon size={12} role="img" aria-label={result.label} />
         </span>
       )}
       {/*
@@ -191,7 +207,9 @@ export function JobItem({ job, onDropJob }: JobItemProps): React.JSX.Element {
             className="inline-flex items-center justify-center w-4 h-4 rounded
               bg-[var(--color-success)] hover:brightness-110 text-white
               transition-all shrink-0"
-            title="Run this job"
+            // The result icon gives way to this button on hover, so its label
+            // travels here — the chat row folds it into its action the same way.
+            title={result ? `${result.label} · Run this job` : 'Run this job'}
             aria-label="Run this job"
           >
             <Play size={10} />
