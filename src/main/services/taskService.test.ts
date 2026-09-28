@@ -1066,6 +1066,11 @@ describe('every task write keeps the exported note in step', () => {
       run: (id) => taskService.setStatus(USER, id, 'in_progress').id,
       leaves: 'file'
     },
+    // Exports after its transaction commits, like `unbindRemote`.
+    reopenForRerun: {
+      run: (id) => taskService.reopenForRerun(USER, id).id,
+      leaves: 'file'
+    },
     acceptRemoteResult: {
       run: (id) => taskService.acceptRemoteResult(USER, id, { status: 'blocked', handoffNote: NOTE, artifacts: [] }).id,
       leaves: 'file'

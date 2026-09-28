@@ -188,15 +188,19 @@ describe('local schedule admission and persistence', () => {
     expect(driverRun).toHaveBeenCalledTimes(1)
   })
 
-  it('consumes one overlap skip for all missed times instead of accumulating work behind an interrupted task', () => {
+  it('admits one catch-up for all missed times beside an interrupted earlier task instead of skipping', async () => {
     const binding = enable()
     const prior = scriptRuntimeService.prepareJob(scope, jobsRepo.getById(USER, binding.jobId)!)
     scriptRuntimeService.interruptPrepared(USER, prior.taskId, 'Review prior work')
     const observed = BASE + 5 * 86400000
     check(observed); check(observed)
-    expect(localScheduleRepo.occurrences(USER, binding.id)).toMatchObject([{ status: 'skipped_overlap', scheduledFor: BASE + 60000, coveredThrough: observed, taskId: prior.taskId }])
+    const receipt = await settled(binding.id)
+    expect(localScheduleRepo.occurrences(USER, binding.id)).toHaveLength(1)
+    expect(receipt).toMatchObject({ scheduledFor: BASE + 60000, coveredThrough: observed, triggerKind: 'catch_up' })
+    expect(receipt.taskId).not.toBe(prior.taskId)
     expect(localScheduleRepo.get(USER, binding.id)?.nextDueAt).toBe(observed + 60000)
-    expect(driverRun).not.toHaveBeenCalled()
+    expect(driverRun).toHaveBeenCalledTimes(1)
+    expect(scriptRuntimeRepo.get(USER, prior.taskId)?.state).toBe('interrupted')
   })
 
   it('keeps opt-in across a transient folder failure and makes listing read-only', async () => {
@@ -233,7 +237,6 @@ describe('local schedule admission and persistence', () => {
     const prepared = scriptRuntimeService.prepareJob(scope, jobsRepo.getById(USER, binding.jobId)!)
     taskRepo.update(USER, prepared.taskId, { status: 'blocked' })
     taskRepo.softDelete(USER, prepared.taskId)
-    expect(localScheduleRepo.unfinishedRuns(USER, [binding.jobId])).toEqual([])
     check()
     await settled(binding.id)
   })
@@ -271,7 +274,7 @@ describe('local schedule admission and persistence', () => {
     expect(driverRun).not.toHaveBeenCalled()
     expect(taskRunnersByChat.size).toBe(0)
   })
-  it('turns a committed but unlaunched occurrence into explicit interrupted recovery', () => {
+  it('turns a committed but unlaunched occurrence into explicit interrupted recovery', async () => {
     const binding = enable()
     const prepare = scriptRuntimeService.prepareJob
     vi.spyOn(scriptRuntimeService, 'prepareJob').mockImplementation((captured, job) => ({ ...prepare(captured, job), launch() { throw new Error('Profile switched before launch') } }))
@@ -280,18 +283,23 @@ describe('local schedule admission and persistence', () => {
     expect(receipt).toMatchObject({ status: 'interrupted', reason: 'Profile switched before launch' })
     expect(scriptRuntimeRepo.get(USER, receipt.taskId!)?.state).toBe('interrupted')
     scriptRuntimeService.recover()
+    vi.mocked(scriptRuntimeService.prepareJob).mockRestore()
     check(BASE + 120000)
-    expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('skipped_overlap')
-    expect(driverRun).not.toHaveBeenCalled()
+    // The interrupted occurrence waits for review; the next one still runs.
+    const next = await settled(binding.id)
+    expect(next.id).not.toBe(receipt.id)
+    expect(localScheduleRepo.occurrence(USER, binding.id, receipt.civilKey)?.status).toBe('interrupted')
+    expect(driverRun).toHaveBeenCalledTimes(1)
   })
-  it('blocks overlap with a manually prepared interrupted run of the generated Job', () => {
+  it('admits an occurrence beside a manually prepared interrupted run of the generated Job', async () => {
     const binding = enable()
     const prior = scriptRuntimeService.prepareJob(scope, jobsRepo.getById(USER, binding.jobId)!)
     scriptRuntimeService.interruptPrepared(USER, prior.taskId, 'Review prior work')
     check()
-    expect(localScheduleRepo.latest(USER, binding.id)).toMatchObject({ status: 'skipped_overlap', taskId: prior.taskId })
-    expect(jobRunsRepo.listByJob(USER, binding.jobId)).toHaveLength(1)
-    expect(driverRun).not.toHaveBeenCalled()
+    const receipt = await settled(binding.id)
+    expect(receipt.taskId).not.toBe(prior.taskId)
+    expect(jobRunsRepo.listByJob(USER, binding.jobId)).toHaveLength(2)
+    expect(driverRun).toHaveBeenCalledTimes(1)
   })
   it('deleting a waiting scheduled run cancels its tasks and gates and allows a later occurrence', async () => {
     driverRun.mockImplementationOnce(async (_owner, _row, input) => {
@@ -486,12 +494,19 @@ describe('scheduled shell commands', () => {
     check()
     const receipt = localScheduleRepo.latest(USER, binding.id)!
     expect(receipt.status).toBe('dispatched')
+    // A running command does not hold back the next due occurrence.
     check(BASE + 5 * 60000)
-    expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('skipped_overlap')
-    expect(state.runScheduled).toHaveBeenCalledTimes(1)
+    const next = localScheduleRepo.latest(USER, binding.id)!
+    expect(next).toMatchObject({ status: 'dispatched', triggerKind: 'catch_up' })
+    expect(next.id).not.toBe(receipt.id)
+    expect(state.runScheduled).toHaveBeenCalledTimes(2)
     localScheduleService.stop(scope, { profileUserId: USER, bindingId: binding.id, occurrenceId: receipt.id })
     await vi.waitFor(() => expect(localScheduleRepo.occurrence(USER, binding.id, receipt.civilKey)?.status).toBe('cancelled'))
     expect(localScheduleRepo.occurrence(USER, binding.id, receipt.civilKey)?.commandOutcome).toMatchObject({ aborted: true, stdout: 'Partial output' })
+    // Stop is per occurrence.
+    expect(localScheduleRepo.occurrence(USER, binding.id, next.civilKey)?.status).toBe('dispatched')
+    localScheduleService.stop(scope, { profileUserId: USER, bindingId: binding.id, occurrenceId: next.id })
+    await vi.waitFor(() => expect(localScheduleRepo.occurrence(USER, binding.id, next.civilKey)?.status).toBe('cancelled'))
     expect(driverRun).not.toHaveBeenCalled()
     expect(taskRepo.list(USER)).toEqual([])
   })
@@ -505,13 +520,14 @@ describe('scheduled shell commands', () => {
     const receipt = localScheduleRepo.latest(USER, binding.id)!
     localScheduleService.cancelCommands()
     await vi.waitFor(() => expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('interrupted'))
-    check(BASE + 120000)
-    expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('skipped_overlap')
-    expect(state.runScheduled).toHaveBeenCalledTimes(1)
-    localScheduleService.stop(scope, { profileUserId: USER, bindingId: binding.id, occurrenceId: receipt.id })
+    // The uncertain occurrence is never replayed; the next one runs on time.
     state.runScheduled.mockResolvedValue(commandOutcome())
-    check(BASE + 180000)
+    check(BASE + 120000)
     await settled(binding.id)
+    expect(state.runScheduled).toHaveBeenCalledTimes(2)
+    expect(localScheduleRepo.occurrence(USER, binding.id, receipt.civilKey)?.status).toBe('interrupted')
+    localScheduleService.stop(scope, { profileUserId: USER, bindingId: binding.id, occurrenceId: receipt.id })
+    expect(localScheduleRepo.occurrence(USER, binding.id, receipt.civilKey)?.status).toBe('cancelled')
     expect(state.runScheduled).toHaveBeenCalledTimes(2)
     expect(driverRun).not.toHaveBeenCalled()
   })
@@ -535,17 +551,19 @@ describe('scheduled shell commands', () => {
     expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('completed')
   })
 
-  it('treats a missing exit code as uncertain and blocks future commands until explicitly dismissed', async () => {
+  it('treats a missing exit code as uncertain and leaves it for review while later occurrences still run', async () => {
     const outcome = commandOutcome({ exitCode: null, stdout: 'Partial work before external termination' })
     state.runScheduled.mockResolvedValue(outcome)
     const binding = enable()
     check()
     await vi.waitFor(() => expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('interrupted'))
     const receipt = localScheduleRepo.latest(USER, binding.id)!
-    expect(receipt).toMatchObject({ commandOutcome: outcome, taskId: null, reason: expect.stringContaining('uncertain outcome') })
+    expect(receipt).toMatchObject({ commandOutcome: outcome, taskId: null, reason: expect.stringContaining('Its outcome is uncertain') })
+    state.runScheduled.mockResolvedValue(commandOutcome())
     check(BASE + 120000)
-    expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('skipped_overlap')
-    expect(state.runScheduled).toHaveBeenCalledTimes(1)
+    await settled(binding.id)
+    expect(localScheduleRepo.occurrence(USER, binding.id, receipt.civilKey)?.status).toBe('interrupted')
+    expect(state.runScheduled).toHaveBeenCalledTimes(2)
     expect(driverRun).not.toHaveBeenCalled()
   })
 
@@ -557,8 +575,10 @@ describe('scheduled shell commands', () => {
     localScheduleRepo.updateOccurrence(USER, completed.id, { status: 'dispatched', commandOutcome: null, resultKind: null, finishedAt: null })
     check(BASE + 120000)
     expect(localScheduleRepo.occurrence(USER, binding.id, completed.civilKey)).toMatchObject({ status: 'interrupted', reason: expect.stringContaining('outcome is uncertain') })
-    expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('skipped_overlap')
-    expect(state.runScheduled).toHaveBeenCalledTimes(1)
+    // A new occurrence, not a rerun of the orphaned one.
+    const next = await settled(binding.id)
+    expect(next.civilKey).not.toBe(completed.civilKey)
+    expect(state.runScheduled).toHaveBeenCalledTimes(2)
   })
 
   it('does not launch a follow-up under a changed profile even when the command completed successfully', async () => {
@@ -584,9 +604,13 @@ describe('scheduled shell commands', () => {
     await vi.waitFor(() => expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('interrupted'))
     expect(localScheduleRepo.latest(USER, binding.id)).toMatchObject({ commandOutcome: outcome, taskId: null, reason: 'Task storage unavailable' })
     expect(jobsRepo.list(USER)).toEqual([])
+    const first = localScheduleRepo.latest(USER, binding.id)!
     check(); check(BASE + 120000)
-    expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('skipped_overlap')
-    expect(state.runScheduled).toHaveBeenCalledTimes(1)
+    // The next occurrence runs its own command; the first is not replayed.
+    await vi.waitFor(() => expect(localScheduleRepo.latest(USER, binding.id)?.civilKey).not.toBe(first.civilKey))
+    await vi.waitFor(() => expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('interrupted'))
+    expect(localScheduleRepo.occurrence(USER, binding.id, first.civilKey)).toMatchObject({ status: 'interrupted', commandOutcome: outcome })
+    expect(state.runScheduled).toHaveBeenCalledTimes(2)
     expect(driverRun).not.toHaveBeenCalled()
   })
 
@@ -601,8 +625,10 @@ describe('scheduled shell commands', () => {
     expect(receipt).toMatchObject({ resultKind: 'agent_started', taskId: expect.any(String), commandOutcome: expect.objectContaining({ stdout: 'Needs attention' }) })
     expect(scriptRuntimeRepo.get(USER, receipt.taskId!)?.state).toBe('interrupted')
     check(BASE + 120000)
-    expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('skipped_overlap')
-    expect(state.runScheduled).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(localScheduleRepo.latest(USER, binding.id)?.civilKey).not.toBe(receipt.civilKey))
+    await vi.waitFor(() => expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('interrupted'))
+    expect(localScheduleRepo.occurrence(USER, binding.id, receipt.civilKey)?.status).toBe('interrupted')
+    expect(state.runScheduled).toHaveBeenCalledTimes(2)
     expect(driverRun).not.toHaveBeenCalled()
   })
 

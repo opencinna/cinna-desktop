@@ -558,6 +558,49 @@ export const taskService = {
   },
 
   /**
+   * *Re-run from the last message*: the task goes back to `in_progress`, with
+   * the checks `setStatus` applies, and — for a task a job run produced — that
+   * run goes back to `running` in the same transaction.
+   *
+   * The run has to reopen, or nobody ends the re-run: `inboxService.endTurn`
+   * leaves a job-owned task for `jobService.reportRunCompletion`, which
+   * ignores a run that is already terminal. Only the run this task and chat
+   * belong to is reopened; its outcome then settles the task and any schedule
+   * occurrence that launched it. A task without one behaves as `setStatus`.
+   */
+  reopenForRerun(userId: string, taskId: string): TaskDto {
+    const { row, from, reopenedRunId } = getDb().transaction(() => {
+      const task = requireTask(userId, taskId)
+      requireRunsHere(userId, task)
+      // A runtime (coordinator or script) owns this task's turns and its ending;
+      // a re-run in its chat would be ended by nobody.
+      if (taskRuntimeRepo.get(userId, taskId) || scriptRuntimeRepo.owner(userId, taskId)) {
+        throw new TaskError('invalid_transition', 'This task is run by its runtime. Use the task controls to run it again.')
+      }
+      const from = parseTaskStatus(task.status)
+      if (!canTransition(from, 'in_progress')) {
+        throw new TaskError(
+          'invalid_transition',
+          `A task cannot go from ${from} to in_progress`,
+          `Allowed from ${from}: ${VALID_TRANSITIONS[from].join(', ') || 'nothing'}`
+        )
+      }
+      const row = taskRepo.update(userId, taskId, dirtied(task, statusPatch(task, 'in_progress'), ['status']))
+      if (!row) throw new TaskError('not_found', 'Task not found')
+      const run = task.jobRunId ? jobRunsRepo.getById(userId, task.jobRunId) : null
+      let reopenedRunId: string | null = null
+      if (run && run.taskId === task.id && !!task.chatId && run.localChatId === task.chatId &&
+          (run.status === 'failed' || run.status === 'cancelled' || run.status === 'succeeded')) {
+        jobRunsRepo.updateStatus(run.id, 'running', { errorMessage: null })
+        reopenedRunId = run.id
+      }
+      return { row, from, reopenedRunId }
+    })
+    logger.info('task status', { taskId, from, to: 'in_progress', reopenedRunId: reopenedRunId ?? undefined })
+    return written(userId, row)
+  },
+
+  /**
    * A status observed **elsewhere** — a pull from a bound remote, or a sync
    * payload from a peer. Written as fact, with no transition check.
    *

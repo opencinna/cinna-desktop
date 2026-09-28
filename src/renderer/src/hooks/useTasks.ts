@@ -233,8 +233,9 @@ export function useTakeOverTask(): {
  *
  * It is deliberately **not** "run the job again". A job run creates a new run
  * row and a new task, which is a different gesture with a different record; this
- * one continues the task that is already there, in the chat it already has, so
- * the still-`running` job run finalizes against it when the turn ends.
+ * one continues the task that is already there, in the chat it already has.
+ * A job run that already ended (a quit, a failure) is reopened with the task,
+ * so it finalizes against the re-run when the turn ends.
  *
  * Three things have to be true and each refusal is a sentence rather than a
  * disabled button, because which one it is tells the user something different.
@@ -282,11 +283,14 @@ export function useRerunTask(): {
         // a refusal here — the task is running on another device, or has been
         // archived out from under this page — must stop the run rather than
         // leave a turn streaming into a task that disowns it.
-        await window.api.tasks.setStatus(task.id, 'in_progress').catch((err) => {
+        // Main reopens the job run this task belongs to as well, so the re-run's
+        // outcome finishes the run, the task and a schedule occurrence together.
+        await window.api.tasks.reopenForRerun(task.id).catch((err) => {
           throw new Error(unwrapIpcError(err, 'This task could not be re-opened.'))
         })
         void queryClient.invalidateQueries({ queryKey: TASK_QUERY_KEY(task.id) })
         void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
+        void queryClient.invalidateQueries({ queryKey: ['jobs'] })
 
         // The agent the message went to the first time, which is the one the
         // re-run is addressed to. `assignee.agentId` is the fallback for a chat

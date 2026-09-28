@@ -33,6 +33,9 @@ vi.mock('./syncService', () => ({ syncService: { markDirty: () => undefined } })
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
+// The queue's direct start, refused synchronously in the refused-send tests.
+const start = vi.hoisted(() => vi.fn())
+vi.mock('./runExecutionService', () => ({ runExecutionService: { start, answererOf: vi.fn() } }))
 
 const { interruptedTurnService, finalizeInterrupted, INTERRUPTED_TURN_NOTICE, INTERRUPTED_FOLLOW_UP_NOTICE, INTERRUPTED_RUN_MESSAGE } =
   await import('./interruptedTurnService')
@@ -44,6 +47,10 @@ const { jobsRepo, jobRunsRepo } = await import('../db/jobs')
 const { taskService } = await import('./taskService')
 const { taskInputRequestRepo } = await import('../db/taskInputRequests')
 const { taskRuntimeRepo } = await import('../db/taskRuntimes')
+const { createRunQueueService } = await import('./runQueueService')
+const { activeRunsByChat } = await import('./runExecutionState')
+const { handingOffChats } = await import('./taskOperationState')
+const { jobService } = await import('./jobService')
 
 const USER = '__default__'
 const AGENT = 'agent-1'
@@ -292,5 +299,98 @@ describe('job runs a kill left running before markers existed', () => {
     for (const run of [coordinator, checkpointed, waiting]) {
       expect(jobRunsRepo.getById(USER, run.runId)?.status).toBe('running')
     }
+  })
+
+  it('leaves a run whose task is blocked for review alone', () => {
+    // A scheduled launch refused because its agent was busy: the task is
+    // blocked with the reason and the occurrence reads "Needs review".
+    const { runId, taskId } = jobChat()
+    taskService.setStatus(USER, taskId, 'blocked', { errorMessage: 'The agent was still busy' })
+
+    interruptedTurnService.finalizeLeftovers()
+
+    expect(jobRunsRepo.getById(USER, runId)?.status).toBe('running')
+    expect(taskService.getById(USER, taskId)).toMatchObject({ status: 'blocked', errorMessage: 'The agent was still busy' })
+  })
+})
+
+/**
+ * *Re-run from the last message* reopens a failed job run before its send; a
+ * send `runExecutionService.start` refuses on the spot never reaches
+ * `recordTurnResult`, so the queue's refusal path settles the run itself —
+ * unless something else owns the chat.
+ */
+describe('a re-run whose send is refused before it starts', () => {
+  const SCOPE = { profileUserId: USER, settingsUserId: USER }
+  const REFUSAL = 'This conversation belongs to an autonomous task. Answer in the Inbox or use the task controls.'
+
+  function reopenedJobChat(): { chatId: string; taskId: string; runId: string } {
+    const chat = jobChat()
+    jobService.reportRunCompletion(chat.chatId, 'failed', INTERRUPTED_RUN_MESSAGE)
+    taskService.reopenForRerun(USER, chat.taskId)
+    expect(jobRunsRepo.getById(USER, chat.runId)?.status).toBe('running')
+    return chat
+  }
+
+  afterEach(() => {
+    activeRunsByChat.clear()
+    start.mockReset()
+  })
+
+  it('fails the reopened run and the task with the refusal', async () => {
+    const { chatId, taskId, runId } = reopenedJobChat()
+    start.mockImplementation(() => { throw new Error(REFUSAL) })
+
+    await expect(createRunQueueService().submit(SCOPE, { chatId, content: 'Check' }, () => ({ observe: () => {} })))
+      .rejects.toThrow(REFUSAL)
+
+    expect(jobRunsRepo.getById(USER, runId)).toMatchObject({ status: 'failed', errorMessage: REFUSAL })
+    expect(taskService.getById(USER, taskId)).toMatchObject({ status: 'error', errorMessage: REFUSAL })
+  })
+
+  it('leaves a run alone whose chat a live turn owns', async () => {
+    const { chatId, taskId, runId } = jobChat()
+    // The job's own first turn is running. A handoff being made sends the
+    // message to `start` rather than the queue, and `start` refuses it.
+    activeRunsByChat.set(chatId, { id: 'live' } as never)
+    handingOffChats.add(chatId)
+    start.mockImplementation(() => { throw new Error('This conversation has a pending remote handoff.') })
+    try {
+      await expect(createRunQueueService().submit(SCOPE, { chatId, content: 'Check' }, () => ({ observe: () => {} })))
+        .rejects.toThrow('pending remote handoff')
+      handingOffChats.delete(chatId)
+      // And with the handoff gone, the live turn alone keeps it.
+      const { settleRefusedStart } = await import('./interruptedTurnService')
+      settleRefusedStart(USER, chatId, 'This conversation already has a turn running.')
+    } finally {
+      handingOffChats.delete(chatId)
+    }
+
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(jobRunsRepo.getById(USER, runId)?.status).toBe('running')
+    expect(taskService.getById(USER, taskId).status).toBe('in_progress')
+  })
+
+  it('leaves another profile\'s run alone', async () => {
+    const { chatId, taskId, runId } = jobChat()
+    start.mockImplementation(() => { throw new Error('Chat not found') })
+
+    await expect(createRunQueueService().submit({ profileUserId: 'other', settingsUserId: 'other' }, { chatId, content: 'Check' },
+      () => ({ observe: () => {} }))).rejects.toThrow('Chat not found')
+
+    expect(jobRunsRepo.getById(USER, runId)?.status).toBe('running')
+    expect(taskService.getById(USER, taskId).status).toBe('in_progress')
+  })
+
+  it('leaves a run alone whose task a runtime owns', async () => {
+    const { chatId, taskId, runId } = jobChat()
+    taskRuntimeRepo.save(USER, taskId, { state: 'running', chatId } as never)
+    start.mockImplementation(() => { throw new Error(REFUSAL) })
+
+    await expect(createRunQueueService().submit(SCOPE, { chatId, content: 'Check' }, () => ({ observe: () => {} })))
+      .rejects.toThrow(REFUSAL)
+
+    expect(jobRunsRepo.getById(USER, runId)?.status).toBe('running')
+    expect(taskService.getById(USER, taskId).status).toBe('in_progress')
   })
 })

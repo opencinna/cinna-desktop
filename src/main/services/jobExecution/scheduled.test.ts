@@ -41,6 +41,7 @@ const { taskRunnerService } = await import('../taskRunnerService')
 const { scriptRuntimeService } = await import('../scriptRuntimeService')
 const { runExecutionService } = await import('../runExecutionService')
 const { messageRoutingService } = await import('../messageRoutingService')
+const { turnLock } = await import('../localAgents/turnLock')
 const USER = '__default__'
 const scope = { profileUserId: USER, settingsUserId: USER }
 
@@ -121,6 +122,22 @@ describe('main-owned scheduled Job execution', () => {
     if (route === 'script') expect(scriptRuntimeRepo.get(USER, prepared.taskId)?.state).toBe('interrupted')
     if (route === 'coordinator') expect(taskRuntimeRepo.get(USER, prepared.taskId)?.state).toBe('interrupted')
     expect(driverRun).not.toHaveBeenCalled()
+  })
+
+  it('does not start an ordinary Job on an agent still in a turn, and leaves it for review', async () => {
+    const job = jobFor('ordinary')
+    const factory = await prepareScheduledJob(scope, job, () => true)
+    const prepared = state.database!.db.transaction(() => factory())
+    const held = turnLock.acquire('worker', 'earlier turn')
+    try {
+      expect(() => prepared.launch()).toThrow('still busy')
+    } finally {
+      held.release()
+    }
+    expect(driverRun).not.toHaveBeenCalled()
+    prepared.interrupt('The agent was still busy')
+    expect(taskRepo.getById(USER, prepared.taskId)).toMatchObject({ status: 'blocked', errorMessage: 'The agent was still busy' })
+    expect(jobRunsRepo.getById(USER, prepared.runId)?.status).not.toBe('failed')
   })
 
   it('refuses a profile switch during asynchronous coordinator preflight before creating rows', async () => {

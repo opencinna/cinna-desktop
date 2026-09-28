@@ -14,7 +14,7 @@ import { nextScheduleOccurrence, scheduleMinute, scheduleTimezone, parseSchedule
 import { normalizeScheduleEditorMetadata } from '../../shared/scheduleTemplates'
 import { canScheduleJob, type LocalJobScheduleSnapshot, type JobScheduleSaveInput, type JobScheduleMutationInput, type JobScheduleEnableInput } from '../../shared/localJobSchedules'
 import type { LocalJobScheduleDefinition, LocalScheduleHistoryInput, LocalScheduleStopInput } from '../../shared/localSchedules'
-import { localScheduleService, occurrenceDto, overlap, reconcileOccurrence } from './localScheduleService'
+import { localScheduleService, occurrenceDto, reconcileOccurrence } from './localScheduleService'
 import { prepareScheduledJob } from './jobExecution/scheduled'
 import { runExecutionService, type RunScope } from './runExecutionService'
 import { taskRuntimeService } from './taskRuntimeService'
@@ -174,22 +174,15 @@ async function admit(scope: RunScope, binding: JobBinding, current: () => boolea
     coveredThrough: observedAt, startedAt: null, finishedAt: null, triggerKind: minute.utcMinute < observed ? 'catch_up' : 'scheduled', resultKind: null, commandOutcome: null }
   let prepared: ReturnType<Awaited<ReturnType<typeof prepareScheduledJob>>> | undefined
   try {
-    // Overlap is checked again transactionally after preflight. Skips do not need
-    // model credentials or agent availability, and consume exactly one period.
-    let factory: Awaited<ReturnType<typeof prepareScheduledJob>> | undefined
-    if (!overlap(binding)) factory = await prepareScheduledJob(scope, requireJob(scope, binding.jobId), current)
+    // A due occurrence is never gated on earlier work: it launches its own
+    // task/run/chat, and a busy agent refuses it through the turn lock instead.
+    const factory = await prepareScheduledJob(scope, requireJob(scope, binding.jobId), current)
     if (!valid()) return
     const live = requireBinding(scope, binding.id)
     if (!live.enabled || live.revision !== binding.revision || jobProblem(scope, live)) return
     getDb().transaction(() => {
       if (!valid() || !localScheduleRepo.claim(binding, nextDueAt, observedAt)) return
       if (localScheduleRepo.occurrence(scope.profileUserId, binding.id, minute.civilKey)) return
-      const busy = overlap(binding)
-      if (busy) {
-        localScheduleRepo.insertOccurrence({ ...receipt, status: 'skipped_overlap', taskId: busy.taskId, reason: busy.reason, finishedAt: observedAt })
-        return
-      }
-      if (!factory) throw new Error('The previous Job run changed during admission. This occurrence was not launched.')
       prepared = factory()
       localScheduleRepo.insertOccurrence({ ...receipt, taskId: prepared.taskId, runId: prepared.runId, chatId: prepared.chatId, resultKind: 'agent_started' })
     })

@@ -1227,6 +1227,9 @@ const api = {
     /** Cancel, archive, or reopen. Refused when the task is running elsewhere. */
     setStatus: (taskId: string, status: TaskStatus): Promise<TaskDto> =>
       ipcRenderer.invoke('task:set-status', taskId, status),
+    /** Re-run from the last message: reopen the task, and the job run it belongs to. */
+    reopenForRerun: (taskId: string): Promise<TaskDto> =>
+      ipcRenderer.invoke('task:reopen-for-rerun', taskId),
     /**
      * Is something working on this task in the service running it, right now?
      *

@@ -133,37 +133,42 @@ describe('device-local Job schedules', () => {
     expect(localScheduleRepo.latest(USER, binding.id)).toMatchObject({ status: 'dispatched', reason: null })
   })
 
-  it.each(['in_progress', 'blocked'] as const)('blocks a due occurrence behind a %s manual source Job run without preflight', async status => {
+  it.each(['in_progress', 'blocked'] as const)('admits one catch-up beside a %s manual source Job run instead of skipping it', async status => {
     const binding = save(), manual = prepareRows()
     taskRepo.update(USER, manual.taskId, { status })
     await check(Date.parse('2026-09-21T11:00:00Z'))
-    expect(localScheduleRepo.latest(USER, binding.id)).toMatchObject({ status: 'skipped_overlap', taskId: manual.taskId })
-    expect(state.prepare).not.toHaveBeenCalled()
+    const occurrences = localScheduleRepo.occurrences(USER, binding.id)
+    expect(occurrences).toHaveLength(1)
+    expect(occurrences[0]).toMatchObject({ status: 'dispatched', triggerKind: 'catch_up', resultKind: 'agent_started' })
+    expect(occurrences[0].taskId).not.toBe(manual.taskId)
+    expect(occurrences[0].chatId).not.toBe(manual.chatId)
+    expect(state.prepare).toHaveBeenCalledTimes(1)
+    expect(state.launch).toHaveBeenCalledTimes(1)
+    expect(taskRepo.getById(USER, manual.taskId)?.status).toBe(status)
     expect(localScheduleRepo.get(USER, binding.id)?.nextDueAt).toBe(Date.parse('2026-09-22T08:00:00Z'))
   })
 
-  it('blocks overlap across two schedules for the same source Job', async () => {
+  it('launches every due schedule of the same source Job', async () => {
     const first = save(), second = save({ name: 'Another schedule' })
     await check(Date.parse('2026-09-14T08:00:00Z'))
-    expect(state.launch).toHaveBeenCalledTimes(1)
-    expect([localScheduleRepo.latest(USER, first.id)?.status, localScheduleRepo.latest(USER, second.id)?.status].sort())
-      .toEqual(['dispatched', 'skipped_overlap'])
+    expect(state.launch).toHaveBeenCalledTimes(2)
+    expect([localScheduleRepo.latest(USER, first.id)?.status, localScheduleRepo.latest(USER, second.id)?.status])
+      .toEqual(['dispatched', 'dispatched'])
   })
 
-  it.each(['terminal', 'deleted'] as const)('keeps overlap while an ordinary %s task’s canceled driver is still stopping', async stateOfTask => {
-    const binding = save(), manual = prepareRows()
-    taskRepo.update(USER, manual.taskId, { status: 'cancelled' })
-    jobRunsRepo.updateStatus(manual.runId, 'cancelled')
-    if (stateOfTask === 'deleted') taskRepo.softDelete(USER, manual.taskId)
-    activeRunsByChat.set(manual.chatId, { id: 'stopping-turn' } as RunHandle)
-    expect(localScheduleRepo.unfinishedRuns(USER, [job.id])).toEqual([])
+  it('launches the next occurrence while an earlier scheduled run is unfinished or still stopping', async () => {
+    const binding = save()
     await check(Date.parse('2026-09-14T08:00:00Z'))
-    expect(localScheduleRepo.latest(USER, binding.id)).toMatchObject({ status: 'skipped_overlap', taskId: manual.taskId, reason: expect.stringContaining('still stopping') })
-    expect(state.prepare).not.toHaveBeenCalled()
-    expect(state.launch).not.toHaveBeenCalled()
-    activeRunsByChat.delete(manual.chatId)
+    const prior = localScheduleRepo.latest(USER, binding.id)!
+    // The earlier turn is still held (its driver has not let go).
+    activeRunsByChat.set(prior.chatId!, { id: 'stopping-turn' } as RunHandle)
     await check(Date.parse('2026-09-15T08:00:00Z'))
-    expect(state.launch).toHaveBeenCalledTimes(1)
+    expect(state.launch).toHaveBeenCalledTimes(2)
+    const next = localScheduleRepo.latest(USER, binding.id)!
+    expect(next).toMatchObject({ status: 'dispatched', triggerKind: 'scheduled' })
+    expect(next.id).not.toBe(prior.id)
+    expect(next.taskId).not.toBe(prior.taskId)
+    expect(localScheduleRepo.occurrence(USER, binding.id, prior.civilKey)?.status).toBe('dispatched')
   })
 
   it('deduplicates concurrent checks while asynchronous preflight is pending', async () => {
@@ -289,9 +294,9 @@ describe('device-local Job schedules', () => {
     expect(state.interruptOrphan).not.toHaveBeenCalled()
     expect(localScheduleRepo.occurrence(USER, binding.id, receipt.civilKey)?.status).toBe('dispatched')
     expect(taskRepo.getById(USER, receipt.taskId!)).toMatchObject({ status: 'in_progress', executorDevice: 'another-device' })
-    expect(localScheduleRepo.latest(USER, binding.id)?.status).toBe('skipped_overlap')
+    expect(localScheduleRepo.latest(USER, binding.id)).toMatchObject({ status: 'dispatched', civilKey: 'UTC|2026-09-15T08:00' })
     expect(localScheduleRepo.latest(USER, unrelated.id)?.status).toBe('dispatched')
-    expect(state.launch).toHaveBeenCalledTimes(2)
+    expect(state.launch).toHaveBeenCalledTimes(3)
   })
 
   it('source Job deletion stops admission and Job bindings never enter agent scheduling', async () => {

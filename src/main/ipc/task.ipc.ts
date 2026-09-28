@@ -180,6 +180,19 @@ export function registerTaskHandlers(): void {
   })
 
   /**
+   * *Re-run from the last message*: back to `in_progress` with the checks
+   * `task:set-status` applies, and a job run this task owns reopened with it,
+   * so the re-run's outcome finishes both (`taskService.reopenForRerun`).
+   */
+  ipcHandle('task:reopen-for-rerun', async (_event, taskId: string) => {
+    userActivation.requireActivated()
+    const userId = getProfileScopeUserId()
+    const task = taskService.reopenForRerun(userId, taskId)
+    syncService.markDirty(userId)
+    return task
+  })
+
+  /**
    * Is something working on this task in the service that holds it?
    *
    * A network question, which is why it is a channel of its own rather than a

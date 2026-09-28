@@ -272,7 +272,7 @@ export function ScheduleEditor(props: ScheduleEditorProps) {
       <div className="flex items-center gap-1.5">
         <h2 className="text-[16px] font-semibold">{title}</h2>
         <SettingsInfoTip label="How schedules run">
-          <p>{catchUpExplanation} The first run after saving or enabling is in the future. Unfinished work prevents another run.</p>
+          <p>{catchUpExplanation} The first run after saving or enabling is in the future. Each run starts on time even if an earlier one is unfinished.</p>
           <p>{isJob ? 'Each run starts a new task using this Job’s instructions, runtime, and limits. Questions appear in the Inbox.' : executionType === 'script_trigger' ? 'Runs the command in this agent’s folder. Exit 0 with trimmed stdout exactly OK is recorded without starting an agent task; other completed results start a task. Commands have a five-minute limit.' : 'Each run starts a task with a 20-turn and 60-minute limit. Questions appear in the Inbox.'}</p>
         </SettingsInfoTip>
       </div>

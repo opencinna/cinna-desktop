@@ -26,6 +26,7 @@ import { visibleChat } from '../auth/chatScope'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { agentRepo } from '../db/agents'
 import { taskRepo } from '../db/tasks'
+import { localScheduleRepo } from '../db/localSchedules'
 import { getSettingsScopeUserId, getAgentLookupScope } from '../auth/scope'
 import { JobError } from '../errors'
 import type { JobRunOrigin, JobExecuteResult } from '../../shared/jobs'
@@ -448,6 +449,24 @@ export const jobService = {
     if (taskInputRequestRepo.listOpenForChat(chatId)
       .some((request) => request.resume === 'next_message')) return
     jobRunsRepo.updateStatus(run.id, outcome, { errorMessage: errorMessage ?? null })
+
+    // A scheduled run's occurrence is settled from the same outcome, so a
+    // re-run of a failed occurrence's task (see `taskService.reopenForRerun`)
+    // lands in the schedule's history too. Best-effort like the task write:
+    // `reconcileOccurrence` settles it from the run on its next pass anyway.
+    try {
+      const finished = jobRunsRepo.getById(run.userId, run.id)?.finishedAt?.getTime() ?? Date.now()
+      localScheduleRepo.settleByRun(run.userId, run.id, {
+        status: outcome === 'succeeded' ? 'completed' : outcome,
+        reason: outcome === 'succeeded' ? null : errorMessage ?? null,
+        finishedAt: finished
+      })
+    } catch (err) {
+      logger.warn('could not record the run outcome on its schedule occurrence', {
+        runId: run.id,
+        error: err instanceof Error ? err.message : String(err)
+      })
+    }
 
     // The task is the record of the work; the run row is the record of the
     // *job's* attempt at it. Both are written, and the task's status comes from

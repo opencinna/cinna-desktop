@@ -30,6 +30,7 @@ function inbox(entries: InboxEntry[], unreadable: InboxUnreadableSource[] = []):
 const getChat = vi.fn()
 const getJob = vi.fn<(jobId: string) => Promise<unknown>>()
 const setStatus = vi.fn<(taskId: string, status: TaskStatus) => Promise<TaskDto>>()
+const reopenForRerun = vi.fn<(taskId: string) => Promise<TaskDto>>()
 const takeOver = vi.fn<(taskId: string, force?: boolean) => Promise<TaskDto>>()
 const remoteLive = vi.fn<(taskId: string) => Promise<boolean | null>>()
 const runSend = vi.fn().mockResolvedValue('run-1')
@@ -46,6 +47,7 @@ const forTask = vi.fn<(taskId: string) => Promise<HandoverDto | null>>()
     start: (taskId: string, target: unknown) => startTask(taskId, target),
     get: (taskId: string) => getTask(taskId),
     setStatus: (taskId: string, status: TaskStatus) => setStatus(taskId, status),
+    reopenForRerun: (taskId: string) => reopenForRerun(taskId),
     takeOver: (taskId: string, force?: boolean) => takeOver(taskId, force),
     remoteLive: (taskId: string) => remoteLive(taskId)
   },
@@ -145,6 +147,7 @@ beforeEach(() => {
     ]
   })
   setStatus.mockResolvedValue(BASE)
+  reopenForRerun.mockResolvedValue(BASE)
   takeOver.mockResolvedValue({ ...BASE, runsHere: true, executorDevice: null })
   remoteLive.mockResolvedValue(false)
   openExternal.mockResolvedValue({ success: true })
@@ -174,7 +177,8 @@ describe('a blocked task with nothing waiting on it', () => {
 
     // The task is re-opened *before* the send: a turn must never stream into a
     // task that still reads as blocked, and a refusal here has to stop the run.
-    expect(setStatus).toHaveBeenCalledWith('t1', 'in_progress')
+    expect(reopenForRerun).toHaveBeenCalledWith('t1')
+    expect(setStatus).not.toHaveBeenCalled()
     // The last **user** message, not the last message.
     expect(runSend).toHaveBeenCalledWith({ chatId: 'c1', content: 'Check August',
       attachments: undefined,
@@ -201,12 +205,12 @@ describe('a blocked task with nothing waiting on it', () => {
     expect(screen.getByRole('button', { name: /Re-run from the last message/ })).toBeTruthy()
     expect(runSend).not.toHaveBeenCalled()
     // Nothing was started, so nothing claimed the task either.
-    expect(setStatus).not.toHaveBeenCalled()
+    expect(reopenForRerun).not.toHaveBeenCalled()
   })
 
   it('does not start the run when the task refuses to re-open', async () => {
-    setStatus.mockRejectedValue(
-      new Error("Error invoking remote method 'task:set-status': This task is running on a connected service")
+    reopenForRerun.mockRejectedValue(
+      new Error("Error invoking remote method 'task:reopen-for-rerun': This task is running on a connected service")
     )
     await renderTask()
     const button = await screen.findByRole('button', { name: /Re-run from the last message/ })
@@ -365,7 +369,8 @@ describe('a failed task', () => {
     await act(async () => {
       button.click()
     })
-    expect(setStatus).toHaveBeenCalledWith('t1', 'in_progress')
+    expect(reopenForRerun).toHaveBeenCalledWith('t1')
+    expect(setStatus).not.toHaveBeenCalled()
     expect(runSend).toHaveBeenCalledWith({ chatId: 'c1', content: 'Check August',
       attachments: undefined,
       addressedAgentId: 'a1'

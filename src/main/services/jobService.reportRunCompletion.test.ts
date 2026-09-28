@@ -259,3 +259,115 @@ describe('a finished run finishes its task', () => {
     expect(taskRepo.getById(USER, taskId)?.status).toBe('completed')
   })
 })
+
+/**
+ * *Re-run from the last message* on a task whose job run already ended — the
+ * boot recovery case, where a quit left the run `failed`, the task `error` and
+ * the schedule occurrence `failed`. The re-run reopens the run through
+ * `taskService.reopenForRerun`, so its outcome closes run, task and occurrence;
+ * without that the task stayed `in_progress` for ever.
+ */
+describe('re-running a job-owned task', () => {
+  async function scheduledRun(): Promise<{ runId: string; chatId: string; taskId: string; bindingId: string; occurrenceId: string }> {
+    const { localScheduleRepo } = await import('../db/localSchedules')
+    const { runId, chatId, jobId } = startedRun()
+    const task = taskService.create(USER, { title: 'Nightly check', goal: 'Check the invoices', chatId, jobId, jobRunId: runId })
+    jobRunsRepo.setTaskId(runId, task.id)
+    taskService.start(USER, task.id, { chatId })
+    const definition = { executionType: 'job' as const, jobId, jobTitle: 'Nightly check', jobRevision: 'r', prompt: 'Check the invoices', name: 'Nightly', cron: '0 8 * * *', timezone: 'UTC' }
+    localScheduleRepo.save({ id: 'binding-1', userId: USER, manifestId: `job:${jobId}`, name: 'Nightly', definition, revision: 'rev',
+      jobId, jobFingerprint: 'r', jobIds: [jobId], enabled: true, reason: null, watermark: 0, nextDueAt: null, enabledSince: 0,
+      lastAttemptAt: null, lastCompletedAt: null, cursorVersion: 1, editorMetadata: null })
+    localScheduleRepo.insertOccurrence({ id: 'occurrence-1', bindingId: 'binding-1', userId: USER, civilKey: '2026-09-14T08:00', utcMinute: 1,
+      definition, revision: 'rev', status: 'dispatched', taskId: task.id, runId, chatId, reason: null, scheduledFor: 60000, observedAt: 60000,
+      coveredThrough: 60000, startedAt: 60000, finishedAt: null, triggerKind: 'scheduled', resultKind: 'agent_started', commandOutcome: null })
+    return { runId, chatId, taskId: task.id, bindingId: 'binding-1', occurrenceId: 'occurrence-1' }
+  }
+  async function occurrence(id: string) {
+    const { localScheduleRepo } = await import('../db/localSchedules')
+    return localScheduleRepo.occurrences(USER, 'binding-1').find((row) => row.id === id)
+  }
+
+  it('settles the occurrence from the run outcome', async () => {
+    const { chatId, occurrenceId, bindingId } = await scheduledRun()
+    jobService.reportRunCompletion(chatId, 'failed', 'The app quit during this turn.')
+    expect(await occurrence(occurrenceId)).toMatchObject({ status: 'failed', reason: 'The app quit during this turn.' })
+    const { localScheduleRepo } = await import('../db/localSchedules')
+    expect(localScheduleRepo.get(USER, bindingId)?.lastCompletedAt).toEqual((await occurrence(occurrenceId))?.finishedAt)
+  })
+
+  it('reopens a failed run, and a successful re-run completes run, task and occurrence', async () => {
+    const { chatId, runId, taskId, occurrenceId, bindingId } = await scheduledRun()
+    jobService.reportRunCompletion(chatId, 'failed', 'The app quit during this turn.')
+    expect(taskService.getById(USER, taskId).status).toBe('error')
+
+    expect(taskService.reopenForRerun(USER, taskId).status).toBe('in_progress')
+    expect(jobRunsRepo.getById(USER, runId)).toMatchObject({ status: 'running', errorMessage: null, finishedAt: null })
+    // Not reopened until the re-run's outcome lands.
+    expect((await occurrence(occurrenceId))?.status).toBe('failed')
+
+    jobService.reportRunCompletion(chatId, 'succeeded')
+    expect(jobRunsRepo.getById(USER, runId)?.status).toBe('succeeded')
+    expect(taskService.getById(USER, taskId).status).toBe('completed')
+    const settled = await occurrence(occurrenceId)
+    expect(settled).toMatchObject({ status: 'completed', reason: null })
+    const { localScheduleRepo } = await import('../db/localSchedules')
+    expect(localScheduleRepo.get(USER, bindingId)?.lastCompletedAt).toBe(settled?.finishedAt)
+  })
+
+  it('a failed re-run fails run, task and occurrence again', async () => {
+    const { chatId, runId, taskId, occurrenceId } = await scheduledRun()
+    jobService.reportRunCompletion(chatId, 'failed', 'The app quit during this turn.')
+    taskService.reopenForRerun(USER, taskId)
+    jobService.reportRunCompletion(chatId, 'failed', 'Invalid API key')
+    expect(jobRunsRepo.getById(USER, runId)).toMatchObject({ status: 'failed', errorMessage: 'Invalid API key' })
+    expect(taskService.getById(USER, taskId)).toMatchObject({ status: 'error', errorMessage: 'Invalid API key' })
+    expect(await occurrence(occurrenceId)).toMatchObject({ status: 'failed', reason: 'Invalid API key' })
+  })
+
+  it('reopens a task with no job run exactly as setStatus did', () => {
+    const task = taskService.create(USER, { title: 'Hand-made', goal: 'Do it' })
+    taskService.start(USER, task.id)
+    taskService.setStatus(USER, task.id, 'error', { errorMessage: 'Broke' })
+    const reopened = taskService.reopenForRerun(USER, task.id)
+    expect(reopened).toMatchObject({ status: 'in_progress', errorMessage: null })
+  })
+
+  it('refuses an illegal step the way setStatus does, and writes nothing', () => {
+    const task = taskService.create(USER, { title: 'Hand-made', goal: 'Do it' })
+    taskService.start(USER, task.id)
+    taskService.setStatus(USER, task.id, 'archived')
+    expect(() => taskService.reopenForRerun(USER, task.id)).toThrow('cannot go from archived to in_progress')
+    expect(taskService.getById(USER, task.id).status).toBe('archived')
+  })
+
+  it.each(['task runtime', 'script runtime'] as const)('refuses a task a %s owns, and reopens nothing', async (kind) => {
+    const { chatId, runId, taskId } = await scheduledRun()
+    jobService.reportRunCompletion(chatId, 'failed', 'The app quit during this turn.')
+    if (kind === 'task runtime') {
+      const { taskRuntimeRepo } = await import('../db/taskRuntimes')
+      taskRuntimeRepo.save(USER, taskId, { state: 'running', chatId } as never)
+    } else {
+      const { scriptRuntimeRepo } = await import('../db/scriptRuntimes')
+      scriptRuntimeRepo.save(USER, taskId, { steps: {} } as never)
+    }
+
+    expect(() => taskService.reopenForRerun(USER, taskId)).toThrow('run by its runtime')
+    expect(taskService.getById(USER, taskId).status).toBe('error')
+    expect(jobRunsRepo.getById(USER, runId)?.status).toBe('failed')
+  })
+
+  it.each(['task', 'chat'] as const)('does not reopen a run whose %s does not match the task', (mismatch) => {
+    const { runId, chatId, jobId } = startedRun()
+    const other = startedRun()
+    const task = taskService.create(USER, { title: 'Nightly check', goal: 'Check the invoices',
+      chatId: mismatch === 'chat' ? other.chatId : chatId, jobId, jobRunId: runId })
+    jobRunsRepo.setTaskId(runId, mismatch === 'task' ? 'another-task' : task.id)
+    taskService.start(USER, task.id, { chatId: mismatch === 'chat' ? other.chatId : chatId })
+    jobRunsRepo.updateStatus(runId, 'failed', { errorMessage: 'Earlier failure' })
+    taskService.setStatus(USER, task.id, 'error', { errorMessage: 'Earlier failure' })
+
+    expect(taskService.reopenForRerun(USER, task.id).status).toBe('in_progress')
+    expect(jobRunsRepo.getById(USER, runId)).toMatchObject({ status: 'failed', errorMessage: 'Earlier failure' })
+  })
+})

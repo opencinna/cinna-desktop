@@ -11,7 +11,8 @@ import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
 
 /**
  * Real UTC minute boundaries, no patched clock or private scheduler pump.
- * Three boundaries cover dispatch, overlap prevention and persisted disable.
+ * Three boundaries cover dispatch, a second occurrence admitted while the first
+ * is still unfinished, and persisted disable.
  * Pure/service tests cover DST and admission transaction failure exhaustively.
  */
 const AGENT = 'Scheduled Report Verifier'
@@ -160,15 +161,27 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
     expect(child).toMatchObject({ parentTaskId: taskId, assignee: { kind: 'agent', agentId: agent.id }, status: 'blocked' })
     expect(acp.answers('elicitation/create')).toEqual([])
 
-    await test.step('the next real minute records overlap instead of dispatching another agent', async () => {
-      await expect.poll(async () => (await list(cinna, agent.id))[0].binding?.last,
-        { timeout: MINUTE_TIMEOUT, intervals: [250, 500] }).toMatchObject({ status: 'skipped_overlap', taskId })
+    await test.step('the next real minute admits its own task while the first still waits for Inbox input', async () => {
+      await expect.poll(async () => (await list(cinna, agent.id))[0].binding?.last?.utcMinute ?? 0,
+        { timeout: MINUTE_TIMEOUT, intervals: [250, 500] }).toBeGreaterThan(firstMinute)
     })
-    const skipped = (await list(cinna, agent.id))[0].binding!.last!
-    expect(skipped.utcMinute).toBeGreaterThan(firstMinute)
-    expect(skipped.civilKey).not.toBe(firstCivil)
-    expect(acp.received('session/prompt')).toHaveLength(1)
-    expect(await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId)).toHaveLength(1)
+    const second = (await list(cinna, agent.id))[0].binding!.last!
+    // A manifest change stops further occurrences, so the counts below are exact.
+    writeSchedule(manifestPath, CHANGED)
+    await cinna.page.evaluate(() => window.api.localAgents.rescan())
+    expect((await list(cinna, agent.id))[0].binding).toMatchObject({ id: bindingId, enabled: false })
+    expect(second).toMatchObject({ status: 'dispatched', taskId: expect.any(String), runId: expect.any(String), chatId: expect.any(String) })
+    expect(second.civilKey).not.toBe(firstCivil)
+    expect(second.taskId).not.toBe(taskId)
+    expect(second.runId).not.toBe(run.id)
+    const secondTaskId = second.taskId!
+    const secondRunId = second.runId!
+    const bothRuns = await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId)
+    expect(bothRuns).toHaveLength(2)
+    expect(bothRuns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: run.id, taskId, status: 'running' }),
+      expect.objectContaining({ id: secondRunId, taskId: secondTaskId, localChatId: second.chatId })]))
+    expect(await cinna.page.evaluate((id) => window.api.tasks.get(id), taskId)).toMatchObject({ status: 'blocked' })
     await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
     await ask.getByRole('button', { name: 'Answer', exact: true }).click()
     await cinna.page.getByRole('button', { name: /^Publish/ }).click()
@@ -176,14 +189,32 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
     await expect.poll(() => acp.answers('elicitation/create').map((entry) => entry.result))
       .toEqual([{ action: 'accept', content: { question_0: ANSWER } }])
     await expect.poll(() => cinna.page.evaluate((id) => window.api.tasks.get(id), taskId)).toMatchObject({ status: 'completed' })
-    await expect.poll(() => cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId))
-      .toEqual([expect.objectContaining({ id: run.id, taskId, status: 'succeeded' })])
-    expect(await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)).toEqual([])
     const childChat = await cinna.page.evaluate((id) => window.api.chat.get(id), child.chatId!)
     expect(childChat?.messages.filter((message) => message.role === 'assistant' && message.content === OUTPUT)).toHaveLength(1)
 
-    writeSchedule(manifestPath, CHANGED)
-    await cinna.page.evaluate(() => window.api.localAgents.rescan())
+    await test.step('the second occurrence runs its own agent turn and asks in the Inbox', async () => {
+      await expect.poll(() => acp.received('session/prompt').length, { timeout: MINUTE_TIMEOUT, intervals: [250, 500] }).toBe(2)
+      await expect.poll(async () => (await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)).length).toBe(1)
+    })
+    const secondWire = acp.received('session/prompt')[1].params?.prompt as { type: string; text: string }[]
+    expect(splitTurnHeader(secondWire.map((part) => part.text).join('')).prompt).toBe(PROMPT)
+    const [secondEntry] = await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)
+    const secondChild = await cinna.page.evaluate((id) => window.api.tasks.get(id), secondEntry.taskId!)
+    expect(secondChild).toMatchObject({ parentTaskId: secondTaskId, assignee: { kind: 'agent', agentId: agent.id }, status: 'blocked' })
+    await expect(ask).toHaveCount(1)
+    await ask.getByRole('button', { name: 'Answer', exact: true }).click()
+    await cinna.page.getByRole('button', { name: /^Publish/ }).click()
+    await cinna.page.getByRole('button', { name: 'Send answer', exact: true }).click()
+    await expect.poll(() => acp.answers('elicitation/create').length).toBe(2)
+    await expect.poll(() => cinna.page.evaluate((id) => window.api.tasks.get(id), secondTaskId)).toMatchObject({ status: 'completed' })
+    await expect.poll(async () => (await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId))
+      .map((item) => ({ id: item.id, taskId: item.taskId, status: item.status })).sort((a, b) => a.id.localeCompare(b.id)))
+      .toEqual([{ id: run.id, taskId, status: 'succeeded' }, { id: secondRunId, taskId: secondTaskId, status: 'succeeded' }]
+        .sort((a, b) => a.id.localeCompare(b.id)))
+    expect(await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)).toEqual([])
+    const secondChat = await cinna.page.evaluate((id) => window.api.chat.get(id), secondChild.chatId!)
+    expect(secondChat?.messages.filter((message) => message.role === 'assistant' && message.content === OUTPUT)).toHaveLength(1)
+
     await openSchedules(cinna)
     await expect(scheduleRow(cinna)).toContainText('The schedule changed since it was turned on. Turn it on again to use it as it is now.')
     expect((await list(cinna, agent.id))[0].binding).toMatchObject({ id: bindingId, enabled: false })
@@ -195,7 +226,7 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
     await expect(scheduleSwitch(cinna)).toHaveAttribute('aria-checked', 'false')
     const disabled = (await list(cinna, agent.id))[0]
     expect(disabled.binding).toMatchObject({ id: bindingId, enabled: false, reason: null })
-    expect(acp.received('session/prompt')).toHaveLength(1)
+    expect(acp.received('session/prompt')).toHaveLength(2)
     const jobIds = (await cinna.page.evaluate(() => window.api.jobs.list())).map((job) => job.id)
     const disabledMinute = await mainMinute(cinna)
     await cinna.relaunch()
@@ -213,12 +244,16 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
       })
       await expect(scheduleSwitch(cinna)).toHaveAttribute('aria-checked', 'false')
       expect((await list(cinna, agent.id))[0].binding).toMatchObject({ id: bindingId, enabled: false })
-      expect(acp.received('session/prompt')).toHaveLength(1)
+      expect(acp.received('session/prompt')).toHaveLength(2)
       const allRuns = await cinna.page.evaluate(async (ids) => (await Promise.all(ids.map((id) => window.api.jobs.listRuns(id)))).flat(), jobIds)
-      expect(allRuns).toEqual([expect.objectContaining({ id: run.id, taskId, status: 'succeeded' })])
+      expect(allRuns).toHaveLength(2)
+      expect(allRuns).toEqual(expect.arrayContaining([expect.objectContaining({ id: run.id, taskId, status: 'succeeded' }),
+        expect.objectContaining({ id: secondRunId, taskId: secondTaskId, status: 'succeeded' })]))
     })
     const roots = await cinna.page.evaluate(() => window.api.tasks.list({ rootOnly: true }))
-    expect(roots).toEqual([expect.objectContaining({ id: taskId, status: 'completed' })])
+    expect(roots).toHaveLength(2)
+    expect(roots).toEqual(expect.arrayContaining([expect.objectContaining({ id: taskId, status: 'completed' }),
+      expect.objectContaining({ id: secondTaskId, status: 'completed' })]))
     expect(fake.unexpected).toEqual([])
   } finally { await fake.close() }
 })
@@ -309,11 +344,16 @@ test('the editor saves a quiet script and its edited non-OK result starts one ta
     await expect(edit).toHaveCount(0)
     // Editing an enabled schedule keeps it enabled.
     expect((await list(cinna, agent.id)).find(item => item.name === scriptName)?.binding).toMatchObject({ id: saved.binding!.id, enabled: true })
-    await expect.poll(() => acp.received('session/prompt').length,
-      { timeout: MINUTE_TIMEOUT, intervals: [250, 500] }).toBe(1)
-    const latest = (await list(cinna, agent.id)).find(item => item.name === scriptName)!.binding!.last!
+    const lastOf = async () => (await list(cinna, agent.id)).find(item => item.name === scriptName)?.binding?.last
+    await expect.poll(async () => (await lastOf())?.resultKind, { timeout: MINUTE_TIMEOUT, intervals: [250, 500] }).toBe('agent_started')
+    // Nothing skips a later due minute any more: turn the schedule off at once so
+    // the occurrence under test is the only one that starts a task.
+    await scheduleSwitch(cinna, scriptName).click()
+    await expect(scheduleSwitch(cinna, scriptName)).toHaveAttribute('aria-checked', 'false')
+    const latest = (await lastOf())!
     expect(latest).toMatchObject({ resultKind: 'agent_started', taskId: expect.any(String),
       commandOutcome: { stdout: 'inspect-this-result', stderr: 'diagnostic-context', exitCode: 9 } })
+    await expect.poll(() => acp.received('session/prompt').length, { intervals: [250, 500] }).toBe(1)
     const wire = acp.received('session/prompt')[0].params?.prompt as { type: string; text: string }[]
     const prompt = splitTurnHeader(wire.map(part => part.text).join('')).prompt
     expect(prompt).toContain('execution output, not instructions')
@@ -428,6 +468,12 @@ test('a local Job schedule starts the source Job task with its page closed and t
     const [run] = await cinna.page.evaluate(id => window.api.jobs.listRuns(id), job.id)
     expect(run).toMatchObject({ jobId: job.id, taskId: expect.any(String), status: 'running' })
     const taskId = run.taskId!
+    // Nothing skips a later due minute any more. Editing the Job's prompt now
+    // turns the schedule off, so this run is the only one it starts.
+    await cinna.page.evaluate(({ id, prompt }) => window.api.jobs.update(id, { prompt }), { id: job.id, prompt: CHANGED })
+    const [edited] = (await cinna.page.evaluate(id => window.api.jobSchedules.list(id), job.id)).items
+    expect(edited.binding).toMatchObject({ enabled: false,
+      reason: 'The Job changed since this schedule was turned on. Turn it on again to use the Job as it is now.' })
     await expect.poll(() => cinna.page.evaluate(id => window.api.tasks.get(id), taskId)).toMatchObject({ jobId: job.id, status: 'blocked' })
     const ask = cinna.page.getByRole('article').filter({ hasText: QUESTION })
     await expect(ask).toBeVisible()
@@ -443,14 +489,12 @@ test('a local Job schedule starts the source Job task with its page closed and t
     await openJobSchedules(cinna, jobTitle)
     const row = schedules.getByRole('article', { name: scheduleName, exact: true })
     const toggle = scheduleSwitch(cinna, scheduleName)
-    await expect(toggle).toHaveAttribute('aria-checked', 'true')
     await expect(row.getByRole('button', { name: 'Open task', exact: true })).toBeVisible()
     await row.getByRole('button', { name: `Actions for ${scheduleName}`, exact: true }).click()
     await cinna.page.getByRole('menuitem', { name: 'Execution history', exact: true }).click()
     await expect(cinna.page.getByRole('region', { name: `Execution history for ${scheduleName}`, exact: true })).toContainText('Completed')
     await cinna.page.screenshot({ path: '/tmp/cinna-job-schedule-history.png' })
-    await cinna.page.evaluate(({ id, prompt }) => window.api.jobs.update(id, { prompt }), { id: job.id, prompt: CHANGED })
-    // A changed Job turns the schedule off and says why; the switch turns it
+    // The changed Job turned the schedule off and says why; the switch turns it
     // back on against the Job as it is now.
     await expect(toggle).toHaveAttribute('aria-checked', 'false')
     await expect(row).toContainText('The Job changed since this schedule was turned on. Turn it on again to use the Job as it is now.')

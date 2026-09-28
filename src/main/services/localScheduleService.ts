@@ -26,6 +26,7 @@ import { taskRunsHere } from '../../shared/tasks'
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+// skipped_overlap is no longer written; it stays finished so old history rows settle.
 const finished = new Set(['completed', 'failed', 'cancelled', 'skipped_overlap'])
 const terminalTasks = new Set(['completed', 'error', 'cancelled', 'archived'])
 const jobFingerprint = (job: JobRow) => hash([job.userId, job.type, job.title, job.prompt, job.router, job.script, job.budget])
@@ -75,7 +76,7 @@ export function reconcileOccurrence(row: ScheduleOccurrenceRow, persist = true):
   if (finished.has(row.status)) return row
   if (!row.taskId) {
     if (activeCommands.has(row.id) || row.status === 'interrupted') return row
-    const reason = 'The command was interrupted. Its outcome is uncertain; review history and dismiss it before another execution.'
+    const reason = 'The command was interrupted. Its outcome is uncertain and it will not be replayed; review it in the history.'
     if (persist) localScheduleRepo.updateOccurrence(row.userId, row.id, { status: 'interrupted', reason })
     return { ...row, status: 'interrupted', reason }
   }
@@ -157,32 +158,6 @@ function rowsFor(scope: RunScope, agentId: string, reconcile = false): LocalSche
       revision, problem, binding: binding ? { id: binding.id, enabled: binding.enabled && !reason, reason, jobId: binding.jobId || null, nextDueAt: binding.nextDueAt,
         last: last ? occurrenceDto(last) : null } : null }
   })
-}
-
-export function overlap(binding: ScheduleBindingRow): { taskId: string | null; reason: string } | null {
-  const prior = localScheduleRepo.unfinished(binding.userId, binding.id).map((row) => reconcileOccurrence(row)).find((row) => !finished.has(row.status))
-  if (prior) return { taskId: prior.taskId, reason: 'Skipped because a previous scheduled task is unfinished or needs review.' }
-  // The generated Job is also visible in Jobs. A manual run must count too,
-  // including historical generated jobs retained after a definition review.
-  const manual = localScheduleRepo.unfinishedRuns(binding.userId, binding.jobIds)[0]
-  if (manual) return { taskId: manual.taskId, reason: 'Skipped because a previous run of this scheduled job is unfinished.' }
-  for (const reservation of taskRunnersByChat.values()) {
-    if (reservation.userId !== binding.userId) continue
-    const task = taskRepo.getById(binding.userId, reservation.controllerTaskId ?? reservation.taskId)
-    if (task?.jobId && binding.jobIds.includes(task.jobId)) return { taskId: task.id, reason: 'Skipped because a previous run is still stopping.' }
-  }
-  // Ordinary Job turns have no task-runner reservation. Their task/run may
-  // already be terminal (or the task tombstoned) while cancellation is still
-  // draining the driver. The live turn retains overlap until its handle closes.
-  for (const chatId of activeRunsByChat.keys()) {
-    const run = jobRunsRepo.getByLocalChatId(chatId)
-    if (run?.userId === binding.userId && binding.jobIds.includes(run.jobId)) {
-      return { taskId: run.taskId, reason: 'Skipped because a previous run is still stopping.' }
-    }
-    const task = taskRepo.getByChatId(binding.userId, chatId)
-    if (task?.jobId && binding.jobIds.includes(task.jobId)) return { taskId: task.id, reason: 'Skipped because a previous run is still stopping.' }
-  }
-  return null
 }
 
 export const localScheduleService = {
@@ -358,12 +333,8 @@ export const localScheduleService = {
         try {
           getDb().transaction(() => {
             if (!valid() || !localScheduleRepo.claim(binding, nextDueAt, observedAt)) return
+            // Earlier unfinished work never gates a due occurrence; see jobScheduleService.admit.
             if (localScheduleRepo.occurrence(scope.profileUserId, binding.id, minute.civilKey)) return
-            const busy = overlap(binding)
-            if (busy) {
-              localScheduleRepo.insertOccurrence({ ...receipt, status: 'skipped_overlap', taskId: busy.taskId, reason: busy.reason, finishedAt: observedAt })
-              return
-            }
             if (binding.definition.executionType === 'script_trigger') {
               localScheduleRepo.insertOccurrence(receipt)
               commandClaimed = true
@@ -420,7 +391,7 @@ async function executeScheduledCommand(scope: RunScope, binding: AgentScheduleBi
     const outcome = await commandService.runScheduled(scope.settingsUserId, binding.definition.agentId, binding.definition.resolvedCommand!, tracked.controller.signal)
     if (outcome.started === false && (outcome.aborted || tracked.interrupted || !current())) {
       // Stopped while queued for the agent's turn lock: nothing ran, so there is
-      // no uncertain outcome to review and nothing to hold later occurrences on.
+      // no uncertain outcome to review.
       localScheduleRepo.updateOccurrence(scope.profileUserId, receipt.id, { status: 'cancelled',
         reason: 'Stopped before the command started; it will not be replayed.', finishedAt: outcome.finishedAt })
       return
@@ -434,7 +405,7 @@ async function executeScheduledCommand(scope: RunScope, binding: AgentScheduleBi
       return
     }
     if (outcome.exitCode === null && !outcome.timedOut && !outcome.spawnError) {
-      localScheduleRepo.updateOccurrence(scope.profileUserId, receipt.id, { status: 'interrupted', reason: 'The command ended without an exit code. Review its uncertain outcome before allowing future runs.', finishedAt: outcome.finishedAt })
+      localScheduleRepo.updateOccurrence(scope.profileUserId, receipt.id, { status: 'interrupted', reason: 'The command ended without an exit code. Its outcome is uncertain and it will not be replayed; review it in the history.', finishedAt: outcome.finishedAt })
       return
     }
     if (outcome.timedOut || outcome.spawnError) {
@@ -458,7 +429,7 @@ async function executeScheduledCommand(scope: RunScope, binding: AgentScheduleBi
         job = jobsRepo.create(scope.profileUserId, { type: 'local', title: `${binding.definition.agentName} · ${binding.definition.name}`,
           prompt: `Inspect the command result for schedule ${binding.definition.name}.`, router: 'script', script: scriptFor(binding.definition), budget: { maxRounds: 20, maxMinutes: 60 } })
         // An edit/rename during a command cannot authorize an old job for the
-        // new definition, but its history still participates in overlap checks.
+        // new definition, but its history stays reachable through jobIds.
         localScheduleRepo.save({ ...live, jobIds: [...new Set([...live.jobIds, job.id])],
           ...(live.revision === binding.revision ? { jobId: job.id, jobFingerprint: jobFingerprint(job) } : {}) })
       }

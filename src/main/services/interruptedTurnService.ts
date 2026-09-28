@@ -1,5 +1,5 @@
 import { inflightTurnRepo, isLiveMarker, type InflightTurnRow, type TurnEndNotice } from '../db/inflightTurns'
-import { jobRunsRepo } from '../db/jobs'
+import { jobRunsRepo, type JobRunRow } from '../db/jobs'
 import { taskRepo } from '../db/tasks'
 import { taskRuntimeRepo } from '../db/taskRuntimes'
 import { scriptRuntimeRepo } from '../db/scriptRuntimes'
@@ -11,6 +11,7 @@ import { recordTurnResult, terminalEventOf } from './turnRecord'
 import { hasRecoverer } from './turnRecoverers'
 import { activeRunsByChat } from './runExecutionState'
 import { taskRunnersByChat } from './taskRunnerState'
+import { handingOffChats } from './taskOperationState'
 import { createLogger } from '../logger/logger'
 import type { TurnOutcome } from './turnCompletion'
 
@@ -124,19 +125,55 @@ function finalizeOrphanedRuns(): void {
   for (const run of jobRunsRepo.listUnfinishedChatTurnRuns()) {
     const chatId = run.localChatId!
     try {
-      if (withMarker.has(chatId) || activeRunsByChat.has(chatId) || taskRunnersByChat.has(chatId)) continue
-      if (taskInputRequestRepo.listOpenForChat(chatId).some((row) => row.resume === 'next_message')) continue
-      if (run.taskId) {
-        const task = taskRepo.getById(run.userId, run.taskId)
-        if (!task || task.deletedAt || task.executor !== 'desktop') continue
-        if (taskRuntimeRepo.get(run.userId, run.taskId) || scriptRuntimeRepo.owner(run.userId, run.taskId)) continue
-        if (taskHandoffRepo.unresolved(run.userId, run.taskId)) continue
-      }
+      if (ownedBySomeoneElse(run, chatId, withMarker.has(chatId))) continue
       jobService.setRunStatus(run.userId, run.id, 'failed', INTERRUPTED_RUN_MESSAGE)
       logger.info('an orphaned job run was finalized', { runId: run.id, chatId })
     } catch (err) {
       logger.error('could not finalize an orphaned job run', { runId: run.id, error: errorText(err) })
     }
+  }
+}
+
+/**
+ * Whether something still owns an unfinished job run's chat: a turn marker, a
+ * running turn, a task runner's reservation, a handoff being made, an
+ * answerable next-message ask,
+ * or — for its task — another executor, a runtime, an unresolved handoff, or
+ * the user: a `blocked` task is waiting for them (a scheduled launch refused
+ * because its agent was busy reads "Needs review" and must stay that way).
+ * Such a run is left for that owner to end.
+ */
+function ownedBySomeoneElse(run: JobRunRow, chatId: string, hasMarker: boolean): boolean {
+  if (hasMarker || activeRunsByChat.has(chatId) || taskRunnersByChat.has(chatId) || handingOffChats.has(chatId)) return true
+  if (taskInputRequestRepo.listOpenForChat(chatId).some((row) => row.resume === 'next_message')) return true
+  if (run.taskId) {
+    const task = taskRepo.getById(run.userId, run.taskId)
+    if (!task || task.deletedAt || task.executor !== 'desktop' || task.status === 'blocked') return true
+    if (taskRuntimeRepo.get(run.userId, run.taskId) || scriptRuntimeRepo.owner(run.userId, run.taskId)) return true
+    if (taskHandoffRepo.unresolved(run.userId, run.taskId)) return true
+  }
+  return false
+}
+
+/**
+ * A send into a chat was refused before any turn began (`runExecutionService.start`
+ * threw): if the chat's job run is still open and nothing else owns the chat,
+ * it fails with the refusal, as a failed turn would fail it — run `failed`,
+ * task `error`. Otherwise nobody ends it: *Re-run from the last message*
+ * reopens the run before its send, and a refused send never reaches
+ * `recordTurnResult`. A run a live turn, runner, ask or runtime owns is left
+ * alone — "a turn is already running" is exactly that case. Never throws.
+ */
+export function settleRefusedStart(profileUserId: string, chatId: string, message: string): void {
+  try {
+    const run = jobRunsRepo.getByLocalChatId(chatId)
+    // Only the sending profile's own run: "Chat not found" is a refusal too.
+    if (!run || run.userId !== profileUserId || (run.status !== 'pending' && run.status !== 'running')) return
+    if (ownedBySomeoneElse(run, chatId, inflightTurnRepo.listChatIds().has(chatId))) return
+    jobService.reportRunCompletion(chatId, 'failed', message)
+    logger.info('a job run whose send was refused was finalized', { runId: run.id, chatId })
+  } catch (err) {
+    logger.error('could not settle the job run of a refused send', { chatId, error: errorText(err) })
   }
 }
 

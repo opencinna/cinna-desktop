@@ -5,6 +5,7 @@ import { taskRunnersByChat } from './taskRunnerState'
 import { handingOffChats } from './taskOperationState'
 import { installTaskRunnerHooks } from './taskRunnerBridge'
 import { taskHandoffRepo } from '../db/taskHandoffs'
+import { settleRefusedStart } from './interruptedTurnService'
 import { chatOwnerFor, ownerOfVisible, visibleChat } from '../auth/chatScope'
 import { createLogger } from '../logger/logger'
 import type { RunQueueItem, RunQueueView, RunSendPayload, RunStartResult } from '../../shared/ipcPayloads'
@@ -273,7 +274,15 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
       const active = activeRunsByChat.get(chatId)
       if ((!active && !queues.get(key)?.flushing) || taskRunnersByChat.has(chatId) || handingOffChats.has(chatId) ||
         taskHandoffRepo.unresolvedForChat(scope.profileUserId, chatId)) {
-        return { kind: 'started', runId: runExecutionService.start(scope, payload, options(payload)).id }
+        try {
+          return { kind: 'started', runId: runExecutionService.start(scope, payload, options(payload)).id }
+        } catch (error) {
+          // Refused before any turn began, so no turn result will end the
+          // chat's job run — one a re-run reopened, say. Settled here unless
+          // something else owns the chat.
+          settleRefusedStart(scope.profileUserId, chatId, error instanceof Error ? error.message : String(error))
+          throw error
+        }
       }
       const chat = visible
       if (!chat) throw new Error('Chat not found')

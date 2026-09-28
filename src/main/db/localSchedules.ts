@@ -1,6 +1,6 @@
 import { and, sql, desc, eq, inArray, isNull, or } from 'drizzle-orm'
 import { getDb } from './client'
-import { jobRuns, tasks, localScheduleBindings, localScheduleOccurrences } from './schema'
+import { localScheduleBindings, localScheduleOccurrences } from './schema'
 
 export type ScheduleBindingRow = typeof localScheduleBindings.$inferSelect
 export type ScheduleOccurrenceRow = typeof localScheduleOccurrences.$inferSelect
@@ -47,18 +47,25 @@ export const localScheduleRepo = {
     return getDb().select().from(localScheduleOccurrences).where(and(eq(localScheduleOccurrences.userId, userId),
       eq(localScheduleOccurrences.bindingId, bindingId), inArray(localScheduleOccurrences.status, ['prepared', 'dispatched', 'interrupted']))).all()
   },
-  unfinishedRuns(userId: string, jobIds: string[]): { taskId: string | null }[] {
-    if (!jobIds.length) return []
-    return getDb().select({ taskId: jobRuns.taskId }).from(jobRuns).leftJoin(tasks, eq(tasks.id, jobRuns.taskId))
-      .where(and(eq(jobRuns.userId, userId), inArray(jobRuns.jobId, jobIds), isNull(tasks.deletedAt), or(inArray(jobRuns.status, ['pending', 'running']),
-        inArray(tasks.status, ['new', 'open', 'in_progress', 'blocked'])))).limit(1).all()
-  },
   occurrence(userId: string, bindingId: string, civilKey: string): ScheduleOccurrenceRow | undefined {
     return getDb().select().from(localScheduleOccurrences).where(and(eq(localScheduleOccurrences.userId, userId),
       eq(localScheduleOccurrences.bindingId, bindingId), eq(localScheduleOccurrences.civilKey, civilKey))).get()
   },
   insertOccurrence(row: ScheduleOccurrenceRow): void {
     getDb().insert(localScheduleOccurrences).values(row).run()
+  },
+  /**
+   * Settle the occurrences that launched `runId` from its outcome, and move
+   * their bindings' `lastCompletedAt`. Returns how many rows changed.
+   */
+  settleByRun(userId: string, runId: string, patch: { status: 'completed' | 'failed' | 'cancelled'; reason: string | null; finishedAt: number }): number {
+    const rows = getDb().select({ id: localScheduleOccurrences.id, bindingId: localScheduleOccurrences.bindingId }).from(localScheduleOccurrences)
+      .where(and(eq(localScheduleOccurrences.userId, userId), eq(localScheduleOccurrences.runId, runId))).all()
+    for (const row of rows) {
+      this.updateOccurrence(userId, row.id, patch)
+      this.completed(userId, row.bindingId, patch.finishedAt)
+    }
+    return rows.length
   },
   updateOccurrence(userId: string, id: string, patch: Partial<Omit<ScheduleOccurrenceRow, 'id' | 'userId' | 'bindingId'>>): void {
     getDb().update(localScheduleOccurrences).set(patch).where(and(eq(localScheduleOccurrences.userId, userId), eq(localScheduleOccurrences.id, id))).run()

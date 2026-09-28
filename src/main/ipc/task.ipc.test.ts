@@ -35,6 +35,7 @@ const startTask = vi.hoisted(() => vi.fn(async () => ({ task: { id: 't1' }, chat
 const service = vi.hoisted(() => ({
   update: vi.fn(() => ({ id: 't1' })),
   setStatus: vi.fn(() => ({ id: 't1' })),
+  reopenForRerun: vi.fn(() => ({ id: 't1' })),
   remove: vi.fn(),
   removeWithJobRun: vi.fn(() => ({ jobRunId: 'run-1', jobId: 'job-1', chatId: 'chat-1', chatDeleted: true })),
   deletePreview: vi.fn(() => ({ deletesRun: true, chat: 'deleted_with_run', jobStays: true })),
@@ -103,6 +104,7 @@ describe('a task write a person made reaches the other devices without waiting a
     ['task:start', ['t1', { kind: 'model' }]],
     ['task:update', ['t1', { title: 'Renamed' }]],
     ['task:set-status', ['t1', 'in_progress']],
+    ['task:reopen-for-rerun', ['t1']],
     ['task:delete', ['t1']]
   ] as const)('%s nudges sync', async (channel, args) => {
     await invoke(channel, ...args)
