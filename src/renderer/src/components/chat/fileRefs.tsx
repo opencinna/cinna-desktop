@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, type ComponentProps, type ReactNode } from 'react'
 import type { Components, ExtraProps } from 'react-markdown'
 import { stripCinnaAttachTags } from '../../../../shared/cinnaAttach'
+import type { AgentFileRef } from '../../../../shared/agentFiles'
 import { useFilePreviewStore } from '../../stores/filePreview.store'
 import { markdownComponents } from '../../utils/markdownComponents'
 import { useAgentFileRefs, type FileRefScope } from '../../hooks/useAgentFileRefs'
@@ -13,6 +14,24 @@ export type { FileRefScope }
  * nothing may link: outside a folder agent's chat, and while streaming.
  */
 export const FileRefContext = createContext<FileRefScope | null>(null)
+
+/** The reference a rendered `code.file-ref` stands for, and whose folder it resolved in. */
+export interface FileRefTarget {
+  agentId: string
+  ref: AgentFileRef
+}
+
+/**
+ * Rendered reference spans → what they name, for the transcript's context
+ * menu, which starts from the DOM node a right-click landed on. Weak, so a
+ * span that unmounts takes its entry with it.
+ */
+const fileRefTargets = new WeakMap<Element, FileRefTarget>()
+
+/** The reference `element` renders, or null for any other element. */
+export function fileRefTargetOf(element: Element): FileRefTarget | null {
+  return fileRefTargets.get(element) ?? null
+}
 
 /** True inside a fenced block: a `code` there is never a reference. */
 const InsidePreContext = createContext(false)
@@ -64,6 +83,11 @@ function MarkdownCode({ node: _node, children, className, ...props }: ComponentP
   return (
     <code
       {...props}
+      ref={(element) => {
+        if (!element) return
+        fileRefTargets.set(element, { agentId: scope.agentId, ref })
+        return () => void fileRefTargets.delete(element)
+      }}
       className={className ? `${className} file-ref` : 'file-ref'}
       role="button"
       tabIndex={0}

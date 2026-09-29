@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_FILE_REF_CANDIDATES,
+  agentFileContentKind,
   agentFilePreviewKindFor,
   extractFileRefCandidates,
   extractInlineCodeSpans,
   fileRefCandidatePath,
+  isCredentialFileRef,
   isCredentialFilePath
 } from './agentFiles'
 
@@ -129,7 +131,21 @@ describe('isCredentialFilePath', () => {
     '/x/server.pem',
     '/x/tls.key',
     '/home/me/.ssh/id_rsa',
-    '/home/me/.ssh/id_ed25519.pub'
+    '/home/me/.ssh/id_ed25519',
+    '/home/me/.ssh/id_ecdsa',
+    '/home/me/.ssh/id_dsa',
+    '/home/me/.ssh/id_rsa_work',
+    '/home/me/.netrc',
+    '/c/Users/me/_netrc',
+    '/home/me/.npmrc',
+    '/home/me/.pypirc',
+    '/home/me/.pgpass',
+    '/home/me/.git-credentials',
+    '/home/me/.dockercfg',
+    '/home/me/.docker/config.json',
+    '/home/me/.aws/credentials',
+    '/home/me/.kube/config',
+    '/agents/a/.AWS/Credentials'
   ])('refuses %s', (path) => {
     expect(isCredentialFilePath(path, agentDir)).toBe(true)
   })
@@ -142,8 +158,49 @@ describe('isCredentialFilePath', () => {
     '/agents/a/credentials/.env.example',
     '/agents/a/credentials/service.json.example',
     '/agents/a/data/credentials.csv',
-    '/other/credentials/service.json'
+    '/other/credentials/service.json',
+    '/home/me/.ssh/id_rsa.pub',
+    '/home/me/.ssh/id_ed25519.pub',
+    '/x/id_mapping.csv',
+    '/x/docker/config.json',
+    '/x/my.aws/credentials',
+    '/x/.aws/credentials.md',
+    '/x/.kube/config.yaml',
+    '/x/netrc.txt'
   ])('allows %s', (path) => {
     expect(isCredentialFilePath(path, agentDir)).toBe(false)
+  })
+})
+
+describe('agentFileContentKind', () => {
+  it.each([
+    'notes.md', 'README.markdown', 'data.csv', 'table.tsv', 'plain.txt', 'config.json', 'spec.yaml', 'spec.yml',
+    'main.py', 'types.pyi', 'index.ts', 'App.tsx', 'run.sh', 'query.sql', 'server.log', 'server.log.1',
+    'app.log.12', 'job.out', 'job.err', '/abs/path/Makefile', 'Dockerfile', '.gitignore', 'LICENSE',
+    '.env.example', 'dir/.editorconfig', '.nvmrc'
+  ])('%s is text', (name) => {
+    expect(agentFileContentKind(name)).toBe('text')
+  })
+
+  it.each(['report.pdf', 'deck.pptx', 'photo.JPG', 'sheet.xlsx', 'talk.key', '/x/y/image.heic'])(
+    '%s is binary',
+    (name) => {
+      expect(agentFileContentKind(name)).toBe('binary')
+    }
+  )
+
+  it.each(['dump.gz', 'archive.zip', 'model.bin', 'NOTES', 'data.parquet', 'server.logs'])('%s is unknown', (name) => {
+    expect(agentFileContentKind(name)).toBe('unknown')
+  })
+})
+
+describe('isCredentialFileRef', () => {
+  it('judges an inside ref by its folder-relative path, an outside one by its absolute path', () => {
+    expect(isCredentialFileRef({ path: '/a/credentials/x.json', displayPath: 'credentials/x.json', inside: true })).toBe(true)
+    expect(isCredentialFileRef({ path: '/a/credentials/README.md', displayPath: 'credentials/README.md', inside: true })).toBe(false)
+    expect(isCredentialFileRef({ path: '/o/.env.local', displayPath: '/o/.env.local', inside: false })).toBe(true)
+    expect(isCredentialFileRef({ path: '/o/credentials/x.json', displayPath: '/o/credentials/x.json', inside: false })).toBe(false)
+    expect(isCredentialFileRef({ path: '/a/main.py', displayPath: 'main.py', inside: true })).toBe(false)
+    expect(isCredentialFileRef({ path: '/a/.aws/credentials', displayPath: '.aws/credentials', inside: true })).toBe(true)
   })
 })

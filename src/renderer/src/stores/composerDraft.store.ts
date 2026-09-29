@@ -24,6 +24,12 @@ export const EMPTY_COMPOSER_DRAFT: ComposerDraft = {
   modeSelection: 'auto', pendingAgentIds: null, pendingMcpIds: [], coordinate: false
 }
 
+/**
+ * The surface of the main new-chat screen (`ChatWorkspace` with no chat open),
+ * where every "chat with this agent" landing arrives.
+ */
+export const NEW_CHAT_DRAFT_SURFACE = 'dashboard'
+
 /** Session-only drafts. Profiles and entry surfaces never share a buffer. */
 export function composerDraftKey(profileId: string | undefined, surface: string): string {
   return JSON.stringify([profileId ?? null, surface])

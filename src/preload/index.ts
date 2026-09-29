@@ -45,8 +45,10 @@ import type { StoredPermissionGrant } from '../shared/localAgentRequests'
 import type {
   AgentFileActionResult,
   AgentFilePathInput,
+  AuthorizeAgentFileInput,
   AuthorizeAgentFileResult,
   ReadAgentFilePreviewResult,
+  ReadAgentFileTextResult,
   ResolveAgentFileRefsInput,
   ResolveAgentFileRefsResult
 } from '../shared/agentFiles'
@@ -1333,6 +1335,16 @@ const api = {
     serverUrl: (): Promise<string> => ipcRenderer.invoke('catalog:server-url')
   },
 
+  /**
+   * The system clipboard, written by main. `navigator.clipboard` can reject
+   * once a native dialog (the file consent prompt) has taken the window's
+   * focus; main's clipboard does not depend on it.
+   */
+  clipboard: {
+    writeText: (text: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('clipboard:write-text', text)
+  },
+
   system: {
     openExternal: (
       url: string
@@ -1490,11 +1502,14 @@ const api = {
      * May the renderer act on this path? Inside the agent folder, or approved
      * before, answers at once; otherwise main asks with a native dialog.
      */
-    authorize: (input: AgentFilePathInput): Promise<AuthorizeAgentFileResult> =>
+    authorize: (input: AuthorizeAgentFileInput): Promise<AuthorizeAgentFileResult> =>
       ipcRenderer.invoke('agent-files:authorize', input),
     /** Capped UTF-8 text for the preview modal. Refuses credential files. */
     readPreview: (input: AgentFilePathInput): Promise<ReadAgentFilePreviewResult> =>
       ipcRenderer.invoke('agent-files:read-preview', input),
+    /** The whole file as UTF-8 text, up to 4 MB — refused, never truncated. Refuses credential and binary files. */
+    readText: (input: AgentFilePathInput): Promise<ReadAgentFileTextResult> =>
+      ipcRenderer.invoke('agent-files:read-text', input),
     /** Open with the default editor, the default app or a text editor — never executed. */
     open: (input: AgentFilePathInput): Promise<AgentFileActionResult> =>
       ipcRenderer.invoke('agent-files:open', input),

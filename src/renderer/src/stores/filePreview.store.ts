@@ -3,12 +3,12 @@ import type { PreviewRenderKind } from '../../../shared/filePreview'
 import type { MessageAttachment } from '../../../shared/attachments'
 import {
   agentFilePreviewKindFor,
-  isCredentialFilePath,
+  isCredentialFileRef,
   type AgentFileErrorCode,
-  type AgentFilePathInput,
   type AgentFileRef,
   type AuthorizeAgentFileResult
 } from '../../../shared/agentFiles'
+import { authorizeAgentFile as authorize } from '../utils/agentFileAccess'
 import { unwrapIpcError } from '../utils/ipcError'
 import { createLogger } from './logger.store'
 
@@ -132,16 +132,6 @@ const closedState = {
   pendingAction: null,
   actionError: null
 } satisfies Partial<FilePreviewState>
-
-/**
- * Whether the renderer may act on `ref`. Always main's answer, inside the
- * agent folder too: the renderer's `inside` flag was true when the transcript
- * resolved and may not be now (the file became a symlink out of the folder).
- * Main answers an inside path without a dialog.
- */
-function authorize(input: AgentFilePathInput): Promise<AuthorizeAgentFileResult> {
-  return window.api.agentFiles.authorize(input)
-}
 
 /**
  * The body sentence for an agent file that could not be shown. A folder that
@@ -307,9 +297,7 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
       // A name that is plainly a credential file is not even asked for — `.env`
       // has no preview kind, and would otherwise read as "no preview for this
       // type". Main refuses the read regardless, and catches what a name hides.
-      const credential = ref.inside
-        ? isCredentialFilePath(`/${ref.displayPath}`, '/')
-        : isCredentialFilePath(ref.path, null)
+      const credential = isCredentialFileRef(ref)
       const notice: PreviewNotice | null = credential ? 'credential' : kind ? null : 'unsupported'
       const requestId = get().requestId + 1
       set({

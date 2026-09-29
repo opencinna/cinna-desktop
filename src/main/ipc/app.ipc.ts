@@ -1,5 +1,6 @@
 import { shell } from 'electron'
 import { appIconService, type AppTheme } from '../host/desktop/appIconService'
+import { writeClipboardText } from '../host/desktop/clipboard'
 import { ipcHandle } from './_wrap'
 
 export function registerAppHandlers(): void {
@@ -8,6 +9,10 @@ export function registerAppHandlers(): void {
     appIconService.apply(theme)
     return { success: true as const }
   })
+
+  // Plain text onto the system clipboard, for a copy that follows a native
+  // dialog (the renderer's clipboard needs a focused document).
+  ipcHandle('clipboard:write-text', (_event, text: unknown) => writeClipboardText(text))
 
   // Open an external URL via the OS. Restrict to http(s) so a malicious/
   // misconfigured caller can't shell out to custom protocols. Mirrors the

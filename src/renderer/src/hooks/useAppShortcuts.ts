@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { AppShortcut } from '../../../shared/appShortcuts'
 import { useChatStore } from '../stores/chat.store'
 import { useUIStore } from '../stores/ui.store'
+import { startAgentChat, unavailableAgentMessage } from '../utils/startAgentChat'
 import { useToastStore } from '../stores/toast.store'
 import { createLogger } from '../stores/logger.store'
 import { useStartNewChat } from './useStartNewChat'
@@ -34,16 +35,6 @@ export function useAppShortcuts(): void {
         queryKey: ['agents'],
         queryFn: () => window.api.agents.list()
       })
-
-    // The same landing every "chat with this agent" button uses: the new-chat
-    // screen, the agent preselected by `ChatWorkspace`, the Chats list beside it.
-    const startAgentChat = (agentId: string): void => {
-      const ui = useUIStore.getState()
-      ui.setActiveJobId(null)
-      ui.setPendingAgentId(agentId)
-      ui.setActiveView('chat')
-      ui.setSidebarTab('chats')
-    }
 
     const handle = async (shortcut: AppShortcut): Promise<void> => {
       // A menu accelerator fires under an open modal too. Leaving the view
@@ -88,13 +79,14 @@ export function useAppShortcuts(): void {
         startAgentChat(agent.id)
         return
       }
-      const listed = agents.find((a) => a.id === binding.agentId)
       useToastStore
         .getState()
         .show(
-          listed && !listed.enabled && !listed.conductor
-            ? `${listed.name} is disabled`
-            : `The agent for ${agentShortcutLabel(shortcut.slot)} is no longer available`
+          unavailableAgentMessage(
+            agents,
+            binding.agentId,
+            `The agent for ${agentShortcutLabel(shortcut.slot)} is no longer available`
+          )
         )
     }
 

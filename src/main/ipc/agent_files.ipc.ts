@@ -6,6 +6,7 @@ import type {
   AgentFileActionResult,
   AuthorizeAgentFileResult,
   ReadAgentFilePreviewResult,
+  ReadAgentFileTextResult,
   ResolveAgentFileRefsResult
 } from '../../shared/agentFiles'
 
@@ -30,6 +31,11 @@ export function registerAgentFileHandlers(): void {
   ipcHandle('agent-files:read-preview', (_event, data: unknown): Promise<ReadAgentFilePreviewResult> => {
     userActivation.requireActivated()
     return agentFileService.readPreview(data)
+  })
+
+  ipcHandle('agent-files:read-text', (_event, data: unknown): Promise<ReadAgentFileTextResult> => {
+    userActivation.requireActivated()
+    return agentFileService.readText(data)
   })
 
   ipcHandle('agent-files:open', (_event, data: unknown): Promise<AgentFileActionResult> => {

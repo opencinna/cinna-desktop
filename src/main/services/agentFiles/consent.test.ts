@@ -121,6 +121,23 @@ describe('consentDialogOptions', () => {
     )
   })
 
+  it('asks to read a file for Copy contents / Save to Notes, whether or not it previews', () => {
+    for (const previewable of [true, false]) {
+      expect(consentDialogOptions({ ...file, previewable, purpose: 'read' }, 'darwin')).toMatchObject({
+        buttons: ['Read file', 'Cancel'],
+        defaultId: 0,
+        cancelId: 1,
+        message: "Let Cinna read a file outside GFCA's folder?",
+        detail: '~/work/pulled/a.md\n\nCinna reads it to copy it or save it to Notes.\n\nFolder: ~/work/pulled',
+        checkboxLabel: "Don't ask again for anything inside “pulled” until Cinna restarts"
+      })
+    }
+  })
+
+  it("words an explicit 'show' as the default", () => {
+    expect(consentDialogOptions({ ...file, purpose: 'show' }, 'darwin')).toEqual(consentDialogOptions(file, 'darwin'))
+  })
+
   it.each([
     ['darwin', 'Show in Finder'],
     ['linux', 'Show in folder'],

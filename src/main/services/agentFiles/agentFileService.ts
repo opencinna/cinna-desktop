@@ -6,16 +6,20 @@ import { createLogger } from '../../logger/logger'
 import { isPlausiblePath, isWithin } from '../localAgents/pathRules'
 import { MAX_PREVIEW_BYTES, decodePreviewText } from '../../../shared/filePreview'
 import {
+  MAX_AGENT_FILE_TEXT_BYTES,
   MAX_FILE_REF_CANDIDATES,
+  agentFileContentKind,
   agentFilePreviewKindFor,
   isCredentialFilePath,
   type AgentFileActionResult,
+  type AgentFileConsentPurpose,
   type AgentFileErrorCode,
   type AgentFileFailure,
   type AgentFilePathInput,
   type AgentFileRefKind,
   type AuthorizeAgentFileResult,
   type ReadAgentFilePreviewResult,
+  type ReadAgentFileTextResult,
   type ResolveAgentFileRefsInput,
   type ResolveAgentFileRefsResult
 } from '../../../shared/agentFiles'
@@ -39,7 +43,9 @@ const MESSAGES: Record<AgentFileErrorCode, string> = {
   not_previewable: 'No preview for this file type.',
   not_a_file: 'That is a folder, not a file.',
   read_failed: 'Could not read the file.',
-  launch_failed: 'Could not open the file.'
+  launch_failed: 'Could not open the file.',
+  too_large: `This file is over ${MAX_AGENT_FILE_TEXT_BYTES / (1024 * 1024)} MB.`,
+  not_text: "This isn't a text file."
 }
 
 function fail(code: AgentFileErrorCode, error: string = MESSAGES[code]): AgentFileFailure {
@@ -65,6 +71,8 @@ export interface AgentFileServiceDeps {
   paths?: PathCanonicalizer
   home?: string
   maxPreviewBytes?: number
+  /** Defaults to {@link MAX_AGENT_FILE_TEXT_BYTES}. */
+  maxTextBytes?: number
   getDefaultEditor: () => Promise<(DetectedTool & { path: string }) | null>
   launchEditor: (tool: DetectedTool & { path: string }, target: string, cwd: string) => Promise<void>
   /** `shell.openPath`: resolves to an error string, empty on success. */
@@ -106,6 +114,7 @@ interface Target {
  */
 export function createAgentFileService(deps: AgentFileServiceDeps) {
   const maxPreviewBytes = deps.maxPreviewBytes ?? MAX_PREVIEW_BYTES
+  const maxTextBytes = deps.maxTextBytes ?? MAX_AGENT_FILE_TEXT_BYTES
   const paths = deps.paths ?? createPathCanonicalizer({ platform: deps.platform })
   const home = (): string => deps.home ?? homedir()
   /** One dialog per (user, path) at a time: a second click waits for the first answer. */
@@ -169,7 +178,7 @@ export function createAgentFileService(deps: AgentFileServiceDeps) {
     )
   }
 
-  async function ask(found: Target, prompt: ConsentPrompt): Promise<AuthorizeAgentFileResult> {
+  async function ask(found: Target, prompt: ConsentPrompt, purpose: AgentFileConsentPurpose): Promise<AuthorizeAgentFileResult> {
     const dir = found.kind === 'dir' ? found.real : dirname(found.real)
     const offerDir = deps.consent.canApproveDirectory(dir)
     const realHome = await paths.realpath(home()).catch(() => resolve(home()))
@@ -181,6 +190,7 @@ export function createAgentFileService(deps: AgentFileServiceDeps) {
       displayPath: homeDisplayPath(found.real, realHome),
       displayDir: homeDisplayPath(dir, realHome),
       offerDir,
+      purpose,
       previewable:
         found.kind === 'file' && agentFilePreviewKindFor(basename(found.real)) !== null && !isCredential(found)
     })
@@ -227,7 +237,11 @@ export function createAgentFileService(deps: AgentFileServiceDeps) {
       const key = `${found.userId}\0${found.real}`
       let pending = asking.get(key)
       if (!pending) {
-        pending = ask(found, prompt).finally(() => asking.delete(key))
+        // Approvals are shared across purposes: a dialog already open for the
+        // same path answers this call too, in whichever words it was asked.
+        const purpose: AgentFileConsentPurpose =
+          (input as { purpose?: unknown }).purpose === 'read' ? 'read' : 'show'
+        pending = ask(found, prompt, purpose).finally(() => asking.delete(key))
         asking.set(key, pending)
       }
       return pending
@@ -266,6 +280,59 @@ export function createAgentFileService(deps: AgentFileServiceDeps) {
             text: decodePreviewText(buffer.subarray(0, offset), truncated),
             truncated
           }
+        } finally {
+          await handle.close()
+        }
+      } catch (err) {
+        logger.warn('reading an agent file failed', { error: err instanceof Error ? err.name : 'unknown' })
+        return fail('read_failed')
+      }
+    },
+
+    /**
+     * The whole file as text, for **Copy contents** and **Save to Notes**. The
+     * same gate as {@link readPreview} — containment or approval, files only,
+     * never a credential file, the identity checked again once open — but
+     * never truncated: a file over the cap is refused as `too_large`, and a
+     * binary type, invalid UTF-8 or a NUL byte as `not_text`.
+     */
+    async readText(input: unknown): Promise<ReadAgentFileTextResult> {
+      const found = await permitted(input)
+      if (isFailure(found)) return found
+      if (found.kind !== 'file') return fail('not_a_file')
+      if (isCredential(found)) return fail('credential_file', 'Cinna does not read credential files.')
+      if (agentFileContentKind(basename(found.real)) === 'binary') return fail('not_text')
+      try {
+        const handle = await open(found.real, 'r')
+        try {
+          const opened = await handle.stat()
+          if (opened.dev !== found.identity.dev || opened.ino !== found.identity.ino) {
+            logger.warn('an agent file changed between its check and its read', {
+              pathLength: found.real.length
+            })
+            return fail('not_found')
+          }
+          if (opened.size > maxTextBytes) return fail('too_large')
+          // One byte past the cap: a file that grew since the stat is caught
+          // by the read rather than cut short.
+          const buffer = Buffer.alloc(maxTextBytes + 1)
+          let offset = 0
+          while (offset < buffer.length) {
+            const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset)
+            if (bytesRead === 0) break
+            offset += bytesRead
+          }
+          if (offset > maxTextBytes) return fail('too_large')
+          const bytes = buffer.subarray(0, offset)
+          if (bytes.includes(0)) return fail('not_text')
+          let text: string
+          try {
+            text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+          } catch {
+            return fail('not_text')
+          }
+          logger.info('read an agent file as text', { bytes: offset, inside: found.inside })
+          return { success: true, text }
         } finally {
           await handle.close()
         }

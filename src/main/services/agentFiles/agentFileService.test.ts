@@ -99,6 +99,7 @@ interface ServiceOptions {
   homeDirs?: string[]
   paths?: PathCanonicalizer
   isGuardedLocation?: (path: string) => boolean
+  maxTextBytes?: number
   /** Runs while the service looks up the default editor, between its check and its launch. */
   onEditorLookup?: () => void
 }
@@ -118,6 +119,7 @@ function makeService(options: ServiceOptions = {}) {
     paths: options.paths,
     home: options.home,
     maxPreviewBytes: 7,
+    maxTextBytes: options.maxTextBytes ?? 16,
     getDefaultEditor: async () => {
       options.onEditorLookup?.()
       return options.editor
@@ -252,6 +254,88 @@ describe('readPreview', () => {
     write(join(agent, 'swap-new.md'), 'swapped in')
     hooks.beforeOpen = () => renameSync(join(agent, 'swap-new.md'), join(agent, 'swap.md'))
     expect(await service.readPreview(at(join(agent, 'swap.md')))).toEqual({
+      success: false,
+      code: 'not_found',
+      error: 'That file is no longer there.'
+    })
+  })
+})
+
+describe('readText', () => {
+  it('reads a whole file inside the folder, untruncated, without asking', async () => {
+    const service = makeService()
+    write(join(agent, 'whole.md'), '# Whole\nfile é\n')
+    expect(await service.readText(at(join(agent, 'whole.md')))).toEqual({ success: true, text: '# Whole\nfile é\n' })
+    // An unknown type is read when its bytes are text.
+    expect(await service.readText(at(join(agent, 'dump.gz')))).toEqual({ success: true, text: 'binary' })
+    expect(prompts).toEqual([])
+  })
+
+  it('refuses a file outside the folder until the user approves it', async () => {
+    const service = makeService()
+    const path = join(outside, 'notes.md')
+    expect(await service.readText(at(path))).toMatchObject({ success: false, code: 'needs_consent' })
+    await service.authorize(at(path), deny)
+    expect(await service.readText(at(path))).toMatchObject({ success: false, code: 'needs_consent' })
+    await service.authorize(at(path), approve())
+    expect(await service.readText(at(path))).toEqual({ success: true, text: '# outside' })
+  })
+
+  it("asks in 'read' words only when told to; anything else is the default 'show'", async () => {
+    const service = makeService()
+    await service.authorize({ ...at(join(outside, 'notes.md')), purpose: 'read' }, deny)
+    await service.authorize({ ...at(join(outside, 'notes.md')), purpose: 'sudo' }, deny)
+    await service.authorize(at(join(outside, 'notes.md')), deny)
+    expect(prompts.map((p) => p.purpose)).toEqual(['read', 'show', 'show'])
+  })
+
+  it('never reads a credential file, inside or approved outside', async () => {
+    const service = makeService()
+    expect(await service.readText(at(join(agent, '.env')))).toMatchObject({ success: false, code: 'credential_file' })
+    expect(await service.readText(at(join(agent, 'credentials/service.json')))).toMatchObject({ code: 'credential_file' })
+    await service.authorize(at(join(outside, '.env.local')), approve())
+    expect(await service.readText(at(join(outside, '.env.local')))).toMatchObject({ code: 'credential_file' })
+  })
+
+  it('refuses a known binary type without reading it, and a folder', async () => {
+    const service = makeService()
+    let opened = 0
+    hooks.beforeOpen = () => void opened++
+    expect(await service.readText(at(join(agent, 'report.pdf')))).toEqual({
+      success: false,
+      code: 'not_text',
+      error: "This isn't a text file."
+    })
+    expect(opened).toBe(0)
+    expect(await service.readText(at(join(agent, 'data')))).toMatchObject({ code: 'not_a_file' })
+  })
+
+  it('refuses a file over the cap rather than truncating it', async () => {
+    const service = makeService({ maxTextBytes: 16 })
+    write(join(agent, 'exact.txt'), 'x'.repeat(16))
+    write(join(agent, 'over.txt'), 'x'.repeat(17))
+    expect(await service.readText(at(join(agent, 'exact.txt')))).toEqual({ success: true, text: 'x'.repeat(16) })
+    expect(await service.readText(at(join(agent, 'over.txt')))).toEqual({
+      success: false,
+      code: 'too_large',
+      error: 'This file is over 4 MB.'
+    })
+  })
+
+  it('refuses bytes that are not UTF-8 text: a NUL byte, or an invalid sequence', async () => {
+    const service = makeService()
+    write(join(agent, 'nul.dat'), 'ab\u0000cd')
+    writeFileSync(join(agent, 'latin1.dat'), Buffer.from([0x63, 0x61, 0x66, 0xe9]))
+    expect(await service.readText(at(join(agent, 'nul.dat')))).toMatchObject({ success: false, code: 'not_text' })
+    expect(await service.readText(at(join(agent, 'latin1.dat')))).toMatchObject({ success: false, code: 'not_text' })
+  })
+
+  it('refuses a file swapped for another between the check and the read', async () => {
+    const service = makeService()
+    write(join(agent, 'swap-text.md'), 'checked')
+    write(join(agent, 'swap-text-new.md'), 'swapped in')
+    hooks.beforeOpen = () => renameSync(join(agent, 'swap-text-new.md'), join(agent, 'swap-text.md'))
+    expect(await service.readText(at(join(agent, 'swap-text.md')))).toEqual({
       success: false,
       code: 'not_found',
       error: 'That file is no longer there.'

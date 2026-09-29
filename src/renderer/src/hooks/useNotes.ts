@@ -60,16 +60,19 @@ export function useCreateNote() {
   })
 }
 
-/** Save a transcript excerpt; the caller owns whether its menu is still open. */
+/**
+ * Save a transcript excerpt, or a referenced file's contents; the caller owns
+ * whether its menu is still open. Without a `title`, the text's first line is.
+ */
 export function useSaveMessageNote() {
   const queryClient = useQueryClient()
   const { mutateAsync } = useMutation({
-    mutationFn: async ({ text, profileId }: { text: string; profileId: string | undefined }) => {
+    mutationFn: async ({ text, title: given, profileId }: { text: string; title?: string; profileId: string | undefined }) => {
       // React Query may start the mutation in a later microtask. Capture its
       // account at the gesture, and never dispatch into a different profile.
       if (useAuthStore.getState().currentUser?.id !== profileId) return null
       const firstLine = text.trim().split('\n').find((line) => line.trim()) ?? ''
-      const title = firstLine.replace(/^\s{0,3}#{1,6}\s+/, '').slice(0, 80) || 'Chat excerpt'
+      const title = given?.trim() || firstLine.replace(/^\s{0,3}#{1,6}\s+/, '').slice(0, 80) || 'Chat excerpt'
       const note = await window.api.notes.create({ title, body: text })
       // Query keys are shared across profiles and cleared during a switch.
       if (useAuthStore.getState().currentUser?.id !== profileId) return null
@@ -77,8 +80,8 @@ export function useSaveMessageNote() {
       return note
     }
   })
-  return useCallback((text: string) => mutateAsync({
-    text, profileId: useAuthStore.getState().currentUser?.id
+  return useCallback((text: string, title?: string) => mutateAsync({
+    text, title, profileId: useAuthStore.getState().currentUser?.id
   }), [mutateAsync])
 }
 

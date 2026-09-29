@@ -242,6 +242,17 @@ export function agentFilePreviewKindFor(filename: string): PreviewRenderKind | n
 
 const ENV_TEMPLATES = new Set(['.env.example', '.env.sample', '.env.template'])
 
+/** SSH private keys (`id_rsa`, `id_ed25519_work`, …); the `.pub` half is public. */
+const SSH_PRIVATE_KEY_PREFIXES = ['id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'id_xmss']
+
+/** Tool credential stores known by name alone. */
+const CREDENTIAL_FILE_NAMES = new Set([
+  '.netrc', '_netrc', '.npmrc', '.pypirc', '.pgpass', '.git-credentials', '.dockercfg'
+])
+
+/** Credential stores known by their folder and name, matched as whole path segments. */
+const CREDENTIAL_PATH_SUFFIXES = ['/.docker/config.json', '/.aws/credentials', '/.kube/config']
+
 /**
  * Whether a file holds secrets and so must never be read into the renderer.
  * Compared case-insensitively, erring towards refusing on a case-insensitive
@@ -254,7 +265,10 @@ export function isCredentialFilePath(path: string, agentDir: string | null): boo
   if (base === '.env') return true
   if (base.startsWith('.env.') && !ENV_TEMPLATES.has(base)) return true
   if (base.endsWith('.pem') || base.endsWith('.key')) return true
-  if (base.startsWith('id_rsa') || base.startsWith('id_ed25519')) return true
+  if (SSH_PRIVATE_KEY_PREFIXES.some((prefix) => base.startsWith(prefix)) && !base.endsWith('.pub')) return true
+  if (CREDENTIAL_FILE_NAMES.has(base)) return true
+  const lower = normalized.toLowerCase()
+  if (CREDENTIAL_PATH_SUFFIXES.some((suffix) => lower.endsWith(suffix))) return true
   if (agentDir) {
     const prefix = agentDir.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() + '/credentials/'
     if (normalized.toLowerCase().startsWith(prefix)) {
@@ -262,6 +276,17 @@ export function isCredentialFilePath(path: string, agentDir: string | null): boo
     }
   }
   return false
+}
+
+/**
+ * {@link isCredentialFilePath} for a reference as the transcript resolved it:
+ * an inside reference is judged by its folder-relative path, so the
+ * `credentials/` rule applies without knowing the agent folder; an outside one
+ * by its absolute path. Main refuses the read regardless — this only keeps the
+ * renderer from offering what main would refuse.
+ */
+export function isCredentialFileRef(ref: Pick<AgentFileRef, 'path' | 'displayPath' | 'inside'>): boolean {
+  return ref.inside ? isCredentialFilePath(`/${ref.displayPath}`, '/') : isCredentialFilePath(ref.path, null)
 }
 
 /** The file name a path ends in. */
@@ -283,6 +308,46 @@ export const BINARY_DOCUMENT_EXTENSIONS: readonly string[] = [
 export const TEXT_DOCUMENT_EXTENSIONS: readonly string[] = [
   'csv', 'tsv', 'md', 'markdown', 'txt', 'log', 'json', 'yaml', 'yml'
 ]
+
+/** Log and process-output extensions: `.out`, `.err` beside `.log`. */
+const LOG_EXTENSIONS = new Set(['log', 'out', 'err'])
+
+/** A rotated log: `app.log.1`, `server.log.12`. */
+const ROTATED_LOG = /\.log\.\d+$/
+
+/** Files with no extension (or only a leading dot) that are text by convention. */
+const TEXT_FILE_NAMES = new Set([
+  'makefile', 'gnumakefile', 'dockerfile', 'containerfile', 'rakefile', 'gemfile', 'procfile',
+  'vagrantfile', 'jenkinsfile', 'brewfile', 'justfile', 'license', 'licence', 'readme', 'changelog',
+  'authors', 'contributors', 'copying', 'notice', 'todo', 'codeowners',
+  '.gitignore', '.gitattributes', '.gitmodules', '.dockerignore', '.npmignore', '.editorconfig',
+  '.nvmrc', '.node-version', '.python-version', '.ruby-version', '.tool-versions',
+  '.prettierrc', '.eslintrc', '.babelrc', '.bashrc', '.zshrc', '.profile', '.bash_profile',
+  '.env.example', '.env.sample', '.env.template'
+])
+
+/**
+ * Whether a file's contents may be offered as text (**Copy contents**, **Save
+ * to Notes**) without reading it first:
+ *  - `text` — a type known to be text: every preview kind, the text documents,
+ *    log variants and conventional names such as `Makefile` or `.gitignore`;
+ *  - `binary` — one of {@link BINARY_DOCUMENT_EXTENSIONS}; never read as text;
+ *  - `unknown` — anything else: offered, and main decides from the bytes.
+ */
+export function agentFileContentKind(name: string): 'text' | 'binary' | 'unknown' {
+  const base = agentFileName(name).toLowerCase()
+  if (TEXT_FILE_NAMES.has(base) || ROTATED_LOG.test(base)) return 'text'
+  const extension = agentFileExtension(base)
+  if (BINARY_DOCUMENT_EXTENSIONS.includes(extension)) return 'binary'
+  if (
+    agentFilePreviewKindFor(base) !== null ||
+    TEXT_DOCUMENT_EXTENSIONS.includes(extension) ||
+    LOG_EXTENSIONS.has(extension)
+  ) {
+    return 'text'
+  }
+  return 'unknown'
+}
 
 /**
  * Every type **Open** may hand to the OS default app. An allowlist because
@@ -321,6 +386,10 @@ export type AgentFileErrorCode =
   | 'not_a_file'
   | 'read_failed'
   | 'launch_failed'
+  /** Over {@link MAX_AGENT_FILE_TEXT_BYTES}: a whole-file read refuses rather than truncates. */
+  | 'too_large'
+  /** A binary type, or bytes that are not UTF-8 text. */
+  | 'not_text'
 
 /** Failures travel as data: a thrown error's code never reaches the renderer. */
 export interface AgentFileFailure {
@@ -343,6 +412,17 @@ export interface AgentFilePathInput {
   path: string
 }
 
+/**
+ * What the consent dialog says Cinna will do with an outside file: `show` it
+ * (preview, open, reveal — the default) or `read` it whole (copy its
+ * contents, save it to Notes). An approval covers both.
+ */
+export type AgentFileConsentPurpose = 'show' | 'read'
+
+export interface AuthorizeAgentFileInput extends AgentFilePathInput {
+  purpose?: AgentFileConsentPurpose
+}
+
 export type AuthorizeAgentFileResult = { success: true; approved: boolean } | AgentFileFailure
 
 export type ReadAgentFilePreviewResult =
@@ -350,3 +430,9 @@ export type ReadAgentFilePreviewResult =
   | AgentFileFailure
 
 export type AgentFileActionResult = { success: true } | AgentFileFailure
+
+/** The most a whole-file text read (**Copy contents**, **Save to Notes**) takes. */
+export const MAX_AGENT_FILE_TEXT_BYTES = 4 * 1024 * 1024
+
+/** The whole file as UTF-8 text, never truncated. */
+export type ReadAgentFileTextResult = { success: true; text: string } | AgentFileFailure

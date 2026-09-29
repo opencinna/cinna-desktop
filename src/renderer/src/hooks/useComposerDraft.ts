@@ -1,10 +1,10 @@
 import { useCallback, type Dispatch, type SetStateAction } from 'react'
 import { useAuthStore } from '../stores/auth.store'
-import { composerDraftKey, EMPTY_COMPOSER_DRAFT, useComposerDraftStore, type ComposerDraft } from '../stores/composerDraft.store'
+import { composerDraftKey, EMPTY_COMPOSER_DRAFT, NEW_CHAT_DRAFT_SURFACE, useComposerDraftStore, type ComposerDraft } from '../stores/composerDraft.store'
 
 export function useComposerDraftKey(chatId: string | null, agentId?: string): string {
   const profileId = useAuthStore((s) => s.currentUser?.id)
-  return composerDraftKey(profileId, chatId ? `chat:${chatId}` : agentId ? `agent:${agentId}` : 'dashboard')
+  return composerDraftKey(profileId, chatId ? `chat:${chatId}` : agentId ? `agent:${agentId}` : NEW_CHAT_DRAFT_SURFACE)
 }
 
 export function useComposerDraftField<K extends keyof ComposerDraft>(

@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, parse, relative, resolve, sep } from 'node:path'
 import { isWithin } from '../localAgents/pathRules'
-import type { AgentFileRefKind } from '../../../shared/agentFiles'
+import type { AgentFileConsentPurpose, AgentFileRefKind } from '../../../shared/agentFiles'
 import { createPathCanonicalizer, type PathCanonicalizer } from './canonicalPath'
 
 /** What the user is asked before Cinna reads, opens or reveals a path outside an agent folder. */
@@ -21,6 +21,8 @@ export interface ConsentRequest {
   offerDir: boolean
   /** A file Cinna would read to preview: a previewable type that is not a credential file. */
   previewable: boolean
+  /** Why it is asked: to show the path (default), or to read the whole file. */
+  purpose?: AgentFileConsentPurpose
 }
 
 export interface ConsentAnswer {
@@ -140,16 +142,21 @@ export type ConsentRegistry = ReturnType<typeof createConsentRegistry>
 /**
  * The native dialog for a {@link ConsentRequest}: button 0 shows, 1 cancels.
  * Worded for what a click does — a folder is only shown in the file manager,
- * a file is shown, and read only when it can be previewed.
+ * a file is shown, and read only when it can be previewed — unless it is
+ * asked for to be read whole (`purpose: 'read'`), which is what it then says.
  */
 export function consentDialogOptions(
   request: ConsentRequest,
   platform: NodeJS.Platform = process.platform
 ): ConsentDialogOptions {
   const folder = request.kind === 'dir'
-  const showButton = folder ? (platform === 'darwin' ? 'Show in Finder' : 'Show in folder') : 'Show file'
+  const read = !folder && request.purpose === 'read'
+  const showButton = read
+    ? 'Read file'
+    : folder ? (platform === 'darwin' ? 'Show in Finder' : 'Show in folder') : 'Show file'
   const detail = [request.displayPath]
-  if (!folder && request.previewable) detail.push('', 'Cinna reads it to preview it here.')
+  if (read) detail.push('', 'Cinna reads it to copy it or save it to Notes.')
+  else if (!folder && request.previewable) detail.push('', 'Cinna reads it to preview it here.')
   // For a folder the covered folder is the path already shown: say it once.
   if (request.offerDir && request.displayDir !== request.displayPath) {
     detail.push('', `Folder: ${request.displayDir}`)
@@ -159,7 +166,9 @@ export function consentDialogOptions(
     buttons: [showButton, 'Cancel'],
     defaultId: 0,
     cancelId: 1,
-    message: `Show a ${folder ? 'folder' : 'file'} outside ${request.agentName}'s folder?`,
+    message: read
+      ? `Let Cinna read a file outside ${request.agentName}'s folder?`
+      : `Show a ${folder ? 'folder' : 'file'} outside ${request.agentName}'s folder?`,
     detail: detail.join('\n'),
     ...(request.offerDir
       ? {
