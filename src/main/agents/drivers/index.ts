@@ -56,6 +56,7 @@ import {
   type NativeRuntimeEngine
 } from '../../services/localAgents/promptAssembly'
 import { getShellEnv, shellEnvForChild } from '../../shell/env'
+import { withDeveloperToolShims } from '../../shell/developerToolShims'
 import { buildClaudeEnv } from './acp/claudeEnv'
 import { readFolderAgents } from './acp/claudeAgents'
 import { fetchAgentCard } from '../a2a-client'
@@ -214,7 +215,7 @@ export const claudeAuthProbe = new ClaudeAuthProbe({
   // in…". The login follows HOME, not the binary (verified 2026-09-18: a second
   // binary reported the same Max login with no Keychain prompt).
   claudePath: runningBinary(claudeBinaryService),
-  env: async () => buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() })
+  env: async () => withDeveloperToolShims(buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() }))
 })
 
 
@@ -323,7 +324,7 @@ function folderSystemPrompt(
  */
 export const codexAuthProbe = new CodexAuthProbe({
   path: runningBinary(codexBinaryService),
-  env: async () => buildCodexEnv({ shellEnv: await getShellEnv() })
+  env: async () => withDeveloperToolShims(buildCodexEnv({ shellEnv: await getShellEnv() }))
 })
 
 const syntheticRuntimeProfiles = new Map<string, { userId: string; context: ConductorContext }>()
@@ -439,7 +440,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       return path
     },
     nodeRuntime: hostNodeRuntime,
-    env: async () => buildCodexEnv({ shellEnv: await getShellEnv() }),
+    env: async () => withDeveloperToolShims(buildCodexEnv({ shellEnv: await getShellEnv() })),
     systemPrompt: folderSystemPrompt('codex'),
     settings: (userId, agentId) => {
       const synthetic = syntheticRuntimeProfiles.get(agentId)
@@ -496,7 +497,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       return input
     },
     configRoot: () => join(runtimeHost.getPath('userData'), 'acp'),
-    childEnv: async () => shellEnvForChild(await getShellEnv())
+    childEnv: async () => withDeveloperToolShims(shellEnvForChild(await getShellEnv()))
   }),
   claude: createClaudeLauncher({
     // Through the service, exactly like Codex above.
@@ -518,7 +519,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     adapterEntry: claudeAdapterEntry,
     nodeRuntime: hostNodeRuntime,
     claudeEnv: async () =>
-      buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() }),
+      withDeveloperToolShims(buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() })),
     systemPrompt: folderSystemPrompt('claude'),
     // A model **alias** (`haiku` / `sonnet` / `opus`), not a catalogue id: a
     // plan serves what the plan serves, and `runtimeService.resolve` returns the
@@ -685,7 +686,9 @@ export const acpDriver = createAcpDriver({
       desktopFeatures.developmentAgentContext(ctx.userId, ctx.agentId)
       if ('error' in plan) return plan
       // Keep runtime credential/environment policy; add only the managed CLI tools.
-      const path = execution.env.PATH ?? plan.spec.env.PATH ?? ''
+      // The development PATH replaces the one the launcher shimmed, so the
+      // developer-tool shims go back in front of it (a no-op when already first).
+      const path = (await withDeveloperToolShims({ PATH: execution.env.PATH ?? plan.spec.env.PATH ?? '' })).PATH ?? ''
       return { ...plan, spec: { ...plan.spec, env: { ...plan.spec.env, PATH: path },
         key: createHash('sha256').update(JSON.stringify([plan.spec.key, path])).digest('hex') } }
     } }

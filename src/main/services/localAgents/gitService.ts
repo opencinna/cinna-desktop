@@ -50,7 +50,7 @@ import type {
   GitStatus,
   GitUpdateResult
 } from '../../../shared/agentGit'
-import { getShellEnv, shellEnvForChild, which } from '../../shell/env'
+import { getShellEnv, shellEnvForChild, usableTool } from '../../shell/env'
 import { createLogger } from '../../logger/logger'
 
 const logger = createLogger('local-agent-git')
@@ -197,8 +197,12 @@ function parseCommits(stdout: string): GitCommit[] {
   return out
 }
 
+/**
+ * Null for a macOS `/usr/bin/git` stub with no developer tools behind it:
+ * running it pops the install dialog, so it reads as "git is not installed".
+ */
 async function resolveGit(): Promise<string | null> {
-  return which('git')
+  return usableTool('git')
 }
 
 /**

@@ -8,7 +8,8 @@ const log = (entry) => appendFileSync(logPath, `${JSON.stringify(entry)}\n`)
 log({ kind: 'start', pid: process.pid, env: {
   HOME: process.env.HOME,
   MCP_TEST_SHELL_SECRET: process.env.MCP_TEST_SHELL_SECRET ?? null,
-  MCP_TEST_EXPLICIT: process.env.MCP_TEST_EXPLICIT ?? null
+  MCP_TEST_EXPLICIT: process.env.MCP_TEST_EXPLICIT ?? null,
+  PATH: process.env.PATH ?? null
 } })
 process.on('exit', (code) => log({ kind: 'exit', pid: process.pid, code }))
 process.on('SIGTERM', () => { log({ kind: 'signal', signal: 'SIGTERM' }); process.exit(0) })

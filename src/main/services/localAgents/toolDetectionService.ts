@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { clearToolCache, getShellEnv, shellEnvForChild, which } from '../../shell/env'
+import { clearToolCache, getShellEnv, shellEnvForChild, usableTool } from '../../shell/env'
 import { createLogger } from '../../logger/logger'
 import { toolchain } from '../../localdev/toolchain'
 import type { DetectedTool, LocalToolId, LocalToolKind } from '../../../shared/localTools'
@@ -194,7 +194,10 @@ function cleanVersion(raw: string): string | null {
 }
 
 async function detect(spec: ToolSpec): Promise<DetectedTool> {
-  const onPath = await which(spec.bin)
+  // `usableTool`, not `which`: on a Mac without the developer tools
+  // `/usr/bin/git`, `make` and `python3` are stubs, and asking one its version
+  // pops the install dialog. Such a stub reads as not installed, unprobed.
+  const onPath = await usableTool(spec.bin)
   if (onPath) {
     return {
       id: spec.id,

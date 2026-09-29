@@ -17,6 +17,9 @@ vi.mock('../logger/logger', () => ({ createLogger: () => ({ debug() {}, info() {
 vi.mock('electron', () => ({ app: { getPath: () => state.root }, safeStorage: { isEncryptionAvailable: () => true, encryptString: (value: string) => Buffer.from(value.split('').reverse().join('')), decryptString: (value: Buffer) => value.toString().split('').reverse().join('') } }))
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => state.profile, getSettingsScopeUserId: () => '__default__' }))
 vi.mock('../shell/env', async () => ({ ...(await import('../shell/envMerge')), getShellEnv: async () => ({ PATH: '/usr/bin:/bin', HOME: state.root, SSH_AUTH_SOCK: '/tmp/fixture-agent.sock', ANTHROPIC_API_KEY: 'must-not-inherit' }) }))
+vi.mock('../shell/developerToolShims', () => ({
+  withDeveloperToolShims: async (env: Record<string, string | undefined>) => ({ ...env, PATH: `/cinna-test-shims:${env.PATH ?? ''}` })
+}))
 vi.mock('./agentReadinessService', () => ({ agentReadinessService: { forget: vi.fn() } }))
 const { customAgentService } = await import('./customAgentService')
 const { agentRepo, agentSessionRepo } = await import('../db/agents')
@@ -127,6 +130,7 @@ describe('real initialize-only test receipts', () => {
     const start = fake.log().find((entry) => entry.dir === 'start')!
     expect(start.env?.ANTHROPIC_API_KEY).toBeUndefined()
     expect(start.env?.SSH_AUTH_SOCK).toBe('/tmp/fixture-agent.sock')
+    expect(start.env?.PATH).toMatch(/^\/cinna-test-shims:\/usr\/bin:\/bin/)
     expect(() => process.kill(start.pid!, 0)).toThrow()
     const saved = customAgentService.save({ config, testToken: tested.token })
     expect(() => customAgentService.save({ config, testToken: tested.token })).toThrow(/Test this exact/)

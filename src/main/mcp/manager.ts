@@ -8,6 +8,7 @@ import { mcpProviderRepo } from '../db/mcpProviders'
 import { createLogger } from '../logger/logger'
 import { notifyMcpToolsChanged } from './toolChanges'
 import { droppedChildEnvNames, getShellEnv, mergeEnv, shellEnvForChild } from '../shell/env'
+import { withDeveloperToolShims } from '../shell/developerToolShims'
 
 /**
  * Channel the main process uses to tell the renderer that one or more MCP
@@ -206,11 +207,14 @@ export class MCPManager {
           providerId: config.id,
           dropped: droppedChildEnvNames(shellEnv, config.env)
         })
+        // The developer-tool shims go on the base env, so a PATH the user set
+        // in `config.env` still replaces it.
+        const childEnv = await withDeveloperToolShims(shellEnvForChild(shellEnv))
         this.assertCurrent(connection)
         transport = new StdioClientTransport({
           command: config.command,
           args: config.args ?? [],
-          env: mergeEnv(shellEnvForChild(shellEnv), config.env)
+          env: mergeEnv(childEnv, config.env)
         })
       } else if ((config.transportType === 'streamable-http' || config.transportType === 'sse') && config.authType === 'bearer') {
         if (!config.url) throw new Error('URL is required for streamable-http transport')

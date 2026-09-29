@@ -21,7 +21,7 @@ vi.mock('../../db/serviceCredentials', () => ({ credentialDto: (r: ServiceCreden
 } }))
 vi.mock('../localAgents/localAgentService', () => ({ localAgentService: { list: () => ({ agents: world.agents }), get: (_: string, id: string) => { const a = world.agents.find(a => a.id === id); if (!a) throw new Error('Agent missing'); return a } } }))
 vi.mock('../localAgents/scannerService', () => ({ markAllRootsDirty() {} }))
-vi.mock('../../shell/env', () => ({ getShellEnv: async () => process.env }))
+vi.mock('../../shell/env', () => ({ getShellEnv: async () => process.env, usableTool: async (bin: string) => bin }))
 vi.mock('./cloud', () => ({ serviceCredentialCloud: { list: (...args: unknown[]) => world.list(...args), materialize: (...args: unknown[]) => world.fetch(...args) } }))
 import { serviceCredentialService as service } from './service'
 import { turnLock } from '../localAgents/turnLock'

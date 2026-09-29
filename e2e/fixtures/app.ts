@@ -94,6 +94,10 @@ function launchEnv(sandbox: Sandbox, extra: Readonly<Record<string, string>>): R
   // that needs a Claude binary therefore sets `localAgentsClaudePath` itself
   // and depends on neither.
   env.CINNA_CLAUDE_DOWNLOAD = 'off'
+  // And for git (~62 MB), which Cinna fetches in the background whenever the
+  // machine has no usable git of its own — as a CI Mac without the command
+  // line developer tools does. A spec never waits on it; it must never pull it.
+  env.CINNA_GIT_DOWNLOAD = 'off'
   // Reuse the developer's tool caches so `uv run` in a test does not
   // re-provision an interpreter per sandbox.
   env.UV_CACHE_DIR ??= join(realHome, '.cache', 'uv')

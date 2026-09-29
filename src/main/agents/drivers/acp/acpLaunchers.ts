@@ -357,7 +357,10 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
             'acp',
             digest.config,
             digest.env,
-            configPath
+            configPath,
+            // The inherited PATH decides which `git` the engine runs — the
+            // developer-tool shims come and go with Apple's command line tools.
+            env.PATH ?? ''
           ])
         },
         init: {

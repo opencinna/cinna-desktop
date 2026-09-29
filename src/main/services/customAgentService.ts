@@ -5,6 +5,7 @@ import { agentRepo, agentSessionRepo, type AgentRow } from '../db/agents'
 import { visibleChat } from '../auth/chatScope'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { getShellEnv, shellEnvForChild } from '../shell/env'
+import { withDeveloperToolShims } from '../shell/developerToolShims'
 import { parseCustomAgentConfig, parseAcpAccessToken, type CustomAgentConfig, type CustomAgentTestResult } from '../../shared/customAgents'
 import { isPermissionGranted, permissionGrantKey, permissionGrantPatterns, type StoredPermissionGrant } from '../../shared/localAgentRequests'
 import { desktopStateService, type ExternalRuntimeStateKey } from './localAgents/desktopStateService'
@@ -29,7 +30,7 @@ const assertCustom = (row: AgentRow | undefined, allowDevelopment = false): Agen
 }
 const launcher = createCustomLauncher({
   defaultLocalCwd: () => runtimeHost.getPath('home'),
-  childEnv: async () => ({ ...shellEnvForChild(await getShellEnv()), SSH_ASKPASS_REQUIRE: 'never' })
+  childEnv: async () => ({ ...(await withDeveloperToolShims(shellEnvForChild(await getShellEnv()))), SSH_ASKPASS_REQUIRE: 'never' })
 })
 interface Receipt {
   ownerId: string; profileId: string; id?: string; original: string | null

@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { HANDOVERS_DIR, type HandoverIgnoreCheck } from '../../shared/handovers'
-import { getShellEnv } from '../shell/env'
+import { getShellEnv, usableTool } from '../shell/env'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('handover-git')
@@ -26,6 +26,13 @@ export interface HandoverGitDeps {
   readFile: (path: string) => string
   /** Is the folder there at all? A path that is gone is never a permission. */
   exists: (path: string) => boolean
+  /**
+   * The git to run, or null when there is none worth running. On a Mac without
+   * the command line developer tools `/usr/bin/git` is a stub that pops the
+   * install dialog instead of answering, so it counts as no git at all. Absent,
+   * the bare name is run and a missing binary surfaces as ENOENT.
+   */
+  resolveGit?: () => Promise<string | null>
 }
 
 /** A non-zero exit is an answer here, not a failure — so the code is what matters. */
@@ -95,14 +102,20 @@ export function createHandoverGit(deps: HandoverGitDeps) {
      * Never throws. Every failure is `unknown`, which forbids `auto`.
      */
     async check(agentDir: string, relativePath: string = HANDOVERS_DIR): Promise<HandoverIgnoreCheck> {
+      const noGit = (): HandoverIgnoreCheck =>
+        relativePath === HANDOVERS_DIR ? staticCheck(agentDir) : { result: 'unknown', detail: 'Git is required to verify credential paths.' }
+      const resolveGit = deps.resolveGit
+      const git = resolveGit ? await Promise.resolve().then(resolveGit).catch(() => null) : 'git'
+      // Not spawned at all: a macOS stub would pop the install dialog per check.
+      if (!git) return noGit()
       const env = await deps.env().catch(() => process.env)
       const run = (args: string[]): Promise<{ stdout: string; stderr: string }> =>
-        deps.execFile('git', ['-C', agentDir, ...args], { env, timeout: GIT_TIMEOUT_MS })
+        deps.execFile(git, ['-C', agentDir, ...args], { env, timeout: GIT_TIMEOUT_MS })
 
       try {
         await run(['rev-parse', '--is-inside-work-tree'])
       } catch (error) {
-        if (errnoOf(error) === 'ENOENT') return relativePath === HANDOVERS_DIR ? staticCheck(agentDir) : { result: 'unknown', detail: 'Git is required to verify credential paths.' }
+        if (errnoOf(error) === 'ENOENT') return noGit()
         // **A git that never answered is not a git that said "no repository".**
         // The 5 s timeout kills the child with a signal and no exit code, and so
         // does an OOM killer; `index.lock` contention and a slow network mount
@@ -140,7 +153,7 @@ export function createHandoverGit(deps: HandoverGitDeps) {
           detail: 'This folder’s handovers are committed to git, so anything that can land a commit can plant one.'
         }
       } catch (error) {
-        if (errnoOf(error) === 'ENOENT') return relativePath === HANDOVERS_DIR ? staticCheck(agentDir) : { result: 'unknown', detail: 'Git is required to verify credential paths.' }
+        if (errnoOf(error) === 'ENOENT') return noGit()
         if (exitCodeOf(error) === null || (relativePath !== HANDOVERS_DIR && exitCodeOf(error) !== 1)) {
           logger.warn('git ls-files did not answer', { agentDir })
           return { result: 'unknown', detail: 'git could not be asked about this folder.' }
@@ -151,7 +164,7 @@ export function createHandoverGit(deps: HandoverGitDeps) {
         await run(['check-ignore', '-q', '--', relativePath])
         return { result: 'ignored' }
       } catch (error) {
-        if (errnoOf(error) === 'ENOENT') return relativePath === HANDOVERS_DIR ? staticCheck(agentDir) : { result: 'unknown', detail: 'Git is required to verify credential paths.' }
+        if (errnoOf(error) === 'ENOENT') return noGit()
         // `check-ignore -q`: 0 is ignored, 1 is not, anything else is an error.
         if (exitCodeOf(error) === 1) {
           return {
@@ -172,5 +185,6 @@ export const handoverGit = createHandoverGit({
   execFile: nodeExecFile,
   env: async () => ({ ...process.env, ...(await getShellEnv()) }),
   readFile: (path) => readFileSync(path, 'utf8'),
-  exists: (path) => existsSync(path)
+  exists: (path) => existsSync(path),
+  resolveGit: () => usableTool('git')
 })

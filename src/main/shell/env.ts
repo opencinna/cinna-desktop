@@ -24,6 +24,8 @@ import {
   isBareBinaryName,
   splitPathEntries
 } from './pathWalk'
+import { createUsableTool, macDeveloperTools } from './macDeveloperTools'
+import { managedGit } from './managedGit'
 
 const logger = createLogger('shell-env')
 
@@ -300,6 +302,47 @@ export async function which(bin: string): Promise<string | null> {
 }
 
 /**
+ * {@link which}, except that a macOS developer-tool stub (`/usr/bin/git`,
+ * `/usr/bin/make`, …) whose tools are not installed is `null`.
+ *
+ * For every caller that is about to **execute** the result: running a stub pops
+ * the "install the command line developer tools" dialog. `which()` itself keeps
+ * PATH semantics for the terminal and "Open in…".
+ *
+ * `git` with no usable system git is the managed git's wrapper when that is
+ * installed (and starts its background install when it is not); see
+ * `managedGit.ts`. A real git always answers first.
+ */
+export const usableTool: (bin: string) => Promise<string | null> = createUsableTool({
+  which: (bin) => which(bin),
+  tools: macDeveloperTools,
+  pastStub: (bin) => whichPastStub(bin),
+  fallback: async (bin, options) => (bin === 'git' ? managedGit.fallback(options) : null)
+})
+
+/**
+ * The first match for `bin` along the login-shell `PATH` that is not a macOS
+ * developer-tool stub — a Homebrew `git` in `/opt/homebrew/bin` listed after
+ * `/usr/bin`. Only asked once {@link which} has landed on a stub, so it is not
+ * cached. Null when there is none, or the walk failed.
+ */
+export async function whichPastStub(bin: string): Promise<string | null> {
+  if (!isBareBinaryName(bin)) return null
+  try {
+    const env = await getShellEnv()
+    return await findExecutable(
+      bin,
+      splitPathEntries(env.PATH),
+      async (candidate) => !macDeveloperTools.isStub(candidate) && (await isExecutableFile(candidate)),
+      { platform: currentWalkPlatform(), pathExt: env.PATHEXT }
+    )
+  } catch (err) {
+    logger.warn('executable lookup failed', { bin, error: String(err) })
+    return null
+  }
+}
+
+/**
  * Drop every cached executable lookup. Backs the Refresh affordance — a user
  * who has just installed `claude` expects the app to see it without a restart.
  *
@@ -314,6 +357,8 @@ export async function which(bin: string): Promise<string | null> {
  */
 export function clearToolCache(): void {
   toolCache.clear()
+  // So a Refresh right after `xcode-select --install` does not wait out the TTL.
+  macDeveloperTools.clear()
   // A resolution that fell back to `process.env` is a failure the user can fix
   // — a typo in `.zshrc`, a shell that was mid-reinstall. Drop it so the next
   // caller re-probes; a successful resolution stays cached for the lifetime.
@@ -348,6 +393,7 @@ export function resetShellEnv(): void {
   // missing. Dropping the map means those callers finish against the stale
   // world while the next one starts a fresh lookup.
   toolInFlight.clear()
+  macDeveloperTools.clear()
   resolved = null
   resolvedFromShell = false
   inFlight = null

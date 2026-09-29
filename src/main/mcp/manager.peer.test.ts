@@ -29,6 +29,11 @@ vi.mock('../shell/env', async () => ({
   ...(await import('../shell/envMerge')),
   getShellEnv: async () => edge.shellEnv
 }))
+// Stands in for the macOS developer-tool shims: a marker in front of PATH, so
+// the test sees they go on the base env and never over the provider's own.
+vi.mock('../shell/developerToolShims', () => ({
+  withDeveloperToolShims: async (env: Record<string, string | undefined>) => ({ ...env, PATH: `/cinna-test-shims:${env.PATH ?? ''}` })
+}))
 
 const { MCPManager } = await import('./manager')
 let manager: InstanceType<typeof MCPManager>
@@ -424,7 +429,8 @@ describe('MCPManager through the real v2 SDK', () => {
       .toMatchObject({ content: [{ type: 'text', text: 'stdio:stdio-witness' }] })
     const starts = readLog().filter((row) => row.kind === 'start')
     expect(starts).toHaveLength(1)
-    expect(starts[0].env).toEqual({ HOME: temporary, MCP_TEST_SHELL_SECRET: null, MCP_TEST_EXPLICIT: 'explicit-fixture-value' })
+    expect(starts[0].env).toEqual({ HOME: temporary, MCP_TEST_SHELL_SECRET: null, MCP_TEST_EXPLICIT: 'explicit-fixture-value',
+      PATH: `/cinna-test-shims:${edge.shellEnv.PATH}` })
     const methods = readLog().filter((row) => row.kind === 'rpc').map((row) => row.rpc!.method)
     expect(methods).toEqual(['initialize', 'notifications/initialized', 'tools/list', 'tools/call'])
     expect(readLog().find((row) => row.rpc?.method === 'tools/call')?.rpc?.params)

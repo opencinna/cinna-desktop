@@ -214,6 +214,18 @@ describe('the OpenCode launcher', () => {
     expect(moved.spec.key).not.toBe(first.spec.key)
   })
 
+  it('moves the key when the inherited PATH changes, so installing the developer tools drops the shims', async () => {
+    const first = plan(await launcher().plan(CTX))
+    const shimmed = plan(await createOpencodeLauncher({
+      binary: async () => ({ path: '/usr/local/bin/opencode', version: '1.18.27' }),
+      configInput: async () => configInput(),
+      configRoot: () => root,
+      childEnv: async () => ({ PATH: '/data/tool-shims:/usr/bin', HOME: '/Users/x' })
+    }).plan(CTX))
+    expect(shimmed.spec.env.PATH).toBe('/data/tool-shims:/usr/bin')
+    expect(shimmed.spec.key).not.toBe(first.spec.key)
+  })
+
   it('moves the key when a credential is rotated, though the config bytes do not change', async () => {
     const first = plan(await launcher().plan(CTX))
     const rotated = configInput()

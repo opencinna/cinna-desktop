@@ -8,7 +8,7 @@ import { HANDOVERS_DIR, allowsAuto } from '../../shared/handovers'
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} })
 }))
-vi.mock('../shell/env', () => ({ getShellEnv: async () => process.env }))
+vi.mock('../shell/env', () => ({ getShellEnv: async () => process.env, usableTool: async (bin: string) => bin }))
 
 const { createHandoverGit, handoverGit } = await import('./handoverGit')
 
@@ -134,6 +134,43 @@ describe('with no git binary on the machine', () => {
     const check = await noGit('/p').check('/p')
     expect(check.result).toBe('unknown')
     expect(allowsAuto(check)).toBe(false)
+  })
+
+  it('never spawns a git the resolver calls unusable (a macOS stub), and reads .gitignore instead', async () => {
+    // Running `/usr/bin/git` on a Mac without the developer tools pops the
+    // install dialog, so the stub must not even be tried.
+    const execFile = vi.fn(async () => ({ stdout: 'true\n', stderr: '' }))
+    const git = createHandoverGit({
+      execFile,
+      env: async () => ({}),
+      readFile: () => '.cinna/\n',
+      exists: () => true,
+      resolveGit: async () => null
+    })
+    const check = await git.check('/p')
+    expect(check.result).toBe('ignored')
+    expect(execFile).not.toHaveBeenCalled()
+
+    // A credential path cannot be judged from .gitignore; still no spawn.
+    const credential = await git.check('/p', 'credentials/.env')
+    expect(credential.result).toBe('unknown')
+    expect(execFile).not.toHaveBeenCalled()
+  })
+
+  it('runs the git the resolver found, by its path', async () => {
+    const execFile = vi.fn(async (_file: string, args: string[]) => {
+      if (args.includes('rev-parse')) throw Object.assign(new Error('not a repo'), { code: 128 })
+      return { stdout: '', stderr: '' }
+    })
+    const check = await createHandoverGit({
+      execFile,
+      env: async () => ({}),
+      readFile: () => '',
+      exists: () => true,
+      resolveGit: async () => '/opt/homebrew/bin/git'
+    }).check('/p')
+    expect(check.result).toBe('not_a_repo')
+    expect(execFile.mock.calls[0]?.[0]).toBe('/opt/homebrew/bin/git')
   })
 
   it('is unknown when there is no .gitignore either', async () => {
