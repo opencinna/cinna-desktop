@@ -28,6 +28,7 @@ import { nestSubagentParts, type SubagentGroup } from './subagentParts'
 import { CommandToolFrame } from './CommandToolFrame'
 import { CinnaCliBlock } from './CinnaCliBlock'
 import { pairCinnaCliTools } from '../../utils/cinnaCli'
+import { buildToolStepPreview, pairToolSteps, toolStepPreview } from '../../utils/toolStepPairs'
 import { NoticeBlock } from './NoticeBlock'
 import { SystemTurnBlock } from './SystemTurnBlock'
 import { AskUserQuestionBlock } from './AskUserQuestionBlock'
@@ -788,6 +789,10 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                     key: msg.id,
                     kind: 'tool_call',
                     status: msg.toolError ? 'error' : 'done',
+                    preview: () => buildToolStepPreview({
+                      call: { toolName: msg.toolName ?? undefined, toolInput: msg.toolInput as Record<string, unknown> | undefined },
+                      outputs: [{ text: msg.content, toolStream: msg.toolError ? 'stderr' : 'stdout' }]
+                    }),
                     node: toolBlock
                   }
                 })
@@ -928,6 +933,8 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                   )
                 })
               } else {
+                // Each call's dot and its output's dot preview the whole step.
+                const steps = pairToolSteps(parts)
                 parts.forEach((p, idx) => {
                   const k = `${msg.id}-${idx}`
                   const group = nested?.groups.get(idx)
@@ -944,6 +951,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                       item: {
                         key: k, kind: 'tool_narration', groupWhenAlone: true,
                         status: results.some((result) => result.toolStream === 'stderr') ? 'error' : 'done',
+                        preview: () => buildToolStepPreview({ call: { toolName: p.toolName, input: cliCall.command, narration: p.text }, outputs: results }),
                         node: <CinnaCliBlock command={cliCall.command} narration={p.text} results={results} animate={shouldAnimate} animateDelay={idx * 80} />
                       }
                     })
@@ -1002,6 +1010,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                         key: k,
                         kind: 'tool_narration',
                         status: 'done',
+                        ...toolStepPreview(parts, idx, steps, { keyPrefix: msg.id }),
                         node: <ToolNarrationBlock content={p.text} toolName={p.toolName} toolInput={p.toolInput} animate={shouldAnimate} animateDelay={idx * 80} />
                       }
                     })
@@ -1012,6 +1021,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                         key: k,
                         kind: 'tool_result',
                         status: p.toolStream === 'stderr' ? 'error' : 'done',
+                        ...toolStepPreview(parts, idx, steps, { keyPrefix: msg.id }),
                         node: <ToolResultBlock content={p.text} toolStream={p.toolStream} animate={shouldAnimate} animateDelay={idx * 80} />
                       }
                     })
@@ -1168,6 +1178,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
           const { pairResultIdx: streamPairResultIdx, consumed: streamConsumed } =
             pairCommandTools(streamingTextBlocks)
           const streamingCli = pairCinnaCliTools(streamingTextBlocks)
+          const streamSteps = pairToolSteps(streamingTextBlocks)
           streamingCli.consumed.forEach((index) => streamConsumed.add(index))
           // "Last" is the last block of the whole stream, nested ones included:
           // while a subagent streams, the agent's own last words are not the
@@ -1213,6 +1224,11 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 item: {
                   key, kind: 'tool_narration', groupWhenAlone: true, isLive: live,
                   status: results.some((result) => result.toolStream === 'stderr') ? 'error' : isStreaming && !results.length ? 'pending' : 'done',
+                  preview: () => buildToolStepPreview({
+                    call: { toolName: block.toolName, input: cliCall.command, narration: block.content },
+                    outputs: results,
+                    running: isStreaming
+                  }),
                   node
                 }
               })
@@ -1314,7 +1330,13 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 } else {
                   renderNodes.push({
                     slot: 'collapsible',
-                    item: { key: `stream-tool-${i}`, kind: 'tool_narration', status: 'done', isLive: live, node }
+                    item: {
+                      key: `stream-tool-${i}`, kind: 'tool_narration', status: 'done', isLive: live,
+                      // Running until its output arrives, whether or not it is the last block
+                      // (parallel calls return out of order).
+                      ...toolStepPreview(streamingTextBlocks, i, streamSteps, { keyPrefix: 'stream', running: isStreaming }),
+                      node
+                    }
                   })
                 }
                 return
@@ -1386,6 +1408,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                       kind: 'tool_result',
                       status: block.toolStream === 'stderr' ? 'error' : 'done',
                       isLive: live,
+                      ...toolStepPreview(streamingTextBlocks, i, streamSteps, { keyPrefix: 'stream' }),
                       node
                     }
                   })
@@ -1458,7 +1481,19 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             } else {
               renderNodes.push({
                 slot: 'collapsible',
-                item: { key: `stream-tc-${block.id}`, kind: 'tool_call', status: block.status, node: toolNode }
+                item: {
+                  key: `stream-tc-${block.id}`, kind: 'tool_call', status: block.status,
+                  preview: () => buildToolStepPreview({
+                    call: { toolName: block.name, toolInput: block.input },
+                    outputs: block.error
+                      ? [{ text: block.error, toolStream: 'stderr' }]
+                      : block.result != null
+                        ? [{ text: typeof block.result === 'string' ? block.result : JSON.stringify(block.result), toolStream: 'stdout' }]
+                        : [],
+                    running: block.status === 'pending'
+                  }),
+                  node: toolNode
+                }
               })
             }
           })

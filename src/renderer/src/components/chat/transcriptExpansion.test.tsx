@@ -63,8 +63,8 @@ describe('transcript expansion registry', () => {
     render(
       <CollapsibleGroup
         items={[
-          { key: 'n', kind: 'tool_narration', node: <NoticeBlock content="Starting up" /> },
-          { key: 'o', kind: 'tool_narration', node: <span>other step</span> }
+          { key: 'n', kind: 'tool_narration', preview: () => ({ hasCall: true, status: 'done' }), node: <NoticeBlock content="Starting up" /> },
+          { key: 'o', kind: 'tool_narration', preview: () => ({ hasCall: true, status: 'done' }), node: <span>other step</span> }
         ]}
       />,
       { wrapper: inTranscript(store) }

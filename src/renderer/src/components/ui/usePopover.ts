@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 
-export type PopoverPlacement = 'above-left' | 'above-right' | 'below-right' | 'right'
+export type PopoverPlacement = 'above-left' | 'above-right' | 'below-left' | 'below-right' | 'right'
 
 export type FixedPos =
   | { left: number; bottom: number; right?: undefined; top?: undefined }
@@ -95,6 +95,9 @@ export function usePopover<
           break
         case 'above-right':
           setPos({ right: vw - r.right, bottom: vh - r.top + GAP })
+          break
+        case 'below-left':
+          setPos({ left: r.left, top: r.bottom + BELOW_GAP })
           break
         case 'below-right':
           setPos({ right: vw - r.right, top: r.bottom + BELOW_GAP })

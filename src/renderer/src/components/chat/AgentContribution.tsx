@@ -8,6 +8,7 @@ import { ToolNarrationBlock } from './ToolNarrationBlock'
 import { ToolResultBlock } from './ToolResultBlock'
 import { CinnaCliBlock } from './CinnaCliBlock'
 import { pairCinnaCliTools } from '../../utils/cinnaCli'
+import { buildToolStepPreview, pairToolSteps, toolStepPreview } from '../../utils/toolStepPairs'
 import { CommandResultBlock } from './CommandResultBlock'
 import { AgentAttachment } from './AgentAttachment'
 import { type RenderNode, groupConsecutiveCollapsibles } from './CollapsibleGroup'
@@ -111,6 +112,7 @@ export function AgentContribution({
 
   const renderNodes: RenderNode[] = []
   const cli = pairCinnaCliTools(parts)
+  const steps = pairToolSteps(parts)
   parts.forEach((p, idx) => {
     const k = `part-${idx}`
     const live = isStreaming && idx === lastIdx
@@ -149,6 +151,11 @@ export function AgentContribution({
         item: {
           key: k, kind: 'tool_narration', groupWhenAlone: true, isLive: cliLive,
           status: results.some((result) => result.toolStream === 'stderr') ? 'error' : isStreaming && !results.length ? 'pending' : 'done',
+          preview: () => buildToolStepPreview({
+            call: { toolName: p.toolName, input: cliCall.command, narration: p.text },
+            outputs: results,
+            running: isStreaming
+          }),
           node
         }
       })
@@ -175,7 +182,14 @@ export function AgentContribution({
       renderNodes.push(
         verbose
           ? { slot: 'plain', key: k, node }
-          : { slot: 'collapsible', item: { key: k, kind: 'tool_narration', status: 'done', isLive: live, node } }
+          : {
+              slot: 'collapsible',
+              item: {
+                key: k, kind: 'tool_narration', status: 'done', isLive: live,
+                ...toolStepPreview(parts, idx, steps, { keyPrefix: 'part', running: isStreaming }),
+                node
+              }
+            }
       )
     } else if (p.kind === 'tool_result') {
       const node = (
@@ -196,6 +210,7 @@ export function AgentContribution({
                 kind: 'tool_result',
                 status: p.toolStream === 'stderr' ? 'error' : 'done',
                 isLive: live,
+                ...toolStepPreview(parts, idx, steps, { keyPrefix: 'part' }),
                 node
               }
             }
