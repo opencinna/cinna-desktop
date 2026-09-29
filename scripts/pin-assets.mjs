@@ -75,11 +75,20 @@ if (tool === 'claude') {
     const { sha256, size } = await hashUrl(url)
     const triple = asset.executable.replace(/^codex-/, '')
     const archive = asset.file.endsWith('.zip') ? 'zip' : 'tar.gz'
+    // The companion (`codex-code-mode-host`) is its own archive of the same release.
+    const hosts = []
+    for (const companion of asset.companions ?? []) {
+      const hostUrl = companion.url.replace(`rust-v${pin.cli}`, `rust-v${version}`)
+      log(`downloading ${hostUrl}`)
+      const host = await hashUrl(hostUrl)
+      rows.push({ platform, url: hostUrl, ...host, source: 'downloaded (companion)' })
+      hosts.push(`{ sha256: '${host.sha256}', size: ${host.size} }`)
+    }
     rows.push({ platform, url, sha256, size, source: 'downloaded',
-      paste: `'${platform}': codexAsset(\n  '${triple}',\n  '${archive}',\n  '${sha256}',\n  ${size}\n),` })
+      paste: `'${platform}': codexAsset(\n  '${triple}',\n  '${archive}',\n  '${sha256}',\n  ${size}${hosts.map((h) => `,\n  ${h}`).join('')}\n),` })
   }
 }
 
 for (const row of rows) log(`${row.platform}  ${row.sha256}  ${row.size} bytes  (${row.source})\n  ${row.url}`)
 log(`\n--- paste into RUNTIME_PINS.${tool}.assets, and set the version constant to '${version}':`)
-console.log(rows.map((row) => row.paste).join('\n'))
+console.log(rows.filter((row) => row.paste).map((row) => row.paste).join('\n'))

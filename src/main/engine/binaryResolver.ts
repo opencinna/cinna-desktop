@@ -46,8 +46,7 @@ import { runtimeHost } from '../host/runtimeHost'
  */
 
 import { spawn } from 'node:child_process'
-import type { Dirent } from 'node:fs'
-import { chmod, readdir, realpath, rename, rm, stat, utimes } from 'node:fs/promises'
+import { chmod, realpath, rename, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { appSettingsRepo } from '../db/appSettings'
 import { createLogger } from '../logger/logger'
@@ -58,15 +57,17 @@ import {
   installPinnedAsset,
   isFile,
   ManagedAssetError,
+  markUsed,
   sha256File,
-  sweepStaging,
+  sweepSuperseded,
   type DownloadProgress,
   type ManagedAssetErrorCode,
-  type PinnedAsset
+  type PinnedAsset,
+  withVerifiedFile
 } from '../managed/managedAsset'
 import { which } from '../shell/env'
 import { PINNED_ENGINE_VERSION, type EngineBinarySource } from '../../shared/engine'
-import { RUNTIME_PINS } from '../../shared/runtimePins'
+import { RUNTIME_PINS, type RuntimePinCompanion } from '../../shared/runtimePins'
 
 const logger = createLogger('engine-binary')
 
@@ -226,7 +227,14 @@ export { downloadToFile, extractArchive, sha256File }
  * is not the name the binary is installed under (Codex ships
  * `codex-<target triple>`).
  */
-export type EngineAsset = PinnedAsset & { url?: string; executable?: string; format?: 'archive' | 'executable'; size?: number }
+export type EngineAsset = PinnedAsset & {
+  url?: string
+  executable?: string
+  format?: 'archive' | 'executable'
+  size?: number
+  /** Files installed beside the binary; see {@link installCompanions}. */
+  companions?: readonly RuntimePinCompanion[]
+}
 
 /**
  * The pinned release assets, keyed `${process.platform}-${process.arch}`.
@@ -433,57 +441,83 @@ export function managedBinaryPath(deps: Pick<BinaryResolverDeps, 'engineRoot' | 
   return join(deps.engineRoot(), `${spec.tool}-${deps.version}`, spec.binaryName)
 }
 
-/** A version directory used this recently is never swept. */
-const SWEEP_KEEP_MS = 7 * 24 * 60 * 60 * 1000
+/**
+ * Re-exported: it lives beside `sweepSuperseded` in `managedAsset.ts` so the
+ * managed git (`../shell/managedGit.ts`) can stamp its tree without importing
+ * this module, which imports the shell layer.
+ */
+export { markUsed }
 
 /**
- * After a **successful** install *and* a successful `--version` probe of it:
- * remove this tool's other version directories that nothing has used for
- * {@link SWEEP_KEEP_MS}, and any `.staging-*` no install in this process is using.
+ * Put each of `asset`'s companions that `dir` lacks into `dir`, under its
+ * `installAs` name; returns the names it placed.
  *
- * **"Used" is the directory's mtime**, which every successful managed
- * resolution refreshes ({@link markUsed}). Two builds with different pins
- * sharing one `userData` — a dev build beside a release — used to delete each
- * other's copy on every install and re-download it on the next launch; now a
- * version somebody ran this week survives. The cost is that a genuinely
- * superseded tree lingers until the first fresh install after it has been idle
- * a week — at most one stale generation on disk, which is the cheap side of
- * that trade.
+ * Every companion is its own pinned archive, downloaded into its own
+ * `.staging-*` under `root` and digest-checked there; only the verified file
+ * is renamed into `dir`, one atomic rename per file, and its archive never
+ * leaves staging. A file that is already there — a concurrent repair got there
+ * first — is kept: it passed the same check.
  *
- * Nothing else ever did. A pin bump left the previous ~90 MB (Codex) or ~46 MB
- * (OpenCode) tree in `userData` for good, and a download killed by a quit left
- * its staging directory beside it; only the toolchain's root was ever swept.
- *
- * Only on a fresh install, never on "already there": that is the one moment a
- * newer version is known to be good, and it keeps the everyday resolution at
- * one `stat`. Only **directories** named `<tool>-<digit>…`, so the OpenCode
- * root's own `opencode.json` and `prompts/` are not candidates. Best-effort
- * throughout: a tree that will not delete costs disk, while failing the
- * install over it would cost the user their runtime. A child still running the
- * old binary keeps its open file on POSIX; where that is refused (Windows) the
- * directory simply survives until the next install.
+ * Called twice, with one meaning: on a fresh install `dir` is the staged
+ * directory, before the publishing rename, so a published install always has
+ * every file; on an install that is already published it is the repair of one
+ * made before the companion existed (Codex 0.155.0 installs that hold only
+ * `codex`). A mismatch throws `checksum_mismatch` in the asset's own words, and
+ * — on a fresh install — publishes nothing.
  */
-async function sweepSuperseded(root: string, tool: string, keep: string): Promise<void> {
-  const entries: Dirent[] = await readdir(root, { withFileTypes: true }).catch((): Dirent[] => [])
-  const cutoff = Date.now() - SWEEP_KEEP_MS
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name === keep) continue
-    if (!entry.name.startsWith(`${tool}-`) || !/^\d/.test(entry.name.slice(tool.length + 1))) continue
-    // Unreadable counts as recent: when in doubt, the disk pays, not the user.
-    const usedAt = await stat(join(root, entry.name)).then((info) => info.mtimeMs, () => Date.now())
-    if (usedAt > cutoff) continue
-    await rm(join(root, entry.name), { recursive: true, force: true }).then(
-      () => logger.info('removed a superseded runtime', { tool, directory: entry.name }),
-      () => undefined
-    )
+async function installCompanions(
+  deps: BinaryResolverDeps,
+  spec: RuntimeBinarySpec,
+  asset: EngineAsset,
+  root: string,
+  dir: string,
+  /**
+   * Bytes already reported to the install's progress slot before the first
+   * companion — the main asset's size on a fresh install, 0 on a repair — or
+   * null to report nothing (a main asset of unknown size). Companion bytes are
+   * reported on from there, against `base` plus the missing companions' sizes,
+   * so one bar runs 0→100% across every download.
+   */
+  base: number | null
+): Promise<string[]> {
+  const placed: string[] = []
+  const missing: RuntimePinCompanion[] = []
+  for (const companion of asset.companions ?? []) {
+    if (!(await isFile(join(dir, companion.installAs)))) missing.push(companion)
   }
-  await sweepStaging(root)
-}
-
-/** Stamp a managed install as used now, so another pin's sweep leaves it alone. Best-effort. */
-export async function markUsed(installDir: string): Promise<void> {
-  const now = new Date()
-  await utimes(installDir, now, now).catch(() => undefined)
+  const total = base === null ? null : missing.reduce((sum, companion) => sum + companion.size, base)
+  let done = base ?? 0
+  for (const companion of missing) {
+    const target = join(dir, companion.installAs)
+    if (await isFile(target)) {
+      done += companion.size
+      continue
+    }
+    const offset = done
+    const onProgress: DownloadProgress | undefined =
+      total === null ? undefined : (received) => installReports.get(spec.tool)?.(offset + received, total)
+    const moved = await withVerifiedFile(
+      {
+        root,
+        label: spec.label,
+        archiveName: companion.file,
+        url: companion.url,
+        sha256: companion.sha256,
+        name: companion.executable,
+        download: (url, dest) => deps.download(url, dest, onProgress, companion.size),
+        extract: deps.extract,
+        notFoundMessage: `The downloaded ${spec.label} archive did not contain ${companion.executable}.`
+      },
+      async (file) => {
+        if (await isFile(target)) return false
+        await rename(file, target)
+        return true
+      }
+    )
+    if (moved) placed.push(companion.installAs)
+    done += companion.size
+  }
+  return placed
 }
 
 async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinary> {
@@ -500,6 +534,12 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
   /** Set by `locate` when the version gate is what rejected the archive. */
   let rejectedVersion = false
   let didInstall = false
+  /**
+   * What the progress bar counts to on a fresh install: the main asset and
+   * every companion, when the pin row records the main asset's size. Null keeps
+   * the download's own total (the server's length, or nothing).
+   */
+  const combinedBytes = pinnedAssetBytes(deps)
 
   try {
     ;({ installed: didInstall } = await installPinnedAsset({
@@ -530,10 +570,13 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
             return null
           }
         }
+        // Inside staging, before the publishing rename: the directory that
+        // appears at `installDir` already holds every companion.
+        await installCompanions(deps, spec, asset, root, dirname(target), asset.size ?? null)
         return target
       },
       isInstalled: () => isFile(installed),
-      onDownloadProgress: (received, total) => installReports.get(spec.tool)?.(received, total),
+      onDownloadProgress: (received, total) => installReports.get(spec.tool)?.(received, combinedBytes ?? total),
       // The asset's recorded size is its ceiling: exact for a pinned file, and
       // what lets a ~215 MB executable past a guard sized for archives.
       download: (url, dest, onProgress) => deps.download(url, dest, onProgress, asset.size),
@@ -552,6 +595,30 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
       throw new EngineBinaryError('version_mismatch', spec.messages.versionMismatch(deps.version))
     }
     throw err
+  }
+
+  // An install published before its companions were pinned has the binary and
+  // nothing beside it. `installPinnedAsset` skips it as installed, so it is
+  // completed here — without downloading the main asset again. After a fresh
+  // install this is one `stat` per companion.
+  //
+  // A repair that fails is logged and skipped, never thrown: the binary is
+  // there and runs, only without what the companion adds (for Codex, Code
+  // Mode) — which is how it ran before the companion was pinned. The next
+  // resolve tries again.
+  if (!didInstall) {
+    try {
+      const repaired = await installCompanions(deps, spec, asset, root, installDir, 0)
+      if (repaired.length > 0) {
+        logger.info('repaired a managed runtime', { tool: spec.tool, version: deps.version, companions: repaired })
+      }
+    } catch (error) {
+      logger.warn('could not repair a managed runtime', {
+        tool: spec.tool,
+        version: deps.version,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
 
   const version = await deps.probeVersion(installed)
@@ -661,12 +728,14 @@ async function pinnedOnPath(deps: BinaryResolverDeps, spec: RuntimeBinarySpec): 
 }
 
 /**
- * The byte length of this platform's pinned asset, when its pin row records
- * one — what "installs on first use, about N MB" is said from. Null for a
- * platform with no row, or a row with no size (OpenCode's).
+ * The byte length of this platform's pinned asset plus its companions, when its
+ * pin row records one — what "installs on first use, about N MB" is said from.
+ * Null for a platform with no row, or a row with no size (OpenCode's).
  */
 export function pinnedAssetBytes(deps: Pick<BinaryResolverDeps, 'assets' | 'platformKey'>): number | null {
-  return deps.assets[deps.platformKey()]?.size ?? null
+  const asset = deps.assets[deps.platformKey()]
+  if (asset?.size === undefined) return null
+  return asset.size + (asset.companions ?? []).reduce((sum, companion) => sum + companion.size, 0)
 }
 
 /**

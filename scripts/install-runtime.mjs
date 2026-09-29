@@ -20,6 +20,10 @@
 // is byte-for-byte the pinned asset (same sha256), those bytes are copied
 // instead of downloaded: the digest is the verification either way.
 //
+// A row's `companions` (Codex's `codex-code-mode-host`) are installed beside
+// the executable, each verified against its own pin, before the install is
+// published; an existing install that lacks one gets just the missing file.
+//
 // Prints the installed executable's absolute path as its last stdout line.
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
@@ -92,7 +96,48 @@ async function localPinnedBytes() {
   }
 }
 
+/** Stream a URL to a file: a 215 MB executable is not something to hold in one Buffer. */
+async function fetchTo(url, dest) {
+  log(`downloading ${url}`)
+  const response = await fetch(url, { redirect: 'follow' })
+  if (!response.ok || !response.body) throw new Error(`download failed: HTTP ${response.status}`)
+  await pipeline(Readable.fromWeb(response.body), createWriteStream(dest))
+}
+
+/** Put each companion `dir` lacks into it, verified like the main asset; its archive stays in staging. */
+async function installCompanions(dir) {
+  for (const companion of row.companions ?? []) {
+    const target = join(dir, companion.installAs)
+    if (existsSync(target)) continue
+    const stage = mkdtempSync(join(dirname(installDir), '.staging-'))
+    try {
+      const archive = join(stage, companion.file)
+      await fetchTo(pinned ? companion.url : candidateUrl(companion, pin, version), archive)
+      const digest = await sha256(archive)
+      if (pinned && digest !== companion.sha256) {
+        throw new Error(`checksum mismatch for the pinned ${companion.file}: expected ${companion.sha256}, got ${digest}. Nothing was installed.`)
+      }
+      log(pinned ? `sha256 verified: ${companion.file} ${digest}` : `UNVERIFIED candidate — sha256 ${platform} ${companion.file}: ${digest}`)
+      const tar = spawnSync('tar', ['-xf', archive, '-C', stage], { encoding: 'utf8' })
+      if (tar.status !== 0) throw new Error(`could not unpack ${companion.file}: ${tar.stderr.trim()}`)
+      const found = join(stage, companion.executable)
+      if (!existsSync(found)) throw new Error(`${companion.file} did not contain ${companion.executable}`)
+      chmodSync(found, 0o755)
+      renameSync(found, target)
+      log(`installed ${companion.installAs}`)
+    } finally {
+      rmSync(stage, { recursive: true, force: true })
+    }
+  }
+}
+
 if (existsSync(installed)) {
+  try {
+    await installCompanions(installDir)
+  } catch (error) {
+    log(String(error instanceof Error ? error.message : error))
+    process.exit(1)
+  }
   log(`already installed: ${versionOf(installed)}`)
   console.log(installed)
   process.exit(0)
@@ -107,11 +152,7 @@ try {
     log(`reusing ${local}: its sha256 is the pinned one, so nothing is downloaded`)
     copyFileSync(local, archive)
   } else {
-    log(`downloading ${url}`)
-    const response = await fetch(url, { redirect: 'follow' })
-    if (!response.ok || !response.body) throw new Error(`download failed: HTTP ${response.status}`)
-    // Streamed: a 215 MB executable is not something to hold in one Buffer.
-    await pipeline(Readable.fromWeb(response.body), createWriteStream(archive))
+    await fetchTo(url, archive)
   }
   const digest = await sha256(archive)
   if (pinned && digest !== row.sha256) {
@@ -134,6 +175,7 @@ try {
   chmodSync(binary, 0o755)
   const reported = versionOf(binary)
   if (reported !== versionOutput(version)) throw new Error(`expected ${versionOutput(version)}, the binary reports ${reported}`)
+  await installCompanions(unpacked)
   renameSync(unpacked, installDir)
   log(`installed ${reported}`)
   console.log(installed)

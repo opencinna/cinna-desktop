@@ -2,7 +2,8 @@
  * The one place a runtime version lives.
  *
  * Cinna runs three external CLIs — OpenCode, Codex and Claude Code — and two of
- * them through an ACP adapter that is an exact `package.json` pin. A version
+ * them through an ACP adapter that is an exact `package.json` pin. A fourth,
+ * git, is downloaded only for a machine that has none. A version
  * that is compared, downloaded or displayed anywhere in the app is read from
  * here, so bumping a runtime is one edit plus the checksums that prove it.
  *
@@ -55,6 +56,28 @@ export interface RuntimePinAsset {
    * a progress line when the server declares no length.
    */
   size?: number
+  /**
+   * Further files installed **beside** the executable, each from its own pinned
+   * archive of the same release. A managed install is not complete — and the
+   * resolver repairs it — until every one is there. Codex needs one; see its
+   * `assets`.
+   */
+  companions?: readonly RuntimePinCompanion[]
+}
+
+/** A file that must sit beside a runtime's executable, pinned like the asset itself. */
+export interface RuntimePinCompanion {
+  /** Archive file name in the release. */
+  file: string
+  /** SHA-256 of the archive's exact bytes, hex. */
+  sha256: string
+  url: string
+  /** The file's name inside the archive. */
+  executable: string
+  /** Its name once installed, in the same directory as the main executable. */
+  installAs: string
+  /** Exact byte length of the archive. */
+  size: number
 }
 
 const CLAUDE_CLI = '2.1.276'
@@ -68,11 +91,44 @@ function claudeAsset(platform: string, sha256: string, size: number): RuntimePin
 const CODEX_CLI = '0.155.0'
 const CODEX_RELEASE = `https://github.com/openai/codex/releases/download/rust-v${CODEX_CLI}`
 
-function codexAsset(triple: string, archive: 'tar.gz' | 'zip', sha256: string, size: number): RuntimePinAsset {
+/** The `codex-code-mode-host` archive of the same release and triple. POSIX tarballs only. */
+function codexCodeModeHost(triple: string, sha256: string, size: number): RuntimePinCompanion {
+  const executable = `codex-code-mode-host-${triple}`
+  const file = `${executable}.tar.gz`
+  return { file, sha256, url: `${CODEX_RELEASE}/${file}`, executable, installAs: 'codex-code-mode-host', size }
+}
+
+function codexAsset(
+  triple: string,
+  archive: 'tar.gz' | 'zip',
+  sha256: string,
+  size: number,
+  host: { sha256: string; size: number }
+): RuntimePinAsset {
   const windows = triple.endsWith('windows-msvc')
   const executable = `codex-${triple}${windows ? '.exe' : ''}`
   const file = `${executable}.${archive}`
-  return { file, sha256, url: `${CODEX_RELEASE}/${file}`, executable, size }
+  return {
+    file,
+    sha256,
+    url: `${CODEX_RELEASE}/${file}`,
+    executable,
+    size,
+    companions: [codexCodeModeHost(triple, host.sha256, host.size)]
+  }
+}
+
+const GIT_CLI = '2.53.0'
+/** dugite-native's release tag; its fourth packaging of git 2.53.0. */
+const GIT_RELEASE_TAG = 'v2.53.0-4'
+const GIT_RELEASE = `https://github.com/desktop/dugite-native/releases/download/${GIT_RELEASE_TAG}`
+/** Asset names carry the git version and the short commit dugite-native built from, not the tag. */
+const GIT_ASSET_PREFIX = `dugite-native-v${GIT_CLI}-4098283`
+
+/** One dugite-native tarball: `<plat>` is the release's own platform name. */
+function gitAsset(plat: string, sha256: string, size: number): RuntimePinAsset {
+  const file = `${GIT_ASSET_PREFIX}-${plat}.tar.gz`
+  return { file, sha256, url: `${GIT_RELEASE}/${file}`, size }
 }
 
 export const RUNTIME_PINS = {
@@ -113,16 +169,25 @@ export const RUNTIME_PINS = {
     /** The same file after `scripts/patch-codex-acp.cjs`. */
     adapterPatchedSha256: 'bf3f889fbad28a1304b0e358a3d4cb099cf95ffe317e80b529ceecf7bd76fc95',
     /**
-     * The vendor's unmodified GitHub release archives for `rust-v0.155.0`, each
-     * a single self-contained executable. Downloaded and hashed 2026-09-18;
-     * each `size` is the byte count of that same download (`scripts/pin-assets.mjs`
-     * prints it), so it is exact for the digest beside it.
-     * Linux is the musl build — the only one the release ships.
+     * The vendor's unmodified GitHub release archives for `rust-v0.155.0`: the
+     * `codex` archive, and beside it the `codex-code-mode-host` archive of the
+     * same triple as a companion. The `codex` archives were downloaded and
+     * hashed 2026-09-18, the host archives 2026-09-29 (both agreed with the
+     * digests GitHub publishes); each `size` is the byte count of that same
+     * download (`scripts/pin-assets.mjs` prints it), so it is exact for the
+     * digest beside it. Linux is the musl build — the only one the release ships.
+     *
+     * **Why the host is needed.** From 0.155.0 the `code_mode_host` feature is
+     * stable and on by default, and a bare (non-package) install looks for
+     * `codex-code-mode-host` in the directory of its own executable; without it
+     * Code Mode is unavailable and the agent reports "the required
+     * codex-code-mode-host executable is missing". So the managed install is two files, and a bump recomputes the
+     * companion rows as well as the main ones.
      *
      * **Windows is absent deliberately.** Its release zip is not one
      * executable: `codex-<triple>.exe` ships beside
-     * `codex-windows-sandbox-setup.exe` and a command runner, so "publish the
-     * one file that was verified" does not describe it, and the restricted chat
+     * `codex-windows-sandbox-setup.exe` and a command runner, none of which the
+     * companion rows describe, and the restricted chat
      * policy is POSIX-only regardless. A Windows user sets the Codex path in
      * Settings, which is the answer an unlisted platform already gets.
      */
@@ -131,25 +196,29 @@ export const RUNTIME_PINS = {
         'aarch64-apple-darwin',
         'tar.gz',
         '5a584b7cddc2a97083cada53f10f5bc4231526b7f64105f6a5bb82d01ccdba49',
-        90573064
+        90573064,
+        { sha256: '3d751deef91b4526f086029c9395feb872abf7a717e45752ad1b33dcb387fa6b', size: 22559336 }
       ),
       'darwin-x64': codexAsset(
         'x86_64-apple-darwin',
         'tar.gz',
         'cc84081b15284eea10c8b8d428818d1c8debdce5a7f0f4f5c04dfc7c72518174',
-        98661335
+        98661335,
+        { sha256: '285d1c6fdacf9b500fe041c0a98b06cf58eb7ea35549554bcb2a0c04866ef49d', size: 24302873 }
       ),
       'linux-x64': codexAsset(
         'x86_64-unknown-linux-musl',
         'tar.gz',
         'e415cc3adb94ade16e8d44b4dd58a9201cc34b2ee51a5d6eddf2a3a00aecb6c0',
-        101573733
+        101573733,
+        { sha256: '328c1bebe09fc727053794576efea353d3b18381ee8883f5283b37ae4a7854d4', size: 25736177 }
       ),
       'linux-arm64': codexAsset(
         'aarch64-unknown-linux-musl',
         'tar.gz',
         '8b4a9c356916c515f7c93f918a01b8fa1371bcc9758addbfa723b85fbec5694b',
-        94309776
+        94309776,
+        { sha256: '0ecd8e263468b520770c6dc6c9ebafeba3052c0c9796eabc5b0c469f77d5489b', size: 24365040 }
       )
     } as Readonly<Record<string, RuntimePinAsset>>
   },
@@ -184,6 +253,35 @@ export const RUNTIME_PINS = {
         file: 'opencode-windows-arm64.zip',
         sha256: '59174ffeb6ce327bd2c534bf5147d0005e8db3b5889414de10490d00e640c908'
       }
+    } as Readonly<Record<string, RuntimePinAsset>>
+  },
+  git: {
+    cli: GIT_CLI,
+    release: GIT_RELEASE_TAG,
+    /** Exactly what `git --version` prints for the pin. */
+    versionOutput: `git version ${GIT_CLI}`,
+    /**
+     * GitHub Desktop's relocatable git (`desktop/dugite-native`), installed only
+     * when a machine has no usable git of its own — a Mac without Apple's
+     * command line developer tools, where `/usr/bin/git` is the stub that pops
+     * the install dialog, or a Linux without a `git` package. Any real git wins;
+     * see `main/shell/managedGit.ts`.
+     *
+     * Each tarball unpacks to a tree — `bin/git`, `libexec/git-core/`,
+     * `share/git-core/templates`, `etc/gitconfig` (and `ssl/cacert.pem` on
+     * Linux) — that runs from anywhere only with the environment dugite itself
+     * sets, which is why it is run through a wrapper script and not by path.
+     *
+     * Every row was downloaded from the release and hashed on 2026-09-29, and
+     * agreed with the digest GitHub publishes for the asset; `size` is the byte
+     * count of the same download. **Windows is absent**: the wrapper is a POSIX
+     * shell script, and a Windows git ships as its own installer anyway.
+     */
+    assets: {
+      'darwin-arm64': gitAsset('macOS-arm64', 'f9dc64635a5b62fbd7ad95db73268bbb8912255ac516d65d37bf7af22fcb8ffe', 62348987),
+      'darwin-x64': gitAsset('macOS-x64', 'ae6686718aa34f4140424db16b92a47dcffd6d1f312eb8b5f3b267f7404e2680', 66136060),
+      'linux-x64': gitAsset('ubuntu-x64', 'cca76aa31ad9e835e771ee7f55b73934777fbd8d16757a10d307ba06de860901', 65269219),
+      'linux-arm64': gitAsset('ubuntu-arm64', 'a161f45af4626bb7e0c688854bd4a9aee47cc514bca404cff0a5e3536ef1c0af', 23223345)
     } as Readonly<Record<string, RuntimePinAsset>>
   }
 } as const

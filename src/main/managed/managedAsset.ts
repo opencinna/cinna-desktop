@@ -43,7 +43,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream, type Dirent } from 'node:fs'
-import { chmod, mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
+import { chmod, mkdir, readdir, rename, rm, stat, utimes } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -214,6 +214,61 @@ export async function sweepStaging(root: string): Promise<void> {
   }
 }
 
+/** A version directory used this recently is never swept. */
+const SWEEP_KEEP_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * After a **successful** install *and* a successful `--version` probe of it:
+ * remove this tool's other version directories that nothing has used for
+ * {@link SWEEP_KEEP_MS}, and any `.staging-*` no install in this process is using.
+ *
+ * **"Used" is the directory's mtime**, which every successful managed
+ * resolution refreshes ({@link markUsed}). Two
+ * builds with different pins sharing one `userData` — a dev build beside a release — used to delete each
+ * other's copy on every install and re-download it on the next launch; now a
+ * version somebody ran this week survives. The cost is that a genuinely
+ * superseded tree lingers until the first fresh install after it has been idle
+ * a week — at most one stale generation on disk, which is the cheap side of
+ * that trade.
+ *
+ * Shared by the engine resolver and the managed git (`../shell/managedGit.ts`),
+ * which install into the same `runtimes/` root. Before it existed nothing swept
+ * at all: a pin bump left the previous ~90 MB (Codex) or ~46 MB (OpenCode)
+ * tree in `userData` for good, and a download killed by a quit left its
+ * staging directory beside it; only the toolchain's root was ever swept.
+ *
+ * Only on a fresh install, never on "already there": that is the one moment a
+ * newer version is known to be good, and it keeps the everyday resolution at
+ * one `stat`. Only **directories** named `<tool>-<digit>…`, so the OpenCode
+ * root's own `opencode.json` and `prompts/` are not candidates. Best-effort
+ * throughout: a tree that will not delete costs disk, while failing the
+ * install over it would cost the user their runtime. A child still running the
+ * old binary keeps its open file on POSIX; where that is refused (Windows) the
+ * directory simply survives until the next install.
+ */
+export async function sweepSuperseded(root: string, tool: string, keep: string): Promise<void> {
+  const entries = await readdir(root, { withFileTypes: true }).catch((): Dirent<string>[] => [])
+  const cutoff = Date.now() - SWEEP_KEEP_MS
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === keep) continue
+    if (!entry.name.startsWith(`${tool}-`) || !/^\d/.test(entry.name.slice(tool.length + 1))) continue
+    // Unreadable counts as recent: when in doubt, the disk pays, not the user.
+    const usedAt = await stat(join(root, entry.name)).then((info) => info.mtimeMs, () => Date.now())
+    if (usedAt > cutoff) continue
+    await rm(join(root, entry.name), { recursive: true, force: true }).then(
+      () => logger.info('removed a superseded runtime', { tool, directory: entry.name }),
+      () => undefined
+    )
+  }
+  await sweepStaging(root)
+}
+
+/** Stamp a managed install as used now, so another pin's sweep leaves it alone. Best-effort. */
+export async function markUsed(installDir: string): Promise<void> {
+  const now = new Date()
+  await utimes(installDir, now, now).catch(() => undefined)
+}
+
 export interface InstallPinnedAssetOptions {
   /** Parent dir holding installs and `.staging-*` (`<userData>/engine`, `<userData>/localdev`). */
   root: string
@@ -225,8 +280,16 @@ export interface InstallPinnedAssetOptions {
   archiveName: string
   url: string
   sha256: string
-  /** Find, inside the unpacked tree, the directory to rename into `installDir`. */
+  /** Find, inside the unpacked tree, the file whose directory is renamed into `installDir`. */
   locate: (unpackedDir: string) => Promise<string | null>
+  /**
+   * The directory to publish, given what {@link locate} found. Default: the
+   * directory holding it — right for an archive whose payload is one
+   * executable. A tree whose executable sits a level down (git's `bin/git`
+   * beside `libexec/`) publishes the tree's root instead; it must still be
+   * inside the unpacked directory.
+   */
+  publishDir?: (found: string) => string
   /** True when `installDir` already holds a good install (checked before work and after a lost rename race). */
   isInstalled: () => Promise<boolean>
   /**
@@ -285,22 +348,7 @@ export async function installPinnedAsset(
     logger.info('downloading a pinned asset', { label: o.label, url: o.url })
     await o.download(o.url, archive, o.onDownloadProgress)
 
-    const digest = await sha256File(archive)
-    if (digest !== o.sha256) {
-      // Loud, and nothing survives it. Logging both digests is what makes a
-      // genuine upstream re-tag diagnosable in a user's log without asking them
-      // to re-run anything.
-      logger.error('a pinned asset failed verification', {
-        label: o.label,
-        url: o.url,
-        expected: o.sha256,
-        actual: digest
-      })
-      throw new ManagedAssetError(
-        'checksum_mismatch',
-        `The downloaded ${o.label} did not match its expected checksum, so it was discarded. Check your connection and try again.`
-      )
-    }
+    await assertPinnedDigest(archive, o)
 
     await o.extract(archive, unpacked)
     const found = await o.locate(unpacked)
@@ -312,12 +360,12 @@ export async function installPinnedAsset(
     }
     if (process.platform !== 'win32') await chmod(found, 0o755)
 
-    // Publish the *directory that holds the located file*, not the whole
-    // staging tree, so the final layout is the same regardless of how the
-    // archive nested it — and so `installDir` never contains the archive it
-    // came from.
+    // Publish the *directory that holds the located file* (or the root the
+    // caller derives from it), not the whole staging tree, so the final layout
+    // is the same regardless of how the archive nested it — and so
+    // `installDir` never contains the archive it came from.
     try {
-      await rename(dirname(found), o.installDir)
+      await rename((o.publishDir ?? dirname)(found), o.installDir)
     } catch (err) {
       // Lost the race: another caller published first. Its tree passed the same
       // digest check, so keep it and report success.
@@ -327,6 +375,88 @@ export async function installPinnedAsset(
     }
     logger.info('installed a pinned asset', { label: o.label, installDir: o.installDir })
     return { installed: true }
+  } finally {
+    liveStaging.delete(staging)
+    await rm(staging, { recursive: true, force: true }).catch(() => undefined)
+  }
+}
+
+/**
+ * Throw `checksum_mismatch` unless `archive` is exactly the pinned bytes.
+ * Shared by {@link installPinnedAsset} and {@link withVerifiedFile}, so a
+ * companion file fails in the same words as the asset it belongs to.
+ */
+async function assertPinnedDigest(
+  archive: string,
+  o: { label: string; url: string; sha256: string }
+): Promise<void> {
+  const digest = await sha256File(archive)
+  if (digest === o.sha256) return
+  // Loud, and nothing survives it. Logging both digests is what makes a
+  // genuine upstream re-tag diagnosable in a user's log without asking them
+  // to re-run anything.
+  logger.error('a pinned asset failed verification', {
+    label: o.label,
+    url: o.url,
+    expected: o.sha256,
+    actual: digest
+  })
+  throw new ManagedAssetError(
+    'checksum_mismatch',
+    `The downloaded ${o.label} did not match its expected checksum, so it was discarded. Check your connection and try again.`
+  )
+}
+
+export interface VerifiedFileOptions {
+  /** Parent dir the `.staging-*` directory is created in; the sweep's root. */
+  root: string
+  /** Log label, and the noun in the checksum message. */
+  label: string
+  /** File name to stage the download under. It never leaves staging. */
+  archiveName: string
+  url: string
+  sha256: string
+  /** The file to find inside the unpacked archive. */
+  name: string
+  download: (url: string, dest: string) => Promise<void>
+  extract: (archive: string, dest: string) => Promise<void>
+  /** Message for the `extract_failed` raised when the archive holds no `name`. */
+  notFoundMessage?: string
+}
+
+/**
+ * One file out of one pinned archive: download it into its own staging
+ * directory under `root`, verify the digest, unpack, find `name`, make it
+ * executable, and hand its path to `use` — which moves it wherever it belongs.
+ * The staging directory, archive included, is removed afterwards whatever
+ * happened, and is exempt from {@link sweepStaging} while it is in use.
+ *
+ * For a file that is published *beside* an install rather than as one: a
+ * runtime's companion executable, placed either into a staged install before
+ * its publishing rename, or into an existing install that lacks it. What is
+ * published is only ever the verified file, by a rename `use` performs.
+ */
+export async function withVerifiedFile<T>(o: VerifiedFileOptions, use: (file: string) => Promise<T>): Promise<T> {
+  await mkdir(o.root, { recursive: true })
+  const staging = join(o.root, `.staging-${process.pid}-${Date.now()}-${++stagingSeq}`)
+  const unpacked = join(staging, 'unpacked')
+  const archive = join(staging, o.archiveName)
+  liveStaging.add(staging)
+  try {
+    await mkdir(unpacked, { recursive: true })
+    logger.info('downloading a pinned asset', { label: o.label, url: o.url })
+    await o.download(o.url, archive)
+    await assertPinnedDigest(archive, o)
+    await o.extract(archive, unpacked)
+    const found = await findNamedFile(unpacked, o.name)
+    if (!found) {
+      throw new ManagedAssetError(
+        'extract_failed',
+        o.notFoundMessage ?? `The downloaded ${o.label} archive did not contain what was expected.`
+      )
+    }
+    if (process.platform !== 'win32') await chmod(found, 0o755)
+    return await use(found)
   } finally {
     liveStaging.delete(staging)
     await rm(staging, { recursive: true, force: true }).catch(() => undefined)

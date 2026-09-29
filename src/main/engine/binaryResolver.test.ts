@@ -48,8 +48,9 @@ import {
 
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent' } }))
 const logInfo = vi.hoisted(() => vi.fn())
+const logWarn = vi.hoisted(() => vi.fn())
 vi.mock('../logger/logger', () => ({
-  createLogger: () => ({ debug: () => {}, info: logInfo, warn: () => {}, error: () => {} })
+  createLogger: () => ({ debug: () => {}, info: logInfo, warn: logWarn, error: () => {} })
 }))
 
 const ARCHIVE_BYTES = 'pretend this is a 46 MB zip'
@@ -105,6 +106,7 @@ beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'cinna-engine-')))
   downloads = []
   logInfo.mockClear()
+  logWarn.mockClear()
 })
 
 afterEach(() => {
@@ -521,6 +523,146 @@ describe('resolveEngineBinaryWith — the managed Codex CLI', () => {
       expect(asset.url, key).toMatch(/^https:\/\/github\.com\/openai\/codex\/releases\/download\/rust-v/)
       expect(asset.executable, key).toMatch(/^codex-/)
     }
+  })
+
+  /**
+   * Codex 0.155.0 looks for `codex-code-mode-host` beside its own executable and
+   * loses Code Mode without it. The host is its own pinned archive, so what is
+   * under test is that it is verified like the main asset, lands in the install
+   * atomically with it, and is added to an install made before it was pinned.
+   */
+  describe('with the code-mode host companion', () => {
+    const HOST = 'codex-code-mode-host-aarch64-apple-darwin'
+    const HOST_BYTES = 'pretend this is the code-mode host tarball'
+    const HOST_SHA = createHash('sha256').update(HOST_BYTES).digest('hex')
+    const HOST_URL = 'https://example.test/codex-code-mode-host.tar.gz'
+    let fetched: Array<{ url: string; expectedBytes: number | undefined }>
+
+    beforeEach(() => {
+      fetched = []
+    })
+
+    function withHost(hostSha = HOST_SHA): BinaryResolverDeps {
+      return codex({
+        assets: {
+          'test-arch': {
+            file: `${TRIPLE}.tar.gz`,
+            sha256: ARCHIVE_SHA,
+            url: 'https://example.test/codex.tar.gz',
+            executable: TRIPLE,
+            size: 100,
+            companions: [
+              { file: `${HOST}.tar.gz`, sha256: hostSha, url: HOST_URL, executable: HOST, installAs: 'codex-code-mode-host', size: 42 }
+            ]
+          }
+        },
+        download: async (url, dest, _onProgress, expectedBytes) => {
+          fetched.push({ url, expectedBytes })
+          downloads.push(dest)
+          writeFileSync(dest, url === HOST_URL ? HOST_BYTES : ARCHIVE_BYTES)
+        },
+        extract: async (archive, dest) => {
+          if (archive.endsWith(`${HOST}.tar.gz`)) writeFileSync(join(dest, HOST), '#!/bin/sh\n')
+          else writeFileSync(join(dest, TRIPLE), '#!/bin/sh\necho codex-cli 0.155.0\n')
+        }
+      })
+    }
+
+    const installDir = (): string => join(root, 'codex-0.155.0')
+
+    it('publishes the host beside codex in the same install, executable, with no archive left in it', async () => {
+      const resolved = await resolveEngineBinaryWith(withHost())
+      expect(resolved.path).toBe(join(installDir(), 'codex'))
+      expect(readdirSync(installDir()).sort()).toEqual(['codex', 'codex-code-mode-host'])
+      expect(statSync(join(installDir(), 'codex-code-mode-host')).mode & 0o111).not.toBe(0)
+      expect(everything()).toEqual(['codex-0.155.0'])
+      // The host's own recorded size is its download ceiling, not the main asset's.
+      expect(fetched).toEqual([
+        { url: 'https://example.test/codex.tar.gz', expectedBytes: 100 },
+        { url: HOST_URL, expectedBytes: 42 }
+      ])
+    })
+
+    it('publishes nothing when the host fails its checksum, not even the verified codex', async () => {
+      const attempt = resolveEngineBinaryWith(withHost('0'.repeat(64)))
+      await expect(attempt).rejects.toMatchObject({ code: 'checksum_mismatch' })
+      await expect(attempt).rejects.toThrow(/^The downloaded Codex did not match its expected checksum/)
+      expect(everything()).toEqual([])
+    })
+
+    it('repairs an install that has codex but not the host, without downloading codex again', async () => {
+      mkdirSync(installDir())
+      writeFileSync(join(installDir(), 'codex'), '#!/bin/sh\necho codex-cli 0.155.0\n')
+      const resolved = await resolveEngineBinaryWith(withHost())
+      expect(resolved).toMatchObject({ path: join(installDir(), 'codex'), source: 'managed' })
+      expect(fetched.map((call) => call.url)).toEqual([HOST_URL])
+      expect(readdirSync(installDir()).sort()).toEqual(['codex', 'codex-code-mode-host'])
+      expect(everything()).toEqual(['codex-0.155.0'])
+      expect(logInfo).toHaveBeenCalledWith('repaired a managed runtime', {
+        tool: 'codex',
+        version: '0.155.0',
+        companions: ['codex-code-mode-host']
+      })
+    })
+
+    it('still runs a half install when the repair fails its checksum, and leaves it for the next resolve to retry', async () => {
+      mkdirSync(installDir())
+      writeFileSync(join(installDir(), 'codex'), '#!/bin/sh\n')
+      const resolved = await resolveEngineBinaryWith(withHost('0'.repeat(64)))
+      expect(resolved).toMatchObject({ path: join(installDir(), 'codex'), source: 'managed' })
+      expect(readdirSync(installDir())).toEqual(['codex'])
+      expect(everything()).toEqual(['codex-0.155.0'])
+      expect(logWarn).toHaveBeenCalledWith('could not repair a managed runtime', expect.objectContaining({
+        tool: 'codex',
+        version: '0.155.0',
+        error: expect.stringMatching(/did not match its expected checksum/)
+      }))
+      // Nothing was cached as done: the next resolve downloads the host again.
+      fetched = []
+      await resolveEngineBinaryWith(withHost())
+      expect(fetched.map((call) => call.url)).toEqual([HOST_URL])
+      expect(readdirSync(installDir()).sort()).toEqual(['codex', 'codex-code-mode-host'])
+    })
+
+    /** `withHost`, with each download reporting its bytes in two halves, like a real one. */
+    function withHostReporting(): BinaryResolverDeps {
+      const deps = withHost()
+      const download = deps.download
+      return {
+        ...deps,
+        download: async (url, dest, onProgress, expectedBytes) => {
+          await download(url, dest, undefined, expectedBytes)
+          const size = url === HOST_URL ? 42 : 100
+          onProgress?.(size / 2, size)
+          onProgress?.(size, size)
+        }
+      }
+    }
+
+    it('reports one bar across codex and the host on a first install, never going back', async () => {
+      const reports: Array<[number, number | null]> = []
+      await resolveEngineBinaryWith(withHostReporting(), (received, total) => reports.push([received, total]))
+      expect(reports).toEqual([[50, 142], [100, 142], [121, 142], [142, 142]])
+    })
+
+    it('reports the host bytes against the host alone when it repairs', async () => {
+      mkdirSync(installDir())
+      writeFileSync(join(installDir(), 'codex'), '#!/bin/sh\necho codex-cli 0.155.0\n')
+      const reports: Array<[number, number | null]> = []
+      await resolveEngineBinaryWith(withHostReporting(), (received, total) => reports.push([received, total]))
+      expect(reports).toEqual([[21, 42], [42, 42]])
+    })
+
+    it('downloads nothing once the install is complete', async () => {
+      await resolveEngineBinaryWith(withHost())
+      fetched = []
+      await resolveEngineBinaryWith(withHost())
+      expect(fetched).toEqual([])
+    })
+
+    it('counts the host in the size a first-use install announces', () => {
+      expect(pinnedAssetBytes(withHost())).toBe(142)
+    })
   })
 
   describe('with downloads switched off (the E2E sandbox)', () => {
