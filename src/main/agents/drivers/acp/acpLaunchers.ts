@@ -89,6 +89,7 @@ import {
   type AcpRuntimeMode
 } from './types'
 import { airClientMeta } from './acpActivity'
+import { RAW_SDK_MESSAGE_FILTER } from './acpSdkTelemetry'
 import type { CodexBinaryKnown } from './codexLauncher'
 
 const logger = createLogger('acp-launcher')
@@ -556,6 +557,10 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
           mcpServers: [],
           meta: {
             claudeCode: {
+              // Claude's raw SDK stream, for session telemetry only
+              // (`acpSdkTelemetry.ts`): the resolved model from turn 0, the
+              // cache TTL, per-model cost and context window.
+              emitRawSDKMessages: RAW_SDK_MESSAGE_FILTER.map((filter) => ({ ...filter })),
               options: native
                 ? {
                     // **The folder's own runtime.** `settingSources` names the

@@ -313,6 +313,22 @@ describe('the Claude launcher', () => {
   const claudeOptions = (p: AcpLaunchPlan): Record<string, unknown> =>
     (p.session.meta?.claudeCode as { options: Record<string, unknown> }).options
 
+  it('asks for the raw SDK frames telemetry reads, beside the session options, on both branches', async () => {
+    const filter = [
+      { type: 'system', subtype: 'init' },
+      { type: 'system', subtype: 'compact_boundary' },
+      { type: 'assistant' },
+      { type: 'result' }
+    ]
+    for (const ctx of [CTX, BARE_CTX]) {
+      const p = plan(await createClaudeLauncher(deps).plan(ctx))
+      const claudeCode = p.session.meta?.claudeCode as { emitRawSDKMessages: unknown; options: Record<string, unknown> }
+      expect(claudeCode.emitRawSDKMessages).toEqual(filter)
+      expect(claudeCode.options).toMatchObject({ model: 'sonnet' })
+      expect(Object.keys(claudeCode).sort()).toEqual(['emitRawSDKMessages', 'options'])
+    }
+  })
+
   it('ends every turn with a usage update that carries a cost, so its follow-ups need no quiet spell', () => {
     expect(createClaudeLauncher(deps).endsTurnsWithCostedUsage).toBe(true)
   })

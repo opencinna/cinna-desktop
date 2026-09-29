@@ -105,6 +105,25 @@ describe('createSessionObservation', () => {
     expect(sink.elicitation).not.toHaveBeenCalled()
   })
 
+  it('counts an extension notification and hands it to a sink that takes them, not after closing', () => {
+    const ext = vi.fn()
+    const sink: SessionTrafficSink = {
+      update: () => {},
+      permission: async () => ({ outcome: { outcome: 'cancelled' } }),
+      elicitation: async () => ({ action: 'cancel' }),
+      ext
+    }
+    const { observer, close } = createSessionObservation(SCOPE, sink)
+    observer.onExtNotification?.('_claude/sdkMessage', { sessionId: 'ses_1', message: { type: 'result' } })
+    expect(ext).toHaveBeenCalledWith('_claude/sdkMessage', { sessionId: 'ses_1', message: { type: 'result' } })
+    close()
+    observer.onExtNotification?.('_claude/sdkMessage', { sessionId: 'ses_1' })
+    expect(ext).toHaveBeenCalledTimes(1)
+    // A sink that throws does not take the observer down.
+    const { observer: other } = createSessionObservation(SCOPE, { ...sink, ext: () => { throw new Error('boom') } })
+    expect(() => other.onExtNotification?.('_claude/sdkMessage', { sessionId: 'ses_1' })).not.toThrow()
+  })
+
   it('does not throw when the sink throws on an update', () => {
     const sink: SessionTrafficSink = {
       update: () => { throw new Error('boom') },

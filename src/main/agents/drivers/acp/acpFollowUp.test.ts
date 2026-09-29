@@ -177,6 +177,39 @@ describe('the follow-up gate', () => {
     expect(h.gate.take()).toHaveLength(3)
   })
 
+  it('holds Claude’s raw SDK frames from the trigger on, in order and under the same limit; before it, or with none pending, drops them', () => {
+    const h = harness({ limit: 3 })
+    const raw = (id: string): Record<string, unknown> => ({ sessionId: 'ses_1', message: { type: 'assistant', message: { id } } })
+    // Before the trigger: opens nothing, holds nothing.
+    h.gate.sink.ext?.('_claude/sdkMessage', raw('before'))
+    expect(h.opened).toBe(0)
+    expect(h.gate.pending).toBe(false)
+
+    h.gate.sink.update(chunk('Working', 'm1'))
+    h.gate.sink.ext?.('_claude/sdkMessage', raw('msg_1'))
+    // Other extensions are not the follow-up's.
+    h.gate.sink.ext?.('_session/goal', { sessionId: 'ses_1' })
+    h.gate.sink.update(chunk('more', 'm1'))
+    // Past the limit, counted with the updates.
+    h.gate.sink.ext?.('_claude/sdkMessage', raw('msg_2'))
+
+    const items = h.gate.take()
+    expect(items.map((i) => i.type)).toEqual(['update', 'ext', 'update'])
+    const ext: Array<[string, Record<string, unknown>]> = []
+    const { handlers, seen } = recorder()
+    deliverAll(items, { ...handlers, onExtNotification: (method, params) => { seen.push(method); ext.push([method, params]) } })
+    expect(seen).toEqual(['agent_message_chunk:Working', '_claude/sdkMessage', 'agent_message_chunk:more'])
+    expect(ext[0][1]).toEqual(raw('msg_1'))
+    expect(getLogEntries().filter((e) => e.scope === 'acp-follow-up' && e.message.includes('overflowed'))[0].data).toMatchObject({ kept: 3, dropped: 1 })
+
+    // The follow-up ended; a frame after it, with nothing pending, is dropped.
+    h.gate.release([])
+    h.gate.sink.ext?.('_claude/sdkMessage', raw('after'))
+    expect(h.gate.pending).toBe(false)
+    expect(h.opened).toBe(1)
+    expect(h.gate.take()).toEqual([])
+  })
+
   it('counts and logs updates past the limit, and keeps every ask', async () => {
     const h = harness({ limit: 2 })
     h.gate.sink.update(chunk('1', 'm'))

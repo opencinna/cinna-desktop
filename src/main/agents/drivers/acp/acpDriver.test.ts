@@ -37,6 +37,7 @@ import { ACP_PROTOCOL_VERSION, type AcpConnection, type AcpLauncherId, type AcpP
 import type { SessionTrafficScope, SessionTrafficSink } from './acpSessionObserver'
 import type { SessionTelemetry, SessionTelemetryChange, SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
 import { applyTelemetryChange } from '../../telemetry/sessionTelemetryReducer'
+import { assistantMessage, initMessage, resultMessage, sdkParams } from './testSupport/sdkMessageFixtures'
 
 /** The one `needs_input` a turn posted, waited for. */
 function askedFor(w: World): Promise<Extract<RunEvent, { type: 'needs_input' }>> {
@@ -1250,6 +1251,44 @@ describe('a turn the agent starts on its own', () => {
     expect(turns[0]).toMatchObject({ sessionId: 'ses_fake', message: { costUsd: 0.0407752 } })
   })
 
+  it('takes its tokens from the raw result when the stream carries one', async () => {
+    const changes: SessionTelemetryChange[] = []
+    const result = resultMessage({ costs: { 'claude-sonnet-5-20260101': 0.02 }, usage: { input: 7, output: 90, cacheRead: 12_000, cacheWrite: 300 } })
+    const w = followUpWorld({
+      script: thenOnItsOwn([say('Working', 'm1'), { kind: 'delay', ms: 300 },
+        { kind: 'notify', method: '_claude/sdkMessage', params: sdkParams(result, 'ses_fake') }, COSTED_USAGE]),
+      launcher: 'claude',
+      deps: { telemetry: { report: (_chatId, change) => void changes.push(change) } }
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const turn = await request.run(followUpIo().io)
+    expect(turn.telemetry).toMatchObject({ tokens: { input: 7, output: 90, cacheRead: 12_000, cacheWrite: 300 }, tokenScope: 'turn', requests: 2 })
+  })
+
+  it('keeps the raw frames that arrived before it was bound: its request, the cache clock and an early result', async () => {
+    const changes: SessionTelemetryChange[] = []
+    const result = resultMessage({ costs: { 'claude-sonnet-5-20260101': 0.02 }, usage: { input: 7, output: 90, cacheRead: 12_000, cacheWrite: 300 }, numTurns: 1 })
+    const raw = (message: object): FakeAcpStep => ({ kind: 'notify', method: '_claude/sdkMessage', params: sdkParams(message, 'ses_fake') })
+    const w = followUpWorld({
+      // A raw frame before the trigger opens nothing and is dropped; the ones after it are the follow-up's.
+      script: thenOnItsOwn([raw(assistantMessage({ id: 'msg_before', input: 1 })), say('Working', 'm1'),
+        raw(assistantMessage({ id: 'msg_1', input: 3, cacheRead: 15_000, write1h: 2_000 })), raw(result), COSTED_USAGE]),
+      launcher: 'claude',
+      deps: { telemetry: { report: (_chatId, change) => void changes.push(change) } }
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    // Everything reaches the gate before the follow-up is bound.
+    await settle(200)
+    changes.length = 0
+    const turn = await request.run(followUpIo().io)
+    expect(turn.telemetry).toMatchObject({ tokens: { input: 7, output: 90, cacheRead: 12_000, cacheWrite: 300 }, tokenScope: 'turn', requests: 1 })
+    const requests = changes.filter((change) => change.type === 'request')
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({ input: 17_003, cacheWrite1h: 2_000 })
+  })
+
   it('is not ended by a usage update without a cost', async () => {
     const w = followUpWorld({
       script: thenOnItsOwn([say('one ', 'm1'), PLAIN_USAGE, { kind: 'delay', ms: 150 }, say('two', 'm1'), COSTED_USAGE])
@@ -2249,6 +2288,34 @@ describe('session telemetry', () => {
     expect(turns[0]).toMatchObject({ sessionId: 'ses_fake', byModel: { 'claude-haiku-4-5': { output: 120 } } })
     expect(changes.filter((change) => change.type === 'context').map((change) => change.type === 'context' && change.used))
       .toEqual([16_000, 16_400])
+  })
+
+  it('reads Claude’s raw SDK frames of its own session into telemetry, never into the transcript', async () => {
+    const { changes, telemetry } = reporter()
+    const raw = (message: object, sessionId = 'ses_fake'): FakeAcpStep => ({ kind: 'notify', method: '_claude/sdkMessage', params: sdkParams(message, sessionId) })
+    const w = world({ launcher: 'claude', deps: { telemetry }, script: { prompt: {
+      emit: [
+        raw(initMessage),
+        raw(assistantMessage({ id: 'msg_1', input: 3, cacheRead: 15_000, write1h: 2_000 })),
+        // A subagent's frame, and another session's: neither is this session's request.
+        raw(assistantMessage({ id: 'msg_sub', parent: 'toolu_1' })),
+        raw(assistantMessage({ id: 'msg_other' }), 'ses_other'),
+        { kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } } },
+        raw(resultMessage({ costs: { 'claude-sonnet-5[1m]': 0.035, 'claude-haiku-4-5': 0.005 }, windows: { 'claude-sonnet-5[1m]': 1_000_000 }, numTurns: 1, apiDurationMs: 2_000 })),
+        usage({ used: 16_400, size: 1_000_000, cost: { amount: 0.04, currency: 'USD' } })
+      ],
+      response: CLAUDE_ANSWER
+    } } })
+    const result = await w.run()
+    expect(result.text).toBe('Done.')
+    expect(JSON.stringify(result)).not.toContain('SECRET')
+    expect(result.telemetry).toMatchObject({ requests: 1, costUsd: 0.04 })
+    // A running total, but the session was created on this connection: its ledger started at zero.
+    expect(result.telemetry).toMatchObject({ apiDurationMs: 2_000 })
+    expect(changes.map((change) => change.type)).toEqual(['session', 'runtime', 'request', 'context', 'turn'])
+    expect(changes[0]).toMatchObject({ type: 'session', sessionId: 'ses_fake', fresh: true, fingerprint: expect.stringMatching(/^[0-9a-f]{16}$/) })
+    expect(changes[2]).toMatchObject({ type: 'request', input: 17_003, cacheWrite1h: 2_000 })
+    expect(changes[4]).toMatchObject({ type: 'turn', contextWindow: 1_000_000, byModelCost: { 'claude-sonnet-5[1m]': 0.035, 'claude-haiku-4-5': 0.005 } })
   })
 
   it('counts a cancelled turn’s answer too', async () => {

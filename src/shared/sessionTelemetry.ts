@@ -19,6 +19,13 @@ export type AuthKind = 'subscription' | 'api_key' | 'gateway' | 'cloud' | 'none'
 
 export type TelemetryEngine = 'claude' | 'codex'
 
+/**
+ * Whether the engine's prompt-cache TTL is known, so the cache has an expiry,
+ * a warm or cold state and invalidations. Claude's writes show their TTL;
+ * Codex caches on its own with a TTL nobody reports.
+ */
+export const CACHE_TTL_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false })
+
 export interface TokenTally {
   /** Uncached input. */
   input: number
@@ -56,6 +63,32 @@ export interface SessionTelemetrySessionTotals {
    * a restart is measured against it instead of counted whole.
    */
   lastCostReading?: number
+  /**
+   * The session's last `result.modelUsage[model].costUSD` per model (Claude's
+   * raw stream) — running totals like {@link lastCostReading}, kept for the
+   * same reason.
+   */
+  modelCostReadings?: Record<string, number>
+  /**
+   * A digest of the params the session was last set up under (cwd and MCP
+   * servers; never the params themselves, which can hold secrets). A load
+   * under another one rebuilt the session and invalidated its cache.
+   */
+  fingerprint?: string
+}
+
+/** Why a session's prompt cache went cold before its TTL ran out. */
+export type CacheInvalidationReason = 'model_change' | 'session_params_change' | 'compaction' | 'new_session'
+
+/**
+ * A coarse split of the main agent's context (Claude's raw stream only).
+ * `baseline` is the whole input of the session's first main-agent request
+ * (system prompt, tools, memory, the first message); `conversation` is what
+ * has been added since (`used − baseline`, never below 0).
+ */
+export interface ContextBreakdown {
+  baseline: number
+  conversation: number
 }
 
 export interface SessionTelemetry {
@@ -82,6 +115,10 @@ export interface SessionTelemetry {
     sessionId?: string
     /** The selected model the reading was taken under. */
     model?: string
+    /** Absent without Claude's raw stream, and until the first request after a reset. */
+    breakdown?: ContextBreakdown
+    /** The next main-agent request sets `breakdown.baseline` (after a new session or a compaction). */
+    awaitingBaseline?: boolean
   }
   totals: {
     tokens: TokenTally
@@ -91,14 +128,39 @@ export interface SessionTelemetry {
     /** `last_request` once any counted turn was: the token totals are then a lower bound. */
     tokenScope: TokenScope
     byModel: Record<string, TokenTally & { costUsd?: number }>
+    /** The last counted turn's tokens, for its cache hit ratio. */
+    lastTurn?: TokenTally
     /** Per ACP session id. Kept for later; not shown. */
     bySession: Record<string, SessionTelemetrySessionTotals>
   }
+  /**
+   * The prompt cache (Claude only for TTL, expiry and invalidation; Codex
+   * reports no TTL, so those stay unset for it). Warm or cold is derived at
+   * read time (`sessionTelemetryDerived.ts`).
+   */
   cache: {
     lastRequestAt?: number
     ttlMs?: number
+    /** `observed` from the TTL of a main-agent request's cache writes; `assumed` 5m until one is seen. */
     ttlSource: 'observed' | 'assumed'
+    /**
+     * `lastRequestAt + ttlMs`. Approximate: the TTL runs from when the
+     * request reached the API, and `lastRequestAt` is when its first frame
+     * reached this app, a little later.
+     */
     expiresAt?: number
+    /** The cache went cold here, whatever the TTL says, until the next request writes it again. */
+    invalidatedAt?: number
+    invalidationReason?: CacheInvalidationReason
+  }
+  /** What Claude's `system/init` said. */
+  runtime?: {
+    cliVersion?: string
+    betas?: string[]
+    /** The effort applied; null when none is sent. */
+    effort?: string | null
+    /** `off`, `cooldown` or `on`. */
+    fastMode?: string
   }
   rateLimit?: unknown
   updatedAt: number
@@ -140,6 +202,11 @@ export interface SessionTelemetryContextChange {
   costReading?: number
   rateLimit?: unknown
   at: number
+  /**
+   * The raw stream timed this turn's requests ({@link SessionTelemetryRequestChange}),
+   * so this reading does not move the cache clock.
+   */
+  cacheTimed?: boolean
 }
 
 /** One finished turn, counted once. */
@@ -150,7 +217,68 @@ export interface SessionTelemetryTurnChange {
   message: MessageTelemetry
   /** Tokens per model, subagents' models included. */
   byModel?: Record<string, TokenTally>
+  /** The turn's cost per model: runtime deltas (Claude's raw `result`) or estimates (Codex). */
+  byModelCost?: Record<string, number>
+  /** The session's latest per-model cost readings (Claude's raw `result`), to keep. */
+  modelCostReadings?: Record<string, number>
+  /** The main model's window per the raw `result`: authoritative. */
+  contextWindow?: number
+  maxOutputTokens?: number
   selectedModel?: string
+}
+
+/** What Claude's raw `system/init` said about the session's runtime. */
+export interface SessionTelemetryRuntimeChange {
+  type: 'runtime'
+  engine: TelemetryEngine
+  sessionId: string
+  /** The model the session runs. */
+  model?: string
+  cliVersion?: string
+  betas?: string[]
+  effort?: string | null
+  fastMode?: string
+  /**
+   * The SDK's `apiKeySource`, mapped: `api_key` when a key is in use. It
+   * refines an `unknown` login only; it never replaces a reported one.
+   */
+  authHint?: 'api_key'
+}
+
+/**
+ * One main-agent model request (Claude's raw `assistant`, first frame of a
+ * message). Never a subagent's.
+ */
+export interface SessionTelemetryRequestChange {
+  type: 'request'
+  engine: TelemetryEngine
+  sessionId: string
+  model?: string
+  /** Input of the request: uncached plus cache read and write. */
+  input: number
+  cacheWrite5m: number
+  cacheWrite1h: number
+  at: number
+}
+
+/** Claude compacted the session's context (raw `compact_boundary`). */
+export interface SessionTelemetryCompactionChange {
+  type: 'compaction'
+  engine: TelemetryEngine
+  sessionId: string
+  at: number
+}
+
+/** The turn's ACP session was created, or loaded under `fingerprint`. */
+export interface SessionTelemetrySessionChange {
+  type: 'session'
+  engine: TelemetryEngine
+  sessionId: string
+  /** `session/new`: a new session, a cold cache and a new context baseline. */
+  fresh: boolean
+  /** Digest of the params (see {@link SessionTelemetrySessionTotals.fingerprint}). */
+  fingerprint: string
+  at: number
 }
 
 /** The session's model option changed (or was first reported). */
@@ -165,6 +293,10 @@ export type SessionTelemetryChange =
   | SessionTelemetryContextChange
   | SessionTelemetryTurnChange
   | SessionTelemetryModelChange
+  | SessionTelemetryRuntimeChange
+  | SessionTelemetryRequestChange
+  | SessionTelemetryCompactionChange
+  | SessionTelemetrySessionChange
 
 /**
  * The port a driver receives in its deps. Drivers report; the one thing they
@@ -175,6 +307,8 @@ export interface SessionTelemetryReporter {
   report(chatId: string, change: SessionTelemetryChange): void
   /** The last `cost.amount` recorded for the chat's ACP session, if any. */
   lastCostReading?(chatId: string, sessionId: string): number | undefined
+  /** The last per-model cost readings recorded for the chat's ACP session, if any. */
+  lastModelCostReadings?(chatId: string, sessionId: string): Record<string, number> | undefined
 }
 
 /** Main → renderer: a chat's telemetry changed. */

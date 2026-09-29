@@ -134,3 +134,154 @@ describe('the session telemetry reducer', () => {
     expect(JSON.stringify(before)).toBe(frozen)
   })
 })
+
+const request = (at: number, cache: { write5m?: number; write1h?: number; input?: number; model?: string } = {}): SessionTelemetryChange => ({
+  type: 'request',
+  engine: 'claude',
+  sessionId: 's1',
+  ...(cache.model ? { model: cache.model } : {}),
+  input: cache.input ?? 50_000,
+  cacheWrite5m: cache.write5m ?? 0,
+  cacheWrite1h: cache.write1h ?? 0,
+  at
+})
+
+const MIN = 60_000
+
+describe('the raw stream in the session telemetry', () => {
+  it('observes the cache TTL from a request’s writes: 1h over 5m, the last one kept, else 5m assumed', () => {
+    const assumed = fold([request(1_000)])
+    expect(assumed.cache).toEqual({ lastRequestAt: 1_000, ttlMs: 5 * MIN, ttlSource: 'assumed', expiresAt: 1_000 + 5 * MIN })
+    const oneHour = fold([request(1_000, { write5m: 10, write1h: 20 })])
+    expect(oneHour.cache).toMatchObject({ ttlMs: 60 * MIN, ttlSource: 'observed', expiresAt: 1_000 + 60 * MIN })
+    // A request that wrote nothing keeps what was seen, and moves the clock.
+    const kept = fold([request(1_000, { write1h: 20 }), request(2_000)])
+    expect(kept.cache).toMatchObject({ ttlMs: 60 * MIN, ttlSource: 'observed', lastRequestAt: 2_000, expiresAt: 2_000 + 60 * MIN })
+    expect(fold([request(1_000, { write1h: 20 }), request(2_000, { write5m: 5 })]).cache).toMatchObject({ ttlMs: 5 * MIN, ttlSource: 'observed' })
+  })
+
+  it('lets a usage reading move the cache clock only when no raw request timed the turn', () => {
+    const untimed = fold([context(10, 200_000, false, 7_000)])
+    expect(untimed.cache).toEqual({ lastRequestAt: 7_000, ttlMs: 5 * MIN, ttlSource: 'assumed', expiresAt: 7_000 + 5 * MIN })
+    const timed = fold([request(1_000, { write1h: 1 }), { type: 'context', engine: 'claude', sessionId: 's1', used: 10, size: 1, costed: true, at: 9_000, cacheTimed: true }])
+    expect(timed.cache).toMatchObject({ lastRequestAt: 1_000, expiresAt: 1_000 + 60 * MIN })
+    // Codex: a clock, never a TTL or an expiry.
+    const codex = fold([{ type: 'context', engine: 'codex', sessionId: 's', used: 5, size: 258_400, costed: false, at: 3 }])
+    expect(codex.cache).toEqual({ lastRequestAt: 3, ttlSource: 'assumed' })
+  })
+
+  it('takes the resolved model from the raw stream, and the quota’s once the turn settles', () => {
+    const state = fold([
+      { type: 'runtime', engine: 'claude', sessionId: 's1', model: 'claude-sonnet-5', cliVersion: '2.1.274', betas: ['b'], effort: null, fastMode: 'off' }
+    ])
+    expect(state.model).toEqual({ resolved: 'claude-sonnet-5', source: 'init' })
+    expect(state.runtime).toEqual({ cliVersion: '2.1.274', betas: ['b'], effort: null, fastMode: 'off' })
+    const settled = applyTelemetryChange(applyTelemetryChange(state, 'chat', request(5, { model: 'claude-sonnet-5-20260101' }), 5), 'chat', turn({ model: 'claude-sonnet-5[1m]', tokens: tally(1, 1) }), 6)
+    expect(settled.model).toEqual({ resolved: 'claude-sonnet-5[1m]', source: 'quota' })
+  })
+
+  it('lets an API key source refine an unknown login, never replace a reported one', () => {
+    const hint: SessionTelemetryChange = { type: 'runtime', engine: 'claude', sessionId: 's1', authHint: 'api_key' }
+    expect(fold([hint]).auth).toEqual({ kind: 'api_key' })
+    expect(fold([{ type: 'auth', engine: 'claude', auth: { kind: 'subscription', plan: 'max' } }, hint]).auth).toEqual({ kind: 'subscription', plan: 'max' })
+  })
+
+  it('sets the context baseline from the first main request of a new session, and splits the context from it', () => {
+    const state = fold([
+      { type: 'session', engine: 'claude', sessionId: 's1', fresh: true, fingerprint: 'fp', at: 1 },
+      request(2, { input: 20_000 }),
+      request(3, { input: 25_000 }),
+      context(26_000, 200_000)
+    ])
+    expect(state.context.breakdown).toEqual({ baseline: 20_000, conversation: 6_000 })
+    expect(state.context.awaitingBaseline).toBeUndefined()
+    // Never below zero.
+    expect(applyTelemetryChange(state, 'chat', context(1_000, 200_000), 9).context.breakdown).toEqual({ baseline: 20_000, conversation: 0 })
+    // No raw stream, no split.
+    expect(fold([{ type: 'session', engine: 'claude', sessionId: 's1', fresh: true, fingerprint: 'fp', at: 1 }, context(26_000, 200_000)]).context.breakdown).toBeUndefined()
+  })
+
+  it('marks the cache cold on a new session, other params, a model switch and a compaction; resets the baseline only on a new session or a compaction', () => {
+    const warm = fold([
+      { type: 'model', engine: 'claude', selected: 'default' },
+      { type: 'session', engine: 'claude', sessionId: 's1', fresh: false, fingerprint: 'fp1', at: 1 },
+      { type: 'session', engine: 'claude', sessionId: 's1', fresh: true, fingerprint: 'fp1', at: 2 },
+      request(3, { input: 20_000 })
+    ])
+    expect(warm.context.breakdown).toBeDefined()
+    expect(warm.totals.bySession.s1.fingerprint).toBe('fp1')
+
+    const cases: Array<[SessionTelemetryChange, string]> = [
+      [{ type: 'session', engine: 'claude', sessionId: 's2', fresh: true, fingerprint: 'fp1', at: 50 }, 'new_session'],
+      [{ type: 'session', engine: 'claude', sessionId: 's1', fresh: false, fingerprint: 'fp2', at: 50 }, 'session_params_change'],
+      [{ type: 'model', engine: 'claude', selected: 'opus' }, 'model_change'],
+      [{ type: 'compaction', engine: 'claude', sessionId: 's1', at: 50 }, 'compaction']
+    ]
+    for (const [change, reason] of cases) {
+      const cold = applyTelemetryChange(warm, 'chat', change, 50)
+      expect(cold.cache).toMatchObject({ invalidatedAt: 50, invalidationReason: reason })
+      if (reason === 'new_session' || reason === 'compaction') {
+        expect(cold.context.breakdown).toBeUndefined()
+        expect(cold.context.awaitingBaseline).toBe(true)
+      } else {
+        // The same conversation: its split stands.
+        expect(cold.context.breakdown).toEqual(warm.context.breakdown)
+        expect(cold.context.awaitingBaseline).toBeUndefined()
+      }
+    }
+    // Reloaded under the same params: nothing happened to the cache.
+    const same = applyTelemetryChange(warm, 'chat', { type: 'session', engine: 'claude', sessionId: 's1', fresh: false, fingerprint: 'fp1', at: 50 }, 50)
+    expect(same.cache).toEqual(warm.cache)
+    expect(same.context.breakdown).toEqual(warm.context.breakdown)
+    // Codex: no invalidation, only the fingerprint.
+    const codex = fold([{ type: 'session', engine: 'codex', sessionId: 's', fresh: true, fingerprint: 'f', at: 1 }])
+    expect(codex.cache).toEqual({ ttlSource: 'assumed' })
+    expect(codex.totals.bySession.s.fingerprint).toBe('f')
+  })
+
+  it('keeps an 80K context’s breakdown through a model switch, with the cache marked cold', () => {
+    const warm = fold([
+      { type: 'model', engine: 'claude', selected: 'default' },
+      { type: 'session', engine: 'claude', sessionId: 's1', fresh: true, fingerprint: 'fp', at: 1 },
+      request(2, { input: 20_000 }),
+      context(80_000, 200_000, true, 3)
+    ])
+    expect(warm.context.breakdown).toEqual({ baseline: 20_000, conversation: 60_000 })
+    const switched = applyTelemetryChange(warm, 'chat', { type: 'model', engine: 'claude', selected: 'opus' }, 60)
+    expect(switched.context.breakdown).toEqual({ baseline: 20_000, conversation: 60_000 })
+    expect(switched.context.awaitingBaseline).toBeUndefined()
+    expect(switched.cache).toMatchObject({ invalidatedAt: 60, invalidationReason: 'model_change' })
+    // The next request under the new model does not re-baseline it.
+    expect(applyTelemetryChange(switched, 'chat', request(61, { input: 81_000 }), 61).context.breakdown).toEqual({ baseline: 20_000, conversation: 60_000 })
+  })
+
+  it('adds per-model costs, keeps the session’s per-model readings, and takes the main window as authoritative', () => {
+    const state = fold([
+      context(30_000, 200_000),
+      turn({ model: 'claude-sonnet-5[1m]', tokens: tally(1, 2), costUsd: 0.3 }, {
+        byModel: { 'claude-sonnet-5[1m]': tally(1, 2) },
+        byModelCost: { 'claude-sonnet-5[1m]': 0.25, 'claude-haiku-4-5': 0.05 },
+        modelCostReadings: { 'claude-sonnet-5[1m]': 1.25, 'claude-haiku-4-5': 0.05 },
+        contextWindow: 1_000_000,
+        maxOutputTokens: 64_000
+      }),
+      turn({ model: 'claude-sonnet-5[1m]', tokens: tally(1, 2), costUsd: 0.1 }, {
+        byModelCost: { 'claude-sonnet-5[1m]': 0.1 },
+        modelCostReadings: { 'claude-sonnet-5[1m]': 1.35 }
+      })
+    ])
+    expect(state.totals.byModel['claude-sonnet-5[1m]'].costUsd).toBeCloseTo(0.35)
+    expect(state.totals.byModel['claude-haiku-4-5']).toEqual({ ...tally(0, 0), costUsd: 0.05 })
+    expect(state.totals.bySession.s1.modelCostReadings).toEqual({ 'claude-sonnet-5[1m]': 1.35, 'claude-haiku-4-5': 0.05 })
+    expect(state.context).toMatchObject({ size: 1_000_000, sizeAuthoritative: true, maxOutput: 64_000 })
+    expect(state.totals.lastTurn).toEqual(tally(1, 2))
+    expect(state.totals.costSource).toBe('runtime')
+  })
+
+  it('marks the totals estimated once an estimated cost was added', () => {
+    const state = fold([
+      { ...turn({ model: 'gpt-5.5', tokens: tally(1_000, 10), tokenScope: 'last_request', costUsd: 0.0053, costSource: 'estimated' }), engine: 'codex' }
+    ])
+    expect(state.totals).toMatchObject({ costUsd: 0.0053, costSource: 'estimated' })
+  })
+})

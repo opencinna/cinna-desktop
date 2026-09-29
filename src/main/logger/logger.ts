@@ -31,6 +31,8 @@ export interface ScopedLogger {
   info: (message: string, data?: unknown) => void
   warn: (message: string, data?: unknown) => void
   error: (message: string, data?: unknown) => void
+  /** Whether debug detail that costs work to gather is wanted (see {@link isDebugEnabled}). */
+  isDebugEnabled: () => boolean
 }
 
 /** Somewhere to send each entry as it is logged, beyond the buffer and the console. */
@@ -52,6 +54,22 @@ export function setLogValueRedactor(redactor: typeof valueRedactor): void { valu
  */
 export function setLogSink(next: LogSink | null): void {
   sink = next
+}
+
+/**
+ * Whether debug detail that costs work to gather — sizing every frame of a
+ * stream, say — is wanted. Debug entries themselves are always kept; this
+ * gates only the work done solely to fill one. Off unless the process starts
+ * with `CINNA_LOG_DEBUG=1`, or {@link setDebugEnabled} turns it on.
+ */
+let debugEnabled = typeof process !== 'undefined' && process.env?.CINNA_LOG_DEBUG === '1'
+
+export function isDebugEnabled(): boolean {
+  return debugEnabled
+}
+
+export function setDebugEnabled(enabled: boolean): void {
+  debugEnabled = enabled
 }
 
 const SENSITIVE_KEY_RE = /(api[_-]?key|access[_-]?token|refresh[_-]?token|password|authorization|bearer|secret|token|cookie)/i
@@ -163,7 +181,8 @@ export function createLogger(scope: string): ScopedLogger {
     debug: (message, data) => logEntry('debug', scope, 'main', message, data),
     info: (message, data) => logEntry('info', scope, 'main', message, data),
     warn: (message, data) => logEntry('warn', scope, 'main', message, data),
-    error: (message, data) => logEntry('error', scope, 'main', message, data)
+    error: (message, data) => logEntry('error', scope, 'main', message, data),
+    isDebugEnabled
   }
 }
 

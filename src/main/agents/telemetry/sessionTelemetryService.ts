@@ -127,6 +127,12 @@ export function createSessionTelemetryService(options: {
       return load(chatId)?.totals.bySession[sessionId]?.lastCostReading
     },
 
+    /** The same, per model: the session's last `modelUsage[model].costUSD` readings, or undefined. */
+    lastModelCostReadings(chatId: string, sessionId: string): Record<string, number> | undefined {
+      const readings = load(chatId)?.totals.bySession[sessionId]?.modelCostReadings
+      return readings ? { ...readings } : undefined
+    },
+
     /** Forgets a chat (trashed or deleted): its row and what is held here. Announces nothing. */
     forget
   }

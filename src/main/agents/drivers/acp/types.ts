@@ -300,7 +300,41 @@ export interface AcpStreamUpdate {
   selectedModel?: string
   /** A `usage_update`: a context reading, and at the end of a model result its cost. */
   telemetry?: AcpTelemetryFrame
+  /** A `_claude/sdkMessage` (Claude's raw SDK stream), read for telemetry only (`acpSdkTelemetry.ts`). */
+  sdk?: AcpSdkFrame
 }
+
+/** Token counts of one raw SDK usage block. */
+export interface AcpSdkUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  /** `cache_creation.ephemeral_5m_input_tokens` / `…_1h_…`, when the block splits them. */
+  cacheWrite5m?: number
+  cacheWrite1h?: number
+}
+
+/** One model's row of a raw `result.modelUsage`. Running totals over the session's query. */
+export interface AcpSdkModelUsage {
+  costUsd?: number
+  contextWindow?: number
+  maxOutputTokens?: number
+  /** `list`, `managed` or `unknown` (the CLI's own price guess). */
+  costBasis?: string
+}
+
+/**
+ * What a `_claude/sdkMessage` said that telemetry reads — never its content.
+ * `bytes` is the JSON length of the whole notification, for the traffic count,
+ * measured only while debug detail is on (`isDebugEnabled`).
+ */
+export type AcpSdkFrame =
+  | { kind: 'init'; sessionId: string; bytes?: number; model?: string; cliVersion?: string; betas?: string[]; effort?: string | null; fastMode?: string; apiKeySource?: string }
+  | { kind: 'assistant'; sessionId: string; bytes?: number; main: boolean; messageId?: string; model?: string; usage?: AcpSdkUsage }
+  | { kind: 'result'; sessionId: string; bytes?: number; usage?: AcpSdkUsage; models: Record<string, AcpSdkModelUsage>; durationMs?: number; apiDurationMs?: number; numTurns?: number; fastMode?: string }
+  | { kind: 'compact'; sessionId: string; bytes?: number }
+  | { kind: 'other'; sessionId: string; bytes?: number; label: string }
 
 /** What one `usage_update` said. Absent fields were not on the wire. */
 export interface AcpTelemetryFrame {

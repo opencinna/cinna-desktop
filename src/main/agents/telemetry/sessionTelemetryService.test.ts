@@ -87,6 +87,20 @@ describe('the session telemetry service', () => {
     expect(service.lastCostReading('chat', 's2')).toBeUndefined()
   })
 
+  it('answers a session’s last persisted per-model cost readings, as a copy', () => {
+    const service = createSessionTelemetryService({ store: memoryStore() })
+    expect(service.lastModelCostReadings('chat', 's1')).toBeUndefined()
+    service.report('chat', {
+      type: 'turn', engine: 'claude', sessionId: 's1',
+      message: { tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, tokenScope: 'turn', costSource: 'runtime' },
+      modelCostReadings: { 'claude-sonnet-5[1m]': 1.25 }
+    })
+    const readings = service.lastModelCostReadings('chat', 's1')!
+    expect(readings).toEqual({ 'claude-sonnet-5[1m]': 1.25 })
+    readings['claude-sonnet-5[1m]'] = 0
+    expect(service.lastModelCostReadings('chat', 's1')).toEqual({ 'claude-sonnet-5[1m]': 1.25 })
+  })
+
   it('keeps going when the write fails, and forgets a chat whole', () => {
     const store = memoryStore()
     store.save.mockImplementation(() => { throw new Error('FOREIGN KEY constraint failed') })

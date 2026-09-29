@@ -25,6 +25,12 @@
  * user started on the same session does ({@link FollowUpGate.handOver}).
  * Updates past {@link FOLLOW_UP_BUFFER_LIMIT} are counted and logged, never
  * silently lost; asks are never dropped, since the agent waits on each.
+ *
+ * Claude's raw SDK frames (`_claude/sdkMessage`) are held the same way, under
+ * the same limit, from the trigger on: the adapter sends a message's raw frame
+ * before the update it becomes, and the follow-up's request count, cache
+ * clock and an early `result` are in them. They never open a follow-up, and
+ * with none pending they are dropped (the observer has counted them).
  */
 
 import type {
@@ -35,6 +41,7 @@ import type {
   SessionNotification
 } from '@agentclientprotocol/sdk'
 import { createLogger } from '../../../logger/logger'
+import { SDK_MESSAGE_METHOD } from './acpSdkTelemetry'
 import type { SessionTrafficScope, SessionTrafficSink } from './acpSessionObserver'
 import type { AcpSessionHandlers } from './types'
 
@@ -46,6 +53,8 @@ export const FOLLOW_UP_BUFFER_LIMIT = 2_000
 /** One piece of held traffic. */
 export type HeldTraffic =
   | { type: 'update'; notification: SessionNotification }
+  /** A `_claude/sdkMessage` extension notification: read for telemetry, held like an update. */
+  | { type: 'ext'; method: string; params: Record<string, unknown> }
   | { type: 'permission'; params: RequestPermissionRequest; answer(response: RequestPermissionResponse): void }
   | { type: 'elicitation'; params: CreateElicitationRequest; answer(response: CreateElicitationResponse): void }
 
@@ -61,6 +70,9 @@ export function deliverHeld(item: HeldTraffic, handlers: AcpSessionHandlers): vo
   switch (item.type) {
     case 'update':
       handlers.onUpdate(item.notification)
+      return
+    case 'ext':
+      handlers.onExtNotification?.(item.method, item.params)
       return
     case 'permission': {
       let answer: Promise<RequestPermissionResponse>
@@ -90,7 +102,7 @@ export function deliverHeld(item: HeldTraffic, handlers: AcpSessionHandlers): vo
   }
 }
 
-/** Refuse a held ask; an update is simply dropped. */
+/** Refuse a held ask; an update or a raw frame is simply dropped. */
 export function refuseHeld(item: HeldTraffic): void {
   if (item.type === 'permission') item.answer(CANCELLED_PERMISSION)
   else if (item.type === 'elicitation') item.answer(CANCELLED_QUESTION)
@@ -165,6 +177,11 @@ export interface FollowUpGateOptions {
 
 type GateState = 'idle' | 'pending' | 'running' | 'closed'
 
+/** Traffic the agent does not wait on: an update or a raw frame. */
+function isAsk(item: HeldTraffic): boolean {
+  return item.type === 'permission' || item.type === 'elicitation'
+}
+
 function kindOf(notification: SessionNotification): string {
   const kind = (notification.update as { sessionUpdate?: unknown }).sessionUpdate
   return typeof kind === 'string' ? kind : 'unknown'
@@ -221,7 +238,7 @@ export function createFollowUpGate(scope: SessionTrafficScope, options: FollowUp
   }
 
   const hold = (item: HeldTraffic): void => {
-    if (item.type === 'update') {
+    if (!isAsk(item)) {
       if (heldUpdates >= limit) {
         overflow += 1
         return
@@ -252,6 +269,8 @@ export function createFollowUpGate(scope: SessionTrafficScope, options: FollowUp
 
   /** Traffic while no turn holds the session and nothing is pending. */
   const idle = (item: HeldTraffic): void => {
+    // A raw frame opens nothing; with no follow-up pending it has nowhere to go.
+    if (item.type === 'ext') return
     if (item.type !== 'update') {
       trigger(item, item.type === 'permission' ? 'session/request_permission' : 'elicitation/create')
       return
@@ -291,7 +310,7 @@ export function createFollowUpGate(scope: SessionTrafficScope, options: FollowUp
     letGo()
     const items = reset()
     if (state !== 'closed') state = 'idle'
-    const asks = items.filter((item) => item.type !== 'update').length
+    const asks = items.filter(isAsk).length
     if (items.length > 0) logger[level]('a follow-up turn was not opened; its traffic was dropped', { ...where, reason, updates: items.length - asks, asks })
     for (const item of items) refuseHeld(item)
     options.onAbandon?.(reason)
@@ -300,7 +319,10 @@ export function createFollowUpGate(scope: SessionTrafficScope, options: FollowUp
   const sink: SessionTrafficSink = {
     update: (notification) => accept({ type: 'update', notification }),
     permission: (params) => new Promise<RequestPermissionResponse>((answer) => accept({ type: 'permission', params, answer })),
-    elicitation: (params) => new Promise<CreateElicitationResponse>((answer) => accept({ type: 'elicitation', params, answer }))
+    elicitation: (params) => new Promise<CreateElicitationResponse>((answer) => accept({ type: 'elicitation', params, answer })),
+    ext: (method, params) => {
+      if (method === SDK_MESSAGE_METHOD) accept({ type: 'ext', method, params })
+    }
   }
 
   return {
@@ -355,13 +377,14 @@ export function createFollowUpGate(scope: SessionTrafficScope, options: FollowUp
         giveBack: (target) => {
           let updates = 0
           for (const item of items) {
-            if (item.type !== 'update') {
+            if (isAsk(item)) {
               refuseHeld(item)
               continue
             }
             updates += 1
             try {
-              target.update(item.notification)
+              if (item.type === 'update') target.update(item.notification)
+              else if (item.type === 'ext') target.ext?.(item.method, item.params)
             } catch (err) {
               logger.warn('held traffic could not be given back', { ...where, error: String(err) })
             }

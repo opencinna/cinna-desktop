@@ -408,7 +408,8 @@ function createSessionObservers(
           sink.update(notification)
         },
         permission: (params) => sink.permission(params),
-        elicitation: (params) => sink.elicitation(params)
+        elicitation: (params) => sink.elicitation(params),
+        ext: (method, params) => sink.ext?.(method, params)
       }
       const observation = createSessionObservation(scope, heard)
       const unobserve = connection.observeSession(scope.sessionId, observation.observer)
@@ -1107,7 +1108,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       onExtNotification: (method: string, params: Record<string, unknown>): void => {
         if (turn.replaying) return
         if (method === AUTH_STATUS_METHOD) noteConnectionAuth(live, params)
-        emit(stream.applyExt(method, params).message)
+        const update = stream.applyExt(method, params)
+        // Claude's raw stream: the session's own frames only (a subagent's
+        // arrive under the parent's id and say so themselves).
+        if (update.sdk && sessionId && update.sdk.sessionId === sessionId) ctx.telemetry?.sdk(live, sessionId, update.sdk)
+        emit(update.message)
       }
     }
 
@@ -1148,6 +1153,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         deps.recordModelCatalog?.(input.runScope?.profileUserId ?? ctx.userId, ctx.launcherId, loaded)
         runtime.validate(chatId)
         sessionId = remembered
+        ctx.telemetry?.session(remembered, false, fingerprint)
         ctx.telemetry?.model(selectedModelOf((loaded as { configOptions?: unknown } | null)?.configOptions))
         // Not prompted on this connection yet, or loaded under other params: the
         // adapter built a fresh session object over the restored history (see
@@ -1188,6 +1194,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         runtime.validate(chatId)
         sessionId = created.sessionId
         noteSessionLive(connection, sessionId, fingerprint)
+        ctx.telemetry?.session(sessionId, true, fingerprint, connection)
         ctx.telemetry?.model(selectedModelOf((created as { configOptions?: unknown }).configOptions))
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -1685,7 +1692,10 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     },
     onExtNotification: (method, params) => {
       if (ended) return
-      emit(stream.applyExt(method, params).message)
+      const folded = stream.applyExt(method, params)
+      // The raw result is where a follow-up's tokens come from.
+      if (folded.sdk && folded.sdk.sessionId === sessionId) ctx.telemetry?.sdk(connection, sessionId, folded.sdk)
+      emit(folded.message)
     }
   }
 
@@ -2298,12 +2308,13 @@ function finish(
  * cost reading per session for the first reading after a restart. Empty
  * without a telemetry service.
  */
-function telemetrySink(deps: AcpDriverDeps, chatId: string): Pick<TurnTelemetryOptions, 'reporter' | 'lastCostReading'> {
+function telemetrySink(deps: AcpDriverDeps, chatId: string): Pick<TurnTelemetryOptions, 'reporter' | 'lastCostReading' | 'lastModelCostReadings'> {
   const reporter = deps.telemetry
   if (!reporter) return {}
   return {
     reporter,
-    ...(reporter.lastCostReading ? { lastCostReading: (sessionId: string) => reporter.lastCostReading?.(chatId, sessionId) } : {})
+    ...(reporter.lastCostReading ? { lastCostReading: (sessionId: string) => reporter.lastCostReading?.(chatId, sessionId) } : {}),
+    ...(reporter.lastModelCostReadings ? { lastModelCostReadings: (sessionId: string) => reporter.lastModelCostReadings?.(chatId, sessionId) } : {})
   }
 }
 

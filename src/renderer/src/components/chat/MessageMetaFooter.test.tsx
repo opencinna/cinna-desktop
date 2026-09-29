@@ -34,6 +34,19 @@ describe('the message metadata popup', () => {
       .toMatchObject({ cost: '$0.04123 (estimated)' })
   })
 
+  it('adds the request count and API time the raw stream reported', () => {
+    expect(buildMeta({ ...base, telemetry: {
+      tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }, tokenScope: 'turn', costUsd: 0.5, costSource: 'runtime',
+      requests: 3, durationMs: 9_000, apiDurationMs: 7_250
+    } }).telemetry).toEqual({
+      tokens: { scope: 'turn', input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+      cost: '$0.5',
+      requests: 3,
+      durationMs: 9_000,
+      apiDurationMs: 7_250
+    })
+  })
+
   it('adds nothing without telemetry', () => {
     expect(Object.keys(buildMeta(base))).toEqual(['id', 'role', 'createdAt', 'sortOrder', 'chatId', 'contentLength'])
   })

@@ -22,11 +22,23 @@
  *   `_meta.quota` hold the turn's **last request** only (`tokenUsage.last`).
  *   Recorded as `tokenScope: 'last_request'`. No cost.
  *
+ * - **Claude's raw SDK stream** (`acpSdkTelemetry.ts`, requested by the
+ *   launcher) adds what the ACP surface does not carry: the resolved model
+ *   from the first request, each main-agent request's time and cache-write
+ *   TTL, and per result the per-model running cost, context window and max
+ *   output, API time (a running total like the cost, measured against this
+ *   process's earlier reading only) and request count. A follow-up turn (no prompt
+ *   response) takes its tokens from the raw `result`'s `usage`.
+ * - **Codex cost is estimated** from `shared/modelPricing.ts` (the runtime
+ *   reports none) — a lower bound while its tokens are the last request's.
+ *
  * Nothing here keeps or logs an account email or organisation: the auth
  * payload is read for its kind, a scrubbed label and the plan name.
  */
 
+import { createHash } from 'node:crypto'
 import type { CodexAuthStatus } from '../../../../shared/engine'
+import { canonicalPricingModel, costOf, type CacheTtl } from '../../../../shared/modelPricing'
 import {
   EMPTY_TOKEN_TALLY,
   type AuthKind,
@@ -38,7 +50,8 @@ import {
   type TokenTally
 } from '../../../../shared/sessionTelemetry'
 import { createLogger } from '../../../logger/logger'
-import type { AcpConnection, AcpLauncherId, AcpTelemetryFrame } from './types'
+import { sdkFrameLabel } from './acpSdkTelemetry'
+import type { AcpConnection, AcpLauncherId, AcpSdkFrame, AcpTelemetryFrame } from './types'
 
 const logger = createLogger('acp-telemetry')
 
@@ -92,6 +105,94 @@ export class CostReadings {
 export const costReadings = new CostReadings()
 
 /**
+ * The same bookkeeping per model, for the raw `result.modelUsage[m].costUSD`
+ * readings — running totals for the session's query, like `total_cost_usd`.
+ * A connection that has readings for the session measures a model it has
+ * none for from zero; one that has none asks `persisted`.
+ */
+export class ModelCostReadings {
+  private readonly readings = new WeakMap<AcpConnection, Map<string, Record<string, number>>>()
+
+  /** Records `readings` and answers what each model's added (see {@link costDelta}). */
+  take(
+    connection: AcpConnection,
+    sessionId: string,
+    readings: Record<string, number>,
+    persisted?: (sessionId: string) => Record<string, number> | undefined
+  ): Record<string, number> {
+    let sessions = this.readings.get(connection)
+    if (!sessions) {
+      sessions = new Map()
+      this.readings.set(connection, sessions)
+    }
+    const previous = sessions.get(sessionId) ?? persisted?.(sessionId) ?? {}
+    const deltas: Record<string, number> = {}
+    for (const [model, reading] of Object.entries(readings)) deltas[model] = costDelta(previous[model], reading)
+    sessions.set(sessionId, { ...previous, ...readings })
+    return deltas
+  }
+}
+
+export const modelCostReadings = new ModelCostReadings()
+
+/**
+ * The raw `result.duration_api_ms` readings, per session, per connection. Like
+ * `total_cost_usd` it comes from the CLI's cumulative cost ledger, so it is a
+ * running total for the session, not the result's own time. In memory only:
+ * a connection with no reading for a session has nothing to measure against,
+ * and the turn's API time stays unknown rather than guessed.
+ */
+export class ApiDurationReadings {
+  private readonly readings = new WeakMap<AcpConnection, Map<string, number>>()
+
+  /** The last reading this connection saw for the session, or undefined. */
+  last(connection: AcpConnection, sessionId: string): number | undefined {
+    return this.readings.get(connection)?.get(sessionId)
+  }
+
+  record(connection: AcpConnection, sessionId: string, reading: number): void {
+    let sessions = this.readings.get(connection)
+    if (!sessions) {
+      sessions = new Map()
+      this.readings.set(connection, sessions)
+    }
+    sessions.set(sessionId, reading)
+  }
+}
+
+export const apiDurationReadings = new ApiDurationReadings()
+
+/** How far the table's price may drift from the runtime's cost before it is logged. */
+export const CALIBRATION_TOLERANCE = 0.05
+
+/**
+ * The price table checked against Claude's runtime cost, turn by turn. A
+ * drift above {@link CALIBRATION_TOLERANCE} is logged once per model per
+ * process — a stale table shows in the logs, not silently in the UI. The log
+ * names the model and the two figures, nothing else.
+ */
+export class PriceCalibration {
+  private readonly warned = new Set<string>()
+
+  /** True when this call logged. */
+  check(model: string, estimatedUsd: number | undefined, runtimeUsd: number | undefined): boolean {
+    if (estimatedUsd === undefined || runtimeUsd === undefined || runtimeUsd <= 0) return false
+    const canonical = canonicalPricingModel(model)
+    if (this.warned.has(canonical)) return false
+    if (Math.abs(estimatedUsd - runtimeUsd) / runtimeUsd <= CALIBRATION_TOLERANCE) return false
+    this.warned.add(canonical)
+    logger.warn('the price table drifts from the runtime’s cost for a model', {
+      model: canonical,
+      estimatedUsd: Number(estimatedUsd.toPrecision(6)),
+      runtimeUsd: Number(runtimeUsd.toPrecision(6))
+    })
+    return true
+  }
+}
+
+export const priceCalibration = new PriceCalibration()
+
+/**
  * The sessions each connection has run a prompt on, or created, with the
  * fingerprint of the params they were last set up under. A session
  * `session/load`ed on a connection where it is not in here is a fresh adapter
@@ -121,6 +222,15 @@ export function noteSessionLive(connection: AcpConnection, sessionId: string, fi
 
 export function isSessionLive(connection: AcpConnection, sessionId: string, fingerprint: string): boolean {
   return liveSessions.get(connection)?.get(sessionId) === fingerprint
+}
+
+/**
+ * What telemetry keeps of a {@link sessionFingerprint}: a digest. The
+ * fingerprint itself holds the MCP servers' env and headers, which can be
+ * secrets, and is never stored.
+ */
+export function fingerprintDigest(fingerprint: string): string {
+  return createHash('sha256').update(fingerprint).digest('hex').slice(0, 16)
 }
 
 /* -------------------------------------------------------- prompt response */
@@ -366,17 +476,34 @@ export interface TurnTelemetryOptions {
   reporter?: SessionTelemetryReporter
   now?: () => number
   costs?: CostReadings
+  modelCosts?: ModelCostReadings
+  apiDurations?: ApiDurationReadings
+  calibration?: PriceCalibration
   /** The last cost reading the chat's telemetry kept for a session (see {@link CostReadings}). */
   lastCostReading?: (sessionId: string) => number | undefined
+  /** The same per model (see {@link ModelCostReadings}). */
+  lastModelCostReadings?: (sessionId: string) => Record<string, number> | undefined
+}
+
+/** The SDK's `apiKeySource` values that mean an API key paid. `none` says nothing (OAuth, a bearer token, a cloud). */
+const API_KEY_SOURCES = new Set(['ANTHROPIC_API_KEY', 'apiKeyHelper', '/login managed key'])
+
+/** The key among `keys` naming the same model as `model`, exact first. */
+function sameModel(keys: string[], model: string | undefined): string | undefined {
+  if (!model) return undefined
+  if (keys.includes(model)) return model
+  const wanted = canonicalPricingModel(model)
+  return keys.find((key) => canonicalPricingModel(key) === wanted)
 }
 
 /**
  * What one turn — prompted or a follow-up — observed, settled once into its
  * {@link MessageTelemetry} and reported to the session once.
  *
- * Context readings are reported as they arrive (mid-turn too); the turn's
- * tokens and cost only at {@link settle}. The caller drops a load replay's
- * frames before they get here.
+ * Context readings and raw-stream facts (init, main-agent requests,
+ * compaction) are reported as they arrive; the turn's tokens and cost only
+ * at {@link settle}. The caller drops a load replay's frames before they get
+ * here.
  */
 export class TurnTelemetry {
   private selected?: string
@@ -389,12 +516,37 @@ export class TurnTelemetry {
   private settled = false
   private mainLoopOnly = false
   private result?: MessageTelemetry
+  private authKind?: SessionTelemetryAuth['kind']
+  // Claude's raw stream.
+  private rawModel?: string
+  private fastMode?: string
+  private readonly requestIds = new Set<string>()
+  private requests = 0
+  private ttl?: CacheTtl
+  private maxRequestInput?: number
+  private rawUsage?: TokenTally
+  private numTurns?: number
+  /** The session's API-time reading before the turn's first result: `null` when this process had none. */
+  private apiDurationBefore?: number | null
+  private apiDurationLatest?: number
+  private readonly modelCostDelta: Record<string, number> = {}
+  private readonly modelCostLatest: Record<string, number> = {}
+  private readonly modelCostBasis: Record<string, string> = {}
+  private contextWindow?: number
+  private maxOutputTokens?: number
+  private readonly traffic: Record<string, { frames: number; bytes?: number }> = {}
   private readonly now: () => number
   private readonly costs: CostReadings
+  private readonly modelCosts: ModelCostReadings
+  private readonly apiDurations: ApiDurationReadings
+  private readonly calibration: PriceCalibration
 
   constructor(private readonly options: TurnTelemetryOptions) {
     this.now = options.now ?? Date.now
     this.costs = options.costs ?? costReadings
+    this.modelCosts = options.modelCosts ?? modelCostReadings
+    this.apiDurations = options.apiDurations ?? apiDurationReadings
+    this.calibration = options.calibration ?? priceCalibration
   }
 
   get engine(): TelemetryEngine {
@@ -417,6 +569,17 @@ export class TurnTelemetry {
     if (selected === this.reportedSelected) return
     this.reportedSelected = selected
     this.report({ type: 'model', engine: this.options.engine, selected })
+  }
+
+  /**
+   * The turn's ACP session was created (`fresh`) or loaded, under the params
+   * whose {@link sessionFingerprint} is `fingerprint`. Only a digest goes on.
+   * A session this connection created starts its API-time ledger at zero, so
+   * its first turn's API time is known rather than left unset.
+   */
+  session(sessionId: string, fresh: boolean, fingerprint: string, connection?: AcpConnection): void {
+    if (fresh && connection) this.apiDurations.record(connection, sessionId, 0)
+    this.report({ type: 'session', engine: this.options.engine, sessionId, fresh, fingerprint: fingerprintDigest(fingerprint), at: this.now() })
   }
 
   /**
@@ -446,13 +609,117 @@ export class TurnTelemetry {
       costed,
       ...(frame.costUsd !== undefined ? { costReading: frame.costUsd } : {}),
       ...(frame.rateLimit !== undefined ? { rateLimit: frame.rateLimit } : {}),
-      at: this.now()
+      at: this.now(),
+      ...(this.requests > 0 ? { cacheTimed: true } : {})
     })
+  }
+
+  /**
+   * One raw SDK frame (`_claude/sdkMessage`) of the turn's own session.
+   * A subagent's frame (`main: false`) is counted as traffic and read for
+   * nothing else: it never moves the model, the context or the cache.
+   */
+  sdk(connection: AcpConnection, sessionId: string, frame: AcpSdkFrame): void {
+    const label = sdkFrameLabel(frame)
+    const seen = this.traffic[label] ?? { frames: 0 }
+    // Sized only while debug detail is on (`readSdkMessage`).
+    const bytes = frame.bytes !== undefined || seen.bytes !== undefined ? (seen.bytes ?? 0) + (frame.bytes ?? 0) : undefined
+    this.traffic[label] = { frames: seen.frames + 1, ...(bytes !== undefined ? { bytes } : {}) }
+    const engine = this.options.engine
+    switch (frame.kind) {
+      case 'init': {
+        if (frame.model) this.rawModel = frame.model
+        if (frame.fastMode) this.fastMode = frame.fastMode
+        this.report({
+          type: 'runtime',
+          engine,
+          sessionId,
+          ...(frame.model ? { model: frame.model } : {}),
+          ...(frame.cliVersion ? { cliVersion: frame.cliVersion } : {}),
+          ...(frame.betas ? { betas: frame.betas } : {}),
+          ...(frame.effort !== undefined ? { effort: frame.effort } : {}),
+          ...(frame.fastMode ? { fastMode: frame.fastMode } : {}),
+          ...(frame.apiKeySource && API_KEY_SOURCES.has(frame.apiKeySource) ? { authHint: 'api_key' as const } : {})
+        })
+        return
+      }
+      case 'assistant': {
+        if (!frame.main) return
+        if (frame.model) this.rawModel = frame.model
+        // A streamed message arrives as one frame per content block, each
+        // with the same id and the same input-side usage: one request.
+        if (frame.messageId) {
+          if (this.requestIds.has(frame.messageId)) return
+          this.requestIds.add(frame.messageId)
+        }
+        this.requests += 1
+        const usage = frame.usage
+        const input = usage ? usage.input + usage.cacheRead + usage.cacheWrite : 0
+        const write5m = usage?.cacheWrite5m ?? 0
+        const write1h = usage?.cacheWrite1h ?? 0
+        if (write1h > 0) this.ttl = '1h'
+        else if (write5m > 0 && this.ttl === undefined) this.ttl = '5m'
+        if (input > 0) this.maxRequestInput = Math.max(this.maxRequestInput ?? 0, input)
+        this.report({
+          type: 'request',
+          engine,
+          sessionId,
+          ...(frame.model ? { model: frame.model } : {}),
+          input,
+          cacheWrite5m: write5m,
+          cacheWrite1h: write1h,
+          at: this.now()
+        })
+        return
+      }
+      case 'result': {
+        if (frame.fastMode) this.fastMode = frame.fastMode
+        if (frame.usage) {
+          const tally: TokenTally = { input: frame.usage.input, output: frame.usage.output, cacheRead: frame.usage.cacheRead, cacheWrite: frame.usage.cacheWrite }
+          if (frame.usage.cacheWrite1h !== undefined) tally.cacheWrite1h = frame.usage.cacheWrite1h
+          this.rawUsage = this.rawUsage ? addTally(this.rawUsage, tally) : tally
+        }
+        if (frame.numTurns !== undefined) this.numTurns = (this.numTurns ?? 0) + frame.numTurns
+        // A running total, like the cost: the turn's is the last reading
+        // less the one before the turn, never a sum of readings.
+        if (frame.apiDurationMs !== undefined) {
+          if (this.apiDurationBefore === undefined) this.apiDurationBefore = this.apiDurations.last(connection, sessionId) ?? null
+          this.apiDurations.record(connection, sessionId, frame.apiDurationMs)
+          this.apiDurationLatest = frame.apiDurationMs
+        }
+        const readings: Record<string, number> = {}
+        for (const [model, row] of Object.entries(frame.models)) {
+          if (row.costUsd !== undefined) readings[model] = row.costUsd
+          if (row.costBasis) this.modelCostBasis[model] = row.costBasis
+        }
+        if (Object.keys(readings).length) {
+          const deltas = this.modelCosts.take(connection, sessionId, readings, this.options.lastModelCostReadings)
+          for (const [model, delta] of Object.entries(deltas)) this.modelCostDelta[model] = (this.modelCostDelta[model] ?? 0) + delta
+          Object.assign(this.modelCostLatest, readings)
+        }
+        // The window is the main model's; a subagent's model has its own.
+        const models = Object.keys(frame.models)
+        const main = sameModel(models, this.rawModel ?? this.selected) ?? (models.length === 1 ? models[0] : undefined)
+        if (main) {
+          const row = frame.models[main]
+          if (row.contextWindow) this.contextWindow = row.contextWindow
+          if (row.maxOutputTokens) this.maxOutputTokens = row.maxOutputTokens
+        }
+        return
+      }
+      case 'compact':
+        this.report({ type: 'compaction', engine, sessionId, at: this.now() })
+        return
+      case 'other':
+        return
+    }
   }
 
   /** The login, reported to the session as it stands. */
   auth(auth: SessionTelemetryAuth | null): void {
-    if (auth) this.report({ type: 'auth', engine: this.options.engine, auth })
+    if (!auth) return
+    this.authKind = auth.kind
+    this.report({ type: 'auth', engine: this.options.engine, auth })
   }
 
   /** The prompt went out (or the follow-up began). */
@@ -466,6 +733,55 @@ export class TurnTelemetry {
     this.answer = response
   }
 
+  /** Per-model cost deltas keyed like the turn's token rows where the ids name the same model. */
+  private costsByModel(rows: Record<string, TokenTally>): Record<string, number> {
+    const keys = Object.keys(rows)
+    const byModel: Record<string, number> = {}
+    for (const [model, cost] of Object.entries(this.modelCostDelta)) {
+      const key = sameModel(keys, model) ?? model
+      byModel[key] = (byModel[key] ?? 0) + cost
+    }
+    return byModel
+  }
+
+  /**
+   * Claude: each model's tokens at list price against what the runtime
+   * charged for it. Not on a resumed session's first turn (its rows are not
+   * the turn's), and not for a model the runtime priced other than at list.
+   */
+  private calibrate(rows: Record<string, TokenTally>): void {
+    const models = Object.keys(rows)
+    const costKeys = Object.keys(this.modelCostDelta)
+    for (const model of models) {
+      const costKey = sameModel(costKeys, model)
+      let runtime: number | undefined
+      if (costKey) {
+        const basis = this.modelCostBasis[costKey]
+        if (basis && basis !== 'list') continue
+        runtime = this.modelCostDelta[costKey]
+      } else if (models.length === 1 && costKeys.length === 0) {
+        runtime = this.costUsd
+      }
+      const estimated = costOf(model, rows[model], {
+        ttl: this.ttl ?? '5m',
+        fast: this.fastMode === 'on',
+        ...(this.maxRequestInput !== undefined ? { contextTokens: this.maxRequestInput } : {})
+      })
+      this.calibration.check(model, estimated, runtime)
+    }
+  }
+
+  private logTraffic(): void {
+    const labels = Object.keys(this.traffic)
+    if (!labels.length) return
+    let bytes: number | undefined
+    for (const label of labels) {
+      const sized = this.traffic[label].bytes
+      if (sized !== undefined) bytes = (bytes ?? 0) + sized
+    }
+    logger.debug('raw SDK stream traffic for the turn', { chatId: this.options.chatId, ...(bytes !== undefined ? { bytes } : {}), byType: this.traffic })
+  }
+
   /**
    * The turn's telemetry, or undefined when the runtime reported neither
    * tokens nor cost. The first call reports it to the session; later calls
@@ -474,26 +790,64 @@ export class TurnTelemetry {
   settle(sessionId: string | null): MessageTelemetry | undefined {
     if (this.settled) return this.result
     this.settled = true
-    const parsed = this.answer !== undefined ? parsePromptTelemetry(this.answer, this.options.engine, this.selected, { mainLoopOnly: this.mainLoopOnly }) : null
-    if (!parsed && this.costUsd === undefined) return undefined
+    this.logTraffic()
+    const engine = this.options.engine
+    const parsed = this.answer !== undefined ? parsePromptTelemetry(this.answer, engine, this.selected, { mainLoopOnly: this.mainLoopOnly }) : null
+    // No prompt response (a follow-up the agent started): the raw result's
+    // main-loop usage is the turn's.
+    const raw = !parsed && this.rawUsage ? { tokens: this.rawUsage, model: this.rawModel } : null
+    if (!parsed && !raw && this.costUsd === undefined) return undefined
+    const model = parsed?.model ?? raw?.model
+    const tokens = parsed?.tokens ?? raw?.tokens ?? { ...EMPTY_TOKEN_TALLY }
+    const tokenScope: TokenScope = parsed ? parsed.tokenScope : raw ? 'turn' : 'none'
+    const rows = parsed?.byModel ?? {}
+
+    let costUsd = this.costUsd
+    let costSource: MessageTelemetry['costSource'] = 'runtime'
+    let byModelCost = this.costsByModel(rows)
+    if (engine === 'claude' && parsed && !this.mainLoopOnly) this.calibrate(rows)
+    // Codex reports no cost: the table's, unless a partner cloud paid (its
+    // prices differ) or the model is not in it. A lower bound while the
+    // tokens are the last request's.
+    if (engine === 'codex' && costUsd === undefined && parsed && model && this.authKind !== 'cloud') {
+      const estimated = costOf(model, tokens, { contextTokens: tokens.input + tokens.cacheRead + tokens.cacheWrite })
+      if (estimated !== undefined) {
+        costUsd = estimated
+        costSource = 'estimated'
+        byModelCost = { [model]: estimated }
+      }
+    }
+
     const end = this.endedAt ?? this.now()
+    const requests = this.numTurns ?? (this.requests > 0 ? this.requests : undefined)
+    // No earlier reading in this process: the turn's API time is not known.
+    const apiDurationMs =
+      this.apiDurationLatest !== undefined && typeof this.apiDurationBefore === 'number'
+        ? costDelta(this.apiDurationBefore, this.apiDurationLatest)
+        : undefined
     const message: MessageTelemetry = {
-      ...(parsed?.model ? { model: parsed.model } : {}),
-      tokens: parsed ? parsed.tokens : { ...EMPTY_TOKEN_TALLY },
-      tokenScope: parsed ? parsed.tokenScope : 'none',
-      ...(this.costUsd !== undefined ? { costUsd: this.costUsd } : {}),
-      costSource: 'runtime',
+      ...(model ? { model } : {}),
+      tokens,
+      tokenScope,
+      ...(costUsd !== undefined ? { costUsd } : {}),
+      costSource,
+      ...(requests !== undefined ? { requests } : {}),
       ...(this.startedAt !== undefined ? { durationMs: Math.max(0, end - this.startedAt) } : {}),
+      ...(apiDurationMs !== undefined ? { apiDurationMs } : {}),
       ...(this.lastUsed !== undefined ? { contextUsedAfter: this.lastUsed } : {})
     }
     this.result = message
     if (sessionId) {
       this.report({
         type: 'turn',
-        engine: this.options.engine,
+        engine,
         sessionId,
         message,
-        ...(parsed && Object.keys(parsed.byModel).length ? { byModel: parsed.byModel } : {}),
+        ...(Object.keys(rows).length ? { byModel: rows } : {}),
+        ...(Object.keys(byModelCost).length ? { byModelCost } : {}),
+        ...(Object.keys(this.modelCostLatest).length ? { modelCostReadings: { ...this.modelCostLatest } } : {}),
+        ...(this.contextWindow !== undefined ? { contextWindow: this.contextWindow } : {}),
+        ...(this.maxOutputTokens !== undefined ? { maxOutputTokens: this.maxOutputTokens } : {}),
         ...(this.selected ? { selectedModel: this.selected } : {})
       })
     }

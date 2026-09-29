@@ -51,7 +51,9 @@ export function buildMeta(msg: MessageData): Record<string, unknown> {
     if (telemetry.costUsd !== undefined) {
       shown.cost = `$${Number(telemetry.costUsd.toPrecision(4))}${telemetry.costSource === 'runtime' ? '' : ' (estimated)'}`
     }
+    if (telemetry.requests !== undefined) shown.requests = telemetry.requests
     if (telemetry.durationMs !== undefined) shown.durationMs = telemetry.durationMs
+    if (telemetry.apiDurationMs !== undefined) shown.apiDurationMs = telemetry.apiDurationMs
     meta.telemetry = shown
   }
   if (msg.parts && msg.parts.length > 0) {

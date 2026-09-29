@@ -98,6 +98,7 @@ import {
   type PartLike
 } from '../../streamPartsAccumulator'
 import type { AcpLauncherId, AcpStreamUpdate, AcpTelemetryFrame } from './types'
+import { readSdkMessage, SDK_MESSAGE_METHOD } from './acpSdkTelemetry'
 import type { SessionNotification } from '@agentclientprotocol/sdk'
 
 /** The message a block belongs to when no chunk has named one yet. */
@@ -245,8 +246,16 @@ export class AcpMessageStream {
    * (`claude/s2-perms-turn.ndjson`). Funnelling every extension through one
    * function that keeps nothing is what makes "the driver drops it" a fact
    * about the code rather than a promise about every call site.
+   *
+   * The one extension read is Claude's raw SDK stream (`_claude/sdkMessage`),
+   * and only into the numbers telemetry wants (`readSdkMessage`): its frames
+   * repeat the turn's content, which reaches the transcript the usual way.
    */
-  applyExt(_method: string, _params: Record<string, unknown>): AcpStreamUpdate {
+  applyExt(method: string, params: Record<string, unknown>): AcpStreamUpdate {
+    if (method === SDK_MESSAGE_METHOD) {
+      const sdk = readSdkMessage(params)
+      return sdk ? { sdk } : {}
+    }
     return {}
   }
 

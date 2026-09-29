@@ -55,6 +55,12 @@ export interface SessionTrafficSink {
   update(notification: SessionNotification): void
   permission(params: RequestPermissionRequest): Promise<RequestPermissionResponse>
   elicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse>
+  /**
+   * An extension notification naming the session. Optional: only the
+   * follow-up gate wants any (Claude's raw SDK frames, for the follow-up's
+   * telemetry); without it they are counted and dropped.
+   */
+  ext?(method: string, params: Record<string, unknown>): void
 }
 
 export type SessionTrafficSinkFactory = (scope: SessionTrafficScope) => SessionTrafficSink
@@ -177,7 +183,19 @@ export function createSessionObservation(
       count('elicitation/create')
       return guarded('question', { action: 'cancel' }, () => sink.elicitation(params))
     },
-    onExtNotification: (method) => count(method)
+    onExtNotification: (method, params) => {
+      if (closed) return
+      count(method)
+      try {
+        sink.ext?.(method, params)
+      } catch (err) {
+        logger.warn('the session traffic sink threw on an extension notification', {
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          error: String(err)
+        })
+      }
+    }
   }
 
   return {
