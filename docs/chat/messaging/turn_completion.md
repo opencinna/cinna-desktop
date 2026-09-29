@@ -6,7 +6,7 @@ A finished turn reports what happened without assuming that its enclosing task i
 
 ## Outcome and Lifetime
 
-`src/main/services/turnCompletion.ts` defines `TurnOutcome`. Its state is `completed`, `needs_input`, `failed`, `canceled` or `budget`; text contains the final assistant answer or the stopped round’s retained partial output. Optional error data carries a message and code. An internal coordinator control records explicit handoff, finish or human-wait intent; arbitrary tool prose cannot supply it. Optional usage means reported input/output tokens; absence means unreported, never zero. Current model adapters do not provide usage.
+`src/main/services/turnCompletion.ts` defines `TurnOutcome`. Its state is `completed`, `needs_input`, `failed`, `canceled` or `budget`; text contains the final assistant answer or the stopped round’s retained partial output. Optional error data carries a message and code. An internal coordinator control records explicit handoff, finish or human-wait intent; arbitrary tool prose cannot supply it. Optional usage means reported input/output tokens; absence means unreported, never zero. Only a local agent on Claude or Codex provides it, from its turn's [session telemetry](../../agents/session_telemetry/session_telemetry.md): input is uncached input plus cache reads plus cache writes. A Codex count covers the turn's last request only, so it is a lower bound, and a follow-up turn reports none. Remote A2A agents, Managed sessions, OpenCode and command-line agents provide no usage.
 
 `src/main/services/runExecutionService.ts` returns separate acceptance and completion promises. Acceptance follows the input-message transaction: human input uses a user row; everything the desktop wrote itself uses a system row.
 
