@@ -13,7 +13,7 @@ export interface TurnOutcome {
   /** Final assistant text, or the stopped round's retained partial text. */
   text: string
   error?: { message: string; code?: string }
-  /** Absent means unreported. The current adapter contract reports no usage. */
+  /** Absent means unreported: filled for the local Claude and Codex agents, from their prompt response. */
   usage?: { inputTokens: number; outputTokens: number }
 }
 

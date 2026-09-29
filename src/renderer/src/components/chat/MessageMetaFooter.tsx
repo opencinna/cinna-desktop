@@ -25,7 +25,7 @@ function formatRelative(from: Date, now: Date): string {
   return from.toLocaleDateString()
 }
 
-function buildMeta(msg: MessageData): Record<string, unknown> {
+export function buildMeta(msg: MessageData): Record<string, unknown> {
   const meta: Record<string, unknown> = {
     id: msg.id,
     role: msg.role,
@@ -39,6 +39,21 @@ function buildMeta(msg: MessageData): Record<string, unknown> {
   if (msg.toolCallId) meta.toolCallId = msg.toolCallId
   if (msg.toolError !== undefined) meta.toolError = msg.toolError
   if (msg.toolInput) meta.toolInput = msg.toolInput
+  // Before `parts`, which can run long enough to push it below the popup's fold.
+  const telemetry = msg.telemetry
+  if (telemetry) {
+    const shown: Record<string, unknown> = {}
+    if (telemetry.model) shown.model = telemetry.model
+    // Codex reports its last request only; a follow-up turn reports no tokens at all.
+    shown.tokens = telemetry.tokenScope === 'none'
+      ? 'not reported (follow-up turn)'
+      : { scope: telemetry.tokenScope === 'last_request' ? 'last request only (lower bound)' : 'turn', ...telemetry.tokens }
+    if (telemetry.costUsd !== undefined) {
+      shown.cost = `$${Number(telemetry.costUsd.toPrecision(4))}${telemetry.costSource === 'runtime' ? '' : ' (estimated)'}`
+    }
+    if (telemetry.durationMs !== undefined) shown.durationMs = telemetry.durationMs
+    meta.telemetry = shown
+  }
   if (msg.parts && msg.parts.length > 0) {
     meta.parts = msg.parts.map((p) => ({
       kind: p.kind,

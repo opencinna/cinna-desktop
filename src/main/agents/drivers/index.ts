@@ -70,6 +70,7 @@ import { createA2aTurnRecoverer } from './a2aTurnRecoverer'
 import { createAcpDriver, respondToAcpAsk, type AcpFolderView } from './acp/acpDriver'
 import { acpProcessPool } from './acp/acpPool'
 import { sessionActivityHub } from '../../services/sessionActivityHub'
+import { sessionTelemetryService } from '../telemetry/sessionTelemetryService'
 import { installChatSessionForgetter } from '../../services/chatSessionRelease'
 import { installSessionActivityStopper } from '../../services/sessionActivityStop'
 export { acpProcessPool } from './acp/acpPool'
@@ -707,6 +708,8 @@ export const acpDriver = createAcpDriver({
   },
   // Subagents and background processes a session reports, for the composer's badges.
   activity: sessionActivityHub,
+  // Tokens, cost, context and login a session reports, for the session badge.
+  telemetry: sessionTelemetryService,
   // A turn the agent starts between the user's turns becomes a run of the
   // chat. Imported when first needed: the service reaches this module back
   // through the run service.

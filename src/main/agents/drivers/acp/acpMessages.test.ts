@@ -138,8 +138,8 @@ describe('OpenCode', () => {
     expect(parts.map(kindOf)).toEqual(['thinking', 'text'])
     expect(parts[0].text).toBe('The user wants me to say hello in five words or fewer.')
     expect(parts[1].text).toBe('Hello there, how are you?')
-    // The trailing usage_update has nowhere to go and says so.
-    expect(updates[updates.length - 1]).toEqual({})
+    // The trailing usage_update is telemetry, never a message.
+    expect(updates[updates.length - 1]).toEqual({ telemetry: { used: 8013, size: 200000, costUsd: 0 } })
   })
 
   it('hands back the cumulative text, never a delta', () => {
@@ -418,6 +418,43 @@ describe('Claude', () => {
     const stream = new AcpMessageStream({ launcher: 'claude' })
     expect(stream.applyExt(fixture.method!, fixture.params!)).toEqual({})
     expect(stream.applyExt('_session/goal', { goal: 'anything' })).toEqual({})
+  })
+})
+
+describe('usage reports', () => {
+  const usage = (update: Record<string, unknown>): SessionNotification =>
+    ({ sessionId: 's1', update: { sessionUpdate: 'usage_update', ...update } }) as unknown as SessionNotification
+
+  it('turns a usage_update into telemetry and never into a message', () => {
+    const stream = new AcpMessageStream({ launcher: 'claude' })
+    // Mid-turn: no cost.
+    expect(stream.apply(usage({ used: 16_227, size: 200_000 }))).toEqual({ telemetry: { used: 16_227, size: 200_000 } })
+    // The end of a model result, from a turn the agent started (followup_turn.json).
+    expect(stream.apply(usage({
+      used: 16_470, size: 200_000, cost: { amount: 0.0407752, currency: 'USD' },
+      _meta: { '_claude/origin': { kind: 'task-notification' } }
+    }))).toEqual({ telemetry: { used: 16_470, size: 200_000, costUsd: 0.0407752, origin: { kind: 'task-notification' } } })
+    // A rate-limit event.
+    const limit = { status: 'allowed_warning', resetsAt: 1_900_000_000 }
+    expect(stream.apply(usage({ used: 1, size: 2, _meta: { '_claude/rateLimit': limit } }))).toEqual({ telemetry: { used: 1, size: 2, rateLimit: limit } })
+    // Garbage in the numeric fields is dropped, not passed on.
+    expect(stream.apply(usage({ used: 'lots', size: null, cost: { amount: 'free' } }))).toEqual({ telemetry: {} })
+  })
+
+  it('reads the session’s model option out of a config_option_update, beside the mode', () => {
+    const stream = new AcpMessageStream({ launcher: 'claude' })
+    const update = stream.apply({
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'config_option_update',
+        configOptions: [
+          { id: 'mode', category: 'mode', type: 'select', currentValue: 'auto', options: [] },
+          { id: 'model', category: 'model', type: 'select', currentValue: 'opus', options: [] },
+          { id: 'effort', category: 'thought_level', type: 'select', currentValue: 'high', options: [] }
+        ]
+      }
+    } as unknown as SessionNotification)
+    expect(update).toEqual({ modeId: 'auto', selectedModel: 'opus' })
   })
 })
 

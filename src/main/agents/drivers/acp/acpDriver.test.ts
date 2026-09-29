@@ -35,6 +35,8 @@ import type { AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
 import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpScript, type FakeAcpStep } from './testSupport/fakeAcp'
 import { ACP_PROTOCOL_VERSION, type AcpConnection, type AcpLauncherId, type AcpProcessPool } from './types'
 import type { SessionTrafficScope, SessionTrafficSink } from './acpSessionObserver'
+import type { SessionTelemetry, SessionTelemetryChange, SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
+import { applyTelemetryChange } from '../../telemetry/sessionTelemetryReducer'
 
 /** The one `needs_input` a turn posted, waited for. */
 function askedFor(w: World): Promise<Extract<RunEvent, { type: 'needs_input' }>> {
@@ -129,6 +131,8 @@ interface WorldOptions {
   costedEnd?: boolean
   /** The idle reap of `observedWorld`'s pool. */
   reapMs?: number
+  /** The launcher's own login report, for session telemetry (Codex). */
+  telemetryAuth?: AcpLauncher['telemetryAuth']
 }
 
 function makeWorld(options: WorldOptions = {}): World {
@@ -155,7 +159,8 @@ function makeWorld(options: WorldOptions = {}): World {
             session: { mcpServers: [] },
             setup: options.setup ?? {}
           },
-    ...(options.launcherReadiness ? { readiness: options.launcherReadiness } : {})
+    ...(options.launcherReadiness ? { readiness: options.launcherReadiness } : {}),
+    ...(options.telemetryAuth ? { telemetryAuth: options.telemetryAuth } : {})
   }
 
   const deps: AcpDriverDeps = {
@@ -1231,6 +1236,20 @@ describe('a turn the agent starts on its own', () => {
     expect([...w.observed]).toEqual(['ses_fake'])
   })
 
+  it('reports its cost to the session once, from the costed usage update alone', async () => {
+    const changes: SessionTelemetryChange[] = []
+    const w = followUpWorld({ script: thenOnItsOwn(FOLLOW_UP_STEPS), launcher: 'claude',
+      deps: { telemetry: { report: (_chatId, change) => void changes.push(change) } } })
+    await w.run({ runScope: RUN_SCOPE })
+    changes.length = 0
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const result = await request.run(followUpIo().io)
+    expect(result.telemetry).toMatchObject({ tokenScope: 'none', costUsd: 0.0407752, contextUsedAfter: 16_470 })
+    const turns = changes.filter((change) => change.type === 'turn')
+    expect(turns).toHaveLength(1)
+    expect(turns[0]).toMatchObject({ sessionId: 'ses_fake', message: { costUsd: 0.0407752 } })
+  })
+
   it('is not ended by a usage update without a cost', async () => {
     const w = followUpWorld({
       script: thenOnItsOwn([say('one ', 'm1'), PLAIN_USAGE, { kind: 'delay', ms: 150 }, say('two', 'm1'), COSTED_USAGE])
@@ -2169,6 +2188,196 @@ describe('which login paid for the turn', () => {
     const text = result.notices.map((notice) => notice.text).join('\n')
     expect(text).toContain('key for …')
     expect(text).not.toContain('someone@example.com')
+  })
+
+  it('says so once per chat on a connection, not on every turn', async () => {
+    const w = world({ launcher: 'claude', script: authStatus({ kind: 'apiKey', label: 'API key' }) })
+    const notices = async (chatId?: string): Promise<string> =>
+      (await w.run(chatId ? { chatId } : {})).notices.map((notice) => notice.text).join('\n')
+    expect(await notices()).toContain('did not run on the agent’s own login')
+    expect(await notices()).not.toContain('did not run on the agent’s own login')
+    // Another chat on the same connection has not been told.
+    expect(await notices('chat-2')).toContain('did not run on the agent’s own login')
+  })
+})
+
+describe('session telemetry', () => {
+  const q = (inputTokens: number, cachedInputTokens: number, cachedWriteTokens: number, outputTokens: number) => ({
+    totalTokens: inputTokens + cachedInputTokens + cachedWriteTokens + outputTokens,
+    inputTokens, cachedInputTokens, cachedWriteTokens, outputTokens, reasoningOutputTokens: 0
+  })
+  const CLAUDE_ANSWER = {
+    stopReason: 'end_turn',
+    usage: { inputTokens: 10, outputTokens: 200, cachedReadTokens: 30_000, cachedWriteTokens: 1_500, totalTokens: 31_710 },
+    _meta: { quota: { token_count: q(10, 30_000, 1_500, 200), model_usage: [
+      { model: 'claude-sonnet-5[1m]', token_count: q(10, 30_000, 1_500, 200) },
+      { model: 'claude-haiku-4-5', token_count: q(5, 8_000, 900, 120) }
+    ] } }
+  }
+  const usage = (update: Record<string, unknown>, sessionId = 'ses_fake'): FakeAcpStep =>
+    ({ kind: 'update', sessionId, update: { sessionUpdate: 'usage_update', ...update } })
+  const reporter = (): { changes: SessionTelemetryChange[]; telemetry: SessionTelemetryReporter } => {
+    const changes: SessionTelemetryChange[] = []
+    return { changes, telemetry: { report: (chatId, change) => { expect(chatId).toBe(CHAT_ID); changes.push(change) } } }
+  }
+
+  it('returns a Claude turn’s model, tokens, cost and context, and reports the turn once', async () => {
+    const { changes, telemetry } = reporter()
+    const w = world({ launcher: 'claude', deps: { telemetry }, script: { prompt: {
+      emit: [
+        usage({ used: 16_000, size: 200_000 }),
+        { kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } } },
+        // A subagent's own session (Codex opens one) is routed here, but is not this session's context.
+        { kind: 'update', update: { sessionUpdate: 'subagent_spawned', subagentSessionId: 'ses_child', name: 'Echo', task: 'Echo', capabilities: {} } },
+        usage({ used: 3, size: 4 }, 'ses_child'),
+        usage({ used: 16_400, size: 1_000_000, cost: { amount: 0.04, currency: 'USD' } })
+      ],
+      response: CLAUDE_ANSWER
+    } } })
+    const result = await w.run()
+    expect(result.telemetry).toMatchObject({
+      model: 'claude-sonnet-5[1m]',
+      tokens: { input: 15, output: 320, cacheRead: 38_000, cacheWrite: 2_400 },
+      tokenScope: 'turn',
+      costUsd: 0.04,
+      costSource: 'runtime',
+      contextUsedAfter: 16_400
+    })
+    expect(result.telemetry?.durationMs).toBeGreaterThanOrEqual(0)
+    const turns = changes.filter((change) => change.type === 'turn')
+    expect(turns).toHaveLength(1)
+    expect(turns[0]).toMatchObject({ sessionId: 'ses_fake', byModel: { 'claude-haiku-4-5': { output: 120 } } })
+    expect(changes.filter((change) => change.type === 'context').map((change) => change.type === 'context' && change.used))
+      .toEqual([16_000, 16_400])
+  })
+
+  it('counts a cancelled turn’s answer too', async () => {
+    const controller = new AbortController()
+    const w = world({ launcher: 'claude', script: { prompt: {
+      emit: [{ kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Wor' } } }, { kind: 'awaitCancel' }],
+      response: { ...CLAUDE_ANSWER, stopReason: 'cancelled' }
+    } } })
+    const running = w.run({ signal: controller.signal })
+    await waitFor(() => w.events.some((event) => event.type === 'delta'), 'the first delta')
+    controller.abort()
+    const result = await running
+    expect(result.taskState).toBe('canceled')
+    expect(result.telemetry?.tokens.output).toBe(320)
+  })
+
+  it('does not count what a session/load replays', async () => {
+    const { changes, telemetry } = reporter()
+    const w = world({ launcher: 'claude', remembered: 'ses_fake', deps: { telemetry }, script: {
+      loadSession: { emit: [usage({ used: 999, size: 200_000, cost: { amount: 5, currency: 'USD' } })] },
+      prompt: { emit: [usage({ used: 1_000, size: 200_000, cost: { amount: 5.5, currency: 'USD' } })], response: CLAUDE_ANSWER }
+    } })
+    const result = await w.run()
+    expect(changes.some((change) => change.type === 'context' && change.used === 999)).toBe(false)
+    // The replayed reading was never taken, so this turn's is its first: taken as is.
+    expect(result.telemetry?.costUsd).toBe(5.5)
+  })
+
+  it('reads the login from the notification that names no session, and says when it is not the subscription', async () => {
+    const { changes, telemetry } = reporter()
+    const w = world({ launcher: 'claude', deps: { telemetry }, script: {
+      // Before `session/new` answers, as the adapter sends it.
+      newSession: { emit: [{ kind: 'notify', method: '_auth/status_update', params: { authStatus: {
+        kind: 'api_key', label: 'Anthropic API key', account: { email: 'someone@example.com', organization: 'Acme' }
+      } } }] },
+      prompt: { emit: [{ kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } } }] }
+    } })
+    const result = await w.run()
+    expect(result.notices.map((notice) => notice.text).join('\n')).toContain('did not run on the agent’s own login — it reported “Anthropic API key”')
+    expect(changes.filter((change) => change.type === 'auth')).toEqual([
+      { type: 'auth', engine: 'claude', auth: { kind: 'api_key', label: 'Anthropic API key' } }
+    ])
+    expect(JSON.stringify(changes)).not.toContain('example.com')
+    expect(JSON.stringify(changes)).not.toContain('Acme')
+    expect(JSON.stringify(result)).not.toContain('example.com')
+  })
+
+  it('says so about a foreign login once per chat on a connection, not on every turn', async () => {
+    const { telemetry } = reporter()
+    const w = world({ launcher: 'claude', deps: { telemetry }, script: {
+      newSession: { emit: [{ kind: 'notify', method: '_auth/status_update', params: { authStatus: { kind: 'api_key', label: 'Anthropic API key' } } }] },
+      prompt: { emit: [{ kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } } }] }
+    } })
+    const noticed = (result: Awaited<ReturnType<typeof w.run>>): boolean =>
+      result.notices.some((notice) => notice.text.includes('did not run on the agent’s own login'))
+    expect(noticed(await w.run())).toBe(true)
+    expect(noticed(await w.run())).toBe(false)
+  })
+
+  it('reads a Codex turn as its last request, and its login from the launcher', async () => {
+    const { changes, telemetry } = reporter()
+    const w = world({ launcher: 'codex', deps: { telemetry }, telemetryAuth: async () => ({ kind: 'subscription', label: 'ChatGPT' }), script: {
+      newSession: { response: { configOptions: [{ id: 'model', category: 'model', type: 'select', currentValue: 'gpt-5.5-codex', options: [] }] } },
+      prompt: { emit: [usage({ used: 12_345, size: 258_400 })], response: {
+        stopReason: 'end_turn',
+        usage: { totalTokens: 12_345, inputTokens: 1_000, cachedReadTokens: 11_000, outputTokens: 345, thoughtTokens: 100 },
+        _meta: { quota: { token_count: { totalTokens: 12_345, inputTokens: 1_000, cachedInputTokens: 11_000, outputTokens: 345, reasoningOutputTokens: 100 },
+          model_usage: [{ model: 'gpt-5.5-codex', token_count: { totalTokens: 12_345, inputTokens: 1_000, cachedInputTokens: 11_000, outputTokens: 345, reasoningOutputTokens: 100 } }] } }
+      } }
+    } })
+    const result = await w.run()
+    expect(result.telemetry).toMatchObject({ model: 'gpt-5.5-codex', tokenScope: 'last_request', tokens: { input: 1_000, output: 345, cacheRead: 11_000 }, contextUsedAfter: 12_345 })
+    expect(result.telemetry?.costUsd).toBeUndefined()
+    await waitFor(() => changes.find((change) => change.type === 'auth'), 'the launcher’s login')
+    expect(changes.find((change) => change.type === 'auth')).toEqual({ type: 'auth', engine: 'codex', auth: { kind: 'subscription', label: 'ChatGPT' } })
+    expect(changes.find((change) => change.type === 'model')).toEqual({ type: 'model', engine: 'codex', selected: 'gpt-5.5-codex' })
+  })
+
+  it('counts only the turn’s own spend on the first turn after a restart, when the resumed session reports its whole history', async () => {
+    // The chat's aggregate, folded as the service folds it, surviving the "restart".
+    let state: SessionTelemetry | null = null
+    const service: SessionTelemetryReporter = {
+      report: (chatId, change) => { state = applyTelemetryChange(state, chatId, change, 1) },
+      lastCostReading: (_chatId, sessionId) => state?.totals.bySession[sessionId]?.lastCostReading
+    }
+    const first = world({ launcher: 'claude', deps: { telemetry: service }, script: { prompt: {
+      emit: [usage({ used: 16_400, size: 1_000_000, cost: { amount: 0.04, currency: 'USD' } })],
+      response: CLAUDE_ANSWER
+    } } })
+    await first.run()
+    expect(state!.totals.costUsd).toBeCloseTo(0.04)
+    expect(state!.totals.tokens).toEqual({ input: 15, output: 320, cacheRead: 38_000, cacheWrite: 2_400 })
+
+    // A new process loads the session. The CLI restored its cost-state, so the
+    // reading is the session's running total; the adapter's model_usage
+    // baseline started over, so the rows are both turns.
+    const RESUMED_ANSWER = {
+      stopReason: 'end_turn',
+      usage: { inputTokens: 7, outputTokens: 50, cachedReadTokens: 31_000, cachedWriteTokens: 0, totalTokens: 31_057 },
+      _meta: { quota: { token_count: q(7, 31_000, 0, 50), model_usage: [
+        { model: 'claude-sonnet-5[1m]', token_count: q(17, 61_000, 1_500, 250) },
+        { model: 'claude-haiku-4-5', token_count: q(5, 8_000, 900, 120) }
+      ] } }
+    }
+    const second = world({ launcher: 'claude', remembered: 'ses_fake', deps: { telemetry: service }, script: { prompt: {
+      emit: [usage({ used: 16_500, size: 1_000_000, cost: { amount: 0.1, currency: 'USD' } })],
+      response: RESUMED_ANSWER
+    } } })
+    const resumed = await second.run()
+    expect(resumed.telemetry?.costUsd).toBeCloseTo(0.06)
+    expect(resumed.telemetry?.tokens).toEqual({ input: 7, output: 50, cacheRead: 31_000, cacheWrite: 0 })
+    expect(state!.totals.costUsd).toBeCloseTo(0.1)
+    expect(state!.totals.tokens).toEqual({ input: 22, output: 370, cacheRead: 69_000, cacheWrite: 2_400 })
+    expect(state!.totals.turns).toBe(2)
+
+    // The next turn on that connection is live again: its rows are its own.
+    const next = await second.run()
+    expect(next.telemetry?.tokens).toEqual({ input: 22, output: 370, cacheRead: 69_000, cacheWrite: 2_400 })
+    expect(next.telemetry?.costUsd ?? 0).toBeCloseTo(0)
+  })
+
+  it('reports nothing for a nested turn, and nothing for an engine it does not read', async () => {
+    const { changes, telemetry } = reporter()
+    const nested = world({ launcher: 'claude', deps: { telemetry }, script: { prompt: { emit: [usage({ used: 1, size: 2, cost: { amount: 0.5, currency: 'USD' } })], response: CLAUDE_ANSWER } } })
+    const result = await nested.driver.run(USER_ID, ROW, { chatId: CHAT_ID, wireContent: 'hello', signal: new AbortController().signal, nested: { toolCallId: 'call_1' } })
+    expect(result.telemetry?.costUsd).toBe(0.5)
+    const opencode = world({ deps: { telemetry }, script: { prompt: { emit: [usage({ used: 1, size: 2, cost: { amount: 0.5, currency: 'USD' } })], response: CLAUDE_ANSWER } } })
+    expect((await opencode.run()).telemetry).toBeUndefined()
+    expect(changes).toEqual([])
   })
 })
 

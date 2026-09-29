@@ -7,7 +7,14 @@ const logger = createLogger('codex-auth')
 
 /** The CLI prints login status on stderr, including when it exits 1 logged out. */
 export function parseCodexAuthStatus(output: string): CodexAuthStatus {
-  if (/^Logged in (using|with)\b/im.test(output.trim())) return { state: 'logged_in' }
+  const loggedIn = /^Logged in (?:using|with)\b(.*)$/im.exec(output.trim())
+  if (loggedIn) {
+    // "Logged in using ChatGPT" / "Logged in using an API key - sk-…": only the
+    // method is kept, never what follows it.
+    const how = loggedIn[1]
+    const method = /\bChatGPT\b/i.test(how) ? 'chatgpt' as const : /\bAPI key\b/i.test(how) ? 'api_key' as const : undefined
+    return method ? { state: 'logged_in', method } : { state: 'logged_in' }
+  }
   if (/^Not logged in\s*$/im.test(output.trim())) return { state: 'logged_out' }
   return UNKNOWN
 }

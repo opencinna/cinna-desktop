@@ -2,7 +2,7 @@
 import { client } from '@agentclientprotocol/sdk'
 import type { AnyMessage, CreateElicitationResponse, RequestPermissionResponse, SessionNotification, Stream } from '@agentclientprotocol/sdk'
 import { createLogger } from '../../../logger/logger'
-import type { AcpSessionHandlers, AcpSessionObserver } from './types'
+import type { AcpSessionHandlers, AcpSessionObserver, ConnectionExtListener } from './types'
 const logger = createLogger('acp-client')
 
 /** One buffered piece of session traffic, ready to be replayed into handlers. */
@@ -227,6 +227,51 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
     }
   }
 
+  // ---- connection-level extensions ------------------------------------------
+
+  /**
+   * Who hears extension notifications that name no session. Traffic that
+   * arrives before anyone listens is kept — only the latest per method, and
+   * only until the first listener takes it — because `_auth/status_update`
+   * lands right after `initialize`, before a turn has had the connection in
+   * its hands. The payload carries the account email; nothing here logs it.
+   */
+  const connectionListeners = new Set<ConnectionExtListener>()
+  const earlyConnectionExt = new Map<string, Record<string, unknown>>()
+  const EARLY_CONNECTION_EXT_LIMIT = 16
+
+  const deliverConnectionExt = (method: string, params: Record<string, unknown>): void => {
+    if (connectionListeners.size === 0) {
+      earlyConnectionExt.delete(method)
+      if (earlyConnectionExt.size >= EARLY_CONNECTION_EXT_LIMIT) return
+      earlyConnectionExt.set(method, params)
+      return
+    }
+    for (const listener of [...connectionListeners]) {
+      try {
+        listener(method, params)
+      } catch (err) {
+        logger.warn('connection extension handler threw', { method, error: String(err) })
+      }
+    }
+  }
+
+  const onConnectionExt = (listener: ConnectionExtListener): (() => void) => {
+    connectionListeners.add(listener)
+    if (earlyConnectionExt.size > 0) {
+      const held = [...earlyConnectionExt]
+      earlyConnectionExt.clear()
+      for (const [method, params] of held) {
+        try {
+          listener(method, params)
+        } catch (err) {
+          logger.warn('connection extension handler threw on held traffic', { method, error: String(err) })
+        }
+      }
+    }
+    return () => { connectionListeners.delete(listener) }
+  }
+
   // ---- the client ----------------------------------------------------------
 
   // No `session/update` handler here on purpose — it is routed from the
@@ -281,9 +326,10 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
         // `_auth/status_update` is the one we know arrives this way — twice per
         // start, before `session/new` has even answered
         // (`claude/recordings/s1-session-new-mcp.ndjson`). It names no session,
-        // so no turn can own it, and it carries the account email, so it is not
-        // something to log the body of.
+        // so no turn can own it: it goes to the connection's own listeners. It
+        // carries the account email, so it is not something to log the body of.
         logger.debug('extension notification with no session', { method })
+        deliverConnectionExt(method, paramsRecord(params))
         return false
       }
       const record = paramsRecord(params)
@@ -293,10 +339,12 @@ export function connectAcpClient(stream: Stream, preBindWindowMs = 10_000, preBi
   )
 
   const connection = app.connect(transport)
-  return { connection, bindSession, observeSession, aliasSession, clearRouting: () => {
+  return { connection, bindSession, observeSession, aliasSession, onConnectionExt, clearRouting: () => {
     for (const sessionId of [...preBind.keys()]) closeWindow(sessionId)
     bound.clear()
     observers.clear()
     aliases.clear()
+    connectionListeners.clear()
+    earlyConnectionExt.clear()
   } }
 }

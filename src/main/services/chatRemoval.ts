@@ -3,6 +3,7 @@ import { chatConductorService } from './chatConductorService'
 import { taskRunnersByChat } from './taskRunnerState'
 import { activeRunsByChat } from './runExecutionState'
 import { sessionActivityHub } from './sessionActivityHub'
+import { sessionTelemetryService } from '../agents/telemetry/sessionTelemetryService'
 import { forgetChatSessions } from './chatSessionRelease'
 
 /**
@@ -22,7 +23,7 @@ export function activeChatRunId(chatId: string): string | null {
 
 /**
  * Everything held in memory for a chat, released once its row is hard-deleted:
- * a waiting script's gates, the chat's agent sessions and activity, and its
+ * a waiting script's gates, the chat's agent sessions, activity and telemetry, and its
  * conductor runtime. Call after the delete has committed, never before.
  */
 export function chatHardDeleted(userId: string, chatId: string, ownerUserId = userId): void {
@@ -31,5 +32,6 @@ export function chatHardDeleted(userId: string, chatId: string, ownerUserId = us
   taskRunnerBridge.chatRemoved(userId, chatId)
   forgetChatSessions(chatId)
   sessionActivityHub.clear(chatId)
+  sessionTelemetryService.forget(chatId)
   chatConductorService.remove(ownerUserId, chatId)
 }

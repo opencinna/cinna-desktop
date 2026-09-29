@@ -35,6 +35,17 @@ export function migrateChats(sqlite: Database.Database): void {
     );
   `)
 
+  // The last known telemetry of a chat's agent session (one JSON document),
+  // kept across restarts. Created before the trash cleanup below, whose
+  // cascade reaches it.
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS session_telemetry (
+      chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+      json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `)
+
   if (!hasColumn(sqlite, 'chats', 'deleted_at')) {
     sqlite.exec(`ALTER TABLE chats ADD COLUMN deleted_at INTEGER`)
   }

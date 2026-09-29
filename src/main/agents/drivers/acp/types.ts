@@ -133,6 +133,9 @@ export interface AcpSessionHandlers {
   onExtNotification?(method: string, params: Record<string, unknown>): void
 }
 
+/** An extension notification that names no session (`_auth/status_update`). */
+export type ConnectionExtListener = (method: string, params: Record<string, unknown>) => void
+
 /**
  * Who hears a session while no turn is bound to it.
  *
@@ -237,6 +240,13 @@ export interface AcpConnection {
    */
   aliasSession(childSessionId: string, parentSessionId: string): () => void
 
+  /**
+   * Hear the extension notifications that name no session, until the returned
+   * function runs. The first listener also gets what arrived before it — the
+   * latest per method. Optional: a test double may not route any.
+   */
+  onConnectionExt?(listener: ConnectionExtListener): () => void
+
   /** The last stderr lines, for an error message. */
   stderrTail(): string
   /** Kill the process tree. Idempotent; resolves once it has exited. */
@@ -286,4 +296,20 @@ export interface AcpStreamUpdate {
   message?: MessageLike
   /** `current_mode_update`, or a `config_option_update` for the `mode` option. */
   modeId?: string
+  /** A `config_option_update` naming the session's model option (`category: "model"`). */
+  selectedModel?: string
+  /** A `usage_update`: a context reading, and at the end of a model result its cost. */
+  telemetry?: AcpTelemetryFrame
+}
+
+/** What one `usage_update` said. Absent fields were not on the wire. */
+export interface AcpTelemetryFrame {
+  used?: number
+  size?: number
+  /** `cost.amount` — for Claude, the adapter's running total for its query() (see `acpTelemetry.ts`). */
+  costUsd?: number
+  /** `_meta["_claude/origin"]`: set when the result belonged to a turn the agent started. */
+  origin?: unknown
+  /** `_meta["_claude/rateLimit"]`, raw. */
+  rateLimit?: unknown
 }

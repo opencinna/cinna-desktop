@@ -22,6 +22,8 @@ const runCompletions: { status: string; message?: string }[] = []
 const rows: Record<string, unknown>[] = []
 /** Set to make the next assistant write throw, as a deleted chat's insert does. */
 const writes = { assistantFails: false }
+/** `updateAssistantTelemetry` calls: telemetry put on a row saved earlier. */
+const telemetryUpdates: { id: string; telemetry: unknown }[] = []
 
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
@@ -33,7 +35,9 @@ vi.mock('../db/messages', () => ({
       if (writes.assistantFails) throw new Error('FOREIGN KEY constraint failed')
       savedAssistant.push(i)
       rows.push({ role: 'assistant', content: i.content, parts: i.parts })
+      return `assistant-${savedAssistant.length}`
     },
+    updateAssistantTelemetry: (id: string, telemetry: unknown) => void telemetryUpdates.push({ id, telemetry }),
     saveUser: (i: Record<string, unknown>) => {
       rows.push({ role: 'user', content: i.content, addressedAgentId: i.addressedAgentId })
       return 'user-row'
@@ -166,6 +170,58 @@ describe('a2aStreamingService.streamToAgent', () => {
       })
     })
     expect(rows.filter((row) => row.role !== 'user').map((row) => row.content)).toEqual(['a', 'c'])
+  })
+
+  it('saves the turn’s telemetry on its last row only, and reports its tokens as the outcome’s usage', async () => {
+    const telemetry = {
+      model: 'claude-sonnet-5[1m]', tokens: { input: 15, output: 320, cacheRead: 38_000, cacheWrite: 2_400 },
+      tokenScope: 'turn' as const, costUsd: 0.04, costSource: 'runtime' as const, durationMs: 1_500
+    }
+    const p = fakePort()
+    const onFinished = vi.fn()
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1', agentId: 'folder:abc', port: p.port, onFinished,
+      run: async () => ({
+        text: 'ac', parts: [{ kind: 'text', text: 'a' }, { kind: 'text', text: 'c' }], notices: [],
+        steers: [{ afterPart: 1, text: 'steer' }], telemetry
+      })
+    })
+    expect(savedAssistant.map((row) => row.telemetry)).toEqual([undefined, telemetry])
+    expect(onFinished).toHaveBeenCalledWith(expect.objectContaining({
+      state: 'completed', usage: { inputTokens: 15 + 38_000 + 2_400, outputTokens: 320 }
+    }))
+
+    // A turn that reported no tokens (a follow-up) has no usage, and one with no telemetry none either.
+    onFinished.mockClear()
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1', agentId: 'folder:abc', port: fakePort().port, onFinished,
+      run: async () => ({ text: 'x', parts: [{ kind: 'text', text: 'x' }], notices: [],
+        telemetry: { ...telemetry, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, tokenScope: 'none' as const } })
+    })
+    expect(savedAssistant.at(-1)?.telemetry).toMatchObject({ tokenScope: 'none', costUsd: 0.04 })
+    expect(onFinished.mock.calls[0][0]).not.toHaveProperty('usage')
+  })
+
+  it('puts the telemetry on the turn’s last assistant row when its last slice is empty, and drops it with no row', async () => {
+    const telemetry = { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }, tokenScope: 'turn' as const, costUsd: 0.01, costSource: 'runtime' as const }
+    telemetryUpdates.length = 0
+    // The turn ended on a steer: nothing follows it, so no row carries the telemetry.
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1', agentId: 'folder:abc', port: fakePort().port,
+      run: async () => ({ text: 'a', parts: [{ kind: 'text', text: 'a' }], notices: [], steers: [{ afterPart: 1, text: 'steer' }], telemetry })
+    })
+    expect(savedAssistant.at(-1)?.telemetry).toBeUndefined()
+    expect(telemetryUpdates).toEqual([{ id: `assistant-${savedAssistant.length}`, telemetry }])
+
+    // Cancelled before any output: no assistant row, nothing to update.
+    telemetryUpdates.length = 0
+    const before = savedAssistant.length
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1', agentId: 'folder:abc', port: fakePort().port,
+      run: async () => ({ text: '', parts: [], notices: [], taskState: 'canceled', stopReason: 'canceled' as const, telemetry })
+    })
+    expect(savedAssistant.length).toBe(before)
+    expect(telemetryUpdates).toEqual([])
   })
 
   it('keeps one row with the turn’s own text when nothing was steered', async () => {

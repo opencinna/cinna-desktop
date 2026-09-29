@@ -29,7 +29,7 @@
  * tool_call_update     status:completed      content[] + rawOutput.output
  * agent_thought_chunk  {messageId: NEW}      the reply after the call
  * agent_message_chunk  {messageId: same}
- * usage_update                               ignored
+ * usage_update                               telemetry only, never the transcript
  * ```
  *
  * Four consequences shape everything below.
@@ -97,7 +97,7 @@ import {
   TOOL_STREAM_METADATA_KEY,
   type PartLike
 } from '../../streamPartsAccumulator'
-import type { AcpLauncherId, AcpStreamUpdate } from './types'
+import type { AcpLauncherId, AcpStreamUpdate, AcpTelemetryFrame } from './types'
 import type { SessionNotification } from '@agentclientprotocol/sdk'
 
 /** The message a block belongs to when no chunk has named one yet. */
@@ -108,6 +108,45 @@ const NARRATION_LIMIT = 160
 
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+function finite(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * What one `usage_update` said: `used`/`size` always (mid-turn too), `cost`
+ * at the end of each model result, `_meta` for the origin and rate limit.
+ */
+function usageFrame(update: Record<string, unknown>): AcpTelemetryFrame {
+  const frame: AcpTelemetryFrame = {}
+  const used = finite(update.used)
+  const size = finite(update.size)
+  if (used !== undefined) frame.used = used
+  if (size !== undefined) frame.size = size
+  const cost = record(update.cost)
+  const amount = finite(cost?.amount)
+  if (amount !== undefined) frame.costUsd = amount
+  const meta = record(update._meta)
+  if (meta && meta['_claude/origin'] !== undefined) frame.origin = meta['_claude/origin']
+  if (meta && meta['_claude/rateLimit'] !== undefined) frame.rateLimit = meta['_claude/rateLimit']
+  return frame
+}
+
+/**
+ * The session's model, out of a list of config options: the one whose
+ * `category` is `model` (both adapters), or failing that the one with id
+ * `model`. Its `currentValue` is an alias for Claude (`default`, `opus`).
+ */
+export function selectedModelOf(configOptions: unknown): string | undefined {
+  if (!Array.isArray(configOptions)) return undefined
+  for (const option of configOptions) {
+    const o = record(option)
+    if (!o || (o.category !== 'model' && o.id !== 'model')) continue
+    const value = str(o.currentValue)
+    if (value) return value
+  }
+  return undefined
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -394,6 +433,11 @@ export class AcpMessageStream {
       }
       case 'config_option_update':
         return this.configOptions(update)
+      case 'usage_update':
+        // Telemetry only: a context reading, and at the end of each model
+        // result its cost. Nothing reaches the transcript, and whether it
+        // ends a turn the agent started is the driver's call (`endsFollowUp`).
+        return { telemetry: usageFrame(update) }
       case 'async_task_spawned':
       case 'async_task_progress':
       case 'async_task_state_update':
@@ -403,7 +447,7 @@ export class AcpMessageStream {
         // subagents are read by `acpActivity.ts` and shown beside the composer.
         return {}
       default:
-        // `usage_update`, `compaction_*`, `plan_update`, `plan_removed` and
+        // `compaction_*`, `plan_update`, `plan_removed` and
         // whatever comes next. Silence is the contract, not an oversight.
         return {}
     }
@@ -611,19 +655,24 @@ export class AcpMessageStream {
    *
    * The Claude adapter answers `session/set_mode` with `{}` and reports the new
    * mode only here (`claude/s6-load-set-mode-noturn.ndjson`); it emits no
-   * `current_mode_update` at all. Everything but the `mode` option is ignored —
-   * the same notification also carries the model and thinking-level options,
-   * and this class has nowhere to put them.
+   * `current_mode_update` at all. The same notification also carries the model
+   * option (`category: "model"`), whose value is kept for session telemetry;
+   * the thinking-level options are ignored.
    */
   private configOptions(update: Record<string, unknown>): AcpStreamUpdate {
     const options = Array.isArray(update.configOptions) ? update.configOptions : []
+    const out: AcpStreamUpdate = {}
     for (const option of options) {
       const o = record(option)
-      if (!o || o.id !== 'mode') continue
-      const modeId = str(o.currentValue)
-      if (modeId) return { modeId }
+      if (!o) continue
+      if (o.id === 'mode' && !out.modeId) {
+        const modeId = str(o.currentValue)
+        if (modeId) out.modeId = modeId
+      }
+      const selected = selectedModelOf([o])
+      if (selected && !out.selectedModel) out.selectedModel = selected
     }
-    return {}
+    return out
   }
 
   // ── message bookkeeping ───────────────────────────────────────────────────

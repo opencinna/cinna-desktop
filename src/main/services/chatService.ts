@@ -20,6 +20,7 @@ import { createLogger } from '../logger/logger'
 import { taskRunnersByChat } from './taskRunnerState'
 import { activeChatRunId as activeRunId, chatHardDeleted } from './chatRemoval'
 import { sessionActivityHub } from './sessionActivityHub'
+import { sessionTelemetryService } from '../agents/telemetry/sessionTelemetryService'
 import { forgetChatSessions, releaseChatSessions } from './chatSessionRelease'
 import { chatRunResultRepo } from '../db/chatRunResults'
 import type { ChatRunResult } from '../../shared/chatRunResult'
@@ -159,6 +160,8 @@ export const chatService = {
     // nothing its agents say between turns lands in it.
     forgetChatSessions(chatId)
     sessionActivityHub.clear(chatId)
+    // Its sessions are forgotten, so their telemetry goes with them.
+    sessionTelemetryService.forget(chatId)
     logger.info('chat moved to trash', { chatId })
   },
 

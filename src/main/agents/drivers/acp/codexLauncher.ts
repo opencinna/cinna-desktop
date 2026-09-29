@@ -5,6 +5,7 @@ import type { ReadinessOptions } from '../driver'
 import type { AcpLauncher } from './acpLaunchers'
 import { ACP_PROTOCOL_VERSION, type AcpRuntimeMode } from './types'
 import { airClientMeta } from './acpActivity'
+import { codexTelemetryAuth } from './acpTelemetry'
 import { createLogger } from '../../../logger/logger'
 
 const logger = createLogger('codex-launcher')
@@ -115,6 +116,11 @@ export function createCodexLauncher(deps: CodexLauncherDeps): AcpLauncher {
   }
   return {
     id: 'codex', readiness,
+    // Codex reports no login over ACP: the CLI's own status line says which.
+    async telemetryAuth() {
+      const auth = await deps.auth().catch(() => null)
+      return auth ? codexTelemetryAuth(auth) : null
+    },
     async plan(ctx) {
       if (!ctx.folder) return { error: 'This launcher requires a local agent folder.' }
       let phase = 'executable'

@@ -58,4 +58,9 @@ export function migrateMessages(sqlite: Database.Database): void {
   if (!hasColumn(sqlite, 'messages', 'attachments')) {
     sqlite.exec(`ALTER TABLE messages ADD COLUMN attachments TEXT`)
   }
+
+  // What the runtime reported an assistant turn used (session telemetry).
+  if (!hasColumn(sqlite, 'messages', 'telemetry')) {
+    sqlite.exec(`ALTER TABLE messages ADD COLUMN telemetry TEXT`)
+  }
 }

@@ -85,6 +85,12 @@ import {
   type SessionActivityGetResult,
   type SessionActivityStopResult
 } from '../shared/sessionActivity'
+import {
+  SESSION_TELEMETRY_CHANGED_CHANNEL,
+  type SessionTelemetryChangedPayload,
+  type SessionTelemetryGetResult
+} from '../shared/sessionTelemetry'
+import type { MessageTelemetry } from '../shared/sessionTelemetry'
 import type { ChatRouter } from '../shared/chatRouting'
 import { isRunEvent, type RunEvent } from '../shared/runEvents'
 import type { MessageAttachment, PendingAttachment } from '../shared/attachments'
@@ -197,6 +203,8 @@ export interface MessageData {
   sourceAgentId?: string | null
   /** File attachments persisted on user turns (badges below the bubble). */
   attachments?: MessageAttachment[] | null
+  /** What the runtime reported an assistant turn used (ACP agents); on the turn's last row. */
+  telemetry?: MessageTelemetry | null
   sortOrder: number
   createdAt: Date
 }
@@ -951,6 +959,18 @@ const api = {
       const listener = (_event: IpcRendererEvent, payload: SessionActivityChangedPayload): void => handler(payload)
       ipcRenderer.on(SESSION_ACTIVITY_CHANGED_CHANNEL, listener)
       return () => ipcRenderer.off(SESSION_ACTIVITY_CHANGED_CHANNEL, listener)
+    }
+  },
+
+  /** What a chat's agent session reports it used: model, tokens, cost, context, login kind. */
+  sessionTelemetry: {
+    /** The chat's telemetry, `null` when it has none yet; `ok: false` for a chat this profile does not own. */
+    get: (chatId: string): Promise<SessionTelemetryGetResult> => ipcRenderer.invoke('sessionTelemetry:get', chatId),
+    /** Fires whenever a chat's telemetry changes, with its new state. Returns an unsubscribe function. */
+    onChanged: (handler: (payload: SessionTelemetryChangedPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: SessionTelemetryChangedPayload): void => handler(payload)
+      ipcRenderer.on(SESSION_TELEMETRY_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(SESSION_TELEMETRY_CHANGED_CHANNEL, listener)
     }
   },
 

@@ -272,6 +272,8 @@ export function claudeModelForComplexity(complexity: WorkComplexity | null): str
 /** Login readiness from the user's Codex CLI; no credentials cross IPC. */
 export interface CodexAuthStatus {
   state: 'logged_in' | 'logged_out' | 'unknown'
+  /** How a logged-in CLI is authenticated, when its status line says. Never the key itself. */
+  method?: 'chatgpt' | 'api_key'
 }
 
 /** Codex keeps its configured model; complexity controls reasoning effort. */

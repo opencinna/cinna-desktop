@@ -804,3 +804,26 @@ describe('retired chat routing mirror', () => {
     raw.close()
   })
 })
+
+describe('session telemetry', () => {
+  it('adds the per-chat table and the per-message column, on a fresh install and an existing one', () => {
+    const raw = freshDatabase()
+    expect(columnNames(raw, 'session_telemetry')).toEqual(new Set(['chat_id', 'json', 'updated_at']))
+    expect(columnNames(raw, 'messages')).toContain('telemetry')
+
+    // An install from before: neither exists yet, and a message row is kept.
+    raw.exec(`DROP TABLE session_telemetry; ALTER TABLE messages DROP COLUMN telemetry;
+      INSERT INTO chats (id,user_id,title,created_at,updated_at) VALUES ('c1','__default__','Chat',1,1);
+      INSERT INTO messages (id,chat_id,role,content,sort_order,created_at) VALUES ('m1','c1','assistant','Hi',0,1);`)
+    runAllMigrations(adaptDatabase(raw))
+    runAllMigrations(adaptDatabase(raw))
+    expect(raw.prepare("SELECT content, telemetry FROM messages WHERE id = 'm1'").get()).toEqual({ content: 'Hi', telemetry: null })
+
+    // A chat's telemetry goes with the chat.
+    raw.exec(`INSERT INTO session_telemetry (chat_id,json,updated_at) VALUES ('c1','{}',1)`)
+    raw.exec("DELETE FROM chats WHERE id = 'c1'")
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM session_telemetry').get()).toEqual({ n: 0 })
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.close()
+  })
+})

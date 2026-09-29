@@ -34,6 +34,7 @@ import { CUT_OFF_NOTICE, REPLY_CUT_OFF_CODE, STILL_RUNNING_NOTICE } from './turn
 import { createLogger } from '../logger/logger'
 import type { InputQuestion, InputRequest, RunEvent, RunState } from '../../shared/runEvents'
 import type { MessagePart } from '../../shared/messageParts'
+import type { MessageTelemetry } from '../../shared/sessionTelemetry'
 
 const logger = createLogger('A2A')
 
@@ -319,6 +320,11 @@ export interface RunAgentTurnResult {
    * streamed before and after it.
    */
   steers?: TurnSteer[]
+  /**
+   * What the runtime reported the turn used (ACP Claude and Codex only).
+   * Saved on the turn's last assistant row.
+   */
+  telemetry?: MessageTelemetry
 }
 
 /** A user message taken into a running turn, after `afterPart` of its parts. */
@@ -344,6 +350,8 @@ interface PersistCursor {
    * text is still empty, so positions shift when it fills in later.
    */
   notices: Set<string>
+  /** The last assistant row saved for the turn, for telemetry that comes after its parts. */
+  lastAssistantId?: string
 }
 
 /**
@@ -379,31 +387,47 @@ function sliceText(parts: MessagePart[]): string {
 function saveTurnRows(
   chatId: string,
   agentId: string,
-  turn: TurnSnapshot & { text?: string },
+  turn: PersistedTurn,
   cursor: PersistCursor
 ): void {
+  // The turn's telemetry goes on its last row. A flush mid-turn carries none;
+  // the pass that has it writes it with the last slice, or — when that slice
+  // is empty (the turn ended on a steer, was cancelled before any output, or a
+  // flush already saved every part) — onto the last assistant row saved
+  // before. With no assistant row at all it is dropped: the session totals
+  // already have it.
+  const telemetry = turn.telemetry ? { telemetry: turn.telemetry } : {}
+  let carried = false
+  const saveSlice = (slice: MessagePart[], content: string, last: boolean): void => {
+    cursor.lastAssistantId = messageRepo.saveAssistant({ chatId, content, parts: slice, sourceAgentId: agentId, ...(last ? telemetry : {}) })
+    if (last) carried = true
+  }
   const steers = (turn.steers ?? []).slice(cursor.steers)
   if (!steers.length) {
     if (turn.parts.length > cursor.parts) {
       const slice = turn.parts.slice(cursor.parts)
       const content = cursor.parts === 0 && turn.text !== undefined ? turn.text : sliceText(slice)
-      messageRepo.saveAssistant({ chatId, content, parts: slice, sourceAgentId: agentId })
+      saveSlice(slice, content, true)
       cursor.parts = turn.parts.length
     }
-    return
+  } else {
+    const saveUpTo = (to: number, last = false): void => {
+      const slice = turn.parts.slice(cursor.parts, to)
+      if (slice.length) saveSlice(slice, sliceText(slice), last)
+      cursor.parts = Math.max(cursor.parts, to)
+    }
+    for (const steer of steers) {
+      saveUpTo(Math.min(Math.max(steer.afterPart, cursor.parts), turn.parts.length))
+      messageRepo.saveUser({ chatId, content: steer.text, addressedAgentId: agentId })
+      cursor.steers++
+    }
+    saveUpTo(turn.parts.length, true)
   }
-  const saveUpTo = (to: number): void => {
-    const slice = turn.parts.slice(cursor.parts, to)
-    if (slice.length) messageRepo.saveAssistant({ chatId, content: sliceText(slice), parts: slice, sourceAgentId: agentId })
-    cursor.parts = Math.max(cursor.parts, to)
-  }
-  for (const steer of steers) {
-    saveUpTo(Math.min(Math.max(steer.afterPart, cursor.parts), turn.parts.length))
-    messageRepo.saveUser({ chatId, content: steer.text, addressedAgentId: agentId })
-    cursor.steers++
-  }
-  saveUpTo(turn.parts.length)
+  if (turn.telemetry && !carried && cursor.lastAssistantId) messageRepo.updateAssistantTelemetry(cursor.lastAssistantId, turn.telemetry)
 }
+
+/** What a persist pass writes: a snapshot, or the finished result with its text and telemetry. */
+type PersistedTurn = TurnSnapshot & { text?: string; telemetry?: MessageTelemetry }
 
 /**
  * Everything of a turn past `cursor`, in transcript order: its notices first —
@@ -415,7 +439,7 @@ function saveTurnRows(
 function persistTurn(
   chatId: string,
   agentId: string,
-  turn: TurnSnapshot & { text?: string },
+  turn: PersistedTurn,
   cursor: PersistCursor,
   options: { touch: boolean } = { touch: true }
 ): void {
@@ -430,6 +454,18 @@ function persistTurn(
   }
   saveTurnRows(chatId, agentId, turn, cursor)
   if (options.touch) messageRepo.touchChat(chatId)
+}
+
+/**
+ * `TurnOutcome.usage` from a turn's telemetry: input is every prompt token the
+ * model read (uncached, cache reads and cache writes), output as reported.
+ * Absent when the runtime reported no tokens. For Codex the counts are the
+ * turn's last request only, so a lower bound.
+ */
+export function turnUsage(telemetry: MessageTelemetry | undefined): Pick<TurnOutcome, 'usage'> {
+  if (!telemetry || telemetry.tokenScope === 'none') return {}
+  const { input, cacheRead, cacheWrite, output } = telemetry.tokens
+  return { usage: { inputTokens: input + cacheRead + cacheWrite, outputTokens: output } }
 }
 
 /**
@@ -1013,7 +1049,7 @@ export const a2aStreamingService = {
      * Save a turn's rows past the cursor, replacing the draft in the same
      * transaction. Throws what the write throws; the draft is then untouched.
      */
-    const save = (turn: TurnSnapshot & { text?: string }, options: { touch?: boolean } = {}): void => {
+    const save = (turn: PersistedTurn, options: { touch?: boolean } = {}): void => {
       const touch = input.touchChat !== false && options.touch !== false
       inflightTurnRepo.replaceDraft(markerId, draftId, () => persistTurn(chatId, agentId, turn, cursor, { touch }))
       draftId = null
@@ -1092,7 +1128,7 @@ export const a2aStreamingService = {
             : { type: 'error', error: message }
         )
         // The job run keeps the agent's own reason; only the row was shortened.
-        finish({ state: 'failed', text: result.text, error: { message: failure.message, code: failure.code } })
+        finish({ state: 'failed', text: result.text, error: { message: failure.message, code: failure.code }, ...turnUsage(result.telemetry) })
         return
       }
 
@@ -1109,7 +1145,7 @@ export const a2aStreamingService = {
       // through the `catch`. Reporting `succeeded` for it is the same lie the
       // OpenAI adapter used to tell by resolving on abort: the run reads as a
       // job that finished, and nothing distinguishes it from one that did.
-      finish({ state, text: result.text, ...(result.control && !canceled ? { control: result.control } : {}), ...(state === 'completed' && result.handback ? { handback: result.handback } : {}) })
+      finish({ state, text: result.text, ...(result.control && !canceled ? { control: result.control } : {}), ...(state === 'completed' && result.handback ? { handback: result.handback } : {}), ...turnUsage(result.telemetry) })
       if (!canceled && state !== 'failed') {
         try {
           input.onCompleted?.()

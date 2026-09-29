@@ -190,6 +190,12 @@ export interface AcpLauncher {
    * has to fix.
    */
   readiness?(options?: ReadinessOptions): Promise<AgentReadiness>
+  /**
+   * The login a turn on this engine runs on, for session telemetry — only for
+   * an engine that does not say so over ACP (Codex). Kind, label and plan
+   * only; never an account or a key. Must not throw.
+   */
+  telemetryAuth?(): Promise<import('../../../../shared/sessionTelemetry').SessionTelemetryAuth | null>
 }
 
 /* ------------------------------------------------------------------ OpenCode */

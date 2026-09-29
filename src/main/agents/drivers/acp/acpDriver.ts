@@ -76,7 +76,22 @@ import { capabilitiesFor } from '../capabilities'
 import { launcherOfFolder } from '../driverOf'
 import type { AgentEngine } from '../../../../shared/engine'
 import type { AgentDriver, FollowUpOpener, FollowUpScope, ParkedAsk, RespondOutcome, RunInput, ReadinessOptions, SteerFn } from '../driver'
-import { AcpMessageStream } from './acpMessages'
+import { AcpMessageStream, selectedModelOf } from './acpMessages'
+import {
+  AUTH_STATUS_METHOD,
+  connectionAuthOf,
+  isSessionLive,
+  sessionFingerprint,
+  noteConnectionAuth,
+  noteSessionLive,
+  telemetryAuthOf,
+  telemetryEngineOf,
+  TurnTelemetry,
+  watchConnectionAuth,
+  type TurnTelemetryOptions,
+  type ConnectionAuth
+} from './acpTelemetry'
+import type { SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
 import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } from './acpLaunchers'
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
 import { toElicitationContent, toInputQuestions } from './acpQuestions'
@@ -191,6 +206,13 @@ export interface AcpDriverDeps {
    * Absent: nothing is reported, and subagent frames are still routed.
    */
   activity?: SessionActivityReporter
+  /**
+   * Where a session's usage goes (the session telemetry service): context
+   * readings as they arrive, each turn's tokens and cost once, the login.
+   * Absent, and for a nested turn: nothing is reported, and a turn's result
+   * still carries its own telemetry.
+   */
+  telemetry?: SessionTelemetryReporter
   /**
    * Where the title a chat's root session gives itself goes (see
    * `acpSessionTitle.ts`: Codex only, placeholder dropped). Absent: titles are
@@ -622,6 +644,8 @@ interface TurnContext {
   input: RunInput
   /** User messages the agent took into this turn, where they landed. */
   steers: TurnSteer[]
+  /** The turn's usage, for an engine whose reports are read; settled by `finish`. */
+  telemetry?: TurnTelemetry
   /**
    * The session id this turn already handed to `saveSession`, so the exit does
    * not write the same id twice. See {@link rememberSession}.
@@ -681,6 +705,14 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   let connection: AcpConnection | undefined
   let sessionId: string | null = null
   let hitCeiling = false
+  const telemetryEngine = telemetryEngineOf(ctx.launcherId)
+  if (telemetryEngine) {
+    ctx.telemetry = new TurnTelemetry({
+      engine: telemetryEngine,
+      chatId,
+      ...(!input.nested ? telemetrySink(deps, chatId) : {})
+    })
+  }
   /**
    * The mode the session says it is in, when it says anything.
    *
@@ -694,24 +726,6 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
    * on" and "I was asked for every command" are indistinguishable from a bug.
    */
   let reportedMode: string | null = null
-  /**
-   * What the agent said it authenticated with, when it says anything.
-   *
-   * The in-process Claude runner read this off the SDK's `init` message as
-   * `apiKeySource` and put a **notice** in the transcript whenever it was not
-   * `'none'` — because a turn billed to an account the user did not choose
-   * looks exactly like a turn billed to the right one, and a log line is no use
-   * to somebody who does not already suspect it. That notice was briefly lost
-   * with the runner; the ACP equivalent is the adapter's `_auth/status_update`,
-   * whose `authStatus.kind` is `'account'` for a subscription login (recorded:
-   * `{kind:'account', label:'Claude Max', account:{plan:'max', …}}`).
-   *
-   * Only the kind and the label are kept. The same payload carries the
-   * account's **email address**, unasked and with no way to switch it off short
-   * of refusing subscription use, and {@link scrubbed} is what keeps a future
-   * adapter from smuggling one into the label.
-   */
-  let reportedAuth: { kind: string; label: string | null } | null = null
 
   /**
    * Mid-turn messages, over the steering extension.
@@ -1045,6 +1059,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     try {
       runtime.validate(chatId)
       connection = await duringStart(deps.pool.acquire(agent.id, plan.spec, plan.init, startupController.signal))
+      watchConnectionAuth(connection)
       try { runtime.validate(chatId) } catch (error) { deps.pool.retire(agent.id); throw error }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -1075,6 +1090,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
           trackToolCall(frame)
           const update = stream.apply(frame)
           if (update.modeId) reportedMode = update.modeId
+          ctx.telemetry?.model(update.selectedModel)
+          // Only the session's own readings: a child session's (a subagent's)
+          // context is not this one's.
+          if (update.telemetry && sessionId && frame.sessionId === sessionId) ctx.telemetry?.frame(live, sessionId, update.telemetry)
           emit(update.message)
           // After the call is tracked, so a turn that starts with a tool call
           // opens its window withdrawn rather than offering and withdrawing.
@@ -1087,12 +1106,15 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         answerElicitation(deps, ctx, { stream, emit, turn }, params),
       onExtNotification: (method: string, params: Record<string, unknown>): void => {
         if (turn.replaying) return
-        if (method === AUTH_STATUS_METHOD) reportedAuth = readAuthStatus(params) ?? reportedAuth
+        if (method === AUTH_STATUS_METHOD) noteConnectionAuth(live, params)
         emit(stream.applyExt(method, params).message)
       }
     }
 
     const remembered = conductor?.freshSession ? null : runtime.readSession(chatId)
+    const sessionParams = newSessionParams(plan, sessionCwd)
+    // Marked live only by a result the adapter measured under these params (see `isSessionLive`).
+    const fingerprint = sessionFingerprint(sessionParams)
     const canLoad = connection.initialized.agentCapabilities?.loadSession === true
     // Before anything that can produce traffic for it: from here the session's
     // traffic is this turn's (the load replay included), and the pen only
@@ -1121,11 +1143,16 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         runtime.validate(chatId)
         const loaded = await duringStart(connection.loadSession({
           sessionId: remembered,
-          ...newSessionParams(plan, sessionCwd)
+          ...sessionParams
         }))
         deps.recordModelCatalog?.(input.runScope?.profileUserId ?? ctx.userId, ctx.launcherId, loaded)
         runtime.validate(chatId)
         sessionId = remembered
+        ctx.telemetry?.model(selectedModelOf((loaded as { configOptions?: unknown } | null)?.configOptions))
+        // Not prompted on this connection yet, or loaded under other params: the
+        // adapter built a fresh session object over the restored history (see
+        // `TurnTelemetry.resumed`).
+        if (!isSessionLive(connection, remembered, fingerprint)) ctx.telemetry?.resumed()
       } catch (err) {
         // **A remembered session is verified by use, not by a probe** — there
         // is nothing to ask. A load against a session the engine has forgotten
@@ -1156,10 +1183,12 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       conductor?.sessionLost?.()
       try {
         runtime.validate(chatId)
-        const created = await duringStart(connection.newSession(newSessionParams(plan, sessionCwd)))
+        const created = await duringStart(connection.newSession(sessionParams))
         deps.recordModelCatalog?.(input.runScope?.profileUserId ?? ctx.userId, ctx.launcherId, created)
         runtime.validate(chatId)
         sessionId = created.sessionId
+        noteSessionLive(connection, sessionId, fingerprint)
+        ctx.telemetry?.model(selectedModelOf((created as { configOptions?: unknown }).configOptions))
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         logger.warn('an ACP session could not be created', { agentId: agent.id, error: message })
@@ -1265,14 +1294,19 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         else prompt.unshift(...transcript)
       }
       ctx.titles?.prompted(titleScope(), prompt)
+      void reportLauncherAuth(deps, ctx)
       const answer = await promptWithCancelGrace(
         deps,
         connection,
         { sessionId, prompt },
         cancelRequested,
         agent.id,
-        armSteering
+        () => { ctx.telemetry?.started(); armSteering() }
       ).finally(settleSteering)
+      if (answer) {
+        ctx.telemetry?.answered(answer)
+        noteSessionLive(connection, sessionId, fingerprint)
+      }
       // Only a session that took its prompt — the transcript replay with it —
       // is marked current. One that failed before that must be replaced and
       // replayed again, not loaded empty on the next turn.
@@ -1290,7 +1324,30 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : undefined)
       }
       noteModeFallback(plan, reportedMode, stream, emit)
-      noteForeignAuth(reportedAuth, stream, emit)
+      /**
+       * What the agent said it authenticated with, when it says anything.
+       *
+       * The in-process Claude runner read this off the SDK's `init` message as
+       * `apiKeySource` and put a **notice** in the transcript whenever it was not
+       * `'none'` — because a turn billed to an account the user did not choose
+       * looks exactly like a turn billed to the right one, and a log line is no use
+       * to somebody who does not already suspect it. That notice was briefly lost
+       * with the runner; the ACP equivalent is the adapter's `_auth/status_update`,
+       * whose `authStatus.kind` is `'account'` for a subscription login (recorded:
+       * `{kind:'account', label:'Claude Max', account:{plan:'max', …}}`).
+       *
+       * Only the kind, the label and the plan are kept. The same payload carries
+       * the account's **email address**, unasked and with no way to switch it off
+       * short of refusing subscription use, and `scrubbed` (`acpTelemetry.ts`) is
+       * what keeps a future adapter from smuggling one into the label.
+       *
+       * It names no session and arrives right after `initialize`, so it is heard
+       * per connection (`watchConnectionAuth`) and read from there when the turn
+       * ends; one that does name this session is recorded the same way.
+       */
+      const reportedAuth = connectionAuthOf(connection)
+      noteForeignAuth(reportedAuth, connection, chatId, stream, emit)
+      if (reportedAuth) ctx.telemetry?.auth(telemetryAuthOf(reportedAuth))
       logger.info('ACP turn complete', {
         agentId: agent.id,
         chatId,
@@ -1496,6 +1553,11 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     savedSession: sessionId,
     ...(world.titles ? { titles: world.titles } : {})
   }
+  const telemetryEngine = telemetryEngineOf(world.launcherId)
+  if (telemetryEngine) {
+    ctx.telemetry = new TurnTelemetry({ engine: telemetryEngine, chatId, ...telemetrySink(deps, chatId) })
+    ctx.telemetry.started()
+  }
   const stream = new AcpMessageStream({ launcher: world.launcherId })
   const accumulator = new StreamPartsAccumulator({
     onToolCall: ({ name, input: toolInput }) =>
@@ -1603,7 +1665,11 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
             toolsOpen.add(id)
           }
         }
-        emit(stream.apply(frame).message)
+        const folded = stream.apply(frame)
+        ctx.telemetry?.model(folded.selectedModel)
+        // No prompt response here: the costed reading is all a follow-up has.
+        if (folded.telemetry && frame.sessionId === sessionId) ctx.telemetry?.frame(connection, sessionId, folded.telemetry)
+        emit(folded.message)
       }
       if (endsFollowUp(notification)) end('marker')
     },
@@ -1692,7 +1758,9 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     ceiling: hitCeiling
   })
   const error = hitCeiling ? ceilingMessage() : endedBy === 'exited' && !canceled ? ACP_FOLLOW_UP_EXITED : undefined
-  // No session to record: it is the one the chat already remembers.
+  // No session to record: it is the one the chat already remembers. Its
+  // telemetry is that session's, reported once, here.
+  ctx.telemetry?.settle(sessionId)
   return finish(ctx, accumulator, null, error, undefined, false, canceled)
 }
 
@@ -1790,37 +1858,8 @@ function advertisesSteering(connection: AcpConnection): boolean {
   return !!steering && typeof steering === 'object' && (steering as { supported?: unknown }).supported === true
 }
 
-/** The adapter's own notification about which login is paying for the turn. */
-const AUTH_STATUS_METHOD = '_auth/status_update'
-
-/**
- * The kind of login the agent reported, and its label — never the account.
- *
- * Structural, and deliberately narrow: it reads two strings out of a payload
- * whose third field is an email address. Anything else in there stays where it
- * is.
- */
-function readAuthStatus(params: Record<string, unknown>): { kind: string; label: string | null } | null {
-  const status = params.authStatus
-  if (!status || typeof status !== 'object' || Array.isArray(status)) return null
-  const kind = (status as { kind?: unknown }).kind
-  if (typeof kind !== 'string' || kind === '') return null
-  const label = (status as { label?: unknown }).label
-  return { kind, label: typeof label === 'string' && label !== '' ? scrubbed(label) : null }
-}
-
-/**
- * A string with anything email-shaped taken out of it.
- *
- * The label observed is a plan name (`Claude Max`), but the payload it arrives
- * in carries the account's email two fields away, and the one thing this driver
- * promises about that payload is that it does not pass the address on. A guard
- * rather than a comment, because the promise has to survive an adapter version
- * that decides the label should name the account.
- */
-function scrubbed(text: string): string {
-  return text.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '…')
-}
+/** The chat and login pairs each connection already told about ({@link noteForeignAuth}). */
+const foreignAuthNoted = new WeakMap<AcpConnection, Set<string>>()
 
 /**
  * Say, in the transcript, that the turn was not paid for by the login the user
@@ -1834,12 +1873,25 @@ function scrubbed(text: string): string {
  * agent says otherwise.
  */
 function noteForeignAuth(
-  auth: { kind: string; label: string | null } | null,
+  auth: ConnectionAuth | null,
+  connection: AcpConnection,
+  chatId: string,
   stream: AcpMessageStream,
   emit: EmitMessage
 ): void {
   if (!auth || auth.kind === 'account') return
+  // Once per chat per connection and login: the login is the connection's,
+  // heard once after `initialize`, and a notice on every turn stops being
+  // read. A different foreign login later (a provider update) is news again.
+  let noted = foreignAuthNoted.get(connection)
+  if (!noted) {
+    noted = new Set()
+    foreignAuthNoted.set(connection, noted)
+  }
   const what = auth.label ?? auth.kind
+  const key = JSON.stringify([chatId, auth.kind, what])
+  if (noted.has(key)) return
+  noted.add(key)
   emit(
     stream.note(
       `This turn did not run on the agent’s own login — it reported “${what}”. ` +
@@ -2218,6 +2270,8 @@ function finish(
   }
   const parts = accumulator.snapshotParts()
   const answer = accumulator.answerText()
+  // Settled once: a follow-up settled it above with its own session.
+  const telemetry = ctx.telemetry?.settle(sessionId)
   const note = completed && !error && !ctx.input.signal.aborted && ctx.input.handbackEligible &&
     ctx.runtime.type === 'folder' && ctx.runtime.folder.kind === 'kit' && ctx.runtime.folder.coordinatorHandback ? readHandbackNote(answer) : null
   return {
@@ -2234,7 +2288,38 @@ function finish(
     notices: accumulator.snapshotNotices(),
     ...(ctx.steers.length ? { steers: ctx.steers.slice() } : {}),
     ...(sessionId ? { contextId: sessionId } : {}),
+    ...(telemetry ? { telemetry } : {}),
     ...(error ? { error: { message: error, raw: raw ?? error } } : {})
+  }
+}
+
+/**
+ * Where a turn's telemetry goes: the reporter, and the chat's last persisted
+ * cost reading per session for the first reading after a restart. Empty
+ * without a telemetry service.
+ */
+function telemetrySink(deps: AcpDriverDeps, chatId: string): Pick<TurnTelemetryOptions, 'reporter' | 'lastCostReading'> {
+  const reporter = deps.telemetry
+  if (!reporter) return {}
+  return {
+    reporter,
+    ...(reporter.lastCostReading ? { lastCostReading: (sessionId: string) => reporter.lastCostReading?.(chatId, sessionId) } : {})
+  }
+}
+
+/**
+ * Report the login of an engine that does not say so over ACP (Codex), in
+ * parallel with the turn. Never throws, never holds the turn beyond its prompt.
+ */
+async function reportLauncherAuth(deps: AcpDriverDeps, ctx: TurnContext): Promise<void> {
+  const collector = ctx.telemetry
+  if (!collector) return
+  try {
+    const launcher = deps.launcher(ctx.launcherId)
+    if (!launcher?.telemetryAuth) return
+    collector.auth(await launcher.telemetryAuth())
+  } catch (err) {
+    logger.debug('the engine’s login could not be read for telemetry', { error: err instanceof Error ? err.message : String(err) })
   }
 }
 

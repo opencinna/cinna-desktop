@@ -10,6 +10,7 @@ import type { MessageAttachment } from '../../shared/attachments'
 import type { JobDepDescriptor, JobSyncManifest } from '../../shared/sync'
 import type { ChatRouter } from '../../shared/chatRouting'
 import type { ChatRunResultStatus } from '../../shared/chatRunResult'
+import type { MessageTelemetry, SessionTelemetry } from '../../shared/sessionTelemetry'
 import type { InputRequest, InputResumeMode } from '../../shared/runEvents'
 import type { HandoverExecution, HandoverReportStatus, HandoverState } from '../../shared/handovers'
 import type { RequestResolution } from '../../shared/localAgentRequests'
@@ -179,6 +180,16 @@ export const chats = sqliteTable('chats', {
   updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())
+})
+
+/**
+ * The last known telemetry of a chat's agent session (`shared/sessionTelemetry`),
+ * one JSON document per chat, so it survives restarts.
+ */
+export const sessionTelemetry = sqliteTable('session_telemetry', {
+  chatId: text('chat_id').primaryKey().references(() => chats.id, { onDelete: 'cascade' }),
+  json: text('json', { mode: 'json' }).notNull().$type<SessionTelemetry>(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
 })
 
 export const chatRunResults = sqliteTable('chat_run_results', {
@@ -494,6 +505,8 @@ export const messages = sqliteTable('messages', {
   addressedAgentId: text('addressed_agent_id'),
   /** Agent that produced an assistant turn in a direct-A2A chat (null for LLM root). */
   sourceAgentId: text('source_agent_id'),
+  /** What the runtime reported an assistant turn used (ACP agents); on the turn's last row. */
+  telemetry: text('telemetry', { mode: 'json' }).$type<MessageTelemetry>(),
   sortOrder: integer('sort_order').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()

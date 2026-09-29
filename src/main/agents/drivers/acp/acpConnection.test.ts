@@ -295,6 +295,33 @@ describe('session routing', () => {
     ])
     expect(connection.alive).toBe(true)
   })
+
+  it('hands an extension notification with no session to the connection, and keeps the latest for its first listener', async () => {
+    const fake = fakeAgent({
+      setMode: {
+        emit: [
+          { kind: 'notify', method: '_auth/status_update', params: { authStatus: { kind: 'none' } } },
+          { kind: 'notify', method: '_auth/status_update', params: { authStatus: { kind: 'account', label: 'Claude Max' } } }
+        ]
+      }
+    })
+    const connection = await start(fake)
+    await connection.setSessionMode({ sessionId: 'ses_1', modeId: 'default' })
+    await settle(50)
+
+    // Nobody listened yet: only the latest per method was kept.
+    const early: { method: string; params: Record<string, unknown> }[] = []
+    connection.onConnectionExt!((method, params) => early.push({ method, params }))
+    expect(early).toEqual([{ method: '_auth/status_update', params: { authStatus: { kind: 'account', label: 'Claude Max' } } }])
+
+    // From then on, live — and a second listener gets no replay of the first's.
+    const late: string[] = []
+    connection.onConnectionExt!((_method, params) => late.push((params.authStatus as { kind: string }).kind))
+    await connection.setSessionMode({ sessionId: 'ses_1', modeId: 'default' })
+    await settle(50)
+    expect(early.map((e) => (e.params.authStatus as { kind: string }).kind)).toEqual(['account', 'none', 'account'])
+    expect(late).toEqual(['none', 'account'])
+  })
 })
 
 describe('observing a session between turns', () => {

@@ -5,6 +5,7 @@ import { getDb } from './client'
 import { messages, chats } from './schema'
 import type { MessagePart } from '../../shared/messageParts'
 import type { MessageAttachment } from '../../shared/attachments'
+import type { MessageTelemetry } from '../../shared/sessionTelemetry'
 
 export type { MessagePart }
 
@@ -24,6 +25,8 @@ export interface SaveAssistantMessage {
   parts?: MessagePart[] | null
   /** Multi-agent: agent that produced this assistant turn (null for LLM root). */
   sourceAgentId?: string | null
+  /** What the runtime reported the turn used; on the turn's last row only. */
+  telemetry?: MessageTelemetry | null
 }
 
 export interface SaveToolCallMessage {
@@ -134,6 +137,7 @@ const rawMessageRepo = {
         toolCalls: msg.toolCalls ?? null,
         parts: msg.parts ?? null,
         sourceAgentId: msg.sourceAgentId ?? null,
+        telemetry: msg.telemetry ?? null,
         sortOrder: getNextSortOrder(msg.chatId),
         createdAt: new Date()
       })
@@ -147,6 +151,14 @@ const rawMessageRepo = {
    */
   updateAssistantParts(id: string, content: string, parts: MessagePart[]): void {
     getDb().update(messages).set({ content, parts }).where(and(eq(messages.id, id), eq(messages.role, 'assistant'))).run()
+  },
+
+  /**
+   * Put a turn's telemetry on an assistant row saved before it arrived (the
+   * turn's last row, when its final pass had no parts left to write).
+   */
+  updateAssistantTelemetry(id: string, telemetry: MessageTelemetry): void {
+    getDb().update(messages).set({ telemetry }).where(and(eq(messages.id, id), eq(messages.role, 'assistant'))).run()
   },
 
   deleteById(id: string): void {
@@ -309,4 +321,4 @@ const rawMessageRepo = {
   }
 }
 
-export const messageRepo = redactingRepository(rawMessageRepo, ['saveSystem', 'saveUser', 'saveAssistant', 'updateAssistantParts', 'saveToolCall', 'saveTransition', 'saveError', 'insertRaw'])
+export const messageRepo = redactingRepository(rawMessageRepo, ['saveSystem', 'saveUser', 'saveAssistant', 'updateAssistantParts', 'updateAssistantTelemetry', 'saveToolCall', 'saveTransition', 'saveError', 'insertRaw'])
