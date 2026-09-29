@@ -4,13 +4,13 @@ Notes for the assistant that builds agents **inside Cinna Desktop**, rather than
 terminal. Everything in `START.md`, the kit `README.md` and the guides applies
 unchanged; this file only covers what is specific to that host.
 
-**This document is not part of the contract, on purpose.** Cinna Desktop ships the
-*contract* — `kit.json`, `layout.json`, `CONTRACT_VERSION`, `CHANGELOG.md`, `schema/`
-and `templates/` — bundled inside the app, and that is the whole of what the two hosts
-have agreed on. The guides, these assistant notes and `tools/kit.py` are kit-only and
-travel in the kit tarball, not the contract one. So nothing written here may be treated
-as a rule another host must implement: the rules live in `layout.json`, the schema and
-the folder templates. This is advice about working in the app, filed with the guides
+**This document is not part of the contract, on purpose.** Cinna Desktop bundles the
+whole kit and installs it into `.cinna-kit/`, but only the *contract* — `kit.json`,
+`layout.json`, `CONTRACT_VERSION`, `CHANGELOG.md`, `schema/` and `templates/` — is what
+the two hosts have agreed on. The guides, these assistant notes and `tools/kit.py` are
+kit-only: the app carries them for you and implements none of them. So nothing written
+here may be treated as a rule another host must implement: the rules live in
+`layout.json`, the schema and the folder templates. This is advice about working in the app, filed with the guides
 because that is what it is.
 
 ## What you have, and what you do not
@@ -21,9 +21,10 @@ they do not have open.
 
 - Run commands from the agent folder, with relative paths only. This is the same rule
   the cloud runtime enforces, so it costs nothing and buys portability.
-- `.cinna-kit/` may hold **only the contract**. There may be no `guides/` and no
-  `tools/kit.py`. Check before you reach for either, and never hand the user a
-  `uv run .cinna-kit/tools/kit.py …` line you have not confirmed exists.
+- `.cinna-kit/` holds the full kit — `README.md`, `guides/` and `tools/kit.py` included.
+  `kit.py` still needs `uv` (or Python 3.10+) on the machine, which the app does not
+  promise. If `uv run .cinna-kit/tools/kit.py …` will not start, say so in one line and
+  use the app's own validation; never hand the user a command you have not seen run.
 - Scaffolding and validation are the app's own actions here. The desktop builds and
   checks folders from the same contract `kit.py` reads, so a folder it created is one
   `kit.py new` would have created, and the other way round. Use the app's action rather
@@ -32,8 +33,8 @@ they do not have open.
 
 ## Never run `kit.py refresh`
 
-The desktop owns `.cinna-kit/`. It installs the contract from its bundled copy and
-replaces it when the app updates.
+The desktop owns `.cinna-kit/`. It installs the kit from its bundled copy and replaces
+it when the app updates.
 
 `refresh` downloads the full kit tarball and swaps the whole `.cinna-kit/` directory in
 one move. In this host that replaces the app's contract with a different version behind

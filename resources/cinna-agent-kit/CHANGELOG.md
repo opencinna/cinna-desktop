@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `e5c11a38d3e1fc8b`.
+Your current kit is version `7085a29d0ca713c0`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,13 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## Desktop installs the full kit
+
+Documentation update, with no schema or contract-version change. Cinna Desktop now
+bundles the whole kit — guides, assistant notes, `tools/kit.py` — and installs it into
+`.cinna-kit/`, so `assistants/cinna-desktop.md` and the root `AGENTS.md` stop saying a
+desktop workshop may hold only the contract. `kit.py` still needs `uv` or Python 3.10+.
 
 ## Desktop local scheduling guidance
 

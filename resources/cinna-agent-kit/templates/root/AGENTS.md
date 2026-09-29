@@ -86,8 +86,8 @@ Two things change for you when the answer is `yes`:
 **If you are the assistant inside Cinna Desktop itself**, read
 `.cinna-kit/assistants/cinna-desktop.md` before anything else. Two rules bite there
 immediately: the desktop owns `.cinna-kit/`, so you must never run `kit.py refresh`;
-and `.cinna-kit/` may hold only the contract, with no `guides/` and no `tools/kit.py`,
-so check that a command exists before you offer it.
+and `kit.py` needs `uv` (or Python 3.10+), which the app does not promise, so check
+that a command runs before you offer it.
 
 ## Freshness
 
