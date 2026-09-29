@@ -26,7 +26,7 @@
 
 ### Renderer — Shared UI / Hooks
 
-- `src/renderer/src/components/ui/usePopover.ts` — Generic popover wiring: trigger ref, popover ref, fixed-position computation, outside-click handler with portal-aware exclusion, and a clamp back inside the window (horizontal for every placement, vertical for `right`); placements `above-left | above-right | below-right | right`
+- `src/renderer/src/components/ui/usePopover.ts` — Generic popover wiring: trigger ref, popover ref, fixed-position computation, outside-click handler with portal-aware exclusion, and a clamp back inside the window (horizontal for every placement, vertical for `right`); placements `above-left | above-right | below-left | below-right | right`
 - `src/renderer/src/hooks/useStartNewChat.ts` — Stable callback: clears `activeChatId`, sets `activeView` to `chat`
 
 ### Renderer — Styles
@@ -128,6 +128,7 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 - Single `useLayoutEffect` keyed on `[open, placement]`. A layout effect, not a passive one: the position is measured in the frame the popover opens, so one that follows the pointer from row to row never paints a frame of nothing in between
 - Computes `position: fixed` style from the trigger's `getBoundingClientRect`, with a `GAP = 8` (above), `BELOW_GAP = 4` or `RIGHT_GAP = 4`
 - `right` sits beside the trigger with top edges level — for a row's hoverable popover, which must cover neither the row nor the rows the pointer moves on to. 4 px is close enough for the pointer to cross onto it; it may overlap the sidebar card's edge. Used by the [chat row summary](../../chat/chat_row_summary/chat_row_summary_tech.md)
+- `below-left` hangs under the trigger with left edges level. Its user, the transcript's dot preview ([Conversation UI tech](../../chat/conversation_ui/conversation_ui_tech.md)), picks it against `above-left` once at open and overrides `left` to sit at the hovered dot
 - `mousedown` handler closes when target is outside both the trigger ref and the popover ref
 - Re-measures on `window resize`; consumer is responsible for scroll. The shell's own triggers do not scroll; the chat row summary's does, and closes on it rather than re-measuring
 
