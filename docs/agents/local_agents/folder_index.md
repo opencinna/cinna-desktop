@@ -13,7 +13,7 @@ Three trees are discussed here and their paths look alike, so they are written d
 | Written as | Means |
 |---|---|
 | `src/...`, `resources/...`, `docs/...` | A file in **this repository** |
-| `kit.json`, `layout.json`, `templates/...` | Relative to the **contract root** — `resources/cinna-kit-contract/`, or `.cinna-kit/` once copied into a workshop |
+| `kit.json`, `layout.json`, `templates/...` | Relative to the **contract root** — `resources/cinna-agent-kit/`, or `.cinna-kit/` once copied into a workshop |
 | `Local/<slug>/...` | Inside an **agent folder**, i.e. relative to a root. Where the sentence has already established we are inside one, the prefix is dropped: `credentials/.env`, `app-data/desktop.json` |
 
 The third is the one that catches people: an agent folder has its own `docs/`, `scripts/` and `config/`, and none of them is this repository's.
@@ -33,7 +33,7 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 ## Core Concepts
 
 - **Folder Agent** — An agent that *is* a folder on disk (`agents.source = 'folder'`, row id `folder:<manifest uuid>`). Contrast with `'local'` (a hand-added A2A URL) and `'remote'` (Cinna-synced)
-- **Agents Root** — A registered folder agents are scanned from. Two kinds, in the `agent_roots.kind` column: **workshop** (the kit shape — `Local/` with one directory per agent, `Cloud/`, the root markdown files and a `.cinna-kit/` copy of the contract) and **external** (a folder the user pointed at, walked for `AGENT.md`, with nothing installed into it). Unqualified, "root" and "workshop" in this document mean the first
+- **Agents Root** — A registered folder agents are scanned from. Two kinds, in the `agent_roots.kind` column: **workshop** (the kit shape — `Local/` with one directory per agent, `Cloud/`, the root markdown files and a `.cinna-kit/` copy of the kit, downloaded by the user or installed by the desktop) and **external** (a folder the user pointed at, walked for `AGENT.md`, with nothing installed into it). Unqualified, "root" and "workshop" in this document mean the first
 - **Agents Home** — The one root marked default: `~/Documents/CinnaAgents` unless the `localAgentsHome` app setting says otherwise. Where the New Agent button writes. Cannot be removed, only moved. Always a workshop. On macOS its first creation is gated on an in-app explainer — [The Agents Folder Question](home_access.md)
 - **Bare Agent** — An agent found in an external root: a folder holding an `AGENT.md`, `AGENTS.md` or `CLAUDE.md` and no manifest (the last two do not count in a kit-shaped folder at all). Same DTO, same rows, same prune, same watcher — see [Bare Agents & External Roots](bare_agents.md)
 - **Folder Index** — The `agents` rows derived from a scan, plus the `agent_roots` rows saying where to look
@@ -49,7 +49,7 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 ### Opening the Agents tab for the first time
 1. The home is resolved from the `localAgentsHome` setting, or the built-in default
 2. On macOS, where the home sits in a folder the system guards and this install has never created it, **nothing is written yet**: the list reports the home access reason while retaining any other registered roots. The explainer opens only from an explicit folder setup action, such as **+ → New agent** or **Set one up**. See [The Agents Folder Question](home_access.md)
-3. Once access is ready (after consent when required), the folder is created if missing, the root templates (`AGENTS.md`, `CLAUDE.md`, `README.md`, `.gitignore`, `Local/`, `Cloud/`) are installed, and `.cinna-kit/` is populated from the bundled contract
+3. Once access is ready (after consent when required), the folder is created if missing, the root templates (`AGENTS.md`, `CLAUDE.md`, `README.md`, `.gitignore`, `Local/`, `Cloud/`) are installed, and the bundled kit is installed into `.cinna-kit/` when that is missing or broken
 4. Each root is scanned; every folder becomes a list entry and (where its identity could be read) an `agents` row
 5. Each root starts being watched
 
@@ -102,7 +102,7 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 - Exactly one root per user is the home. It is created lazily and idempotently: everything missing is created, everything present is left alone (every root file is `survives_update: true` in the contract layout)
 - **The first creation of a home inside a macOS-guarded folder is neither lazy nor automatic.** It raises the system's Files-and-Folders prompt, so it is refused until the user has been shown what the folder is, and the refusal lives in the one function every path to the home goes through. What is withheld is the **home row alone** — an adopted workshop still lists, still scans and still works, because the app being unable to make *its* folder says nothing about the folder the user chose. See [The Agents Folder Question](home_access.md)
 - A root already registered at the home's path is adopted as the home rather than duplicated
-- The `.cinna-kit/` copy is refreshed only when the workshop's copy is **older** than the bundled contract. An equal or newer copy is left alone — overwriting would undo a contract refresh, or an edit an assistant is entitled to make in the workshop, and copying on every call would defeat the contract cache
+- **A kit the user downloaded into a workshop keeps working exactly as before.** The desktop installs the **whole bundled kit** — contract, guides, assistant notes and `tools/kit.py` — into `.cinna-kit/` only when it is missing or broken (no readable contract version, or no `kit.json`, `VERSION`, `README.md`, `tools/kit.py` or `guides/` — a contract-only copy from an older build is broken by this rule), and marks what it installs with `.cinna-kit/.desktop_install`. A complete tree without the marker came from `kit.py refresh`, the CLI or an adopted workshop, and is never touched, whatever its contract version. A strictly newer workshop contract is never touched, whether marked or complete or not, because a newer core may lay its kit out differently. A marked tree is the desktop's: a different kit hash (`VERSION`) is reinstalled at most once per root per process (so a dev build and the installed release sharing one home do not swap kits back and forth), and a failed install waits for the next launch. An install is staged beside the tree and swapped in whole, so a file dropped upstream disappears and a local edit in a replaced tree does not survive. The "leave it" answers cost a few `stat`s and no copy, since this runs on nearly every request and copying each time would defeat the contract cache. Only in a tree it owns does the desktop keep `.cinna-kit/.last_refresh_check` under a day old, so the root `AGENTS.md` never sends an assistant to `kit.py refresh` there. See [The workshop copy](kit_contract.md#the-workshop-copy-installed-where-missing-kept-current-only-where-the-desktop-put-it)
 - The configured home is re-validated on **every read**, not trusted. A value that no longer passes the path rules falls back to the default and is logged; the user keeps a working Agents tab instead of an app that refuses to open one
 - Folder agents are **machine-local**: they live in the default (settings) scope alongside hand-added A2A agents and follow every profile. See [Settings Scope](../../core/settings_scope/settings_scope.md)
 
@@ -283,7 +283,7 @@ Agents tab / agent page (renderer)
                            | :validate | :open-path
                            | :roots-list | :root-add | :root-remove
             -> localAgentService                (composition root of the slice)
-                 -> agentsHomeService   the home, extra roots, .cinna-kit copy
+                 -> agentsHomeService   the home, extra roots, .cinna-kit kit copy
                  -> scaffoldService     templates/agent -> Local/<slug>/
                  -> scannerService      folder -> DTO -> agents rows (one transaction)
                  -> desktopStateService app-data/desktop.json

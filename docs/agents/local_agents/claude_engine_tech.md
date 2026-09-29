@@ -55,7 +55,7 @@ Implementation reference for [The Claude Engine](claude_engine.md). What the SDK
 
 | File | Change |
 |---|---|
-| `resources/cinna-kit-contract/schema/cinna-agent.schema.json` | `runtime.engine`, `["string","null"]`, **no enum**. Core's schema since contract 1.5.0; the bundle is re-synced from core, never edited here (see [Updating the bundle](kit_contract_tech.md#updating-the-bundle)) |
+| `resources/cinna-agent-kit/schema/cinna-agent.schema.json` | `runtime.engine`, `["string","null"]`, **no enum**. Core's schema since contract 1.5.0; the bundle is re-synced from core, never edited here (see [Updating the bundle](kit_contract_tech.md#updating-the-bundle)) |
 | `electron-builder.yml`, `scripts/packaged-dependencies.cjs` | Root/nested CLI exclusions, automatic adapter runtime dependency unpacking and shipped-tree validation |
 | `package.json` | `@anthropic-ai/claude-agent-sdk` added; `@anthropic-ai/sdk` `^0.89.0` → `^0.93.0` |
 

@@ -23,7 +23,7 @@ Implementation reference for [`/run:<name>` — running a folder agent's catalog
 
 ### Main process — reused, unchanged by this slice
 - `src/main/kit/validator.ts:687` — `readCommandCatalog(agentDir, relPath)`
-- `src/main/kit/layout.ts:329-344` — `LayoutView.localizeCommand(command, context)`, rule-driven from `layout.json`'s `local_command_runner.rules` (`resources/cinna-kit-contract/layout.json:247`)
+- `src/main/kit/layout.ts:329-344` — `LayoutView.localizeCommand(command, context)`, rule-driven from `layout.json`'s `local_command_runner.rules` (`resources/cinna-agent-kit/layout.json:247`)
 - `src/main/services/localAgents/turnLock.ts:68` — `acquire(agentId, owner)`; `:98` — `withLock`. `owner` is an unconstrained string — `'command'` is a new value passed in, not a new lock mode
 - `src/main/services/a2aStreamingService.ts` — `RunAgentTurnResult`, `TurnIO` / `TurnRun` (`:108-114`), `streamToAgent()`. `commandService.ts` imports only the types. `streamToAgent`'s body is the same for a command and a turn; only the `run` it is handed differs
 

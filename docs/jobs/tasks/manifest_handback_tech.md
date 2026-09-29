@@ -2,7 +2,7 @@
 
 ## File Locations
 
-- Contract: `src/shared/kit/manifest.ts`, `src/shared/kit/handovers.ts`, `src/main/kit/validator.ts`, `resources/cinna-kit-contract/schema/cinna-agent.schema.json`, `resources/cinna-kit-contract/CHANGELOG.md`.
+- Contract: `src/shared/kit/manifest.ts`, `src/shared/kit/handovers.ts`, `src/main/kit/validator.ts`, `resources/cinna-agent-kit/schema/cinna-agent.schema.json`, `resources/cinna-agent-kit/CHANGELOG.md`.
 - Eligibility: `src/main/services/taskRunnerService.ts`, `src/main/services/runExecutionService.ts`, `src/main/agents/drivers/driver.ts`.
 - Folder/driver: `src/main/agents/drivers/index.ts`, `src/main/agents/drivers/acp/acpDriver.ts`, `src/main/agents/drivers/acp/handback.ts`.
 - Result/prompt: `src/main/services/a2aStreamingService.ts`, `src/main/services/turnCompletion.ts`, `src/main/services/localAgents/promptAssembly.ts`.

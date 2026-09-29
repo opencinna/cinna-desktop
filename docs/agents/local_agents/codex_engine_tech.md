@@ -21,7 +21,7 @@
 - `src/main/agents/drivers/capabilities.ts` and `src/shared/agentDrivers.ts` — launcher identity and advertised capabilities.
 - `src/shared/engine.ts` — `AgentEngine`, `CodexAuthStatus`, `effectiveEngine`, `resolveDefaultEngine`, `codexEffortForComplexity`; `src/shared/localAgents.ts` and `src/shared/localAgentRequests.ts` carry desktop summary and permission contracts.
 - `src/main/services/localAgents/runtimeService.ts`, `defaultEngineService.ts`, `desktopStateService.ts`, `localAgentService.ts` in the same directory — runtime validation/resolution, machine default, persisted approval choice and owned mutation.
-- `src/main/kit/validator.ts` and `resources/cinna-kit-contract/schema/cinna-agent.schema.json` — tolerant manifest reads with warnings for a Codex credential.
+- `src/main/kit/validator.ts` and `resources/cinna-agent-kit/schema/cinna-agent.schema.json` — tolerant manifest reads with warnings for a Codex credential.
 - `src/main/agents/drivers/acp/contracts/` — `codex.contract.ts` (the registry), `codex.contract.test.ts`, `codexHarness.ts`, `contractDocs.ts`, `contractRegistry.test.ts` and `snapshots/`. See [Verification](#verification-and-limits).
 - `scripts/install-runtime.mjs` and `scripts/generate-contract-docs.mjs` — the out-of-app installer the contract tests use, and the generator of the [interface contract](contracts/codex_interface.md).
 - `src/main/services/appSettingsService.ts` — `localAgentsCodexPath` validation (absolute or empty) and `onSaved`.

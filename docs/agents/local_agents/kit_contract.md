@@ -2,7 +2,9 @@
 
 ## Purpose
 
-Cinna Desktop ships a pinned, machine-readable copy of the cinna-core agent start-kit's **contract** — the manifest schema, the folder-layout rules, the root/agent templates and the conformance set — plus a TypeScript reader, validator and exporter for it. It is what lets the desktop scaffold, read, validate and export kit-shaped agent folders entirely offline: no Python, no network, no cinna-core.
+Cinna Desktop ships a pinned copy of the cinna-core **agent kit** — the same tree core's kit tarball serves, and what `kit.py refresh` would download — plus a TypeScript reader, validator and exporter for the kit's machine-readable half, the **contract**: the manifest schema, the folder-layout rules, the root/agent templates and the conformance set. The contract is what lets the desktop scaffold, read, validate and export kit-shaped agent folders entirely offline: no Python, no network, no cinna-core.
+
+The rest of the kit — `README.md`, `START.md`, `guides/`, `assistants/`, `tools/kit.py`, `desktop_contract_answers.md` — is carried for the workshops, not read by the app. A workshop without a usable kit gets the whole tree as its `.cinna-kit/`, so a coding assistant opening the folder finds the guides and the tool the kit's own documents send it to; a kit the user downloaded there is left alone. See [The workshop copy](#the-workshop-copy-installed-where-missing-kept-current-only-where-the-desktop-put-it).
 
 The copy is **core's, byte for byte**. `make kit-sync` renders it from a cinna-core checkout and a unit test fails on any hand edit; the desktop mints no contract version and keeps no template of its own. See [The bundle is core's](#the-bundle-is-cores-and-is-never-edited-here).
 
@@ -31,11 +33,12 @@ The contract carries one field registered to this host: `handovers[].target_kind
 
 ## Core Concepts
 
-- **Kit Contract** — The bundled tree at `resources/cinna-kit-contract/`: `kit.json` (core's kit descriptor, carrying `contract_version` and `kit_version`), `CONTRACT_VERSION`, `CHANGELOG.md`, `schema/cinna-agent.schema.json` and `schema/publications.schema.json`, `layout.json`, `conformance/`, and the two template trees. Its version is whatever core minted — `CONTRACT_VERSION` says which
+- **Agent Kit (bundle)** — The bundled tree at `resources/cinna-agent-kit/`: core's whole kit, rendered with its public-cloud values. Its `VERSION` is the kit content hash (core's `_content_version`, the same value as `kit.json`'s `kit_version`), which is what decides whether a workshop copy the desktop installed is current
+- **Kit Contract** — The members of that tree the desktop reads: `kit.json` (core's kit descriptor, carrying `contract_version` and `kit_version`), `CONTRACT_VERSION`, `CHANGELOG.md`, `schema/cinna-agent.schema.json` and `schema/publications.schema.json`, `layout.json`, `conformance/`, and the two template trees. Its version is whatever core minted — `CONTRACT_VERSION` says which
 - **Conformance Set** — `conformance/manifests/*.json`: manifests paired with the field paths a validator must report for them. `kit.py` and this desktop's validator both run the whole set, so the two cannot disagree about a manifest without a test failing. Manifest-level checks only — nothing that needs a folder
 - **Field scope** — every schema property carries `x-scope` (`portable`, `host`, or `host:<name>`) and `x-import` (what `cinna agent import` does with it). Annotations only: they change no validation outcome, and the desktop's code reads neither
 - **Agent Manifest** — `cinna-agent.json` at an agent folder's root. The one file every tool that touches the folder agrees on: identity, prompts paths, credential slots, schedules, handovers, publications
-- **Agents Root** (a.k.a. workshop) — The folder agent folders live under. May carry its own `.cinna-kit/` copy of the contract, pulled by a later contract refresh
+- **Agents Root** (a.k.a. workshop) — The folder agent folders live under. Carries a `.cinna-kit/` copy of the kit: one the user downloaded (`kit.py refresh`, the CLI), which the desktop never touches, or one the desktop installed because none was usable, which it keeps current
 - **Contract Version** — Semver on the folder and on the tool. The compatibility gate — see [Three versions, three questions](#three-versions-three-questions)
 - **Kit Version** — Which start-kit scaffolded the agent (core's content hash of the kit, e.g. `kit.json`'s `kit_version`). Informational, never a gate
 - **Content Hash** — A stable SHA-256 over the files that would travel to a Cinna instance. Answers "has this agent changed since it was pushed to that instance?"
@@ -53,7 +56,7 @@ Three version-ish values live on an agent, and confusing them is the classic way
 | `kit_version` | *Which kit scaffolded this agent?* | Informational only. **Never** branch on it, never gate on it |
 | `content_hash` | *Has this agent changed since it was pushed to that instance?* | Recorded per publication. A mismatch against the current export means the instance is behind |
 
-The gate is applied identically by the desktop, by `kit.py validate` and by cinna-core — the rules table lives in `resources/cinna-kit-contract/CHANGELOG.md` under "Compatibility", and the desktop's copy is `src/shared/kit/contractVersion.ts`.
+The gate is applied identically by the desktop, by `kit.py validate` and by cinna-core — the rules table lives in `resources/cinna-agent-kit/CHANGELOG.md` under "Compatibility", and the desktop's copy is `src/shared/kit/contractVersion.ts`.
 
 Core's CHANGELOG also records, under 1.5.0, the versions the desktop minted on its own before the contract was unified (its 1.1.0 for `runtime.complexity`, 1.2.0 for `runtime.engine`, 1.3.0 for `target_kind`). 1.1.0 was minted on both sides with different meanings — the collision that is the reason versions are now minted only in core. None of them gates anything: every one is a minor of the same major.
 
@@ -88,23 +91,48 @@ Core's CHANGELOG also records, under 1.5.0, the versions the desktop minted on i
 
 ### The bundle is core's, and is never edited here
 
-`resources/cinna-kit-contract/` is a render of cinna-core's `docs/local_agent_kit/` contract members, produced by `make kit-sync` exactly as core's own kit service renders them, with core's public-cloud placeholder values. `scripts/kit-sync/contract.lock.json` records the core commit it came from and a tree hash over every file; `contractBundle.test.ts` recomputes the hash, so a hand edit fails the unit suite and points at `make kit-sync`.
+`resources/cinna-agent-kit/` is a render of the whole of cinna-core's `docs/local_agent_kit/`, produced by `make kit-sync` exactly as core's own kit service renders it, with core's public-cloud placeholder values — byte-identical to core's kit tarball. `scripts/kit-sync/kit.lock.json` records the core commit it came from and a tree hash over every file; `contractBundle.test.ts` recomputes the hash, so a hand edit fails the unit suite and points at `make kit-sync`.
 
 The rule exists because the desktop used to keep its own copy, with its own templates, CHANGELOG and version numbers, and the two histories drifted: the same version number meant different things on each side, and core's templates and the desktop's scaffolded different folders. A change the desktop needs in the contract is made in core first and then synced; the desktop only chooses *when* to take a new render.
 
-What stays the desktop's own is the code that reads the contract — the validator, the exporter, the scaffolder — and a few rules the desktop keeps a second copy of so they hold without a layout (the secret-file check below). Those copies are checked against the bundle by `contractBundle.test.ts`, not trusted to agree.
+**The bundle is the whole kit, not the contract members.** It used to be only the contract, and the workshop templates' `AGENTS.md` sends an assistant to the kit's index, its guides and `tools/kit.py` — so every build request an assistant took in a desktop workshop came back saying the kit was missing. `contractBundle.test.ts` now fails if `README.md`, `START.md`, `VERSION`, `tools/kit.py`, `assistants/cinna-desktop.md` or any guide is absent.
+
+**The render proves itself against core's own version stamp.** Core writes the kit content hash into `VERSION` while rendering; the sync computes the same hash independently, and stops if the two differ. A mismatch means the sync no longer reproduces core's render: the bundle would not be the tarball core serves, and the hash the workshop sync compares on would name a kit that exists nowhere else.
+
+**Every file of the render is committed, whatever a global ignore says.** The repository's `.gitignore` un-ignores `resources/cinna-agent-kit/**`. Without it, a developer's global ignore of `.claude/settings.local.json` silently dropped `templates/agent/.claude/settings.local.json` from the commit: the lock counted one file more than the repository held, and a clean checkout failed the tree-hash test.
+
+What stays the desktop's own is the code that reads the contract — the validator, the exporter, the scaffolder — and a few rules the desktop keeps a second copy of so they hold without a layout (the secret-file check below). Those copies are checked against the bundle by `contractBundle.test.ts`, not trusted to agree. Nothing in the app reads the guides, the assistant notes or `kit.py`; the one place it points at them is building mode, which names `assistants/cinna-desktop.md` in the workshop copy (see [The Local Engine](engine.md#the-desktop-context-block-and-building-mode)).
+
+### The workshop copy: installed where missing, kept current only where the desktop put it
+
+A workshop's `<root>/.cinna-kit/` is where an assistant working in the folder reads its rules, guides and `tools/kit.py`. The desktop installs the bundled kit there when it is missing or broken, and keeps current only the copies it installed itself. **A kit the user downloaded — with `kit.py refresh` or the CLI, or brought along in an adopted workshop — keeps working exactly as before**: it may come from a self-hosted or newer core, and replacing it with this build's public-cloud render would undo their kit.
+
+Each pass over a workshop decides, in this order:
+
+0. **A strictly newer contract → never touched**, marked or not, complete by today's layout or not: a newer core may lay its kit out differently, and [contract resolution](#contract-resolution) prefers it. The version is read as contract resolution reads it — `kit.json`, then `CONTRACT_VERSION`
+1. **Missing or broken → install.** Broken means any of these is absent: a readable contract version, `kit.json`, `VERSION`, `README.md`, `tools/kit.py`, `guides/`. That covers a fresh workshop, a contract-only copy an older build left (the case that motivated this: the workshop templates send assistants to guides and a tool those copies did not have), and a damaged tree — whoever made it
+2. **Complete, without the `.cinna-kit/.desktop_install` marker → never touched**, whatever its contract version, and no stamp written. The app reads its bundled contract regardless, so an older downloaded kit costs the app nothing, and overlaying it would only mix two kits
+3. **Complete, with the marker → the desktop's own.** A `VERSION` other than the bundled one is reinstalled, **at most once per root per process**: two builds sharing one home — a dev build and the installed release — bundle different hashes, and without the limit each would swap its own kit back in on every call. Otherwise the tree is current: no copy, no cache invalidation, only the stamp below
+
+This runs on the hot path — the home is ensured on every list, rescan and create — so the "leave it" answers cost a few `stat`s and small reads, never a copy.
+
+Every install is built in a staging directory beside `.cinna-kit/`, gets the marker (holding the bundled `VERSION` it installed), and is swapped in by rename, so the workshop never holds half a kit and a file core dropped upstream disappears with the old tree. **A local edit inside a tree the desktop replaces is not preserved** — `layout.json` declares `.cinna-kit` replaced wholesale and never edited by hand. Staging left by an interrupted install is removed on the next one. **A failed install only logs, and is not retried until the next launch**: the previous tree stays, the app reads its bundled copy regardless, and a folder that refuses the copy would otherwise be copied into, and warned about, on every call.
+
+**In a tree it owns, the desktop keeps the kit's freshness stamp current, so no assistant runs `kit.py refresh` there.** The root `AGENTS.md` tells an assistant to run `kit.py refresh --check` when `.cinna-kit/.last_refresh_check` is missing or older than seven days — and a refresh in a desktop-owned tree would swap the app's kit behind its back. So the desktop writes that stamp, in `kit.py`'s own format, on every install and whenever it is older than a day. A failed write is swallowed; the worst case is that the rule fires. **A tree the desktop does not own never gets the stamp**: whether it refreshes is its owner's business, and a downloaded kit refreshing itself is exactly what "keeps working as before" means. A tree with a strictly newer contract is left without it too.
+
+What it deliberately does not do: the desktop never runs `kit.py`, never fetches a kit, and puts no managed `uv` or Python on anyone's PATH. `kit.py` still needs `uv` (or a `python3` of 3.10 or newer) on the machine; an assistant without one can read the guides but not run the tool.
 
 ### The legacy exemption, and the three places that must agree
 
 A manifest carrying `schema_version` but neither `contract_version` nor `id` is a legacy folder. It must still parse — it is read, reported, and re-stamped, never rejected. Every *other* manifest requires both fields.
 
-That is why `contract_version` and `id` are **not** in the schema's top-level `required`. The requirement is expressed instead as a conditional `allOf` in `resources/cinna-kit-contract/schema/cinna-agent.schema.json`: *if* legacy, nothing extra; *else* require both.
+That is why `contract_version` and `id` are **not** in the schema's top-level `required`. The requirement is expressed instead as a conditional `allOf` in `resources/cinna-agent-kit/schema/cinna-agent.schema.json`: *if* legacy, nothing extra; *else* require both.
 
 Three artefacts encode this same rule and must be changed in the same commit:
 
 1. The schema's conditional `allOf`
 2. `checkIdentity()` in `src/main/kit/validator.ts`
-3. The Compatibility section and the 1.0.0 Breaking entry in `resources/cinna-kit-contract/CHANGELOG.md`
+3. The Compatibility section and the 1.0.0 Breaking entry in `resources/cinna-agent-kit/CHANGELOG.md`
 
 The schema carries a `$comment` saying exactly this. Two of the three are core's, so a change to the rule starts in core and reaches this repository through `make kit-sync`; `checkIdentity()` then follows, and the conformance set's `legacy-manifest` case fails until it does. **The coupling is load-bearing**: an earlier mismatch between the schema and the validator would have made cinna-core reject folders the desktop happily accepts — the folder travels, the import fails, and nothing on the desktop side saw it coming.
 
@@ -122,9 +150,9 @@ Enforced at four independent layers, so no single mistake leaks:
 
 | Layer | File | What it stops |
 |-------|------|---------------|
-| Export exclusion | `cloud_import_excludes` **and** `secret_files` in `resources/cinna-kit-contract/layout.json`, both applied by `isExcludedFromExport()` | The file travelling to a Cinna instance |
-| Agent ignore template | `resources/cinna-kit-contract/templates/agent/gitignore` | The file being committed from an agent folder |
-| Workshop ignore template | `resources/cinna-kit-contract/templates/root/gitignore` | The same, from the workshop root |
+| Export exclusion | `cloud_import_excludes` **and** `secret_files` in `resources/cinna-agent-kit/layout.json`, both applied by `isExcludedFromExport()` | The file travelling to a Cinna instance |
+| Agent ignore template | `resources/cinna-agent-kit/templates/agent/gitignore` | The file being committed from an agent folder |
+| Workshop ignore template | `resources/cinna-agent-kit/templates/root/gitignore` | The same, from the workshop root |
 | Validator secret check | `isSecretFile()` in `src/main/kit/validator.ts`, with `isIgnoredPath()` deciding whether a rule already covers it | The user shipping or committing one unknowingly |
 
 **The export applies the rule to the files it hashes, not only to the files it copies.** A secret left out of the upload but counted in the content hash would make the hash move for a change that can never be published, which reads as "unpublished changes" for ever.
@@ -191,7 +219,7 @@ Ignore rules ship **dotless** in the template trees and the scaffolder restores 
 
 ### Contract resolution
 
-The bundled contract is always present. A workshop may additionally carry `.cinna-kit/` — a contract tree, or core's full kit installed by `kit.py`. A tree's version is `kit.json`'s `contract_version`, else its `CONTRACT_VERSION` file, and **never** a `VERSION` file: in core's full kit that is the *kit* content hash, and reading it as a contract version would compare a hash against a semver. The workshop copy wins **only** when its major matches the bundled one *and* its version is newer. A workshop copy with a newer major is deliberately not adopted — a newer major means the app itself is out of date, and the per-agent gate reports `app_too_old` rather than the app quietly running against a contract this build does not understand.
+The bundled contract is always present. A workshop may additionally carry `.cinna-kit/` — the kit the desktop installed, one `kit.py` or the CLI installed or refreshed, or a contract-only tree an older build left (which the desktop replaces). A tree's contract version is `kit.json`'s `contract_version`, else its `CONTRACT_VERSION` file, and **never** its `VERSION` file: that is the *kit* content hash, in the bundle as in every full kit, and reading it as a contract version would compare a hash against a semver. `VERSION` is read only by the [workshop sync](#the-workshop-copy-installed-where-missing-kept-current-only-where-the-desktop-put-it), as the kit hash it is. The workshop copy wins **only** when its major matches the bundled one *and* its version is newer. A workshop copy with a newer major is deliberately not adopted — a newer major means the app itself is out of date, and the per-agent gate reports `app_too_old` rather than the app quietly running against a contract this build does not understand.
 
 ### Content hash construction
 
@@ -213,15 +241,18 @@ No mtime, no inode, no size, no directory order, nothing machine-specific. Two m
 
 ```
 cinna-core docs/local_agent_kit/  ($CINNA_CORE_PATH)
-            |  make kit-sync — render, pin in scripts/kit-sync/contract.lock.json
+            |  make kit-sync — render, pin in scripts/kit-sync/kit.lock.json
             v
-resources/cinna-kit-contract/          (core's render; never hand-edited)
-  kit.json  CONTRACT_VERSION  CHANGELOG.md
+resources/cinna-agent-kit/          (core's whole kit; never hand-edited)
+  kit.json  CONTRACT_VERSION  CHANGELOG.md   <- contract
   schema/cinna-agent.schema.json       <- the manifest rules (+ publications.schema.json)
   layout.json                          <- the folder model as data, incl. secret_files
   conformance/manifests/               <- cases every validator must agree on
   templates/root/  templates/agent/    <- what a scaffold copies
+  VERSION  README.md  START.md  guides/  assistants/  tools/kit.py
+  desktop_contract_answers.md          <- kit-only: carried for workshops, not read here
             |
+            +--> agentsHomeService.syncWorkshopKit -> <root>/.cinna-kit/ (whole tree; only where missing, broken or ours)
             v
   contractStore  ->  resolves bundled vs. workshop .cinna-kit/
             |
@@ -241,6 +272,7 @@ No IPC, no renderer, no SQLite in this layer.
 ## Integration Points
 
 - [Open in… (Local Agent Tools)](open_in_tools.md) — Phase 4 of the same feature; hands a validated agent folder to the user's own assistant or editor. Shares the Agents Root concept
+- [Agents Home, Scanner & Folder Index](folder_index.md) — owns the workshops, and with them the install of the bundled kit into a `.cinna-kit/` that is missing, broken or the desktop's own
 - [Bare Agents & External Roots](bare_agents.md) — the other kind of folder agent: what a folder with only an instructions file is, and everything in this document it does not keep
 - [Main-Process Layering](../../development/main_layering/main_layering_llm.md) — `KitError` follows the standard `DomainError` code convention
 - [Database Migrations](../../development/migrations/migrations_llm.md) — relevant only to note that this layer adds *none*
