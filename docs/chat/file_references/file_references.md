@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A folder agent works inside its folder and names files all the time: `data/reforecast/pulled/omp.csv`, `scripts/pull.py:42`. In that agent's chat, an inline code span that names a real file or folder is clickable. A file opens in the shared [preview modal](../file_preview/file_preview.md), which expands from the click point and has **Open** and **Open folder** in its header's **⋯** menu. A folder opens in Finder / Explorer. The user never has to go looking for a file the agent has just named.
+A folder agent works inside its folder and names files all the time: `data/reforecast/pulled/omp.csv`, `scripts/pull.py:42`. In that agent's chat, an inline code span that names a real file or folder is clickable. A file opens in the shared [preview modal](../file_preview/file_preview.md), which expands from the click point and has **Open** and **Open folder** in its header's **⋯** menu. A folder opens in Finder / Explorer. A right-click offers what a user does with a named file next: copy its contents or save them to Notes, copy its full path, or start a new chat that points at it. The user never has to go looking for a file the agent has just named.
 
 ## Core Concepts
 
@@ -19,6 +19,8 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **Credential file**: a file whose name says it holds secrets. It is never read into the renderer.
 - **Guarded location**: `~/Documents`, `~/Desktop`, `~/Downloads` or iCloud Drive (`~/Library/Mobile Documents`). macOS asks the user before an app touches any of them. See [The Agents Folder Question](../../agents/local_agents/home_access.md).
 - **Open strategy**: how **Open** hands a file to the operating system, which never involves executing it.
+- **Reference menu**: the transcript's right-click menu when it lands on a reference. It replaces **Copy text** / **Save to Notes** of the span text with **Copy contents**, **Save to Notes** (of the file), **Copy full path** and **Reference in a new chat**.
+- **Whole-file read**: the file's complete text, for Copy contents and Save to Notes. Unlike a preview it is never truncated: a file over 4 MB is refused.
 
 ## User Stories / Flows
 
@@ -52,6 +54,26 @@ A folder agent works inside its folder and names files all the time: `data/refor
 ### From the keyboard
 1. Tab reaches a reference. Enter or Space opens it, and the modal grows from its centre.
 2. Focus moves into the modal, so Tab reaches the path, the **⋯** button and Close. Enter on **⋯** opens the menu with its first item focused. Escape closes the modal, and once it has faded out, focus goes back to the reference.
+
+### Right-clicking a reference
+1. The user right-clicks a linked span with nothing selected in it. The reference is outlined, and the menu opens with two groups separated by a divider:
+   - **Copy contents** and **Save to Notes**;
+   - **Copy full path** and **Reference in a new chat**.
+
+   Near the bottom of the window the menu opens upwards from the pointer instead.
+
+   A folder, a known binary type (`report.pdf`, `photo.jpg`) or a credential file shows only the second group.
+2. **Copy contents** puts the whole file on the clipboard and closes the menu.
+3. **Save to Notes** creates a note from the file and opens it, the way a transcript excerpt does. The note is titled:
+   - for a markdown file, by its frontmatter `title:`, else its first H1, else its first heading of any level, else its file name;
+   - for anything else, by its file name.
+
+   A markdown or `.txt` file is saved as written. Any other file is saved inside a fenced code block tagged with its language (`py`, `ts`, `json`, `makefile`…), so a script reads as code in the note.
+4. **Copy full path** copies the absolute path. Nothing is read and nothing is asked.
+5. **Reference in a new chat** opens the new-chat screen with the reference's agent selected, the composer focused, and "The file \`<path>\` " already typed, ready for the rest of the sentence. A folder reads "The folder \`<path>\` ". Text already in the new-chat composer stays, and the reference goes on a line under it.
+6. For a file outside the agent folder, the two content items first ask to read it: "Let Cinna read a file outside <agent>'s folder?", **Read file** or **Cancel**. The menu stays open while the dialog is up. **Cancel** closes the menu and reads nothing. The running item shows a spinner and the others dim until it ends.
+7. A failure is said inside the menu, which stays open for a retry with focus back on the item that failed: "This file is over 4 MB.", "This isn't a text file.", "That file is no longer there.". An agent that has been switched off shows the toast "*Name* is disabled", one that is gone "That agent is no longer available".
+8. A selection inside a path still wins: selecting part of it and right-clicking gives the ordinary **Copy text** / **Save to Notes** of the selection.
 
 ## Business Rules
 
@@ -108,6 +130,8 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **Linked, but checked at the click.** The native dialog is shown by main and attached to the window.
   - It shows `~/…` paths and calls a folder a folder.
   - It says "Cinna reads it to preview it here." only when the file is a previewable type and not a credential file.
+- **It says what Cinna is about to do.** A click, Open and Open folder ask to *show* the path. Copy contents and Save to Notes ask to *read* it: "Let Cinna read a file outside <agent>'s folder?", with a **Read file** button and "Cinna reads it to copy it or save it to Notes." A dialog that promised a preview would not be consent to putting the file on the clipboard.
+- **One approval, whichever words asked for it.** An approval given to read covers a later click, and the other way round. While a dialog for a path is open, a second request for the same path waits for that dialog's answer, in whatever words it was asked.
 - **Approvals live in memory only.**
   - They end when Cinna quits.
   - They are kept per profile, so switching profile never carries one person's approvals over to another.
@@ -120,12 +144,15 @@ A folder agent works inside its folder and names files all the time: `data/refor
 ### Credential files are never read into the renderer
 - **Which files count:**
   - `.env` and `.env.*`, except `.env.example`, `.env.sample` and `.env.template`;
-  - `*.pem`, `*.key`, `id_rsa*` and `id_ed25519*`;
+  - `*.pem` and `*.key`;
+  - SSH private keys: names starting `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519` or `id_xmss` (so `id_ed25519_work` too), except the public `*.pub` half;
+  - tool credential stores known by name: `.netrc`, `_netrc`, `.npmrc`, `.pypirc`, `.pgpass`, `.git-credentials`, `.dockercfg`;
+  - stores known by folder and name, matched as whole path segments: `…/.docker/config.json`, `…/.aws/credentials`, `…/.kube/config`;
   - anything under the agent's `credentials/` folder, except `README.md` and `*.example`.
 - **Names are compared without case**, erring towards refusing.
 - **Main checks two spellings**: the realpath and the path as the renderer spelled it. Neither a symlink nor a data-volume spelling gets past it.
-- **The renderer checks the name first** as well, only so that `.env` shows the credential message rather than "No preview for this file type".
-- **Only the preview is refused.** Open and Open folder still work.
+- **The renderer checks the name first** as well, only so that `.env` shows the credential message rather than "No preview for this file type", and so its right-click menu does not offer contents main would refuse.
+- **Only reading is refused**: the preview and the whole-file read ("Cinna does not read credential files."). Open, Open folder and Copy full path still work.
 
 ### macOS spellings
 - **The data volume.** `/System/Volumes/Data/Users/me` is the same folder as `/Users/me`, and `realpath` keeps whichever spelling it was given. That spelling used to get around the containment, credential and home-folder rules.
@@ -142,7 +169,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
   - The exception for an agent inside a guarded folder is compared as spelled, so an agent in `~/Documents/a` does not link `~/DOCUMENTS/x.md`.
 
 ### Check, then use
-- **A preview** compares the opened file's device and inode with the stat that passed the checks. If a rename or a new symlink changed them in between, it refuses as not found.
+- **A preview and a whole-file read** compare the opened file's device and inode with the stat that passed the checks. If a rename or a new symlink changed them in between, they refuse as not found.
 - **Open** re-takes the realpath immediately before launching, and refuses if it changed.
 - **Open folder** does not re-check, because selecting a path in the file manager executes nothing.
 
@@ -193,6 +220,20 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **A failed header action** is named in a row under the header: "Couldn't open it: …" or "Couldn't show it in its folder: …". It closes nothing, and the row is hidden when the body already says the same thing.
 - **Shared with attachments:** the entrance, the fade-out on close, the card pinned to the top, focus handling and the press guard are rules of the modal itself. See [File Preview](../file_preview/file_preview.md).
 
+### The right-click menu
+- **It is the transcript's own menu**, with the same placement rule, outline, pointer and keyboard handling, one-action-at-a-time guard and in-menu errors as Copy text / Save to Notes. See [Conversation UI](../conversation_ui/conversation_ui.md#reusing-message-text). Only a rendered reference gets these items; inline code that did not resolve, or a reference in a bubble still streaming, gets the plain text menu.
+- **The items are decided once, when the menu opens**, from the reference as the transcript resolved it. Nothing appears or disappears while the menu is open, so the item under the pointer is the one clicked.
+- **Contents are offered unless they plainly cannot be text.** A folder, a known binary type or a credential name gets the path items only. A known text type (every previewable type, `.log`, `.out`, `.err`, rotated logs such as `app.log.1`, and conventional names such as `Makefile`, `Dockerfile`, `.gitignore`, `LICENSE`) is offered. So is an unknown type (`.gz`, an extensionless `NOTES`): main reads it and decides from the bytes.
+- **The whole file or nothing.** The read goes through the same checks as a preview — containment or approval, files only, never a credential file, the device and inode re-checked once open — and is never truncated:
+  - over 4 MB, it is refused as "This file is over 4 MB." (the figure is computed from the cap) A file that grows past the cap after the size check is caught by the read, not cut short;
+  - a known binary type, a NUL byte or bytes that are not valid UTF-8 are refused as "This isn't a text file."
+
+  A note or a clipboard holding the first 512 KB of a file would pass for the whole of it.
+- **The menu survives the consent dialog, and only that.** A native dialog takes the window's focus, and a window blur normally closes the menu. A blur is ignored only while the consent call is pending; once it has answered, switching away closes the menu again even if the read or the note is still running. Declining closes the menu silently, as a declined click opens nothing.
+- **Copy contents writes the clipboard from main.** The renderer's clipboard refuses a write from a document without focus, and after a consent dialog the document may not have it back. Copy full path, which asks nothing, uses the renderer's clipboard as Copy text does.
+- **Reference in a new chat uses the reference's own agent**: the agent whose folder the span resolved in, which in a routed chat can be a different agent from the chat's. It lands where every "chat with this agent" action lands — the new-chat screen, that agent preselected, the Chats list beside it — as [New Chat with This Agent](../../ui/keyboard_shortcuts/keyboard_shortcuts.md) does. The path is written into the new-chat screen's draft before the screen mounts, so it is in the input with the caret after it; a line break separates it from text the user had already typed there, which is kept.
+- **The path is the realpath**, for Copy full path and Reference in a new chat alike, not the display path: a relative path means nothing in another chat or tool.
+
 ### Deliberately not done
 - **No approval survives a restart**, and none is written anywhere.
 - **Nothing links** for a remote or command-line agent, in a coordinator's sub-threads, in markdown links or in code blocks.
@@ -219,6 +260,16 @@ Click
                   → agent-files:read-preview (containment/consent → credential → kind → dev/inode) → text
                   Open        → authorize → agent-files:open   → editor | system app | open -t | reveal
                   Open folder → authorize → agent-files:reveal
+
+Right-click
+  useMessageContextMenu → fileRefTargetOf(code) → { agentId, ref } → messageMenuItems (decided once)
+    Copy contents / Save to Notes
+      → readAgentFileText: agent-files:authorize (dialog if outside) → agent-files:read-text
+         (containment/consent → file → credential → binary name → dev/inode → 4 MB → NUL / UTF-8)
+      Copy contents → clipboard:write-text (main's clipboard)
+      Save to Notes → fileNoteFromContents → note:create → Notes tab, note opens
+    Copy full path          → navigator.clipboard (no IPC, no dialog)
+    Reference in a new chat → startAgentChat(agent, draft) → new-chat screen, path in the composer
 ```
 
 For file paths, IPC signatures and method-level detail see [File References — Technical Details](file_references_tech.md).
@@ -230,5 +281,7 @@ For file paths, IPC signatures and method-level detail see [File References — 
 - [Open in Tools](../../agents/local_agents/open_in_tools.md): the Default Tool that **Open** prefers. The editor launch is the one the agent page uses.
 - [The Agents Folder Question](../../agents/local_agents/home_access.md): owns the guarded-location check this feature reuses, so the resolver never probes a guarded folder.
 - [Kit Contract](../../agents/local_agents/kit_contract.md): the `credentials/` folder convention the credential rule follows.
-- [Conversation UI](../conversation_ui/conversation_ui.md): the message bubbles the links render in.
+- [Conversation UI](../conversation_ui/conversation_ui.md): the message bubbles the links render in, and the transcript right-click menu the reference items live in.
+- [Notes](../../notes/notes/notes.md): Save to Notes creates an ordinary note from the file, and opens it as a saved excerpt is opened.
+- [Keyboard Shortcuts](../../ui/keyboard_shortcuts/keyboard_shortcuts.md): Reference in a new chat shares the "chat with this agent" landing and the disabled/missing-agent toast with the chat-starting shortcuts.
 - [Settings Scope](../../core/settings_scope/settings_scope.md): folder agents are located in the settings scope, and approvals are keyed by the profile scope.

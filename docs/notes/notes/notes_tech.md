@@ -89,7 +89,7 @@
 
 ## Services & Key Methods
 
-- `src/renderer/src/hooks/useNotes.ts:useSaveMessageNote()` — first nonempty trimmed line, leading Markdown heading removal, 80-character title cap and Chat excerpt fallback. Stored body is captured text verbatim. [Context actions](../../chat/conversation_ui/conversation_ui_tech.md#message-context-actions) define selection and menu lifecycle.
+- `src/renderer/src/hooks/useNotes.ts:useSaveMessageNote()` — `(text, title?)`: a given non-blank title is used as is (a file reference's, from `src/renderer/src/utils/fileNote.ts`); otherwise first nonempty trimmed line, leading Markdown heading removal, 80-character title cap and Chat excerpt fallback. Stored body is captured text verbatim. [Context actions](../../chat/conversation_ui/conversation_ui_tech.md#message-context-actions) define selection and menu lifecycle.
 
 - `src/main/db/notes.ts`:
   - `notesRepo.list/getById/create/update/softDelete` — CRUD with `userId` in WHERE.

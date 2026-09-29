@@ -21,6 +21,7 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 3. The sidebar switches to the Notes tab with the new note's row selected and scrolled into view, and the note opens for the usual inline editing. If the menu was dismissed or navigation moved away before creation completed, the saved note stays in the list without taking the user back to its detail view or changing the tab.
 4. Pressing Chats afterwards reopens the chat the excerpt came from.
 5. Copy/Save errors remain in the context menu for retry. Selecting part of rendered text preserves the visible excerpt; a completely selected message preserves its Markdown. Capture and menu lifetime belong to [Conversation UI](../../chat/conversation_ui/conversation_ui.md#reusing-message-text).
+6. Right-clicking a linked [file reference](../../chat/file_references/file_references.md#right-clicking-a-reference) saves the file's whole contents instead. A markdown file is titled by its frontmatter `title:`, first H1 or first heading, anything else by its file name; markdown and `.txt` are saved as written, other text files in a fenced code block tagged with their language.
 
 ### Switching to Notes
 

@@ -42,6 +42,7 @@
 | `src/renderer/src/utils/appShortcuts.ts` | Pure rules: `startableAgent(agents, id)` (listed, `enabled`, not `conductor`), `resolveShortcutAgent(screen, agents)` (`chat` view → `routingOf(chat)` with `router === 'direct'` → `rootAgentId`; `external-agent` / `local-agent` → the page's id; anything else → null), `agentShortcutLabel(slot)` (`⌘3` or `Ctrl+3`), `truncateName(name, 24)`. |
 | `src/renderer/src/hooks/useAgents.ts` | `AGENT_SHORTCUTS_KEY = ['agents', 'shortcuts']` — under the `['agents']` prefix, so every agents invalidation and the profile-switch reset re-read it. `useAgentShortcuts()`; `useSetAgentShortcut()` throws on `success: false` and returns its `onSettled` invalidation so the mutation stays pending until the list has re-read. |
 | `src/renderer/src/hooks/useStartNewChat.ts` | The TopBar `+` action `⌘N` reuses. |
+| `src/renderer/src/utils/startAgentChat.ts` | `startAgentChat(agentId, { draft? })`, the "chat with this agent" landing (`activeJobId` null, `pendingAgentId`, `chat` view, Chats tab), and `unavailableAgentMessage(agents, id, missing)`, the toast text. Shared with a file reference's **Reference in a new chat**, which also seeds the new-chat draft. |
 
 ### Preload
 
