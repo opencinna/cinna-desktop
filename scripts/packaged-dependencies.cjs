@@ -2,6 +2,7 @@ const { existsSync, readFileSync, mkdtempSync, mkdirSync, renameSync, rmSync, st
 const { basename, dirname, join, relative, resolve, sep } = require('node:path')
 const { tmpdir } = require('node:os')
 const { verifyCodexAcpPatch } = require('./patch-codex-acp.cjs')
+const { completePackagedKit } = require('./packaged-kit.cjs')
 
 // These are the app-owned entry points executed with ELECTRON_RUN_AS_NODE.
 const CHILD_PACKAGES = [
@@ -172,6 +173,8 @@ function afterPack({ packager, appOutDir, electronPlatformName, arch }) {
     validateCanvasPayload(directory, target)
     console.log(`Verified unpacked ${target.name}@${target.version}`)
   }
+  // electron-builder drops the kit's `.gitkeep` files; see packaged-kit.cjs.
+  completePackagedKit(packager.info.projectDir, packager.getResourcesDir(appOutDir))
 }
 
 module.exports = { runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, beforePack, afterPack }

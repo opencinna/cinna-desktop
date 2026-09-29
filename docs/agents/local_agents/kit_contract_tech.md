@@ -266,6 +266,8 @@ Three entries in `electron-builder.yml` work together, and changing one alone br
 
 Both `electron-builder.yml` and `contractStore.ts` carry reciprocal comments pointing at each other; read both before touching either.
 
+**`afterPack` makes the shipped tree whole.** electron-builder's directory walker (builder-util `walk`) drops every `.gitkeep` and `.DS_Store` before any file pattern is consulted, and creates no empty directories, so the templates' `files/`, `app-data/uploads/` and `app-data/storage/` used to vanish from packaged builds — scaffolded agents lacked them and the workshop kit was not core's tree. No `extraResources` filter can prevent it. `scripts/packaged-kit.cjs` (`completePackagedKit`, called at the end of `afterPack` in `scripts/packaged-dependencies.cjs`) copies back every bundle file the shipped tree lacks, mode included, then fails the build unless the shipped tree's file count and tree hash equal `scripts/kit-sync/kit.lock.json` — the same hash `contractBundle.test.ts` pins the repo copy to, restated in CommonJS. `scripts/packaged-kit.test.cjs` (in `npm run test:packaging`) simulates the filtered copy and checks the restore, the mode of `tools/kit.py`, and that a changed file still fails.
+
 Path resolution is lazy (`app.isPackaged` is only consulted inside the function) so the module is importable before `app.whenReady()`:
 
 - packaged → `join(process.resourcesPath, 'cinna-agent-kit')`

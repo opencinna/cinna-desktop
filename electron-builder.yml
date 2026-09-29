@@ -62,7 +62,9 @@ extraResources:
   # ships as a real directory at Resources/cinna-agent-kit, with no asar shim
   # in the read path. In development the same tree is read straight from the
   # repo. Both paths live in src/main/kit/contractStore.ts; read the packaging
-  # note there before changing any of this.
+  # note there before changing any of this. electron-builder drops the kit's
+  # `.gitkeep` files on every copy; afterPack puts them back and checks the
+  # tree against scripts/kit-sync/kit.lock.json (scripts/packaged-kit.cjs).
   - from: resources/cinna-agent-kit
     to: cinna-agent-kit
 # The `cinna://` deep link the server-hosted landing page fires. electron-builder

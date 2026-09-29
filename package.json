@@ -13,7 +13,7 @@
     "test:packaged:main": "node scripts/check-packaged-main.cjs",
     "test:contract": "vitest run -c vitest.contract.config.ts",
     "contract:docs": "node --experimental-strip-types scripts/generate-contract-docs.mjs",
-    "test:packaging": "node --test scripts/packaged-dependencies.test.cjs scripts/patch-codex-acp.test.cjs",
+    "test:packaging": "node --test scripts/packaged-kit.test.cjs scripts/packaged-dependencies.test.cjs scripts/patch-codex-acp.test.cjs",
     "test:e2e": "electron-vite build && playwright test -c e2e/playwright.config.ts",
     "test:e2e:only": "playwright test -c e2e/playwright.config.ts",
     "dev": "electron-vite dev",

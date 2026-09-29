@@ -87,7 +87,7 @@ test('build hooks preserve resource patterns and reject a broken shipped tree', 
   const native = pkg(canvasName, { main: 'skia.darwin-x64.node' })
   writeFileSync(join(native, 'skia.darwin-x64.node'), 'native fixture')
   const packager = {
-    info: { appDir: root }, config: { asarUnpack: ['resources/**'] },
+    info: { appDir: root, projectDir: join(__dirname, '..') }, config: { asarUnpack: ['resources/**'] },
     getResourcesDir: () => root
   }
   const context = { packager, electronPlatformName: 'darwin', arch: 1, appOutDir: root }
