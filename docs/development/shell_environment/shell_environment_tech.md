@@ -7,6 +7,7 @@
 - `src/main/shell/pathWalk.ts` — pure PATH-walking rules (split, validate, candidate generation, first-match walk). Free of `node:fs` and of the Electron-bound logger so Windows semantics can be exercised from a POSIX host
 - `src/main/shell/envMerge.ts` — the child inherit allowlist, the narrowing, the merge, and the dropped-names diagnostic. Electron-free for the same reason
 - `src/main/shell/pathWalk.test.ts`, `src/main/shell/envMerge.test.ts` — unit coverage for both pure modules
+- `src/main/shell/macDeveloperTools.ts`, `developerToolShims.ts`, `managedGit.ts` — stubs, child-`PATH` shims and the managed git; see [Developer Tools — Technical Details](developer_tools_tech.md)
 - `src/main/mcp/manager.ts` — first consumer; see [MCP Connections — Technical Details](../../mcp/connections/connections_tech.md)
 - `src/main/services/localAgents/toolDetectionService.ts` — second consumer; see [Open in Tools — Technical Details](../../agents/local_agents/open_in_tools_tech.md)
 
@@ -18,7 +19,8 @@ There is no database schema, no IPC channel and no renderer surface for this mod
 - `getShellEnv()` — the resolved environment. Memoised in a module-level `resolved`; concurrent callers share a module-level `inFlight` promise. The promise chain is started from `Promise.resolve().then(...)` so a synchronous throw cannot run the `finally` before `inFlight` is assigned
 - `getResolvedPath()` — convenience wrapper returning `env.PATH ?? ''`
 - `which(bin)` — resolve a bare binary name against the resolved `PATH`. Refuses non-bare names via `isBareBinaryName`, de-dupes in-flight lookups per binary in `toolInFlight`, caches results (hits **and** misses) in `toolCache`, and returns `null` on any failure after a warning
-- `clearToolCache()` — drops `toolCache` only. The resolved environment is intentionally kept
+- `usableTool(bin)` — `which`, but a macOS developer-tool stub whose tools are absent is passed over (next non-stub match via `whichPastStub(bin)`, else the managed git for `git`, else `null`). For every caller that executes the result; see [developer_tools_tech.md](developer_tools_tech.md)
+- `clearToolCache()` — drops `toolCache` and the developer-tools state (`macDeveloperTools.clear()`, so a Refresh right after `xcode-select --install` does not wait out its 60 s TTL). A resolution that fell back to `process.env` is dropped too; a successful one is intentionally kept
 - `loginShell()` — `process.env.SHELL` when absolute, else `/bin/zsh` on darwin, `/bin/bash` elsewhere
 - `resolveShellEnv()` — short-circuits `win32` to `process.env`; otherwise tries `['-ilc']` then `['-lc']`, merging the first parseable dump over `process.env`
 - `probeShell(shell, args)` — spawns the probe with `stdio: ['ignore','pipe','ignore']`, `DISABLE_AUTO_UPDATE` / `ZSH_DISABLE_COMPFIX` set, a `RESOLVE_TIMEOUT_MS` (5 s) `SIGKILL` timer and a `MAX_OUTPUT_BYTES` (2 MB) accumulation cap. Resolves `null` rather than rejecting

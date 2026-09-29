@@ -14,6 +14,7 @@ This is general infrastructure, not agent-specific. Installed-tool detection, th
 - **Child inherit set** — The narrowed environment a *third-party* child process is given. Deliberately much smaller than the resolved environment (see [Child-Process Environment Rule](#child-process-environment-rule))
 - **Regression-only variables** — Proxy and CA variables inherited from `process.env` **only**, never from the shell dump, so the app never grants a capability the platform did not already grant
 - **Dropped-names diagnostic** — A debug log line naming (never valuing) the variables the narrowing removed, so a "my server stopped working" report is diagnosable
+- **Usable tool** — `which()` minus the macOS developer-tool stubs, for callers about to execute the result; and the managed git for a machine with none. See [Developer Tools on a Bare Machine](developer_tools.md)
 
 ## User Stories / Flows
 
@@ -58,6 +59,7 @@ This is general infrastructure, not agent-specific. Installed-tool detection, th
 - Duplicate entries are collapsed; on Windows entries are additionally de-quoted
 - On POSIX a candidate must be a regular file with the executable bit set; on Windows existence is the test, and each directory yields the bare name plus one candidate per `PATHEXT` extension (defaulting to `.COM;.EXE;.BAT;.CMD`) unless the name already carries one
 - Results are cached **including misses**, so a missing tool is not re-walked on every render
+- **`which()` answers what `PATH` holds, not whether it will run.** On a Mac without the Command Line Tools, `/usr/bin/git` is a stub that pops an install dialog; a caller about to execute a tool uses `usableTool()` instead, and engine, custom-agent and MCP children get stand-ins on their `PATH` — see [Developer Tools on a Bare Machine](developer_tools.md)
 
 ### Child-Process Environment Rule
 
@@ -107,5 +109,6 @@ Caller (tool detection / launcher / MCP stdio spawn)
 
 - [MCP Connections](../../mcp/connections/connections.md) — the stdio transport spawn is the first consumer and the one whose behaviour changed; see its **Stdio environment** rules for the user-visible consequence
 - [Open in Tools](../../agents/local_agents/open_in_tools.md) — installed-tool detection and the terminal/editor launchers resolve every binary through `which`
+- [Developer Tools on a Bare Machine](developer_tools.md) — `usableTool()`, the developer-tool shims prepended to child `PATH`s, and the managed git
 - [Setup](../setup/setup.md) — general dev environment and gotchas
 - [Logger](../logger/logger.md) — the `shell-env`, `local-tools` and `open-in` scopes carry the diagnostics described here
