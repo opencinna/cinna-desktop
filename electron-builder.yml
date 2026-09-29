@@ -20,7 +20,7 @@ files:
   # The kit contract ships via extraResources below, not inside the asar.
   # Without this it would be packed twice: once here (and unpacked again by
   # asarUnpack) and once as an extra resource.
-  - '!resources/cinna-kit-contract/**'
+  - '!resources/cinna-agent-kit/**'
   # **The Claude Agent SDK's bundled `claude`, which we must never ship.**
   #
   # `@anthropic-ai/claude-agent-sdk` declares eight optional platform packages,
@@ -59,12 +59,12 @@ asarUnpack:
 extraResources:
   # The kit contract is read as a *tree* at runtime — the manifest schema,
   # layout.json, and the templates the scaffolder copies file by file — so it
-  # ships as a real directory at Resources/cinna-kit-contract, with no asar shim
+  # ships as a real directory at Resources/cinna-agent-kit, with no asar shim
   # in the read path. In development the same tree is read straight from the
   # repo. Both paths live in src/main/kit/contractStore.ts; read the packaging
   # note there before changing any of this.
-  - from: resources/cinna-kit-contract
-    to: cinna-kit-contract
+  - from: resources/cinna-agent-kit
+    to: cinna-agent-kit
 # The `cinna://` deep link the server-hosted landing page fires. electron-builder
 # turns this into the macOS bundle's CFBundleURLTypes, the Linux .desktop file's
 # `MimeType=x-scheme-handler/cinna`, and the NSIS registry keys on Windows.

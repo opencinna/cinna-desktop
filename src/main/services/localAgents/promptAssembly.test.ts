@@ -204,6 +204,55 @@ describe('assembleAgentPrompt', () => {
     expect(withGuide).not.toContain('The build loop.')
   })
 
+  it('points building mode at the kit’s desktop notes only when the workshop has them', () => {
+    // Codex without a git repository never loads the workshop's AGENTS.md, so
+    // this is how the desktop rules (never `kit.py refresh`, test through the
+    // real agent) reach it. Named only when the file exists: a pointer to a
+    // missing file is how a model refuses the work.
+    const root = mkdtempSync(join(tmpdir(), 'cinna-prompt-workshop-'))
+    try {
+      const agentDir = join(root, 'Local', 'invoices')
+      mkdirSync(join(agentDir, 'docs'), { recursive: true })
+      writeFileSync(join(agentDir, 'docs', 'WORKFLOW_PROMPT.md'), '# A\n\nreal text')
+      const bullet = (rel: string): string =>
+        `- Before you build, read \`${rel}\`: it covers what is different about building inside Cinna Desktop, and where it and the kit disagree, it wins.`
+
+      expect(assembleAgentPrompt(agentDir, manifest(), CONTEXT)).not.toContain('Before you build')
+
+      // A directory by that name is not the file.
+      const notes = join(root, '.cinna-kit', 'assistants', 'cinna-desktop.md')
+      mkdirSync(notes, { recursive: true })
+      expect(assembleAgentPrompt(agentDir, manifest(), CONTEXT)).not.toContain('Before you build')
+      rmSync(notes, { recursive: true })
+
+      writeFileSync(notes, '# Building inside Cinna Desktop')
+      const prompt = assembleAgentPrompt(agentDir, manifest(), CONTEXT)
+      const lines = prompt.split('\n')
+      const at = lines.indexOf(bullet('../../.cinna-kit/assistants/cinna-desktop.md'))
+      expect(at, prompt).toBeGreaterThan(0)
+      // Right after the switching sentence, and named, never inlined.
+      expect(lines[at - 1]).toMatch(/^- Say in one line that you are switching to building mode/)
+      expect(prompt).not.toContain('# Building inside Cinna Desktop')
+      expect(prompt).toBe(assembleAgentPrompt(agentDir, manifest(), CONTEXT))
+
+      // A deeper agent still finds it, up to three levels up, and no further.
+      const nested = join(root, 'Local', 'team', 'invoices')
+      mkdirSync(nested, { recursive: true })
+      expect(assembleAgentPrompt(nested, manifest(), CONTEXT)).toContain(
+        bullet('../../../.cinna-kit/assistants/cinna-desktop.md')
+      )
+      const tooDeep = join(root, 'Local', 'a', 'b', 'invoices')
+      mkdirSync(tooDeep, { recursive: true })
+      expect(assembleAgentPrompt(tooDeep, manifest(), CONTEXT)).not.toContain('Before you build')
+
+      // The bare-folder prompts are not kit agents and never carry it.
+      writeFileSync(join(agentDir, 'AGENT.md'), '# Bare\n\nDo things.')
+      expect(assembleBareAgentPrompt(agentDir, 'Invoices', CONTEXT)).not.toContain('Before you build')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('describes coordinator return only for its explicit role, leaving plain coordinator as a sibling', () => {
     const base = manifest()
     const declared = assembleAgentPrompt(dir, { ...base, handovers: [{ target_slug: 'coordinator', target_kind: 'coordinator' }] }, CONTEXT)

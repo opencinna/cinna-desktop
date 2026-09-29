@@ -33,7 +33,7 @@ import {
 import type { CinnaAgentManifest } from '../../shared/kit/manifest'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
-const contractDir = join(repoRoot, 'resources/cinna-kit-contract')
+const contractDir = join(repoRoot, 'resources/cinna-agent-kit')
 const CONTRACT_VERSION = readFileSync(join(contractDir, 'CONTRACT_VERSION'), 'utf8').trim()
 const layout = createLayoutView(
   parseLayout(JSON.parse(readFileSync(join(contractDir, 'layout.json'), 'utf8')))

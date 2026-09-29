@@ -1,7 +1,7 @@
 import { runtimeHost } from '../host/runtimeHost'
 /**
  * Resolves the **active kit contract** — the tree under
- * `resources/cinna-kit-contract/` that says what an agent folder is: the
+ * `resources/cinna-agent-kit/` that says what an agent folder is: the
  * manifest schema, the folder model (`layout.json`) and the templates a
  * scaffold copies.
  *
@@ -30,7 +30,7 @@ import { createLayoutView, parseLayout, type KitLayout, type LayoutView } from '
 const logger = createLogger('kit-contract')
 
 /** Folder name of the bundled contract inside `resources/`. */
-const CONTRACT_DIR = 'cinna-kit-contract'
+const CONTRACT_DIR = 'cinna-agent-kit'
 /** Folder a workshop keeps its own copy of the contract in. */
 const WORKSHOP_KIT_DIR = '.cinna-kit'
 
@@ -80,14 +80,14 @@ const cache = new Map<string, ContractCacheEntry>()
  * **Packaging note — read before changing `electron-builder.yml`.** Three
  * entries there work together, and changing one alone breaks this function:
  *
- * * `extraResources` copies the tree to `Resources/cinna-kit-contract`, which is
+ * * `extraResources` copies the tree to `Resources/cinna-agent-kit`, which is
  *   the packaged path below. A real directory, no asar shim in the read path.
- * * `files` excludes `resources/cinna-kit-contract/**` **on purpose**, so the
+ * * `files` excludes `resources/cinna-agent-kit/**` **on purpose**, so the
  *   tree is not also packed into `app.asar` and unpacked again by `asarUnpack:
  *   resources/**` (which is there for the icon PNGs). Without the exclusion it
  *   would ship twice.
  * * In development nothing is packaged at all: the tree is read straight from
- *   the repo at `<repo>/resources/cinna-kit-contract`.
+ *   the repo at `<repo>/resources/cinna-agent-kit`.
  *
  * If you ever drop `extraResources`, the packaged path would have to rely on
  * Electron redirecting asar reads to `app.asar.unpacked` — documented behaviour,
@@ -132,7 +132,11 @@ export function getBundledContractDir(): string {
   return root
 }
 
-function readVersionAt(root: string): string | null {
+/**
+ * The contract version of a kit tree at `root`, or null. Exported for the
+ * workshop sync, which must read an installed copy the way this store does.
+ */
+export function readVersionAt(root: string): string | null {
   // kit.json is the authority; CONTRACT_VERSION is the fallback. Never
   // `VERSION` — a workshop's `.cinna-kit/VERSION` holds the *kit* version when
   // the full kit is installed there, not the contract's.

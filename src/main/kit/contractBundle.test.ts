@@ -1,31 +1,33 @@
 import { describe, it, expect } from 'vitest'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, type Dirent } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, type Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { contractTreeHash } from './contractTreeHash'
 import { createLayoutView, parseLayout } from './layout'
 import { isIgnoredPath, isSecretFile } from './validator'
-import { applyTarballModes, freshWorkDir, swapInto } from '../../../scripts/kit-sync/bundleFiles'
+import { applyTarballModes, freshWorkDir } from '../../../scripts/kit-sync/bundleFiles'
 
 /**
- * `resources/cinna-kit-contract/` is a byte-exact render of cinna-core's kit
- * contract, produced by `make kit-sync` (scripts/kit-sync/sync.mjs). Core is
- * the only place a contract version is minted and its templates are canonical,
- * so a hand edit here is a fork — this test is what makes one fail.
+ * `resources/cinna-agent-kit/` is a byte-exact render of cinna-core's whole
+ * agent kit — contract, guides, assistant notes, `tools/kit.py`, `VERSION` —
+ * produced by `make kit-sync` (scripts/kit-sync/sync.mjs). Core is the only
+ * place a contract version is minted and its templates are canonical, so a hand
+ * edit here is a fork — this test is what makes one fail.
  */
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
-const bundle = join(repoRoot, 'resources/cinna-kit-contract')
-const lock = JSON.parse(readFileSync(join(repoRoot, 'scripts/kit-sync/contract.lock.json'), 'utf8')) as {
+const bundle = join(repoRoot, 'resources/cinna-agent-kit')
+const lock = JSON.parse(readFileSync(join(repoRoot, 'scripts/kit-sync/kit.lock.json'), 'utf8')) as {
   contract_version: string
+  kit_version: string
   file_count: number
   tree_hash: string
 }
 
-const RESYNC = 'resources/cinna-kit-contract/ no longer matches scripts/kit-sync/contract.lock.json. Re-run `make kit-sync`; never hand-edit the bundle or the lock.'
+const RESYNC = 'resources/cinna-agent-kit/ no longer matches scripts/kit-sync/kit.lock.json. Re-run `make kit-sync`; never hand-edit the bundle or the lock.'
 
-describe('the bundled kit contract', () => {
+describe('the bundled agent kit', () => {
   it('is exactly the tree the last `make kit-sync` wrote', () => {
     const tree = contractTreeHash(bundle)
     expect({ fileCount: tree.fileCount, hash: tree.hash }, RESYNC).toEqual({
@@ -45,6 +47,26 @@ describe('the bundled kit contract', () => {
     for (const [where, value] of Object.entries(declared)) {
       expect(value, `${where} disagrees — ${RESYNC}`).toBe(declared['CONTRACT_VERSION'])
     }
+  })
+
+  it('is the full kit, not just the contract', () => {
+    // The workshop templates' AGENTS.md sends an assistant to the index, the
+    // guides and the validator; a contract-only bundle is how every build
+    // request came to say "the kit is missing".
+    const required = ['README.md', 'START.md', 'VERSION', 'tools/kit.py', 'assistants/cinna-desktop.md']
+    expect(required.filter((rel) => !statSync(join(bundle, rel), { throwIfNoEntry: false })?.isFile()), RESYNC).toEqual([])
+    expect(readdirSync(join(bundle, 'guides')).filter((name) => name.endsWith('.md')).length).toBeGreaterThan(0)
+  })
+
+  it('carries the kit version the lock recorded in VERSION', () => {
+    // `VERSION` is the kit content hash the workshop sync compares on.
+    expect(readFileSync(join(bundle, 'VERSION'), 'utf8').trim(), RESYNC).toBe(lock.kit_version)
+  })
+
+  it('ships tools/kit.py executable', () => {
+    // The agent template's `make validate` runs it; a packaged copy that lost
+    // the bit would fail there rather than here.
+    expect(statSync(join(bundle, 'tools/kit.py')).mode & 0o111, RESYNC).toBe(0o111)
   })
 })
 
@@ -82,34 +104,6 @@ describe('how `make kit-sync` writes the bundle', () => {
       writeFileSync(join(root, 'templates/agent/scripts/run.py'), '', { mode: 0o600 })
       applyTarballModes(root)
       expect(modesUnder(root).filter(([rel, mode]) => mode !== expectedMode(root, rel))).toEqual([])
-    } finally {
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  it('puts the previous bundle back when the swap fails', () => {
-    const root = mkdtempSync(join(tmpdir(), 'cinna-kit-swap-'))
-    try {
-      const target = join(root, 'bundle')
-      const staging = join(root, 'work', 'staging-1')
-      mkdirSync(target)
-      writeFileSync(join(target, 'old.txt'), 'old')
-      mkdirSync(staging, { recursive: true })
-      writeFileSync(join(staging, 'new.txt'), 'new')
-      const failing = (from: string, to: string): void => {
-        if (from === staging) throw new Error('EXDEV')
-        renameSync(from, to)
-      }
-      expect(() => swapInto(staging, target, failing)).toThrow('EXDEV')
-      expect(readFileSync(join(target, 'old.txt'), 'utf8')).toBe('old')
-      expect(existsSync(`${staging}.previous`)).toBe(false)
-      expect(existsSync(staging)).toBe(false)
-
-      mkdirSync(staging, { recursive: true })
-      writeFileSync(join(staging, 'new.txt'), 'new')
-      swapInto(staging, target)
-      expect(readdirSync(target)).toEqual(['new.txt'])
-      expect(existsSync(`${staging}.previous`)).toBe(false)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

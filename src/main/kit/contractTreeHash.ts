@@ -1,6 +1,6 @@
 /**
- * The tree hash that pins `resources/cinna-kit-contract/` to the render
- * `make kit-sync` produced from cinna-core (`scripts/kit-sync/contract.lock.json`).
+ * The tree hash that pins `resources/cinna-agent-kit/` to the render
+ * `make kit-sync` produced from cinna-core (`scripts/kit-sync/kit.lock.json`).
  *
  * Shared by the sync script (run under `node --experimental-strip-types`, so this
  * module imports nothing but `node:` builtins and uses no TS-only syntax that

@@ -1,5 +1,5 @@
 /**
- * The contract-version gate (`resources/cinna-kit-contract/CHANGELOG.md`,
+ * The contract-version gate (`resources/cinna-agent-kit/CHANGELOG.md`,
  * "Compatibility"). A folder records the contract it was scaffolded against; a
  * tool records the contract it bundles. Comparing the two answers one question:
  * may this tool operate this folder?

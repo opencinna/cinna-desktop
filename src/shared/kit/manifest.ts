@@ -1,6 +1,6 @@
 /**
  * TypeScript mirror of the kit contract's `schema/cinna-agent.schema.json`
- * (`resources/cinna-kit-contract/`). Shared between main (scaffolder, scanner,
+ * (`resources/cinna-agent-kit/`). Shared between main (scaffolder, scanner,
  * validator, publish) and renderer (the agent page), so keep it type-only and
  * dependency-free.
  *

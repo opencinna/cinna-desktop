@@ -28,7 +28,7 @@ import { handoverRequesterSection } from '../../../shared/handovers'
  */
 
 import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import type { CinnaAgentManifest } from '../../../shared/kit/manifest'
 import {
   BARE_AGENT_INSTRUCTION_FILES,
@@ -49,6 +49,18 @@ const MAX_KNOWLEDGE_TOPICS = 200
 
 /** A kit folder's guide for an assistant working *on* the agent. */
 const KIT_BUILDER_GUIDE_FILE = 'AGENTS.md'
+
+/**
+ * The kit's notes on building inside Cinna Desktop, relative to a workshop
+ * root: never `kit.py refresh`, test through the real agent, `desktop.json` is
+ * the app's. Codex without a git repository treats the agent folder as the
+ * project and never loads the workshop's `AGENTS.md`, which is the only other
+ * place these rules reach the model.
+ */
+const KIT_DESKTOP_NOTES = ['.cinna-kit', 'assistants', 'cinna-desktop.md'] as const
+
+/** Ancestors searched for the notes. Agents live at `<root>/Local/<slug>`. */
+const KIT_DESKTOP_NOTES_MAX_ANCESTORS = 3
 
 export interface DesktopPromptContext {
   /** BCP-47 tag from the OS, e.g. `en-GB`. */
@@ -89,6 +101,24 @@ function readTextFile(path: string): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * The kit's desktop notes as a POSIX path relative to `agentDir`
+ * (`../../.cinna-kit/assistants/cinna-desktop.md` for an agent in a workshop),
+ * from the nearest of up to {@link KIT_DESKTOP_NOTES_MAX_ANCESTORS} ancestors
+ * that has them; null when none does. Only an existing file is ever named.
+ */
+function kitDesktopNotesPath(agentDir: string): string | null {
+  let dir = resolve(agentDir)
+  for (let level = 0; level < KIT_DESKTOP_NOTES_MAX_ANCESTORS; level++) {
+    const parent = dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+    const notes = join(dir, ...KIT_DESKTOP_NOTES)
+    if (isFile(notes)) return relative(resolve(agentDir), notes).split(sep).join('/')
+  }
+  return null
 }
 
 /**
@@ -218,7 +248,8 @@ function handoverSections(context: DesktopPromptContext): string[] {
  *
  * `guide` finishes the "say you are switching, then …" sentence and names a
  * builder document only when the folder has one: a rule that points at a
- * missing file is how a model ends up refusing the work.
+ * missing file is how a model ends up refusing the work. `desktopNotes` is the
+ * same rule for the kit's desktop notes: a path only when the file exists.
  */
 function buildingModeSection(
   guide: string,
@@ -230,7 +261,9 @@ function buildingModeSection(
    * instructions "above" — the engine loaded the file itself — so that path
    * says so instead of pointing at text that is not there.
    */
-  memoryNote = 'the instructions above were read before your edits'
+  memoryNote = 'the instructions above were read before your edits',
+  /** Agent-relative path of the kit's desktop notes, when the workshop has them. */
+  desktopNotes: string | null = null
 ): string[] {
   return [
     '## Building mode',
@@ -239,6 +272,11 @@ function buildingModeSection(
     '',
     '- Only a person\'s request switches you. Never switch on your own initiative, and never for an unattended or handed-over task.',
     `- Say in one line that you are switching to building mode, then ${guide}`,
+    ...(desktopNotes
+      ? [
+          `- Before you build, read \`${desktopNotes}\`: it covers what is different about building inside Cinna Desktop, and where it and the kit disagree, it wins.`
+        ]
+      : []),
     `- In building mode you may edit ${editable}. Say which files you changed.`,
     `- Stay in building mode for the rest of this conversation: the person may keep refining you and trying the result. When they ask for your actual job, do it the way your edited files now say — ${memoryNote}.`
   ]
@@ -252,7 +290,8 @@ function buildingModeSection(
  * The `app-data/` rule is scoped to conversation mode, since building a kit
  * agent means editing `docs/`, `scripts/` and the manifest. The kit folder's own
  * `AGENTS.md` routes on the same two roles — Builder when the user asks to
- * change the agent — so building mode hands over to it where it exists.
+ * change the agent — so building mode hands over to it where it exists, and
+ * names the kit's desktop notes where the workshop carries them.
  */
 function desktopContextSection(agentDir: string, context: DesktopPromptContext): string {
   const guide = isFile(join(agentDir, KIT_BUILDER_GUIDE_FILE))
@@ -272,7 +311,9 @@ function desktopContextSection(agentDir: string, context: DesktopPromptContext):
     '',
     ...buildingModeSection(
       guide,
-      'whatever in this folder the change needs — `docs/`, `scripts/`, `knowledge/`, `config/`, `cinna-agent.json`, the `Makefile`, `pyproject.toml` — but never `app-data/desktop.json`, which belongs to Cinna Desktop'
+      'whatever in this folder the change needs — `docs/`, `scripts/`, `knowledge/`, `config/`, `cinna-agent.json`, the `Makefile`, `pyproject.toml` — but never `app-data/desktop.json`, which belongs to Cinna Desktop',
+      undefined,
+      kitDesktopNotesPath(agentDir)
     ),
     // The scanner marks a folder whose manifest or command catalog fails
     // validation `invalid`, and the driver refuses every turn after that — so a

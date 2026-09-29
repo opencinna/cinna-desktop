@@ -61,7 +61,7 @@ describe('credential delivery integration', () => {
     expect(statSync(path).mode & 0o777).toBe(0o600)
     expect(statSync(join(a.path, 'credentials')).mode & 0o777).toBe(0o700)
     const modified = statSync(path).mtimeMs; await prepare(a.id); expect(statSync(path).mtimeMs).toBe(modified)
-    const helper = join(process.cwd(), 'resources/cinna-kit-contract/templates/agent/scripts')
+    const helper = join(process.cwd(), 'resources/cinna-agent-kit/templates/agent/scripts')
     const result = execFileSync('python3', ['-c', "from cinna_credentials import require_slot; assert require_slot('api')['http_header_value'] == 'Bearer local-fixture-secret-123'; print('script-ok')"], { env: { ...process.env, PYTHONPATH: helper, CINNA_CREDENTIALS_PATH: path }, encoding: 'utf8' })
     expect(result.trim()).toBe('script-ok')
     expect(redactCredentialText('local-fixture-secret-123')).toBe('***REDACTED***')

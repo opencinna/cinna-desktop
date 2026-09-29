@@ -26,7 +26,7 @@ import { validateManifest, type ValidationReport } from './validator'
  */
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
-const bundle = join(repoRoot, 'resources/cinna-kit-contract')
+const bundle = join(repoRoot, 'resources/cinna-agent-kit')
 const casesDir = join(bundle, 'conformance/manifests')
 const CONTRACT_VERSION = readFileSync(join(bundle, 'CONTRACT_VERSION'), 'utf8').trim()
 

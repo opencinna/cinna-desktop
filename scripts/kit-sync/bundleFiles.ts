@@ -1,13 +1,15 @@
 /**
- * How `make kit-sync` (sync.mjs) lays the rendered contract onto disk: the
- * modes core's contract tarball uses, and a swap that never leaves the bundle
- * missing. Separate from sync.mjs, which runs on import, so tests can reach it.
+ * How `make kit-sync` (sync.mjs) lays the rendered kit onto disk: the modes
+ * core's kit tarball uses, and a clean work dir per run. The swap that never
+ * leaves the bundle missing is `swapInto` in `src/main/kit/treeSwap.ts`, shared
+ * with the workshop sync. Separate from sync.mjs, which runs on import, so
+ * tests can reach it.
  */
-import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, type Dirent } from 'node:fs'
+import { chmodSync, mkdirSync, readdirSync, rmSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 
 /**
- * Core's contract tarball modes: directories 0755, files 0644, `.py` files
+ * Core's kit tarball modes: directories 0755, files 0644, `.py` files
  * 0755. Set explicitly, because `mkdtempSync` creates its directory 0700 and
  * the umask decides the rest — a bundle that lands 0700 is unreadable to any
  * other user of a packaged app.
@@ -30,38 +32,4 @@ export function applyTarballModes(dir: string): void {
 export function freshWorkDir(dir: string): void {
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(dir, { recursive: true })
-}
-
-/**
- * Replace `target` with `staging`. The previous tree is parked beside the
- * staging tree (never under `resources/`) and renamed back if the second rename
- * fails, so the bundle is never missing.
- */
-export function swapInto(
-  staging: string,
-  target: string,
-  rename: (from: string, to: string) => void = renameSync
-): void {
-  const previous = existsSync(target) ? `${staging}.previous` : null
-  try {
-    if (previous) rename(target, previous)
-  } catch (err) {
-    rmSync(staging, { recursive: true, force: true })
-    throw err
-  }
-  try {
-    rename(staging, target)
-  } catch (err) {
-    if (previous) {
-      try {
-        rename(previous, target)
-      } catch (restoreErr) {
-        console.error(`kit-sync: could not restore the previous bundle; it is at ${previous}`)
-        throw restoreErr
-      }
-    }
-    rmSync(staging, { recursive: true, force: true })
-    throw err
-  }
-  if (previous) rmSync(previous, { recursive: true, force: true })
 }

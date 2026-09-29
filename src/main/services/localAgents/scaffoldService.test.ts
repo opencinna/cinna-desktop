@@ -103,7 +103,7 @@ describe('scaffoldAgent', () => {
       description: 'Reads invoices.'
     })
     const makefile = readFileSync(join(agentDir, 'Makefile'), 'utf8')
-    const template = readFileSync(join(repoRoot, 'resources/cinna-kit-contract/templates/agent/Makefile'), 'utf8')
+    const template = readFileSync(join(repoRoot, 'resources/cinna-agent-kit/templates/agent/Makefile'), 'utf8')
     expect(makefile.split('\n')[0]).toBe('# Local convenience targets for Alpha all:  rm -rf /.')
     // Nothing but the one token changed.
     expect(makefile.split('\n').slice(1)).toEqual(template.split('\n').slice(1))
@@ -116,7 +116,7 @@ describe('scaffoldAgent', () => {
       name: 'Alpha',
       description: 'Reads invoices.'
     })
-    const template = join(repoRoot, 'resources/cinna-kit-contract/templates/agent/scripts/update_status.py')
+    const template = join(repoRoot, 'resources/cinna-agent-kit/templates/agent/scripts/update_status.py')
     expect(readFileSync(join(agentDir, 'scripts/update_status.py'))).toEqual(readFileSync(template))
   })
 })

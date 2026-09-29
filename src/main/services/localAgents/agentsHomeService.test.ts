@@ -3,7 +3,17 @@ vi.mock('../../host/runtimeHost', async () => {
   return { runtimeHost: createDesktopHost() }
 })
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,10 +37,14 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..')
  * which is a property of the code, not of any particular version number.
  */
 const BUNDLED_CONTRACT = readFileSync(
-  join(repoRoot, 'resources/cinna-kit-contract/CONTRACT_VERSION'),
+  join(repoRoot, 'resources/cinna-agent-kit/CONTRACT_VERSION'),
   'utf8'
 ).trim()
+/** The kit hash this build bundles — what an up-to-date workshop carries. */
+const BUNDLED_KIT = readFileSync(join(repoRoot, 'resources/cinna-agent-kit/VERSION'), 'utf8').trim()
 const holder = vi.hoisted(() => ({ current: null as TestDatabase | null }))
+/** When set, the workshop swap's second rename fails, as a cross-device move would. */
+const swapFault = vi.hoisted(() => ({ failInstall: false }))
 
 vi.mock('electron', () => ({
   app: {
@@ -44,6 +58,17 @@ vi.mock('electron', () => ({
 vi.mock('../../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
+vi.mock('../../kit/treeSwap', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../kit/treeSwap')>()
+  const { renameSync: rename } = await import('node:fs')
+  return {
+    swapInto: (staging: string, target: string) =>
+      real.swapInto(staging, target, (from, to) => {
+        if (swapFault.failInstall && from === staging) throw new Error('EXDEV: simulated')
+        rename(from, to)
+      })
+  }
+})
 vi.mock('../../db/client', () => ({
   getDb: () => {
     if (!holder.current) throw new Error('test database not initialised')
@@ -69,6 +94,8 @@ beforeEach(() => {
   holder.current = createTestDatabase()
   clearContractCache()
   scannerService.markAllRootsDirty()
+  swapFault.failInstall = false
+  agentsHomeService._resetKitSync()
   sandbox = mkdtempSync(join(tmpdir(), 'cinna-roots-'))
 })
 
@@ -213,46 +240,264 @@ describe('moving the agents home', () => {
   })
 })
 
-describe('the workshop contract copy', () => {
-  it('installs it once and then leaves it alone', () => {
+describe('the workshop kit copy', () => {
+  const kitPath = (home: string, rel = ''): string => join(home, '.cinna-kit', rel)
+  const stagingLeftovers = (home: string): string[] =>
+    readdirSync(home).filter((name) => name.startsWith('.cinna-kit.staging-'))
+  const setContractVersion = (home: string, version: string): void => {
+    const kit = JSON.parse(readFileSync(kitPath(home, 'kit.json'), 'utf8'))
+    kit.contract_version = version
+    writeFileSync(kitPath(home, 'kit.json'), JSON.stringify(kit, null, 2))
+  }
+
+  it('installs the full kit into a fresh workshop', () => {
     const home = join(sandbox, 'workshop')
     setHome(home)
-    const kitJson = join(home, '.cinna-kit', 'kit.json')
-    expect(existsSync(kitJson)).toBe(true)
-
-    // An assistant working in the folder edits a file the bundle also ships.
-    // `cpSync(force)` on every `ensureHome` silently reverts exactly this — and
-    // `ensureHome` is on the path of `list`, `rescan`, `listRoots`, `create`
-    // and `requireRoot`, so it would happen on nearly every request.
-    //
-    // The edit has to be to a file the bundle *contains*: `cpSync` does not
-    // delete extras, so a new file of one's own survives a re-copy and would
-    // make this test pass while the reversion still happened.
-    const kit = JSON.parse(readFileSync(kitJson, 'utf8'))
-    kit.description = 'edited by the assistant working in this workshop'
-    writeFileSync(kitJson, `${JSON.stringify(kit, null, 2)}\n`)
-
-    agentsHomeService.ensureHome(USER)
-    agentsHomeService.ensureHome(USER)
-    agentsHomeService.listRoots(USER)
-
-    expect(JSON.parse(readFileSync(kitJson, 'utf8')).description).toBe(
-      'edited by the assistant working in this workshop'
-    )
+    for (const rel of ['kit.json', 'layout.json', 'README.md', 'START.md', 'assistants/cinna-desktop.md', 'tools/kit.py']) {
+      expect(existsSync(kitPath(home, rel)), rel).toBe(true)
+    }
+    expect(readdirSync(kitPath(home, 'guides')).length).toBeGreaterThan(0)
+    expect(readFileSync(kitPath(home, 'VERSION'), 'utf8').trim()).toBe(BUNDLED_KIT)
+    // The template's `make validate` runs it.
+    expect(statSync(kitPath(home, 'tools/kit.py')).mode & 0o111).toBe(0o111)
+    expect(existsSync(kitPath(home, '.desktop_install'))).toBe(true)
+    expect(existsSync(kitPath(home, '.last_refresh_check'))).toBe(true)
+    expect(stagingLeftovers(home)).toEqual([])
   })
 
-  it('reinstalls when the workshop copy is older', () => {
+  it('upgrades a contract-only copy at the same contract version', () => {
+    // The regression: earlier builds installed only the contract, so a
+    // workshop at the bundled contract version had no guides, no kit.py and
+    // no VERSION — and a contract-version comparison called it up to date.
     const home = join(sandbox, 'workshop')
     setHome(home)
-    const kitJson = join(home, '.cinna-kit', 'kit.json')
-    const kit = JSON.parse(readFileSync(kitJson, 'utf8'))
-    kit.contract_version = '0.9.0'
-    writeFileSync(kitJson, JSON.stringify(kit, null, 2))
+    for (const rel of ['README.md', 'START.md', 'VERSION', 'guides', 'assistants', 'tools', '.desktop_install', '.last_refresh_check']) {
+      rmSync(kitPath(home, rel), { recursive: true, force: true })
+    }
+    expect(JSON.parse(readFileSync(kitPath(home, 'kit.json'), 'utf8')).contract_version).toBe(BUNDLED_CONTRACT)
 
     clearContractCache()
     agentsHomeService.ensureHome(USER)
 
-    expect(JSON.parse(readFileSync(kitJson, 'utf8')).contract_version).toBe(BUNDLED_CONTRACT)
+    expect(existsSync(kitPath(home, 'tools/kit.py'))).toBe(true)
+    expect(existsSync(kitPath(home, 'README.md'))).toBe(true)
+    expect(readFileSync(kitPath(home, 'VERSION'), 'utf8').trim()).toBe(BUNDLED_KIT)
+  })
+
+  it('leaves an up-to-date copy alone', () => {
+    // `ensureHome` is on the path of `list`, `rescan`, `listRoots`, `create`
+    // and `requireRoot`; an install on every call would copy the tree and
+    // drop the contract cache on nearly every request. A file the bundle does
+    // not have survives only when no swap happened.
+    const home = join(sandbox, 'workshop')
+    setHome(home)
+    writeFileSync(kitPath(home, 'marker.txt'), 'still here')
+
+    agentsHomeService.ensureHome(USER)
+    agentsHomeService.listRoots(USER)
+
+    expect(readFileSync(kitPath(home, 'marker.txt'), 'utf8')).toBe('still here')
+  })
+
+  it('leaves a strictly newer contract untouched, even in a tree it installed', () => {
+    // A refresh pulled it down, and `contractStore` prefers it.
+    const home = join(sandbox, 'workshop')
+    setHome(home)
+    const [major] = BUNDLED_CONTRACT.split('.')
+    agentsHomeService._resetKitSync()
+    setContractVersion(home, `${major}.999.0`)
+    writeFileSync(kitPath(home, 'VERSION'), 'refreshed-kit\n')
+    rmSync(kitPath(home, '.last_refresh_check'))
+    writeFileSync(kitPath(home, 'marker.txt'), 'mine')
+
+    clearContractCache()
+    agentsHomeService.ensureHome(USER)
+
+    expect(readFileSync(kitPath(home, 'marker.txt'), 'utf8')).toBe('mine')
+    expect(readFileSync(kitPath(home, 'VERSION'), 'utf8')).toBe('refreshed-kit\n')
+    expect(existsSync(kitPath(home, '.last_refresh_check'))).toBe(false)
+  })
+
+  it('marks every tree it installs with the kit version it installed', () => {
+    const home = join(sandbox, 'workshop')
+    setHome(home)
+    expect(readFileSync(kitPath(home, '.desktop_install'), 'utf8')).toBe(`${BUNDLED_KIT}\n`)
+  })
+
+  it('replaces its own tree of another kit hash once per process, never back and forth', () => {
+    // Two builds sharing one home bundle different hashes. Each may bring the
+    // tree to its own kit once; without the limit they would swap it on
+    // every `ensureHome`.
+    const home = join(sandbox, 'workshop')
+    setHome(home)
+    agentsHomeService._resetKitSync() // a new process, e.g. the next launch
+    writeFileSync(kitPath(home, 'VERSION'), 'other-build-kit\n')
+
+    agentsHomeService.ensureHome(USER)
+    expect(readFileSync(kitPath(home, 'VERSION'), 'utf8').trim()).toBe(BUNDLED_KIT)
+
+    // The other build puts its kit back while this process is still running.
+    writeFileSync(kitPath(home, 'VERSION'), 'other-build-kit\n')
+    agentsHomeService.ensureHome(USER)
+    agentsHomeService.listRoots(USER)
+    expect(readFileSync(kitPath(home, 'VERSION'), 'utf8')).toBe('other-build-kit\n')
+  })
+
+  for (const contract of ['same', 'older'] as const) {
+    it(`never touches a complete kit it did not install (${contract} contract), stamp included`, () => {
+      // Downloaded by `kit.py refresh` or the CLI, or brought by an adopted
+      // workshop — possibly from a self-hosted or newer core. This build's
+      // public-cloud render must not undo it, and the app reads its bundled
+      // contract whatever this tree says.
+      const home = join(sandbox, 'workshop')
+      setHome(home)
+      agentsHomeService._resetKitSync()
+      rmSync(kitPath(home, '.desktop_install'))
+      rmSync(kitPath(home, '.last_refresh_check'))
+      if (contract === 'older') setContractVersion(home, '0.9.0')
+      writeFileSync(kitPath(home, 'VERSION'), 'downloaded-kit\n')
+      writeFileSync(kitPath(home, 'guides/99-their-own.md'), 'theirs')
+
+      clearContractCache()
+      agentsHomeService.ensureHome(USER)
+
+      expect(readFileSync(kitPath(home, 'VERSION'), 'utf8')).toBe('downloaded-kit\n')
+      expect(existsSync(kitPath(home, 'guides/99-their-own.md'))).toBe(true)
+      expect(existsSync(kitPath(home, '.desktop_install'))).toBe(false)
+      expect(existsSync(kitPath(home, '.last_refresh_check'))).toBe(false)
+    })
+  }
+
+  it('leaves a newer contract alone even when it lacks what today\'s kit has', () => {
+    // A newer core may lay its kit out differently; completeness is judged by
+    // this build's layout, so it must not decide over a newer contract.
+    const home = join(sandbox, 'workshop')
+    setHome(home)
+    const [major] = BUNDLED_CONTRACT.split('.')
+    agentsHomeService._resetKitSync()
+    rmSync(kitPath(home, '.desktop_install'))
+    rmSync(kitPath(home, 'guides'), { recursive: true })
+    setContractVersion(home, `${major}.999.0`)
+
+    clearContractCache()
+    agentsHomeService.ensureHome(USER)
+
+    expect(existsSync(kitPath(home, 'guides'))).toBe(false)
+    expect(existsSync(kitPath(home, '.desktop_install'))).toBe(false)
+  })
+
+  it('reads the installed contract version as contractStore does, CONTRACT_VERSION included', () => {
+    // A `kit.json` without the key is a state kit.py itself tolerates; the
+    // tree is still a complete downloaded kit, not a broken one.
+    const home = join(sandbox, 'workshop')
+    setHome(home)
+    agentsHomeService._resetKitSync()
+    rmSync(kitPath(home, '.desktop_install'))
+    const kit = JSON.parse(readFileSync(kitPath(home, 'kit.json'), 'utf8'))
+    delete kit.contract_version
+    writeFileSync(kitPath(home, 'kit.json'), JSON.stringify(kit, null, 2))
+    writeFileSync(kitPath(home, 'VERSION'), 'downloaded-kit\n')
+
+    clearContractCache()
+    agentsHomeService.ensureHome(USER)
+
+    expect(readFileSync(kitPath(home, 'VERSION'), 'utf8')).toBe('downloaded-kit\n')
+    expect(existsSync(kitPath(home, '.desktop_install'))).toBe(false)
+  })
+
+  for (const missing of ['kit.json', 'VERSION', 'README.md', 'tools/kit.py', 'guides']) {
+    it(`repairs a kit it did not install when ${missing} is missing`, () => {
+      // Complete is what earns a downloaded kit its hands-off treatment; a
+      // tree missing any of these (no `kit.json`: no readable contract
+      // version) is not one the builder steps can use.
+      const home = join(sandbox, 'workshop')
+      setHome(home)
+      agentsHomeService._resetKitSync()
+      rmSync(kitPath(home, '.desktop_install'))
+      rmSync(kitPath(home, missing), { recursive: true })
+
+      clearContractCache()
+      agentsHomeService.ensureHome(USER)
+
+      expect(existsSync(kitPath(home, missing))).toBe(true)
+      expect(existsSync(kitPath(home, '.desktop_install'))).toBe(true)
+    })
+  }
+
+  it('replaces the tree wholesale, so a file dropped upstream disappears', () => {
+    const home = join(sandbox, 'workshop')
+    setHome(home)
+    // An earlier build's install (it carries the marker), met by a new process.
+    agentsHomeService._resetKitSync()
+    writeFileSync(kitPath(home, 'VERSION'), '0000000000000000\n')
+    writeFileSync(kitPath(home, 'guides/99-dropped-upstream.md'), 'stale')
+    // What an interrupted earlier install leaves in the root.
+    mkdirSync(join(home, '.cinna-kit.staging-abc123', 'guides'), { recursive: true })
+    mkdirSync(join(home, '.cinna-kit.staging-def456.previous'))
+
+    agentsHomeService.ensureHome(USER)
+
+    expect(existsSync(kitPath(home, 'guides/99-dropped-upstream.md'))).toBe(false)
+    expect(readFileSync(kitPath(home, 'VERSION'), 'utf8').trim()).toBe(BUNDLED_KIT)
+    expect(stagingLeftovers(home)).toEqual([])
+  })
+
+  it('keeps the previous tree when an install fails, and leaves no staging behind', () => {
+    const home = join(sandbox, 'workshop')
+    setHome(home)
+    agentsHomeService._resetKitSync()
+    writeFileSync(kitPath(home, 'VERSION'), 'old-kit\n')
+    writeFileSync(kitPath(home, 'marker.txt'), 'previous tree')
+
+    swapFault.failInstall = true
+    expect(() => agentsHomeService.ensureHome(USER)).not.toThrow()
+
+    expect(readFileSync(kitPath(home, 'VERSION'), 'utf8')).toBe('old-kit\n')
+    expect(readFileSync(kitPath(home, 'marker.txt'), 'utf8')).toBe('previous tree')
+    expect(stagingLeftovers(home)).toEqual([])
+
+    // Not retried in the same process: a folder that refuses the copy would
+    // otherwise be copied into on every `ensureHome`.
+    swapFault.failInstall = false
+    agentsHomeService.ensureHome(USER)
+    expect(readFileSync(kitPath(home, 'VERSION'), 'utf8')).toBe('old-kit\n')
+
+    // The next launch, with the fault gone, installs.
+    agentsHomeService._resetKitSync()
+    agentsHomeService.ensureHome(USER)
+    expect(readFileSync(kitPath(home, 'VERSION'), 'utf8').trim()).toBe(BUNDLED_KIT)
+  })
+
+  it('writes the refresh stamp the way kit.py does, and re-touches it only once stale', () => {
+    // The root AGENTS.md freshness rule sends an assistant to
+    // `kit.py refresh --check` when the stamp is missing or a week old; the
+    // desktop owns `.cinna-kit/`, so it keeps the stamp fresh itself.
+    const home = join(sandbox, 'workshop')
+    setHome(home)
+    const stamp = kitPath(home, '.last_refresh_check')
+    const written = readFileSync(stamp, 'utf8')
+    // `time.strftime("%Y-%m-%dT%H:%M:%S%z") + "\n"`: local time, `+0200`.
+    const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})([+-]\d{2})(\d{2})\n$/.exec(written)
+    expect(match, written).not.toBeNull()
+    // Local time and offset agree: read back, it is now.
+    const parsed = Date.parse(`${match![1]}${match![2]}:${match![3]}`)
+    expect(Math.abs(parsed - Date.now())).toBeLessThan(60_000)
+
+    // Fresh: left alone.
+    writeFileSync(stamp, 'fresh\n')
+    agentsHomeService.ensureHome(USER)
+    expect(readFileSync(stamp, 'utf8')).toBe('fresh\n')
+
+    // Two days old: touched.
+    const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
+    utimesSync(stamp, old, old)
+    agentsHomeService.ensureHome(USER)
+    expect(readFileSync(stamp, 'utf8')).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}\n$/)
+
+    // Missing: written.
+    rmSync(stamp)
+    agentsHomeService.ensureHome(USER)
+    expect(existsSync(stamp)).toBe(true)
   })
 })
 

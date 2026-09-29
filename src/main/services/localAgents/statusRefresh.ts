@@ -43,7 +43,7 @@ const logger = createLogger('local-agent-status')
  * The contract's four words, plus the near-synonyms a hand-written or
  * LLM-written STATUS.md actually uses.
  *
- * `resources/cinna-kit-contract/templates/agent/scripts/update_status.py:40`
+ * `resources/cinna-agent-kit/templates/agent/scripts/update_status.py:40`
  * declares `STATUSES = ("ok", "attention", "error", "unknown")` and normalises
  * anything else to `unknown` before writing the file — so those four are
  * normative, and a compliant agent can only ever write one of them. The rest of
@@ -239,7 +239,7 @@ const failed = (error: string): StatusRefreshOutcome => ({ ran: false, skipped: 
  * ## Only the `/run:<name>` form executes
  *
  * The schema calls the field "Shell command, or a /run:<name> reference"
- * (`resources/cinna-kit-contract/schema/cinna-agent.schema.json:160`) and
+ * (`resources/cinna-agent-kit/schema/cinna-agent.schema.json:160`) and
  * `validator.ts:975` only ever checks the `/run:` form. This app runs **only**
  * that form; a raw string comes back as an error naming the supported syntax.
  *

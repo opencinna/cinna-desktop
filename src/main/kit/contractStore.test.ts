@@ -12,7 +12,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 
 // `contractStore` is the one module in `src/main/kit` that reaches for Electron.
 // Standing in for `app` here is what lets the dev-mode path resolution — the one
-// a future move of `resources/cinna-kit-contract` would silently break — be
+// a future move of `resources/cinna-agent-kit` would silently break — be
 // exercised for real rather than re-derived in the test.
 vi.mock('electron', () => ({
   app: { isPackaged: false, getAppPath: () => repoRoot }
@@ -39,7 +39,7 @@ beforeEach(() => {
 describe('the bundled contract', () => {
   it('resolves to the tree in resources/, and it is complete', () => {
     const root = getBundledContractDir()
-    expect(root).toBe(join(repoRoot, 'resources/cinna-kit-contract'))
+    expect(root).toBe(join(repoRoot, 'resources/cinna-agent-kit'))
 
     // Named explicitly so moving or renaming any of them fails here first.
     for (const rel of [
@@ -68,8 +68,8 @@ describe('the bundled contract', () => {
     expect(getContractVersion()).toMatch(/^\d+\.\d+\.\d+$/)
     expect((getSchema() as { title: string }).title).toBe('cinna-agent.json')
     expect(getLayoutView().layout.agent.manifest).toBe('cinna-agent.json')
-    expect(getTemplateRoot('agent')).toBe(join(repoRoot, 'resources/cinna-kit-contract/templates/agent'))
-    expect(getTemplateRoot('root')).toBe(join(repoRoot, 'resources/cinna-kit-contract/templates/root'))
+    expect(getTemplateRoot('agent')).toBe(join(repoRoot, 'resources/cinna-agent-kit/templates/agent'))
+    expect(getTemplateRoot('root')).toBe(join(repoRoot, 'resources/cinna-agent-kit/templates/root'))
     expect(resolveContract().source).toBe('bundled')
   })
 

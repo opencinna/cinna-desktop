@@ -22,3 +22,7 @@ e2e/playwright-report
 
 # Local plans and drafts; never committed.
 /drafts/
+
+# The bundled kit is core's tree byte for byte; a global ignore (e.g. of
+# `.claude/settings.local.json`) must not drop a file of it from the repo.
+!/resources/cinna-agent-kit/**

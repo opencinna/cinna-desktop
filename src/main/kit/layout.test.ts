@@ -11,7 +11,7 @@ import { createLayoutView, isSecretByRules, matchesPattern, parseLayout } from '
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const raw = JSON.parse(
-  readFileSync(join(repoRoot, 'resources/cinna-kit-contract/layout.json'), 'utf8')
+  readFileSync(join(repoRoot, 'resources/cinna-agent-kit/layout.json'), 'utf8')
 )
 const layout = createLayoutView(parseLayout(raw))
 

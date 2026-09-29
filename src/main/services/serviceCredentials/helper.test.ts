@@ -9,7 +9,7 @@ afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recur
 it('reads refreshed arrays, explicit slots, placeholders and typed env fallbacks without merging', () => {
   const folder = mkdtempSync(join(tmpdir(), 'credential-reader-')); folders.push(folder)
   mkdirSync(join(folder, 'scripts')); mkdirSync(join(folder, 'credentials'))
-  copyFileSync('resources/cinna-kit-contract/templates/agent/scripts/cinna_credentials.py', join(folder, 'scripts/cinna_credentials.py'))
+  copyFileSync('resources/cinna-agent-kit/templates/agent/scripts/cinna_credentials.py', join(folder, 'scripts/cinna_credentials.py'))
   writeFileSync(join(folder, 'cinna-agent.json'), JSON.stringify({ credentials: [{ name: 'Mail', type: 'email_imap', env_prefix: 'MAIL_' }] }))
   writeFileSync(join(folder, 'credentials/.env'), 'MAIL_PORT=993\nMAIL_IS_SSL=true\nMAIL_LOGIN=file\n')
   const code = `
@@ -53,7 +53,7 @@ it('matches the Core token and service-account delivery fixtures', () => {
 it('does not use a token for a different declared service even when the type matches', () => {
   const folder = mkdtempSync(join(tmpdir(), 'credential-slots-')); folders.push(folder)
   mkdirSync(join(folder, 'scripts')); mkdirSync(join(folder, 'credentials'))
-  copyFileSync('resources/cinna-kit-contract/templates/agent/scripts/cinna_credentials.py', join(folder, 'scripts/cinna_credentials.py'))
+  copyFileSync('resources/cinna-agent-kit/templates/agent/scripts/cinna_credentials.py', join(folder, 'scripts/cinna_credentials.py'))
   const code = `
 import json
 from pathlib import Path

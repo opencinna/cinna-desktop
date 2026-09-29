@@ -93,7 +93,7 @@ afterEach(() => {
 describe('a real STATUS.md all the way to a list() result', () => {
   it('carries the summary, the severity and the timestamp the contract’s script writes', async () => {
     // Byte-for-byte what `render_status()` emits:
-    // `resources/cinna-kit-contract/templates/agent/scripts/update_status.py:54-63`.
+    // `resources/cinna-agent-kit/templates/agent/scripts/update_status.py:54-63`.
     writeFileSync(
       join(dirs.agent, 'app-data/storage/STATUS.md'),
       [

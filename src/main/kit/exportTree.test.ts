@@ -15,7 +15,7 @@ import { buildExportTree } from './exportTree'
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const layout = createLayoutView(
   parseLayout(
-    JSON.parse(readFileSync(join(repoRoot, 'resources/cinna-kit-contract/layout.json'), 'utf8'))
+    JSON.parse(readFileSync(join(repoRoot, 'resources/cinna-agent-kit/layout.json'), 'utf8'))
   )
 )
 

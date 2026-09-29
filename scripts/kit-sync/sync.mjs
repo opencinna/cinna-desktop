@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * `make kit-sync` — re-bundle cinna-core's kit contract into
- * `resources/cinna-kit-contract/`, byte for byte.
+ * `make kit-sync` — re-bundle cinna-core's agent kit into
+ * `resources/cinna-agent-kit/`, byte for byte.
  *
  *   node --experimental-strip-types scripts/kit-sync/sync.mjs [--core <path>] [--ref <rev>]
  *
@@ -10,18 +10,21 @@
  * the one way the desktop copy changes: it renders `docs/local_agent_kit/`
  * exactly as core's `LocalAgentKitService` does (backend/app/services/cli/
  * local_agent_kit_service.py — `_read_snapshot`, `_render_tree`, `_render_bytes`,
- * `_content_version`, `_is_contract_member`) with public-cloud placeholder
- * values, keeps only the contract members, and replaces the bundle wholesale.
- * `scripts/kit-sync/contract.lock.json` records what was rendered and a tree
- * hash that `src/main/kit/contractBundle.test.ts` recomputes, so a hand edit to
- * the bundle fails the unit suite.
+ * `_content_version`) with public-cloud placeholder values, and replaces the
+ * bundle wholesale. The result is the whole kit — contract, guides, assistant
+ * notes, `tools/kit.py` and `VERSION` — the same tree core's kit tarball serves
+ * (what `kit.py refresh` would download); the rendered `VERSION` must equal the
+ * computed content version, or the sync stops. `scripts/kit-sync/kit.lock.json`
+ * records what was rendered and a tree hash that
+ * `src/main/kit/contractBundle.test.ts` recomputes, so a hand edit to the bundle
+ * fails the unit suite.
  *
  * `--core` defaults to `$CINNA_CORE_PATH`, else `../workflow-runner-core`.
  * `--ref <rev>` reads core at that git revision (kit tree, service source and
  * config defaults alike); without it, core's working tree.
  *
- * Everything this script cannot read unambiguously out of core — the member
- * set, the CLI defaults, the token set — fails loudly instead of guessing.
+ * Everything this script cannot read unambiguously out of core — the CLI
+ * defaults, the token set — fails loudly instead of guessing.
  */
 
 import { spawnSync } from 'node:child_process'
@@ -41,11 +44,12 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { compareUtf8, contractTreeHash } from '../../src/main/kit/contractTreeHash.ts'
-import { applyTarballModes, freshWorkDir, swapInto } from './bundleFiles.ts'
+import { swapInto } from '../../src/main/kit/treeSwap.ts'
+import { applyTarballModes, freshWorkDir } from './bundleFiles.ts'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const BUNDLE = join(REPO, 'resources', 'cinna-kit-contract')
-const LOCK = join(REPO, 'scripts', 'kit-sync', 'contract.lock.json')
+const BUNDLE = join(REPO, 'resources', 'cinna-agent-kit')
+const LOCK = join(REPO, 'scripts', 'kit-sync', 'kit.lock.json')
 /**
  * Where the new tree is built and the old one parked during the swap. Inside
  * the repo so the rename stays on one filesystem; gitignored. Kept out of the
@@ -179,11 +183,6 @@ function resolveItems(body, constants, what) {
 function parseService(source) {
   const constants = stringConstants(source)
 
-  const members = /^CONTRACT_MEMBERS\s*=\s*frozenset\(\s*\{([^}]*)\}\s*\)/m.exec(source)
-  if (!members) fail(`could not find CONTRACT_MEMBERS = frozenset({...}) in ${SERVICE_REL}`)
-  const prefixes = /^CONTRACT_MEMBER_PREFIXES\s*=\s*\(([^)]*)\)/m.exec(source)
-  if (!prefixes) fail(`could not find CONTRACT_MEMBER_PREFIXES = (...) in ${SERVICE_REL}`)
-
   const skip = /^_SKIP_DIRS\s*=\s*\{([^}]*)\}/m.exec(source)
   if (!skip) fail(`could not find _SKIP_DIRS in ${SERVICE_REL}`)
   const skipDirs = resolveItems(skip[1], constants, '_SKIP_DIRS').sort()
@@ -205,11 +204,6 @@ function parseService(source) {
   const expected = Object.keys(PUBLIC_VALUES_WITHOUT_CLI).concat(['CLI_INSTALL_SPEC', 'MIN_CLI_VERSION'])
   if (tokens.join(',') !== expected.join(',')) {
     fail(`core's placeholder token set is ${tokens.join(',')}; this script renders ${expected.join(',')} — update it`)
-  }
-
-  return {
-    members: new Set(resolveItems(members[1], constants, 'CONTRACT_MEMBERS')),
-    prefixes: resolveItems(prefixes[1], constants, 'CONTRACT_MEMBER_PREFIXES')
   }
 }
 
@@ -350,7 +344,7 @@ function main() {
     fail(`no cinna-core checkout at ${args.core} (pass --core or set CINNA_CORE_PATH)`)
   }
 
-  const service = parseService(readCoreText(args.core, args.ref, SERVICE_REL))
+  parseService(readCoreText(args.core, args.ref, SERVICE_REL))
   const config = readCoreText(args.core, args.ref, CONFIG_REL)
   const values = {
     ...PUBLIC_VALUES_WITHOUT_CLI,
@@ -375,15 +369,25 @@ function main() {
 
   const { version: kitVersion, rendered } = renderTree(raw, values)
   const contractVersion = contractVersionOf(rendered)
-  const isMember = (rel) => service.members.has(rel) || service.prefixes.some((prefix) => rel.startsWith(prefix))
-  const members = [...rendered.keys()].filter(isMember).sort(compareUtf8)
+  // Core stamps `{{KIT_VERSION}}` into `VERSION`; reading it back proves this
+  // render hashed exactly what core's `_content_version` hashes.
+  let stamped = null
+  try {
+    stamped = rendered.has('VERSION') ? strictUtf8.decode(rendered.get('VERSION')).trim() : null
+  } catch {
+    /* undecodable: reported as a mismatch below */
+  }
+  if (stamped !== kitVersion) {
+    fail(`rendered VERSION is ${JSON.stringify(stamped)}, but the computed kit version is ${kitVersion} — the render no longer matches core`)
+  }
+  const files = [...rendered.keys()].sort(compareUtf8)
 
   // Build in the work dir, then swap: the old tree is replaced wholesale, so
   // nothing that core no longer ships survives.
   freshWorkDir(WORK)
   const staging = mkdtempSync(join(WORK, 'staging-'))
   try {
-    for (const rel of members) {
+    for (const rel of files) {
       const target = join(staging, ...rel.split('/'))
       mkdirSync(dirname(target), { recursive: true })
       writeFileSync(target, rendered.get(rel))
@@ -393,10 +397,14 @@ function main() {
     rmSync(staging, { recursive: true, force: true })
     throw err
   }
-  swapInto(staging, BUNDLE)
+  try {
+    swapInto(staging, BUNDLE)
+  } catch (err) {
+    fail(`could not swap the new bundle into ${BUNDLE}: ${err instanceof Error ? err.message : String(err)}`)
+  }
   const tree = contractTreeHash(BUNDLE)
   const lock = {
-    comment: 'Written by `make kit-sync` (scripts/kit-sync/sync.mjs). Never edit this or resources/cinna-kit-contract/ by hand.',
+    comment: 'Written by `make kit-sync` (scripts/kit-sync/sync.mjs). Never edit this or resources/cinna-agent-kit/ by hand.',
     core_commit: identity.commit,
     core_source: identity.source,
     core_dirty: identity.dirty,

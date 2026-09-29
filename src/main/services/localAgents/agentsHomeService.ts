@@ -2,9 +2,10 @@
  * The agents home and the extra roots.
  *
  * A **root** is a workshop folder: it holds `Local/` (one directory per agent),
- * `Cloud/`, the root markdown files, and `.cinna-kit/` — the contract copy that
+ * `Cloud/`, the root markdown files, and `.cinna-kit/` — the kit copy that
  * lets a coding assistant working in the folder read the same rules the desktop
- * reads. Exactly one root is the *home*: `~/Documents/CinnaAgents` unless the
+ * reads, along with the kit's guides and `tools/kit.py`. Exactly one root is
+ * the *home*: `~/Documents/CinnaAgents` unless the
  * `localAgentsHome` app setting says otherwise. Any number of extra roots can be
  * adopted, which is how an existing kit workshop joins the app unchanged.
  *
@@ -26,7 +27,18 @@
  * of becoming a directory this app writes into.
  */
 
-import { cpSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  type Dirent
+} from 'node:fs'
 import { basename, join } from 'node:path'
 import { agentRootRepo, type AgentRootRow } from '../../db/agentRoots'
 import { agentRepo } from '../../db/agents'
@@ -34,8 +46,10 @@ import {
   clearContractCache,
   getBundledContractDir,
   getContractVersion,
+  readVersionAt,
   resolveContract
 } from '../../kit/contractStore'
+import { swapInto } from '../../kit/treeSwap'
 import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { compareVersionStrings } from '../../../shared/kit/contractVersion'
@@ -57,26 +71,150 @@ import { scaffoldService } from './scaffoldService'
 
 const logger = createLogger('local-agents-home')
 
-/** Folder a workshop keeps its copy of the contract in, per `layout.json`. */
+/** Folder a workshop keeps its copy of the kit in, per `layout.json`. */
 const WORKSHOP_KIT_DIR = '.cinna-kit'
+
+/**
+ * Prefix of the tree an install is built in, beside `.cinna-kit/` so the swap
+ * is a rename on one filesystem. `swapInto` parks the old tree at
+ * `<staging>.previous`, which carries the same prefix.
+ */
+const KIT_STAGING_PREFIX = `${WORKSHOP_KIT_DIR}.staging-`
+
+/** The kit's content version (core's `_content_version`), not the contract's. */
+const KIT_VERSION_FILE = 'VERSION'
+
+/**
+ * The stamp the root `AGENTS.md` freshness rule reads (`kit.py`'s
+ * `LAST_REFRESH_CHECK`): missing or older than 7 days sends an assistant to
+ * `kit.py refresh --check`, which a desktop workshop must not run — the app
+ * owns `.cinna-kit/`.
+ */
+const REFRESH_CHECK_FILE = '.last_refresh_check'
+
+/**
+ * Written into every tree this app installs, holding the kit `VERSION` it
+ * installed. A complete tree without it is a kit the user downloaded, and is
+ * never touched; with it, the tree is ours to keep current.
+ */
+const DESKTOP_INSTALL_MARKER = '.desktop_install'
+
+/**
+ * Roots this process has installed the kit into. A tree of ours with another
+ * kit hash is replaced at most once per root per process, so two
+ * builds sharing one home (a dev build and the installed release) cannot swap
+ * the tree back and forth on every `ensureHome`.
+ */
+const kitInstalledThisProcess = new Set<string>()
+
+/**
+ * Roots whose install failed in this process. Tried again only on the next
+ * launch: a folder that refuses the copy would otherwise be copied into, and
+ * warned about, on every `ensureHome`.
+ */
+const kitInstallFailedThisProcess = new Set<string>()
+
+/** How stale the stamp may get before a sync pass touches it again. */
+const REFRESH_CHECK_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 /** Label of the home root in the sidebar. */
 const DEFAULT_HOME_LABEL = 'Agents'
 
-/**
- * The `contract_version` of the copy installed in a workshop, or null when
- * there is none. Reads `kit.json` directly rather than going through
- * `resolveContract`, whose answer is "which copy wins", not "what is installed".
- */
-function readInstalledContractVersion(kitDir: string): string | null {
+/** A tree's `VERSION` (the kit hash), trimmed; null when missing or empty. */
+function readKitVersion(kitDir: string): string | null {
   try {
-    const kit = JSON.parse(readFileSync(join(kitDir, 'kit.json'), 'utf8')) as Record<
-      string,
-      unknown
-    >
-    return typeof kit.contract_version === 'string' ? kit.contract_version : null
+    const version = readFileSync(join(kitDir, KIT_VERSION_FILE), 'utf8').trim()
+    return version === '' ? null : version
   } catch {
     return null
+  }
+}
+
+/** The bundled kit's `VERSION`, read once per process and bundle path. */
+let bundledKitVersionMemo: { dir: string; version: string | null } | null = null
+
+function bundledKitVersion(bundledDir: string): string | null {
+  if (bundledKitVersionMemo?.dir !== bundledDir) {
+    const version = readKitVersion(bundledDir)
+    if (version === null) {
+      logger.warn('the bundled kit has no readable VERSION; workshop copies update on contract version only', {
+        bundledDir
+      })
+    }
+    bundledKitVersionMemo = { dir: bundledDir, version }
+  }
+  return bundledKitVersionMemo.version
+}
+
+/**
+ * `time.strftime("%Y-%m-%dT%H:%M:%S%z") + "\n"` — what `kit.py` writes into
+ * `.last_refresh_check`: local time, offset without a colon (`+0200`).
+ */
+function refreshCheckStamp(now: Date): string {
+  const pad = (value: number, width = 2): string => String(value).padStart(width, '0')
+  const offset = -now.getTimezoneOffset()
+  const sign = offset >= 0 ? '+' : '-'
+  const abs = Math.abs(offset)
+  return (
+    `${pad(now.getFullYear(), 4)}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+    `T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}` +
+    `${sign}${pad(Math.floor(abs / 60))}${pad(abs % 60)}\n`
+  )
+}
+
+/**
+ * Keep the root `AGENTS.md` freshness rule quiet: write the stamp when `force`
+ * (just installed), or when it is missing or older than a day. One `stat` on
+ * the hot path. A failure only means the rule may fire, so it is swallowed.
+ */
+function touchRefreshCheck(kitDir: string, force: boolean): void {
+  const path = join(kitDir, REFRESH_CHECK_FILE)
+  if (!force) {
+    try {
+      if (Date.now() - statSync(path).mtimeMs < REFRESH_CHECK_MAX_AGE_MS) return
+    } catch {
+      /* missing: write it */
+    }
+  }
+  try {
+    writeFileSync(path, refreshCheckStamp(new Date()))
+  } catch (err) {
+    logger.debug('could not write the kit refresh stamp', {
+      error: err instanceof Error ? err.message : String(err)
+    })
+  }
+}
+
+/**
+ * Remove staging trees an interrupted install left in the root, including a
+ * `.previous` tree `swapInto` parked there.
+ */
+function removeStaleStaging(rootPath: string): void {
+  let entries: Dirent[]
+  try {
+    entries = readdirSync(rootPath, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (!entry.name.startsWith(KIT_STAGING_PREFIX)) continue
+    try {
+      rmSync(join(rootPath, entry.name), { recursive: true, force: true })
+    } catch (err) {
+      // Left for the next install to retry; never a reason to skip this one.
+      logger.debug('could not remove a stale kit staging tree', {
+        name: entry.name,
+        error: err instanceof Error ? err.message : String(err)
+      })
+    }
+  }
+}
+
+function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
   }
 }
 
@@ -261,7 +399,7 @@ export const agentsHomeService = {
 
   /**
    * Create the folder if needed, install the root templates, and keep
-   * `.cinna-kit/` populated from the bundled contract. Safe to re-run.
+   * `.cinna-kit/` in step with the bundled kit. Safe to re-run.
    */
   installRoot(rootPath: string): void {
     try {
@@ -286,58 +424,125 @@ export const agentsHomeService = {
         err instanceof Error ? err.message : String(err)
       )
     }
-    this.syncWorkshopContract(rootPath)
+    this.syncWorkshopKit(rootPath)
   },
 
   /**
-   * Copy the bundled contract into `<root>/.cinna-kit/` when the workshop has
-   * none, or has an older one. An assistant opening the folder reads its rules
-   * from there, so a workshop without it is a workshop whose conventions are
-   * invisible.
+   * Put the kit into `<root>/.cinna-kit/` where it is missing or broken, and
+   * keep the copies this app installed current. An assistant opening the
+   * folder reads its rules, guides and `tools/kit.py` from there, so a workshop
+   * without them — or with only the contract, as older builds installed — is a
+   * workshop whose builder steps point at files that are not there.
    *
-   * A workshop copy at the same version or newer is left alone — `contractStore`
-   * prefers a newer one deliberately, and overwriting either would undo a
-   * contract refresh, or an edit someone made in the folder.
+   * Decided in this order:
+   *
+   * 0. **A strictly newer contract → never touched**, marked or not, complete
+   *    by today's layout or not: a newer core may lay its kit out differently,
+   *    and `contractStore` prefers that copy. The version is read as
+   *    `contractStore` and `kit.py` read it — `kit.json`, then
+   *    `CONTRACT_VERSION`.
+   * 1. **Missing or broken → install.** Broken is any of: no readable contract
+   *    version, no `kit.json`, no `VERSION`, `README.md`, `tools/kit.py` or `guides/`. That
+   *    is a fresh workshop, an old contract-only copy, or a damaged tree. A few
+   *    `stat`s, on a hot path — `ensureHome` runs on `list`, `rescan`,
+   *    `listRoots`, `create` and `requireRoot`.
+   * 2. **Complete, without {@link DESKTOP_INSTALL_MARKER} → never touched.**
+   *    The user downloaded it (`kit.py refresh`, the CLI), or it came with an
+   *    adopted workshop, possibly from a self-hosted or newer core; replacing
+   *    it with this build's public-cloud render would undo their kit. Whatever
+   *    its contract version: the app reads its bundled contract regardless, and
+   *    overlaying an older tree would only mix two kits. No stamp either.
+   * 3. **Complete, with the marker → ours.** A `VERSION` other than the
+   *    bundled one is reinstalled, at most once per root per process: two
+   *    builds sharing one home (a dev build and the installed release) bundle
+   *    different hashes, and without the limit each would reinstall on every
+   *    call. Else it is up to date — no copy, no cache invalidation.
+   *
+   * An install is staged beside `.cinna-kit/` and swapped in whole, so a file
+   * dropped upstream disappears too — `layout.json` declares `.cinna-kit`
+   * replaced wholesale by a refresh and never edited by hand. The refresh stamp
+   * is written on install and kept fresh on an up-to-date tree we own (see
+   * {@link touchRefreshCheck}), never in a tree we do not. A failed install is
+   * not fatal: the previous tree stays, and the app reads its bundled copy
+   * regardless.
    */
-  syncWorkshopContract(rootPath: string): void {
+  syncWorkshopKit(rootPath: string): void {
     const kitDir = join(rootPath, WORKSHOP_KIT_DIR)
-    // `resolveContract` picks the workshop copy over the bundled one only when
-    // it is *strictly newer* at the same major, so "is the workshop copy in
-    // use?" is the wrong question — for the normal case, equal versions, the
-    // answer is no and the copy would run on every call.
-    //
-    // That mattered for two reasons. `ensureHome` is on the path of `list`,
-    // `rescan`, `listRoots`, `create` and `requireRoot`, so a recursive copy
-    // plus a `clearContractCache()` ran on nearly every request, defeating the
-    // contract cache entirely. And `cpSync(force)` silently reverted any local
-    // edit inside `<root>/.cinna-kit/` — which an assistant working in the
-    // workshop is entitled to make.
-    const installed = readInstalledContractVersion(kitDir)
+    const installed = readVersionAt(kitDir)
+    const installedKit = readKitVersion(kitDir)
+    const complete =
+      installed !== null &&
+      installedKit !== null &&
+      isRegularFile(join(kitDir, 'kit.json')) &&
+      isRegularFile(join(kitDir, 'README.md')) &&
+      isRegularFile(join(kitDir, 'tools', 'kit.py')) &&
+      isDirectory(join(kitDir, 'guides'))
     const bundledVersion = resolveContract().version
-    if (installed !== null && compareVersionStrings(installed, bundledVersion) >= 0) {
-      // Same version, or a newer one a refresh pulled down. Nothing to do, and
-      // nothing to invalidate.
-      return
+    // A strictly newer contract is never ours to replace, complete by today's
+    // layout or not: a newer core may lay its kit out differently, and
+    // `contractStore` prefers that copy.
+    if (installed !== null && compareVersionStrings(installed, bundledVersion) > 0) return
+    const bundled = getBundledContractDir()
+    const bundledKit = bundledKitVersion(bundled)
+    if (complete) {
+      // A kit the user downloaded, or brought with an adopted workshop.
+      if (!existsSync(join(kitDir, DESKTOP_INSTALL_MARKER))) return
+      const stale =
+        bundledKit === null
+          ? compareVersionStrings(installed, bundledVersion) < 0
+          : installedKit !== bundledKit
+      // Once per process: another build sharing the home may have put its own
+      // kit back since, and swapping on every call helps neither.
+      if (!stale || kitInstalledThisProcess.has(rootPath)) {
+        touchRefreshCheck(kitDir, false)
+        return
+      }
     }
 
-    const bundled = getBundledContractDir()
+    if (kitInstallFailedThisProcess.has(rootPath)) return
+    removeStaleStaging(rootPath)
+    let staging: string | null = null
     try {
-      cpSync(bundled, kitDir, { recursive: true, force: true })
+      staging = mkdtempSync(join(rootPath, KIT_STAGING_PREFIX))
+      cpSync(bundled, staging, { recursive: true })
+      // `mkdtempSync` creates 0700; the tree should be as readable as the bundle.
+      chmodSync(staging, statSync(bundled).mode & 0o777)
+      writeFileSync(join(staging, DESKTOP_INSTALL_MARKER), `${bundledKit ?? ''}\n`)
+      swapInto(staging, kitDir)
+      staging = null
     } catch (err) {
       // Not fatal: the app reads its own bundled copy either way. The workshop
       // copy is a courtesy to whatever assistant opens the folder.
-      logger.warn('could not install the workshop contract copy', {
+      kitInstallFailedThisProcess.add(rootPath)
+      logger.warn('could not install the workshop kit copy', {
         error: err instanceof Error ? err.message : String(err)
       })
+      if (staging) {
+        try {
+          rmSync(staging, { recursive: true, force: true })
+        } catch {
+          /* removed by the stale-staging sweep of the next install */
+        }
+      }
       return
     }
     // The tree under this root just changed; drop the cached resolution so the
-    // next read sees it. Only reached when a copy actually happened.
+    // next read sees it. Only reached when an install actually happened.
+    kitInstalledThisProcess.add(rootPath)
     clearContractCache()
-    logger.info('workshop contract copy installed', {
-      from: installed ?? 'none',
-      to: bundledVersion
+    touchRefreshCheck(kitDir, true)
+    logger.info('workshop kit copy installed', {
+      fromContract: installed ?? 'none',
+      toContract: bundledVersion,
+      fromKit: installedKit ?? 'none',
+      toKit: bundledKit ?? 'unknown'
     })
+  },
+
+  /** Test-only reset of the once-per-process install memo. */
+  _resetKitSync(): void {
+    kitInstalledThisProcess.clear()
+    kitInstallFailedThisProcess.clear()
   },
 
   /**

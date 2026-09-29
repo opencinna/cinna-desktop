@@ -24,11 +24,11 @@ typecheck: ## Type-check main, preload, renderer and e2e
 build: ## Production build into out/ (what the E2E suite launches)
 	npx electron-vite build
 
-# The kit contract bundle (resources/cinna-kit-contract/) is a byte-exact render
-# of cinna-core's docs/local_agent_kit/ contract members; never edit it by hand.
+# The agent kit bundle (resources/cinna-agent-kit/) is a byte-exact render of
+# cinna-core's docs/local_agent_kit/, the whole kit; never edit it by hand.
 # CORE=<path> overrides $CINNA_CORE_PATH (default ../workflow-runner-core);
 # REF=<rev> renders core at that git revision instead of its working tree.
-kit-sync: ## Re-bundle the kit contract from cinna-core: make kit-sync [CORE=<path>] [REF=<rev>]
+kit-sync: ## Re-bundle the agent kit from cinna-core: make kit-sync [CORE=<path>] [REF=<rev>]
 	$(STRIP) scripts/kit-sync/sync.mjs $(if $(CORE),--core "$(CORE)") $(if $(REF),--ref "$(REF)")
 
 # The interface contract: every external CLI interface Cinna relies on, checked
