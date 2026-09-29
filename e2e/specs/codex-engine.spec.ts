@@ -77,7 +77,7 @@ test('Codex chats, approves, answers questions, stops, and resumes through the p
   const tools = await cinna.page.evaluate(() => window.api.localTools.list())
   expect(tools.find((tool) => tool.id === 'codex')?.path).toBe(executable)
   // Asked of the configured binary, not of the PATH copy.
-  expect(await cinna.page.evaluate(() => window.api.localTools.codexAuth())).toEqual({ state: 'logged_in' })
+  expect(await cinna.page.evaluate(() => window.api.localTools.codexAuth())).toEqual({ state: 'logged_in', method: 'chatgpt' })
   // The explicit path is reported as what it is: configured, never "managed".
   expect(await cinna.page.evaluate(() => window.api.engine.resolveCodex())).toMatchObject({ state: 'ready', path: executable, source: 'configured' })
   const root = await addAgentRoot(cinna)

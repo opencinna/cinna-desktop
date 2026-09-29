@@ -200,7 +200,7 @@ test.describe('Codex', () => {
       await window.api.settings.set('autoChatTitles', true)
     }, binary!.path)
     // Polled: until the binary service has taken up the path just saved, the probe has nothing to ask and says `unknown`.
-    await expect.poll(() => cinna.page.evaluate(() => window.api.localTools.codexAuth()), { timeout: 30_000 }).toEqual({ state: 'logged_in' })
+    await expect.poll(() => cinna.page.evaluate(() => window.api.localTools.codexAuth()), { timeout: 30_000 }).toEqual({ state: 'logged_in', method: 'api_key' })
     expect(await cinna.page.evaluate(() => window.api.providers.list())).toEqual([])
     const specialist = await adoptSpecialist(cinna, makeSpecialist(cinna))
 
