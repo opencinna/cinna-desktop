@@ -88,7 +88,8 @@ import {
 import {
   SESSION_TELEMETRY_CHANGED_CHANNEL,
   type SessionTelemetryChangedPayload,
-  type SessionTelemetryGetResult
+  type SessionTelemetryGetResult,
+  type SessionTelemetryMeasureResult
 } from '../shared/sessionTelemetry'
 import type { MessageTelemetry } from '../shared/sessionTelemetry'
 import type { ChatRouter } from '../shared/chatRouting'
@@ -966,6 +967,12 @@ const api = {
   sessionTelemetry: {
     /** The chat's telemetry, `null` when it has none yet; `ok: false` for a chat this profile does not own. */
     get: (chatId: string): Promise<SessionTelemetryGetResult> => ipcRenderer.invoke('sessionTelemetry:get', chatId),
+    /**
+     * Measure the chat's context by category now (Claude, between turns). The
+     * result arrives through `onChanged`; this answers whether it was taken,
+     * or why not (`busy`, `not_ready`, `not_running`, `unsupported`, `failed`).
+     */
+    measureContext: (chatId: string): Promise<SessionTelemetryMeasureResult> => ipcRenderer.invoke('sessionTelemetry:measureContext', chatId),
     /** Fires whenever a chat's telemetry changes, with its new state. Returns an unsubscribe function. */
     onChanged: (handler: (payload: SessionTelemetryChangedPayload) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, payload: SessionTelemetryChangedPayload): void => handler(payload)

@@ -9,6 +9,7 @@ import { ConductorMcpServer } from '../../../../services/conductorMcpServer'
 import { applyConductorToolPolicy, cinnaToolName } from '../conductorToolPolicy'
 import { parseClaudeAuthStatus } from '../claudeAuth'
 import { airClientMeta } from '../acpActivity'
+import { readContextCategories } from '../acpTelemetry'
 import type { AcpLaunchPlan } from '../acpLaunchers'
 import { CLAUDE_CONTRACT } from './claude.contract'
 import { runCli, spawnAdapter, type AdapterConnection, type AdapterMessage } from './codexHarness'
@@ -85,6 +86,10 @@ const seen = {
   setModes: {} as Record<string, boolean>,
   folderTurns: [] as ClaudeProviderTurn[],
   firstPromptUpdates: [] as Json[],
+  contextUsage: null as AdapterMessage | null,
+  contextUsageUnknown: null as AdapterMessage | null,
+  /** What the measurement asked of the provider: its requests off `/v1/messages`, and how many Messages requests. */
+  contextUsageTraffic: { other: [] as string[], messages: 0 },
   question: { request: null as AdapterMessage | null, toolResults: [] as string[] },
   nativeMentionsClaudeMd: false, isolatedMentionsClaudeMd: true,
   bypassInMetaMode: null as unknown,
@@ -156,6 +161,13 @@ async function folderScenario(binary: string, trap: EgressTrap): Promise<void> {
     // The second title request follows the turn rather than riding inside it.
     await until(() => provider!.turns.filter((turn) => turn.kind === 'title').length >= 2, 5_000)
     seen.firstPromptUpdates = [...connection.updates]
+    // The patched adapter's measurement, between turns, after the session's first answered prompt.
+    // Its provider traffic is its own entry's observation, kept out of the others'.
+    const otherBefore = provider.otherRequests.length
+    const messagesBefore = provider.turns.length
+    seen.contextUsage = await connection.rpc('_cinna/contextUsage', { sessionId }, 60_000)
+    seen.contextUsageUnknown = await connection.rpc('_cinna/contextUsage', { sessionId: 'no-such-session' })
+    seen.contextUsageTraffic = { other: provider.otherRequests.splice(otherBefore), messages: provider.turns.length - messagesBefore }
 
     script = [{ kind: 'tool', name: 'AskUserQuestion', input: { questions: [{ question: 'Deterministic?', header: 'Probe', multiSelect: false,
       options: [{ label: 'Yes', description: 'Accept' }, { label: 'No', description: 'Decline' }] }] } }]
@@ -458,6 +470,24 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
   it(entry('claude.session.costed-usage-ends-turn'), () => {
     const usage = seen.firstPromptUpdates.filter((update) => update.sessionUpdate === 'usage_update')
     expect(usage.at(-1)).toHaveProperty('cost')
+  })
+
+  it(entry('claude.session.context-usage'), () => {
+    expect(seen.contextUsage?.error, JSON.stringify(seen.contextUsage?.error)).toBeUndefined()
+    const result = (seen.contextUsage?.result ?? null) as Json | null
+    expect(result).not.toBeNull()
+    expect(result).not.toHaveProperty('gridRows')
+    const reading = readContextCategories(result)
+    expect(reading, 'the answer lost a field the desktop reads').not.toBeNull()
+    expect(reading!.categories.length).toBeGreaterThan(0)
+    expect(reading!.categories.every((category) => category.name !== '' && category.tokens >= 0)).toBe(true)
+    expect(reading!.totalTokens).toBeGreaterThan(0)
+    expect(reading!.maxTokens).toBeGreaterThan(0)
+    expect(reading!.model).not.toBe('')
+    expect((seen.contextUsageUnknown?.error as Json | undefined)?.code).toBe(-32602)
+    // It counts tokens with the provider (the CLI's `count_tokens`), and sends no Messages request.
+    expect(seen.contextUsageTraffic.messages).toBe(0)
+    expect([...new Set(seen.contextUsageTraffic.other)]).toEqual(['POST /v1/messages/count_tokens'])
   })
 
   /* tools & MCP */

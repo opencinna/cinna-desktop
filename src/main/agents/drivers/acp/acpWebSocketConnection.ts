@@ -1,7 +1,7 @@
 import { WebSocket } from 'undici'
 import type { AnyMessage, InitializeRequest, InitializeResponse, Stream } from '@agentclientprotocol/sdk'
 import { connectAcpClient } from './acpClient'
-import { ACP_ASYNC_TASK_STOP_METHOD, ACP_START_TIMEOUT_MS, ACP_STEER_METHOD, type AcpAsyncTaskStopRequest, type AcpAsyncTaskStopResponse, type AcpConnection, type AcpExit, type AcpSteerRequest, type AcpSteerResponse } from './types'
+import { ACP_ASYNC_TASK_STOP_METHOD, ACP_CONTEXT_USAGE_METHOD, ACP_START_TIMEOUT_MS, ACP_STEER_METHOD, type AcpAsyncTaskStopRequest, type AcpContextUsageRequest, type AcpAsyncTaskStopResponse, type AcpConnection, type AcpExit, type AcpSteerRequest, type AcpSteerResponse } from './types'
 import { parseRemoteAcpConfig, parseAcpAccessToken, type RemoteAcpConfig } from '../../../../shared/customAgents'
 
 /** Cinna-core/Python SDK profile: one UTF-8 JSON-RPC object per text frame. */
@@ -94,6 +94,7 @@ export async function startAcpWebSocketConnection(
       cancel: (sessionId) => call.notify('session/cancel', { sessionId }),
       steer: (params) => call.request<AcpSteerResponse, AcpSteerRequest>(ACP_STEER_METHOD, params),
       stopAsyncTask: (params) => call.request<AcpAsyncTaskStopResponse, AcpAsyncTaskStopRequest>(ACP_ASYNC_TASK_STOP_METHOD, params),
+      contextUsage: (params) => call.request<unknown, AcpContextUsageRequest>(ACP_CONTEXT_USAGE_METHOD, params),
       stderrTail: () => failure?.message ?? '', dispose
     }
   } catch (error) {

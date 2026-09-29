@@ -81,6 +81,7 @@ import {
   AUTH_STATUS_METHOD,
   connectionAuthOf,
   isSessionLive,
+  readContextCategories,
   sessionFingerprint,
   noteConnectionAuth,
   noteSessionLive,
@@ -91,7 +92,7 @@ import {
   type TurnTelemetryOptions,
   type ConnectionAuth
 } from './acpTelemetry'
-import type { SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
+import type { ContextMeasurement, SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
 import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } from './acpLaunchers'
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
 import { toElicitationContent, toInputQuestions } from './acpQuestions'
@@ -225,6 +226,29 @@ export interface AcpDriverDeps {
   turnCeilingMs?: number
   /** Override the wait for a `session/cancel` acknowledgement. Tests only. */
   cancelGraceMs?: number
+  /** Override the wait for a context measurement ({@link ACP_CONTEXT_USAGE_TIMEOUT_MS}). Tests only. */
+  contextUsageTimeoutMs?: number
+}
+
+/** How long a context measurement may take before it is given up as `failed`. */
+export const ACP_CONTEXT_USAGE_TIMEOUT_MS = 30_000
+
+/**
+ * A chat's root session as its last turn left it, for measuring its context
+ * between turns without starting or reserving anything. `answered` is set
+ * when a prompt was answered on it and cleared when a turn begins taking the
+ * session again: a turn that then fails before its answer (a reload under
+ * other params, a fresh session) leaves a session the runtime would stall on.
+ */
+interface MeasurableSession {
+  connection: AcpConnection
+  sessionId: string
+  fingerprint: string
+  agentId: string
+  launcherId: AcpLauncherId
+  specKey: string
+  runtime: AcpRuntimeView
+  answered: boolean
 }
 
 function fail(message: string, raw?: string): RunAgentTurnResult {
@@ -446,10 +470,38 @@ export interface AcpDriver extends AgentDriver {
   forgetChatSessions(chatId: string, agentId?: string): void
   /** Stop for the background tasks its sessions report (installed by the app). */
   readonly activityStopper: SessionActivityStopper
+  /**
+   * Measure the chat's context by category (Claude's patched adapter), on
+   * the process and session its last turn left live — never starting,
+   * reserving or holding one. Refused with a code when there is none, when a
+   * turn or follow-up runs in the chat, for another engine, and for a session
+   * no prompt has been answered on in this process.
+   */
+  measureContext(chatId: string): Promise<ContextMeasurement>
 }
 
 export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
   const parkedRuntimes = new Map<string, AcpRuntimeView>()
+  const measurable = new Map<string, MeasurableSession>()
+  /** Turns and follow-up turns running (or queued) per chat. */
+  const running = new Map<string, number>()
+  /**
+   * Bumped whenever a turn or follow-up starts in a chat, so a measurement
+   * that awaited across one is discarded rather than saved as current.
+   */
+  const generations = new Map<string, number>()
+  const enter = (chatId: string): (() => void) => {
+    running.set(chatId, (running.get(chatId) ?? 0) + 1)
+    generations.set(chatId, (generations.get(chatId) ?? 0) + 1)
+    let left = false
+    return () => {
+      if (left) return
+      left = true
+      const count = (running.get(chatId) ?? 1) - 1
+      if (count > 0) running.set(chatId, count)
+      else running.delete(chatId)
+    }
+  }
   const openFollowUp = deps.openFollowUp
   const sessionActivity = createSessionActivityRegistry(deps.activity)
   const titles = createSessionTitles(deps.sessionTitle)
@@ -473,9 +525,12 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
           agentId: scope.agentId,
           driverId: 'acp',
           scope: runScope,
-          run: (io) => runFollowUp(deps, {
-            ...armed, chatId: scope.chatId, connection, sessionId: scope.sessionId, gate, knownToolCalls, parkedRuntimes, activity: sessionActivity, titles
-          }, io),
+          run: (io) => {
+            const leave = enter(scope.chatId)
+            return runFollowUp(deps, {
+              ...armed, chatId: scope.chatId, connection, sessionId: scope.sessionId, gate, knownToolCalls, parkedRuntimes, activity: sessionActivity, titles
+            }, io).finally(leave)
+          },
           wanted: () => gate.pending,
           abandon: (reason, options) => {
             if (options?.keepListening) {
@@ -580,11 +635,12 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
       if (input.signal.aborted) return canceled()
       if (isRefusal(plan)) return fail(plan.error)
 
+      const leave = enter(input.chatId)
       try {
         return await deps.withLock(agent.id, 'turn', async () => {
           const prepared = deps.prepareCredentials ? await deps.prepareCredentials(agent, plan) : plan
           if (input.signal.aborted) return canceled()
-          return runTurn(deps, { userId, agent, runtime, launcherId, plan: prepared, input: prepared.credentialPrompt ? { ...input, wireContent: input.wireContent + '\n' + prepared.credentialPrompt } : input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null })
+          return runTurn(deps, { userId, agent, runtime, launcherId, plan: prepared, input: prepared.credentialPrompt ? { ...input, wireContent: input.wireContent + '\n' + prepared.credentialPrompt } : input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null, ...(!input.nested ? { measurable } : {}) })
         }, input.queueWhenBusy ? input.signal : undefined)
       } catch (err) {
         // `turnLock.acquire` throws rather than queueing, and its message is
@@ -599,6 +655,8 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
           error: message
         })
         return input.signal.aborted ? { text: '', parts: [], notices: [], taskState: 'canceled', stopReason: 'canceled' } : fail(message, String(err))
+      } finally {
+        leave()
       }
     },
 
@@ -613,11 +671,83 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
 
     forgetChatSessions(chatId, agentId) {
       observers.forgetChat(chatId, agentId)
+      const known = measurable.get(chatId)
+      if (known && (!agentId || known.agentId === agentId)) measurable.delete(chatId)
     },
 
-    activityStopper: createAcpActivityStopper(sessionActivity)
+    activityStopper: createAcpActivityStopper(sessionActivity),
+
+    async measureContext(chatId): Promise<ContextMeasurement> {
+      // A turn in the chat outranks everything: its first one has no session to name yet.
+      if (running.has(chatId)) return { ok: false, code: 'busy' }
+      const known = measurable.get(chatId)
+      if (!known) return { ok: false, code: 'not_running' }
+      if (telemetryEngineOf(known.launcherId) !== 'claude') return { ok: false, code: 'unsupported' }
+      const connection = deps.pool.peek?.(known.agentId, known.specKey)
+      if (!connection || connection !== known.connection || !connection.alive) return { ok: false, code: 'not_running' }
+      let current: string | null
+      try {
+        current = known.runtime.readSession(chatId)
+      } catch {
+        return { ok: false, code: 'not_running' }
+      }
+      if (!current) return { ok: false, code: 'not_running' }
+      // Asked before the session's first answered prompt in this process, the
+      // runtime stalls on the request for tens of seconds.
+      if (current !== known.sessionId || !known.answered || !isSessionLive(connection, current, known.fingerprint)) {
+        return { ok: false, code: 'not_ready' }
+      }
+      if (!connection.contextUsage) return { ok: false, code: 'unsupported' }
+      const generation = generations.get(chatId) ?? 0
+      let raw: unknown
+      const timeoutMs = deps.contextUsageTimeoutMs ?? ACP_CONTEXT_USAGE_TIMEOUT_MS
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        raw = await Promise.race([
+          connection.contextUsage({ sessionId: current }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new ContextUsageTimeout()), timeoutMs)
+            timer.unref?.()
+          })
+        ])
+      } catch (err) {
+        if (refusalReason(err) === 'busy') return { ok: false, code: 'busy' }
+        // The session's SDK stream ended: there is nothing live to measure.
+        if (refusalReason(err) === 'closed') return { ok: false, code: 'not_running' }
+        // The code only: an answer or an error from here can carry the
+        // user's paths.
+        logger.warn('a context measurement failed', {
+          agentId: known.agentId,
+          chatId,
+          ...(err instanceof ContextUsageTimeout ? { timedOutMs: timeoutMs } : { code: err instanceof RequestError ? err.code : 'error' })
+        })
+        return { ok: false, code: 'failed' }
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+      // A turn that started while the request was out makes the answer stale:
+      // it describes the context before that turn, not the one now current.
+      if (running.has(chatId) || (generations.get(chatId) ?? 0) !== generation) return { ok: false, code: 'busy' }
+      const categories = readContextCategories(raw)
+      if (!categories) {
+        logger.warn('a context measurement could not be read', { agentId: known.agentId, chatId })
+        return { ok: false, code: 'failed' }
+      }
+      return { ok: true, engine: 'claude', sessionId: current, categories }
+    }
   }
   return driver
+}
+
+class ContextUsageTimeout extends Error {}
+
+/**
+ * Why the patched adapter refused a measurement (`data.reason`): `busy` while
+ * a turn runs or is queued, `closed` once the session's query has ended.
+ */
+function refusalReason(err: unknown): unknown {
+  const data = (err as { data?: unknown } | null)?.data
+  return typeof data === 'object' && data !== null ? (data as { reason?: unknown }).reason : undefined
 }
 
 /* --------------------------------------------------------------------- turn */
@@ -652,6 +782,8 @@ interface TurnContext {
    * not write the same id twice. See {@link rememberSession}.
    */
   savedSession: string | null
+  /** Where a root turn leaves its session for a context measurement between turns. Absent for a nested turn. */
+  measurable?: Map<string, MeasurableSession>
 }
 
 /**
@@ -1061,6 +1193,9 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       runtime.validate(chatId)
       connection = await duringStart(deps.pool.acquire(agent.id, plan.spec, plan.init, startupController.signal))
       watchConnectionAuth(connection)
+      // The session is this turn's until it answers again (see `MeasurableSession`).
+      const known = ctx.measurable?.get(chatId)
+      if (known) known.answered = false
       try { runtime.validate(chatId) } catch (error) { deps.pool.retire(agent.id); throw error }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -1311,8 +1446,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         () => { ctx.telemetry?.started(); armSteering() }
       ).finally(settleSteering)
       if (answer) {
-        ctx.telemetry?.answered(answer)
+        ctx.telemetry?.answered(answer, connection, sessionId)
         noteSessionLive(connection, sessionId, fingerprint)
+        ctx.measurable?.set(chatId, {
+          connection, sessionId, fingerprint, agentId: agent.id, launcherId: ctx.launcherId, specKey: plan.spec.key, runtime, answered: true
+        })
       }
       // Only a session that took its prompt — the transcript replay with it —
       // is marked current. One that failed before that must be replaced and
@@ -2308,13 +2446,14 @@ function finish(
  * cost reading per session for the first reading after a restart. Empty
  * without a telemetry service.
  */
-function telemetrySink(deps: AcpDriverDeps, chatId: string): Pick<TurnTelemetryOptions, 'reporter' | 'lastCostReading' | 'lastModelCostReadings'> {
+function telemetrySink(deps: AcpDriverDeps, chatId: string): Pick<TurnTelemetryOptions, 'reporter' | 'lastCostReading' | 'lastModelCostReadings' | 'lastTokenTotal'> {
   const reporter = deps.telemetry
   if (!reporter) return {}
   return {
     reporter,
     ...(reporter.lastCostReading ? { lastCostReading: (sessionId: string) => reporter.lastCostReading?.(chatId, sessionId) } : {}),
-    ...(reporter.lastModelCostReadings ? { lastModelCostReadings: (sessionId: string) => reporter.lastModelCostReadings?.(chatId, sessionId) } : {})
+    ...(reporter.lastModelCostReadings ? { lastModelCostReadings: (sessionId: string) => reporter.lastModelCostReadings?.(chatId, sessionId) } : {}),
+    ...(reporter.lastTokenTotal ? { lastTokenTotal: (sessionId: string) => reporter.lastTokenTotal?.(chatId, sessionId) } : {})
   }
 }
 

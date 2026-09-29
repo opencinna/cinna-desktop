@@ -726,6 +726,8 @@ export const acpDriver = createAcpDriver({
 installChatSessionForgetter((chatId, agentId) => acpDriver.forgetChatSessions(chatId, agentId))
 // Stop on a background process the composer's popover lists.
 installSessionActivityStopper('acp', acpDriver.activityStopper)
+// Measure a chat's context by category on demand (Claude; the telemetry popover asks).
+sessionTelemetryService.installContextMeasurer((chatId) => acpDriver.measureContext(chatId))
 
 /** Relaunch recovery of `a2a` turns, with the driver's own credential resolution. */
 export const a2aTurnRecoverer = createA2aTurnRecoverer({

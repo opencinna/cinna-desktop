@@ -8,7 +8,7 @@ import { PINNED_CLAUDE_VERSION, PINNED_CODEX_VERSION, PINNED_ENGINE_VERSION } fr
 /**
  * The manifest is the only place a runtime version lives — except for the two
  * files that cannot import TypeScript. This test is what makes that exception
- * safe: `package.json` and `codexAdapterPatch.json` may repeat a value, and a
+ * safe: `package.json` and the adapter patch files may repeat a value, and a
  * bump that touches one side only fails here rather than at a user's first turn.
  */
 
@@ -30,6 +30,14 @@ describe('runtime pins', () => {
       version: RUNTIME_PINS.codex.adapter,
       originalSha256: RUNTIME_PINS.codex.adapterOriginalSha256,
       patchedSha256: RUNTIME_PINS.codex.adapterPatchedSha256
+    })
+  })
+
+  it('claudeAdapterPatch.json, read by the CommonJS install hooks, equals the manifest', () => {
+    expect(readJson('src/main/agents/drivers/acp/claudeAdapterPatch.json')).toEqual({
+      version: RUNTIME_PINS.claude.adapter,
+      originalSha256: RUNTIME_PINS.claude.adapterOriginalSha256,
+      patchedSha256: RUNTIME_PINS.claude.adapterPatchedSha256
     })
   })
 

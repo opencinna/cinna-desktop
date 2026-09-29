@@ -1,4 +1,10 @@
-import type { SessionTelemetry, SessionTelemetryChange } from '../../../shared/sessionTelemetry'
+import type {
+  ContextMeasureCode,
+  SessionContextMeasurer,
+  SessionTelemetry,
+  SessionTelemetryChange,
+  TokenTally
+} from '../../../shared/sessionTelemetry'
 import { sessionTelemetryRepo } from '../../db/sessionTelemetry'
 import { chatRepo } from '../../db/chats'
 import { createLogger } from '../../logger/logger'
@@ -7,6 +13,8 @@ import { applyTelemetryChange } from './sessionTelemetryReducer'
 const logger = createLogger('session-telemetry')
 
 export type SessionTelemetryListener = (chatId: string, telemetry: SessionTelemetry) => void
+
+export type MeasureContextOutcome = { ok: true } | { ok: false; code: ContextMeasureCode }
 
 export interface SessionTelemetryStore {
   get(chatId: string): SessionTelemetry | null
@@ -47,6 +55,9 @@ export function createSessionTelemetryService(options: {
   const isTrashed = options.isTrashed
   const held = new Map<string, SessionTelemetry | null>()
   const listeners = new Set<SessionTelemetryListener>()
+  let measurer: SessionContextMeasurer | undefined
+  /** One measurement per chat at a time: a second ask shares the first. */
+  const measuring = new Map<string, Promise<MeasureContextOutcome>>()
 
   const load = (chatId: string): SessionTelemetry | null => {
     if (held.has(chatId)) return held.get(chatId) ?? null
@@ -89,23 +100,59 @@ export function createSessionTelemetryService(options: {
     }
   }
 
+  const report = (chatId: string, change: SessionTelemetryChange): void => {
+    if (trashed(chatId)) {
+      forget(chatId)
+      return
+    }
+    const current = load(chatId)
+    const next = applyTelemetryChange(current, chatId, change, now())
+    if (sameTelemetry(current, next)) return
+    held.set(chatId, next)
+    try {
+      store.save(next)
+    } catch (error) {
+      // A chat deleted under its turn has no row to hold this.
+      logger.warn('could not save a chat’s session telemetry', { chatId, error: String(error) })
+    }
+    emit(chatId, next)
+  }
+
+  const measure = async (chatId: string): Promise<MeasureContextOutcome> => {
+    if (!measurer) return { ok: false, code: 'unsupported' }
+    let measured: Awaited<ReturnType<SessionContextMeasurer>>
+    try {
+      measured = await measurer(chatId)
+    } catch (error) {
+      logger.warn('a context measurement failed', { chatId, error: String(error) })
+      return { ok: false, code: 'failed' }
+    }
+    if (!measured.ok) return { ok: false, code: measured.code }
+    report(chatId, { type: 'context_categories', engine: measured.engine, sessionId: measured.sessionId, categories: measured.categories, at: now() })
+    return { ok: true }
+  }
+
   return {
-    report(chatId: string, change: SessionTelemetryChange): void {
-      if (trashed(chatId)) {
-        forget(chatId)
-        return
-      }
-      const current = load(chatId)
-      const next = applyTelemetryChange(current, chatId, change, now())
-      if (sameTelemetry(current, next)) return
-      held.set(chatId, next)
-      try {
-        store.save(next)
-      } catch (error) {
-        // A chat deleted under its turn has no row to hold this.
-        logger.warn('could not save a chat’s session telemetry', { chatId, error: String(error) })
-      }
-      emit(chatId, next)
+    report,
+
+    /**
+     * Measure the chat's context by category, now, through the installed
+     * measurer (the ACP driver). Never starts a process or a session: a chat
+     * whose session is not live, or is mid-turn, is refused with a code. On
+     * success the measurement is reported as a `context_categories` change —
+     * listeners hear it like any other — and the answer is only `ok`.
+     */
+    measureContext(chatId: string): Promise<MeasureContextOutcome> {
+      const running = measuring.get(chatId)
+      if (running) return running
+      const started = measure(chatId).finally(() => measuring.delete(chatId))
+      measuring.set(chatId, started)
+      return started
+    },
+
+    /** The driver side of {@link measureContext}. The last one installed wins. */
+    installContextMeasurer(next: SessionContextMeasurer): void {
+      measurer = next
     },
 
     /** The chat's telemetry as it stands, or null when it has none. */
@@ -131,6 +178,12 @@ export function createSessionTelemetryService(options: {
     lastModelCostReadings(chatId: string, sessionId: string): Record<string, number> | undefined {
       const readings = load(chatId)?.totals.bySession[sessionId]?.modelCostReadings
       return readings ? { ...readings } : undefined
+    },
+
+    /** The session's last running token total (Codex's patched quota), or undefined. */
+    lastTokenTotal(chatId: string, sessionId: string): TokenTally | undefined {
+      const reading = load(chatId)?.totals.bySession[sessionId]?.lastTokenTotal
+      return reading ? { ...reading } : undefined
     },
 
     /** Forgets a chat (trashed or deleted): its row and what is held here. Announces nothing. */

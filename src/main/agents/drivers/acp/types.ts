@@ -183,6 +183,19 @@ export interface AcpAsyncTaskStopResponse {
   [key: string]: unknown
 }
 
+/**
+ * Cinna's own extension on the patched Claude adapter
+ * (`scripts/patch-claude-agent-acp.cjs`): the SDK's `getContextUsage()` for
+ * one session, trimmed. Refused mid-turn (`data.reason: "busy"`), and it
+ * stalls before the session's first prompt, so it is asked only of a session
+ * a prompt has been answered on in this process.
+ */
+export const ACP_CONTEXT_USAGE_METHOD = '_cinna/contextUsage'
+
+export interface AcpContextUsageRequest {
+  sessionId: string
+}
+
 export interface AcpConnection {
   readonly pid: number | undefined
   /** The agent's `initialize` answer. */
@@ -207,6 +220,11 @@ export interface AcpConnection {
   steer(params: AcpSteerRequest): Promise<AcpSteerResponse>
   /** `_session/async_task/stop` ({@link ACP_ASYNC_TASK_STOP_METHOD}). Rejects like any request. */
   stopAsyncTask(params: AcpAsyncTaskStopRequest): Promise<AcpAsyncTaskStopResponse>
+  /**
+   * `_cinna/contextUsage` ({@link ACP_CONTEXT_USAGE_METHOD}). The answer is
+   * the adapter's, unchecked. Optional: a test double may not implement it.
+   */
+  contextUsage?(params: AcpContextUsageRequest): Promise<unknown>
 
   /**
    * Route one session's traffic to `handlers` until the returned function runs.

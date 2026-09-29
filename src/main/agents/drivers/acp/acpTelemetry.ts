@@ -20,7 +20,13 @@
  *   turn's tokens come from `usage` instead ({@link TurnTelemetry.resumed}).
  * - **Codex (`codex-acp`).** The same response shape, but both `usage` and
  *   `_meta.quota` hold the turn's **last request** only (`tokenUsage.last`).
- *   Recorded as `tokenScope: 'last_request'`. No cost.
+ *   The patched adapter (`scripts/patch-codex-acp.cjs`) adds
+ *   `_meta.quota.total_token_count`, the session's running total: the turn's
+ *   tokens are what it grew by ({@link tokenDelta}), `tokenScope: 'turn'`.
+ *   Without it, the last request is recorded as `tokenScope: 'last_request'`
+ *   — as it is on a restored session's first turn when no earlier total was
+ *   persisted, since the total survives a restart ({@link TokenTotalReadings}).
+ *   No cost.
  *
  * - **Claude's raw SDK stream** (`acpSdkTelemetry.ts`, requested by the
  *   launcher) adds what the ACP surface does not carry: the resolved model
@@ -32,6 +38,11 @@
  * - **Codex cost is estimated** from `shared/modelPricing.ts` (the runtime
  *   reports none) — a lower bound while its tokens are the last request's.
  *
+ * - **Context by category (Claude, on demand).** The patched adapter's
+ *   `_cinna/contextUsage` answer is checked field by field
+ *   ({@link readContextCategories}); its memory-file paths are the user's own
+ *   and are never logged.
+ *
  * Nothing here keeps or logs an account email or organisation: the auth
  * payload is read for its kind, a scrubbed label and the plan name.
  */
@@ -42,6 +53,7 @@ import { canonicalPricingModel, costOf, type CacheTtl } from '../../../../shared
 import {
   EMPTY_TOKEN_TALLY,
   type AuthKind,
+  type ContextCategories,
   type MessageTelemetry,
   type SessionTelemetryAuth,
   type SessionTelemetryReporter,
@@ -233,6 +245,153 @@ export function fingerprintDigest(fingerprint: string): string {
   return createHash('sha256').update(fingerprint).digest('hex').slice(0, 16)
 }
 
+/* ----------------------------------------------------------- token totals */
+
+/**
+ * What one turn used, from the session's running token total and the
+ * previous reading (this process's, else the one the chat's telemetry
+ * persisted). No earlier reading, or a total that dropped in any field (the
+ * runtime started counting over), and the reading is taken as is.
+ */
+export function tokenDelta(previous: TokenTally | undefined, reading: TokenTally): TokenTally {
+  if (!previous) return { ...reading }
+  const fields = ['input', 'output', 'cacheRead', 'cacheWrite'] as const
+  if (fields.some((field) => reading[field] < previous[field])) return { ...reading }
+  return {
+    input: reading.input - previous.input,
+    output: reading.output - previous.output,
+    cacheRead: reading.cacheRead - previous.cacheRead,
+    cacheWrite: reading.cacheWrite - previous.cacheWrite
+  }
+}
+
+/**
+ * The last running token total per session, per connection — the
+ * {@link CostReadings} bookkeeping for Codex's `total_token_count`.
+ *
+ * **The total survives a restart.** Observed against the pinned CLI
+ * (`codex.session.quota-total-on-resume`): a session `session/load`ed into a
+ * fresh adapter process answers its first prompt with the total from before
+ * the restart plus that turn. So the first reading on a new connection is
+ * measured against the one the chat's telemetry persisted; and a restored
+ * session with none persisted (a chat from before the total was kept) has no
+ * baseline at all — its first reading is the whole history, so no turn is
+ * answered and the caller keeps the last request instead.
+ */
+export class TokenTotalReadings {
+  private readonly readings = new WeakMap<AcpConnection, Map<string, TokenTally>>()
+
+  /**
+   * Records `reading` and answers what it added (see {@link tokenDelta}), or
+   * `undefined` for a `restored` session with no earlier reading anywhere.
+   */
+  take(
+    connection: AcpConnection,
+    sessionId: string,
+    reading: TokenTally,
+    persisted?: (sessionId: string) => TokenTally | undefined,
+    restored = false
+  ): TokenTally | undefined {
+    let sessions = this.readings.get(connection)
+    if (!sessions) {
+      sessions = new Map()
+      this.readings.set(connection, sessions)
+    }
+    const previous = sessions.has(sessionId) ? sessions.get(sessionId) : persisted?.(sessionId)
+    sessions.set(sessionId, { ...reading })
+    if (!previous && restored) return undefined
+    return tokenDelta(previous, reading)
+  }
+}
+
+export const tokenTotalReadings = new TokenTotalReadings()
+
+/** `_meta.quota.total_token_count` of a prompt response (Codex's patched adapter), or null. */
+export function readQuotaTotal(response: unknown): TokenTally | null {
+  const quota = record(record(record(response)?._meta)?.quota)
+  return tallyOfQuota(quota?.total_token_count)
+}
+
+/* -------------------------------------------------------- context usage */
+
+function text(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
+function amount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+/** Rows of `value` that `read` accepts; anything else is dropped. */
+function rows<T>(value: unknown, read: (row: Record<string, unknown>) => T | undefined): T[] {
+  if (!Array.isArray(value)) return []
+  const out: T[] = []
+  for (const item of value) {
+    const row = record(item)
+    const read_ = row ? read(row) : undefined
+    if (read_ !== undefined) out.push(read_)
+  }
+  return out
+}
+
+/** A named token count, or undefined. */
+function named(row: Record<string, unknown>): { name: string; tokens: number } | undefined {
+  const name = text(row.name)
+  const tokens = amount(row.tokens)
+  return name !== undefined && tokens !== undefined ? { name, tokens } : undefined
+}
+
+/**
+ * The patched Claude adapter's `_cinna/contextUsage` answer, checked. Null
+ * when the headline figures are missing; a malformed row is dropped rather
+ * than failing the whole reading. Nothing beyond the fields it names is kept.
+ */
+export function readContextCategories(raw: unknown): ContextCategories | null {
+  const r = record(raw)
+  if (!r) return null
+  const totalTokens = amount(r.totalTokens)
+  const maxTokens = amount(r.maxTokens)
+  if (totalTokens === undefined || maxTokens === undefined || !Array.isArray(r.categories)) return null
+  const reading: ContextCategories = {
+    categories: rows(r.categories, (row) => {
+      const base = named(row)
+      if (!base) return undefined
+      return typeof row.isDeferred === 'boolean' ? { ...base, isDeferred: row.isDeferred } : base
+    }),
+    totalTokens,
+    maxTokens,
+    rawMaxTokens: amount(r.rawMaxTokens) ?? maxTokens,
+    percentage: amount(r.percentage) ?? (maxTokens > 0 ? (totalTokens / maxTokens) * 100 : 0),
+    model: text(r.model) ?? '',
+    memoryFiles: rows(r.memoryFiles, (row) => {
+      const path = text(row.path)
+      const tokens = amount(row.tokens)
+      return path !== undefined && tokens !== undefined ? { path, type: text(row.type) ?? '', tokens } : undefined
+    }),
+    mcpTools: rows(r.mcpTools, (row) => {
+      const base = named(row)
+      if (!base) return undefined
+      return { ...base, serverName: text(row.serverName) ?? '', ...(typeof row.isLoaded === 'boolean' ? { isLoaded: row.isLoaded } : {}) }
+    }),
+    agents: rows(r.agents, (row) => {
+      const agentType = text(row.agentType)
+      const tokens = amount(row.tokens)
+      return agentType !== undefined && tokens !== undefined ? { agentType, source: text(row.source) ?? '', tokens } : undefined
+    }),
+    systemTools: rows(r.systemTools, named),
+    systemPromptSections: rows(r.systemPromptSections, named)
+  }
+  const skills = record(r.skills)
+  if (skills) {
+    reading.skills = { totalSkills: amount(skills.totalSkills) ?? 0, includedSkills: amount(skills.includedSkills) ?? 0, tokens: amount(skills.tokens) ?? 0 }
+  }
+  const commands = record(r.slashCommands)
+  if (commands) {
+    reading.slashCommands = { totalCommands: amount(commands.totalCommands) ?? 0, includedCommands: amount(commands.includedCommands) ?? 0, tokens: amount(commands.tokens) ?? 0 }
+  }
+  return reading
+}
+
 /* -------------------------------------------------------- prompt response */
 
 export interface PromptTelemetry {
@@ -241,6 +400,8 @@ export interface PromptTelemetry {
   tokens: TokenTally
   byModel: Record<string, TokenTally>
   tokenScope: TokenScope
+  /** Codex with a running total: the turn's last request, whose input is the context it priced at. */
+  lastRequest?: TokenTally
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -324,13 +485,15 @@ export function mainModel(rows: Record<string, TokenTally>, selected?: string): 
  * `quota.token_count`. With `mainLoopOnly` (the first turn of a resumed
  * session, whose rows are its whole history) `usage` is taken instead and no
  * per-model rows are kept; the rows still name the model. Codex: `usage`,
- * falling back to `quota.token_count`; both are the last request only.
+ * falling back to `quota.token_count`; both are the last request only —
+ * unless `turnTokens` (the growth of the patched adapter's running total)
+ * is given, which is then the turn's, with scope `turn`.
  */
 export function parsePromptTelemetry(
   response: unknown,
   engine: TelemetryEngine,
   selectedModel?: string,
-  options: { mainLoopOnly?: boolean } = {}
+  options: { mainLoopOnly?: boolean; turnTokens?: TokenTally } = {}
 ): PromptTelemetry | null {
   const r = record(response)
   if (!r) return null
@@ -348,9 +511,20 @@ export function parsePromptTelemetry(
   const usage = tallyOfUsage(r.usage)
   const total = tallyOfQuota(quota?.token_count)
   const mainLoopOnly = engine === 'claude' && options.mainLoopOnly === true
+  const model = mainModel(byModel, selectedModel)
+  // Codex with the running total: the turn's growth of it, every request.
+  if (engine === 'codex' && options.turnTokens) {
+    const lastRequest = usage ?? total ?? undefined
+    return {
+      ...(model ? { model } : {}),
+      tokens: { ...options.turnTokens },
+      byModel: model ? { [model]: { ...options.turnTokens } } : {},
+      tokenScope: 'turn',
+      ...(lastRequest ? { lastRequest } : {})
+    }
+  }
   const tokens = mainLoopOnly ? usage ?? total : engine === 'claude' ? summed ?? usage ?? total : usage ?? total ?? summed
   if (!tokens) return null
-  const model = mainModel(byModel, selectedModel)
   return {
     ...(model ? { model } : {}),
     tokens,
@@ -483,6 +657,9 @@ export interface TurnTelemetryOptions {
   lastCostReading?: (sessionId: string) => number | undefined
   /** The same per model (see {@link ModelCostReadings}). */
   lastModelCostReadings?: (sessionId: string) => Record<string, number> | undefined
+  tokenTotals?: TokenTotalReadings
+  /** The last running token total the chat's telemetry kept for a session (see {@link TokenTotalReadings}). */
+  lastTokenTotal?: (sessionId: string) => TokenTally | undefined
 }
 
 /** The SDK's `apiKeySource` values that mean an API key paid. `none` says nothing (OAuth, a bearer token, a cloud). */
@@ -513,8 +690,13 @@ export class TurnTelemetry {
   private startedAt?: number
   private endedAt?: number
   private answer?: unknown
+  /** Codex's running total after the turn, and what it grew by. */
+  private tokenTotalReading?: TokenTally
+  private turnTokens?: TokenTally
   private settled = false
   private mainLoopOnly = false
+  /** The turn runs on a session `session/load` restored (see {@link TokenTotalReadings}). */
+  private restored = false
   private result?: MessageTelemetry
   private authKind?: SessionTelemetryAuth['kind']
   // Claude's raw stream.
@@ -539,6 +721,7 @@ export class TurnTelemetry {
   private readonly costs: CostReadings
   private readonly modelCosts: ModelCostReadings
   private readonly apiDurations: ApiDurationReadings
+  private readonly tokenTotals: TokenTotalReadings
   private readonly calibration: PriceCalibration
 
   constructor(private readonly options: TurnTelemetryOptions) {
@@ -546,6 +729,7 @@ export class TurnTelemetry {
     this.costs = options.costs ?? costReadings
     this.modelCosts = options.modelCosts ?? modelCostReadings
     this.apiDurations = options.apiDurations ?? apiDurationReadings
+    this.tokenTotals = options.tokenTotals ?? tokenTotalReadings
     this.calibration = options.calibration ?? priceCalibration
   }
 
@@ -579,6 +763,7 @@ export class TurnTelemetry {
    */
   session(sessionId: string, fresh: boolean, fingerprint: string, connection?: AcpConnection): void {
     if (fresh && connection) this.apiDurations.record(connection, sessionId, 0)
+    this.restored = !fresh
     this.report({ type: 'session', engine: this.options.engine, sessionId, fresh, fingerprint: fingerprintDigest(fingerprint), at: this.now() })
   }
 
@@ -727,10 +912,20 @@ export class TurnTelemetry {
     if (this.startedAt === undefined) this.startedAt = this.now()
   }
 
-  /** The prompt response, cancelled ones included. */
-  answered(response: unknown): void {
+  /**
+   * The prompt response, cancelled ones included. With the connection and
+   * session it answered on, a Codex running total in it is measured against
+   * the session's previous one here, once, as it arrives.
+   */
+  answered(response: unknown, connection?: AcpConnection, sessionId?: string): void {
     this.endedAt = this.now()
     this.answer = response
+    if (this.options.engine !== 'codex' || !connection || !sessionId || this.tokenTotalReading) return
+    const reading = readQuotaTotal(response)
+    if (!reading) return
+    this.tokenTotalReading = reading
+    const turnTokens = this.tokenTotals.take(connection, sessionId, reading, this.options.lastTokenTotal, this.restored)
+    if (turnTokens) this.turnTokens = turnTokens
   }
 
   /** Per-model cost deltas keyed like the turn's token rows where the ids name the same model. */
@@ -792,7 +987,9 @@ export class TurnTelemetry {
     this.settled = true
     this.logTraffic()
     const engine = this.options.engine
-    const parsed = this.answer !== undefined ? parsePromptTelemetry(this.answer, engine, this.selected, { mainLoopOnly: this.mainLoopOnly }) : null
+    const parsed = this.answer !== undefined
+      ? parsePromptTelemetry(this.answer, engine, this.selected, { mainLoopOnly: this.mainLoopOnly, ...(this.turnTokens ? { turnTokens: this.turnTokens } : {}) })
+      : null
     // No prompt response (a follow-up the agent started): the raw result's
     // main-loop usage is the turn's.
     const raw = !parsed && this.rawUsage ? { tokens: this.rawUsage, model: this.rawModel } : null
@@ -808,9 +1005,11 @@ export class TurnTelemetry {
     if (engine === 'claude' && parsed && !this.mainLoopOnly) this.calibrate(rows)
     // Codex reports no cost: the table's, unless a partner cloud paid (its
     // prices differ) or the model is not in it. A lower bound while the
-    // tokens are the last request's.
+    // tokens are the last request's. The long-context tier is judged by one
+    // request's context — the last one's — never by the turn's sum.
     if (engine === 'codex' && costUsd === undefined && parsed && model && this.authKind !== 'cloud') {
-      const estimated = costOf(model, tokens, { contextTokens: tokens.input + tokens.cacheRead + tokens.cacheWrite })
+      const priced = parsed.lastRequest ?? tokens
+      const estimated = costOf(model, tokens, { contextTokens: priced.input + priced.cacheRead + priced.cacheWrite })
       if (estimated !== undefined) {
         costUsd = estimated
         costSource = 'estimated'
@@ -846,6 +1045,7 @@ export class TurnTelemetry {
         ...(Object.keys(rows).length ? { byModel: rows } : {}),
         ...(Object.keys(byModelCost).length ? { byModelCost } : {}),
         ...(Object.keys(this.modelCostLatest).length ? { modelCostReadings: { ...this.modelCostLatest } } : {}),
+        ...(this.tokenTotalReading ? { tokenTotalReading: { ...this.tokenTotalReading } } : {}),
         ...(this.contextWindow !== undefined ? { contextWindow: this.contextWindow } : {}),
         ...(this.maxOutputTokens !== undefined ? { maxOutputTokens: this.maxOutputTokens } : {}),
         ...(this.selected ? { selectedModel: this.selected } : {})

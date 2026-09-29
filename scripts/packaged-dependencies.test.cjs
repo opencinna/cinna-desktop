@@ -7,11 +7,19 @@ const { spawnSync } = require('node:child_process')
 const { runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, beforePack, afterPack } = require('./packaged-dependencies.cjs')
 const { checkEnvironment } = require('./check-packaged-main.cjs')
 const codexPatch = require('../src/main/agents/drivers/acp/codexAdapterPatch.json')
+const claudePatch = require('../src/main/agents/drivers/acp/claudeAdapterPatch.json')
 
 function copyCodexAdapter(directory) {
   mkdirSync(join(directory, 'dist'), { recursive: true })
   writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/codex-acp', version: codexPatch.version }))
   copyFileSync(join(__dirname, '../node_modules/@agentclientprotocol/codex-acp/dist/index.js'), join(directory, 'dist/index.js'))
+}
+
+// The installed (patched) Claude adapter, as a package `pkg` created.
+function copyClaudeAdapter(directory) {
+  mkdirSync(join(directory, 'dist'), { recursive: true })
+  writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/claude-agent-acp', version: claudePatch.version, dependencies: { shared: '*' } }))
+  copyFileSync(join(__dirname, '../node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js'), join(directory, 'dist/acp-agent.js'))
 }
 
 function fixture(t) {
@@ -80,6 +88,7 @@ test('excludes bundled Claude and Codex CLIs even when installed', (t) => {
 test('build hooks preserve resource patterns and reject a broken shipped tree', (t) => {
   const { root, pkg } = fixture(t)
   const agent = pkg('@agentclientprotocol/claude-agent-acp', { dependencies: { shared: '*' } })
+  copyClaudeAdapter(agent)
   copyCodexAdapter(pkg('@agentclientprotocol/codex-acp'))
   pkg('shared', {}, agent) // Source is nested; electron-builder may hoist it.
   const canvasName = '@napi-rs/canvas-darwin-x64'
@@ -97,10 +106,15 @@ test('build hooks preserve resource patterns and reject a broken shipped tree', 
   assert.ok(packager.config.asarUnpack.includes('**/node_modules/shared/**'))
   assert.ok(packager.config.asarUnpack.includes(`**/node_modules/${canvasName}/**`))
   const unpacked = join(root, 'app.asar.unpacked')
-  pkg('@agentclientprotocol/claude-agent-acp', { dependencies: { shared: '*' } }, unpacked)
+  const shippedClaude = pkg('@agentclientprotocol/claude-agent-acp', { dependencies: { shared: '*' } }, unpacked)
   copyCodexAdapter(pkg('@agentclientprotocol/codex-acp', {}, unpacked))
   assert.throws(() => afterPack(context), /Missing runtime dependency shared/)
   pkg('shared', {}, unpacked)
+  // A shipped Claude adapter without the reviewed patch is refused.
+  copyClaudeAdapter(shippedClaude)
+  writeFileSync(join(shippedClaude, 'dist/acp-agent.js'), '// pristine adapter\n')
+  assert.throws(() => afterPack(context), /Claude ACP context-usage patch is missing or changed/)
+  copyClaudeAdapter(shippedClaude)
   assert.throws(() => afterPack(context), /Missing packaged Canvas payload/)
   const shipped = pkg(canvasName, { main: 'skia.darwin-x64.node' }, unpacked)
   assert.throws(() => afterPack(context), /Missing native Canvas binary/)

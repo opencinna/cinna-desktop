@@ -58,6 +58,12 @@ export interface SessionTelemetrySessionTotals {
   costUsd?: number
   turns: number
   /**
+   * The session's last `_meta.quota.total_token_count` (Codex's patched
+   * adapter) — the running token total of the session — so the next turn's
+   * tokens are what it grew by, across a restart too.
+   */
+  lastTokenTotal?: TokenTally
+  /**
    * The session's last `usage_update.cost.amount` — a running total the
    * runtime restores when the session is resumed — so the first reading after
    * a restart is measured against it instead of counted whole.
@@ -91,6 +97,37 @@ export interface ContextBreakdown {
   conversation: number
 }
 
+/** One category of a measured context (Claude's `getContextUsage`). */
+export interface ContextCategory {
+  name: string
+  tokens: number
+  /** Loaded on demand (deferred tools), not in the window until used. */
+  isDeferred?: boolean
+}
+
+/**
+ * The main agent's context measured by category, on demand, between turns
+ * (Claude only: the patched adapter's `_cinna/contextUsage`). A trimmed copy
+ * of the SDK's answer. `memoryFiles[].path` is the user's own path and may
+ * name their home directory: it is shown, never logged.
+ */
+export interface ContextCategories {
+  categories: ContextCategory[]
+  totalTokens: number
+  maxTokens: number
+  rawMaxTokens: number
+  percentage: number
+  /** The model the measurement was taken under, as the runtime names it. */
+  model: string
+  memoryFiles: { path: string; type: string; tokens: number }[]
+  mcpTools: { name: string; serverName: string; tokens: number; isLoaded?: boolean }[]
+  agents: { agentType: string; source: string; tokens: number }[]
+  systemTools: { name: string; tokens: number }[]
+  systemPromptSections: { name: string; tokens: number }[]
+  skills?: { totalSkills: number; includedSkills: number; tokens: number }
+  slashCommands?: { totalCommands: number; includedCommands: number; tokens: number }
+}
+
 export interface SessionTelemetry {
   chatId: string
   engine: TelemetryEngine
@@ -119,6 +156,16 @@ export interface SessionTelemetry {
     breakdown?: ContextBreakdown
     /** The next main-agent request sets `breakdown.baseline` (after a new session or a compaction). */
     awaitingBaseline?: boolean
+    /**
+     * The last on-demand measurement by category. Where present it supersedes
+     * `breakdown` for display. Cleared with the baseline (a new session, a
+     * compaction); otherwise it stands, dated, until measured again.
+     */
+    categories?: ContextCategories
+    /** When {@link categories} was measured. */
+    categoriesMeasuredAt?: number
+    /** The ACP session {@link categories} was measured on. */
+    categoriesSessionId?: string
   }
   totals: {
     tokens: TokenTally
@@ -221,6 +268,8 @@ export interface SessionTelemetryTurnChange {
   byModelCost?: Record<string, number>
   /** The session's latest per-model cost readings (Claude's raw `result`), to keep. */
   modelCostReadings?: Record<string, number>
+  /** The session's latest running token total (Codex's patched quota), to keep. */
+  tokenTotalReading?: TokenTally
   /** The main model's window per the raw `result`: authoritative. */
   contextWindow?: number
   maxOutputTokens?: number
@@ -281,6 +330,15 @@ export interface SessionTelemetrySessionChange {
   at: number
 }
 
+/** The main agent's context, measured by category on demand (Claude). */
+export interface SessionTelemetryContextCategoriesChange {
+  type: 'context_categories'
+  engine: TelemetryEngine
+  sessionId: string
+  categories: ContextCategories
+  at: number
+}
+
 /** The session's model option changed (or was first reported). */
 export interface SessionTelemetryModelChange {
   type: 'model'
@@ -297,6 +355,7 @@ export type SessionTelemetryChange =
   | SessionTelemetryRequestChange
   | SessionTelemetryCompactionChange
   | SessionTelemetrySessionChange
+  | SessionTelemetryContextCategoriesChange
 
 /**
  * The port a driver receives in its deps. Drivers report; the one thing they
@@ -309,7 +368,37 @@ export interface SessionTelemetryReporter {
   lastCostReading?(chatId: string, sessionId: string): number | undefined
   /** The last per-model cost readings recorded for the chat's ACP session, if any. */
   lastModelCostReadings?(chatId: string, sessionId: string): Record<string, number> | undefined
+  /** The last running token total recorded for the chat's ACP session, if any (Codex). */
+  lastTokenTotal?(chatId: string, sessionId: string): TokenTally | undefined
 }
+
+/**
+ * Why a context measurement was not taken.
+ *
+ * - `not_running` — the chat has no live process or no session in it.
+ * - `busy` — a turn (or a follow-up turn) is running on the session.
+ * - `unsupported` — the chat's engine cannot measure by category (not Claude).
+ * - `not_ready` — the session has not answered a prompt in this process yet;
+ *   asking then stalls the runtime for tens of seconds.
+ * - `failed` — the runtime refused, answered nonsense or took too long.
+ */
+export type ContextMeasureCode = 'not_running' | 'busy' | 'unsupported' | 'not_ready' | 'failed'
+
+/** What a driver answers when asked to measure a chat's context. */
+export type ContextMeasurement =
+  | { ok: true; engine: TelemetryEngine; sessionId: string; categories: ContextCategories }
+  | { ok: false; code: ContextMeasureCode }
+
+/** The driver side of `measureContext`: never starts or reserves a process. */
+export type SessionContextMeasurer = (chatId: string) => Promise<ContextMeasurement>
+
+/**
+ * `sessionTelemetry:measureContext`. On success the measurement arrives
+ * through the push channel, not in this answer.
+ */
+export type SessionTelemetryMeasureResult =
+  | { ok: true }
+  | { ok: false; code: 'chat_not_found' | ContextMeasureCode }
 
 /** Main → renderer: a chat's telemetry changed. */
 export const SESSION_TELEMETRY_CHANGED_CHANNEL = 'session-telemetry:changed'

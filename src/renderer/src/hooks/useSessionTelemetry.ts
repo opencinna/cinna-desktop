@@ -1,6 +1,6 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useQuery, useQueryClient, type QueryClient, type UseQueryResult } from '@tanstack/react-query'
-import type { SessionTelemetry } from '../../../shared/sessionTelemetry'
+import type { SessionTelemetry, SessionTelemetryMeasureResult } from '../../../shared/sessionTelemetry'
 
 export const sessionTelemetryKey = (chatId: string | null) => ['sessionTelemetry', chatId] as const
 
@@ -26,13 +26,28 @@ function pushesFor(client: QueryClient): Map<string, PushEntry> {
 }
 
 /**
+ * The query is returned whole, not spread: spreading reads every property of
+ * TanStack's tracked result, which then re-renders the caller on changes it
+ * never looks at (`isFetching` on each refetch).
+ */
+export interface UseSessionTelemetryResult {
+  query: UseQueryResult<SessionTelemetry | null>
+  /**
+   * Measure the chat's context by category now (Claude, between turns). The
+   * measurement lands in `query.data.context.categories` through the push; the
+   * answer only says whether it was taken, or why not.
+   */
+  measureContext: () => Promise<SessionTelemetryMeasureResult>
+}
+
+/**
  * What this chat's agent session reports it used: the model that answered,
  * tokens and cost so far, the context window, the login kind. `null` for a
  * chat with none yet, or one main does not recognise as this profile's.
  *
  * Read once, then kept current by main's push, which carries the whole state.
  */
-export function useSessionTelemetry(chatId: string | null): UseQueryResult<SessionTelemetry | null> {
+export function useSessionTelemetry(chatId: string | null): UseSessionTelemetryResult {
   const queryClient = useQueryClient()
   useEffect(() => {
     if (!chatId) return
@@ -51,7 +66,12 @@ export function useSessionTelemetry(chatId: string | null): UseQueryResult<Sessi
       if (entry.holders === 0 && entries.get(chatId) === entry) entries.delete(chatId)
     }
   }, [chatId, queryClient])
-  return useQuery({
+  const measureContext = useCallback(
+    (): Promise<SessionTelemetryMeasureResult> =>
+      chatId ? window.api.sessionTelemetry.measureContext(chatId) : Promise.resolve({ ok: false, code: 'chat_not_found' }),
+    [chatId]
+  )
+  const query = useQuery({
     queryKey: sessionTelemetryKey(chatId),
     queryFn: async (): Promise<SessionTelemetry | null> => {
       const startedAt = tick
@@ -67,4 +87,5 @@ export function useSessionTelemetry(chatId: string | null): UseQueryResult<Sessi
     // Pushes are heard only while a view of this chat is mounted.
     staleTime: 0
   })
+  return { query, measureContext }
 }

@@ -285,6 +285,13 @@ const app = agent({ name: 'fake-acp' })
     (params) => params,
     handler('asyncTaskStop', '_session/async_task/stop', () => ({ stopped: false }))
   )
+  // The patched Claude adapter's context measurement. Answers an empty
+  // measurement unless the script says otherwise (`contextUsage.response`).
+  .onRequest(
+    '_cinna/contextUsage',
+    (params) => params,
+    handler('contextUsage', '_cinna/contextUsage', () => ({ categories: [], totalTokens: 0, maxTokens: 200000, rawMaxTokens: 200000, percentage: 0, model: 'fake', memoryFiles: [], mcpTools: [], agents: [], systemTools: [], systemPromptSections: [] }))
+  )
   .onNotification('session/cancel', (ctx) => {
     log({ dir: 'in', kind: 'notification', method: 'session/cancel', params: ctx.params })
     noteCancel(ctx.params?.sessionId)

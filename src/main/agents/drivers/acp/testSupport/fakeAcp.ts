@@ -33,6 +33,7 @@
  *   // "prompt":       { "after": [ …a turn the agent starts on its own… ] }
  *   "steer":           { "response": { "outcome": "injected" } }   // _session/steering
  *   "asyncTaskStop":   { "response": { "stopped": true } }         // _session/async_task/stop
+ *   "contextUsage":    { "response": { "totalTokens": 1 } }        // _cinna/contextUsage
  *
  *   // `error` replaces the response, after whatever `emit` streamed:
  *   // "prompt":       { "error": { "code": -32603, "message": "model not found" } }
@@ -87,6 +88,8 @@ export interface FakeAcpScript {
   steer?: FakeAcpHandlerScript
   /** `_session/async_task/stop`; answers `{ stopped: false }` unless `response` overrides it. */
   asyncTaskStop?: FakeAcpHandlerScript
+  /** `_cinna/contextUsage` (the patched Claude adapter); answers an empty measurement unless `response` overrides it. */
+  contextUsage?: FakeAcpHandlerScript
 }
 
 export interface FakeAcpHandlerScript {

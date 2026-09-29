@@ -14,9 +14,9 @@
  * a type-stripping loader cannot run.
  *
  * Two files cannot import TypeScript and therefore repeat a value from here:
- * `package.json` (the adapter versions) and `codexAdapterPatch.json` (read by
- * the CommonJS postinstall and packaging hooks). `runtimePins.test.ts` fails
- * when either disagrees with this manifest.
+ * `package.json` (the adapter versions) and `codexAdapterPatch.json` /
+ * `claudeAdapterPatch.json` (read by the CommonJS postinstall and packaging
+ * hooks). `runtimePins.test.ts` fails when any of them disagrees with this manifest.
  *
  * ## How the checksums were produced
  *
@@ -137,6 +137,10 @@ export const RUNTIME_PINS = {
     /** Exactly what `claude --version` prints for the pin. */
     versionOutput: `${CLAUDE_CLI} (Claude Code)`,
     adapter: '0.76.0',
+    /** `@agentclientprotocol/claude-agent-acp/dist/acp-agent.js` as published (checked against the locked npm tarball). */
+    adapterOriginalSha256: 'c1635f643ceff71c906011b85f33f1b135a4a07aeaa5546d44fb6c5fad11c96d',
+    /** The same file after `scripts/patch-claude-agent-acp.cjs` (the `_cinna/contextUsage` request). */
+    adapterPatchedSha256: '7aa55ed80d2c991b3fc6a97aa09a8b35d7e097d5445bf8e566dc94db658d48d2',
     /**
      * Anthropic's own release bucket — the one `claude`'s installer and updater
      * read. `<release>/manifest.json` lists `platforms.<key>.{binary, checksum,
@@ -167,7 +171,7 @@ export const RUNTIME_PINS = {
     /** `@agentclientprotocol/codex-acp/dist/index.js` as published. */
     adapterOriginalSha256: '3527bdaf90a219175c742576963e6d9e943e4ea5fbdbc3e04e7f57f9a9e11343',
     /** The same file after `scripts/patch-codex-acp.cjs`. */
-    adapterPatchedSha256: 'bf3f889fbad28a1304b0e358a3d4cb099cf95ffe317e80b529ceecf7bd76fc95',
+    adapterPatchedSha256: '55b785713b8aa2d1a505a8b1e8b9fb46fb2c881926ea54a384c25b10bb25be3d',
     /**
      * The vendor's unmodified GitHub release archives for `rust-v0.155.0`: the
      * `codex` archive, and beside it the `codex-code-mode-host` archive of the

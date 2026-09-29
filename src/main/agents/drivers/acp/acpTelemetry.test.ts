@@ -14,8 +14,12 @@ import {
   PriceCalibration,
   parsePromptTelemetry,
   readAuthStatus,
+  readContextCategories,
+  readQuotaTotal,
   sessionFingerprint,
   telemetryAuthOf,
+  tokenDelta,
+  TokenTotalReadings,
   TurnTelemetry
 } from './acpTelemetry'
 import type { AcpConnection } from './types'
@@ -456,5 +460,140 @@ describe('one turn, with Claude’s raw SDK stream', () => {
     const traffic = getLogEntries().filter((entry) => entry.level === 'debug' && entry.message.includes('raw SDK stream traffic'))
     expect(traffic).toHaveLength(1)
     expect(traffic[0].data).toEqual({ chatId: 'chat', byType: { assistant: { frames: 1 } } })
+  })
+})
+
+describe('Codex’s running token total (patched quota)', () => {
+  const t = (input: number, output: number, cacheRead = 0) => ({ input, output, cacheRead, cacheWrite: 0 })
+  /** A patched `codex-acp` prompt response: the last request, and the session's running total beside it. */
+  const answer = (last: ReturnType<typeof q>, total: ReturnType<typeof q> | null | undefined) => ({
+    stopReason: 'end_turn',
+    usage: { totalTokens: last.totalTokens, inputTokens: last.inputTokens, cachedReadTokens: last.cachedInputTokens, outputTokens: last.outputTokens },
+    _meta: { quota: { token_count: last, ...(total !== undefined ? { total_token_count: total } : {}), model_usage: [{ model: 'gpt-5.5', token_count: last }] } }
+  })
+  const collect = (options: { readings?: TokenTotalReadings; persisted?: Record<string, ReturnType<typeof t>> } = {}) => {
+    const changes: SessionTelemetryChange[] = []
+    const turn = new TurnTelemetry({
+      engine: 'codex', chatId: 'chat', costs: new CostReadings(), tokenTotals: options.readings ?? new TokenTotalReadings(),
+      ...(options.persisted ? { lastTokenTotal: (sessionId: string) => options.persisted![sessionId] } : {}),
+      reporter: { report: (_chatId, change) => changes.push(change) }
+    })
+    const settled = () => changes.find((change) => change.type === 'turn') as Extract<SessionTelemetryChange, { type: 'turn' }> | undefined
+    return { turn, changes, settled }
+  }
+
+  it('is the growth of the total, or the total itself with no earlier reading or after a drop', () => {
+    expect(tokenDelta(undefined, t(10, 2, 30))).toEqual(t(10, 2, 30))
+    expect(tokenDelta(t(10, 2, 30), t(15, 6, 90))).toEqual(t(5, 4, 60))
+    expect(tokenDelta(t(10, 2, 30), t(15, 1, 90))).toEqual(t(15, 1, 90))
+  })
+
+  it('reads total_token_count from the quota, and nothing without it', () => {
+    expect(readQuotaTotal(answer(q(1, 2, 0, 3), q(10, 20, 0, 30)))).toEqual({ input: 10, output: 30, cacheRead: 20, cacheWrite: 0 })
+    expect(readQuotaTotal(answer(q(1, 2, 0, 3), null))).toBeNull()
+    expect(readQuotaTotal(answer(q(1, 2, 0, 3), undefined))).toBeNull()
+  })
+
+  it('counts every request of the turn, scope turn, and prices the long-context tier by the last request', () => {
+    const connection = {} as AcpConnection
+    const readings = new TokenTotalReadings()
+    const first = collect({ readings })
+    first.turn.answered(answer(q(100, 1_000, 0, 10), q(300, 1_500, 0, 40)), connection, 's1')
+    expect(first.turn.settle('s1')).toMatchObject({ tokens: t(300, 40, 1_500), tokenScope: 'turn', model: 'gpt-5.5' })
+    expect(first.settled()).toMatchObject({ byModel: { 'gpt-5.5': t(300, 40, 1_500) }, tokenTotalReading: t(300, 40, 1_500) })
+    // Estimated on the turn's tokens, not the last request's.
+    expect(first.settled()!.message.costUsd).toBeCloseTo((300 * 5 + 1_500 * 0.5 + 40 * 30) / 1_000_000)
+
+    const second = collect({ readings })
+    second.turn.answered(answer(q(50, 2_000, 0, 5), q(400, 4_500, 0, 60)), connection, 's1')
+    expect(second.turn.settle('s1')).toMatchObject({ tokens: t(100, 20, 3_000), tokenScope: 'turn' })
+  })
+
+  it('prices a turn whose requests together pass the long-context threshold at the base rate, as no request did', () => {
+    const { turn, settled } = collect()
+    // Four requests of ~100K context: 400K in all, 100K the last.
+    turn.answered(answer(q(1_000, 99_000, 0, 50), q(4_000, 396_000, 0, 200)), {} as AcpConnection, 's1')
+    turn.settle('s1')
+    expect(settled()!.message.costUsd).toBeCloseTo((4_000 * 5 + 396_000 * 0.5 + 200 * 30) / 1_000_000)
+  })
+
+  it('measures the first turn after a restart against the persisted total, and takes a total that started over as is', () => {
+    const restarted = collect({ persisted: { s1: t(300, 40, 1_500) } })
+    restarted.turn.answered(answer(q(50, 2_000, 0, 5), q(400, 4_500, 0, 60)), {} as AcpConnection, 's1')
+    expect(restarted.turn.settle('s1')).toMatchObject({ tokens: t(100, 20, 3_000), tokenScope: 'turn' })
+
+    const startedOver = collect({ persisted: { s1: t(300, 40, 1_500) } })
+    startedOver.turn.answered(answer(q(50, 2_000, 0, 5), q(50, 2_000, 0, 5)), {} as AcpConnection, 's1')
+    expect(startedOver.turn.settle('s1')).toMatchObject({ tokens: t(50, 5, 2_000), tokenScope: 'turn' })
+  })
+
+  it('keeps the last request for a restored session with no total persisted (its total is the whole history), and records the reading', () => {
+    const connection = {} as AcpConnection
+    const readings = new TokenTotalReadings()
+    const upgraded = collect({ readings })
+    upgraded.turn.session('s1', false, 'fp')
+    upgraded.turn.answered(answer(q(50, 2_000, 0, 5), q(4_000, 90_000, 0, 600)), connection, 's1')
+    expect(upgraded.turn.settle('s1')).toMatchObject({ tokens: t(50, 5, 2_000), tokenScope: 'last_request' })
+    expect(upgraded.settled()).toMatchObject({ tokenTotalReading: t(4_000, 600, 90_000) })
+    // The next turn on the connection is measured against it.
+    const next = collect({ readings })
+    next.turn.session('s1', false, 'fp')
+    next.turn.answered(answer(q(10, 100, 0, 1), q(4_010, 90_100, 0, 601)), connection, 's1')
+    expect(next.turn.settle('s1')).toMatchObject({ tokens: t(10, 1, 100), tokenScope: 'turn' })
+    // A session this connection created has no history: its first total is the turn.
+    const created = collect()
+    created.turn.session('s2', true, 'fp')
+    created.turn.answered(answer(q(50, 2_000, 0, 5), q(300, 1_500, 0, 40)), connection, 's2')
+    expect(created.turn.settle('s2')).toMatchObject({ tokens: t(300, 40, 1_500), tokenScope: 'turn' })
+  })
+
+  it('keeps the last request as a lower bound when the total is missing, and reports no reading', () => {
+    const { turn, settled } = collect()
+    turn.answered(answer(q(50, 2_000, 0, 5), undefined), {} as AcpConnection, 's1')
+    expect(turn.settle('s1')).toMatchObject({ tokens: t(50, 5, 2_000), tokenScope: 'last_request' })
+    expect(settled()).not.toHaveProperty('tokenTotalReading')
+  })
+
+  it('leaves Claude’s turn alone even if a total were present', () => {
+    const changes: SessionTelemetryChange[] = []
+    const readings = new TokenTotalReadings()
+    const turn = new TurnTelemetry({ engine: 'claude', chatId: 'chat', costs: new CostReadings(), tokenTotals: readings, reporter: { report: (_c, change) => changes.push(change) } })
+    turn.answered({ ...CLAUDE_RESPONSE, _meta: { ...CLAUDE_RESPONSE._meta, quota: { ...CLAUDE_RESPONSE._meta.quota, total_token_count: q(1, 1, 1, 1) } } }, {} as AcpConnection, 's1')
+    expect(turn.settle('s1')?.tokens).toEqual(parsePromptTelemetry(CLAUDE_RESPONSE, 'claude')?.tokens)
+  })
+})
+
+describe('the context measured by category', () => {
+  const ANSWER = {
+    categories: [{ name: 'System prompt', tokens: 3_100 }, { name: 'MCP tools', tokens: 900, isDeferred: true }, { name: 42 }],
+    totalTokens: 18_000, maxTokens: 200_000, rawMaxTokens: 200_000, percentage: 9, model: 'claude-sonnet-5',
+    gridRows: [[{ color: 'x' }]],
+    memoryFiles: [{ path: '/home/someone/project/CLAUDE.md', type: 'Project', tokens: 120 }, { path: 7 }],
+    mcpTools: [{ name: 'mcp__cinna__probe', serverName: 'cinna', tokens: 80, isLoaded: true }],
+    agents: [{ agentType: 'helper', source: 'sdk', tokens: 30 }],
+    systemTools: [{ name: 'Bash', tokens: 400 }],
+    systemPromptSections: [{ name: 'Environment', tokens: 200 }],
+    skills: { totalSkills: 3, includedSkills: 2, tokens: 60, skillFrontmatter: [{ name: 'pdf' }] },
+    slashCommands: { totalCommands: 12, includedCommands: 10, tokens: 150 }
+  }
+
+  it('keeps the named fields, drops malformed rows and anything else', () => {
+    expect(readContextCategories(ANSWER)).toEqual({
+      categories: [{ name: 'System prompt', tokens: 3_100 }, { name: 'MCP tools', tokens: 900, isDeferred: true }],
+      totalTokens: 18_000, maxTokens: 200_000, rawMaxTokens: 200_000, percentage: 9, model: 'claude-sonnet-5',
+      memoryFiles: [{ path: '/home/someone/project/CLAUDE.md', type: 'Project', tokens: 120 }],
+      mcpTools: [{ name: 'mcp__cinna__probe', serverName: 'cinna', tokens: 80, isLoaded: true }],
+      agents: [{ agentType: 'helper', source: 'sdk', tokens: 30 }],
+      systemTools: [{ name: 'Bash', tokens: 400 }],
+      systemPromptSections: [{ name: 'Environment', tokens: 200 }],
+      skills: { totalSkills: 3, includedSkills: 2, tokens: 60 },
+      slashCommands: { totalCommands: 12, includedCommands: 10, tokens: 150 }
+    })
+  })
+
+  it('refuses an answer without its headline figures', () => {
+    expect(readContextCategories(null)).toBeNull()
+    expect(readContextCategories({ ...ANSWER, totalTokens: 'many' })).toBeNull()
+    expect(readContextCategories({ ...ANSWER, categories: undefined })).toBeNull()
   })
 })

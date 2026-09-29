@@ -10,7 +10,7 @@ Which version of each external CLI and ACP adapter Cinna runs (and of the git it
 |---|---|---|
 | `codex` | `cli`, `versionOutput` (exactly what `--version` prints), `adapter`, `adapterOriginalSha256`, `adapterPatchedSha256`, `assets` (each with one companion, `codex-code-mode-host`) | Yes — a PATH copy reporting exactly `versionOutput` is reused (`path-pinned`); otherwise downloaded into `<userData>/runtimes/codex-<version>/` on first use, `codex` and `codex-code-mode-host` side by side |
 | `opencode` | `cli`, `assets` | Yes — `<userData>/engine/opencode-<version>/`, after a configured path and the user's PATH |
-| `claude` | `cli`, `versionOutput` (`<cli> (Claude Code)`), `adapter`, `assets` | Yes — on Codex's terms: exact-version PATH copy, else `<userData>/runtimes/claude-<version>/`. The adapter is unpatched, so there are no adapter digests |
+| `claude` | `cli`, `versionOutput` (`<cli> (Claude Code)`), `adapter`, `adapterOriginalSha256`, `adapterPatchedSha256`, `assets` | Yes — on Codex's terms: exact-version PATH copy, else `<userData>/runtimes/claude-<version>/`. The adapter carries one reviewed patch (`scripts/patch-claude-agent-acp.cjs`: the `_cinna/contextUsage` request), so it has digests like Codex's |
 | `git` | `cli`, `release` (dugite-native's tag, `v<cli>-4`), `versionOutput` (`git version <cli>`), `assets` | Only when the machine has no usable git — any real git wins. Downloaded in the background into `<userData>/runtimes/git-<version>/`, run through `<userData>/git-shim/git`; darwin and linux only. Behaviour: [Developer Tools on a Bare Machine](../shell_environment/developer_tools.md) |
 
 - An asset row is `{file, sha256, url?, executable?, format?, size?, companions?}` keyed `${process.platform}-${process.arch}`. Codex rows always carry `url`, `executable` (the archive holds `codex-<target triple>`, installed as `codex`), `size` and one **companion**: `{file, sha256, url, executable, installAs, size}`, the release's `codex-code-mode-host-<triple>.tar.gz`, installed beside `codex` as `codex-code-mode-host`. From 0.155.0 Code Mode is on by default and a bare install looks for that file in its own directory; without it Codex reports *the required codex-code-mode-host executable is missing*. Git rows carry `url` and `size` — a dugite-native tarball holding a whole tree (`bin/git`, `libexec/git-core/`, …), never a lone executable. Claude rows carry `url`, `size` and `format: 'executable'` — the asset **is** the binary (215–232 MB), from Anthropic's release bucket (`<release>/<platform>/claude`, listed by `<release>/manifest.json`), and nothing is unpacked. OpenCode rows derive the URL from the version and record no size.
@@ -28,12 +28,13 @@ Which version of each external CLI and ACP adapter Cinna runs (and of the git it
 - `src/main/agents/drivers/acp/codexConductorPolicy.ts` — `SUPPORTED_VERSION` and the patched-adapter digest. **The version installed and the version the restricted chat policy accepts are the same read**, so they cannot drift; they were two unrelated literals before
 - `scripts/install-runtime.mjs`, `scripts/pin-assets.mjs`, `scripts/generate-contract-docs.mjs`, `scripts/runtime-compat.mjs`, `scripts/live/runtime-flow.mjs`, `e2e/specs/codex-engine.spec.ts`, `e2e/specs/runtime-flow.spec.ts`
 
-### The two files that repeat it
+### The files that repeat it
 
-They cannot import TypeScript. `src/shared/runtimePins.test.ts` fails when either disagrees.
+They cannot import TypeScript. `src/shared/runtimePins.test.ts` fails when any of them disagrees.
 
 - `package.json` — the adapter versions, as **exact** strings. A `^` range would let `npm install` move the adapter off the version the patch checksum and the contract snapshot describe
 - `src/main/agents/drivers/acp/codexAdapterPatch.json` — adapter version and original/patched digests, read by the CommonJS postinstall and packaging hooks (`scripts/patch-codex-acp.cjs`)
+- `src/main/agents/drivers/acp/claudeAdapterPatch.json` — the same for the Claude adapter (`scripts/patch-claude-agent-acp.cjs`). Its original digest is the file inside the npm tarball `package-lock.json` locks, checked against its `integrity`
 
 ## Test levels
 
@@ -119,7 +120,7 @@ Written for Codex; Claude differs only where a step says so.
 
 Moving the **git** pin: no script covers it and there is no contract level. Bump `GIT_CLI`, `GIT_RELEASE_TAG` and `GIT_ASSET_PREFIX` (dugite-native's asset names carry the short commit it built from, not the tag), download each of the four tarballs from the release and replace every `sha256` and `size`, then `npm test` (`runtimePins.test.ts` checks names, URLs and the POSIX-only platform set). A new version gets a new install directory and a new `.git-<version>-unsupported` marker name, so a marker left by the old pin does not block it.
 
-Moving the **adapter** instead: `package.json` (exact), `RUNTIME_PINS.codex.adapter` and both adapter digests, `codexAdapterPatch.json`, then `npm install` so the postinstall patch runs — it refuses any source digest but the recorded original. Then steps 5–8; the snapshot records the adapter version too.
+Moving the **adapter** instead: `package.json` (exact), `RUNTIME_PINS.<engine>.adapter` and both adapter digests, the engine's `<engine>AdapterPatch.json`, then `npm install` so the postinstall patches run — each refuses any source digest but the recorded original. Changing a patch itself (not the version) moves only the patched digest, in both places; an installed copy carrying the earlier patch is refused too, so put the pristine file back (from the locked tarball, `npm pack <adapter>@<version>`) before re-running the script. Then steps 5–8; the snapshot records the adapter version too.
 
 ## Known gaps the contract pins rather than fixes
 

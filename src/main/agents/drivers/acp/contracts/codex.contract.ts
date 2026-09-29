@@ -173,6 +173,20 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['A'] }
   },
   {
+    id: 'codex.session.quota-running-total', area: 'session lifecycle', surface: 'adapter patch', name: '_meta.quota.total_token_count',
+    expectation: 'With the patched adapter, every prompt response’s `_meta.quota` carries `total_token_count` — the session’s running token total, in the shape of `token_count` — beside the last request’s `token_count`, and it grows from one turn to the next.',
+    owners: ['scripts/patch-codex-acp.cjs#patchCodexAcp', 'src/main/agents/drivers/acp/acpTelemetry.ts#readQuotaTotal'],
+    feature: 'A Codex turn’s tokens and estimated cost are its last request’s only: a lower bound on any turn that called a tool.',
+    flow: { steps: ['A', 'C'], note: 'every turn passes through it; no step asserts the tokens' }
+  },
+  {
+    id: 'codex.session.quota-total-on-resume', area: 'session lifecycle', surface: 'adapter patch', name: '_meta.quota.total_token_count after session/load',
+    expectation: 'A session `session/load`ed into a fresh adapter process answers its first prompt with `total_token_count` restored: the running total from before the restart plus that turn, not a count started over.',
+    owners: ['src/main/agents/drivers/acp/acpTelemetry.ts#TokenTotalReadings'],
+    feature: 'The first Codex turn after an app restart is measured against the persisted total; were the total started over, that turn would be undercounted (or, with no persisted total, a restored chat would count its whole history as one turn).',
+    flow: { steps: ['none'], note: 'no step restarts the app or reaps the process between turns; the contract observed the total restored on resume, so a restored chat with no persisted total records that first turn as its last request' }
+  },
+  {
     id: 'codex.session.info-title', area: 'session lifecycle', surface: 'ACP field', name: 'session_info_update.title',
     expectation: 'After a thread’s first prompt the session reports `session_info_update` with a `title` twice: first the prompt text verbatim (a placeholder), then the title the CLI’s own title request produced.',
     owners: ['src/main/agents/drivers/acp/acpSessionTitle.ts#isPromptPlaceholder', 'src/main/agents/drivers/acp/acpSessionTitle.ts#sessionInfoTitle', 'src/main/services/chatTitleService.ts#applyEngineTitle'],

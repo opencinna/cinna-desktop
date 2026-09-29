@@ -96,6 +96,8 @@ import {
   ACP_STDERR_TAIL_LINES,
   ACP_STEER_METHOD,
   ACP_ASYNC_TASK_STOP_METHOD,
+  ACP_CONTEXT_USAGE_METHOD,
+  type AcpContextUsageRequest,
   type AcpAsyncTaskStopRequest,
   type AcpAsyncTaskStopResponse,
   type AcpSteerRequest,
@@ -428,6 +430,8 @@ export async function startAcpConnection(
       call.request<AcpSteerResponse, AcpSteerRequest>(ACP_STEER_METHOD, params),
     stopAsyncTask: (params: AcpAsyncTaskStopRequest): Promise<AcpAsyncTaskStopResponse> =>
       call.request<AcpAsyncTaskStopResponse, AcpAsyncTaskStopRequest>(ACP_ASYNC_TASK_STOP_METHOD, params),
+    contextUsage: (params: AcpContextUsageRequest): Promise<unknown> =>
+      call.request<unknown, AcpContextUsageRequest>(ACP_CONTEXT_USAGE_METHOD, params),
     bindSession,
     observeSession,
     aliasSession,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { MessageTelemetry, SessionTelemetry, SessionTelemetryChange, TokenTally } from '../../../shared/sessionTelemetry'
+import type { ContextCategories, MessageTelemetry, SessionTelemetry, SessionTelemetryChange, TokenTally } from '../../../shared/sessionTelemetry'
 import { applyTelemetryChange } from './sessionTelemetryReducer'
 
 const tally = (input: number, output: number, cacheRead = 0, cacheWrite = 0): TokenTally => ({ input, output, cacheRead, cacheWrite })
@@ -283,5 +283,70 @@ describe('the raw stream in the session telemetry', () => {
       { ...turn({ model: 'gpt-5.5', tokens: tally(1_000, 10), tokenScope: 'last_request', costUsd: 0.0053, costSource: 'estimated' }), engine: 'codex' }
     ])
     expect(state.totals).toMatchObject({ costUsd: 0.0053, costSource: 'estimated' })
+  })
+})
+
+describe('context categories and running totals in the session telemetry', () => {
+  const categories = (total: number): ContextCategories => ({
+    categories: [{ name: 'System prompt', tokens: 3_000 }, { name: 'Messages', tokens: total - 3_000 }],
+    totalTokens: total, maxTokens: 200_000, rawMaxTokens: 200_000, percentage: total / 2_000, model: 'claude-sonnet-5',
+    memoryFiles: [{ path: '/home/me/project/CLAUDE.md', type: 'Project', tokens: 100 }],
+    mcpTools: [], agents: [], systemTools: [], systemPromptSections: []
+  })
+  const measured = (total: number, at = 50, sessionId = 's1'): SessionTelemetryChange =>
+    ({ type: 'context_categories', engine: 'claude', sessionId, categories: categories(total), at })
+  const request = (input: number): SessionTelemetryChange =>
+    ({ type: 'request', engine: 'claude', sessionId: 's1', input, cacheWrite5m: 0, cacheWrite1h: 0, at: 2 })
+
+  it('keeps a measurement dated and tied to its session, beside the coarse split, and replaces it with the next', () => {
+    const state = fold([
+      { type: 'session', engine: 'claude', sessionId: 's1', fresh: true, fingerprint: 'f', at: 1 },
+      request(12_000), context(14_000, 200_000, true), measured(14_000, 50), measured(15_000, 60)
+    ])
+    expect(state.context.breakdown).toEqual({ baseline: 12_000, conversation: 2_000 })
+    expect(state.context.categories).toEqual(categories(15_000))
+    expect(state.context.categoriesMeasuredAt).toBe(60)
+    expect(state.context.categoriesSessionId).toBe('s1')
+    // A later reading of the same session leaves it standing.
+    expect(fold([measured(14_000), context(16_000, 200_000)]).context.categories).toEqual(categories(14_000))
+  })
+
+  it.each([
+    ['a new session', { type: 'session', engine: 'claude', sessionId: 's1', fresh: true, fingerprint: 'f', at: 70 }],
+    ['a compaction', { type: 'compaction', engine: 'claude', sessionId: 's1', at: 70 }],
+    ['a reading from another session', { type: 'context', engine: 'claude', sessionId: 's2', used: 10, costed: false, at: 70 }]
+  ] as [string, SessionTelemetryChange][])('drops the measurement on %s', (_label, reset) => {
+    const state = fold([measured(14_000), reset])
+    expect(state.context.categories).toBeUndefined()
+    expect(state.context.categoriesMeasuredAt).toBeUndefined()
+    expect(state.context.categoriesSessionId).toBeUndefined()
+  })
+
+  it('ignores a measurement of another session than the context’s, and takes one before any reading', () => {
+    const state = fold([context(16_000, 200_000), measured(14_000, 50, 's_old')])
+    expect(state.context.sessionId).toBe('s1')
+    expect(state.context.categories).toBeUndefined()
+    expect(fold([measured(14_000, 50, 's_first')]).context.categoriesSessionId).toBe('s_first')
+  })
+
+  it('keeps the measurement through a model switch and a reload under other params, which reset no baseline', () => {
+    const state = fold([
+      { type: 'model', engine: 'claude', selected: 'sonnet' },
+      { type: 'session', engine: 'claude', sessionId: 's1', fresh: false, fingerprint: 'a', at: 1 },
+      measured(14_000),
+      { type: 'model', engine: 'claude', selected: 'opus' },
+      { type: 'session', engine: 'claude', sessionId: 's1', fresh: false, fingerprint: 'b', at: 80 }
+    ])
+    expect(state.context.categories).toEqual(categories(14_000))
+  })
+
+  it('keeps the session’s last running token total, without adding it to the totals', () => {
+    const state = fold([
+      { ...turn({ model: 'gpt-5.5', tokens: tally(50, 5, 900) }, { tokenTotalReading: tally(150, 25, 2_900) }), engine: 'codex' },
+      { ...turn({ model: 'gpt-5.5', tokens: tally(10, 5, 1_000) }, { tokenTotalReading: tally(160, 30, 3_900) }), engine: 'codex' }
+    ])
+    expect(state.totals.bySession.s1.lastTokenTotal).toEqual(tally(160, 30, 3_900))
+    expect(state.totals.tokens).toEqual(tally(60, 10, 1_900))
+    expect(state.totals.tokenScope).toBe('turn')
   })
 })

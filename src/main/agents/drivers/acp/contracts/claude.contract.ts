@@ -145,6 +145,13 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     feature: 'A follow-up turn the engine starts on its own never ends until the ceiling, leaving the chat "working".',
     flow: { steps: ['none'], note: 'no step starts a background task' }
   },
+  {
+    id: 'claude.session.context-usage', area: 'session lifecycle', surface: 'adapter patch', name: '_cinna/contextUsage',
+    expectation: 'With the patched adapter, after a session’s first answered prompt, `_cinna/contextUsage {sessionId}` answers the context by category (`categories`, `totalTokens`, `maxTokens`, `model`, memory files, MCP tools…) without the SDK’s `gridRows`, and refuses an unknown session as invalid params. Measuring makes the CLI call the provider’s `POST /v1/messages/count_tokens` — no Messages request.',
+    owners: ['scripts/patch-claude-agent-acp.cjs#patchClaudeAgentAcp', `${DRIVER}#measureContext`, 'src/main/agents/drivers/acp/acpTelemetry.ts#readContextCategories'],
+    feature: 'The session telemetry cannot split a Claude chat’s context by category; only the coarse baseline-and-conversation split remains.',
+    flow: { steps: ['none'], note: 'asked on demand by the telemetry popover, which no step opens' }
+  },
   /* -------------------------------------------------------------- tools & MCP */
   {
     id: 'claude.mcp.session-injection', area: 'tools & MCP', surface: 'ACP field', name: 'session/new.mcpServers (http)',

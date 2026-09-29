@@ -7,7 +7,8 @@ import { ipcHandle } from './_wrap'
 import {
   SESSION_TELEMETRY_CHANGED_CHANNEL,
   type SessionTelemetryChangedPayload,
-  type SessionTelemetryGetResult
+  type SessionTelemetryGetResult,
+  type SessionTelemetryMeasureResult
 } from '../../shared/sessionTelemetry'
 
 export function registerSessionTelemetryHandlers(): void {
@@ -28,5 +29,16 @@ export function registerSessionTelemetryHandlers(): void {
     const chat = visibleChat(getProfileScopeUserId(), chatId)
     if (!chat || chat.deletedAt) return { ok: false, code: 'chat_not_found' }
     return { ok: true, telemetry: sessionTelemetryService.get(chatId) }
+  })
+
+  // On demand, between turns (the popover asks). The measurement itself
+  // arrives through the push above; this answers only whether it was taken,
+  // as data — a thrown code does not survive the trip to the renderer.
+  ipcHandle('sessionTelemetry:measureContext', async (_event, chatId: unknown): Promise<SessionTelemetryMeasureResult> => {
+    userActivation.requireActivated()
+    if (typeof chatId !== 'string') return { ok: false, code: 'chat_not_found' }
+    const chat = visibleChat(getProfileScopeUserId(), chatId)
+    if (!chat || chat.deletedAt) return { ok: false, code: 'chat_not_found' }
+    return sessionTelemetryService.measureContext(chatId)
   })
 }

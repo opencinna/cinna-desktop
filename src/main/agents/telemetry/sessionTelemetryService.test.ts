@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { SessionTelemetry } from '../../../shared/sessionTelemetry'
+import type { ContextCategories, ContextMeasurement, SessionTelemetry } from '../../../shared/sessionTelemetry'
 
 vi.mock('../../db/sessionTelemetry', () => ({ sessionTelemetryRepo: { get: () => null, save: () => {}, delete: () => {} } }))
 vi.mock('../../db/chats', () => ({ chatRepo: { isTrashed: () => false } }))
@@ -110,5 +110,70 @@ describe('the session telemetry service', () => {
     service.forget('gone')
     expect(store.delete).toHaveBeenCalledWith('gone')
     expect(service.get('gone')).toBeNull()
+  })
+})
+
+describe('measuring a chat’s context on demand', () => {
+  const categories: ContextCategories = {
+    categories: [{ name: 'System prompt', tokens: 3_000 }], totalTokens: 3_000, maxTokens: 200_000, rawMaxTokens: 200_000,
+    percentage: 1.5, model: 'claude-sonnet-5', memoryFiles: [], mcpTools: [], agents: [], systemTools: [], systemPromptSections: []
+  }
+
+  it('reports a measurement as a change listeners hear, and answers only ok', async () => {
+    const store = memoryStore()
+    const service = createSessionTelemetryService({ store, now: () => 77 })
+    const heard: SessionTelemetry[] = []
+    service.onChange((_chatId, telemetry) => heard.push(telemetry))
+    service.installContextMeasurer(async () => ({ ok: true, engine: 'claude', sessionId: 's1', categories }))
+    await expect(service.measureContext('chat')).resolves.toEqual({ ok: true })
+    expect(heard).toHaveLength(1)
+    expect(heard[0].context).toMatchObject({ categories, categoriesMeasuredAt: 77, categoriesSessionId: 's1' })
+    expect(store.rows.get('chat')?.context.categories).toEqual(categories)
+  })
+
+  it('passes a refusal on as its code and changes nothing', async () => {
+    const service = createSessionTelemetryService({ store: memoryStore() })
+    const heard = vi.fn()
+    service.onChange(heard)
+    service.installContextMeasurer(async () => ({ ok: false, code: 'not_ready' }))
+    await expect(service.measureContext('chat')).resolves.toEqual({ ok: false, code: 'not_ready' })
+    expect(heard).not.toHaveBeenCalled()
+    expect(service.get('chat')).toBeNull()
+  })
+
+  it('answers unsupported with no measurer installed, and failed when the measurer throws', async () => {
+    const service = createSessionTelemetryService({ store: memoryStore() })
+    await expect(service.measureContext('chat')).resolves.toEqual({ ok: false, code: 'unsupported' })
+    service.installContextMeasurer(async () => { throw new Error('boom') })
+    await expect(service.measureContext('chat')).resolves.toEqual({ ok: false, code: 'failed' })
+  })
+
+  it('shares one measurement between two asks for the same chat', async () => {
+    const service = createSessionTelemetryService({ store: memoryStore() })
+    let release!: () => void
+    const measurer = vi.fn(() => new Promise<ContextMeasurement>((resolve) => {
+      release = () => resolve({ ok: true, engine: 'claude', sessionId: 's1', categories })
+    }))
+    service.installContextMeasurer(measurer)
+    const first = service.measureContext('chat')
+    const second = service.measureContext('chat')
+    release()
+    await expect(Promise.all([first, second])).resolves.toEqual([{ ok: true }, { ok: true }])
+    expect(measurer).toHaveBeenCalledTimes(1)
+    // Once settled, the next ask measures again.
+    const third = service.measureContext('chat')
+    release()
+    await third
+    expect(measurer).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads back a session’s last running token total, as a copy', () => {
+    const service = createSessionTelemetryService({ store: memoryStore() })
+    service.report('chat', { ...turn, engine: 'codex', tokenTotalReading: { input: 10, output: 2, cacheRead: 30, cacheWrite: 0 } })
+    const reading = service.lastTokenTotal('chat', 's1')!
+    expect(reading).toEqual({ input: 10, output: 2, cacheRead: 30, cacheWrite: 0 })
+    reading.input = 0
+    expect(service.lastTokenTotal('chat', 's1')?.input).toBe(10)
+    expect(service.lastTokenTotal('chat', 's2')).toBeUndefined()
   })
 })

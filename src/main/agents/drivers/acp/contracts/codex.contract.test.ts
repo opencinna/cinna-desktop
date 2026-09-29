@@ -11,6 +11,7 @@ import { cinnaToolName } from '../conductorToolPolicy'
 import { isPromptPlaceholder } from '../acpSessionTitle'
 import { parseCodexAuthStatus } from '../codexAuth'
 import { airClientMeta } from '../acpActivity'
+import { readQuotaTotal } from '../acpTelemetry'
 import type { AcpLaunchPlan } from '../acpLaunchers'
 import { CODEX_CONTRACT } from './codex.contract'
 import { lineDiff, sorted } from './snapshotTools'
@@ -101,6 +102,13 @@ const seen = {
   sessionNew: null as AdapterMessage | null,
   setModes: {} as Record<string, boolean>,
   firstTurn: null as ProviderTurn | null,
+  /** The folder session's first prompt answer, and the one after the model change: their `_meta.quota`. */
+  quotas: [] as Json[],
+  /**
+   * The same session resumed on a fresh adapter process after its turns: the
+   * `_meta.quota` of the last answer before the restart and of the first after.
+   */
+  resumed: { loaded: false, before: null as Json | null, after: null as Json | null },
   permission: null as AdapterMessage | null,
   permissionCount: 0, mcpCalls: 0,
   toolCall: null as Json | null,
@@ -195,7 +203,8 @@ async function folderScenario(binary: string): Promise<void> {
     const prompt = (text: string, timeoutMs?: number): Promise<AdapterMessage> =>
       connection!.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text }] }, timeoutMs)
 
-    await prompt(FIRST_PROMPT)
+    const firstAnswer = await prompt(FIRST_PROMPT)
+    seen.quotas.push(((firstAnswer.result?._meta as Json | undefined)?.quota ?? {}) as Json)
     // The title request runs beside the turn, not inside it: give it a moment to land.
     await until(() => provider!.turns.some((turn) => turn.kind === 'title'), 5_000)
     // And the title it produced is reported after that, often after the turn.
@@ -225,7 +234,8 @@ async function folderScenario(binary: string): Promise<void> {
 
     await connection.rpc('session/set_config_option', { sessionId, configId: 'model', value: NEXT_MODEL })
     const changedAt = provider.turns.length
-    await prompt(NEXT_MODEL_PROMPT)
+    const nextAnswer = await prompt(NEXT_MODEL_PROMPT)
+    seen.quotas.push(((nextAnswer.result?._meta as Json | undefined)?.quota ?? {}) as Json)
     await sleep(1500)
     seen.afterModelChange = provider.turns.slice(changedAt)
     seen.folderTurns = [...provider.turns]
@@ -236,6 +246,26 @@ async function folderScenario(binary: string): Promise<void> {
     seen.rateLimit = await prompt('This request is rate limited.')
     await sleep(300)
     seen.rateLimitUpdates = connection.updates.slice(updatesBefore)
+
+    // After everything: the process goes, and the same session is resumed on a
+    // fresh one the way the driver resumes a chat after a restart.
+    mode = 'text'
+    seen.resumed.before = seen.quotas[1] ?? null
+    await connection.close()
+    connection = spawnAdapter({
+      adapterPath: adapter, cwd: scratch.cwd, answer: allowOnce,
+      env: { ...scratch.env, CODEX_PATH: binary, INITIAL_AGENT_MODE: 'read-only', MODEL_PROVIDER: 'probe',
+        CODEX_CONFIG: JSON.stringify({ model: MODEL, model_provider: 'probe', developer_instructions: FOLDER_MARKER, model_reasoning_effort: 'high' }) }
+    })
+    await connection.rpc('initialize', { protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} }, _meta: airClientMeta(['asyncTasks']) }, clientInfo: { name: 'cinna-desktop', version: '1' } })
+    const reloaded = await connection.rpc('session/load', { sessionId, cwd: scratch.cwd, mcpServers: [] })
+    seen.resumed.loaded = !reloaded.error
+    if (seen.resumed.loaded) {
+      await connection.rpc('session/set_config_option', { sessionId, configId: 'model', value: NEXT_MODEL })
+      const resumedAnswer = await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Answer OK after the restart.' }] })
+      seen.resumed.after = ((resumedAnswer.result?._meta as Json | undefined)?.quota ?? null) as Json | null
+    }
   } finally {
     await connection?.close()
     await provider?.close()
@@ -531,6 +561,35 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     expect(conversation.length).toBeGreaterThan(0)
     expect(conversation.every((turn) => turn.systemText.includes(POLICY_MARKER))).toBe(true)
     expect(conversation.some((turn) => turn.userText.includes(POLICY_MARKER))).toBe(false)
+  })
+
+  it(entry('codex.session.quota-running-total'), () => {
+    expect(seen.quotas).toHaveLength(2)
+    // Both fields read with the owner's own reader (`token_count` has the same shape).
+    const tally = (value: unknown) => readQuotaTotal({ _meta: { quota: { total_token_count: value } } })
+    const [first, next] = seen.quotas.map((quota) => ({ last: tally(quota.token_count), total: tally(quota.total_token_count) }))
+    expect(first.total, JSON.stringify(seen.quotas[0])).not.toBeNull()
+    expect(next.total, JSON.stringify(seen.quotas[1])).not.toBeNull()
+    // The same shape as `token_count`, and never below it.
+    expect(Object.keys(seen.quotas[0].total_token_count as Json).sort()).toEqual(Object.keys(seen.quotas[0].token_count as Json).sort())
+    const sum = (t: { input: number; output: number; cacheRead: number }): number => t.input + t.output + t.cacheRead
+    expect(sum(first.total!)).toBeGreaterThanOrEqual(sum(first.last!))
+    // A running total: the later turn's is the earlier one's plus at least its own last request.
+    expect(sum(next.total!)).toBeGreaterThanOrEqual(sum(first.total!) + sum(next.last!))
+  })
+
+  it(entry('codex.session.quota-total-on-resume'), () => {
+    expect(seen.resumed.loaded).toBe(true)
+    const tally = (value: unknown) => readQuotaTotal({ _meta: { quota: { total_token_count: value } } })
+    const before = tally(seen.resumed.before?.total_token_count)
+    const after = tally(seen.resumed.after?.total_token_count)
+    const last = tally(seen.resumed.after?.token_count)
+    expect(before, JSON.stringify(seen.resumed)).not.toBeNull()
+    expect(after, JSON.stringify(seen.resumed)).not.toBeNull()
+    const sum = (t: { input: number; output: number; cacheRead: number }): number => t.input + t.output + t.cacheRead
+    // Restored, not started over: the pre-restart total plus this turn's request.
+    // (Started over, it would equal this turn's last request alone.)
+    expect(sum(after!)).toBeGreaterThanOrEqual(sum(before!) + sum(last!))
   })
 
   it(entry('codex.session.info-title'), () => {

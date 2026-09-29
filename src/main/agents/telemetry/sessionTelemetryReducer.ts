@@ -14,6 +14,10 @@
  *   from the main session's readings.
  * - A turn whose tokens cover only its last request (`codex-acp`) marks the
  *   totals `last_request`: they are a lower bound from then on.
+ * - A `context_categories` measurement (Claude, on demand) is kept, dated and
+ *   tied to its session, beside the coarse `breakdown`; a new session and a
+ *   compaction drop it with the baseline — for every engine, not only those
+ *   with a known cache TTL.
  * - A costed `context` reading records the session's running cost total
  *   (`bySession[id].lastCostReading`); the driver measures the next reading
  *   against it after a restart. It is a reading, not an addition. So are a
@@ -78,12 +82,24 @@ export const CACHE_TTL_1H_MS = 60 * 60_000
  * other params the conversation is the same one, so its split stands.
  */
 function invalidate(next: SessionTelemetry, reason: CacheInvalidationReason, at: number): void {
+  const resetsContext = reason === 'new_session' || reason === 'compaction'
+  // A measurement by category describes a context that no longer exists.
+  if (resetsContext) next.context = withoutCategories(next.context)
   if (!CACHE_TTL_KNOWN[next.engine]) return
   next.cache = { ...next.cache, invalidatedAt: at, invalidationReason: reason }
-  if (reason !== 'new_session' && reason !== 'compaction') return
+  if (!resetsContext) return
   const context = { ...next.context, awaitingBaseline: true }
   delete context.breakdown
   next.context = context
+}
+
+function withoutCategories(context: SessionTelemetry['context']): SessionTelemetry['context'] {
+  if (context.categories === undefined && context.categoriesMeasuredAt === undefined && context.categoriesSessionId === undefined) return context
+  const rest = { ...context }
+  delete rest.categories
+  delete rest.categoriesMeasuredAt
+  delete rest.categoriesSessionId
+  return rest
 }
 
 function sessionTotals(state: SessionTelemetry, sessionId: string): SessionTelemetrySessionTotals {
@@ -146,6 +162,10 @@ export function applyTelemetryChange(
       }
       if (model !== undefined) next.context.model = model
       else delete next.context.model
+      // Categories measured on another session say nothing about this one.
+      if (next.context.categoriesSessionId !== undefined && next.context.categoriesSessionId !== change.sessionId) {
+        next.context = withoutCategories(next.context)
+      }
       if (base.context.breakdown) {
         next.context.breakdown = { baseline: base.context.breakdown.baseline, conversation: Math.max(0, used - base.context.breakdown.baseline) }
       }
@@ -206,6 +226,16 @@ export function applyTelemetryChange(
     case 'compaction':
       invalidate(next, 'compaction', change.at)
       return next
+    case 'context_categories':
+      // A measurement of a session the context has since moved off is stale.
+      if (base.context.sessionId !== undefined && base.context.sessionId !== change.sessionId) return next
+      next.context = {
+        ...base.context,
+        categories: structuredClone(change.categories),
+        categoriesMeasuredAt: change.at,
+        categoriesSessionId: change.sessionId
+      }
+      return next
     case 'session': {
       const prior = base.totals.bySession[change.sessionId]?.fingerprint
       if (change.fresh) invalidate(next, 'new_session', change.at)
@@ -247,7 +277,8 @@ export function applyTelemetryChange(
             tokens: add(priorSession.tokens, message.tokens),
             ...(sessionCost !== undefined ? { costUsd: sessionCost } : {}),
             turns: priorSession.turns + 1,
-            ...(change.modelCostReadings ? { modelCostReadings: { ...(priorSession.modelCostReadings ?? {}), ...change.modelCostReadings } } : {})
+            ...(change.modelCostReadings ? { modelCostReadings: { ...(priorSession.modelCostReadings ?? {}), ...change.modelCostReadings } } : {}),
+            ...(change.tokenTotalReading ? { lastTokenTotal: { ...change.tokenTotalReading } } : {})
           }
         }
       }

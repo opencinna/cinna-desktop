@@ -2446,6 +2446,117 @@ describe('session telemetry', () => {
     expect((await opencode.run()).telemetry).toBeUndefined()
     expect(changes).toEqual([])
   })
+
+  it('counts a Codex turn as the growth of the session’s running total, and falls back to the persisted total', async () => {
+    const CODEX_ANSWER = { stopReason: 'end_turn', usage: { inputTokens: 5, cachedReadTokens: 100, outputTokens: 2, totalTokens: 107 },
+      _meta: { quota: { token_count: q(5, 100, 0, 2), total_token_count: q(40, 900, 0, 12), model_usage: [{ model: 'gpt-5.5', token_count: q(5, 100, 0, 2) }] } } }
+    const w = world({ launcher: 'codex', script: { prompt: { response: CODEX_ANSWER } } })
+    const first = await w.run()
+    expect(first.telemetry).toMatchObject({ tokens: { input: 40, output: 12, cacheRead: 900, cacheWrite: 0 }, tokenScope: 'turn' })
+    // The same total again: this turn added nothing.
+    const second = await w.run()
+    expect(second.telemetry).toMatchObject({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, tokenScope: 'turn' })
+
+    // Another process, and a total persisted from before it.
+    const persisted = { report: () => {}, lastTokenTotal: (_chatId: string, sessionId: string) => sessionId === 'ses_fake' ? { input: 30, output: 10, cacheRead: 600, cacheWrite: 0 } : undefined }
+    const restarted = world({ launcher: 'codex', remembered: 'ses_fake', deps: { telemetry: persisted }, script: { prompt: { response: CODEX_ANSWER } } })
+    expect((await restarted.run()).telemetry).toMatchObject({ tokens: { input: 10, output: 2, cacheRead: 300, cacheWrite: 0 }, tokenScope: 'turn' })
+
+    // Another process, and nothing persisted (a chat from before the total was
+    // kept): the restored total is the whole history, so the last request stands.
+    const upgraded = world({ launcher: 'codex', remembered: 'ses_fake', deps: { telemetry: { report: () => {}, lastTokenTotal: () => undefined } }, script: { prompt: { response: CODEX_ANSWER } } })
+    expect((await upgraded.run()).telemetry).toMatchObject({ tokens: { input: 5, output: 2, cacheRead: 100, cacheWrite: 0 }, tokenScope: 'last_request' })
+  })
+})
+
+describe('measuring a chat’s context between turns', () => {
+  const MEASURED = {
+    categories: [{ name: 'System prompt', tokens: 3_100 }, { name: 'Messages', tokens: 900 }],
+    totalTokens: 4_000, maxTokens: 200_000, rawMaxTokens: 200_000, percentage: 2, model: 'claude-sonnet-5',
+    memoryFiles: [{ path: '/home/someone/CLAUDE.md', type: 'User', tokens: 40 }],
+    mcpTools: [], agents: [], systemTools: [], systemPromptSections: []
+  }
+  const measure = (w: World, chatId = CHAT_ID) => (w.driver as AcpDriver).measureContext(chatId)
+  const asked = (w: World) => w.fake.received('_cinna/contextUsage')
+
+  it('asks the live session its last turn answered on, and answers the measurement read', async () => {
+    const w = world({ launcher: 'claude', script: { prompt: SAYS_HELLO.prompt, contextUsage: { response: MEASURED } } })
+    await w.run()
+    await expect(measure(w)).resolves.toEqual({ ok: true, engine: 'claude', sessionId: 'ses_fake', categories: MEASURED })
+    expect(asked(w).map((entry) => entry.params)).toEqual([{ sessionId: 'ses_fake' }])
+  })
+
+  it('refuses without asking: no turn yet, another engine, a chat the agent was taken off, or the process gone', async () => {
+    const claude = world({ launcher: 'claude', script: { prompt: SAYS_HELLO.prompt } })
+    await expect(measure(claude)).resolves.toEqual({ ok: false, code: 'not_running' })
+    const codex = world({ launcher: 'codex', script: { prompt: SAYS_HELLO.prompt } })
+    await codex.run()
+    await expect(measure(codex)).resolves.toEqual({ ok: false, code: 'unsupported' })
+    expect(asked(codex)).toEqual([])
+
+    await claude.run()
+    ;(claude.driver as AcpDriver).forgetChatSessions(CHAT_ID)
+    await expect(measure(claude)).resolves.toEqual({ ok: false, code: 'not_running' })
+
+    const retired = world({ launcher: 'claude', script: { prompt: SAYS_HELLO.prompt } })
+    await retired.run()
+    retired.pool.retire(AGENT_ID)
+    await waitFor(() => retired.pool.status(AGENT_ID).state !== 'running', 'the process to stop')
+    await expect(measure(retired)).resolves.toEqual({ ok: false, code: 'not_running' })
+    expect(asked(claude)).toEqual([])
+    expect(asked(retired)).toEqual([])
+  })
+
+  it('refuses a chat whose session no prompt has answered on this connection', async () => {
+    const w = world({ launcher: 'claude', script: { prompt: SAYS_HELLO.prompt } })
+    await w.run()
+    // The chat now names another session (a later turn created one and failed before its answer).
+    w.sessions.set(CHAT_ID, 'ses_elsewhere')
+    await expect(measure(w)).resolves.toEqual({ ok: false, code: 'not_ready' })
+    expect(asked(w)).toEqual([])
+  })
+
+  it('refuses while a turn runs in the chat, and passes on the adapter’s own busy refusal', async () => {
+    const controller = new AbortController()
+    const w = world({ launcher: 'claude', script: {
+      prompt: { emit: [{ kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Wor' } } }, { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' } },
+      contextUsage: { error: { code: -32603, message: 'Internal error: busy: a turn is in progress on this session', data: { reason: 'busy' } } }
+    } })
+    const first = w.run({ signal: controller.signal })
+    await waitFor(() => w.events.some((event) => event.type === 'delta'), 'the first delta')
+    await expect(measure(w)).resolves.toEqual({ ok: false, code: 'busy' })
+    expect(asked(w)).toEqual([])
+    controller.abort()
+    await first
+    // Between turns by this app's count; the adapter still has one running (a background task, say).
+    await expect(measure(w)).resolves.toEqual({ ok: false, code: 'busy' })
+    expect(asked(w)).toHaveLength(1)
+  })
+
+  it('reads the adapter’s refusal of a session whose query ended as not running', async () => {
+    const w = world({ launcher: 'claude', script: { prompt: SAYS_HELLO.prompt, contextUsage: { error: { code: -32603, message: 'Internal error: closed: this session\'s query has ended', data: { reason: 'closed' } } } } })
+    await w.run()
+    await expect(measure(w)).resolves.toEqual({ ok: false, code: 'not_running' })
+  })
+
+  it('discards an answer that arrives after a turn started in the chat, as busy', async () => {
+    const w = world({ launcher: 'claude', script: { prompt: SAYS_HELLO.prompt, contextUsage: { response: MEASURED, delayMs: 400 } } })
+    await w.run()
+    const measuring = measure(w)
+    await waitFor(() => asked(w).length === 1, 'the measurement to be asked')
+    // A whole turn runs and ends while the request is out: the answer describes the context before it.
+    await w.run()
+    await expect(measuring).resolves.toEqual({ ok: false, code: 'busy' })
+  })
+
+  it('gives up on a runtime that takes too long or answers nonsense, as failed', async () => {
+    const slow = world({ launcher: 'claude', deps: { contextUsageTimeoutMs: 100 }, script: { prompt: SAYS_HELLO.prompt, contextUsage: { hang: true } } })
+    await slow.run()
+    await expect(measure(slow)).resolves.toEqual({ ok: false, code: 'failed' })
+    const odd = world({ launcher: 'claude', script: { prompt: SAYS_HELLO.prompt, contextUsage: { response: { totalTokens: 'lots' } } } })
+    await odd.run()
+    await expect(measure(odd)).resolves.toEqual({ ok: false, code: 'failed' })
+  })
 })
 
 describe('a stop', () => {
