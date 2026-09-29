@@ -299,6 +299,11 @@ Contract](contracts/claude_interface.md).
   the CLI sends through its HTTP stack, not a firewall
 - **`permissionMode` in the session options is still ignored**, and `session/set_mode` is still the
   only mechanism — the finding above, now held by a test rather than by a probe transcript
+- **Measuring the context by category is a provider request.** The reviewed adapter patch's
+  `_cinna/contextUsage`, asked after the session's first answered prompt, made the CLI send
+  `POST /v1/messages/count_tokens` and no Messages request. Cheap, but never free and never
+  offline — which is why [session telemetry](../session_telemetry/session_telemetry.md) measures
+  only when asked
 
 Entries that need a real login — the login following `HOME`, a subscription limit, the background
 updater — are tagged `live` in the registry: their tests are skipped, never faked, and the generated
@@ -404,6 +409,7 @@ The Claude half has the same: the [Claude Code Interface Contract](contracts/cla
 - **A provider 429 is not an error.** `session/prompt` ends `end_turn` with no error, no `errorKind` and no AIR session failure; the limit shows only as `_meta.codex.threadStatus.type: "systemError"` and as assistant text naming the 429. **This is a known gap, not a design**: the driver pauses a rate-limited chat on `error.data.errorKind === "rate_limit"`, which is the Claude adapter's shape and one Codex never sends, so on Codex a rate limit reads as a finished turn
 - **The CLI sends provider requests nobody scripted.** A thread-title request once per session beside its first turn — on `gpt-5.6-luna` whatever model the session uses, strict `json_schema` output, carrying the user's first message verbatim but not Cinna's session instructions — and one compaction request after a model change, on the model being *left*, with no tools. A thread still untitled after `session/load` is asked for again on its next turn. No other request is made, and neither is offered a tool a restricted session is not allowed; that last clause is what keeps the no-native-tools guarantee from being broken through a request Cinna never wrote
 - **`session/load` keeps the collaboration mode the session was left in**, which is why setup is re-applied after every load rather than only after `session/new`
+- **The session's running token total survives a restart.** With the reviewed patch exposing it as `_meta.quota.total_token_count`, a session loaded into a fresh adapter process answered its first prompt with the pre-restart total plus that turn — not a count started over. [Session telemetry](../session_telemetry/session_telemetry.md) therefore measures that turn against the total the chat saved, and a chat with none saved keeps the turn's last request rather than charging it the whole history
 
 The [Codex technical reference](codex_engine_tech.md) owns the exact configuration, diagnostics and test inventory. Native CLI sandbox behavior, real reviewer decisions and login/provider variants remain separate live validation work, and the contract's provider is a fake — it establishes what the CLI sends and accepts, not what a paid model does; the original OpenCode/Claude measurements above are not claims about Codex.
 

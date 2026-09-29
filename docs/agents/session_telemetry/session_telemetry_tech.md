@@ -4,56 +4,70 @@ Implementation reference for [Session Telemetry](session_telemetry.md). The turn
 
 ## Read this first
 
-1. **One reducer, pure.** `applyTelemetryChange(state, chatId, change, now)` is the only place state moves. No clock, no I/O. Every counting rule in the business doc is in it and pinned by `sessionTelemetryReducer.test.ts`
-2. **Totals move only on a `turn` change**, and a `TurnTelemetry` emits exactly one (`settle` is idempotent: the first call reports, later ones answer the same value). `finish` settles, and `runFollowUp` settles before calling `finish` with a null session id, so the follow-up's own session is the one reported
-3. **Drivers report; they read back one thing.** `SessionTelemetryReporter.lastCostReading(chatId, sessionId)` exists because the CLI restores its running cost total on resume and the driver must measure the next reading against it. Drop it and the first turn after a restart is charged the whole session
-4. **No account identity crosses into the shared module.** `readAuthStatus` reads `authStatus.kind`, `authStatus.label` and `authStatus.account.plan`, and `scrubbed()` runs over both strings. Nothing logs the notification body
-5. **Replay is dropped by the caller, not here.** `runTurn`'s handlers ignore frames while `turn.replaying`; `TurnTelemetry` trusts what reaches it
+1. **One reducer, pure.** `applyTelemetryChange(state, chatId, change, now)` is the only place state moves. No clock, no I/O. Every counting, cache and context rule in the business doc is in it and pinned by `sessionTelemetryReducer.test.ts`
+2. **Totals move only on a `turn` change**, and a `TurnTelemetry` emits exactly one (`settle` is idempotent: the first call reports, later ones answer the same value). `finish` settles, and `runFollowUp` settles before calling `finish` with a null session id, so the follow-up's own session is the one reported. `runtime`, `request`, `compaction`, `session`, `context` and `context_categories` changes never add
+3. **Every running total is a delta against a reading, and the readings survive a restart.** Claude's cost, its per-model cost and Codex's token total are kept per session in `bySession` and read back through the reporter (`lastCostReading`, `lastModelCostReadings`, `lastTokenTotal`). Drop one and the first turn after a restart is charged the whole session. API time is the exception: in memory only, so unknown on a new process
+4. **Raw frames are reduced at the door.** `readSdkMessage` turns a `_claude/sdkMessage` into an `AcpSdkFrame` of numbers and ids; nothing downstream sees the message. Nothing logs a frame; the per-turn traffic line logs counts, and byte sizes only under `CINNA_LOG_DEBUG=1`
+5. **No account identity crosses into the shared module.** `readAuthStatus` reads `authStatus.kind`, `authStatus.label` and `authStatus.account.plan`, and `scrubbed()` runs over both strings. Nothing logs the notification body
+6. **Replay is dropped by the caller, not here.** `runTurn`'s handlers ignore frames while `turn.replaying`; `TurnTelemetry` trusts what reaches it
+7. **Derived values are pure functions of the state and `now`** (`sessionTelemetryDerived.ts`), shared so main and renderer answer the same, and never stored
 
 ## File Locations
 
 ### Shared
-- `src/shared/sessionTelemetry.ts` — `SessionTelemetry`, `MessageTelemetry`, `TokenTally`, `TokenScope`, `AuthKind`, `TelemetryEngine`, `SessionTelemetrySessionTotals` (with `lastCostReading`), the change union (`SessionTelemetryAuthChange`, `…ContextChange`, `…TurnChange`, `…ModelChange`), `SessionTelemetryReporter`, `SESSION_TELEMETRY_CHANGED_CHANNEL` (`session-telemetry:changed`), `SessionTelemetryChangedPayload`, `SessionTelemetryGetResult`, `EMPTY_TOKEN_TALLY`
+- `src/shared/sessionTelemetry.ts` — `SessionTelemetry` (with `context.breakdown` / `awaitingBaseline` / `categories` / `categoriesMeasuredAt` / `categoriesSessionId` / `maxOutput`, `totals.lastTurn`, `cache.invalidatedAt` / `invalidationReason`, `runtime`), `MessageTelemetry` (`requests`, `apiDurationMs`, `costSource`), `TokenTally`, `TokenScope`, `AuthKind`, `TelemetryEngine`, `CACHE_TTL_KNOWN` (Claude true, Codex false), `SessionTelemetrySessionTotals` (`lastCostReading`, `modelCostReadings`, `lastTokenTotal`, `fingerprint`), `CacheInvalidationReason`, `ContextBreakdown`, `ContextCategory`, `ContextCategories`, the change union (`…AuthChange`, `…ContextChange`, `…TurnChange`, `…ModelChange`, `…RuntimeChange`, `…RequestChange`, `…CompactionChange`, `…SessionChange`, `…ContextCategoriesChange`), `SessionTelemetryReporter`, `ContextMeasureCode`, `ContextMeasurement`, `SessionContextMeasurer`, `SessionTelemetryMeasureResult`, `SESSION_TELEMETRY_CHANGED_CHANNEL` (`session-telemetry:changed`), `SessionTelemetryChangedPayload`, `SessionTelemetryGetResult`, `EMPTY_TOKEN_TALLY`
+- `src/shared/modelPricing.ts` — `PRICES_CHECKED_AT`, `MODEL_PRICES` (per MTok: `input`, `output`, `cacheWrite5m`, `cacheWrite1h`, `cacheRead`, optional `longContext`, `unpricedAboveInputTokens`, `fast`), `canonicalPricingModel`, `priceOf`, `effectivePrices(price, {fast?, contextTokens?})`, `costOf(model, tokens, {ttl?, fast?, contextTokens?})`. Undefined, never a guess, for an unknown model or an unpriceable tier
+- `src/shared/sessionTelemetryDerived.ts` — `cacheState(t, now)` → `{state: warm|cold|unknown, flipsAt?}`, `currentPrices(t)`, `nextMessageEstimate(t, now)` → `{warmUsd?, coldUsd?, flipsAt?, basis: api|api_equivalent, note}`, `cacheHitRatio(t)` → `{session?, lastTurn?}`. No production caller yet
 - `src/shared/engine.ts` — `CodexAuthStatus.method` (`chatgpt` / `api_key`), never the key
 
 ### Main process — core (`src/main/agents/telemetry/`)
-- `sessionTelemetryReducer.ts` — `applyTelemetryChange`, `emptySessionTelemetry(chatId, engine, now)`
-- `sessionTelemetryService.ts` — `createSessionTelemetryService({store?, now?, isTrashed?})`, the `sessionTelemetryService` singleton (wired with `chatRepo.isTrashed`), `SessionTelemetryStore`, `SessionTelemetryListener`. Methods: `report`, `get`, `onChange`, `lastCostReading`, `forget`
+- `sessionTelemetryReducer.ts` — `applyTelemetryChange`, `emptySessionTelemetry(chatId, engine, now)`, `CACHE_TTL_5M_MS`, `CACHE_TTL_1H_MS`; internal `invalidate(next, reason, at)`, `withoutCategories`, `withSession`
+- `sessionTelemetryService.ts` — `createSessionTelemetryService({store?, now?, isTrashed?})`, the `sessionTelemetryService` singleton (wired with `chatRepo.isTrashed`), `SessionTelemetryStore`, `SessionTelemetryListener`, `MeasureContextOutcome`. Methods: `report`, `get`, `onChange`, `lastCostReading`, `lastModelCostReadings`, `lastTokenTotal`, `measureContext`, `installContextMeasurer`, `forget`
 
 ### Main process — ACP provider (`src/main/agents/drivers/acp/`)
-- `acpTelemetry.ts` — `telemetryEngineOf(launcher)` (Claude and Codex only), `costDelta`, `CostReadings` / `costReadings` (per connection, per session), `sessionFingerprint` / `noteSessionLive` / `isSessionLive`, `parsePromptTelemetry(response, engine, selected?, {mainLoopOnly?})`, `mainModel`, `canonicalModelId`, `addTally`, `readAuthStatus`, `scrubbed`, `authKindOf`, `telemetryAuthOf`, `codexTelemetryAuth`, `AUTH_STATUS_METHOD`, `noteConnectionAuth`, `watchConnectionAuth`, `connectionAuthOf`, `TurnTelemetry` (`model`, `resumed`, `frame`, `auth`, `started`, `answered`, `settle`)
-- `acpMessages.ts` — `usage_update` → `{telemetry: AcpTelemetryFrame}` and nothing else; `config_option_update` → `selectedModel` beside `modeId`; exported `selectedModelOf(configOptions)`
-- `acpClient.ts` — `connectAcpClient` returns `onConnectionExt`: session-less extension notifications go to connection listeners; before the first listener the latest per method is held (at most 16 methods) and handed to it
-- `acpConnection.ts`, `acpWebSocketConnection.ts` — pass `onConnectionExt` through on the connection
-- `types.ts` — `ConnectionExtListener`, optional `AcpConnection.onConnectionExt`, `AcpStreamUpdate.selectedModel` / `.telemetry`, `AcpTelemetryFrame` (`used`, `size`, `costUsd`, `origin`, `rateLimit`)
-- `acpDriver.ts` — `AcpDriverDeps.telemetry`, `TurnContext.telemetry`, `telemetrySink(deps, chatId)`, `reportLauncherAuth`, `noteForeignAuth` (once per chat, connection and login, `foreignAuthNoted`), and the calls in `runTurn`, `runFollowUp` and `finish`
-- `acpLaunchers.ts` — optional `AcpLauncher.telemetryAuth()`; `codexLauncher.ts` implements it from `deps.auth()`
+- `acpSdkTelemetry.ts` — `SDK_MESSAGE_METHOD` (`_claude/sdkMessage`), `RAW_SDK_MESSAGE_FILTER` (`system/init`, `system/compact_boundary`, `assistant`, `result`), `readSdkMessage(params)` → `AcpSdkFrame | null`, `sdkUsageOf`, `sdkFrameLabel`
+- `acpTelemetry.ts` — `telemetryEngineOf(launcher)` (Claude and Codex only), `costDelta`, `CostReadings` / `costReadings`, `ModelCostReadings` / `modelCostReadings`, `ApiDurationReadings` / `apiDurationReadings`, `PriceCalibration` / `priceCalibration` / `CALIBRATION_TOLERANCE` (0.05), `sessionFingerprint` / `fingerprintDigest` / `noteSessionLive` / `isSessionLive`, `tokenDelta`, `TokenTotalReadings` / `tokenTotalReadings`, `readQuotaTotal`, `readContextCategories`, `parsePromptTelemetry(response, engine, selected?, {mainLoopOnly?, turnTokens?})`, `mainModel`, `canonicalModelId`, `addTally`, `readAuthStatus`, `scrubbed`, `authKindOf`, `telemetryAuthOf`, `codexTelemetryAuth`, `AUTH_STATUS_METHOD`, `noteConnectionAuth`, `watchConnectionAuth`, `connectionAuthOf`, `TurnTelemetry` (`model`, `session`, `resumed`, `frame`, `sdk`, `auth`, `started`, `answered`, `settle`)
+- `acpMessages.ts` — `usage_update` → `{telemetry: AcpTelemetryFrame}`; `config_option_update` → `selectedModel` beside `modeId`; exported `selectedModelOf(configOptions)`; `applyExt` reads `_claude/sdkMessage` into `{sdk}` and every other extension into nothing
+- `acpLaunchers.ts` — the Claude launcher's `session` sends `_meta.claudeCode.emitRawSDKMessages` from `RAW_SDK_MESSAGE_FILTER`; optional `AcpLauncher.telemetryAuth()`, implemented by `codexLauncher.ts` from `deps.auth()`
+- `acpFollowUp.ts` — `HeldTraffic` gains `{type: 'ext'}`; the gate's sink holds `_claude/sdkMessage` from the trigger on under `FOLLOW_UP_BUFFER_LIMIT`, drops it when idle (it opens nothing), and `giveBack` returns it with the updates
+- `acpSessionObserver.ts` — optional `SessionTrafficSink.ext(method, params)`; the observation counts every extension notification and passes it on, a throw logged
+- `acpClient.ts` — `connectAcpClient` returns `onConnectionExt`: session-less extension notifications go to connection listeners; before the first listener the latest per method is held (at most 16 methods)
+- `acpConnection.ts`, `acpWebSocketConnection.ts` — pass `onConnectionExt` through; `contextUsage(params)` requests `ACP_CONTEXT_USAGE_METHOD`
+- `types.ts` — `ACP_CONTEXT_USAGE_METHOD` (`_cinna/contextUsage`), `AcpContextUsageRequest`, optional `AcpConnection.contextUsage`, `ConnectionExtListener`, optional `AcpConnection.onConnectionExt`, `AcpStreamUpdate.selectedModel` / `.telemetry` / `.sdk`, `AcpTelemetryFrame`, `AcpSdkUsage`, `AcpSdkModelUsage` (`costUsd`, `contextWindow`, `maxOutputTokens`, `costBasis`), `AcpSdkFrame` (`init` | `assistant` | `result` | `compact` | `other`)
+- `acpDriver.ts` — `AcpDriverDeps.telemetry` / `.contextUsageTimeoutMs`, `ACP_CONTEXT_USAGE_TIMEOUT_MS` (30 s), `MeasurableSession`, `AcpDriver.measureContext`, `TurnContext.telemetry` / `.measurable`, `telemetrySink(deps, chatId)`, `reportLauncherAuth`, `noteForeignAuth`, `refusalReason`, and the calls in `runTurn`, `runFollowUp` and `finish`
 - `codexAuth.ts` — `parseCodexAuthStatus` keeps the login method, never what follows it on the line
-- `src/main/agents/drivers/index.ts` — wiring: `telemetry: sessionTelemetryService`
+- `claudeAdapterPatch.json`, `codexAdapterPatch.json` — adapter version and original/patched digests for the CommonJS hooks; repeat `RUNTIME_PINS` ([Runtime Pins](../../development/runtime_pins/runtime_pins_llm.md))
+- `src/main/agents/drivers/index.ts` — wiring: `telemetry: sessionTelemetryService`, and `sessionTelemetryService.installContextMeasurer((chatId) => acpDriver.measureContext(chatId))`
 
-### Main process — persistence, services, IPC
+### Adapter patches (postinstall, verified at packaging)
+- `scripts/patch-claude-agent-acp.cjs` — `patchClaudeAgentAcp`, `verifyClaudeAgentAcpPatch`: adds the `_cinna/contextUsage` request route and handler to adapter 0.76.0's `dist/acp-agent.js`
+- `scripts/patch-codex-acp.cjs` — adds `total_token_count: sessionState.totalTokenUsage` to the prompt response's `_meta.quota`, beside the earlier MCP-merge and session-instruction changes. `earlierPatches` reverses a checkout carrying the previous reviewed patch before patching again
+
+### Main process — persistence, services, IPC, logging
 - `src/main/db/sessionTelemetry.ts` — `sessionTelemetryRepo.get` / `save` (upsert) / `delete`
 - `src/main/db/messages.ts` — `SaveAssistantMessage.telemetry`, `messageRepo.updateAssistantTelemetry(id, telemetry)` (assistant rows only)
 - `src/main/services/a2aStreamingService.ts` — `RunAgentTurnResult.telemetry`, `PersistCursor.lastAssistantId`, `saveTurnRows` (the last-row rule), `turnUsage(telemetry)` → `TurnOutcome.usage`
 - `src/main/services/chatService.ts` — trash calls `sessionTelemetryService.forget`; `src/main/services/chatRemoval.ts` — `chatHardDeleted` does too
-- `src/main/ipc/session_telemetry.ipc.ts` — `registerSessionTelemetryHandlers()`: the push listener and `sessionTelemetry:get`
+- `src/main/ipc/session_telemetry.ipc.ts` — `registerSessionTelemetryHandlers()`: the push listener, `sessionTelemetry:get`, `sessionTelemetry:measureContext`
+- `src/main/logger/logger.ts` — `isDebugEnabled()` / `setDebugEnabled()`, and `ScopedLogger.isDebugEnabled`: gates work done only to fill a debug line (sizing frames)
 
 ### Preload
-- `src/preload/index.ts` — `window.api.sessionTelemetry.get(chatId)`, `.onChanged(handler)` → unsubscribe; `MessageData.telemetry`
+- `src/preload/index.ts` — `window.api.sessionTelemetry.get(chatId)`, `.measureContext(chatId)`, `.onChanged(handler)` → unsubscribe; `MessageData.telemetry`
 
 ### Renderer
-- `src/renderer/src/hooks/useSessionTelemetry.ts` — `useSessionTelemetry(chatId)`, `sessionTelemetryKey`. No component uses it yet
-- `src/renderer/src/components/chat/MessageMetaFooter.tsx` — `buildMeta` (now exported) adds the `telemetry` block
+- `src/renderer/src/hooks/useSessionTelemetry.ts` — `useSessionTelemetry(chatId)` → `UseSessionTelemetryResult {query, measureContext}`, `sessionTelemetryKey`. No component uses it yet
+- `src/renderer/src/components/chat/MessageMetaFooter.tsx` — `buildMeta` (exported) adds the `telemetry` block
 
 ## Database Schema
 
-- **`session_telemetry`** (`src/main/db/migrations/chats.ts`, `schema.ts:sessionTelemetry`) — `chat_id` (PK, `ON DELETE CASCADE` from `chats`), `json` (the whole `SessionTelemetry`), `updated_at` (ms). Created before the trash cleanup in `migrateChats`, whose cascade reaches it. One JSON document rather than columns because the shape is still growing and nothing queries inside it
+- **`session_telemetry`** (`src/main/db/migrations/chats.ts`, `schema.ts:sessionTelemetry`) — `chat_id` (PK, `ON DELETE CASCADE` from `chats`), `json` (the whole `SessionTelemetry`), `updated_at` (ms). Created before the trash cleanup in `migrateChats`, whose cascade reaches it. One JSON document rather than columns because the shape is still growing and nothing queries inside it — the cache clock, runtime block, context split and categories, and the per-session readings were all added without a migration; every new field is optional, so an older row reads as "not yet seen"
 - **`messages.telemetry`** (`src/main/db/migrations/messages.ts`) — nullable JSON `MessageTelemetry`, on the turn's last assistant row. Read back with the chat's messages, so it reaches the renderer through the existing `chat:get`
 - Both are additive and idempotent; `migrations.test.ts` ("session telemetry") covers a fresh install, an older one and the cascade
 
 ## IPC Channels
 
 - `sessionTelemetry:get` — `(chatId) → SessionTelemetryGetResult`: `{ok: true, telemetry | null}`, or `{ok: false, code: 'chat_not_found'}` for a non-string id, a chat the active profile cannot see, or a trashed one. `requireActivated()` first
+- `sessionTelemetry:measureContext` — `(chatId) → SessionTelemetryMeasureResult`: `{ok: true}` (the measurement arrives on the push), or `{ok: false, code}` with `chat_not_found` (same checks as `get`) or a `ContextMeasureCode` (`not_running`, `busy`, `unsupported`, `not_ready`, `failed`). Returned as data, never thrown: a thrown code does not survive the trip to the renderer. `requireActivated()` first
 - `session-telemetry:changed` (push, main → renderer) — `{chatId, telemetry}`, the whole state. Sent only when activated and the chat is visible to the active profile and not trashed
 
 ## Services & Key Methods
@@ -61,24 +75,44 @@ Implementation reference for [Session Telemetry](session_telemetry.md). The turn
 ### Per turn (`TurnTelemetry`)
 - Built in `runTurn` and `runFollowUp` only when `telemetryEngineOf(launcherId)` is non-null. A `nested` turn gets no reporter: its result carries telemetry, the chat's totals do not
 - `model(selected)` — from `session/new` / `session/load` config options and every `config_option_update`; reports a `model` change when it differs from the last reported
+- `session(sessionId, fresh, fingerprint, connection?)` — after `session/new` (`fresh`, with the connection: the API-time ledger starts at 0) and after `session/load`. Reports a `session` change carrying `fingerprintDigest(fingerprint)` (sha256, 16 hex), never the fingerprint. Marks a loaded session `restored` for the Codex total
 - `resumed()` — called after a `session/load` of a session that `isSessionLive(connection, id, fingerprint)` does not know under this fingerprint. `sessionFingerprint` mirrors the adapter's `computeSessionFingerprint` (cwd plus MCP servers sorted by name); a load under another fingerprint is rebuilt by the adapter. Sessions are marked live, with their fingerprint, on `session/new` and when a prompt answers — never on the load itself, so a turn that failed before any result stays resumed. The adapter's other rebuilds (a signed-out query, a provider update) are not seen
-- `frame(connection, sessionId, frame)` — only for the turn's own session id (`frame.sessionId === sessionId`), never a child session's. Reports a `context` change every time; a costed frame adds `costReadings.take(...)` to the turn's cost and carries `costReading` so the service records it
-- `started()` — the prompt's `onSent` (beside `armSteering`); for a follow-up, at construction. `answered(response)` — on any prompt answer, cancelled included
-- `settle(sessionId)` — parses the answer (`parsePromptTelemetry`), builds `MessageTelemetry`, reports one `turn` change with `byModel` and `selectedModel`, returns the message. Undefined when there were neither tokens nor cost
+- `frame(connection, sessionId, frame)` — only for the turn's own session id, never a child session's. Reports a `context` change every time, with `cacheTimed` once the turn has counted a raw request; a costed frame adds `costReadings.take(...)` to the turn's cost and carries `costReading`
+- `sdk(connection, sessionId, frame)` — the driver passes only frames whose `sessionId` is the turn's. Every frame is counted by label (and sized, when debug is on). `init` → `runtime` change (model, CLI version, betas, effort, fast mode, `authHint: 'api_key'` for an `apiKeySource` of `ANTHROPIC_API_KEY`, `apiKeyHelper` or `/login managed key`). `assistant` with `main` and a message id not seen this turn → `request` change (input = uncached + read + write, the 5m/1h write split), and the turn's TTL and largest request input. `result` → adds its `usage` to the turn's raw usage, sums `num_turns`, records API time and per-model cost through `apiDurationReadings` / `modelCostReadings` (measured against `lastModelCostReadings`), and takes the main model's `contextWindow` / `maxOutputTokens` (the row matching the raw or selected model by canonical id, else the only row). `compact` → `compaction` change
+- `started()` — the prompt's `onSent` (beside `armSteering`); for a follow-up, at construction. `answered(response, connection?, sessionId?)` — on any prompt answer, cancelled included; for Codex it reads `readQuotaTotal(response)` once and takes the turn's tokens from `tokenTotalReadings.take(connection, sessionId, reading, lastTokenTotal, restored)`, which answers undefined for a restored session with no earlier reading anywhere
+- `settle(sessionId)` — logs the turn's raw traffic (debug), parses the answer (`parsePromptTelemetry`, with `turnTokens` when Codex's total was measured); with no answer, the raw `result` usage and model are the turn's (scope `turn`). Claude with a parsed answer and not `mainLoopOnly`: `calibrate` each row against its runtime cost delta, skipping rows whose `costBasis` is not `list`. Codex with no runtime cost, a model, and a login other than `cloud`: `costOf(model, tokens, {contextTokens: last request's input})` → `costSource: 'estimated'`. `requests` = summed `num_turns`, else counted requests. `apiDurationMs` only when this process had a reading before the turn's first result. Reports one `turn` change with `byModel`, `byModelCost`, `modelCostReadings`, `tokenTotalReading`, `contextWindow`, `maxOutputTokens`, `selectedModel`
 
 ### Prompt response parsing (`parsePromptTelemetry`)
 - Claude: sum of `_meta.quota.model_usage[].token_count` (subagents and compaction included) → else `usage` → else `quota.token_count`. With `mainLoopOnly`: `usage` → `quota.token_count`, and no per-model rows. Scope `turn`
-- Codex: `usage` → `quota.token_count` → summed rows. Scope `last_request`
+- Codex with `turnTokens`: those tokens, one row for the main model, scope `turn`, and `lastRequest` (`usage` → `quota.token_count`) for the tier. Without: `usage` → `quota.token_count` → summed rows, scope `last_request`
 - Field maps: `usage` uses `cachedReadTokens`; `quota` uses `cachedInputTokens`. Both use `cachedWriteTokens`
+
+### Reducer — what each change does
+- `request` (Claude TTL-known only past the model update) — resolved model with `source: 'init'`; TTL 1h over 5m over last seen over assumed 5m; `lastRequestAt`, `expiresAt`; with `awaitingBaseline` and input > 0, `breakdown = {baseline: input, conversation: 0}`
+- `context` — `used`, `size`, authority; categories dropped when from another session; `breakdown.conversation = max(0, used − baseline)`; without `cacheTimed`, the reading is the cache clock (TTL-known engines also get `ttlMs` / `expiresAt`)
+- `model` (a switch, not the first report) — size a guess, resolved cleared, `invalidate('model_change')`
+- `session` — `fresh` → `invalidate('new_session')`; a load whose digest differs from the saved one → `invalidate('session_params_change')`; saves the digest
+- `compaction` → `invalidate('compaction')`
+- `invalidate` — `new_session` and `compaction` drop categories (every engine) and, for TTL-known engines, drop the breakdown and set `awaitingBaseline`; TTL-known engines get `invalidatedAt` / `invalidationReason`
+- `context_categories` — ignored when `context.sessionId` names another session; else kept with `categoriesMeasuredAt` / `categoriesSessionId`
+- `runtime` — merges the runtime block; resolved model with `source: 'init'`; `authHint` only over an `unknown` login
+- `turn` — totals, `byModel` tokens and `byModelCost`, `costSource: 'estimated'` once an estimated turn counts, `lastTurn`, `bySession` (merging `modelCostReadings`, replacing `lastTokenTotal`), resolved model with `source: 'quota'`, `contextWindow` → authoritative size, `maxOutputTokens` → `context.maxOutput`
+
+### Context measurement (`acpDriver.measureContext`)
+- `measurable` holds, per chat, the root session its last turn answered on (`MeasurableSession`: connection, session, fingerprint, agent, launcher, spec key, runtime view, `answered`). Set when a prompt answers; `answered` cleared right after `pool.acquire` of the next turn; entry dropped by `forgetChatSessions`. Nested turns never write it
+- `enter(chatId)` wraps every `run` and follow-up: a running count (→ `busy`) and a generation bumped on each start
+- Order of refusals: running → `busy`; no entry → `not_running`; not Claude → `unsupported`; `pool.peek` not the same live connection, or `runtime.readSession(chatId)` empty or throwing → `not_running`; session changed, not `answered`, or not live under its fingerprint → `not_ready`; no `connection.contextUsage` → `unsupported`
+- The request races `ACP_CONTEXT_USAGE_TIMEOUT_MS`. Adapter refusals are read from `error.data.reason`: `busy` → `busy`, `closed` → `not_running`; anything else → `failed`, logged with the agent, the chat and the error code or timeout only. A turn that started meanwhile (count or generation moved) → `busy`. `readContextCategories` null → `failed`
+- The service shares one in-flight measurement per chat, answers `unsupported` with no measurer installed and `failed` if the measurer throws, and reports a success as `context_categories`
 
 ### Login
 - `watchConnectionAuth(connection)` — right after `pool.acquire`, once per connection (`watched`). A session-named `_auth/status_update` reaching the turn's `onExtNotification` goes through the same `noteConnectionAuth`
-- At the end of a prompted turn: `connectionAuthOf(connection)` → `noteForeignAuth` (Claude's transcript notice) and `TurnTelemetry.auth`
+- At the end of a prompted turn: `connectionAuthOf(connection)` → `noteForeignAuth` (Claude's transcript notice) and `TurnTelemetry.auth`, which also remembers the kind for the Codex estimate
 - `reportLauncherAuth` — fired without awaiting when the prompt goes out; calls `launcher.telemetryAuth()` (Codex only). Failures are debug-logged
 
 ### Service (`sessionTelemetryService`)
 - `report` — trashed chat → `forget` and return; else lazy-load, reduce, compare ignoring `updatedAt` (no change → nothing), hold, `store.save` (a throw is logged, state kept), emit a `structuredClone` to each listener
-- `get` returns a copy; `forget` drops held state and the row and announces nothing
+- `get` returns a copy; `lastModelCostReadings` and `lastTokenTotal` return copies; `forget` drops held state and the row and announces nothing
 
 ### Persistence of a turn (`a2aStreamingService.saveTurnRows`)
 - Mid-turn flushes carry no telemetry. The pass with the result writes it on the last slice's row; if that slice is empty, `updateAssistantTelemetry(cursor.lastAssistantId, …)`; with no assistant row, dropped
@@ -86,23 +120,36 @@ Implementation reference for [Session Telemetry](session_telemetry.md). The turn
 
 ## Renderer Components
 
-- `MessageMetaFooter.tsx:buildMeta` — when the row has telemetry, a `telemetry` key placed before `parts` (which can push it below the popup's fold): `model`, `tokens` (`{scope, input, output, cacheRead, cacheWrite}`, scope `turn` or `last request only (lower bound)`, or the string `not reported (follow-up turn)`), `cost` (`$` and four significant digits, `(estimated)` unless the runtime reported it), `durationMs`. Pinned by `MessageMetaFooter.test.tsx`
-- `useSessionTelemetry` — `get` once, then the push; the same push-vs-reply guard as `useSessionActivity` (a `get` that resolves after a newer push does not overwrite it); `staleTime: 0` because pushes are heard only while a hook for the chat is mounted
+- `MessageMetaFooter.tsx:buildMeta` — when the row has telemetry, a `telemetry` key placed before `parts` (which can push it below the popup's fold): `model`, `tokens` (`{scope, input, output, cacheRead, cacheWrite}`, scope `turn` or `last request only (lower bound)`, or the string `not reported (follow-up turn)`), `cost` (`$` and four significant digits, `(estimated)` unless the runtime reported it), `requests`, `durationMs`, `apiDurationMs`. Pinned by `MessageMetaFooter.test.tsx`
+- `useSessionTelemetry` — `get` once, then the push; the same push-vs-reply guard as `useSessionActivity` (a `get` that resolves after a newer push does not overwrite it); `staleTime: 0` because pushes are heard only while a hook for the chat is mounted. Returns `{query, measureContext}` rather than spreading the query: spreading reads every property of TanStack's tracked result and re-renders the caller on changes it never looks at. `measureContext` with no chat answers `chat_not_found` without a call
 
 ## Configuration
 
-None. There is no setting and no environment variable. Which engines report is `telemetryEngineOf`.
+- No setting. Which engines report is `telemetryEngineOf`
+- `CINNA_LOG_DEBUG=1` — at process start, turns on `isDebugEnabled()`, so each raw frame is sized (`JSON.stringify` length) for the per-turn `raw SDK stream traffic for the turn` debug line. Off, the line carries frame counts only. `setDebugEnabled` exists; nothing calls it yet
+- `RAW_SDK_MESSAGE_FILTER` — which raw messages Claude sessions ask for. Dropping `assistant` (the heavy one: each frame repeats a content block) is a one-line change; the TTL then stays `assumed` and the cache clock falls back to `usage_update` readings
+- `PRICES_CHECKED_AT` and `MODEL_PRICES` — the price table and its date; `CALIBRATION_TOLERANCE` — 5%
+- `ACP_CONTEXT_USAGE_TIMEOUT_MS` — 30 s (`contextUsageTimeoutMs` overrides it in tests)
 
 ## Security
 
 - The email and organisation in `_auth/status_update` are never kept, logged or sent: three fields are read and scrubbed. `acpClient.ts` logs only the method of a session-less notification
-- `codex login status` output keeps only the method word; a key printed after it is discarded in `parseCodexAuthStatus`. `local-tools:codex-auth` therefore now carries `method` as well as `state`
-- Profile scope: `visibleChat(getProfileScopeUserId(), chatId)` on both the reply and the push; nothing crosses while the activation gate is closed
+- Raw SDK frames repeat the turn's content; `readSdkMessage` keeps only numbers, ids, model names and runtime flags, and nothing logs a frame
+- A session's fingerprint (cwd plus MCP servers, whose env and headers can be secrets) is stored only as `fingerprintDigest`
+- A context measurement's `memoryFiles[].path` can name the user's home directory: kept in the telemetry and shown, never logged. The driver's failure log carries the error code only, since an answer or an error from the adapter can carry paths
+- The price calibration log names the canonical model and two figures, nothing else
+- `codex login status` output keeps only the method word; a key printed after it is discarded in `parseCodexAuthStatus`. `local-tools:codex-auth` therefore carries `method` as well as `state`
+- The adapter patches are checksum-gated: each script refuses any source but the reviewed original (or, for Codex, the previous reviewed patch it can reverse to that original), and `beforePack` / `afterPack` verify the patched bytes in the installed and shipped trees. See [Packaged Runtime Dependencies](../../development/distribution/packaged_runtime.md)
+- Profile scope: `visibleChat(getProfileScopeUserId(), chatId)` on both replies and the push; nothing crosses while the activation gate is closed
 
 ## Tests
 
-- `sessionTelemetryReducer.test.ts`, `sessionTelemetryService.test.ts` — counting, context authority, model switch, cost reading, trash, restart, write failure
-- `acpTelemetry.test.ts` — parsing per engine, main-model choice, `costDelta` / `CostReadings`, auth mapping and scrubbing, `TurnTelemetry`
-- `acpDriver.test.ts` ("session telemetry") — a whole turn against the fake agent child: Claude and Codex, cancelled, replay not counted, session-less login and the once-per-chat notice, the first turn after a restart, nested turns and non-reporting engines; plus a follow-up turn's cost
-- `acpConnection.test.ts`, `acpMessages.test.ts` — connection-level extension routing and early holding; `usage_update` and model option translation
-- `sessionTelemetry.test.ts` (db), `session_telemetry.ipc.test.ts`, `a2aStreamingService.test.ts`, `migrations.test.ts`
+- `sessionTelemetryReducer.test.ts`, `sessionTelemetryService.test.ts` — counting, context authority, model switch, cost and token-total readings, cache TTL and invalidations, baseline and categories, one shared measurement, trash, restart, write failure
+- `acpTelemetry.test.ts` — parsing per engine, main-model choice, `costDelta` / the readings classes, `tokenDelta`, calibration, `readContextCategories`, auth mapping and scrubbing, `TurnTelemetry` (raw frames, Codex totals and estimates)
+- `acpSdkTelemetry.test.ts` (fixtures in `testSupport/sdkMessageFixtures.ts`) — frame reading, defensive shapes, debug-gated sizing
+- `acpDriver.test.ts` ("session telemetry") — a whole turn against the fake agent child: Claude and Codex, cancelled, replay not counted, raw frames, session-less login and the once-per-chat notice, the first turn after a restart, nested turns and non-reporting engines, a follow-up turn's cost and raw tokens, and `measureContext` refusals and stale discard
+- `acpFollowUp.test.ts`, `acpSessionObserver.test.ts`, `acpLaunchers.test.ts` — raw frames held and given back, the observer's `ext`, the launcher's `emitRawSDKMessages`
+- `modelPricing.test.ts`, `sessionTelemetryDerived.test.ts` — canonical ids, tiers, fast mode, unknown models; cache state and next-message estimates
+- `useSessionTelemetry.test.tsx`, `MessageMetaFooter.test.tsx`, `session_telemetry.ipc.test.ts`, `sessionTelemetry.test.ts` (db), `a2aStreamingService.test.ts`, `migrations.test.ts`
+- `scripts/patch-claude-agent-acp.test.cjs`, `scripts/patch-codex-acp.test.cjs`, `scripts/packaged-dependencies.test.cjs` (`npm run test:packaging`)
+- Interface contract, against the real pinned CLIs (`make contract`): `claude.session.context-usage`, `codex.session.quota-running-total`, `codex.session.quota-total-on-resume` — [Claude](../local_agents/contracts/claude_interface.md), [Codex](../local_agents/contracts/codex_interface.md)

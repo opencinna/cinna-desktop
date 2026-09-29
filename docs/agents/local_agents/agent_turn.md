@@ -297,7 +297,7 @@ Engines talk between turns, and that traffic used to be dropped. Watched on the 
 
 **Everything else opens nothing:** usage, session info, commands, modes and activity. It goes to the activity feed.
 
-**From the trigger on, everything for the session is held in arrival order**, updates and asks alike, until the follow-up turn takes it. Updates past 2,000 are counted and logged. Asks are never dropped, because the agent waits on each. The agent's process is held against the reaper from the trigger until the turn takes over.
+**From the trigger on, everything for the session is held in arrival order**, updates and asks alike — and Claude's raw SDK frames, which carry the follow-up's request timing and its tokens for [session telemetry](../session_telemetry/session_telemetry.md) and arrive before the updates they become — until the follow-up turn takes it. A raw frame never opens a follow-up itself, and with none pending it is dropped. Updates past 2,000 are counted and logged. Asks are never dropped, because the agent waits on each. The agent's process is held against the reaper from the trigger until the turn takes over.
 
 **Whether and when it opens is the app's decision, not the driver's:**
 
