@@ -72,6 +72,7 @@ const PREVIEW_CONTENTS_KEY = 'cinna-preview-contents-open'
 // How the Chats list is grouped, and which of its groups are collapsed.
 const CHAT_GROUP_BY_AGENT_KEY = 'cinna-chat-group-by-agent'
 const CHAT_GROUP_BY_DATE_KEY = 'cinna-chat-group-by-date'
+const CHAT_SHOW_ACTIVE_KEY = 'cinna-chat-show-active'
 const CHAT_GROUPS_COLLAPSED_KEY = 'cinna-chat-groups-collapsed'
 
 /** `pendingModeId` for a new chat with no chat mode at all. */
@@ -171,6 +172,8 @@ interface UIStore {
   /** Chats list grouping; either, both or neither. */
   chatGroupByAgent: boolean
   chatGroupByDate: boolean
+  /** Running and unread chats drawn in their own block above Pinned; off by default. */
+  chatShowActive: boolean
   /**
    * The user's open/closed choice per Chats-list group key (`chatGroups.ts`),
    * true = closed. A key with no entry follows the group's default.
@@ -208,6 +211,7 @@ interface UIStore {
   toggleVerboseMode: () => void
   toggleChatGroupByAgent: () => void
   toggleChatGroupByDate: () => void
+  toggleChatShowActive: () => void
   setChatGroupCollapsed: (key: string, collapsed: boolean) => void
   expandChatGroups: (keys: string[]) => void
 }
@@ -242,6 +246,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   verboseMode: localStorage.getItem(VERBOSE_KEY) === '1',
   chatGroupByAgent: localStorage.getItem(CHAT_GROUP_BY_AGENT_KEY) === '1',
   chatGroupByDate: localStorage.getItem(CHAT_GROUP_BY_DATE_KEY) === '1',
+  chatShowActive: localStorage.getItem(CHAT_SHOW_ACTIVE_KEY) === '1',
   chatGroupCollapsed: readChatGroupCollapsed(),
   setAgentPageMode: (mode) => set({ agentPageMode: mode }),
   setActiveView: (view) => set({ activeView: view }),
@@ -330,6 +335,12 @@ export const useUIStore = create<UIStore>((set, get) => ({
       const next = !state.chatGroupByDate
       localStorage.setItem(CHAT_GROUP_BY_DATE_KEY, next ? '1' : '0')
       return { chatGroupByDate: next }
+    }),
+  toggleChatShowActive: () =>
+    set((state) => {
+      const next = !state.chatShowActive
+      localStorage.setItem(CHAT_SHOW_ACTIVE_KEY, next ? '1' : '0')
+      return { chatShowActive: next }
     }),
   setChatGroupCollapsed: (key, collapsed) =>
     set((state) => {

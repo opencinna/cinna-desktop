@@ -41,6 +41,7 @@ vi.mock('../../hooks/useLocalAgents', () => ({
 const { ChatList } = await import('./ChatList')
 const { listRank } = await import('./chatGroups')
 const { useUIStore } = await import('../../stores/ui.store')
+const { useChatStore } = await import('../../stores/chat.store')
 
 const chats = [
   { id: 'c-1', title: 'First chat', updatedAt: new Date(), createdAt: new Date() },
@@ -57,7 +58,7 @@ let client: QueryClient
 
 beforeEach(() => {
   localStorage.clear()
-  useUIStore.setState({ chatGroupByAgent: false, chatGroupByDate: false, chatGroupCollapsed: {}, revealChatId: null, pendingAgentId: null, pendingModeId: null })
+  useUIStore.setState({ chatGroupByAgent: false, chatGroupByDate: false, chatShowActive: true, chatGroupCollapsed: {}, revealChatId: null, pendingAgentId: null, pendingModeId: null })
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   list.mockReset().mockResolvedValue(chats)
   listSummaries.mockReset().mockResolvedValue({ 'c-1': summary })
@@ -161,8 +162,8 @@ describe('grouping', () => {
   async function openMenu() {
     render(view())
     await waitFor(() => expect(client.getQueryData(['chats', 'summaries'])).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'Group chats' }))
-    return screen.getByRole('menu', { name: 'Group chats' })
+    fireEvent.click(screen.getByRole('button', { name: 'Chats list options' }))
+    return screen.getByRole('menu', { name: 'Chats list options' })
   }
 
   it('groups by agent from the menu, checked while on, and falls back for a row with no summary', async () => {
@@ -171,7 +172,7 @@ describe('grouping', () => {
     expect(byAgent.getAttribute('aria-checked')).toBe('false')
     fireEvent.click(byAgent)
     // Stays open, and says it is on.
-    expect(within(screen.getByRole('menu', { name: 'Group chats' })).getByRole('menuitemcheckbox', { name: 'Group by Agent' }).getAttribute('aria-checked')).toBe('true')
+    expect(within(screen.getByRole('menu', { name: 'Chats list options' })).getByRole('menuitemcheckbox', { name: 'Group by Agent' }).getAttribute('aria-checked')).toBe('true')
     expect(localStorage.getItem('cinna-chat-group-by-agent')).toBe('1')
 
     // The count is in the name, not beside it.
@@ -217,17 +218,19 @@ describe('grouping', () => {
 
   it('is a menu to the keyboard: first item focused, arrows move, Escape returns to the trigger', async () => {
     const menu = await openMenu()
-    const [byAgent, byDate] = within(menu).getAllByRole('menuitemcheckbox')
+    const [byAgent, byDate, showActive] = within(menu).getAllByRole('menuitemcheckbox')
     await waitFor(() => expect(document.activeElement).toBe(byAgent))
     fireEvent.keyDown(window, { key: 'ArrowDown' })
     expect(document.activeElement).toBe(byDate)
     fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(showActive)
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
     expect(document.activeElement).toBe(byAgent)
     fireEvent.keyDown(window, { key: 'ArrowUp' })
-    expect(document.activeElement).toBe(byDate)
+    expect(document.activeElement).toBe(showActive)
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.queryByRole('menu')).toBeNull()
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Group chats' }))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Chats list options' }))
   })
 
   it('opens a collapsed group when one of its chats is to be shown', async () => {
@@ -465,5 +468,150 @@ describe('Pinned, the row menu and drag order', () => {
     expect(target.querySelector('[data-drop-indicator]')).toBeNull()
     drop()
     expect(move).not.toHaveBeenCalled()
+  })
+})
+
+describe('the Active block', () => {
+  const minute = 60_000
+  const base = Date.now()
+  const row = (id: string, title: string, ago: number, extra: object = {}) =>
+    ({ id, title, agentId: 'a-writer', modeId: null, pinnedRank: null, sortKey: null, updatedAt: new Date(base - ago * minute), createdAt: new Date(), ...extra })
+  const unread = { lastRunResult: { runId: 'run-1', status: 'completed', unread: true } }
+  const read = { lastRunResult: { runId: 'run-1', status: 'completed', unread: false } }
+  const rows = [
+    row('p-1', 'Pinned busy', 0, { pinnedRank: 1, activeRunId: 'run-9' }),
+    row('r-1', 'Fresh', 1),
+    row('r-2', 'Done unseen', 2, unread),
+    row('r-3', 'Quiet', 3)
+  ]
+  beforeEach(() => {
+    list.mockResolvedValue(rows)
+    listSummaries.mockResolvedValue({})
+    useChatStore.setState({ activeChatId: null, isStreaming: false })
+    useUIStore.setState({ activeView: 'chat' })
+  })
+  const titles = (): string[] => [...document.querySelectorAll('[data-chat-row]')].map((el) => el.textContent ?? '')
+  const activeTitles = (): string[] =>
+    [...(screen.queryByRole('group', { name: 'Active' })?.querySelectorAll('[data-chat-row]') ?? [])].map((el) => el.textContent ?? '')
+  const scroller = (): HTMLElement => screen.getByText('Fresh').closest('.overflow-y-auto') as HTMLElement
+  // Where the pointer is comes from document moves, not enter/leave.
+  const pointerOnList = () => fireEvent.mouseMove(scroller())
+  const pointerOffList = () => fireEvent.mouseMove(document.body)
+  // TanStack tells its observers on a timer: wait it out, or a "nothing moved" would hold before anything rendered.
+  const poll = async (next: typeof rows): Promise<void> => {
+    await act(async () => {
+      client.setQueryData(['chats'], next)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  }
+
+  async function shown() {
+    render(view())
+    await waitFor(() => expect(screen.getByText('Fresh')).toBeTruthy())
+  }
+
+  it('draws running and unread chats first, above Pinned, each listed once', async () => {
+    await shown()
+    expect(activeTitles()).toEqual(['Pinned busy', 'Done unseen'])
+    // Its only pinned chat is in Active, so there is no Pinned block.
+    expect(screen.queryByRole('button', { name: 'Pinned' })).toBeNull()
+    expect(titles()).toEqual(['Pinned busy', 'Done unseen', 'Fresh', 'Quiet'])
+  })
+
+  it('draws no block with nothing active, and none while switched off in the menu', async () => {
+    await shown()
+    fireEvent.click(screen.getByRole('button', { name: 'Chats list options' }))
+    const item = within(screen.getByRole('menu', { name: 'Chats list options' })).getByRole('menuitemcheckbox', { name: 'Show Active group' })
+    expect(item.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(item)
+    expect(localStorage.getItem('cinna-chat-show-active')).toBe('0')
+    expect(screen.queryByRole('group', { name: 'Active' })).toBeNull()
+    expect(titles()).toEqual(['Pinned busy', 'Fresh', 'Done unseen', 'Quiet'])
+
+    fireEvent.click(item)
+    expect(activeTitles()).toEqual(['Pinned busy', 'Done unseen'])
+    await poll(rows.map((r) => ({ ...r, activeRunId: null, lastRunResult: null })))
+    expect(screen.queryByRole('group', { name: 'Active' })).toBeNull()
+  })
+
+  it('changes nothing under the pointer: a read chat and a new run wait until it leaves the list', async () => {
+    await shown()
+    pointerOnList()
+    await poll(rows.map((r) => (r.id === 'r-2' ? { ...r, ...read } : r.id === 'r-3' ? { ...r, activeRunId: 'run-5' } : r)))
+    expect(activeTitles()).toEqual(['Pinned busy', 'Done unseen'])
+    expect(titles()).toEqual(['Pinned busy', 'Done unseen', 'Fresh', 'Quiet'])
+
+    pointerOffList()
+    expect(activeTitles()).toEqual(['Quiet', 'Pinned busy'])
+    expect(titles()).toEqual(['Quiet', 'Pinned busy', 'Fresh', 'Done unseen'])
+  })
+
+  it('shows a chat opened from the block where it went when it leaves: its group opens and it is revealed', async () => {
+    useUIStore.setState({ chatGroupByAgent: true, chatGroupCollapsed: { 'agent:a-writer': true } })
+    render(view())
+    await waitFor(() => expect(activeTitles()).toEqual(['Pinned busy', 'Done unseen']))
+    expect(screen.queryByText('Fresh')).toBeNull()
+    fireEvent.click(screen.getByText('Done unseen'))
+    expect(useChatStore.getState().activeChatId).toBe('r-2')
+
+    await poll(rows.map((r) => (r.id === 'r-2' ? { ...r, ...read } : r)))
+    await waitFor(() => expect(activeTitles()).toEqual(['Pinned busy']))
+    await waitFor(() => expect(screen.getByText('Done unseen')).toBeTruthy())
+    expect(useUIStore.getState().chatGroupCollapsed['agent:a-writer']).toBe(false)
+    // The row took the request; a chat that was not open is not revealed.
+    expect(useUIStore.getState().revealChatId).toBeNull()
+  })
+
+  it('reveals nothing when a chat that is not open leaves the block', async () => {
+    useUIStore.setState({ chatGroupByAgent: true, chatGroupCollapsed: { 'agent:a-writer': true } })
+    render(view())
+    await waitFor(() => expect(activeTitles()).toEqual(['Pinned busy', 'Done unseen']))
+    act(() => useChatStore.setState({ activeChatId: 'r-1' }))
+    await poll(rows.map((r) => (r.id === 'r-2' ? { ...r, ...read } : r)))
+    await waitFor(() => expect(activeTitles()).toEqual(['Pinned busy']))
+    expect(useUIStore.getState().chatGroupCollapsed['agent:a-writer']).toBe(true)
+  })
+
+  it('keeps the chat on screen out of the block: its own turn does not move its row', async () => {
+    await shown()
+    act(() => useChatStore.setState({ activeChatId: 'r-3' }))
+    await poll(rows.map((r) => (r.id === 'r-3' ? { ...r, activeRunId: 'run-7' } : r)))
+    act(() => useChatStore.setState({ isStreaming: true }))
+    expect(activeTitles()).toEqual(['Pinned busy', 'Done unseen'])
+    expect(titles()).toEqual(['Pinned busy', 'Done unseen', 'Fresh', 'Quiet'])
+
+    // Looking elsewhere, its turn is news: it joins.
+    act(() => useUIStore.setState({ activeView: 'task' }))
+    expect(activeTitles()).toEqual(['Quiet', 'Pinned busy', 'Done unseen'])
+    // Back on it, it stays in the block until its turn is over and read.
+    act(() => useUIStore.setState({ activeView: 'chat' }))
+    expect(activeTitles()).toEqual(['Quiet', 'Pinned busy', 'Done unseen'])
+  })
+
+  it('does not count a chat opened elsewhere as opened from the block', async () => {
+    // Open behind a task page, so it is in the block when the list mounts.
+    useUIStore.setState({ chatGroupByAgent: true, chatGroupCollapsed: { 'agent:a-writer': true }, activeView: 'task' })
+    useChatStore.setState({ activeChatId: 'r-2' })
+    render(view())
+    await waitFor(() => expect(activeTitles()).toEqual(['Pinned busy', 'Done unseen']))
+    await poll(rows.map((r) => (r.id === 'r-2' ? { ...r, ...read } : r)))
+    await waitFor(() => expect(activeTitles()).toEqual(['Pinned busy']))
+    expect(useUIStore.getState().chatGroupCollapsed['agent:a-writer']).toBe(true)
+  })
+
+  it('holds while a row is being renamed, so the input and its text survive', async () => {
+    await shown()
+    fireEvent.contextMenu(screen.getByText('Done unseen').closest('[data-chat-row]') as HTMLElement)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    const input = screen.getByRole('textbox', { name: 'Chat title' }) as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'Half typed' } })
+    pointerOffList()
+    await poll(rows.map((r) => (r.id === 'r-2' ? { ...r, ...read } : r)))
+    expect(activeTitles()).toHaveLength(2)
+    expect(screen.getByRole('textbox', { name: 'Chat title' })).toBe(input)
+    expect(input.value).toBe('Half typed')
+
+    fireEvent.keyDown(input, { key: 'Escape' })
+    await waitFor(() => expect(activeTitles()).toEqual(['Pinned busy']))
   })
 })

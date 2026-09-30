@@ -48,9 +48,11 @@ interface ChatItemProps {
   dragGroup?: string
   /** A row of the same group dropped above (`before`) or below (`after`) this one. */
   onDropChat?: (draggedId: string, targetId: string, place: 'before' | 'after') => void
+  /** The user opened this chat from this row (a click, not a remote open). */
+  onOpen?: () => void
 }
 
-export function ChatItem({ chat, summary: loaded, index, folderAgentId, dragGroup, onDropChat }: ChatItemProps): React.JSX.Element {
+export function ChatItem({ chat, summary: loaded, index, folderAgentId, dragGroup, onDropChat, onOpen }: ChatItemProps): React.JSX.Element {
   const activeChatId = useChatStore((s) => s.activeChatId)
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
   const setActiveView = useUIStore((s) => s.setActiveView)
@@ -89,7 +91,7 @@ export function ChatItem({ chat, summary: loaded, index, folderAgentId, dragGrou
   }, [holdTooltip, setTooltipOpen])
   const [menu, setMenu] = useState<{ x: number; y: number; anchor: HTMLElement } | null>(null)
   const closeMenu = useCallback(() => setMenu(null), [])
-  const { drag, setDrag, menuOpen, setMenuOpen } = useChatsDrag()
+  const { drag, setDrag, menuOpen, setMenuOpen, setRenaming: setListRenaming } = useChatsDrag()
   // Tell the other rows, so none of them opens a tooltip over this menu.
   useEffect(() => {
     if (!menu) return
@@ -150,6 +152,11 @@ export function ChatItem({ chat, summary: loaded, index, folderAgentId, dragGrou
   // A drop line above or below the row, by the pointer's half of it. Drawn
   // absolutely positioned, so nothing moves while dragging.
   const [dropPlace, setDropPlace] = useState<'before' | 'after' | null>(null)
+  useEffect(() => {
+    if (!renaming) return
+    setListRenaming(true)
+    return () => setListRenaming(false)
+  }, [renaming, setListRenaming])
   const draggable = !!dragGroup && !!onDropChat && !renaming
   const acceptsDrop = draggable && !!drag && drag.group === dragGroup && drag.id !== chat.id
   const isDraggingSelf = drag?.id === chat.id
@@ -254,6 +261,7 @@ export function ChatItem({ chat, summary: loaded, index, folderAgentId, dragGrou
         // Picking a chat from the main Chats list leaves any jobs-context
         // anchor behind — the user is navigating via chats now.
         setActiveJobId(null)
+        onOpen?.()
         setActiveChatId(chat.id)
         setActiveView('chat')
       }}

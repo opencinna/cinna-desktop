@@ -1,4 +1,6 @@
 import type { ChatListSummary } from '../../../../shared/chatListSummary'
+import type { ChatRunResult } from '../../../../shared/chatRunResult'
+import { unreadResultIndicator } from '../ui/runResultIndicators'
 
 /**
  * How the Chats list groups its rows: by who each chat is with, by the day of
@@ -310,4 +312,34 @@ export function canStartChat(
  */
 export function chatGroupCollapsedByDefault(group: { key: string; bucket?: DateBucket }, siblings: number): boolean {
   return group.bucket === 'previous' && siblings > 1
+}
+
+/** What puts a chat in the Active block: a run going, or a result not read yet. */
+export interface ActivityChat extends GroupableChat {
+  activeRunId?: string | null
+  lastRunResult?: ChatRunResult | null
+}
+
+/**
+ * Running, or holding a result the row marks unread — the same test as the
+ * row's own icon (`unreadResultIndicator`), so the block and the icon agree.
+ * `streamingChatId` is the open chat while its turn streams, before the list
+ * has polled its run.
+ */
+export function isActiveChat(chat: ActivityChat, streamingChatId: string | null): boolean {
+  const running = !!chat.activeRunId || chat.id === streamingChatId
+  return running || !!unreadResultIndicator(chat.lastRunResult, running)
+}
+
+/**
+ * The Active block's next rows, as ids: the ones still active keep their
+ * places, so a run ending never reorders the block, and newcomers go on top
+ * in list order.
+ */
+export function settleActiveIds<T extends ActivityChat>(shown: readonly string[], active: T[]): string[] {
+  const now = new Set(active.map((chat) => chat.id))
+  const kept = shown.filter((id) => now.has(id))
+  const had = new Set(kept)
+  const added = byRank(active.filter((chat) => !had.has(chat.id)), listRank).map((chat) => chat.id)
+  return [...added, ...kept]
 }

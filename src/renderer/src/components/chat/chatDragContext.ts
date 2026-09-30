@@ -14,13 +14,18 @@ export interface ChatsDragContextValue {
   /** A row's right-click menu is open: no row opens its tooltip over it. */
   menuOpen: boolean
   setMenuOpen: (open: boolean) => void
+  /** A row's title is being edited in place: the Active block holds, so the row does not remount under the input. */
+  renaming: boolean
+  setRenaming: (renaming: boolean) => void
 }
 
 export const ChatsDragContext = createContext<ChatsDragContextValue>({
   drag: null,
   setDrag: () => {},
   menuOpen: false,
-  setMenuOpen: () => {}
+  setMenuOpen: () => {},
+  renaming: false,
+  setRenaming: () => {}
 })
 
 export function useChatsDrag(): ChatsDragContextValue {

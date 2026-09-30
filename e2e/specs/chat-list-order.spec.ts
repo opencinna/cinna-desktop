@@ -152,12 +152,12 @@ async function pick(cinna: CinnaApp, item: 'Pin' | 'Unpin' | 'Rename' | 'Delete'
 
 async function setGrouping(cinna: CinnaApp, name: 'Group by Agent' | 'Group by Date', on: boolean): Promise<void> {
   const page = cinna.page
-  await page.getByRole('button', { name: 'Group chats', exact: true }).click()
+  await page.getByRole('button', { name: 'Chats list options', exact: true }).click()
   const item = page.getByRole('menuitemcheckbox', { name, exact: true })
   if ((await item.getAttribute('aria-checked')) !== String(on)) await item.click()
   await expect(item).toHaveAttribute('aria-checked', String(on))
   await page.keyboard.press('Escape')
-  await expect(page.getByRole('menu', { name: 'Group chats' })).toHaveCount(0)
+  await expect(page.getByRole('menu', { name: 'Chats list options' })).toHaveCount(0)
 }
 
 /**

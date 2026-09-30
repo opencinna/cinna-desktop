@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 
 /**
- * The Chats list's "Group chats" menu: Group by Agent puts each chat under who
+ * The Chats list's "Chats list options" menu: Group by Agent puts each chat under who
  * it is with (an agent, a chat mode, or the plain "Chat" group); Group by Date
  * splits into Today / Yesterday / Last Week / Previous chats by the last
  * message, nested inside the agent groups or at the top when Agent is off.
@@ -63,13 +63,13 @@ const headerNames = (cinna: CinnaApp) =>
 const chatRow = (cinna: CinnaApp, title: string) => cinna.page.getByText(title, { exact: true })
 
 async function openMenu(cinna: CinnaApp): Promise<void> {
-  await cinna.page.getByRole('button', { name: 'Group chats', exact: true }).click()
-  await expect(cinna.page.getByRole('menu', { name: 'Group chats' })).toBeVisible()
+  await cinna.page.getByRole('button', { name: 'Chats list options', exact: true }).click()
+  await expect(cinna.page.getByRole('menu', { name: 'Chats list options' })).toBeVisible()
 }
 
 async function closeMenu(cinna: CinnaApp): Promise<void> {
   await cinna.page.keyboard.press('Escape')
-  await expect(cinna.page.getByRole('menu', { name: 'Group chats' })).toHaveCount(0)
+  await expect(cinna.page.getByRole('menu', { name: 'Chats list options' })).toHaveCount(0)
 }
 
 const menuItem = (cinna: CinnaApp, name: 'Group by Agent' | 'Group by Date') =>

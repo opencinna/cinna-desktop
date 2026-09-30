@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatListSummary } from '../../../../shared/chatListSummary'
-import { canStartChat, chatGroupCollapsedByDefault, dateBucket, dayRank, dropRank, groupChats, groupKeysOf, listRank, pinnedChats, pinnedRank, rankBetween, tieBreak, type ChatGroupFallback, type GroupableChat } from './chatGroups'
+import { canStartChat, chatGroupCollapsedByDefault, dateBucket, dayRank, dropRank, groupChats, groupKeysOf, isActiveChat, listRank, pinnedChats, pinnedRank, rankBetween, settleActiveIds, tieBreak, type ChatGroupFallback, type GroupableChat } from './chatGroups'
 
 /** Local time, like the list: 26 Sep 2026, 00:10. */
 const now = new Date(2026, 8, 26, 0, 10)
@@ -268,5 +268,30 @@ describe('chatGroupCollapsedByDefault', () => {
     expect(chatGroupCollapsedByDefault({ key: 'all|previous', bucket: 'previous' }, 1)).toBe(false)
     expect(chatGroupCollapsedByDefault({ key: 'all|today', bucket: 'today' }, 4)).toBe(false)
     expect(chatGroupCollapsedByDefault({ key: 'agent:a' }, 3)).toBe(false)
+  })
+})
+
+describe('the Active block', () => {
+  const chat = (id: string, extra: object = {}) => ({ id, updatedAt: on(20), ...extra })
+  const result = (status: 'completed' | 'needs_input' | 'failed' | 'canceled', unread: boolean) =>
+    ({ lastRunResult: { runId: 'run-1', status, unread } })
+
+  it('takes a running chat, the streaming open chat and an unread result — never a read one or a cancel', () => {
+    expect(isActiveChat(chat('a', { activeRunId: 'run-1' }), null)).toBe(true)
+    expect(isActiveChat(chat('a'), 'a')).toBe(true)
+    expect(isActiveChat(chat('a', result('needs_input', true)), null)).toBe(true)
+    expect(isActiveChat(chat('a', result('failed', true)), null)).toBe(true)
+    expect(isActiveChat(chat('a', result('completed', false)), null)).toBe(false)
+    expect(isActiveChat(chat('a', result('canceled', true)), null)).toBe(false)
+    expect(isActiveChat(chat('a'), 'b')).toBe(false)
+  })
+
+  it('keeps the rows it has in place and puts newcomers on top, newest first', () => {
+    const older = chat('old', { updatedAt: on(19) })
+    const newer = chat('new', { updatedAt: on(21) })
+    expect(settleActiveIds([], [older, newer])).toEqual(['new', 'old'])
+    // `x` became active after them but its row is older: still on top, and the two keep their order.
+    expect(settleActiveIds(['new', 'old'], [chat('x', { updatedAt: on(1) }), older, newer])).toEqual(['x', 'new', 'old'])
+    expect(settleActiveIds(['x', 'new', 'old'], [older])).toEqual(['old'])
   })
 })
