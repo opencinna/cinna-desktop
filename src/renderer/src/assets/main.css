@@ -80,6 +80,10 @@
     /* Frosted-glass overlay tints. Dark theme darkens; light theme brightens. */
     --color-overlay-backdrop: rgba(0, 0, 0, 0.4);
     --color-overlay-panel: rgba(0, 0, 0, 0.2);
+
+    /* Behind a previewed HTML page: a browser's default canvas, in both
+       themes, so a page that sets no background reads as it would there. */
+    --color-html-page: #ffffff;
   }
 
   /* Light theme */

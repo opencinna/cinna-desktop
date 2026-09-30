@@ -1,6 +1,6 @@
 /**
  * In-app file preview for a small set of text-based attachment types
- * (`txt`, `csv`, `md`, `json`, `yaml`/`yml`, `py`). Clicking a previewable
+ * (`txt`, `csv`, `md`, `json`, `yaml`/`yml`, `py`, `xml` and its dialects). Clicking a previewable
  * attachment badge opens a modal showing the decoded content instead of
  * going straight to a save dialog; non-previewable types still download.
  *
@@ -9,7 +9,7 @@
  */
 
 /** How the preview modal should render a previewable file's text. */
-export type PreviewRenderKind = 'markdown' | 'json' | 'csv' | 'python' | 'text'
+export type PreviewRenderKind = 'markdown' | 'json' | 'csv' | 'python' | 'xml' | 'text' | 'html'
 
 /**
  * Max bytes the main process reads for a preview. Preview is for quick
@@ -30,7 +30,21 @@ const PREVIEW_KIND_BY_EXT: Record<string, PreviewRenderKind> = {
   yaml: 'text',
   yml: 'text',
   py: 'python',
-  pyi: 'python'
+  pyi: 'python',
+  xml: 'xml',
+  xsd: 'xml',
+  xsl: 'xml',
+  xslt: 'xml',
+  plist: 'xml',
+  rss: 'xml',
+  atom: 'xml',
+  kml: 'xml',
+  gpx: 'xml',
+  csproj: 'xml',
+  xaml: 'xml',
+  html: 'html',
+  htm: 'html',
+  xhtml: 'html'
 }
 
 /** MIME types → how the modal renders them (fallback when the extension
@@ -45,7 +59,11 @@ const PREVIEW_KIND_BY_MIME: Record<string, PreviewRenderKind> = {
   'application/yaml': 'text',
   'text/yaml': 'text',
   'text/x-python': 'python',
-  'text/x-script.python': 'python'
+  'text/x-script.python': 'python',
+  'application/xml': 'xml',
+  'text/xml': 'xml',
+  'text/html': 'html',
+  'application/xhtml+xml': 'html'
 }
 
 /**

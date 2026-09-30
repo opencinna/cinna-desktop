@@ -1,13 +1,14 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { Copy, Link, Loader2, MessageSquarePlus, NotebookPen, type LucideIcon } from 'lucide-react'
+import { Copy, Globe, Link, Loader2, MessageSquarePlus, NotebookPen, type LucideIcon } from 'lucide-react'
 import { agentFileContentKind, isCredentialFileRef, type AgentFileRef } from '../../../../shared/agentFiles'
+import { previewKindFor } from '../../../../shared/filePreview'
 import { useSaveMessageNote } from '../../hooks/useNotes'
 import { useAuthStore } from '../../stores/auth.store'
 import { useToastStore } from '../../stores/toast.store'
 import { useUIStore } from '../../stores/ui.store'
-import { readAgentFileText } from '../../utils/agentFileAccess'
+import { authorizeAgentFile, readAgentFileText } from '../../utils/agentFileAccess'
 import { startableAgent } from '../../utils/appShortcuts'
 import { fileNoteFromContents } from '../../utils/fileNote'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -31,20 +32,30 @@ const ERROR_ROW_RESERVE = 48
 /** Viewport placement: anchored by its top edge, or by its bottom edge near the window's foot. */
 type MenuPosition = { left: number; top: number; bottom?: undefined } | { left: number; bottom: number; top?: undefined }
 
-export type MessageMenuItem = 'copy-text' | 'save-text' | 'copy-contents' | 'save-contents' | 'copy-path' | 'reference'
+export type MessageMenuItem =
+  | 'copy-text'
+  | 'save-text'
+  | 'open-in-browser'
+  | 'copy-contents'
+  | 'save-contents'
+  | 'copy-path'
+  | 'reference'
 
 /**
  * The menu's items, in groups separated by a divider. Decided once, from the
  * reference as the transcript resolved it, so nothing appears or disappears
  * while the menu is open: a file whose contents cannot be text — a folder, a
- * known binary type, a credential file — offers its path only.
+ * known binary type, a credential file — offers its path only. An HTML file
+ * (`.html`, `.htm`, `.xhtml`) also offers Open in browser, first.
  */
 export function messageMenuItems(file: FileRefTarget | undefined): MessageMenuItem[][] {
   if (!file) return [['copy-text', 'save-text']]
   const { ref } = file
   const pathOnly = ref.kind === 'dir' || isCredentialFileRef(ref) || agentFileContentKind(ref.path) === 'binary'
   const pathGroup: MessageMenuItem[] = ['copy-path', 'reference']
-  return pathOnly ? [pathGroup] : [['copy-contents', 'save-contents'], pathGroup]
+  if (pathOnly) return [pathGroup]
+  const contents: MessageMenuItem[] = ['copy-contents', 'save-contents']
+  return previewKindFor(ref.path) === 'html' ? [['open-in-browser'], contents, pathGroup] : [contents, pathGroup]
 }
 
 /** What a new chat about `ref` starts with: its path, ready for the rest of the sentence. */
@@ -297,6 +308,23 @@ function MessageContextMenu({ x, y, text, highlight, file, onClose }: MenuState 
       const note = fileNoteFromContents(file.ref.path, contents)
       await saveNote(note.body, note.title)
     }, 'Could not save to Notes.'),
+    // Main asks first for a file outside the agent folder, as a preview would.
+    'open-in-browser': () => run('open-in-browser', async (fail) => {
+      if (!file) return
+      const input = { agentId: file.agentId, path: file.ref.path }
+      consentPending.current = true
+      let access: Awaited<ReturnType<typeof authorizeAgentFile>>
+      try {
+        access = await authorizeAgentFile(input)
+      } finally {
+        consentPending.current = false
+      }
+      if (!access.success) return fail(access.error)
+      if (!access.approved) return onClose()
+      const result = await window.api.agentFiles.openInBrowser(input)
+      if (result.success) onClose()
+      else fail(result.error)
+    }, 'Could not open the file in the browser.'),
     'copy-path': () => run('copy-path', async () => {
       if (!file) return
       await navigator.clipboard.writeText(file.ref.path)
@@ -319,6 +347,7 @@ function MessageContextMenu({ x, y, text, highlight, file, onClose }: MenuState 
   const labels: Record<MessageMenuItem, [string, LucideIcon]> = {
     'copy-text': ['Copy text', Copy],
     'save-text': ['Save to Notes', NotebookPen],
+    'open-in-browser': ['Open in browser', Globe],
     'copy-contents': ['Copy contents', Copy],
     'save-contents': ['Save to Notes', NotebookPen],
     'copy-path': ['Copy full path', Link],

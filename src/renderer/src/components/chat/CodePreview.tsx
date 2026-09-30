@@ -9,9 +9,16 @@ import type { ElementContent, Root, RootContent } from 'hast'
  * `rehype-highlight`, so a file is tokenised exactly like a fenced block of the
  * same language in chat, and coloured by the same `.hljs-*` palette in main.css.
  */
-const lowlight = createLowlight({ python: common.python })
+const lowlight = createLowlight({
+  python: common.python,
+  // HTML is `xml` to highlight.js; its <style> and <script> are coloured as
+  // css and javascript only when those grammars are registered too.
+  xml: common.xml,
+  css: common.css,
+  javascript: common.javascript
+})
 
-export type CodeLanguage = 'python'
+export type CodeLanguage = 'python' | 'xml'
 
 /**
  * A source file as a highlighted, wrapped `<pre>`. Highlighting runs once per

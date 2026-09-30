@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import { createPortal } from 'react-dom'
+import { createPortal, flushSync } from 'react-dom'
 import type { Components, ExtraProps } from 'react-markdown'
 import { markdownComponents } from '../../utils/markdownComponents'
 import type { TocEntry } from '../../utils/markdownToc'
@@ -60,6 +60,12 @@ interface FilePreviewContentsProps {
    * animates.
    */
   left: number
+  /**
+   * Runs, and is committed, before a clicked entry is looked up and scrolled
+   * to: the XML tree unfolds and pages its way to the element here, which a
+   * folded ancestor would otherwise keep out of the DOM.
+   */
+  onBeforeGo?: (line: number) => void
 }
 
 /**
@@ -74,12 +80,18 @@ interface FilePreviewContentsProps {
  * clicked entry holds the highlight until the user scrolls by hand, so a
  * heading too near the end to reach the top still reads as where they went.
  */
-export function FilePreviewContents({ entries, bodyRef, overlay, left }: FilePreviewContentsProps): React.JSX.Element {
+export function FilePreviewContents({
+  entries,
+  bodyRef,
+  overlay,
+  left,
+  onBeforeGo
+}: FilePreviewContentsProps): React.JSX.Element {
   const navRef = useRef<HTMLElement>(null)
   const [active, setActive] = useState<number | null>(entries[0]?.line ?? null)
   /** The entry the user clicked, held until they scroll themselves. */
   const pinned = useRef<number | null>(null)
-  const listed = useMemo(() => new Set(entries.map((entry) => entry.line)), [entries])
+  const listed = useMemo(() => new Set(entries.filter((entry) => !entry.note).map((entry) => entry.line)), [entries])
   const minDepth = useMemo(() => Math.min(...entries.map((entry) => entry.depth)), [entries])
 
   const compute = useCallback((): void => {
@@ -156,6 +168,7 @@ export function FilePreviewContents({ entries, bodyRef, overlay, left }: FilePre
   }
 
   const go = (line: number): void => {
+    if (onBeforeGo) flushSync(() => onBeforeGo(line))
     const body = bodyRef.current
     const heading = body?.querySelector<HTMLElement>(`[data-heading-line="${line}"]`)
     if (!body || !heading) return
@@ -184,6 +197,18 @@ export function FilePreviewContents({ entries, bodyRef, overlay, left }: FilePre
     >
       <ul className="space-y-px">
         {entries.map((entry) => {
+          if (entry.note) {
+            return (
+              <li
+                key={entry.line}
+                style={{ paddingLeft: 8 + (entry.depth - minDepth) * 12 }}
+                className="truncate py-1 pr-2 text-xs italic text-[var(--color-text-muted)]"
+              >
+                {entry.text}
+                {entry.noteTag && <span className="font-mono not-italic">{` <${entry.noteTag}>`}</span>}
+              </li>
+            )
+          }
           const current = entry.line === active
           return (
             <li key={entry.line}>

@@ -9,6 +9,8 @@ import { ipcErrorShape } from '../errors'
 import { ipcHandle } from './_wrap'
 import { MAX_PREVIEW_BYTES } from '../../shared/filePreview'
 import type { MessageAttachment, PendingAttachment } from '../../shared/attachments'
+import type { FilesOpenInBrowserInput, FilesOpenInBrowserResult } from '../../shared/htmlPreview'
+import { openAttachmentInBrowser } from '../host/desktop/htmlPreview'
 
 export type FilesPickAndUploadResult =
   | { success: true; canceled?: false; files: MessageAttachment[] }
@@ -355,6 +357,32 @@ export function registerFilesHandlers(): void {
       }
     }
   )
+
+  /**
+   * Open in browser for an HTML attachment: copied under the profile's userData, then
+   * handed to the default web browser. Same gates as `files:read-preview`.
+   */
+  ipcHandle('files:open-in-browser', async (_event, data: FilesOpenInBrowserInput): Promise<FilesOpenInBrowserResult> => {
+    userActivation.requireActivated()
+    const userId = getProfileScopeUserId()
+    const sourceRaw = data?.source ?? 'cinna'
+    try {
+      assertFileScope(sourceRaw)
+      if (typeof data.fileId !== 'string' || data.fileId === '' || typeof data.filename !== 'string') {
+        return { success: false, error: 'Nothing to open.', code: 'invalid_input' }
+      }
+      await openAttachmentInBrowser({
+        userId,
+        attachmentId: data.fileId,
+        source: sourceRaw,
+        filename: data.filename
+      })
+      return { success: true }
+    } catch (err) {
+      const e = ipcErrorShape(err)
+      return { success: false, error: e.message, code: e.code }
+    }
+  })
 
   /**
    * Task-scoped attachment download. Distinct from `files:download`

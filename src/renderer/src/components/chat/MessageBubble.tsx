@@ -162,6 +162,7 @@ export function MessageBubble({
             align="right"
             onClick={(a) => openAttachment(a)}
             isLoading={isDownloading}
+            previewsOnClick
           />
         )}
         {downloadErrorForThisBubble && (

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { ExternalLink, FolderOpen, Loader2, MoreHorizontal } from 'lucide-react'
+import { ExternalLink, FolderOpen, Globe, Loader2, MoreHorizontal } from 'lucide-react'
 import { usePopover } from '../ui/usePopover'
 import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
 
@@ -12,17 +12,20 @@ export const PREVIEW_POPOVER_ATTR = 'data-file-preview-popover'
 
 interface FileActionsMenuProps {
   /** The action in flight, if any: the trigger spins and both items wait. */
-  pendingAction: 'open' | 'reveal' | null
+  pendingAction: 'open' | 'reveal' | 'browser' | null
   /** The body already says the file has gone: its actions could only fail. */
   fileGone: boolean
   onOpen: () => void
   onReveal: () => void
+  /** Offered for an HTML file: Open in browser, between Open and Open folder. */
+  onOpenInBrowser?: () => void
   /** The preview is fading out: an open menu goes with it. */
   dismissed: boolean
 }
 
 /**
- * The file preview's ⋯ menu: Open and Open folder for a file an agent named.
+ * The file preview's ⋯ menu: Open, Open in browser (HTML only) and Open folder
+ * for a file an agent named.
  *
  * They used to be labelled header buttons; the header now holds the Contents
  * toggle, and these two are occasional. The trigger stays enabled while the
@@ -41,6 +44,7 @@ export function FileActionsMenu({
   fileGone,
   onOpen,
   onReveal,
+  onOpenInBrowser,
   dismissed
 }: FileActionsMenuProps): React.JSX.Element {
   const menu = usePopover<HTMLButtonElement>('below-right')
@@ -94,6 +98,26 @@ export function FileActionsMenu({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, setOpen, triggerRef])
 
+  // A press inside the HTML preview's frame reaches the frame, not this
+  // document: no outside press closes the menu. Focus moving into the frame
+  // blurs the window with the frame as the active element — close on that.
+  // (Escape inside the frame never reaches the app; that one stays open.)
+  useEffect(() => {
+    if (!open) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const onBlur = (): void => {
+      // A tick later: the frame is the active element by then whichever order Chromium reports them in.
+      timer = setTimeout(() => {
+        if (document.activeElement instanceof HTMLIFrameElement) setOpen(false)
+      }, 0)
+    }
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('blur', onBlur)
+      clearTimeout(timer)
+    }
+  }, [open, setOpen])
+
   const run = (fn: () => void): void => {
     setOpen(false)
     triggerRef.current?.focus({ preventScroll: true })
@@ -130,6 +154,18 @@ export function FileActionsMenu({
               <ExternalLink size={12} />
               Open
             </button>
+            {onOpenInBrowser && (
+              <button
+                type="button"
+                role="menuitem"
+                className={MENU_ITEM}
+                disabled={disabled}
+                onClick={() => run(onOpenInBrowser)}
+              >
+                <Globe size={12} />
+                Open in browser
+              </button>
+            )}
             <button
               type="button"
               role="menuitem"

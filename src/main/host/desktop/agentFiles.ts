@@ -1,4 +1,4 @@
-import { dialog, shell, type BrowserWindow } from 'electron'
+import { app, dialog, shell, type BrowserWindow } from 'electron'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../../auth/scope'
 import { appSettingsService } from '../../services/appSettingsService'
 import { isGuardedLocation } from '../../services/localAgents/homePath'
@@ -8,6 +8,18 @@ import { toolDetectionService } from '../../services/localAgents/toolDetectionSe
 import { createAgentFileService } from '../../services/agentFiles/agentFileService'
 import { consentDialogOptions, createConsentRegistry, type ConsentPrompt } from '../../services/agentFiles/consent'
 import { findDefaultEditor } from '../../services/agentFiles/openStrategy'
+import { createBrowserLauncher } from '../../services/agentFiles/openInBrowser'
+
+/**
+ * Opens a file in the user's default web browser — the `https:` handler, which
+ * `getApplicationInfoForProtocol` names on macOS and Windows (Linux rejects
+ * it, and `xdg-open` is used there).
+ */
+export const openInBrowser = createBrowserLauncher({
+  platform: process.platform,
+  findBrowser: async () => (await app.getApplicationInfoForProtocol('https://')).path || null,
+  openPath: (path) => shell.openPath(path)
+})
 
 /**
  * The production wiring of {@link createAgentFileService}. Folder agents live
@@ -33,7 +45,8 @@ export const agentFileService = createAgentFileService({
   launchEditor,
   openPath: (path) => shell.openPath(path),
   openInTextEditor,
-  showItemInFolder: (path) => shell.showItemInFolder(path)
+  showItemInFolder: (path) => shell.showItemInFolder(path),
+  openInBrowser
 })
 
 /** Ask with a native dialog attached to the window that asked, so it cannot be skipped. */

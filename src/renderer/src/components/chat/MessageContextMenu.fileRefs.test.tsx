@@ -35,7 +35,9 @@ const refs = [
   ref('.env'),
   ref('credentials/key.json'),
   ref('pulled', { kind: 'dir' }),
-  ref('dump.gz')
+  ref('dump.gz'),
+  ref('out/report.html'),
+  ref('.env.html')
 ]
 const scope: FileRefScope = { agentId: 'folder:a', refs: new Map(refs.map((r) => [r.text, r])) }
 const content = refs.map((r) => `\`${r.text}\``).join(' and ') + ' and `npm test`.'
@@ -44,6 +46,7 @@ const clipboardText = vi.fn()
 const bridge = vi.fn()
 const authorize = vi.fn()
 const readText = vi.fn()
+const openInBrowser = vi.fn()
 const create = vi.fn()
 const agentsList = vi.fn()
 const DRAFT = composerDraftKey('alice', 'dashboard')
@@ -54,6 +57,7 @@ beforeEach(() => {
   bridge.mockReset().mockResolvedValue({ success: true })
   authorize.mockReset().mockResolvedValue({ success: true, approved: true })
   readText.mockReset().mockResolvedValue({ success: true, text: 'print(1)\n' })
+  openInBrowser.mockReset().mockResolvedValue({ success: true })
   create.mockReset().mockResolvedValue({ id: 'note-1' })
   agentsList.mockReset().mockResolvedValue([{ id: 'folder:a', name: 'GFCA', enabled: true }])
   vi.stubGlobal('navigator', { clipboard: { writeText: clipboardText } })
@@ -61,7 +65,7 @@ beforeEach(() => {
     app: { setTheme: async () => {} },
     notes: { create },
     clipboard: { writeText: bridge },
-    agentFiles: { authorize, readText },
+    agentFiles: { authorize, readText, openInBrowser },
     agents: { list: agentsList }
   } as never
   useAuthStore.setState({ currentUser: { id: 'alice' } as never })
@@ -110,7 +114,14 @@ describe('the items offered', () => {
     ['report.pdf', ['Copy full path', 'Reference in a new chat'], 0],
     ['.env', ['Copy full path', 'Reference in a new chat'], 0],
     ['credentials/key.json', ['Copy full path', 'Reference in a new chat'], 0],
-    ['pulled', ['Copy full path', 'Reference in a new chat'], 0]
+    ['pulled', ['Copy full path', 'Reference in a new chat'], 0],
+    [
+      'out/report.html',
+      ['Open in browser', 'Copy contents', 'Save to Notes', 'Copy full path', 'Reference in a new chat'],
+      2
+    ],
+    // A credential name offers its path only, html or not.
+    ['.env.html', ['Copy full path', 'Reference in a new chat'], 0]
   ])('over %s: %j', (text, items, separators) => {
     mount()
     openOn(text)
@@ -145,6 +156,30 @@ describe('the items offered', () => {
 })
 
 describe('the file actions', () => {
+  it('opens an html file in the browser after authorizing it, and closes', async () => {
+    mount()
+    openOn('out/report.html')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open in browser' }))
+    await waitFor(() => expect(openInBrowser).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/out/report.html' }))
+    expect(authorize).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/out/report.html' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  })
+
+  it('says why in the menu when no browser opened it, and opens nothing when the user declines', async () => {
+    openInBrowser.mockResolvedValueOnce({ success: false, code: 'launch_failed', error: 'No browser could open this file.' })
+    mount()
+    openOn('out/report.html')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open in browser' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('No browser could open this file.')
+    expect(screen.getByRole('menu')).toBeTruthy()
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    authorize.mockResolvedValueOnce({ success: true, approved: false })
+    openOn('out/report.html')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open in browser' }))
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    expect(openInBrowser).toHaveBeenCalledTimes(1)
+  })
+
   it("copies a file's contents through main's clipboard, after authorizing it", async () => {
     mount()
     openOn('src/main.py')

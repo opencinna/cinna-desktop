@@ -7,7 +7,8 @@ const api = vi.hoisted(() => {
     authorize: vi.fn(),
     readPreview: vi.fn(),
     open: vi.fn(),
-    reveal: vi.fn()
+    reveal: vi.fn(),
+    openInBrowser: vi.fn()
   }
   const files = { readPreview: vi.fn() }
   Object.assign(window, { api: { agentFiles, files } })
@@ -235,6 +236,24 @@ describe('header actions', () => {
     await store().openAgentFileExternally()
     expect(api.agentFiles.open).not.toHaveBeenCalled()
     expect(store()).toMatchObject({ actionError: null, pendingAction: null })
+  })
+
+  it('open an html agent file in the browser after asking main, and say so when it fails', async () => {
+    const page = ref({ path: '/agent/out/report.html', displayPath: 'out/report.html', text: 'out/report.html' })
+    api.agentFiles.readPreview.mockResolvedValue({ success: true, text: '<p>', truncated: false })
+    await store().openAgentFile('folder:a', page)
+    expect(store().kind).toBe('html')
+    api.agentFiles.authorize.mockClear()
+    api.agentFiles.openInBrowser.mockResolvedValue({ success: false, code: 'launch_failed', error: 'No browser could open this file.' })
+    await store().openInBrowser()
+    expect(api.agentFiles.authorize).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/out/report.html' })
+    expect(api.agentFiles.openInBrowser).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/out/report.html' })
+    expect(store()).toMatchObject({
+      actionError: { action: 'browser', code: 'launch_failed', reason: 'No browser could open this file.' },
+      pendingAction: null
+    })
+    expect(actionErrorText(store().actionError!)).toBe('No browser could open this file.')
+    expect(actionErrorText({ action: 'browser', code: null, reason: 'boom' })).toBe("Couldn't open it in the browser: boom")
   })
 
   it('do nothing for a folder shown in its error state', async () => {

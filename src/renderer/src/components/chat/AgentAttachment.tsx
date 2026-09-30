@@ -39,6 +39,7 @@ export function AgentAttachment({
         align={align}
         onClick={(a) => openAttachment(a)}
         isLoading={isDownloading}
+        previewsOnClick
       />
       {errorForThisFile && (
         <div

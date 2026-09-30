@@ -11,6 +11,7 @@ import { createDesktopHost, desktopEventPublisher } from './host/desktop/runtime
 import { taskRuntimeService } from './services/taskRuntimeService'
 import { app, shell, BrowserWindow, Menu, dialog, powerMonitor } from 'electron'
 import { join } from 'path'
+import { pathToFileURL } from 'url'
 import { appendFileSync, renameSync, statSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerAllIpcHandlers } from './ipc'
@@ -33,6 +34,12 @@ import {
   connectUrlFromArgv,
   registerConnectScheme
 } from './host/desktop/connectIntentService'
+import {
+  clearOpenInBrowserCopiesAtStart,
+  guardPreviewFrames,
+  installHtmlPreviewSession,
+  registerHtmlPreviewScheme
+} from './host/desktop/htmlPreview'
 import { BACKGROUND_WINDOW, focusMainWindow, installWindowResolver } from './window/focus'
 import { AGENT_SHORTCUT_SLOTS, type AppShortcut } from '../shared/appShortcuts'
 import {
@@ -95,6 +102,10 @@ connectIntentService.install(getMainWindow)
 // that leaves it pointing at a temporary sandbox has broken the machine it ran
 // on. The suite drives the same funnel through `--cinna-connect-intent=`.
 if (!overrideUserData) registerConnectScheme()
+
+// The HTML preview frame's `cinna-preview:` scheme. Privileges can only be
+// granted before `app` is ready; the handler is installed in `startup()`.
+registerHtmlPreviewScheme()
 
 if (!app.requestSingleInstanceLock()) {
   // A second copy started (a link click, a double-launch). The primary instance
@@ -221,11 +232,19 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: true,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // The default, stated: the preload and `window.api` stay out of every
+      // subframe, the HTML preview frame included.
+      nodeIntegrationInSubFrames: false
     }
   })
 
   trackWindowState(mainWindow)
+  const appUrl =
+    is.dev && process.env['ELECTRON_RENDERER_URL']
+      ? process.env['ELECTRON_RENDERER_URL']
+      : pathToFileURL(join(__dirname, '../renderer/index.html')).href
+  guardPreviewFrames(mainWindow, appUrl)
 
   mainWindow.on('ready-to-show', () => {
     if (isMaximized) mainWindow!.maximize()
@@ -420,6 +439,8 @@ function startup(): void {
 
   initializeHubCore()
   registerAllIpcHandlers()
+  installHtmlPreviewSession()
+  clearOpenInBrowserCopiesAtStart()
   // Providers are activated through auth flow (auth:get-startup / auth:login)
 
   createWindow()

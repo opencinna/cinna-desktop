@@ -246,6 +246,21 @@ export const fileService = {
     source: FileScope
     maxBytes: number
   }): Promise<{ text: string; truncated: boolean }> {
+    const { bytes, truncated } = await fileService.readBytes(opts)
+    return { text: decodePreviewText(bytes, truncated), truncated }
+  },
+
+  /**
+   * An attachment's bytes, capped at `maxBytes`, in memory: the local store
+   * behind the ownership-scoped row, or the Cinna backend with the user's
+   * bearer. The read behind {@link readTextPreview} and the HTML preview frame.
+   */
+  async readBytes(opts: {
+    userId: string
+    attachmentId: string
+    source: FileScope
+    maxBytes: number
+  }): Promise<{ bytes: Buffer; truncated: boolean }> {
     let bytes: Buffer
     let truncated = false
     if (opts.source === 'local') {
@@ -270,7 +285,7 @@ export const fileService = {
       bytes = read.bytes
       truncated = read.truncated
     }
-    return { text: decodePreviewText(bytes, truncated), truncated }
+    return { bytes, truncated }
   }
 }
 

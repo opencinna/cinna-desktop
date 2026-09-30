@@ -6,6 +6,7 @@ import {
   FileText,
   Filter,
   Folder,
+  Globe,
   Loader2,
   TableOfContents,
   X
@@ -18,6 +19,8 @@ import rehypeHighlight from 'rehype-highlight'
 import { useFrontmatter } from '../ui/FrontmatterTable'
 import { markdownToc } from '../../utils/markdownToc'
 import { pythonOutline } from '../../utils/pythonOutline'
+import { parseXml, type ParsedXml } from '../../utils/xmlDocument'
+import { xmlOutline } from '../../utils/xmlOutline'
 import { useUIStore } from '../../stores/ui.store'
 import { FileActionsMenu, PREVIEW_POPOVER_ATTR } from './FileActionsMenu'
 import {
@@ -28,6 +31,8 @@ import {
 } from './FilePreviewContents'
 import { JsonTree, JsonTreeBoundary, useParsedJson } from './JsonTree'
 import { CodePreview } from './CodePreview'
+import { XmlTree, type XmlReveal } from './XmlTree'
+import { HtmlPreview, type HtmlPreviewView } from './HtmlPreview'
 import {
   actionErrorRepeatsBody,
   actionErrorText,
@@ -35,7 +40,7 @@ import {
   useFilePreviewStore
 } from '../../stores/filePreview.store'
 import { useFileDownloadStore } from '../../stores/fileDownload.store'
-import type { PreviewRenderKind } from '../../../../shared/filePreview'
+import { MAX_PREVIEW_BYTES, type PreviewRenderKind } from '../../../../shared/filePreview'
 import { agentFileName } from '../../../../shared/agentFiles'
 
 /** Labelled secondary button at the app-chrome scale (Contents); colours by state. */
@@ -234,7 +239,7 @@ function useCardEntrance({
  */
 export function FilePreviewModal(): React.JSX.Element | null {
   const live = useFilePreviewStore()
-  const { close, openAgentFileExternally, revealAgentFile } = live
+  const { close, openAgentFileExternally, revealAgentFile, openInBrowser } = live
   const contentsOpen = useUIStore((s) => s.previewContentsOpen)
   const togglePreviewContents = useUIStore((s) => s.togglePreviewContents)
   // Closing fades out as fast as opening faded in. The store closes at once;
@@ -280,9 +285,19 @@ export function FilePreviewModal(): React.JSX.Element | null {
   // a Python file lists its functions, classes and methods, and CodePreview
   // marks their lines.
   const markdown = useFrontmatter(kind === 'markdown' ? text : '')
+  // XML is parsed once, here: the outline and the tree share the document.
+  const xml = useMemo(() => (kind === 'xml' ? parseXml(text) : null), [kind, text])
+  const xmlReveal = useRef<XmlReveal | null>(null)
   const toc = useMemo(
-    () => (kind === 'markdown' ? markdownToc(markdown.body) : kind === 'python' ? pythonOutline(text) : null),
-    [kind, markdown.body, text]
+    () =>
+      kind === 'markdown'
+        ? markdownToc(markdown.body)
+        : kind === 'python'
+          ? pythonOutline(text)
+          : kind === 'xml'
+            ? xmlOutline(xml)
+            : null,
+    [kind, markdown.body, text, xml]
   )
   const anchorLines = useMemo(() => toc?.entries.map((entry) => entry.line), [toc])
   const targetKey = !target
@@ -296,6 +311,9 @@ export function FilePreviewModal(): React.JSX.Element | null {
   useEffect(() => {
     setFiltersEnabled(false)
   }, [targetKey])
+  // HTML: Rendered or Source, for this open only — every open starts Rendered.
+  const [htmlViewFor, setHtmlViewFor] = useState<{ openSeq: number; view: HtmlPreviewView } | null>(null)
+  const htmlView: HtmlPreviewView = htmlViewFor?.openSeq === openSeq ? htmlViewFor.view : 'rendered'
 
   const loaded = target !== null && !isLoading && error === null && !notice && kind !== null
   const showContents = loaded && toc?.show === true
@@ -437,7 +455,11 @@ export function FilePreviewModal(): React.JSX.Element | null {
         ? agentFileErrorText(agentFile.ref, failedStep, errorCode, error)
         : `Couldn't load preview: ${error}`
   const showActionError =
-    agentFile !== null && actionError !== null && !actionErrorRepeatsBody({ actionError, error, errorCode, isLoading })
+    actionError !== null &&
+    (agentFile === null || !actionErrorRepeatsBody({ actionError, error, errorCode, isLoading }))
+  const html = kind === 'html'
+  // The page fills a fixed-height body, so the card never resizes as the frame loads.
+  const htmlRendered = html && htmlView === 'rendered' && !isLoading && bodyError === null && !notice
   const TitleIcon = agentFile?.ref.kind === 'dir' ? Folder : FileText
 
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
@@ -475,8 +497,11 @@ export function FilePreviewModal(): React.JSX.Element | null {
         ref={cardRef}
         tabIndex={-1}
         style={cardStyle}
-        className="relative w-full max-w-3xl max-h-[80vh] flex flex-col rounded-xl border
-          border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg focus:outline-none"
+        className={
+          'relative w-full max-h-[80vh] flex flex-col rounded-xl border border-[var(--color-border)] ' +
+          'bg-[var(--color-bg-secondary)] shadow-lg focus:outline-none ' +
+          (html ? 'max-w-6xl h-[80vh]' : 'max-w-3xl')
+        }
       >
         <div
           className="flex items-center justify-between gap-2 px-5 py-3 border-b
@@ -516,6 +541,30 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 <Filter size={14} />
               </button>
             )}
+            {html && bodyError === null && !notice && (
+              <div
+                role="group"
+                aria-label="View"
+                className="inline-flex rounded-md border border-[var(--color-border)]"
+              >
+                {(['rendered', 'source'] as const).map((view) => (
+                  <button
+                    key={view}
+                    type="button"
+                    aria-pressed={htmlView === view}
+                    onClick={() => setHtmlViewFor({ openSeq, view })}
+                    className={
+                      'px-2 py-0.5 rounded-[5px] text-xs font-medium transition-colors ' +
+                      (htmlView === view
+                        ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
+                        : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]')
+                    }
+                  >
+                    {view === 'rendered' ? 'Rendered' : 'Source'}
+                  </button>
+                ))}
+              </div>
+            )}
             {showContents && (
               <button
                 type="button"
@@ -542,7 +591,22 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 fileGone={fileGone}
                 onOpen={() => void openAgentFileExternally()}
                 onReveal={() => void revealAgentFile()}
+                onOpenInBrowser={html ? () => void openInBrowser() : undefined}
               />
+            )}
+            {attachmentTarget && html && (
+              <button
+                type="button"
+                onClick={() => void openInBrowser()}
+                disabled={pendingAction !== null}
+                className="p-1 rounded text-[var(--color-text-muted)]
+                  hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]
+                  disabled:opacity-50 transition-colors"
+                title="Open in browser"
+                aria-label={`Open ${attachmentTarget.filename} in browser`}
+              >
+                {pendingAction === 'browser' ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />}
+              </button>
             )}
             {attachmentTarget && (
               <button
@@ -592,8 +656,11 @@ export function FilePreviewModal(): React.JSX.Element | null {
           <div
             ref={bodyRef}
             style={showContents ? { width: closedWidth - CARD_BORDER_X, flex: 'none' } : undefined}
-            className="px-5 py-4 overflow-auto flex-1 min-w-0 rounded-b-xl focus-visible:outline-2
-              focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+            className={
+              (htmlRendered ? 'overflow-hidden' : 'px-5 py-4 overflow-auto') +
+              ' flex-1 min-w-0 rounded-b-xl focus-visible:outline-2' +
+              ' focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)]'
+            }
           >
             {isLoading ? (
               <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
@@ -612,6 +679,27 @@ export function FilePreviewModal(): React.JSX.Element | null {
               <>
                 {kind === 'markdown' ? (
                   <MarkdownPreview key={targetKey} card={markdown.card} body={markdown.body} />
+                ) : kind === 'xml' ? (
+                  <XmlPreview key={targetKey} text={text} parsed={xml} truncated={truncated} revealRef={xmlReveal} />
+                ) : html && targetKey ? (
+                  <HtmlPreview
+                    key={targetKey}
+                    inputKey={targetKey}
+                    input={
+                      agentFile
+                        ? { type: 'agentFile', agentId: agentFile.agentId, path: agentFile.ref.path }
+                        : {
+                            type: 'attachment',
+                            fileId: attachmentTarget?.id ?? '',
+                            source: attachmentTarget?.source ?? 'cinna',
+                            filename: attachmentTarget?.filename ?? '',
+                            mimeType: attachmentTarget?.mimeType
+                          }
+                    }
+                    view={htmlView}
+                    text={text}
+                    title={filename}
+                  />
                 ) : (
                   <PreviewBody
                     key={targetKey}
@@ -621,7 +709,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
                     anchorLines={anchorLines}
                   />
                 )}
-                {truncated && (
+                {truncated && !htmlRendered && (
                   <div className="mt-3 text-[10px] italic text-[var(--color-text-muted)]">
                     {agentFile
                       ? 'Preview truncated — open the file to see the full content.'
@@ -638,6 +726,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
               bodyRef={bodyRef}
               overlay={!sideBySide}
               left={closedWidth - CARD_BORDER_X}
+              onBeforeGo={kind === 'xml' ? (line) => xmlReveal.current?.(line) : undefined}
             />
           )}
         </div>
@@ -790,6 +879,43 @@ function JsonPreview({ text }: { text: string }): React.JSX.Element {
   return (
     <JsonTreeBoundary key={text} fallback={raw}>
       <JsonTree value={parsed.value} />
+    </JsonTreeBoundary>
+  )
+}
+
+/**
+ * Parsed by the modal, which also builds the outline from it. A tree when the
+ * text is well-formed; the highlighted source otherwise (malformed, or cut by
+ * the preview cap), under a note saying why.
+ */
+function XmlPreview({
+  text,
+  parsed,
+  truncated,
+  revealRef
+}: {
+  text: string
+  parsed: ParsedXml | null
+  /** Cut at the preview cap: a valid file that no longer parses is not a broken one. */
+  truncated: boolean
+  revealRef: RefObject<XmlReveal | null>
+}): React.JSX.Element {
+  const source = <CodePreview text={text} language="xml" />
+  if (!parsed) {
+    return (
+      <>
+        <div className="mb-3 text-xs text-[var(--color-text-muted)]">
+          {truncated
+            ? `The preview is cut at ${Math.round(MAX_PREVIEW_BYTES / 1024)} KB, so it is shown as source.`
+            : 'This XML could not be parsed, so it is shown as source.'}
+        </div>
+        {source}
+      </>
+    )
+  }
+  return (
+    <JsonTreeBoundary key={text} fallback={source}>
+      <XmlTree doc={parsed} revealRef={revealRef} />
     </JsonTreeBoundary>
   )
 }

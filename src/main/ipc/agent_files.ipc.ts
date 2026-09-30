@@ -43,7 +43,13 @@ export function registerAgentFileHandlers(): void {
     return agentFileService.open(data)
   })
 
-  ipcHandle('agent-files:reveal', (_event, data: unknown): Promise<AgentFileActionResult> => {
+  /** An HTML file in the default web browser (not the `.html` default app). */
+  ipcHandle('agent-files:open-in-browser', (_event, data: unknown): Promise<AgentFileActionResult> => {
+    userActivation.requireActivated()
+    return agentFileService.openInBrowser(data)
+  })
+
+  ipcHandle('agent-files:reveal',(_event, data: unknown): Promise<AgentFileActionResult> => {
     userActivation.requireActivated()
     return agentFileService.reveal(data)
   })

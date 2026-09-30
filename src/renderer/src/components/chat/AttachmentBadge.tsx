@@ -1,4 +1,5 @@
 import { Paperclip, X, Image, FileText, Archive, Loader2 } from 'lucide-react'
+import { previewKindFor } from '../../../../shared/filePreview'
 
 /**
  * Visual subset of an attachment the badge needs to render. Carries no
@@ -26,6 +27,12 @@ interface AttachmentBadgeProps {
   isLoading?: boolean
   /** Compact pill for inside the input area vs. under-bubble display. */
   variant?: 'input' | 'message'
+  /**
+   * The click opens the in-app preview for a file it can show
+   * (`useAttachmentOpen`), so such a badge is named "Preview X" rather than
+   * "Download X". Off for a list whose click always downloads.
+   */
+  previewsOnClick?: boolean
 }
 
 function pickIcon(mime: string): React.JSX.Element {
@@ -59,7 +66,8 @@ function truncate(name: string, max = 24): string {
  *
  *  - `onRemove` set → trailing [x] removes the pending attachment (input variant)
  *  - `onClick` set → the whole chip is a button; click triggers download
- *    (message variant — opens save-as dialog)
+ *    (message variant — opens save-as dialog), or the in-app preview for a
+ *    file it can show when `previewsOnClick` — named to match
  *  - neither → static read-only display
  *
  * `onRemove` and `onClick` are mutually exclusive at the call site — input
@@ -70,7 +78,8 @@ export function AttachmentBadge({
   onRemove,
   onClick,
   isLoading,
-  variant = 'input'
+  variant = 'input',
+  previewsOnClick = false
 }: AttachmentBadgeProps): React.JSX.Element {
   const isInput = variant === 'input'
   const isClickable = !!onClick && !isLoading
@@ -87,8 +96,10 @@ export function AttachmentBadge({
   // show nothing rather than a misleading "0 B".
   const hasSize = attachment.size > 0
   const sizeSuffix = hasSize ? ` (${formatSize(attachment.size)})` : ''
+  const clickVerb =
+    previewsOnClick && previewKindFor(attachment.filename, attachment.mimeType) ? 'Preview' : 'Download'
   const titleText = isClickable
-    ? `Download ${attachment.filename}${sizeSuffix}`
+    ? `${clickVerb} ${attachment.filename}${sizeSuffix}`
     : `${attachment.filename}${sizeSuffix}`
 
   const innerContent = (
@@ -131,7 +142,7 @@ export function AttachmentBadge({
         disabled={isLoading}
         title={titleText}
         className={baseClasses}
-        aria-label={`Download ${attachment.filename}`}
+        aria-label={`${clickVerb} ${attachment.filename}`}
       >
         {innerContent}
       </button>
@@ -157,6 +168,8 @@ interface AttachmentListProps<T extends AttachmentBadgeData> {
    */
   isLoading?: (id: string) => boolean
   align?: 'left' | 'right'
+  /** See {@link AttachmentBadgeProps.previewsOnClick}. */
+  previewsOnClick?: boolean
 }
 
 /**
@@ -171,7 +184,8 @@ export function AttachmentList<T extends AttachmentBadgeData>({
   onRemove,
   onClick,
   isLoading,
-  align = 'left'
+  align = 'left',
+  previewsOnClick
 }: AttachmentListProps<T>): React.JSX.Element | null {
   if (attachments.length === 0) return null
   return (
@@ -189,6 +203,7 @@ export function AttachmentList<T extends AttachmentBadgeData>({
           onRemove={onRemove ? () => onRemove(a.id) : undefined}
           onClick={onClick ? () => onClick(a) : undefined}
           isLoading={isLoading ? isLoading(a.id) : false}
+          previewsOnClick={previewsOnClick}
         />
       ))}
     </div>

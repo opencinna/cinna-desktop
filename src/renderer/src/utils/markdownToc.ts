@@ -19,6 +19,14 @@ export interface TocEntry {
   text: string
   /** 1-based source line: the key the rendered heading carries in `data-heading-line`. */
   line: number
+  /**
+   * A muted line saying what was left out ("… 12 more"), not a link:
+   * no heading carries its `line`, and the panel neither scrolls to it nor
+   * marks it current.
+   */
+  note?: true
+  /** A note's element tag when everything it stands for shares one, shown after it as `<item>` in mono. */
+  noteTag?: string
 }
 
 export interface MarkdownToc {

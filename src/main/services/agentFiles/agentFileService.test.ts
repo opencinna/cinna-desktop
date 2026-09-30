@@ -102,6 +102,7 @@ interface ServiceOptions {
   maxTextBytes?: number
   /** Runs while the service looks up the default editor, between its check and its launch. */
   onEditorLookup?: () => void
+  browserFailure?: boolean
 }
 
 function makeService(options: ServiceOptions = {}) {
@@ -132,7 +133,11 @@ function makeService(options: ServiceOptions = {}) {
       return options.openPathFailure ?? ''
     },
     openInTextEditor: async (path) => void launched.push(['text-editor', path]),
-    showItemInFolder: (path) => void launched.push(['reveal', path])
+    showItemInFolder: (path) => void launched.push(['reveal', path]),
+    openInBrowser: async (path) => {
+      launched.push(['browser', path])
+      if (options.browserFailure) throw new Error(`could not open ${path}`)
+    }
   })
 }
 
@@ -495,6 +500,141 @@ describe('resolve', () => {
     expect(await makeService({ home, isGuardedLocation: guarded }).resolve({ agentId: 'folder:a', candidates })).toEqual({
       success: true,
       refs: []
+    })
+  })
+})
+
+describe('the HTML preview frame', () => {
+  let site: string
+  let page: string
+  const CAP = 64
+  const text = (result: { success: boolean }): string | null =>
+    result.success ? (result as unknown as { bytes: Buffer }).bytes.toString('utf8') : null
+
+  beforeAll(() => {
+    site = join(agent, 'site')
+    page = join(outside, 'page')
+    write(join(site, 'report.html'), '<h1>report</h1>')
+    write(join(site, 'style.css'), 'h1{}')
+    write(join(site, 'img/x.png'), 'png')
+    write(join(site, 'data.json'), '{"a":1}')
+    write(join(site, '.env'), 'SECRET=4')
+    write(join(site, '.env.local'), 'SECRET=5')
+    write(join(site, '.git', 'config'), '[remote]')
+    write(join(site, '.claude', 'settings.json'), '{}')
+    write(join(site, 'img', '.hidden.png'), 'png')
+    write(join(site, 'big.js'), 'x'.repeat(CAP + 1))
+    mkdirSync(join(site, 'sub'), { recursive: true })
+    write(join(agent, 'secret.txt'), 'beside the site, not in it')
+    write(join(agent, 'index.html'), '<p>root</p>')
+    symlinkSync(join(agent, 'secret.txt'), join(site, 'escape.txt'))
+    symlinkSync(join(outside, 'notes.md'), join(site, 'away.md'))
+    write(join(page, 'index.html'), '<p>outside</p>')
+    write(join(page, 'app.js'), 'run()')
+  })
+
+  const doc = (path = join(site, 'report.html')): { agentId: string; path: string } => ({ agentId: 'folder:a', path })
+
+  it('serves the document and the files beside it, whole', async () => {
+    const service = makeService()
+    expect(await service.htmlDocumentAccess(doc())).toEqual({ success: true })
+    expect(text(await service.readHtmlDocument(doc(), CAP))).toBe('<h1>report</h1>')
+    expect(text(await service.readHtmlAsset(doc(), ['style.css'], CAP))).toBe('h1{}')
+    expect(text(await service.readHtmlAsset(doc(), ['img', 'x.png'], CAP))).toBe('png')
+    expect(text(await service.readHtmlAsset(doc(), ['data.json'], CAP))).toBe('{"a":1}')
+  })
+
+  it('refuses a document that is not html, is a folder, or is outside and unapproved — without asking', async () => {
+    const service = makeService()
+    expect(await service.htmlDocumentAccess(doc(join(site, 'style.css')))).toMatchObject({ code: 'not_previewable' })
+    expect(await service.htmlDocumentAccess(doc(site))).toMatchObject({ code: 'not_a_file' })
+    expect(await service.readHtmlDocument(doc(join(page, 'index.html')), CAP)).toMatchObject({ code: 'needs_consent' })
+    expect(prompts).toEqual([])
+  })
+
+  it('refuses a document or an asset over the cap rather than cutting it', async () => {
+    const service = makeService()
+    expect(await service.readHtmlDocument(doc(), 4)).toMatchObject({ code: 'too_large' })
+    expect(await service.readHtmlAsset(doc(), ['big.js'], CAP)).toMatchObject({ code: 'too_large' })
+  })
+
+  it('refuses a climb out of the document folder, however it is spelled', async () => {
+    const service = makeService()
+    const climbs = [
+      ['..', 'secret.txt'],
+      ['.', 'style.css'],
+      ['img', '..', '..', 'secret.txt'],
+      ['../secret.txt'],
+      ['a\\..\\..\\secret.txt'],
+      ['c:secret'],
+      ['nul\0.txt'],
+      [''],
+      []
+    ]
+    for (const segments of climbs) {
+      expect(await service.readHtmlAsset(doc(), segments, CAP)).toMatchObject({ success: false, code: 'invalid_input' })
+    }
+    expect(await service.readHtmlAsset(doc(), 'style.css', CAP)).toMatchObject({ code: 'invalid_input' })
+  })
+
+  it('never serves a dotfile or anything in a dot-folder beside the document', async () => {
+    const service = makeService()
+    for (const segments of [['.env'], ['.env.local'], ['.git', 'config'], ['.claude', 'settings.json'], ['img', '.hidden.png']]) {
+      expect(await service.readHtmlAsset(doc(), segments, CAP)).toMatchObject({ success: false, code: 'invalid_input' })
+    }
+  })
+
+  it('refuses a symlink out of the document folder, inside the agent folder or not', async () => {
+    const service = makeService()
+    expect(await service.readHtmlAsset(doc(), ['escape.txt'], CAP)).toMatchObject({ code: 'not_found' })
+    expect(await service.readHtmlAsset(doc(), ['away.md'], CAP)).toMatchObject({ success: false })
+  })
+
+  it('never serves a credential file, a folder or a missing file', async () => {
+    const service = makeService()
+    expect(await service.readHtmlAsset(doc(), ['.env'], CAP)).toMatchObject({ success: false })
+    const root = doc(join(agent, 'index.html'))
+    expect(await service.readHtmlAsset(root, ['credentials', 'service.json'], CAP)).toMatchObject({
+      code: 'credential_file'
+    })
+    expect(await service.readHtmlAsset(doc(), ['sub'], CAP)).toMatchObject({ code: 'not_a_file' })
+    expect(await service.readHtmlAsset(doc(), ['nope.css'], CAP)).toMatchObject({ code: 'not_found' })
+  })
+
+  it('serves beside an approved outside document only what an approval covers', async () => {
+    const service = makeService()
+    const outsideDoc = doc(join(page, 'index.html'))
+    await service.authorize(outsideDoc, approve(false))
+    expect(text(await service.readHtmlDocument(outsideDoc, CAP))).toBe('<p>outside</p>')
+    expect(await service.readHtmlAsset(outsideDoc, ['app.js'], CAP)).toMatchObject({ code: 'needs_consent' })
+    await service.authorize(doc(join(page, 'app.js')), approve(false))
+    expect(text(await service.readHtmlAsset(outsideDoc, ['app.js'], CAP))).toBe('run()')
+  })
+})
+
+describe('openInBrowser', () => {
+  it('hands an html file inside the folder to the browser', async () => {
+    const service = makeService()
+    write(join(agent, 'open/report.html'), '<p>x</p>')
+    expect(await service.openInBrowser(at(join(agent, 'open/report.html')))).toEqual({ success: true })
+    expect(launched).toEqual([['browser', join(agent, 'open/report.html')]])
+  })
+
+  it('refuses anything but html, and an outside file without approval', async () => {
+    const service = makeService()
+    expect(await service.openInBrowser(at(join(agent, 'main.py')))).toMatchObject({ code: 'not_previewable' })
+    write(join(outside, 'o.html'), '<p>o</p>')
+    expect(await service.openInBrowser(at(join(outside, 'o.html')))).toMatchObject({ code: 'needs_consent' })
+    expect(launched).toEqual([])
+  })
+
+  it('says so when no browser opened it', async () => {
+    const service = makeService({ browserFailure: true })
+    write(join(agent, 'open/fail.html'), '<p>x</p>')
+    expect(await service.openInBrowser(at(join(agent, 'open/fail.html')))).toEqual({
+      success: false,
+      code: 'launch_failed',
+      error: 'No browser could open this file.'
     })
   })
 })

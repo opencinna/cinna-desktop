@@ -193,6 +193,10 @@ export type FileErrorCode =
   | 'read_failed'
   | 'write_failed'
   | 'unsupported_source'
+  /** Not a type the action handles (Open in browser takes HTML only). */
+  | 'not_previewable'
+  /** The file is on disk, but nothing opened it. */
+  | 'launch_failed'
 
 export type AppSettingsErrorCode = 'invalid_key' | 'invalid_value'
 

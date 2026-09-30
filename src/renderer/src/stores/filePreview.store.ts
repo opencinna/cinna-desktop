@@ -31,9 +31,12 @@ export type PreviewNotice = 'credential' | 'unsupported'
 /** Which step of an agent-file open failed; it decides how the body words the reason. */
 export type AgentFileFailedStep = 'authorize' | 'preview' | 'reveal'
 
-/** A header action (Open / Open folder) that failed, shown inline under the header. */
+/** A header action: Open, Open folder, Open in browser. */
+export type PreviewAction = 'open' | 'reveal' | 'browser'
+
+/** A header action (Open / Open folder / Open in browser) that failed, shown inline under the header. */
 export interface PreviewActionError {
-  action: 'open' | 'reveal'
+  action: PreviewAction
   /** Null when the call itself threw rather than answering. */
   code: AgentFileErrorCode | null
   reason: string
@@ -81,13 +84,15 @@ interface FilePreviewState {
    *  reopened a different file. */
   requestId: number
   /** The header action in flight for an agent file. */
-  pendingAction: 'open' | 'reveal' | null
+  pendingAction: PreviewAction | null
   /** Why the last Open / Open folder failed; shown inline, closes nothing. */
   actionError: PreviewActionError | null
   openPreview: (attachment: MessageAttachment, kind: PreviewRenderKind) => Promise<void>
   openAgentFile: (agentId: string, ref: AgentFileRef, origin?: PreviewOrigin | null) => Promise<void>
   openAgentFileExternally: () => Promise<void>
   revealAgentFile: () => Promise<void>
+  /** An HTML agent file or attachment in the default web browser. */
+  openInBrowser: () => Promise<void>
   close: () => void
 }
 
@@ -158,6 +163,7 @@ export function agentFileErrorText(
  */
 export function actionErrorText(actionError: PreviewActionError): string {
   if (actionError.code === 'launch_failed') return actionError.reason
+  if (actionError.action === 'browser') return `Couldn't open it in the browser: ${actionError.reason}`
   return actionError.action === 'open'
     ? `Couldn't open it: ${actionError.reason}`
     : `Couldn't show it in its folder: ${actionError.reason}`
@@ -177,7 +183,7 @@ export function actionErrorRepeatsBody(
 }
 
 export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
-  const runAction = async (action: 'open' | 'reveal'): Promise<void> => {
+  const runAction = async (action: PreviewAction): Promise<void> => {
     const target = get().target
     if (target?.type !== 'agentFile' || target.ref.kind !== 'file' || get().pendingAction) return
     const input = { agentId: target.agentId, path: target.ref.path }
@@ -198,7 +204,9 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
       const result =
         action === 'open'
           ? await window.api.agentFiles.open(input)
-          : await window.api.agentFiles.reveal(input)
+          : action === 'browser'
+            ? await window.api.agentFiles.openInBrowser(input)
+            : await window.api.agentFiles.reveal(input)
       if (get().target !== target) return
       if (result.success) set({ pendingAction: null })
       else fail(result.code, result.error)
@@ -331,6 +339,30 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
 
     openAgentFileExternally: () => runAction('open'),
     revealAgentFile: () => runAction('reveal'),
+    openInBrowser: async () => {
+      const target = get().target
+      if (target?.type === 'agentFile') return runAction('browser')
+      if (target?.type !== 'attachment' || get().pendingAction) return
+      const { attachment } = target
+      // Main's `launch_failed` reason names the action itself; the row shows it as is.
+      const fail = (reason: string, code: AgentFileErrorCode | null = null): void => {
+        if (get().target !== target) return
+        set({ pendingAction: null, actionError: { action: 'browser', code, reason } })
+      }
+      set({ pendingAction: 'browser', actionError: null })
+      try {
+        const result = await window.api.files.openInBrowser({
+          fileId: attachment.id,
+          filename: attachment.filename,
+          source: attachment.source ?? 'cinna'
+        })
+        if (get().target !== target) return
+        if (result.success) set({ pendingAction: null })
+        else fail(result.error, result.code === 'launch_failed' ? 'launch_failed' : null)
+      } catch (err) {
+        fail(unwrapIpcError(err))
+      }
+    },
 
     close: () =>
       set((s) => ({

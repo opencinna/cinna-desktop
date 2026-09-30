@@ -1,6 +1,6 @@
 import { open, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { DomainError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { isPlausiblePath, isWithin } from '../localAgents/pathRules'
@@ -79,6 +79,25 @@ export interface AgentFileServiceDeps {
   openPath: (path: string) => Promise<string>
   openInTextEditor: (path: string) => Promise<void>
   showItemInFolder: (path: string) => void
+  /** The user's default web browser on this file (see `openInBrowser.ts`), not the `.html` default app. */
+  openInBrowser: (path: string) => Promise<void>
+}
+
+/**
+ * An agent file's bytes for the HTML preview frame. Served by main over the
+ * `cinna-preview:` scheme; never sent over IPC.
+ */
+export type AgentFileBytesResult = { success: true; bytes: Buffer } | AgentFileFailure
+
+/**
+ * One segment of a path the preview frame asked for, already URL-decoded.
+ * Refuses anything that could climb out of or restart the path — separators,
+ * a drive or stream colon, NUL — and any segment starting with a dot: `.` and
+ * `..`, and every dotfile or dot-folder (`.env*`, `.git`, `.ssh`, `.claude`),
+ * which a page has no business loading.
+ */
+export function isSafeAssetSegment(segment: string): boolean {
+  return segment !== '' && !segment.startsWith('.') && !/[/\\:\0]/.test(segment)
 }
 
 interface Target {
@@ -176,6 +195,50 @@ export function createAgentFileService(deps: AgentFileServiceDeps) {
       isCredentialFilePath(found.real, found.realAgentDir) ||
       isCredentialFilePath(paths.lexical(found.requested), found.realAgentDir)
     )
+  }
+
+  /**
+   * Reads what was checked, at most `maxBytes`: the identity is compared once
+   * the file is open (a swap since the check is `not_found`), and a file over
+   * the cap is refused as `too_large` rather than cut.
+   */
+  async function readChecked(found: Target, maxBytes: number): Promise<AgentFileBytesResult> {
+    try {
+      const handle = await open(found.real, 'r')
+      try {
+        const opened = await handle.stat()
+        if (opened.dev !== found.identity.dev || opened.ino !== found.identity.ino) {
+          logger.warn('an agent file changed between its check and its read', { pathLength: found.real.length })
+          return fail('not_found')
+        }
+        if (opened.size > maxBytes) return fail('too_large', 'This file is too large to show.')
+        // One byte past the size: a file that grew past the cap since the stat is refused too.
+        const buffer = Buffer.alloc(Math.min(opened.size, maxBytes) + 1)
+        let offset = 0
+        while (offset < buffer.length) {
+          const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset)
+          if (bytesRead === 0) break
+          offset += bytesRead
+        }
+        if (offset > maxBytes) return fail('too_large', 'This file is too large to show.')
+        return { success: true, bytes: buffer.subarray(0, offset) }
+      } finally {
+        await handle.close()
+      }
+    } catch (err) {
+      logger.warn('reading an agent file failed', { error: err instanceof Error ? err.name : 'unknown' })
+      return fail('read_failed')
+    }
+  }
+
+  /** An HTML file the preview frame may render: permitted, a file, not a credential, of the html kind. */
+  async function htmlDocument(input: unknown): Promise<Target | AgentFileFailure> {
+    const found = await permitted(input)
+    if (isFailure(found)) return found
+    if (found.kind !== 'file') return fail('not_a_file')
+    if (isCredential(found)) return fail('credential_file')
+    if (agentFilePreviewKindFor(basename(found.requested)) !== 'html') return fail('not_previewable')
+    return found
   }
 
   async function ask(found: Target, prompt: ConsentPrompt, purpose: AgentFileConsentPurpose): Promise<AuthorizeAgentFileResult> {
@@ -383,6 +446,82 @@ export function createAgentFileService(deps: AgentFileServiceDeps) {
         return fail('launch_failed')
       }
       logger.info('opened an agent file', { strategy, inside: found.inside })
+      return { success: true }
+    },
+
+    /**
+     * Whether an HTML file may be rendered in the preview frame: the same
+     * gate as {@link readPreview} (containment or approval, never a
+     * credential file), of the html kind. Never asks.
+     */
+    async htmlDocumentAccess(input: unknown): Promise<AgentFileActionResult> {
+      const found = await htmlDocument(input)
+      return isFailure(found) ? found : { success: true }
+    },
+
+    /** The HTML document itself, whole, for the preview frame; over `maxBytes` it is refused. */
+    async readHtmlDocument(input: unknown, maxBytes: number): Promise<AgentFileBytesResult> {
+      const found = await htmlDocument(input)
+      if (isFailure(found)) return found
+      return readChecked(found, maxBytes)
+    },
+
+    /**
+     * A file the HTML document refers to relatively (`style.css`,
+     * `img/x.png`, `data.json`), for the preview frame. `segments` are the
+     * URL path's decoded segments, resolved against the document's real
+     * folder. Refused unless it stays inside that folder after its realpath
+     * (a `..` or a symlink out is refused), passes the same containment or
+     * approval check as any agent file — never asking — is a file, and is not
+     * a credential file.
+     */
+    async readHtmlAsset(input: unknown, segments: unknown, maxBytes: number): Promise<AgentFileBytesResult> {
+      const document = await htmlDocument(input)
+      if (isFailure(document)) return document
+      if (
+        !Array.isArray(segments) ||
+        segments.length === 0 ||
+        !segments.every((segment) => typeof segment === 'string' && isSafeAssetSegment(segment))
+      ) {
+        return fail('invalid_input')
+      }
+      const root = dirname(document.real)
+      const candidate = join(root, ...(segments as string[]))
+      if (!isWithin(root, candidate)) return fail('invalid_input')
+      const asset = await permitted({ agentId: document.agentId, path: candidate })
+      if (isFailure(asset)) return asset
+      if (!isWithin(root, asset.real)) {
+        logger.warn('refused a preview asset outside its document folder', { pathLength: asset.real.length })
+        return fail('not_found')
+      }
+      if (asset.kind !== 'file') return fail('not_a_file')
+      if (isCredential(asset)) return fail('credential_file')
+      return readChecked(asset, maxBytes)
+    },
+
+    /**
+     * An HTML file in the user's default web browser. The same gate as the
+     * preview frame, with the realpath re-taken right before the launch, as
+     * {@link open} does.
+     */
+    async openInBrowser(input: unknown): Promise<AgentFileActionResult> {
+      const found = await htmlDocument(input)
+      if (isFailure(found)) return found
+      const now = await paths.realpath(found.requested).catch(() => null)
+      if (now !== found.real) {
+        logger.warn('an agent file changed between its check and its launch', { strategy: 'browser' })
+        return fail('launch_failed')
+      }
+      try {
+        await deps.openInBrowser(found.real)
+      } catch (err) {
+        // The error message can carry the path (execFile quotes its argv).
+        logger.warn('opening an agent file in the browser failed', {
+          error: err instanceof Error ? err.name : 'unknown'
+        })
+        return fail('launch_failed', 'No browser could open this file.')
+      }
+      logger.info('opened an agent file', { strategy: 'browser', inside: found.inside })
       return { success: true }
     },
 

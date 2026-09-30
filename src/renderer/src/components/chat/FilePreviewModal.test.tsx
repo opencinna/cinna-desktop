@@ -941,6 +941,91 @@ describe('the Contents panel', () => {
   })
 })
 
+describe('xml', () => {
+  const xmlFile: AgentFileRef = { text: 'feed.xml', path: '/agent/feed.xml', displayPath: 'feed.xml', kind: 'file', inside: true }
+  beforeEach(() => {
+    localStorage.removeItem(CONTENTS_KEY)
+    act(() => useUIStore.setState({ previewContentsOpen: true }))
+  })
+  afterEach(() => {
+    delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo
+  })
+
+  it('shows a well-formed file as a tree with a Contents panel', () => {
+    render(<FilePreviewModal />)
+    open({
+      target: agentTarget(xmlFile),
+      kind: 'xml',
+      text: '<feed><title>F</title><entry id="a"><t>1</t></entry><entry id="b"><t>2</t></entry></feed>'
+    })
+    expect(screen.getByTestId('xml-tree')).toBeTruthy()
+    expect(screen.queryByText(/could not be parsed/)).toBeNull()
+    const nav = screen.getByRole('navigation', { name: 'Contents' })
+    expect(Array.from(nav.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['entry · a', 'entry · b'])
+  })
+
+  it('lists a capped remainder as a muted note, not a button', () => {
+    render(<FilePreviewModal />)
+    const rows = Array.from({ length: 53 }, (_, i) => `<row id="${i}"><v>${i}</v></row>`).join('')
+    open({ target: agentTarget(xmlFile), kind: 'xml', text: `<r>${rows}</r>` })
+    const nav = screen.getByRole('navigation', { name: 'Contents' })
+    expect(nav.querySelectorAll('button')).toHaveLength(50)
+    const note = nav.querySelector('li:last-child')!
+    expect(note.textContent).toBe('… 3 more <row>')
+    // The tag reads as code.
+    expect(note.querySelector('span.font-mono')?.textContent).toBe(' <row>')
+    expect(note.querySelector('button')).toBeNull()
+  })
+
+  it('falls back to highlighted source, under a note, for text that does not parse', () => {
+    render(<FilePreviewModal />)
+    const text = '<feed><entry id="a"/><entry'
+    open({ target: agentTarget(xmlFile), kind: 'xml', text })
+    expect(screen.queryByTestId('xml-tree')).toBeNull()
+    expect(screen.getByText('This XML could not be parsed, so it is shown as source.')).toBeTruthy()
+    const pre = screen.getByTestId('code-preview')
+    expect(pre.textContent).toBe(text)
+    expect(pre.querySelector('.hljs-name')?.textContent).toBe('feed')
+    expect(contentsButton()).toBeNull()
+  })
+
+  it('says a file cut at the preview cap is cut, not broken', () => {
+    render(<FilePreviewModal />)
+    const text = '<feed><entry id="a"><t>1</t></entry><entry'
+    open({ target: agentTarget(xmlFile), kind: 'xml', text, truncated: true })
+    expect(screen.queryByTestId('xml-tree')).toBeNull()
+    expect(screen.getByText('The preview is cut at 512 KB, so it is shown as source.')).toBeTruthy()
+    expect(screen.queryByText(/could not be parsed/)).toBeNull()
+    expect(screen.getByTestId('code-preview').textContent).toBe(text)
+  })
+
+  it('unfolds a folded ancestor on a Contents click, then scrolls the body to the element', () => {
+    const scrolled: HTMLElement[] = []
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      writable: true,
+      value: function (this: HTMLElement) {
+        scrolled.push(this)
+      }
+    })
+    // Over the size limit, so the root's children open folded.
+    const rows = Array.from({ length: 1100 }, () => '<row><v/><w/></row>').join('')
+    const text = `<r><group name="first"><item id="deep"><x/><y/></item></group>${rows}</r>`
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(xmlFile), kind: 'xml', text })
+    expect(screen.getByRole('button', { name: 'Expand group' })).toBeTruthy()
+    const deepRow = (): Element | null => body().querySelector('[data-heading-line="2"]')
+    expect(deepRow()).toBeNull()
+    const nav = screen.getByRole('navigation', { name: 'Contents' })
+    const entry = Array.from(nav.querySelectorAll('button')).find((b) => b.textContent === 'item · deep')!
+    fireEvent.click(entry)
+    expect(deepRow()).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Collapse group' })).toBeTruthy()
+    expect(scrolled).toEqual([body()])
+    expect(entry.getAttribute('aria-current')).toBe('location')
+  })
+})
+
 describe('the ⋯ menu', () => {
   const trigger = (): HTMLElement => screen.getByRole('button', { name: 'More file actions' })
   const item = (name: string): HTMLButtonElement => screen.getByRole('menuitem', { name }) as HTMLButtonElement

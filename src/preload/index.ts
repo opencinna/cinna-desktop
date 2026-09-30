@@ -54,6 +54,12 @@ import type {
   ResolveAgentFileRefsResult
 } from '../shared/agentFiles'
 import type {
+  FilesOpenInBrowserInput,
+  FilesOpenInBrowserResult,
+  HtmlPreviewOpenInput,
+  HtmlPreviewOpenResult
+} from '../shared/htmlPreview'
+import type {
   ClaudeApproval,
   CodexAuthStatus,
   ClaudeAuthStatus,
@@ -1114,6 +1120,9 @@ const api = {
       | { success: true; text: string; truncated: boolean }
       | { success: false; error: string; code?: string }
     > => ipcRenderer.invoke('files:read-preview', data),
+    /** An HTML attachment in the default web browser, from a temp copy. */
+    openInBrowser: (data: FilesOpenInBrowserInput): Promise<FilesOpenInBrowserResult> =>
+      ipcRenderer.invoke('files:open-in-browser', data),
     /**
      * Save-as for a TaskAttachment (cinna task-scoped). Distinct from
      * `download` above because these are not FileUpload rows — their
@@ -1572,7 +1581,21 @@ const api = {
       ipcRenderer.invoke('agent-files:open', input),
     /** Select the file or folder in Finder / Explorer. */
     reveal: (input: AgentFilePathInput): Promise<AgentFileActionResult> =>
-      ipcRenderer.invoke('agent-files:reveal', input)
+      ipcRenderer.invoke('agent-files:reveal', input),
+    /** An HTML file in the default web browser, not the `.html` default app. */
+    openInBrowser: (input: AgentFilePathInput): Promise<AgentFileActionResult> =>
+      ipcRenderer.invoke('agent-files:open-in-browser', input)
+  },
+
+  /**
+   * The HTML preview frame. `open` returns a `cinna-preview://<token>/<name>`
+   * URL main serves the page (and, for an agent file, the files beside it)
+   * from, after the text preview's checks; `release` ends it.
+   */
+  htmlPreview: {
+    open: (input: HtmlPreviewOpenInput): Promise<HtmlPreviewOpenResult> =>
+      ipcRenderer.invoke('html-preview:open', input),
+    release: (token: string): Promise<{ success: true }> => ipcRenderer.invoke('html-preview:release', token)
   },
 
   /**
