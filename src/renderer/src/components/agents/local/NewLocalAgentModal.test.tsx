@@ -26,6 +26,7 @@ const setActiveView = vi.fn()
 const setAgentPageMode = vi.fn()
 const pickFolder = vi.fn()
 const addFolder = vi.fn()
+let createPending = false
 
 vi.mock('../../../stores/ui.store', () => ({
   useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -35,7 +36,7 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
   useAgentRoots: () => ({
     data: [{ id: 'root-1', label: 'Agents', path: '/tmp/agents', isDefault: true }]
   }),
-  useCreateLocalAgent: () => ({ mutate: create, isPending: false }),
+  useCreateLocalAgent: () => ({ mutate: create, isPending: createPending }),
   usePickAgentFolder: () => ({ mutate: pickFolder, isPending: false }),
   useAddAgentFolder: () => ({ mutate: addFolder, isPending: false })
 }))
@@ -88,6 +89,7 @@ function open(): { onClose: ReturnType<typeof vi.fn> } {
 
 afterEach(() => {
   vi.clearAllMocks()
+  createPending = false
 })
 
 describe('NewLocalAgentModal', () => {
@@ -119,6 +121,16 @@ describe('NewLocalAgentModal', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('dialog', { name: /build it with/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /not now/i })).toBeNull()
+  })
+
+  it('cannot be dismissed while the create is in flight, so the landing and the draft are not lost', () => {
+    createPending = true
+    const { onClose } = open()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.mouseDown(document.body)
+    // The header's X and the form's Cancel both carry the name.
+    for (const button of screen.getAllByRole('button', { name: 'Cancel' })) fireEvent.click(button)
+    expect(onClose).not.toHaveBeenCalled()
   })
 
   it('keeps the dialog open and shows the error when create fails', () => {

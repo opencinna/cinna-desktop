@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
@@ -168,12 +168,25 @@ export function NewLocalAgentModal({
     if (step.kind === 'name') nameRef.current?.focus()
   }, [step.kind])
 
+  /**
+   * Close, unless a create or an add is in flight. Landing on the agent and
+   * asking for its draft happen in the call's own `onSuccess`, which TanStack
+   * drops once this dialog has unmounted — so a dismiss mid-call would leave a
+   * folder created, the user not taken to it, and the draft never started.
+   * Read through a ref so the window listeners below see the current answer.
+   */
+  const busyRef = useRef(false)
+  busyRef.current = createAgent.isPending || addFolder.isPending
+  const dismiss = useCallback((): void => {
+    if (!busyRef.current) onClose()
+  }, [onClose])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') dismiss()
     }
     const onClick = (e: MouseEvent): void => {
-      if (cardRef.current && !cardRef.current.contains(e.target as Node)) onClose()
+      if (cardRef.current && !cardRef.current.contains(e.target as Node)) dismiss()
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('mousedown', onClick)
@@ -181,7 +194,7 @@ export function NewLocalAgentModal({
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('mousedown', onClick)
     }
-  }, [onClose])
+  }, [dismiss])
 
   const canCreate = name.trim() !== '' && slug !== '' && !createAgent.isPending
 
@@ -331,8 +344,9 @@ export function NewLocalAgentModal({
   const closeButton = (
     <button
       type="button"
-      onClick={onClose}
-      className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+      onClick={dismiss}
+      disabled={createAgent.isPending || addFolder.isPending}
+      className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       title="Cancel"
       aria-label="Cancel"
     >
@@ -608,9 +622,11 @@ export function NewLocalAgentModal({
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={onClose}
+                onClick={dismiss}
+                disabled={createAgent.isPending}
                 className="px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-text-muted)]
-                  hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors"
+                  hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors
+                  disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>

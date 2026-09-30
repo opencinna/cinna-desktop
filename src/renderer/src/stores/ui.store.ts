@@ -126,6 +126,13 @@ interface UIStore {
    * can show its progress, rather than a modal firing it as it unmounts.
    */
   pendingDraftAgentId: string | null
+  /**
+   * Folder agents whose one-shot AI draft is running now. Kept here rather
+   * than in the page's mutation instance so leaving the agent page and coming
+   * back still knows — the call in main keeps running either way. The agent's
+   * new-chat composer holds sends while its id is listed.
+   */
+  draftingAgentIds: string[]
   sidebarOpen: boolean
   /**
    * The file preview's Contents panel, as the user last left it. Only long
@@ -167,6 +174,8 @@ interface UIStore {
   setActiveExternalAgentId: (id: string | null) => void
   setActiveLocalAgentId: (id: string | null) => void
   setPendingDraftAgentId: (id: string | null) => void
+  addDraftingAgentId: (id: string) => void
+  removeDraftingAgentId: (id: string) => void
   toggleSidebar: () => void
   togglePreviewContents: () => void
   toggleTheme: () => void
@@ -198,6 +207,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   activeExternalAgentId: null,
   activeLocalAgentId: null,
   pendingDraftAgentId: null,
+  draftingAgentIds: [],
   sidebarOpen: localStorage.getItem(SIDEBAR_KEY) !== '0',
   previewContentsOpen: localStorage.getItem(PREVIEW_CONTENTS_KEY) !== '0',
   theme: resolveTheme(readThemePreference()),
@@ -225,6 +235,16 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setActiveExternalAgentId: (id) => set({ activeExternalAgentId: id, activeLocalAgentId: null }),
   setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id, activeExternalAgentId: null }),
   setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),
+  addDraftingAgentId: (id) =>
+    set((state) =>
+      state.draftingAgentIds.includes(id) ? state : { draftingAgentIds: [...state.draftingAgentIds, id] }
+    ),
+  removeDraftingAgentId: (id) =>
+    set((state) =>
+      state.draftingAgentIds.includes(id)
+        ? { draftingAgentIds: state.draftingAgentIds.filter((entry) => entry !== id) }
+        : state
+    ),
   toggleSidebar: () =>
     set((state) => {
       const next = !state.sidebarOpen

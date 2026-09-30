@@ -542,3 +542,63 @@ describe('composer readiness refusal', () => {
     })
   })
 })
+
+/**
+ * A hold: the local agent page holds its new-chat composer while the agent's
+ * one-shot draft is writing its prompts. It blocks the way a refusal does —
+ * Send disabled, Enter a no-op, the text kept — and lifts by itself.
+ */
+describe('composer send hold', () => {
+  const HOLD = "Drafting this agent's prompts — send when it finishes."
+
+  function mountHeld(sendHold: string | null, onNewChat: (message: string) => void): (next: string | null) => void {
+    const target = agent({ state: 'ok', reason: null })
+    agentList.current = [target]
+    const client = clientWith(null)
+    const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element =>
+      createElement(QueryClientProvider, { client }, children)
+    const props = (hold: string | null): Record<string, unknown> => ({
+      chatId: null,
+      selectedAgent: target as never,
+      pendingAgentIds: [target.id as string],
+      routerInfo: { router: 'direct', agentName: 'Invoices', answererName: 'Invoices' },
+      onNewChat,
+      sendHold: hold
+    })
+    const { rerender } = render(createElement(ChatInput, props(sendHold) as never), { wrapper })
+    return (next) => rerender(createElement(ChatInput, props(next) as never))
+  }
+
+  it('disables Send, ignores Enter and keeps the text while held', () => {
+    const onNewChat = vi.fn()
+    mountHeld(HOLD, onNewChat)
+    // The reason sits where the user is about to type, in space that exists.
+    expect(screen.getByRole('combobox').getAttribute('placeholder')).toBe(HOLD)
+    typeAndEnter('hello')
+    expect(onNewChat).not.toHaveBeenCalled()
+    expect(send().disabled).toBe(true)
+    expect(send().getAttribute('title')).toBe(HOLD)
+    expect((screen.getByRole('combobox') as HTMLTextAreaElement).value).toBe('hello')
+    // No warning line of its own: the placeholder and the page's strip say it.
+    expect(screen.queryByText(HOLD)).toBeNull()
+  })
+
+  it('sends the kept text once the hold lifts', () => {
+    const onNewChat = vi.fn()
+    const setHold = mountHeld(HOLD, onNewChat)
+    typeAndEnter('hello')
+    expect(onNewChat).not.toHaveBeenCalled()
+    act(() => setHold(null))
+    expect(send().disabled).toBe(false)
+    expect(send().getAttribute('title')).not.toBe(HOLD)
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' })
+    expect(onNewChat).toHaveBeenCalledWith('hello', undefined, undefined)
+  })
+
+  it('changes nothing without a hold', () => {
+    const onNewChat = vi.fn()
+    mountHeld(null, onNewChat)
+    typeAndEnter('hello')
+    expect(onNewChat).toHaveBeenCalledWith('hello', undefined, undefined)
+  })
+})

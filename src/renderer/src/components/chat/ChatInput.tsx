@@ -69,6 +69,13 @@ interface ChatInputProps {
   /** Agent currently selected on the new-chat screen — used to source example prompts for `#`. */
   selectedAgent?: AgentData | null
   /**
+   * A short reason sends are held for now — a local agent whose prompts are
+   * still being drafted — or null. Blocks Send and Enter the way a readiness
+   * refusal does (the text stays) and is Send's tooltip. No warning line of
+   * its own: the page above the composer already says why.
+   */
+  sendHold?: string | null
+  /**
    * New-chat MCP engagement buffer. When `chatId` is null, the on-demand MCP
    * popup picks add to / remove from this list (owned by MainArea) instead of
    * hitting the DB. The buffer is flushed onto the chat row after creation
@@ -196,7 +203,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onRemovePendingAgent,
     routerInfo,
     onDoubleEscape,
-    tildeModePopup
+    tildeModePopup,
+    sendHold = null
   },
   ref
 ) {
@@ -823,8 +831,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const sendClickedAt = useRef(0)
   // Read by `handleSend` at call time, so Enter cannot slip past a refusal that
   // arrived after the callback was built.
-  const blocksSendRef = useRef(readiness.blocksSend)
-  blocksSendRef.current = readiness.blocksSend
+  // A hold (the agent is still being drafted) blocks exactly like a refusal,
+  // and lifts by itself — the typed text is left where it was.
+  const held = !!sendHold
+  const blocksSend = readiness.blocksSend || held
+  const blocksSendRef = useRef(blocksSend)
+  blocksSendRef.current = blocksSend
   const readinessReasonId = useId()
   // Check again removes itself when its check clears the warning, and the focus
   // it held falls to the page body; hand it to the message box, where the user
@@ -1650,7 +1662,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           value={input}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
-          placeholder={chatId && isStreaming ? 'Send a follow-up · Esc Esc to stop' : 'Type a message...'}
+          placeholder={held ? sendHold ?? undefined : chatId && isStreaming ? 'Send a follow-up · Esc Esc to stop' : 'Type a message...'}
           rows={1}
           role="combobox"
           aria-autocomplete="list"
@@ -1852,12 +1864,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               }}
               aria-label={editingId ? 'Save' : 'Send'}
               aria-describedby={!editingId && readiness.text ? readinessReasonId : undefined}
-              title={editingId ? 'Save queued message' : (readiness.refusal ? readiness.title : null) ?? (isStreaming ? 'Send a follow-up · Esc Esc to stop' : undefined)}
+              title={editingId ? 'Save queued message' : (held ? sendHold : null) ?? (readiness.refusal ? readiness.title : null) ?? (isStreaming ? 'Send a follow-up · Esc Esc to stop' : undefined)}
               disabled={
                 sending ||
                 (editingId
                   ? !input.trim()
-                  : readiness.blocksSend ||
+                  : blocksSend ||
                     (isStreaming
                       ? !input.trim()
                       : !input.trim() &&

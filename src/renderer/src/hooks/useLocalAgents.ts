@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useUIStore } from '../stores/ui.store'
 import {
   useMutation,
   useQuery,
@@ -721,6 +722,15 @@ export function useDraftLocalAgent() {
   const queryClient = useQueryClient()
   return useMutation<DraftLocalAgentResult, Error, string>({
     mutationFn: (agentId: string) => window.api.localAgents.draft(agentId),
+    // Hook-level, not per-`mutate`: a caller-level callback is dropped when the
+    // page unmounts, and the draft outlives the page. The id is what holds the
+    // agent's new-chat composer, so it must come off on every outcome.
+    onMutate: (agentId) => {
+      useUIStore.getState().addDraftingAgentId(agentId)
+    },
+    onSettled: (_result, _error, agentId) => {
+      useUIStore.getState().removeDraftingAgentId(agentId)
+    },
     onSuccess: (result) => {
       queryClient.setQueryData(localAgentKey(result.agent.id), result.agent)
       void queryClient.invalidateQueries({ queryKey: ['local-agent-doc', result.agent.id] })

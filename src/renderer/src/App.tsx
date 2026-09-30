@@ -46,6 +46,13 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 5000,
       refetchOnWindowFocus: false
+    },
+    // Every mutation is an IPC call to main, which does its own networking.
+    // TanStack's default `online` mode pauses a mutation before it runs while
+    // the browser reports offline — a local folder create then shows
+    // "Creating…" until the Wi-Fi comes back.
+    mutations: {
+      networkMode: 'always'
     }
   }
 })

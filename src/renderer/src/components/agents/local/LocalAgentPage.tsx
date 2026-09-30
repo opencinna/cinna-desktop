@@ -71,6 +71,11 @@ export function LocalAgentPage(): React.JSX.Element {
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const pendingDraftAgentId = useUIStore((s) => s.pendingDraftAgentId)
   const setPendingDraftAgentId = useUIStore((s) => s.setPendingDraftAgentId)
+  // From the store, not `draft.isPending`: the draft outlives this page, so
+  // leaving the agent and coming back must still know it is running.
+  const drafting = useUIStore(
+    (s) => activeLocalAgentId !== null && s.draftingAgentIds.includes(activeLocalAgentId)
+  )
   const mode = useUIStore((s) => s.agentPageMode)
   const setMode = useUIStore((s) => s.setAgentPageMode)
   /** Whether there is an agents folder at all — see the placeholder below. */
@@ -295,7 +300,7 @@ export function LocalAgentPage(): React.JSX.Element {
 
         <ReadinessStrip
           agent={agent}
-          drafting={draft.isPending}
+          drafting={drafting}
           draftNote={draftNote}
           onShowDetails={() => { setMode('settings'); setTab('folder') }}
           onStampIdentity={

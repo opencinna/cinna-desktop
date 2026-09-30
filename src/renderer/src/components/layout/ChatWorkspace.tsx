@@ -26,6 +26,9 @@ import type { ComposerAttachment } from '../../../../shared/attachments'
 import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
 import { useComposerDraftStore } from '../../stores/composerDraft.store'
 
+/** Why the new-chat composer holds sends while a picked agent is being drafted. */
+const DRAFTING_SEND_HOLD = "Drafting this agent's prompts — send when it finishes."
+
 export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string; embedded?: boolean }): React.JSX.Element {
   const { activeView, pendingAgentId, setPendingAgentId } = useUIStore()
   const agentStatusOpen = useUIStore((s) => s.agentStatusOpen)
@@ -131,6 +134,15 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   // The full agent set for the new chat is just the ordered pick list. Drives
   // both the routing decision and the badge.
   const combinedAgentIds = pendingAgentIds
+
+  // A freshly created local agent's one-shot draft is still writing its
+  // prompts: hold the send, so the first turn does not run on the kit's
+  // templates. Here rather than on the agent page, because the same agent can
+  // be picked on the main New chat screen, by `@` or by a shortcut.
+  const draftingAgentIds = useUIStore((s) => s.draftingAgentIds)
+  const sendHold = combinedAgentIds.some((id) => draftingAgentIds.includes(id))
+    ? DRAFTING_SEND_HOLD
+    : null
 
   // "Coordinate by…" is one-way inside a chat, but nothing exists yet: a draft
   // whose agents were all removed starts over, or the next pick would be
@@ -386,14 +398,14 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
           <CinnaLogoDraw className="mx-auto mb-3" />
           <h1 className="text-lg font-semibold text-[var(--color-text)]">What can I help with?</h1>
         </div>}
-        <RefusableExamplePrompts refusal={exampleRefusal}>
+        <RefusableExamplePrompts refusal={exampleRefusal} hold={sendHold}>
           <ExamplePromptTags
             prompts={examplePrompts}
             animationKey={selectedAgent?.id ?? 'none'}
             // An example prompt sends past the composer, so its refusal is
             // applied here, where it is clicked (the tags are also inert).
             onSelect={(p) => {
-              if (!exampleRefusal) void handleNewChat(p.full)
+              if (!exampleRefusal && !sendHold) void handleNewChat(p.full)
             }}
           />
         </RefusableExamplePrompts>
@@ -403,6 +415,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
           chatId={null}
           draftKey={newChatDraftKey}
           onNewChat={handleNewChat}
+          sendHold={sendHold}
           modeColor={modeColorPreset}
           selectedAgent={selectedAgent}
           pendingMcpIds={pendingMcpIds}

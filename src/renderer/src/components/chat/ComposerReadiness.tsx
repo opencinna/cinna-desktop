@@ -264,6 +264,11 @@ export function ComposerReadinessWarning({ readiness, reasonId }: {
 interface RefusableExamplePromptsProps {
   /** The refusal a send from these prompts would meet; null leaves them live. */
   refusal: AgentReadiness | null
+  /**
+   * A reason sends are held for now (the agent's prompts are being drafted),
+   * or null. Holds the prompts the same way a refusal does.
+   */
+  hold?: string | null
   children: React.ReactNode
 }
 
@@ -278,15 +283,17 @@ interface RefusableExamplePromptsProps {
  */
 export function RefusableExamplePrompts({
   refusal,
+  hold = null,
   children
 }: RefusableExamplePromptsProps): React.JSX.Element {
+  const inert = refusal !== null || !!hold
   return (
     <div
-      className={`w-full${refusal ? ' cursor-not-allowed' : ''}`}
-      title={refusal ? readinessTitle(refusal) : undefined}
-      aria-disabled={refusal ? true : undefined}
+      className={`w-full${inert ? ' cursor-not-allowed' : ''}`}
+      title={refusal ? readinessTitle(refusal) : hold || undefined}
+      aria-disabled={inert ? true : undefined}
     >
-      <div inert={refusal ? true : undefined} className={`w-full${refusal ? ' opacity-50 pointer-events-none' : ''}`}>
+      <div inert={inert ? true : undefined} className={`w-full${inert ? ' opacity-50 pointer-events-none' : ''}`}>
         {children}
       </div>
     </div>

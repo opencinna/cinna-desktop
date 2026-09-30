@@ -60,6 +60,28 @@ describe('RefusableExamplePrompts', () => {
     expect(inner.className).toContain('opacity-50')
   })
 
+  it('holds the prompts the same way, with the hold as the reason, while sends are held', () => {
+    const hold = "Drafting this agent's prompts — send when it finishes."
+    const { container, rerender } = render(
+      createElement(RefusableExamplePrompts, {
+        refusal: null,
+        hold,
+        children: createElement('button', { type: 'button' }, 'Summarise invoices')
+      })
+    )
+    const before = screen.getByText('Summarise invoices')
+    const outer = container.firstElementChild as HTMLElement
+    const inner = outer.firstElementChild as HTMLElement
+    expect(outer.getAttribute('title')).toBe(hold)
+    expect(outer.getAttribute('aria-disabled')).toBe('true')
+    expect(inner.hasAttribute('inert')).toBe(true)
+    expect(inner.className).toContain('opacity-50')
+    // The hold lifting swaps classes, not the tree.
+    rerender(gate(null))
+    expect(screen.getByText('Summarise invoices')).toBe(before)
+    expect(inner.hasAttribute('inert')).toBe(false)
+  })
+
   it('leaves them live and unmarked when nothing is refused', () => {
     const onSelect = vi.fn()
     const { container } = render(gate(null, onSelect))

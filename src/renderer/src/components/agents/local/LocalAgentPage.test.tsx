@@ -19,8 +19,9 @@ import type { LocalAgentDto } from '../../../../../shared/localAgents'
  */
 
 let pageMode: 'chat' | 'settings' = 'settings'
+let draftingAgentIds: string[] = []
 const setAgentPageMode = vi.fn((mode: 'chat' | 'settings') => { pageMode = mode })
-beforeEach(() => { pageMode = 'settings'; vi.clearAllMocks() })
+beforeEach(() => { pageMode = 'settings'; draftingAgentIds = []; vi.clearAllMocks() })
 const setActiveView = vi.fn()
 const setPendingAgentId = vi.fn()
 const setSidebarTab = vi.fn()
@@ -33,6 +34,7 @@ vi.mock('../../../stores/ui.store', () => ({
       setActiveLocalAgentId: vi.fn(),
       pendingDraftAgentId: null,
       setPendingDraftAgentId: vi.fn(),
+      draftingAgentIds,
       setActiveView,
       setPendingAgentId,
       setSidebarTab
@@ -65,11 +67,17 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
   })
 }))
 
-vi.mock('../../layout/ChatWorkspace', () => ({ ChatWorkspace: ({ agentId }: { agentId: string }) => createElement('textarea', { 'aria-label': `Chat with ${agentId}` }) }))
+vi.mock('../../layout/ChatWorkspace', () => ({
+  ChatWorkspace: ({ agentId }: { agentId: string }) =>
+    createElement('textarea', { 'aria-label': `Chat with ${agentId}` })
+}))
 
 const marker = (name: string) => () => createElement('div', { 'data-marker': name }, name)
 vi.mock('./RuntimePanel', () => ({ RuntimePanel: marker('runtime') }))
-vi.mock('./ReadinessStrip', () => ({ ReadinessStrip: () => null }))
+vi.mock('./ReadinessStrip', () => ({
+  ReadinessStrip: ({ drafting }: { drafting: boolean }) =>
+    createElement('div', { 'data-marker': 'readiness-strip', 'data-drafting': String(drafting) })
+}))
 vi.mock('./OpenInMenu', () => ({ OpenInMenu: marker('open-in') }))
 vi.mock('./AgentActionsMenu', () => ({ AgentActionsMenu: marker('actions') }))
 vi.mock('./ManifestCards', () => ({
@@ -134,6 +142,26 @@ describe('LocalAgentPage — chat and settings modes', () => {
     expect(setActiveView).not.toHaveBeenCalled()
     expect(setPendingAgentId).not.toHaveBeenCalled()
     expect(setSidebarTab).not.toHaveBeenCalled()
+  })
+})
+
+describe('LocalAgentPage — drafting', () => {
+  // The draft runs in main and outlives this page, so whether it is running is
+  // read from the store by agent id, not from the page's own mutation instance
+  // (which reports idle here). The composer's hold reads the same store, in
+  // ChatWorkspace. Mutation: pass `draft.isPending` instead and the first fails.
+  it('marks the strip while the store lists the agent as drafting', () => {
+    pageMode = 'chat'
+    draftingAgentIds = ['folder:alpha']
+    const { container } = renderPage()
+    expect(container.querySelector('[data-marker="readiness-strip"]')?.getAttribute('data-drafting')).toBe('true')
+  })
+
+  it('does not mark the strip for an agent that is not drafting', () => {
+    pageMode = 'chat'
+    draftingAgentIds = ['folder:other']
+    const { container } = renderPage()
+    expect(container.querySelector('[data-marker="readiness-strip"]')?.getAttribute('data-drafting')).toBe('false')
   })
 })
 

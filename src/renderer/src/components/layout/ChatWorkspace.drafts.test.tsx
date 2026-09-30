@@ -26,7 +26,9 @@ vi.mock('../chat/ChatInput', () => ({ ChatInput: (props: {
   chatModeMenu?: { activeId: string; onSelectMode: (mode: unknown) => void }
   pendingAgentIds?: string[]; pendingMcpIds?: string[]
   onTogglePendingAgent?: (id: string) => void; onTogglePendingMcp?: (id: string) => void
+  sendHold?: string | null
 }) => <div>
+  <output data-testid="hold">{props.sendHold ?? ''}</output>
   <output data-testid="selections">{JSON.stringify({ mode: props.chatModeMenu?.activeId, agents: props.pendingAgentIds, mcps: props.pendingMcpIds })}</output>
   <button onClick={() => props.chatModeMenu?.onSelectMode(fixtures.modes[1])}>Choose mode</button>
   <button onClick={() => props.chatModeMenu?.onSelectMode(null)}>No mode</button>
@@ -41,7 +43,7 @@ beforeEach(() => {
   window.ResizeObserver = class { observe() {} disconnect() {} } as never
   useChatStore.getState().reset()
   useAuthStore.setState({ currentUser: { id: 'alice' } as never })
-  useUIStore.setState({ activeView: 'chat', pendingAgentId: null, pendingModeId: null })
+  useUIStore.setState({ activeView: 'chat', pendingAgentId: null, pendingModeId: null, draftingAgentIds: [] })
 })
 const selections = () => JSON.parse(screen.getByTestId('selections').textContent!)
 
@@ -90,4 +92,19 @@ it('lets a pending agent pick win over a pending mode, and drops the mode reques
   expect(useUIStore.getState().pendingAgentId).toBeNull()
   expect(useUIStore.getState().pendingModeId).toBeNull()
   expect(selections().agents).toEqual(['a2'])
+})
+
+it('holds the send while a picked agent is still being drafted, on the main screen as on its page', () => {
+  act(() => useUIStore.setState({ draftingAgentIds: ['a2'] }))
+  const main = render(<ChatWorkspace />)
+  expect(screen.getByTestId('hold').textContent).toBe('')
+  fireEvent.click(screen.getByText('Toggle agent'))
+  expect(screen.getByTestId('hold').textContent).toMatch(/drafting this agent/i)
+  act(() => useUIStore.setState({ draftingAgentIds: [] }))
+  expect(screen.getByTestId('hold').textContent).toBe('')
+  main.unmount()
+
+  act(() => useUIStore.setState({ draftingAgentIds: ['a1'] }))
+  render(<ChatWorkspace agentId="a1" embedded />)
+  expect(screen.getByTestId('hold').textContent).toMatch(/drafting this agent/i)
 })
