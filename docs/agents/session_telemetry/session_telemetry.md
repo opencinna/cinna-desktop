@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A chat with a local Claude or Codex agent spends tokens and money, fills a context window, keeps a prompt cache warm or lets it go cold, and runs on some login. Session telemetry collects what the runtime reports about each of those, per chat and per assistant turn, keeps it across restarts, prices what the runtime does not, and shows it in two places: the **session badge** under the composer — how full the context is, and behind it what the chat has spent, the prompt cache, what the next message will cost and the prices it is charged at — and, per turn, the verbose message popup.
+A chat with a local Claude or Codex agent spends tokens and money, fills a context window, keeps a prompt cache warm or lets it go cold, and runs on some login. Session telemetry collects what the runtime reports about each of those, per chat and per assistant turn, keeps it across restarts, prices what the runtime does not, and shows it in two places: the **mode badge's popover** under the composer (the `Local` / `Direct` / `You route` pill) — how full the context is, and behind it what the chat has spent, the prompt cache, what the next message will cost and the prices it is charged at — and, per turn, the verbose message popup.
 
 Without it the runtime's usage reports were thrown away on arrival. `usage_update` was read only as the end marker of a turn the agent started itself, the prompt response's `usage` was read by nothing, and a user who wanted to know what a chat cost, which model actually answered or how full the context was had to open a terminal and ask the CLI.
 
@@ -26,7 +26,7 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 - **Read-time derivations** — warm or cold cache, the price of the next message's pre-context, the current model's prices, the cache hit ratio (`src/shared/sessionTelemetryDerived.ts`). Computed where they are shown, never stored, because they change with the clock
 - **Login kind** — `subscription`, `api_key`, `gateway`, `cloud`, `none` or `unknown`, with a label and plan name. **Never the account**
 - **Reporter** — the port a driver gets (`SessionTelemetryReporter`). The driver reports changes; the one thing it reads back is a Codex session's last running token total
-- **Session badge** — the rightmost badge under the composer: a gauge and the context fill as a percentage. Hovering or focusing it opens the **session popover**
+- **Context row** — the last row of the chat's mode badge popover (the router badge under the composer, `RouterBadge`), below the routing or connection details and a hairline: `Context` and `27K – 3%` (used tokens, then the fill). A disclosure: collapsed by default, it opens the **session details** above itself
 - **Engine capability tables** — `CACHE_TTL_KNOWN`, `CACHE_WRITES_REPORTED` and `CONTEXT_CATEGORIES_KNOWN` (`src/shared/sessionTelemetry.ts`): per engine, whether it reports a cache TTL, whether it reports cache writes at all, and whether its context can be measured by category. Claude yes to all three, Codex no. The popover hides what an engine cannot report, and the driver refuses a measurement, from the same tables, so the two cannot drift
 
 ## User Stories / Flows
@@ -49,8 +49,8 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 3. Codex restores its running token total with the session, so its first turn is measured against the total the chat saved, and the restored history is not counted again
 
 ### The user checks on the session
-1. After the chat's first reported turn, a badge with a gauge and the context fill (`42%`) sits under the composer, rightmost in the session badges, next to the router badge. With no known window size it shows `–` in the same space
-2. Hovering or focusing it opens the session popover, which reads top to bottom: the model that answered (else the selected one, else *Model not reported yet*) and the login in words (`Claude Max`, `API key`, `Gateway · …`); **Context**; **Spent in this chat**; **Cache** (Claude only); **Next message**; **Prices** (only when the table knows the model); and, in verbose mode only, a raw runtime block — CLI version, effort, fast mode, betas and the rate-limit payload as the runtime sent it
+1. After the chat's first reported turn, hovering or focusing the chat's mode badge (`Local`, `Direct`, `You route`, …) shows, below its routing or connection details, a collapsed **Context** row: the used tokens and the fill, `84.2K – 42%` (just `84.2K` with no known window size), and a chevron pointing up
+2. Clicking the row (or Enter/Space) opens the session details above it and turns the chevron down; clicking again folds them. The choice holds while the chat stays open, across the popover closing, and resets on another chat. The details read top to bottom: the model that answered (else the selected one, else *Model not reported yet*) and the login in words (`Claude Max`, `API key`, `Gateway · …`); **Context**; **Spent in this chat**; **Cache** (Claude only); **Next message**; **Prices** (only when the table knows the model); and, in verbose mode only, a raw runtime block — CLI version, effort, fast mode, betas and the rate-limit payload as the runtime sent it
 3. **Context** shows `used of size (percent)`, marked *size not confirmed yet* while the size is the adapter's guess. Under it, the measured categories largest first with the window's free room as a note, else Claude's coarse setup-and-conversation split. Once measured, its heading says *counted by the provider … ago*
 4. **Spent in this chat** lists input, output, cache reads, cache writes (Claude only), turns, the session cache-hit ratio and the cost, followed by at most one muted qualifier: *estimated*, *at least*, *API-equivalent*, comma-joined. With no cost reported it says so
 5. **Cache** shows Warm (with *cold in m:ss*, counting down each second), Cold or Unknown, and the TTL; a TTL under an hour is qualified *observed* or *assumed* (no write has shown one yet)
@@ -58,9 +58,9 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 7. **Prices** shows the current model's per-MTok input, output, cache-read and (Claude) cache-write prices at the 5-minute and 1-hour TTLs, a note for fast mode or the long-context rate, and the date the table was checked
 
 ### The user measures the context
-1. On a Claude chat the popover's Context heading carries a **Measure** action. Pressing it reads *Measuring…* in the same space until the answer comes
+1. On a Claude chat the details' Context heading carries a **Measure** action. Pressing it reads *Measuring…* in the same space until the answer comes
 2. A measurement taken arrives through the push and replaces the split with the categories
-3. A refusal is one line at the end of the section: *The agent is working — measure when the turn ends* (`busy`), *Available after the agent's first reply in this session* (`not_ready`), *The agent's process isn't running — send a message first* (`not_running`), and, in the danger tone, *The agent didn't answer the measurement* (`failed`) or *The context couldn't be measured* (anything else). It clears on the next attempt and when the popover closes, and never carries into another chat
+3. A refusal is one line at the end of the section: *The agent is working — measure when the turn ends* (`busy`), *Available after the agent's first reply in this session* (`not_ready`), *The agent's process isn't running — send a message first* (`not_running`), and, in the danger tone, *The agent didn't answer the measurement* (`failed`) or *The context couldn't be measured* (anything else). It clears on the next attempt and when the details are folded or the popover closes, and never carries into another chat
 4. An `unsupported` answer is not a failure to retry: Measure disappears for that agent session, across popover closes, and *This agent can't report a breakdown* takes its place. A new session brings it back
 
 ### Something asks how the context is made up
@@ -131,15 +131,16 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 - **Claude gets two figures**: warm (read from cache) and cold (written to cache at the observed TTL's write price), with the moment warm turns cold. **Codex gets one**: the whole context at the uncached input price, an upper bound, since its own caching usually makes it cheaper
 - **On a subscription the figure is API-equivalent**: what counts against its limits, not money paid. A cloud login, an unknown model and an empty context get a note and no figure
 
-### The session badge
-- **Rightmost, and it never leaves.** The session badges are right-aligned, so a badge that appears pushes only what is to its left. The session badge comes with the chat's first telemetry report and stays, so it sits next to the router badge and the badges that come and go stay left of it ([UX rule 1](../../development/ui_guidelines/ux_rules.md)). A chat without telemetry (an engine that reports none, or no turn yet) has no badge
-- **The pill never changes width.** The fill is written in tabular digits in a fixed five-character box, and `–` while the window size is unknown, so a reading moving mid-turn (`9%` → `10%` → `100%`) never nudges the badges beside it. `<1%` for a context under half a percent that is not empty; never a percentage without a known size
-- **Named by what it shows.** Its accessible name is *Context 42% full* (or *Context size unknown*), not the cost or cache state it does not show
-- **The popover's sections keep their order and update in place.** A section an engine cannot fill is absent rather than empty: no Cache section and no cache-write rows or prices for Codex, no Measure where categories cannot be measured, no Prices section for a model the table does not know. A refusal is appended last in its section so it moves nothing above it
-- **The popover's clock runs only while it is open.** The cache countdown ticks once a second; the ticking stops with the popover
+### The Context row in the mode badge
+- **In the mode badge, not a badge of its own.** The router badge's popover carries it for any router, once the chat has telemetry; a chat without telemetry (an engine that reports none, or no turn yet) shows its routing card unchanged. With the row the popover is a `dialog` (it holds a control) and widens to `w-80`. The job pages' router badge has no chat and reads no telemetry
+- **The row under the pointer never moves.** The popover hangs from the pill and grows upward, so the row stays its last row and the details open above it; the chevron points up when collapsed and down when open ([UX rule 1](../../development/ui_guidelines/ux_rules.md)). The popover stays open while the pointer or focus is inside it, through the toggle and Measure
+- **Collapsed by default.** Its state lives with the badge for the chat: it survives the popover closing and reopening, resets when the chat changes, and is not persisted
+- **Named by what it shows.** The row's accessible name is *Context 84.2K, 42% full* (or *Context 84.2K* without a size), with `aria-expanded`. `<1%` for a context under half a percent that is not empty; never a percentage without a known size
+- **The details' sections keep their order and update in place.** A section an engine cannot fill is absent rather than empty: no Cache section and no cache-write rows or prices for Codex, no Measure where categories cannot be measured, no Prices section for a model the table does not know. A refusal is appended last in its section so it moves nothing above it
+- **The details' clock runs only while they are shown.** The cache countdown ticks once a second; the ticking stops when they are folded or the popover closes
 - **Measured categories are what is in the window.** The CLI's list also names the window's unused room (`Free space`) and the room held back for compaction (`Autocompact buffer`, `Compact buffer`); like the CLI's own `/context`, the popover counts neither as a row. Free space is a note under the rows, the buffer is not shown, and categories with no tokens or marked deferred are left out. The names are matched exactly, case-insensitively (`contextCategoryKind`)
 - **"API-equivalent" is said in one place**: the cost qualifier, on a subscription
-- **The list scrolls rather than leaving the window.** Capped at the smaller of 70% of the window and 36rem, and, once the popover's top is pinned, at the room down to 8 px above the window's bottom edge, with a stable scrollbar gutter so a growing section never shifts the rows
+- **The list scrolls rather than leaving the window.** The details are capped at the smaller of 70% of the window and 36rem, and the whole popover at the room from the pill up to 8 px below the window's top edge; under that cap only the details shrink and scroll, with a stable scrollbar gutter so a growing section never shifts the rows
 
 ### Runtime
 - **Claude's `system/init` fills the runtime block**: CLI version, betas, effort (null when none is sent) and fast mode. Fast mode chooses the prices
@@ -191,8 +192,8 @@ codex login status ──► launcher.telemetryAuth ─────────�
           useSessionTelemetry {query, measureContext} ── sessionTelemetry:measureContext
                              │                                  └─► acpDriver.measureContext ─► _cinna/contextUsage
                              ▼
-          SessionTelemetryBadge ◄── sessionTelemetryDerived (cache state, next-message estimate,
-             (under the composer)       current prices, hit ratio, category kind)
+          SessionTelemetryBlock ◄── sessionTelemetryDerived (cache state, next-message estimate,
+        (in RouterBadge's popover)      current prices, hit ratio, category kind)
 
 TurnTelemetry.settle ──► RunAgentTurnResult.telemetry ──► a2aStreamingService
                               ──► messages.telemetry (last row) + TurnOutcome.usage
@@ -204,8 +205,8 @@ TurnTelemetry.settle ──► RunAgentTurnResult.telemetry ──► a2aStreami
 - [The Agent Turn](../local_agents/agent_turn.md) — the ACP driver that observes the turn and settles its telemetry, including follow-up turns, whose gate holds the raw frames
 - [The Claude Engine](../local_agents/claude_engine.md) and [The Codex Engine](../local_agents/codex_engine.md) — what each engine reports, where its login comes from, and the reviewed adapter patches the running Codex total and the Claude context measurement rely on
 - [Runtime Pins](../../development/runtime_pins/runtime_pins_llm.md) and [Packaged Runtime Dependencies](../../development/distribution/packaged_runtime.md) — the adapter digests those patches are checked against, at install and at packaging
-- [Session Activity](../session_activity/session_activity.md) — the sibling core service in the same shape: driver reports, service holds, IPC pushes. Activity is memory-only; telemetry is durable. It also owns the badge strip under the composer (`SessionMetaBadges`) the session badge sits in, and its ordering rule
+- [Session Activity](../session_activity/session_activity.md) — the sibling core service in the same shape: driver reports, service holds, IPC pushes. Activity is memory-only; telemetry is durable. It also owns the badge strip under the composer (`SessionMetaBadges`) left of the mode badge that carries the Context row, and its ordering rule
 - [Turn Outcomes](../../chat/messaging/turn_completion.md) — `TurnOutcome.usage` is filled from a turn's tokens
-- [Verbose Mode](../../ui/verbose_mode/verbose_mode.md) — the per-turn block in the message popup, and the runtime block in the session popover
+- [Verbose Mode](../../ui/verbose_mode/verbose_mode.md) — the per-turn block in the message popup, and the runtime block in the mode badge's session details
 - [Hub core](../../development/hub_core/hub_core_llm.md) — the service is core (`src/main/agents/telemetry/`); the IPC push is the desktop's
 - Technical details: [Session Telemetry (tech)](session_telemetry_tech.md)
