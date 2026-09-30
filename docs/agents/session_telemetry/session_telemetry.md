@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A chat with a local Claude or Codex agent spends tokens and money, fills a context window, keeps a prompt cache warm or lets it go cold, and runs on some login. Session telemetry collects what the runtime reports about each of those, per chat and per assistant turn, keeps it across restarts, prices what the runtime does not, and hands it to the renderer. It is collection only: the one place it is shown today is the verbose message popup. The session badge that will present it comes later and reads this model, the read-time derivations beside it and the on-demand context measurement.
+A chat with a local Claude or Codex agent spends tokens and money, fills a context window, keeps a prompt cache warm or lets it go cold, and runs on some login. Session telemetry collects what the runtime reports about each of those, per chat and per assistant turn, keeps it across restarts, prices what the runtime does not, and shows it in two places: the **session badge** under the composer — how full the context is, and behind it what the chat has spent, the prompt cache, what the next message will cost and the prices it is charged at — and, per turn, the verbose message popup.
 
 Without it the runtime's usage reports were thrown away on arrival. `usage_update` was read only as the end marker of a turn the agent started itself, the prompt response's `usage` was read by nothing, and a user who wanted to know what a chat cost, which model actually answered or how full the context was had to open a terminal and ask the CLI.
 
@@ -15,7 +15,8 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 - **Selected vs resolved model** — *selected* is what the session's model option says, an alias for Claude (`default`, `opus`). *Resolved* is what actually answered: for Claude, named by the runtime's `system/init` before the first request goes out (from turn 0), and again by each main-agent request; for Codex, read off the turn's usage at its end
 - **Raw SDK stream** — Claude's own SDK messages, which the adapter forwards as `_claude/sdkMessage` notifications when a session asks for them. The desktop asks for four kinds — `system/init`, `system/compact_boundary`, `assistant` and `result` — and reads each frame down to a handful of numbers and ids. They carry the turn's content again; **no frame is logged, stored or put in the transcript whole**
 - **Main-agent request** — one model request of the session's own agent: the first raw `assistant` frame of a message id, from a frame that names no parent tool call. A subagent's frames are counted as traffic and read for nothing else
-- **Running total** — a figure the runtime reports as the session's cumulative value, not the turn's: Claude's cost (`usage_update.cost.amount`), its per-model cost (`result.modelUsage[m].costUSD`) and its API time (`result.duration_api_ms`), and Codex's token total (`_meta.quota.total_token_count`, added by the reviewed adapter patch). A turn's figure is always what the total grew by
+- **Running total** — a figure the runtime reports cumulatively, not per turn: Claude's cost (`usage_update.cost.amount`, the SDK's `total_cost_usd`), its per-model cost (`result.modelUsage[m].costUSD`) and its API time (`result.duration_api_ms`), each cumulative **within one adapter query**; and Codex's token total (`_meta.quota.total_token_count`, added by the reviewed adapter patch), cumulative over the session and restored on resume. A turn's figure is always what the total grew by
+- **Fresh query** — the adapter starting a new Claude query for a session: `session/new`, a `session/load` of a session not live on the connection (a new process, the app restarted), or a load under a different cwd or MCP server set, which the adapter answers by rebuilding the session. Every Claude running total starts from 0 with it
 - **Cost source** — `runtime` when the runtime reported the cost (Claude), `estimated` when the desktop priced the tokens itself (Codex)
 - **Price table** — `src/shared/modelPricing.ts`: list prices per model, with the date they were checked and their sources. The only place a price lives
 - **Prompt cache clock** — when the last main-agent request went out, the cache's time-to-live, when it expires, and whether something invalidated it first. Claude only: Codex caches on its own with a TTL nobody reports
@@ -24,7 +25,9 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 - **Context categories** — the main agent's context measured by category (system prompt, tools, memory files, MCP tools, skills, messages…), on demand, between turns, through the reviewed Claude adapter patch's `_cinna/contextUsage`. Where present it supersedes the coarse split
 - **Read-time derivations** — warm or cold cache, the price of the next message's pre-context, the current model's prices, the cache hit ratio (`src/shared/sessionTelemetryDerived.ts`). Computed where they are shown, never stored, because they change with the clock
 - **Login kind** — `subscription`, `api_key`, `gateway`, `cloud`, `none` or `unknown`, with a label and plan name. **Never the account**
-- **Reporter** — the port a driver gets (`SessionTelemetryReporter`). The driver reports changes; what it reads back is a session's last running-total readings (cost, per-model cost, Codex token total)
+- **Reporter** — the port a driver gets (`SessionTelemetryReporter`). The driver reports changes; the one thing it reads back is a Codex session's last running token total
+- **Session badge** — the rightmost badge under the composer: a gauge and the context fill as a percentage. Hovering or focusing it opens the **session popover**
+- **Engine capability tables** — `CACHE_TTL_KNOWN`, `CACHE_WRITES_REPORTED` and `CONTEXT_CATEGORIES_KNOWN` (`src/shared/sessionTelemetry.ts`): per engine, whether it reports a cache TTL, whether it reports cache writes at all, and whether its context can be measured by category. Claude yes to all three, Codex no. The popover hides what an engine cannot report, and the driver refuses a measurement, from the same tables, so the two cannot drift
 
 ## User Stories / Flows
 
@@ -42,11 +45,26 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 
 ### The app restarts mid-chat
 1. The chat's telemetry is read back from the database the first time something asks for it
-2. The next turn resumes the session with `session/load`. Every running total is measured against the last reading the chat saved for that session — Claude's cost and per-model cost, Codex's token total — so the history the runtime restored is not counted again
-3. That turn's API time is left unknown: it is kept in memory only, so there is nothing to measure it against
+2. The next turn resumes the session with `session/load`. For Claude that is a fresh query: its cost, per-model cost and API time start from 0, so the turn is measured from 0 and its cost, API time and per-model rows are its own
+3. Codex restores its running token total with the session, so its first turn is measured against the total the chat saved, and the restored history is not counted again
+
+### The user checks on the session
+1. After the chat's first reported turn, a badge with a gauge and the context fill (`42%`) sits under the composer, rightmost in the session badges, next to the router badge. With no known window size it shows `–` in the same space
+2. Hovering or focusing it opens the session popover, which reads top to bottom: the model that answered (else the selected one, else *Model not reported yet*) and the login in words (`Claude Max`, `API key`, `Gateway · …`); **Context**; **Spent in this chat**; **Cache** (Claude only); **Next message**; **Prices** (only when the table knows the model); and, in verbose mode only, a raw runtime block — CLI version, effort, fast mode, betas and the rate-limit payload as the runtime sent it
+3. **Context** shows `used of size (percent)`, marked *size not confirmed yet* while the size is the adapter's guess. Under it, the measured categories largest first with the window's free room as a note, else Claude's coarse setup-and-conversation split. Once measured, its heading says *counted by the provider … ago*
+4. **Spent in this chat** lists input, output, cache reads, cache writes (Claude only), turns, the session cache-hit ratio and the cost, followed by at most one muted qualifier: *estimated*, *at least*, *API-equivalent*, comma-joined. With no cost reported it says so
+5. **Cache** shows Warm (with *cold in m:ss*, counting down each second), Cold or Unknown, and the TTL; a TTL under an hour is qualified *observed* or *assumed* (no write has shown one yet)
+6. **Next message** shows Claude's cache-warm and cache-cold prices and the time the warm price ends, or Codex's one uncached figure marked *at most*; where there is no figure, one line says why (cloud pricing, price unknown for the model, price unknown in fast mode, no context yet)
+7. **Prices** shows the current model's per-MTok input, output, cache-read and (Claude) cache-write prices at the 5-minute and 1-hour TTLs, a note for fast mode or the long-context rate, and the date the table was checked
+
+### The user measures the context
+1. On a Claude chat the popover's Context heading carries a **Measure** action. Pressing it reads *Measuring…* in the same space until the answer comes
+2. A measurement taken arrives through the push and replaces the split with the categories
+3. A refusal is one line at the end of the section: *The agent is working — measure when the turn ends* (`busy`), *Available after the agent's first reply in this session* (`not_ready`), *The agent's process isn't running — send a message first* (`not_running`), and, in the danger tone, *The agent didn't answer the measurement* (`failed`) or *The context couldn't be measured* (anything else). It clears on the next attempt and when the popover closes, and never carries into another chat
+4. An `unsupported` answer is not a failure to retry: Measure disappears for that agent session, across popover closes, and *This agent can't report a breakdown* takes its place. A new session brings it back
 
 ### Something asks how the context is made up
-1. A view of the chat calls `measureContext` (the hook's second member). Nothing asks on its own; each measurement is one request to the provider
+1. The popover's Measure calls `measureContext` (the hook's second member). Nothing asks on its own; each measurement is one request to the provider
 2. If the chat's Claude process and session are live, idle and have answered a prompt in this process, the adapter measures the context by category and the result reaches the window through the ordinary push
 3. Otherwise the answer is a code — `busy`, `not_ready`, `not_running`, `unsupported` or `failed` — and nothing is started to make it possible
 
@@ -63,28 +81,28 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 - **A nested turn** (an agent called as a tool inside another turn) reports nothing to the chat's totals. Its result still carries its own figures
 
 ### Running totals
-- **A turn's figure is what the total grew by**, measured against the previous reading for the same session: this process's, else the one the chat saved. Measuring from zero after a restart would count the whole restored history as the first turn
-- **A reading that dropped, or one with no earlier reading anywhere, is taken whole**: the session's total started over. Codex compares field by field; any field that fell means it started over
-- **Except a restored Codex session with no saved total.** The CLI restores its token total when a session is loaded into a new process — watched against the pinned CLI (`codex.session.quota-total-on-resume`) — so a chat whose telemetry predates the running total has no baseline, and its first reading is the whole history. That turn keeps its last request instead, scope `last_request`: an undercount, preferred to charging the history to one turn
-- **API time is measured only within one process.** It comes from the same cumulative ledger as the cost, but is not saved; a session this connection created starts at zero, and one loaded into a new process has no API time on its first turn
-- **The first Claude turn on a resumed session takes its tokens from the main loop only.** The adapter restarts its per-model baseline when it builds a session object over a restored history: a `session/load` on a new process, or one under a different cwd or MCP server set (a connector switched on or off), which the adapter answers by rebuilding the session. That turn's per-model rows are the session's whole history. The main-loop `usage` is an undercount (subagents and compaction missing) and is preferred to a double count
+- **A turn's figure is what the total grew by**, measured against the previous reading for the same session on the same connection
+- **Claude's running totals start from 0 with every fresh query, and nothing of Claude's is saved to measure against.** Cost, per-model cost and API time are cumulative within one adapter query only; a restart followed by `session/load` does not restore them. So on a fresh query the connection's readings for the session are set to 0, and that turn's cost, API time and per-model rows are its own. An earlier design assumed the CLI restored its cost on resume and measured the first turn after a restart against a saved reading, and took that turn's tokens from the main loop only, believing its per-model rows were the whole history. A billed live probe (2026-09-30, Claude Code 2.1.276, adapter 0.76.0) showed every total starting at 0 and the rows being the turn's own: the saved reading would have been subtracted from a figure that never contained it, reporting such a turn as costing nothing. Rows written under that design still carry the old readings; they are read by nothing and dropped on the session's next write
+- **A reading that dropped, or one with no earlier reading, is taken whole**: the total started over. That also covers the adapter's rebuilds nobody sees (a signed-out query, a provider update). Codex compares field by field; any field that fell means it started over
+- **Codex's token total, unlike Claude's, survives a restart.** The CLI restores it when a session is loaded into a new process — watched against the pinned CLI (`codex.session.quota-total-on-resume`) — so the chat saves the last total per session and the first turn after a restart is measured against it. A chat whose telemetry predates the running total has no baseline, and its first reading is the whole history. That turn keeps its last request instead, scope `last_request`: an undercount, preferred to charging the history to one turn
+- **API time is never saved.** It is measured on the connection that took the readings; a fresh query starts it at 0, so it is known from a session's first turn
 
 ### Cost
 - **Claude's cost is the runtime's**, and so is its split by model. Its per-model rows name the price basis the CLI used; only `list` rows are compared with the table
 - **Codex's cost is estimated from the price table**, because the runtime reports none. It is a lower bound while its tokens are the last request's. The long-context tier is judged by one request's input — the last request's — never by the turn's sum, which would put every multi-request turn in the higher tier
 - **An unknown model has no price.** No nearest match, no family guess: a price that is wrong looks exactly like one that is right, and the answer is "price unknown" instead
 - **A partner cloud is never estimated.** Bedrock and Vertex price differently from the list; a `cloud` login gets no estimate, per turn or next-message
-- **The table is checked against Claude's runtime cost every turn.** A model whose list-price estimate drifts more than 5% from what the runtime charged is logged once per model per process, naming the model and the two figures. A stale table shows up in the logs, not silently in the UI. Not checked on a resumed session's first turn (its rows are not the turn's) or for a row the CLI priced other than at list
+- **The table is checked against Claude's runtime cost every turn.** A model whose list-price estimate drifts more than 5% from what the runtime charged is logged once per model per process, naming the model and the two figures. A stale table shows up in the logs, not silently in the UI. Not checked for a row the CLI priced other than at list
 
 ### Prices (`modelPricing.ts`)
 - **Dated and sourced.** `PRICES_CHECKED_AT` records the day the table was compared with Anthropic's and OpenAI's (Standard tier) published pricing pages; the sources are named in the file. Updating a price means updating that date
 - **Keyed by a canonical id**: lowercased, without a bracketed variant (`[1m]`), a Vertex `@…` version, a Bedrock region and `anthropic.` prefix and `-v1:0` suffix, or a trailing date
 - **OpenAI's long-context tier** applies above 272K input tokens, where it exists; cache writes in a tier scale with its input price. OpenAI has no cache-write price, so a write is charged as input
 - **A premium the table does not model means no price**: Sonnet 4.5 and 4 above 200K input
-- **Fast mode** has its own input and output prices, and the caching multipliers apply on top of the fast input price. A model with no fast prices, in fast mode, has no price
+- **Fast mode** has its own input and output prices, and the caching multipliers apply on top of the fast input price. A model with no fast prices, in fast mode, has no price for a turn and no next-message estimate (*Price unknown in fast mode*); the popover's Prices section still lists its base rates, flagged *fast-mode rate not listed*, because the base rate is a true floor and hiding it would hide the model's whole price list over one missing line
 
 ### Prompt cache (Claude)
-- **The TTL is read off the writes.** A main-agent request that wrote to the 1-hour cache makes it 1h, one that wrote to the 5-minute cache 5m; a request that wrote nothing keeps the last one seen; until one is seen, 5m is assumed and marked `assumed`
+- **The TTL is read off the writes.** A main-agent request that wrote to the 1-hour cache makes it 1h, one that wrote to the 5-minute cache 5m; a request that wrote nothing keeps the last one seen; until one is seen, 5m is assumed and marked `assumed`. The live probe saw the pinned Claude Code write to the 1-hour cache, so the 5m assumption is a floor for the gap before the first request, not the usual case
 - **The expiry is the last main-agent request plus the TTL**, and it is approximate: the TTL runs from when the request reached the API, and the clock is when its first frame reached this app, a little later
 - **Without the raw stream the `usage_update` readings are the clock.** Once a turn has timed its requests from the raw stream, its readings no longer move it
 - **Four things make the cache cold before its TTL runs out**, each recorded with its reason: a switch of the selected model (nothing the old model wrote is read by the new one), a new session, a session loaded under other params (the adapter rebuilt it with another system prompt and tool list), and a compaction. The cache is cold until the next request writes it again
@@ -102,16 +120,26 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 - **It never starts, reserves or holds anything.** It asks the process and session the chat's last turn left live, or answers `not_running`
 - **Never while a turn runs.** A turn or follow-up in the chat answers `busy`; so does a turn that started while the request was out, whose answer would describe the context before that turn and is discarded rather than saved as current. The adapter refuses a running or queued turn itself as well
 - **Never before the session's first answered prompt in this process** (`not_ready`): asked then, the runtime stalls on the request for tens of seconds. A turn that begins taking the session clears the flag until its prompt answers, so one that failed before its answer (a reload under other params, a fresh session) does not leave a stalling session measurable
-- **Each measurement costs a provider request.** The CLI counts the tokens with the provider's `POST /v1/messages/count_tokens` — not a Messages request, but not free of the network either — which is why nothing measures on its own
+- **Each measurement costs a provider request.** The CLI counts the tokens with the provider's `POST /v1/messages/count_tokens` — not a Messages request, but not free of the network either — which is why nothing measures on its own. Live, the first measurement in a session took about 0.7 s and later ones about 10 ms
 - **One measurement per chat at a time**; a second ask while one is out shares its answer. Past 30 seconds the measurement is given up as `failed`
 - **The answer is only whether it was taken.** The measurement itself arrives through the push, like every other change
-- **Claude only.** A Codex chat answers `unsupported`. An adapter that does not know the request refuses it, which reads as `failed`
+- **Claude only** (`CONTEXT_CATEGORIES_KNOWN`). A Codex chat answers `unsupported`, and its popover offers no Measure. An adapter that does not know the request refuses it, which reads as `failed`
 
 ### Read-time derivations
 - **Warm or cold is computed, never stored.** Claude: unknown before any request; cold after an invalidation no request has followed, or past the expiry; else warm until the expiry. Codex: always unknown
 - **The next message's estimate prices the pre-context only**: the context used, as the first request of the next turn reads it, without the new message. A turn with tool calls re-reads the context once per request and costs a multiple of it, and the estimate says so
 - **Claude gets two figures**: warm (read from cache) and cold (written to cache at the observed TTL's write price), with the moment warm turns cold. **Codex gets one**: the whole context at the uncached input price, an upper bound, since its own caching usually makes it cheaper
 - **On a subscription the figure is API-equivalent**: what counts against its limits, not money paid. A cloud login, an unknown model and an empty context get a note and no figure
+
+### The session badge
+- **Rightmost, and it never leaves.** The session badges are right-aligned, so a badge that appears pushes only what is to its left. The session badge comes with the chat's first telemetry report and stays, so it sits next to the router badge and the badges that come and go stay left of it ([UX rule 1](../../development/ui_guidelines/ux_rules.md)). A chat without telemetry (an engine that reports none, or no turn yet) has no badge
+- **The pill never changes width.** The fill is written in tabular digits in a fixed five-character box, and `–` while the window size is unknown, so a reading moving mid-turn (`9%` → `10%` → `100%`) never nudges the badges beside it. `<1%` for a context under half a percent that is not empty; never a percentage without a known size
+- **Named by what it shows.** Its accessible name is *Context 42% full* (or *Context size unknown*), not the cost or cache state it does not show
+- **The popover's sections keep their order and update in place.** A section an engine cannot fill is absent rather than empty: no Cache section and no cache-write rows or prices for Codex, no Measure where categories cannot be measured, no Prices section for a model the table does not know. A refusal is appended last in its section so it moves nothing above it
+- **The popover's clock runs only while it is open.** The cache countdown ticks once a second; the ticking stops with the popover
+- **Measured categories are what is in the window.** The CLI's list also names the window's unused room (`Free space`) and the room held back for compaction (`Autocompact buffer`, `Compact buffer`); like the CLI's own `/context`, the popover counts neither as a row. Free space is a note under the rows, the buffer is not shown, and categories with no tokens or marked deferred are left out. The names are matched exactly, case-insensitively (`contextCategoryKind`)
+- **"API-equivalent" is said in one place**: the cost qualifier, on a subscription
+- **The list scrolls rather than leaving the window.** Capped at the smaller of 70% of the window and 36rem, and, once the popover's top is pinned, at the room down to 8 px above the window's bottom edge, with a stable scrollbar gutter so a growing section never shifts the rows
 
 ### Runtime
 - **Claude's `system/init` fills the runtime block**: CLI version, betas, effort (null when none is sent) and fast mode. Fast mode chooses the prices
@@ -139,11 +167,10 @@ Without it the runtime's usage reports were thrown away on arrival. `usage_updat
 ## Known limits
 - **A Codex turn is a lower bound when its running total could not be measured**: an adapter answer without `total_token_count`, or the first turn of a restored session whose chat saved no total
 - **A follow-up turn has no tokens when no raw `result` reached it**; Codex follow-ups, never seen live, would have none
-- **API time is unknown on a session's first turn in a new process**
-- **Claude's cost handling rests on the readings being running totals**, read from the adapter and CLI source. If a pinned adapter starts reporting per-result cost instead, `costDelta` is the one place to change
-- **A `session/load` the adapter answers by recreating a live session is not seen as a resume**, so that turn's per-model rows are trusted as they are
+- **Claude's cost handling rests on the readings being running totals of the adapter's query**, observed live on one pinned version. If a pinned adapter starts reporting per-result cost, or starts restoring its totals on resume, `costDelta` and `TurnTelemetry.session` are the places to change; the contract does not watch it, because the fake provider reports no cost
+- **A fresh query the adapter starts without being seen to** (a signed-out query, a provider update) is caught only when a reading drops. If the new query's total has already passed the old reading, that turn's cost and API time are undercounted by the old reading
 - **The price table goes stale with the vendors' pages**; the calibration log catches Claude drift, nothing catches OpenAI drift
-- **Presented nowhere but the verbose popup.** No component reads the hook, the derivations or the measurement yet; the rate-limit payload is kept raw and read by nothing; per-session totals are kept and not shown
+- **The rate-limit payload is shown only raw**, in verbose mode's runtime block; per-session totals are kept and not shown
 - **OpenCode, command-line agents, remote A2A agents and Managed sessions report nothing**
 
 ## Architecture Overview
@@ -159,12 +186,13 @@ codex login status ──► launcher.telemetryAuth ─────────�
                                                                                    ▼
                         sessionTelemetryService (reducer, held + session_telemetry row)
                              │                            │                        ▲
-             session-telemetry:changed        last readings (restart)     measureContext
+             session-telemetry:changed    Codex token total (restart)     measureContext
                              ▼                                                     │
           useSessionTelemetry {query, measureContext} ── sessionTelemetry:measureContext
                              │                                  └─► acpDriver.measureContext ─► _cinna/contextUsage
                              ▼
-          sessionTelemetryDerived (cache state, next-message estimate) — no consumer yet
+          SessionTelemetryBadge ◄── sessionTelemetryDerived (cache state, next-message estimate,
+             (under the composer)       current prices, hit ratio, category kind)
 
 TurnTelemetry.settle ──► RunAgentTurnResult.telemetry ──► a2aStreamingService
                               ──► messages.telemetry (last row) + TurnOutcome.usage
@@ -176,8 +204,8 @@ TurnTelemetry.settle ──► RunAgentTurnResult.telemetry ──► a2aStreami
 - [The Agent Turn](../local_agents/agent_turn.md) — the ACP driver that observes the turn and settles its telemetry, including follow-up turns, whose gate holds the raw frames
 - [The Claude Engine](../local_agents/claude_engine.md) and [The Codex Engine](../local_agents/codex_engine.md) — what each engine reports, where its login comes from, and the reviewed adapter patches the running Codex total and the Claude context measurement rely on
 - [Runtime Pins](../../development/runtime_pins/runtime_pins_llm.md) and [Packaged Runtime Dependencies](../../development/distribution/packaged_runtime.md) — the adapter digests those patches are checked against, at install and at packaging
-- [Session Activity](../session_activity/session_activity.md) — the sibling core service in the same shape: driver reports, service holds, IPC pushes. Activity is memory-only; telemetry is durable
+- [Session Activity](../session_activity/session_activity.md) — the sibling core service in the same shape: driver reports, service holds, IPC pushes. Activity is memory-only; telemetry is durable. It also owns the badge strip under the composer (`SessionMetaBadges`) the session badge sits in, and its ordering rule
 - [Turn Outcomes](../../chat/messaging/turn_completion.md) — `TurnOutcome.usage` is filled from a turn's tokens
-- [Verbose Mode](../../ui/verbose_mode/verbose_mode.md) — the message popup, the only surface today
+- [Verbose Mode](../../ui/verbose_mode/verbose_mode.md) — the per-turn block in the message popup, and the runtime block in the session popover
 - [Hub core](../../development/hub_core/hub_core_llm.md) — the service is core (`src/main/agents/telemetry/`); the IPC push is the desktop's
 - Technical details: [Session Telemetry (tech)](session_telemetry_tech.md)
