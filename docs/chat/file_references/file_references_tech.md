@@ -21,14 +21,15 @@
 - `src/shared/filePreview.ts`: `decodePreviewText(bytes, truncated)`, the truncation-safe decode shared with attachment previews.
 
 ### Main process — services
-- `src/main/services/agentFiles/agentFileService.ts`: `createAgentFileService(deps)`, with `resolve`, `authorize`, `readPreview`, `readText`, `open` and `reveal`.
+- `src/main/services/agentFiles/agentFileService.ts`: `createAgentFileService(deps)`, with `resolve`, `authorize`, `readPreview`, `readText`, `open`, `openInBrowser` and `reveal`, and the HTML preview frame's `htmlDocumentAccess`, `readHtmlDocument` and `readHtmlAsset` (documented with [File Preview — Technical Details](../file_preview/file_preview_tech.md)).
+- `src/main/services/agentFiles/openInBrowser.ts`: `browserLaunchPlan` and `createBrowserLauncher`, the default-browser launch behind Open in browser.
 - `src/main/services/agentFiles/resolver.ts`: `resolveFileRefs`, `displayPathFor` and `homeDisplayPath`.
 - `src/main/services/agentFiles/consent.ts`:
   - `createConsentRegistry`, `canApproveDirectory` and `consentDialogOptions`;
   - the `ConsentRequest`, `ConsentAnswer` and `ConsentPrompt` types.
 - `src/main/services/agentFiles/canonicalPath.ts`: `createPathCanonicalizer` and `DARWIN_DATA_VOLUME`.
 - `src/main/services/agentFiles/openStrategy.ts`: `chooseOpenStrategy` and `findDefaultEditor`.
-- `src/main/host/desktop/agentFiles.ts`: the production wiring (`agentFileService`) and `nativeConsentPrompt(win)`.
+- `src/main/host/desktop/agentFiles.ts`: the production wiring (`agentFileService`, `openInBrowser`) and `nativeConsentPrompt(win)`.
 - `src/main/host/desktop/clipboard.ts`: `writeClipboardText(text, write?)`, the main-side clipboard bridge behind `clipboard:write-text`. Refuses a non-string or anything over `MAX_CLIPBOARD_TEXT_LENGTH` (8M characters, above what a 4 MB UTF-8 file can decode to), and returns a thrown write as `{ success: false }`.
 
 ### Main process — reused from Local Agents
@@ -44,7 +45,7 @@
 - `src/main/services/localAgents/toolDetectionService.ts`: `get(id)`, called through `findDefaultEditor`.
 
 ### Main process — IPC
-- `src/main/ipc/agent_files.ipc.ts`: `registerAgentFileHandlers()`. Six thin controllers.
+- `src/main/ipc/agent_files.ipc.ts`: `registerAgentFileHandlers()`. Seven thin controllers.
   - Each calls `userActivation.requireActivated()` and then the service.
   - `authorize` passes `nativeConsentPrompt(BrowserWindow.fromWebContents(event.sender))`.
 - `src/main/ipc/app.ipc.ts`: `clipboard:write-text` → `writeClipboardText`. Unlike the agent-file handlers it does not call `requireActivated()`.
@@ -52,7 +53,7 @@
 
 ### Preload
 - `src/preload/index.ts`:
-  - `window.api.agentFiles.{resolve, authorize, readPreview, readText, open, reveal}`, each an `ipcRenderer.invoke`;
+  - `window.api.agentFiles.{resolve, authorize, readPreview, readText, open, reveal, openInBrowser}`, each an `ipcRenderer.invoke`;
   - `window.api.clipboard.writeText(text)` → `clipboard:write-text`.
 
 ### Renderer
@@ -62,7 +63,7 @@
 - `src/renderer/src/components/chat/MessageBubble.tsx`: renders with `chatMarkdownComponents`, and provides a null scope while streaming.
 - `src/renderer/src/stores/filePreview.store.ts`: `openAgentFile`, `openAgentFileExternally`, `revealAgentFile`, and the error-copy helpers.
 - `src/renderer/src/utils/agentFileAccess.ts`: `authorizeAgentFile(input)` (shared by the preview store and the menu) and `readAgentFileText(agentId, ref, { onAuthorize? })`.
-- `src/renderer/src/components/chat/MessageContextMenu.tsx`: the reference items (`messageMenuItems`, `referenceDraft` and the file actions). Its text half belongs to [Conversation UI tech](../conversation_ui/conversation_ui_tech.md#message-context-actions).
+- `src/renderer/src/components/chat/MessageContextMenu.tsx`: the reference items (`messageMenuItems`, `referenceDraft` and the file actions). `messageMenuItems` puts `open-in-browser` in a group of its own, first, when `previewKindFor(ref.path) === 'html'` and the file is not path-only; its action runs `authorizeAgentFile` under `consentPending` (so the dialog's blur keeps the menu), closes on a decline, then `window.api.agentFiles.openInBrowser`. Its text half belongs to [Conversation UI tech](../conversation_ui/conversation_ui_tech.md#message-context-actions).
 - `src/renderer/src/utils/fileNote.ts`: `fileNoteFromContents(path, text)` and `fenceLanguageFor(fileName)`.
 - `src/renderer/src/utils/startAgentChat.ts`: `startAgentChat(agentId, { draft? })` and `unavailableAgentMessage(agents, agentId, missing)`, shared with the chat-starting shortcuts.
 - `src/renderer/src/components/chat/FilePreviewModal.tsx`: the agent-file header and states. See [File Preview — Technical Details](../file_preview/file_preview_tech.md).
@@ -86,9 +87,11 @@
   - one shared dialog per path;
   - `authorize` asking in `read` words only for exactly `'read'`;
   - `readText`: whole and untruncated, outside only after approval, credential files, binary types and folders refused unread, the cap exact and one byte over, NUL and invalid UTF-8, a swap between check and read;
-  - open and reveal.
+  - open and reveal;
+  - Open in browser (html only, outside only after approval, a failed launch), and the HTML frame's document and asset gate (see [File Preview — Technical Details](../file_preview/file_preview_tech.md#tests)).
+- `src/main/services/agentFiles/openInBrowser.test.ts`: the per-platform launch plan and its fallback.
 - `src/main/host/desktop/clipboard.test.ts`: the write, and refusal of a non-string, an oversized payload and a throwing write.
-- `src/renderer/src/components/chat/MessageContextMenu.fileRefs.test.tsx`: the items per reference kind, a selection inside a path, keyboard across the divider; copy through main's clipboard after authorizing, main's reason kept in the open menu, the menu surviving the consent dialog, a decline reading nothing, and a blur after the consent call closing it; the running item's spinner, `aria-disabled` items and focus back on a failed item; top- versus bottom-anchored placement with the error row reserved; notes titled by heading or name and fenced code; the path copied without asking; the new-chat landing, a draft appended on a new line, and a disabled agent.
+- `src/renderer/src/components/chat/MessageContextMenu.fileRefs.test.tsx`: the items per reference kind, a selection inside a path, keyboard across the divider; copy through main's clipboard after authorizing, main's reason kept in the open menu, the menu surviving the consent dialog, a decline reading nothing, and a blur after the consent call closing it; the running item's spinner, `aria-disabled` items and focus back on a failed item; top- versus bottom-anchored placement with the error row reserved; notes titled by heading or name and fenced code; the path copied without asking; the new-chat landing, a draft appended on a new line, and a disabled agent; Open in browser first for an HTML file, after authorizing, with main's failure in the menu and nothing opened on a decline.
 - `src/renderer/src/utils/fileNote.test.ts`: title order (frontmatter, H1, any heading, name; headings in fences ignored), raw versus fenced bodies, fence length and `fenceLanguageFor`.
 - `src/main/services/localAgents/homeAccessService.test.ts`: guarded folders spelled in another case.
 - `src/renderer/src/components/chat/fileRefs.test.tsx`: the `code` override and `collectFileRefSources`.
@@ -113,6 +116,7 @@ None.
 | `agent-files:read-preview` | `{ agentId, path }` | `{ success: true, text, truncated }` or `AgentFileFailure` |
 | `agent-files:read-text` | `{ agentId, path }` | `{ success: true, text }` (the whole file) or `AgentFileFailure` |
 | `agent-files:open` | `{ agentId, path }` | `{ success: true }` or `AgentFileFailure` |
+| `agent-files:open-in-browser` | `{ agentId, path }` | `{ success: true }` or `AgentFileFailure`. HTML only; never asks |
 | `agent-files:reveal` | `{ agentId, path }` | `{ success: true }` or `AgentFileFailure` |
 | `clipboard:write-text` | `text: string` | `{ success: boolean }`. Registered in `app.ipc.ts`; not agent-file specific |
 
@@ -132,12 +136,12 @@ None.
 | `not_found` | The path is missing, is neither a file nor a folder, or was swapped between the check and the read | "That file is no longer there." |
 | `needs_consent` | Outside the agent folder and not approved | "Cinna needs your approval to use a file outside the agent folder." |
 | `credential_file` | Preview or whole-file read of a credential file | "Preview is off for credential files." (preview); "Cinna does not read credential files." (`readText`) |
-| `not_previewable` | A type the modal cannot render | "No preview for this file type." |
+| `not_previewable` | A type the modal cannot render, or a non-HTML file given to the HTML frame or Open in browser | "No preview for this file type." |
 | `not_a_file` | A folder where a file was needed | "That is a folder, not a file." |
 | `read_failed` | The read threw | "Could not read the file." |
-| `too_large` | A whole-file read over `MAX_AGENT_FILE_TEXT_BYTES`, at the stat or at the read | "This file is over 4 MB.", the figure computed from the cap |
+| `too_large` | A whole-file read over `MAX_AGENT_FILE_TEXT_BYTES`, or an HTML frame document or asset over `MAX_HTML_PREVIEW_BYTES`, at the stat or at the read | "This file is over 4 MB.", the figure computed from the cap; "This file is too large to show." for the frame (served as 413) |
 | `not_text` | A whole-file read of a `binary` content kind (refused unread), or bytes with a NUL or invalid UTF-8 | "This isn't a text file." |
-| `launch_failed` | The launch threw, or the path moved before launch | "Could not open the file." `shell.openPath` refusing gives "No app could open this file.", and a failed reveal gives "Could not show the file in its folder." |
+| `launch_failed` | The launch threw, or the path moved before launch | "Could not open the file." `shell.openPath` refusing gives "No app could open this file.", a failed reveal "Could not show the file in its folder.", and a failed Open in browser "No browser could open this file." |
 
 ## Services & Key Methods
 
@@ -146,7 +150,7 @@ None.
   - agent lookup: `locateAgent`, `agentName`;
   - consent: `getConsentUserId`, `consent`;
   - platform and paths: `platform`, `isGuardedLocation`, `paths`, `home`, `maxPreviewBytes`, `maxTextBytes`. `isGuardedLocation` is required, so no wiring can forget it.
-  - launching: `getDefaultEditor`, `launchEditor`, `openPath`, `openInTextEditor`, `showItemInFolder`.
+  - launching: `getDefaultEditor`, `launchEditor`, `openPath`, `openInTextEditor`, `showItemInFolder`, `openInBrowser`.
 - `target(input)` (private):
   1. validates the input;
   2. locates the agent folder;
@@ -180,6 +184,7 @@ None.
   3. `chooseOpenStrategy`;
   4. re-takes `paths.realpath(requested)` and returns `launch_failed` if it differs;
   5. launches.
+- `openInBrowser(input)`: `permitted`, `not_a_file`, `credential_file`, `not_previewable` unless the name is of the html kind; re-takes the realpath and returns `launch_failed` if it moved; then `deps.openInBrowser(real)`.
 - `reveal(input)`: `permitted`, then `showItemInFolder(real)`.
 
 ### `src/main/services/agentFiles/resolver.ts`
@@ -358,8 +363,9 @@ None.
 - **Launches:**
   - `launchEditor` passes the target as its own argv element (`code <file>`, or `open -a <bundle> <file>`).
   - `openInTextEditor` is `execFile('open', ['-t', file])`.
-  - `shell.openPath` is used only for `DEFAULT_APP_EXTENSIONS`.
-  - `shell.openExternal` is never used.
+  - `shell.openPath` is used by **Open** only for `DEFAULT_APP_EXTENSIONS`. Open in browser also ends with it, on an `.html` file only, after the browser launch (`open -a <browser> <file>`, the browser executable, `xdg-open <file>`, the file its own argv element) failed.
+  - `shell.openExternal` is never used on an agent file. (The HTML preview frame's link guard uses it for `http(s)` URLs; see [File Preview — Technical Details](../file_preview/file_preview_tech.md#html-preview-frame).)
+- **The HTML frame's assets** go through `permitted` without asking, stay inside the document's folder on the lexical path and the realpath, refuse dot segments and credential files, and are capped at 20 MB. See [File Preview — Technical Details](../file_preview/file_preview_tech.md#html-preview-frame).
 - **The preview body** renders through the same escaped React and `react-markdown` stack as attachments.
 
 ## Observability
@@ -373,5 +379,7 @@ None.
   - `opened an agent file`: `strategy` and `inside`.
   - `read an agent file as text`: `bytes` and `inside`.
   - `revealed an agent file`: `inside`.
+  - `refused a preview asset outside its document folder`: `pathLength`.
+  - `opening an agent file in the browser failed`: the error name.
   - Failures: the error's `name` only, because `execFile`'s message quotes its argv.
 - `createLogger('file-preview')` in the renderer warns with the failure code only.

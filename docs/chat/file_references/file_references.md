@@ -19,7 +19,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **Credential file**: a file whose name says it holds secrets. It is never read into the renderer.
 - **Guarded location**: `~/Documents`, `~/Desktop`, `~/Downloads` or iCloud Drive (`~/Library/Mobile Documents`). macOS asks the user before an app touches any of them. See [The Agents Folder Question](../../agents/local_agents/home_access.md).
 - **Open strategy**: how **Open** hands a file to the operating system, which never involves executing it.
-- **Reference menu**: the transcript's right-click menu when it lands on a reference. It replaces **Copy text** / **Save to Notes** of the span text with **Copy contents**, **Save to Notes** (of the file), **Copy full path** and **Reference in a new chat**.
+- **Reference menu**: the transcript's right-click menu when it lands on a reference. It replaces **Copy text** / **Save to Notes** of the span text with **Open in browser** (HTML files only), **Copy contents**, **Save to Notes** (of the file), **Copy full path** and **Reference in a new chat**.
 - **Whole-file read**: the file's complete text, for Copy contents and Save to Notes. Unlike a preview it is never truncated: a file over 4 MB is refused.
 
 ## User Stories / Flows
@@ -62,7 +62,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 
    Near the bottom of the window the menu opens upwards from the pointer instead.
 
-   A folder, a known binary type (`report.pdf`, `photo.jpg`) or a credential file shows only the second group.
+   A folder, a known binary type (`report.pdf`, `photo.jpg`) or a credential file shows only the second group. An HTML file (`.html`, `.htm`, `.xhtml`) gets a group of its own first: **Open in browser**.
 2. **Copy contents** puts the whole file on the clipboard and closes the menu.
 3. **Save to Notes** creates a note from the file and opens it, the way a transcript excerpt does. The note is titled:
    - for a markdown file, by its frontmatter `title:`, else its first H1, else its first heading of any level, else its file name;
@@ -70,10 +70,11 @@ A folder agent works inside its folder and names files all the time: `data/refor
 
    A markdown or `.txt` file is saved as written. Any other file is saved inside a fenced code block tagged with its language (`py`, `ts`, `json`, `makefile`…), so a script reads as code in the note.
 4. **Copy full path** copies the absolute path. Nothing is read and nothing is asked.
-5. **Reference in a new chat** opens the new-chat screen with the reference's agent selected, the composer focused, and "The file \`<path>\` " already typed, ready for the rest of the sentence. A folder reads "The folder \`<path>\` ". Text already in the new-chat composer stays, and the reference goes on a line under it.
-6. For a file outside the agent folder, the two content items first ask to read it: "Let Cinna read a file outside <agent>'s folder?", **Read file** or **Cancel**. The menu stays open while the dialog is up. **Cancel** closes the menu and reads nothing. The running item shows a spinner and the others dim until it ends.
-7. A failure is said inside the menu, which stays open for a retry with focus back on the item that failed: "This file is over 4 MB.", "This isn't a text file.", "That file is no longer there.". An agent that has been switched off shows the toast "*Name* is disabled", one that is gone "That agent is no longer available".
-8. A selection inside a path still wins: selecting part of it and right-clicking gives the ordinary **Copy text** / **Save to Notes** of the selection.
+5. **Open in browser** opens the file in the user's default web browser and closes the menu. For a file outside the agent folder it first asks to *show* it, as a click does; **Cancel** closes the menu and opens nothing. "No browser could open this file." is said inside the menu.
+6. **Reference in a new chat** opens the new-chat screen with the reference's agent selected, the composer focused, and "The file \`<path>\` " already typed, ready for the rest of the sentence. A folder reads "The folder \`<path>\` ". Text already in the new-chat composer stays, and the reference goes on a line under it.
+7. For a file outside the agent folder, the two content items first ask to read it: "Let Cinna read a file outside <agent>'s folder?", **Read file** or **Cancel**. The menu stays open while the dialog is up. **Cancel** closes the menu and reads nothing. The running item shows a spinner and the others dim until it ends.
+8. A failure is said inside the menu, which stays open for a retry with focus back on the item that failed: "This file is over 4 MB.", "This isn't a text file.", "That file is no longer there.". An agent that has been switched off shows the toast "*Name* is disabled", one that is gone "That agent is no longer available".
+9. A selection inside a path still wins: selecting part of it and right-clicking gives the ordinary **Copy text** / **Save to Notes** of the selection.
 
 ## Business Rules
 
@@ -186,11 +187,13 @@ A folder agent works inside its folder and names files all the time: `data/refor
   - A credential file goes to the editor, else `open -t`, else a reveal.
 - **The system app is used only for allowlisted types.** `shell.openPath` runs whatever the OS associates with a type, so a `.command` or an `.app` would execute.
 - **When the system app refuses**, the message is "No app could open this file."
+- **Open in browser is a separate action**, offered for HTML files only. It goes to the default *web browser* (the `https:` handler), because the app `.html` files open with is often an editor, and falls back to the system app only when no browser launch worked. The path is re-checked right before the launch, as for Open. See [File Preview](../file_preview/file_preview.md#open-in-browser).
 
 ### Previews
 - **What previews:** every type an attachment previews, plus code and config shown as text (`py`, `sh`, `ts`, `sql`, `toml`, …). This is a separate rule from the attachment one, so attachment behaviour is unchanged.
 - **Read in main**, capped at 512 KB, with the same truncation-safe decode as attachments. A truncated preview says "Preview truncated — open the file to see the full content."
 - **A type with no preview is never read.**
+- **An HTML file renders with the files beside it.** Its page asks for `style.css` or `img/chart.png`, and main serves them only from the page's own folder and below, never a dotfile or dot-folder, never a credential file, never over 20 MB, and only when that path is inside the agent folder or under an approval already given. A page never raises the consent dialog: an outside page approved as a single file renders without its assets. See [File Preview — Security](../file_preview/file_preview_tech.md#html-preview-frame).
 
 ### What a reference looks like
 - **It looks pressable.** It keeps the inline code box, tints its fill slightly towards the accent (orange in the dark theme, blue in the light one), and adds a 1px edge. The edge deepens on hover, and the cursor is a pointer. See [UX rule 11](../../development/ui_guidelines/ux_rules.md): a control must not look like the text beside it.
@@ -259,7 +262,9 @@ Click
        file   → FilePreviewModal expands from the click point
                   → agent-files:read-preview (containment/consent → credential → kind → dev/inode) → text
                   Open        → authorize → agent-files:open   → editor | system app | open -t | reveal
+                  Open in browser (html) → authorize → agent-files:open-in-browser → browser | system app
                   Open folder → authorize → agent-files:reveal
+                  html page → html-preview:open → cinna-preview://<token>/… (document + assets in its folder, never asks)
 
 Right-click
   useMessageContextMenu → fileRefTargetOf(code) → { agentId, ref } → messageMenuItems (decided once)
@@ -268,6 +273,7 @@ Right-click
          (containment/consent → file → credential → binary name → dev/inode → 4 MB → NUL / UTF-8)
       Copy contents → clipboard:write-text (main's clipboard)
       Save to Notes → fileNoteFromContents → note:create → Notes tab, note opens
+    Open in browser (html)  → agent-files:authorize (dialog if outside) → agent-files:open-in-browser
     Copy full path          → navigator.clipboard (no IPC, no dialog)
     Reference in a new chat → startAgentChat(agent, draft) → new-chat screen, path in the composer
 ```

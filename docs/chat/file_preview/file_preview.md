@@ -2,11 +2,11 @@
 
 ## Purpose
 
-One read-only modal for looking at a text file **in place**, reached two ways.
+One read-only modal for looking at a file **in place**, reached two ways.
 
 **An attachment badge in a chat message.**
-- **What previews:** `txt`, `csv`, `md`, `json`, `yaml`/`yml`, and Python (`py`/`pyi`). These open the modal instead of the save dialog.
-- **Download stays:** the modal header keeps a **Download** button, so previewing never replaces saving the file.
+- **What previews:** `txt`, `csv`, `md`, `json`, `yaml`/`yml`, Python (`py`/`pyi`), XML and its dialects (`xml`, `xsd`, `xsl`/`xslt`, `plist`, `rss`, `atom`, `kml`, `gpx`, `csproj`, `xaml`), and HTML (`html`, `htm`, `xhtml`). These open the modal instead of the save dialog.
+- **Download stays:** the modal header keeps a **Download** button, so previewing never replaces saving the file. An HTML attachment also gets **Open in browser** beside it.
 - **Everything else downloads:** images, PDF, Office binaries, archives and the rest still go straight to the save dialog. Preview is an extra shortcut, not a new gate.
 - **Both directions of attachment:**
   - **User attachments** under a sent user message ([File Attachments](../file_attachments/file_attachments.md)), `cinna` or `local` source.
@@ -16,12 +16,14 @@ One read-only modal for looking at a text file **in place**, reached two ways.
 - **Open instead of Download:** the file is already on disk, so the header's **⋯** menu offers **Open** and **Open folder**.
 - **More types:** other code and config preview as plain text as well; Python is highlighted, as it is for an attachment.
 
-**A long markdown file**, from either way in, also gets a **Contents** panel: its headings, beside the body or over its right edge, so the user can jump to a section and see where they are. **A Python file** with more than one definition gets the same panel as an outline: top-level functions and classes, and under each class its own methods (no nested functions, nested classes or constants).
+**A long markdown file**, from either way in, also gets a **Contents** panel: its headings, beside the body or over its right edge, so the user can jump to a section and see where they are. **A Python file** with more than one definition gets the same panel as an outline: top-level functions and classes, and under each class its own methods (no nested functions, nested classes or constants). **An XML file** gets it as the document's sections: the elements that hold other elements, down to four levels below the root.
+
+**An HTML file** is shown the way a browser would show it, scripts and remote content included, inside a sandboxed frame that cannot reach the app; a **Rendered / Source** toggle switches to its highlighted markup. **Open in browser** hands it to the user's default web browser.
 
 ## Core Concepts
 
 - **Previewable type**: a filename or MIME type the modal knows how to render.
-  - `previewKindFor(filename, mimeType)` (`src/shared/filePreview.ts`) maps it to a `PreviewRenderKind` (`markdown`, `json`, `csv`, `python` or `text`), or `null` when it is not previewable and should download. The extension wins over the MIME type, because the stores' MIME type is only a best guess.
+  - `previewKindFor(filename, mimeType)` (`src/shared/filePreview.ts`) maps it to a `PreviewRenderKind` (`markdown`, `json`, `csv`, `python`, `xml`, `html` or `text`), or `null` when it is not previewable and should download. The extension wins over the MIME type, because the stores' MIME type is only a best guess.
   - Agent files use `agentFilePreviewKindFor`, which adds other code and config as `text` and leaves attachment behaviour unchanged. A `.py` file resolves to `python` through `previewKindFor` first, so it is highlighted in both places.
 - **Preview read path**: the IPC call that reads a file's bytes into memory and returns decoded UTF-8 plus a `truncated` flag.
   - Attachments use `files:read-preview`, and agent files use `agent-files:read-preview`.
@@ -38,14 +40,19 @@ One read-only modal for looking at a text file **in place**, reached two ways.
   - `json` is a collapsible tree, falling back to raw text if it does not parse; see [JSON tree](#json-tree).
   - `csv`/`tsv` renders as a table: quoted fields are honoured (loosely following RFC 4180) and the first 500 rows are shown.
   - `python` is a wrapped `<pre>` highlighted by lowlight, the engine behind the chat's `rehype-highlight`, so a `.py` file is tokenised and coloured exactly like a fenced `python` block in a message (the same `.hljs-*` palette). If highlighting throws, it shows the plain text, so a file cut at the cap still previews.
+  - `xml` is a collapsible tree, falling back to highlighted source when it does not parse; see [XML tree](#xml-tree).
+  - `html` is the page rendered in a sandboxed frame, or its highlighted source; see [HTML pages](#html-pages).
   - `text` (including yaml) is a wrapped `<pre>`.
+- **Preview frame**: the `<iframe>` an HTML page renders in. Main serves it over the app's own `cinna-preview:` scheme, under a **token** issued for that one file and released when the preview closes.
 - **Notice**: a body that is a sentence rather than content. For agent files it is either "Preview is off for credential files." or "No preview for this file type."
 - **Header actions**:
-  - Attachments get an icon-only Download.
-  - Agent files get an icon-only **⋯** button ("More file actions"). Its menu holds **Open**, then **Open folder**.
+  - Attachments get an icon-only Download. An HTML attachment also gets an icon-only **Open in browser** (a globe) before it.
+  - Agent files get an icon-only **⋯** button ("More file actions"). Its menu holds **Open**, then **Open in browser** for an HTML file, then **Open folder**.
   - For `csv` only, a **Filter** toggle reveals per-column controls. It is hidden while a notice shows.
-  - For a long markdown file, or a Python file with several definitions, a labelled **Contents** toggle, at the app-chrome type scale, shows and hides the Contents panel.
-- **Contents panel**: a 240 px column listing a markdown file's H1–H4 headings, or a Python file's functions and classes (`name()` for a function or method, the bare name for a class) with methods one level in, indented by depth, with the current section in the accent colour. See [The Contents panel](#the-contents-panel).
+  - For `html` only, a **Rendered / Source** segmented toggle. It is hidden while the body is an error or a notice.
+  - For a long markdown file, a Python file with several definitions, or an XML file with several sections, a labelled **Contents** toggle, at the app-chrome type scale, shows and hides the Contents panel.
+- **Contents panel**: a 240 px column listing a markdown file's H1–H4 headings, a Python file's functions and classes (`name()` for a function or method, the bare name for a class) with methods one level in, or an XML file's sections (`tag · name`), indented by depth, with the current section in the accent colour. See [The Contents panel](#the-contents-panel).
+- **Note entry**: a muted, italic Contents line such as "… 12 more `<item>`" that stands for entries left out. It is text, not a link.
 - **Entrance**: the card expands from the point the user clicked.
 - **Exit**: closing plays the entrance backwards, towards the same point.
 - **Header path**: an agent file's display path, beside its name. A click copies it.
@@ -88,6 +95,18 @@ One read-only modal for looking at a text file **in place**, reached two ways.
 2. Clicking a chevron folds that object or array to `{ … }` / `[ … ]` with its size beside it ("3 keys", "12 items"); clicking the chevron or the braces unfolds it. Alt-click folds or unfolds the whole branch under it.
 3. A URL inside a string opens in the browser.
 
+### Reading an XML preview
+1. The user opens an `xml` (or `plist`, `rss`, `csproj`, …) badge or agent file. The modal shows a coloured tree of tags, attributes and text, with an element holding one short line of text shown on one row, `<title>Report</title>`.
+2. Clicking a chevron folds an element to `<tag …>…</tag>` with its size beside it ("3 children"). Alt-click folds or unfolds the whole branch.
+3. With several sections, the header shows **Contents**. Clicking an entry unfolds whatever hides that element and scrolls to it.
+4. A file that does not parse, or was cut at 512 KB, shows its highlighted source under a line saying which: "This XML could not be parsed, so it is shown as source." or "The preview is cut at 512 KB, so it is shown as source."
+
+### Viewing an HTML page
+1. The user opens an `html` badge or agent file. The card opens wider and at a fixed height, and the page loads inside it as it would in a browser: its scripts run, remote images, fonts and styles load, and an agent file's relative `style.css` or `img/chart.png` beside it load too.
+2. Clicking a web link in the page opens it in the user's browser. The page itself stays put.
+3. **Source** in the header shows the markup, highlighted. **Rendered** goes back to the page as it was left, without reloading it.
+4. **Open in browser** (the globe button for an attachment, the **⋯** menu for an agent file) opens the file in the default web browser. A failure appears in the row under the header: "Couldn't open it in the browser: …", or "No browser could open this file."
+
 ### Clicking a non-previewable attachment
 1. The user clicks a `png` / `pdf` / `zip` / … badge.
 2. `previewKindFor` returns `null`, so `useAttachmentOpen` falls through to `download(attachment)`: the existing save dialog, unchanged.
@@ -99,15 +118,15 @@ One read-only modal for looking at a text file **in place**, reached two ways.
 2. **Invalid bytes:** invalid byte sequences decode to the replacement character instead of failing, so the modal always shows *something*. Download or Open still gets the exact bytes.
 
 ### Closing
-1. Escape, the X button, or a press outside the card closes the modal. A press outside within 500 ms of opening, or of a Contents toggle, is ignored. While the **⋯** menu is open, Escape or a press outside closes only the menu.
+1. Escape, the X button, or a press outside the card closes the modal. A press outside within 500 ms of opening, or of a Contents toggle, is ignored. While the **⋯** menu is open, Escape or a press outside closes only the menu. While focus is inside an HTML page, Escape goes to the page and closes nothing.
 2. The card shrinks back towards where it opened while it and the backdrop fade out, as fast as they came in. The page under it takes clicks at once.
 3. **Focus:** after a keyboard open, focus returns to whatever held it before, once the fade has ended. After a click open, focus is released and not returned.
 
 ## Business Rules
 
 - **Only the attachment click decides preview versus download.** `useAttachmentOpen` is the one place that branches.
-  - The shared badge component (`AttachmentBadge`) is unchanged: its tooltip still says "Download", and it knows nothing about preview.
-  - This keeps correct the badges used elsewhere that always download, such as cinna task attachments.
+  - The shared badge component (`AttachmentBadge`) does not route clicks. It only names them: a list whose click goes through `useAttachmentOpen` passes `previewsOnClick`, and then a previewable badge's tooltip and accessible name say "Preview *name*" while the rest say "Download *name*" ([UX rule 10](../../development/ui_guidelines/ux_rules.md)).
+  - Without the flag every badge says "Download", which keeps correct the badges used elsewhere that always download, such as cinna task attachments.
 - **Preview never modifies anything.** It is read-only: no write-back and no re-upload.
 - **The byte cap is enforced in main.** The renderer cannot request more than `MAX_PREVIEW_BYTES`.
   - For attachments, the cap is applied in `fileService.readTextPreview` / `cinnaFileService.readBytes`.
@@ -184,7 +203,13 @@ One read-only modal for looking at a text file **in place**, reached two ways.
 - **Only agent files have it.** An attachment keeps its Download button, and a folder that failed to show has no file actions at all.
 
 ### The Contents panel
-- **Only a long markdown file offers it.** The file must have more than one H1 or more than one H2. A short note gets no panel, because a list of one or two headings is not worth the width it takes. Frontmatter is not counted: the headings are read from exactly the body the preview renders.
+- **A markdown file offers it only when it is long.** It must have more than one H1 or more than one H2. A short note gets no panel, because a list of one or two headings is not worth the width it takes. Frontmatter is not counted: the headings are read from exactly the body the preview renders.
+- **An XML file offers it with at least two sections.** A section is an element that holds other elements, from the root's children down to four levels below the root; the root itself is one per file and is not listed. A leaf such as `<title>`, `<price>` or an empty `<entry id="a"/>` is content, not a section, and listing it would turn the panel into a second copy of the tree.
+  - **An entry is named by its tag and the first thing that identifies it**: an `id`, `name`, `key` or `title` attribute, else the short text of a `<name>` or `<title>` child, cut at 60 characters. Without one it is the bare tag.
+  - **At most 50 entries per parent.** The rest become one note entry, "… N more", with the tag in mono when they all share one (`<item>`). A feed of ten thousand items would otherwise be a panel of ten thousand rows.
+  - **A note entry is not a link.** Nothing scrolls to it and it is never marked current.
+  - **A click reaches an element the tree is hiding.** The tree unfolds every folded ancestor and pages far enough down each long child list before the body scrolls, so a click on a section inside a folded branch still lands on it.
+- **An HTML file never offers it.** The page scrolls inside its own frame, where the panel cannot see or move it.
 - **It is not offered until the preview has loaded.** While loading, or when the body is an error or a notice, the header has no Contents button.
 - **Entries are H1 to H4.** H5 and H6 are left out. A lone H1 is the document's title, so it is left out too, and its H2s become the top level. Several H1s are all listed.
 - **Indentation follows depth, starting from the shallowest level listed.** Top-level entries are in the text colour and deeper ones are secondary. The current one is accent.
@@ -241,6 +266,43 @@ One read-only modal for looking at a text file **in place**, reached two ways.
 - **Text that does not parse shows as plain text.** That includes a file cut at the 512 KB cap, so a large JSON file previews as its raw first 512 KB rather than an error.
 - **Another file starts from its own fold state.** Fold state is keyed by path; carried over, it would fold paths that mean something else in the new file.
 
+### XML tree
+- **An XML file is a tree the user folds, built like the JSON tree.** The same fold that never moves the clicked row, Alt-click for a branch, 200 children at a time with "Show N more of M", and every element deeper than 32 levels folded at the start.
+- **A large file opens with only the root's children listed.** Above 2,000 nodes every element below the root starts folded, for the same reason as JSON: a feed's thousand items, each unfolded, is a wall.
+- **Short text stays on the element's row.** An element whose only content is one line of text up to 80 characters reads `<title>Report</title>`, with no chevron. Anything longer gets its own rows.
+- **Everything in the file is shown**: the XML declaration, a doctype, comments, CDATA and processing instructions, namespace prefixes and declarations as written. A preview that dropped them would misreport the file.
+- **It uses the code-block palette**, as the JSON tree and a fenced `xml` block do: tag names, attribute names, values and comments each in their `.hljs-*` colour, punctuation secondary.
+- **What does not parse is shown as highlighted source, and says why.** A malformed file reads "This XML could not be parsed, so it is shown as source." A file cut at the 512 KB cap no longer parses either, but it is not broken, so it says the preview was cut instead of calling the file malformed.
+- **The parser fetches nothing.** Chromium's XML parser does not load external entities or DTDs, so a previewed file cannot reach the network or the disk through its doctype.
+
+### HTML pages
+- **A page is rendered the way a browser would render it.** Its scripts run, and it loads remote images, styles, fonts and data. An agent's report is usually a page built to be looked at, often with a chart library from a CDN; a preview that stripped scripts or remote content would show an empty page. This was the user's decision, and it carries the risks listed [below](#known-limits-and-accepted-risks).
+- **An agent file's relative assets load; an attachment's do not.** A page in the agent folder gets the files beside it, in its own folder and below: its `style.css`, `img/chart.png`, `data.json`. An attachment is one file with nothing beside it, so its relative references are not found.
+- **The page cannot reach the app.** It runs in a sandboxed frame with no origin of its own, gets no permission (camera, microphone, notifications, location, clipboard) and cannot download, open a window, or take the app window elsewhere. See [Security](file_preview_tech.md#html-preview-frame).
+- **A web link opens in the browser, on a click.** Clicking an `http(s)` link sends it to the user's browser; the page and the app stay where they were. A page cannot do this on its own: a script with no click behind it is stopped, and one click opens one tab. A link to a page beside the document, or to a `#section`, stays inside the frame, and still works on that page.
+- **Rendered first, every time.** Every open starts on **Rendered**. **Source** shows the markup highlighted (with its `<style>` and `<script>` in CSS and JavaScript colours), the first 512 KB like every other preview, with the truncation notice. The frame stays loaded while Source shows, so switching back does not reload the page.
+- **The whole page renders, up to 20 MB.** The frame is served the file whole, not the preview's first 512 KB, so the truncation notice shows on Source only. A page over 20 MB is refused, and the frame says "This file is too large to show."
+- **The card is wider and of a fixed height.** It opens up to 72 rem wide instead of 48, and at 80% of the window tall, whatever the page holds, so nothing resizes while the frame loads. The page sits on white in both themes, as a browser's default canvas does, so a page that sets no background reads as it would there.
+- **A page main refuses says so in the body**: "Couldn't render the page: …".
+- **Opening an `.html` attachment previews it.** It used to download. It now runs the page's scripts and loads its remote content; Download is still in the header.
+
+### Open in browser
+- **It goes to the default web browser, not the `.html` default app.** On many machines that app is an editor. The browser is the `https:` handler: `open -a` on macOS, its executable on Windows, `xdg-open` on Linux, with the system's default app for the file as the last resort.
+- **An agent file opens where it is**, so its relative assets load in the browser too. Its path is re-checked right before the launch, as **Open** does.
+- **An attachment is copied first**, because a browser needs a file. The copy goes to a folder of the app's own data that only the user may enter, one per attachment (a second Open in browser replaces it), and every copy is removed at the next start. A tab still showing one keeps working until then.
+- **Only HTML is offered it**: `.html`, `.htm` and `.xhtml`. It is also in the transcript's right-click menu on an HTML [file reference](../file_references/file_references.md).
+
+### Known limits and accepted risks
+Allowing full remote content was a deliberate choice. These follow from it and are accepted, not open bugs:
+- **The page shares the app's cookie jar.** Its remote requests are made from the app's default session, so they carry whatever cookies that session holds for the sites they reach, and the page can reach services on `localhost`.
+- **A page's scripts can read the files beside it.** Any file in the page's folder and below, except dotfiles, credential files and anything over 20 MB, can be fetched by the page's own script and sent anywhere.
+- **An `.html` attachment runs when previewed.** It used to download.
+- **One click can still open one tab anywhere.** Chromium lets a page act on a click for about five seconds, so within that window a page's script can send the browser to any URL of its choosing, once, instead of the link the user clicked.
+- **A second link within five seconds is refused**, unless the user has left the app and come back in between (following the first link usually does that). The click does nothing; the user clicks again a moment later.
+- **An automated click counts as a user's.** A Playwright or DevTools-protocol click into the frame gives the same activation, so tests and tooling pass the gate as a person would.
+- **Escape and Tab inside the page never reach the modal.** While focus is in the frame, Escape cannot close the preview (the X and a press outside the card still do), and Tab moves through the page and on out of it: there is no focus trap.
+- **An HTML file outside the agent folder, approved as a single file, renders without its relative assets.** The approval covers that file only; its folder would need a folder approval ("don't ask again").
+
 ## Architecture Overview
 
 ```
@@ -255,19 +317,31 @@ Badge click (MessageBubble user badge | AgentAttachment):
                               local : chatFileRepo.getOwned + readFile (capped)
                               cinna : cinnaFileService.readBytes (GET /files/{id}/download, capped)
                            → decodePreviewText → { text, truncated }
-                     → FilePreviewModal renders by kind (markdown|json|csv|text)
+                     → FilePreviewModal renders by kind (markdown|json|csv|python|xml|html|text)
                         header Download → useFileDownloadStore.download (full file)
+                        header Open in browser (html) → files:open-in-browser
+                           → copy under userData/html-open-in-browser → default web browser
 
 File reference click (folder agent chat):
   useFilePreviewStore.openAgentFile(agentId, ref, click point)
     → agent-files:authorize → agent-files:read-preview → FilePreviewModal
-       header ⋯ menu: Open → agent-files:open · Open folder → agent-files:reveal
+       header ⋯ menu: Open → agent-files:open · Open in browser (html) → agent-files:open-in-browser
+                      · Open folder → agent-files:reveal
 
 Long markdown (either way in):
   markdownToc(body after frontmatter) → several H1s or H2s? → header Contents toggle
   pythonOutline(text) → more than one def/class? → header Contents toggle (CodePreview marks each line)
+  parseXml(text) → xmlOutline → two or more sections? → header Contents toggle (XmlTree rows carry the ids)
+                 → null (malformed / cut) → highlighted source under a note
     → FilePreviewContents beside the body (card widens) or over it (narrow window / slow load)
-       entry click → scroll the body to [data-heading-line]
+       entry click → (xml: unfold and page to the element) → scroll the body to [data-heading-line]
+
+HTML page (either way in), Rendered:
+  HtmlPreview → html-preview:open (same checks as the text read, never asks) → cinna-preview://<token>/<name>
+    → <iframe sandbox> → cinna-preview: handler: profile, gate and 20 MB re-checked per request
+       document (+ link helper) · agent file: assets in its folder subtree · attachment: nothing else
+    link click → top navigation (user activation only) → will-navigate → browser, never the app window
+  unmount (close / another file) → html-preview:release
 
 FilePreviewModal (both):
   hidden until settled (≤ 150 ms) → measure card → expand from origin → focus card
@@ -283,16 +357,16 @@ For file paths, IPC signatures and method-level detail see [File Preview — Tec
 
 - [File Attachments](../file_attachments/file_attachments.md): user-uploaded badges route through `useAttachmentOpen`, and preview reuses the same `cinna`/`local` source split.
 - [Agent Attachments](../agent_attachments/agent_attachments.md): agent-attached badges preview too; they used to be download-only.
-- [File References](../file_references/file_references.md): the second way into this modal. It covers resolution, consent, credential files and the Open strategy.
+- [File References](../file_references/file_references.md): the second way into this modal. It covers resolution, consent, credential files and the Open strategy. An HTML page's assets go through the same containment, consent and credential checks, and its right-click menu offers Open in browser.
 - [Note Attachments](../note_attachments/note_attachments.md): a separate preview surface, `NotePreviewModal`, which shows a live note body at the composer stage. This feature previews files already sent or on disk.
 
 ## Future Enhancements (Out of Scope)
 
 - **Image / PDF preview**: render image bytes and PDF pages inline. Today they download, or open in their system app for an agent file.
-- **Syntax highlighting for code other than Python** (`.ts`, `.sh`, …): those attachments still download, and agent files show them as plain text. `CodePreview` registers only the python grammar; another language is a new `PreviewRenderKind` plus its grammar, not a switch to lowlight's whole `common` set.
+- **Syntax highlighting for more code** (`.ts`, `.sh`, …): those attachments still download, and agent files show them as plain text. `CodePreview` registers only the grammars its kinds need (python, and xml with css and javascript for HTML source); another language is a new `PreviewRenderKind` plus its grammar, not a switch to lowlight's whole `common` set.
 - **Copying the file's content** from the preview modal: only an agent file's header path copies today.
-- **A dialog role and a focus trap**: today, Shift+Tab from the card walks back into the page.
+- **A dialog role and a focus trap**: today, Shift+Tab from the card walks back into the page, and Tab walks out of an HTML page's frame the same way.
 
 ---
 
-*Last updated: 2026-09-26*
+*Last updated: 2026-09-30*

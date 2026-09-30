@@ -18,9 +18,12 @@ A2A stream after the reply text), so on desktop the badge lands at the **end**
 of the turn — not spliced at the tag's textual position the way the web renders
 it from the persisted trace.
 
-Text-based attachments (`txt`/`csv`/`md`/`json`/`yaml`/`py`) now open an in-app
-read-only preview on click — see [File Preview](../file_preview/file_preview.md).
-Image / PDF / binary attachments still download on click.
+Text-based attachments (`txt`/`csv`/`md`/`json`/`yaml`/`py`, XML and its
+dialects, and HTML) open an in-app read-only preview on click, and the badge is
+named "Preview *name*" rather than "Download *name*" — see
+[File Preview](../file_preview/file_preview.md). An HTML attachment renders
+with its scripts and remote content in a sandboxed frame, and can be opened in
+the default browser. Image / PDF / binary attachments still download on click.
 
 ## Core Concepts
 
@@ -188,4 +191,4 @@ desktop's live stream).
 
 ---
 
-*Last updated: 2026-06-07*
+*Last updated: 2026-09-30*
