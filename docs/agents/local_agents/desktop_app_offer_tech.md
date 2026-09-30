@@ -4,7 +4,7 @@ Business rules: [desktop_app_offer.md](desktop_app_offer.md).
 
 ## File Locations
 
-- **Shared** — `src/shared/desktopApps.ts`: `DesktopAppId`, `DetectedDesktopApp`, `isDesktopAppId()`, the phase/result types, `DESKTOP_APP_PHASE_LABEL`, `DESKTOP_APP_BUTTON_LABEL`, `visibleDesktopApps()` (the visibility rule) and `desktopAppsBannerText()` (the one sentence)
+- **Shared** — `src/shared/desktopApps.ts`: `DesktopAppId`, `DetectedDesktopApp`, `isDesktopAppId()`, the phase/result types, `DESKTOP_APP_PHASE_LABEL`, `DESKTOP_APP_BUTTON_LABEL`, `visibleDesktopApps()` (the dismissal filter), `hasWorkingRuntime()` with its `RuntimeSetup` / `CliRuntimeSetup` inputs (the visibility rule) and `desktopAppsBannerText()` (the one sentence)
 - **Main**
   - `src/main/services/localAgents/desktopAppsService.ts` — `DESKTOP_APP_SPECS`, `desktopAppRoots()`, `detectDesktopApps()`, `desktopAppsService.list()` (memoized), `resetForTests()`
   - `src/main/services/localAgents/desktopAppConnectService.ts` — `adoptDesktopEngine()`, `createDesktopAppConnect(deps)`, the production `desktopAppConnectService`
@@ -41,7 +41,9 @@ All three call `userActivation.requireActivated()`.
 
 ## Renderer Components
 
-- `DesktopAppsBanner.tsx` — renders `null` until `useDesktopApps`, `useDefaultRuntime`, `useDefaultChatMode` and `useAppSettings` have all answered, then `visibleDesktopApps(detected, dismissed, defaultRuntime.engine, defaultMode.data?.engine ?? null)`. A `region` named *Detected apps*: info icon, sentence, icon button *Dismiss* (dismisses every shown id), then one button per app. The active app and phase come from `useDesktopAppRunning`, falling back to the mutation's own `variables` and `installing` before main has answered. The failure is a `role="alert"` on the button row, from `unwrapIpcError` or the result's `reason`, fallback *"Couldn't set it up."*
+- `desktopApps.ts:visibleDesktopApps(detected, dismissed)` — the detected apps whose id is not dismissed; nothing else
+- `desktopApps.ts:hasWorkingRuntime({ defaultEngine, hasActiveCredential, cli })` — `true` when `defaultEngine === 'opencode' && hasActiveCredential`, or when either `cli.claude` / `cli.codex` has `auth === 'logged_in'`, or `auth === 'unknown' && installed`. `cli` is `Record<EngineLoginId, { auth: 'logged_in' | 'logged_out' | 'unknown'; installed: boolean }>`
+- `DesktopAppsBanner.tsx` — `apps = visibleDesktopApps(detected, dismissed)`; `hasActiveCredential` is `useProviders().data.some(isCredentialActive)`. `needsCli` (apps left, Default runtime and providers answered, and not OpenCode-with-a-credential) is passed as `enabled` to `useClaudeAuth`, `useCodexAuth`, `useClaudeBinary` and `useCodexBinary`; `useLocalTools` is always asked. Renders `null` while there are no apps, the Default runtime or providers are unanswered, or — unless a connect is running or has failed — while any `needsCli` query is unanswered or `hasWorkingRuntime` is `true`. `installed` is the binary state `ready` **or** the tool `available` in `localTools.list()` (a PATH copy at another version is not the binary the probe asks); a missing auth answer is passed as `unknown`. A `region` named *Detected apps*: info icon, sentence, icon button *Dismiss* (dismisses every shown id), then one button per app. The active app and phase come from `useDesktopAppRunning`, falling back to the mutation's own `variables` and `installing` before main has answered. The failure is a `role="alert"` on the button row, from `unwrapIpcError` or the result's `reason`, fallback *"Couldn't set it up."*
 - `useDesktopApps.ts:useDesktopAppConnect()` — `mutationKey` `['desktop-app-connect']`; invalidates the running query right after queuing the call so main answers with it in flight. `onSuccess` (only on `enabled`) dismisses the shown ids and invalidates the Default runtime, `chat-modes`, agent credential bindings, `app-settings`, local agents, `agents` and `local-development-context`; `onSettled` invalidates both auth probes, the engine-login running state and the connect running state
 - `useDesktopApps.ts:useDesktopAppRunning(pending)` — polls every `DESKTOP_APP_RUNNING_POLL_MS` (1 s) while the mutation is pending or main reports a connect
 - `desktopApps.store.ts` — `localStorage['cinna-desktop-apps-dismissed']`, a JSON array of ids; a corrupt blob loads as `[]` and a failed write is ignored
@@ -49,7 +51,7 @@ All three call `userActivation.requireActivated()`.
 ## Configuration
 
 - `CINNA_DESKTOP_APP_ROOTS` — test override of the scanned folders (and of the macOS check). E2E plants `<dir>/Claude.app/Contents/Info.plist` / `<dir>/ChatGPT.app/…`; an empty directory is the only honest "no apps"
-- Settings read: `prioritizeAccountDefaults`; written: `localAgentsDefaultEngine`. Honoured indirectly through the binary services: `localAgentsClaudePath` / `localAgentsCodexPath`, and the download switch the E2E fixture turns off
+- Settings read: `prioritizeAccountDefaults` (by adopt, not the banner); written: `localAgentsDefaultEngine`. Honoured indirectly through the binary services: `localAgentsClaudePath` / `localAgentsCodexPath`, and the download switch the E2E fixture turns off
 
 ## Security
 

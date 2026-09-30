@@ -60,7 +60,7 @@ A `cinna://connect` deep link opens the same screen on a **confirm** step instea
 1. User clicks "Skip for now" on the welcome card
 2. Dismissed flag is set; onboarding screen unmounts; user lands on the empty new-chat screen
 3. They can configure providers later in Settings → LLM Providers; the empty new-chat send raises the existing "can't determine destination" banner until they do
-4. On a Mac with Claude Desktop or ChatGPT, the new-chat screen they land on offers *Use Claude* / *Use ChatGPT* ([Detected Desktop Apps](../../agents/local_agents/desktop_app_offer.md)). That offer is never part of onboarding: it lives in the shell, which `OnboardingGate` does not mount during first run, so it appears only once first run has ended — by any exit, not only Skip
+4. On a Mac with Claude Desktop or ChatGPT, the new-chat screen they land on offers *Use Claude* / *Use ChatGPT* ([Detected Desktop Apps](../../agents/local_agents/desktop_app_offer.md)) — but only while nothing works yet: an API key entered here hides it when the Default runtime is OpenCode, and so does any signed-in or installed `claude` / `codex`. That offer is never part of onboarding: it lives in the shell, which `OnboardingGate` does not mount during first run, so it appears only once first run has ended — by any exit, not only Skip
 
 ### Invalid API Key
 1. `provider:test-key` returns `{ success: false, error }` — error shown inline. For Gemini, the REST listing error is routed through `parseError()` so the user sees the same friendly copy as the chat-stream path ("Invalid API key" / "Rate limit exceeded — retry in Xs" / etc.)
@@ -151,4 +151,4 @@ welcome ──┬─ provider-type ─► provider-key ─► (app)
 - [The `cinna://connect` Link](connect_link.md) — supplies the `cinna-confirm` step's intent, and owns everything about how the link reaches the app
 - [Local Development](../../agents/local_dev/local_dev.md) — not asked during onboarding; its consent opens from the sidebar icon once the user is in the app. Only the confirm step's opt-in checkbox records an answer during first run
 - [Settings](../../ui/settings/settings.md) — the Development section hosts the "Enable onboarding on restart" toggle
-- [Detected Desktop Apps](../../agents/local_agents/desktop_app_offer.md) — the subscription offer shown after first run; onboarding's API-key "Default" mode (on `opencode`) is why connecting moves the default chat mode, and why an app whose engine is already the Default runtime can still be offered
+- [Detected Desktop Apps](../../agents/local_agents/desktop_app_offer.md) — the subscription offer shown after first run; onboarding's API-key "Default" mode (on `opencode`) is why connecting moves the default chat mode; a working setup from onboarding hides the offer

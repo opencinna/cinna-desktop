@@ -280,6 +280,8 @@ So: `refetchInterval` is `CLAUDE_AUTH_POLL_MS` (10 s) **only** while the answer 
 
 `useRefreshLocalTools` invalidates this key on success, since main re-asks the login on that same call.
 
+It takes `{ enabled }` (default `true`), as do `useCodexAuth`, `useClaudeBinary` and `useCodexBinary`. The [Detected apps banner](desktop_app_offer_tech.md#renderer-components) passes `false` when OpenCode with a credential has already answered its question, so that machine never spawns `claude auth status` for it; a disabled observer does not stop another surface's enabled one on the same key.
+
 ### `useEngineLogin` (`useLocalTools.ts`) — one login, three surfaces
 
 The panel, the composer and the build page each call `useEngineLogin(engine)` and all show the **same** login, because the login lives in main and the hook only reflects it.
