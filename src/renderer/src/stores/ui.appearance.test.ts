@@ -12,7 +12,7 @@ const system = vi.hoisted(() => {
   return state
 })
 
-import { useUIStore } from './ui.store'
+import { selectSidebarVisible, useUIStore } from './ui.store'
 import { readThemePreference } from '../utils/theme'
 
 beforeEach(() => {
@@ -70,6 +70,90 @@ describe('appearance preferences', () => {
     localStorage.setItem('cinna-extra-ui-animation', '0')
     window.dispatchEvent(new StorageEvent('storage', { key: 'cinna-extra-ui-animation' }))
     expect(useUIStore.getState().extraUIAnimation).toBe(false)
+  })
+})
+
+describe('sidebar docking', () => {
+  beforeEach(() => {
+    localStorage.removeItem('cinna-sidebar-docking')
+    useUIStore.setState({ sidebarDocking: 'fixed', sidebarPeek: false, sidebarOpen: true })
+  })
+
+  it('defaults to fixed and follows the open state there', () => {
+    expect(useUIStore.getInitialState().sidebarDocking).toBe('fixed')
+    expect(selectSidebarVisible(useUIStore.getState())).toBe(true)
+    useUIStore.getState().toggleSidebar()
+    expect(selectSidebarVisible(useUIStore.getState())).toBe(false)
+  })
+
+  it('hides into hover mode without touching the fixed open state, and is shown only by a peek', () => {
+    useUIStore.getState().setSidebarDocking('hover')
+    let state = useUIStore.getState()
+    expect(localStorage.getItem('cinna-sidebar-docking')).toBe('hover')
+    expect(state.sidebarOpen).toBe(true)
+    expect(state.sidebarPeek).toBe(false)
+    expect(selectSidebarVisible(state)).toBe(false)
+    state.setSidebarPeek(true)
+    expect(selectSidebarVisible(useUIStore.getState())).toBe(true)
+    // Switching back is docking it: open, persisted, peek gone.
+    useUIStore.setState({ sidebarOpen: false })
+    localStorage.setItem('cinna-sidebar-open', '0')
+    useUIStore.getState().setSidebarDocking('fixed')
+    state = useUIStore.getState()
+    expect(state.sidebarDocking).toBe('fixed')
+    expect(state.sidebarOpen).toBe(true)
+    expect(state.sidebarPeek).toBe(false)
+    expect(localStorage.getItem('cinna-sidebar-open')).toBe('1')
+    expect(localStorage.getItem('cinna-sidebar-docking')).toBe('fixed')
+  })
+
+  it('reveals by opening in fixed mode and by peeking in hover mode', () => {
+    useUIStore.setState({ sidebarOpen: false })
+    useUIStore.getState().revealSidebar()
+    expect(useUIStore.getState().sidebarOpen).toBe(true)
+    expect(localStorage.getItem('cinna-sidebar-open')).toBe('1')
+
+    useUIStore.getState().setSidebarDocking('hover')
+    useUIStore.setState({ sidebarOpen: false })
+    useUIStore.getState().revealSidebar()
+    expect(useUIStore.getState().sidebarPeek).toBe(true)
+    expect(useUIStore.getState().sidebarOpen).toBe(false)
+  })
+
+  it('syncs a docking change made in another app window', () => {
+    useUIStore.setState({ sidebarPeek: true })
+    localStorage.setItem('cinna-sidebar-docking', 'hover')
+    window.dispatchEvent(new StorageEvent('storage', { key: 'cinna-sidebar-docking' }))
+    expect(useUIStore.getState().sidebarDocking).toBe('hover')
+    expect(useUIStore.getState().sidebarPeek).toBe(false)
+  })
+
+  it('docks open when another window switches to fixed, and writes the open key first', () => {
+    useUIStore.setState({ sidebarDocking: 'hover', sidebarOpen: false })
+    localStorage.setItem('cinna-sidebar-open', '0')
+    const order: string[] = []
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string) {
+      order.push(key)
+    })
+    useUIStore.getState().setSidebarDocking('fixed')
+    setItem.mockRestore()
+    expect(order).toEqual(['cinna-sidebar-open', 'cinna-sidebar-docking'])
+
+    // The other window, where the open key still reads closed.
+    useUIStore.setState({ sidebarDocking: 'hover', sidebarOpen: false })
+    localStorage.setItem('cinna-sidebar-docking', 'fixed')
+    window.dispatchEvent(new StorageEvent('storage', { key: 'cinna-sidebar-docking' }))
+    expect(useUIStore.getState().sidebarDocking).toBe('fixed')
+    expect(useUIStore.getState().sidebarOpen).toBe(true)
+  })
+
+  it('starts in the stored mode, never peeking', async () => {
+    localStorage.setItem('cinna-sidebar-docking', 'hover')
+    vi.resetModules()
+    const { useUIStore: freshStore } = await import('./ui.store')
+    expect(freshStore.getState().sidebarDocking).toBe('hover')
+    expect(freshStore.getState().sidebarPeek).toBe(false)
+    localStorage.removeItem('cinna-sidebar-docking')
   })
 })
 

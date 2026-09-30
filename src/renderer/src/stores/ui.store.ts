@@ -22,6 +22,12 @@ export type ActiveView =
   | 'local-development'
   | 'external-agent'
 export type SidebarTab = 'chats' | 'jobs' | 'notes' | 'agents'
+/**
+ * How the sidebar sits beside the chat. `fixed` docks it in the layout and the
+ * TopBar button opens and closes it; `hover` hides it and floats it over the
+ * chat while the pointer is at the window's left edge (`sidebarPeek`).
+ */
+export type SidebarDocking = 'fixed' | 'hover'
 export type SettingsMenu =
   | 'chats'
   | 'llm'
@@ -60,6 +66,7 @@ const ANIMATION_KEY = 'cinna-extra-ui-animation'
 // Only the sidebar's open state is remembered; the view, tab and chat are not,
 // so the app always starts on the new-chat screen.
 const SIDEBAR_KEY = 'cinna-sidebar-open'
+const SIDEBAR_DOCKING_KEY = 'cinna-sidebar-docking'
 // Whether a long markdown preview opens with its Contents panel showing.
 const PREVIEW_CONTENTS_KEY = 'cinna-preview-contents-open'
 // How the Chats list is grouped, and which of its groups are collapsed.
@@ -86,6 +93,10 @@ function readChatGroupCollapsed(): Record<string, boolean> {
 
 function writeChatGroupCollapsed(state: Record<string, boolean>): void {
   localStorage.setItem(CHAT_GROUPS_COLLAPSED_KEY, JSON.stringify(state))
+}
+
+function readSidebarDocking(): SidebarDocking {
+  return localStorage.getItem(SIDEBAR_DOCKING_KEY) === 'hover' ? 'hover' : 'fixed'
 }
 
 function applyTheme(theme: Theme): void {
@@ -133,7 +144,11 @@ interface UIStore {
    * new-chat composer holds sends while its id is listed.
    */
   draftingAgentIds: string[]
+  /** Fixed mode's open/closed state; hover mode leaves it as it was. */
   sidebarOpen: boolean
+  sidebarDocking: SidebarDocking
+  /** Hover mode only: the sidebar is floating over the chat now. Not persisted. */
+  sidebarPeek: boolean
   /**
    * The file preview's Contents panel, as the user last left it. Only long
    * markdown files offer the panel, so it starts open.
@@ -177,6 +192,10 @@ interface UIStore {
   addDraftingAgentId: (id: string) => void
   removeDraftingAgentId: (id: string) => void
   toggleSidebar: () => void
+  setSidebarDocking: (docking: SidebarDocking) => void
+  setSidebarPeek: (peek: boolean) => void
+  /** Show the sidebar from code: opens it in fixed mode, peeks it in hover mode. */
+  revealSidebar: () => void
   togglePreviewContents: () => void
   toggleTheme: () => void
   setThemePreference: (preference: ThemePreference) => void
@@ -209,6 +228,8 @@ export const useUIStore = create<UIStore>((set, get) => ({
   pendingDraftAgentId: null,
   draftingAgentIds: [],
   sidebarOpen: localStorage.getItem(SIDEBAR_KEY) !== '0',
+  sidebarDocking: readSidebarDocking(),
+  sidebarPeek: false,
   previewContentsOpen: localStorage.getItem(PREVIEW_CONTENTS_KEY) !== '0',
   theme: resolveTheme(readThemePreference()),
   themePreference: readThemePreference(),
@@ -251,6 +272,24 @@ export const useUIStore = create<UIStore>((set, get) => ({
       localStorage.setItem(SIDEBAR_KEY, next ? '1' : '0')
       return { sidebarOpen: next }
     }),
+  // Into hover: hidden until the pointer reaches the edge. Back to fixed: docked
+  // open, since the user just asked for the sidebar to stay.
+  // The open key is written first, so another window reading the docking
+  // change never sees the old closed state beside it.
+  setSidebarDocking: (docking) => {
+    if (docking === 'fixed') localStorage.setItem(SIDEBAR_KEY, '1')
+    localStorage.setItem(SIDEBAR_DOCKING_KEY, docking)
+    set(docking === 'fixed' ? { sidebarDocking: docking, sidebarOpen: true, sidebarPeek: false } : { sidebarDocking: docking, sidebarPeek: false })
+  },
+  setSidebarPeek: (sidebarPeek) => set({ sidebarPeek }),
+  revealSidebar: () => {
+    const state = get()
+    if (state.sidebarDocking === 'hover') {
+      if (!state.sidebarPeek) set({ sidebarPeek: true })
+    } else if (!state.sidebarOpen) {
+      state.toggleSidebar()
+    }
+  },
   togglePreviewContents: () =>
     set((state) => {
       const next = !state.previewContentsOpen
@@ -309,6 +348,10 @@ export const useUIStore = create<UIStore>((set, get) => ({
     })
 }))
 
+/** Whether the sidebar is on screen, in either docking mode. */
+export const selectSidebarVisible = (state: Pick<UIStore, 'sidebarDocking' | 'sidebarOpen' | 'sidebarPeek'>): boolean =>
+  state.sidebarDocking === 'fixed' ? state.sidebarOpen : state.sidebarPeek
+
 applyTheme(useUIStore.getState().theme)
 const systemTheme = window.matchMedia?.('(prefers-color-scheme: dark)')
 const followSystemTheme = (): void => {
@@ -327,6 +370,13 @@ const syncAppearance = (event: StorageEvent): void => {
   }
   if (event.key === ANIMATION_KEY || event.key === null) {
     useUIStore.setState({ extraUIAnimation: localStorage.getItem(ANIMATION_KEY) !== '0' })
+  }
+  if (event.key === SIDEBAR_DOCKING_KEY || event.key === null) {
+    const sidebarDocking = readSidebarDocking()
+    if (sidebarDocking !== useUIStore.getState().sidebarDocking) {
+      // Switching to fixed docks it open, in every window.
+      useUIStore.setState(sidebarDocking === 'fixed' ? { sidebarDocking, sidebarPeek: false, sidebarOpen: true } : { sidebarDocking, sidebarPeek: false })
+    }
   }
 }
 window.addEventListener('storage', syncAppearance)

@@ -68,7 +68,7 @@ async function openDeleteDialog(): Promise<HTMLElement> {
 beforeEach(() => {
   vi.clearAllMocks()
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
-  useUIStore.setState({ activeView: 'task', sidebarTab: 'jobs', sidebarOpen: true, revealChatId: null, activeJobId: null, activeCinnaRunId: null })
+  useUIStore.setState({ activeView: 'task', sidebarTab: 'jobs', sidebarOpen: true, sidebarDocking: 'fixed', sidebarPeek: false, revealChatId: null, activeJobId: null, activeCinnaRunId: null })
   useChatStore.setState({ activeChatId: null })
   getChat.mockResolvedValue({ id: 'c1', hiddenFromList: true, deletedAt: null, messages: [] })
   showInList.mockResolvedValue({ success: true })
@@ -99,6 +99,19 @@ describe('Show in the Chats list', () => {
     fireEvent.click(item)
     expect(showInList).not.toHaveBeenCalled()
     expect(useUIStore.getState().revealChatId).toBe('c1')
+  })
+
+  it.each([
+    ['opens a closed fixed sidebar', 'fixed', 'sidebarOpen'],
+    ['peeks a hover-docked sidebar, leaving its fixed state alone', 'hover', 'sidebarPeek']
+  ] as const)('%s', async (_case, docking, shows) => {
+    getChat.mockResolvedValue({ id: 'c1', hiddenFromList: false, deletedAt: null, messages: [] })
+    useUIStore.setState({ sidebarDocking: docking, sidebarOpen: false })
+    mount()
+    fireEvent.click(within(await openMenu()).getByRole('menuitem', { name: 'Show in the Chats list' }))
+    const ui = useUIStore.getState()
+    expect(ui[shows]).toBe(true)
+    if (docking === 'hover') expect(ui.sidebarOpen).toBe(false)
   })
 
   it.each([

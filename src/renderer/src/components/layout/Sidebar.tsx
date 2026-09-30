@@ -14,8 +14,10 @@ import {
   SlidersHorizontal,
   TerminalSquare
 } from 'lucide-react'
-import { useEffect } from 'react'
-import { useUIStore, PROFILE_SCOPE_TABS } from '../../stores/ui.store'
+import { useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
+import { useUIStore, PROFILE_SCOPE_TABS, selectSidebarVisible } from '../../stores/ui.store'
+import { useSidebarHoverDock } from '../../hooks/useSidebarHoverDock'
 import type { SettingsMenu } from '../../stores/ui.store'
 import { useAuthStore } from '../../stores/auth.store'
 import { ChatList } from '../chat/ChatList'
@@ -53,7 +55,10 @@ const profileMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles
 ]
 
 export function Sidebar(): React.JSX.Element {
-  const sidebarOpen = useUIStore((s) => s.sidebarOpen)
+  const visible = useUIStore(selectSidebarVisible)
+  const floating = useUIStore((s) => s.sidebarDocking === 'hover')
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const hoverDock = useSidebarHoverDock(wrapRef)
   const activeView = useUIStore((s) => s.activeView)
   const setActiveView = useUIStore((s) => s.setActiveView)
   const settingsTab = useUIStore((s) => s.settingsTab)
@@ -98,11 +103,22 @@ export function Sidebar(): React.JSX.Element {
     )
   }
 
+  // In hover docking the sidebar floats over the chat instead of taking width
+  // from it, shown while the pointer is at the window's left edge or on it.
   return (
-    <div className={`app-sidebar-wrap h-full ${sidebarOpen ? '' : 'is-collapsed'}`}>
+    <div
+      ref={wrapRef}
+      className={`app-sidebar-wrap h-full ${floating ? 'is-floating' : ''} ${visible ? '' : 'is-collapsed'}`}
+      {...hoverDock.sidebar}
+    >
+      {/* Portaled: the wrap's transform would make `position: fixed` mean "inside the wrap". */}
+      {floating && !visible && createPortal(
+        <div className="app-sidebar-hot-zone" aria-hidden="true" data-testid="sidebar-hot-zone" {...hoverDock.hotZone} />,
+        document.body
+      )}
       {!isSettings && <SidebarTabs />}
       <div className="app-sidebar ambient-grid-surface overflow-hidden flex flex-col">
-        <AmbientGrid active={sidebarOpen} borderGlow />
+        <AmbientGrid active={visible} borderGlow />
         {isSettings ? (
           <>
             <div className="px-2 pt-2 pb-1">

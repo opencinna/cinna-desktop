@@ -4,7 +4,7 @@ import { isCredentialActive } from '../../../../shared/credentials'
 import { useAiFunctionsBackend, useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import type { AiFunctionsBackendStatus } from '../../../../shared/aiFunctions'
 import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
-import { useUIStore, type ThemePreference } from '../../stores/ui.store'
+import { useUIStore, type SidebarDocking, type ThemePreference } from '../../stores/ui.store'
 import { unwrapIpcError } from '../../utils/ipcError'
 import {
   SettingsButton,
@@ -51,6 +51,8 @@ function describeRunsOn(status: AiFunctionsBackendStatus | undefined, models: re
 export function FeaturesSettingsSection(): React.JSX.Element {
   const themePreference = useUIStore((s) => s.themePreference)
   const setThemePreference = useUIStore((s) => s.setThemePreference)
+  const sidebarDocking = useUIStore((s) => s.sidebarDocking)
+  const setSidebarDocking = useUIStore((s) => s.setSidebarDocking)
   const extraUIAnimation = useUIStore((s) => s.extraUIAnimation)
   const setExtraUIAnimation = useUIStore((s) => s.setExtraUIAnimation)
   const { data: settings, isLoading, isError } = useAppSettings()
@@ -187,6 +189,18 @@ export function FeaturesSettingsSection(): React.JSX.Element {
                   onClick={() => setThemePreference(value)}
                   className={`rounded px-2.5 py-1 text-[13px] transition-colors ${themePreference === value ? 'app-nav-active text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
                   {value[0].toUpperCase() + value.slice(1)}
+                </button>
+              ))}
+            </div>
+          </SettingsRow>
+          <SettingsRow className="flex items-center justify-between gap-3">
+            <SettingsLabel info="On Hover hides the sidebar and shows it over the chat when the pointer reaches the left edge of the window. Clicking the sidebar button docks it again; right-clicking the button switches the mode.">Sidebar docking</SettingsLabel>
+            <div role="group" aria-label="Sidebar docking" className="flex shrink-0 rounded-md border border-[var(--color-border)] p-0.5">
+              {([['fixed', 'Fixed'], ['hover', 'On Hover']] as const).map(([value, label]: readonly [SidebarDocking, string]) => (
+                <button key={value} type="button" aria-pressed={sidebarDocking === value}
+                  onClick={() => setSidebarDocking(value)}
+                  className={`rounded px-2.5 py-1 text-[13px] transition-colors ${sidebarDocking === value ? 'app-nav-active text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
+                  {label}
                 </button>
               ))}
             </div>

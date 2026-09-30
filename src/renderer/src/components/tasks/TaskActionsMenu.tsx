@@ -77,7 +77,7 @@ export function TaskActionsMenu({ task, onDeleted, onError }: TaskActionsMenuPro
     menu.setOpen(false)
     onError(null)
     const ui = useUIStore.getState()
-    if (!ui.sidebarOpen) ui.toggleSidebar()
+    ui.revealSidebar()
     ui.setSidebarTab('chats')
     // The row consumes this when it renders — at once for a chat already in
     // the list, after the list is read again for one just moved out of hiding.

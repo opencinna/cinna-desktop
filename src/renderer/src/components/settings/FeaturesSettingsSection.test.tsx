@@ -117,6 +117,29 @@ describe('FeaturesSettingsSection', () => {
     expect(localStorage.getItem('cinna-theme')).toBe('light')
   })
 
+  it('sets the sidebar docking right after Theme, with its explanation behind the tip', () => {
+    useUIStore.setState({ sidebarDocking: 'fixed', sidebarOpen: true, sidebarPeek: false })
+    render(<FeaturesSettingsSection />)
+    const group = screen.getByRole('group', { name: 'Sidebar docking' })
+    const theme = screen.getByRole('button', { name: 'System' }).closest('[role="group"]') as HTMLElement
+    expect(theme.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByText(/pointer reaches the left edge/)).toBeNull()
+
+    const fixed = screen.getByRole('button', { name: 'Fixed' })
+    const hover = screen.getByRole('button', { name: 'On Hover' })
+    expect(fixed.getAttribute('aria-pressed')).toBe('true')
+    expect(hover.className).toContain('text-[13px]')
+    fireEvent.click(hover)
+    expect(useUIStore.getState().sidebarDocking).toBe('hover')
+    expect(localStorage.getItem('cinna-sidebar-docking')).toBe('hover')
+    expect(hover.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(fixed)
+    expect(useUIStore.getState().sidebarDocking).toBe('fixed')
+
+    fireEvent.click(screen.getByRole('button', { name: 'About Sidebar docking' }))
+    expect(screen.getByText(/pointer reaches the left edge of the window/)).toBeTruthy()
+  })
+
   it('explains a rejected setting instead of silently resetting the switch', () => {
     saveError = new Error("Error invoking remote method 'settings:set': Error: Unknown app setting: showAgentSidebarSections")
     render(<FeaturesSettingsSection />)

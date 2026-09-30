@@ -450,6 +450,47 @@
     opacity: 0;
     pointer-events: none;
   }
+  /* Hover docking. The wrap keeps no width, so the chat never reflows while
+     the sidebar comes and goes; the rail and card float over it (above the
+     main area, below the TopBar's z-30 and every dialog) with the same slide
+     and fade as the fixed collapse. Switching into this mode from an open
+     fixed sidebar is that collapse, width included. */
+  /* No `will-change` here: an ancestor promised opacity/transform becomes the
+     card's backdrop root, and its blur then sees nothing of the chat below —
+     the dark card went see-through over the composer. */
+  .app-sidebar-wrap.is-floating {
+    width: 0;
+    z-index: 20;
+    will-change: auto;
+  }
+  /* The whole rail + card rectangle, and the window-edge gutter the pointer
+     came in through, count as "on the sidebar" — the gaps between the rail's
+     tabs included — so crossing them does not start the close. */
+  .app-sidebar-wrap.is-floating::before {
+    content: '';
+    position: absolute;
+    top: var(--topbar-h);
+    bottom: 0;
+    left: -8px;
+    width: calc(var(--sidebar-width) + 8px);
+    z-index: -1;
+  }
+  .app-sidebar-wrap.is-floating > .app-sidebar {
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+  }
+  [data-theme="dark"] .app-sidebar-wrap.is-floating > .app-sidebar {
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  }
+  /* The invisible strip at the window's left edge (the shell's 8px padding),
+     below the TopBar, that a resting pointer peeks the sidebar from. */
+  .app-sidebar-hot-zone {
+    position: fixed;
+    left: 0;
+    top: calc(var(--topbar-h) + 8px);
+    bottom: 0;
+    width: 8px;
+    z-index: 20;
+  }
   .app-sidebar-wrap > .app-sidebar {
     position: absolute;
     /* Offset below the absolutely-positioned TopBar so the card sits under
