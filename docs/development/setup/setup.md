@@ -78,6 +78,8 @@ src/
 
 8. **`refetchOnWindowFocus` is inert for app switching**: TanStack Query's `focusManager` (`@tanstack/query-core@5.99.0`) registers exactly one listener — `visibilitychange`. It fires when the window is hidden, occluded, minimized or moved to another Space, and **not** when another application takes the foreground over a still-visible Electron window. Driven through the built app, a focus-refetching query was unchanged across `blur`/`focus`, `hide`/`show` and `minimize`/`restore`, with `document.visibilityState` never leaving `"visible"`. So a query whose answer changes because the user went off to *another app* — the Claude login probe is the live example — needs an explicit trigger: an interval, gated on the state that needs one, rather than the option that looks like it covers this. Keep `refetchOnWindowFocus: 'always'` alongside it for the events `visibilitychange` really does cover (`'always'`, not `true`, which defers to `staleTime` and would hold the stale answer). See [The Claude Engine (tech)](../../agents/local_agents/claude_engine_tech.md#useclaudeauth-uselocaltoolsts-and-why-it-polls)
 
+9. **Mutations run with `networkMode: 'always'`**: the `QueryClient` in `src/renderer/src/App.tsx` sets it as the default for every mutation. Each one is an IPC call to main, which does its own networking, but TanStack's default `'online'` mode pauses a mutation *before it runs* while the browser reports offline — so creating a local agent folder, which needs no network at all, sat on "Creating…" until the connection came back. A per-mutation `networkMode` would bring that back for its call. Queries keep the default mode
+
 ## UI Layout
 
 TopBar (permanent drag strip): traffic lights → sidebar toggle → Agent Status → Inbox → New Chat.
