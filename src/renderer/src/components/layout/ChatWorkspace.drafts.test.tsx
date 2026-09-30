@@ -20,6 +20,7 @@ vi.mock('../../hooks/useApplyChatMode', () => ({ useApplyChatMode: () => vi.fn()
 vi.mock('../../hooks/useChat', () => ({ useChatDetail: () => ({ data: null }) }))
 vi.mock('../chat/MessageStream', () => ({ MessageStream: () => <p>Existing chat</p> }))
 vi.mock('../ui/HintBar', () => ({ HintBar: () => null }))
+vi.mock('../chat/DesktopAppsBanner', () => ({ DesktopAppsBanner: () => null }))
 vi.mock('../chat/ExamplePromptTags', () => ({ ExamplePromptTags: () => null }))
 vi.mock('../chat/ComposerReadiness', () => ({ RefusableExamplePrompts: ({ children }: { children: React.ReactNode }) => children, readinessRefusal: () => null }))
 vi.mock('../chat/ChatInput', () => ({ ChatInput: (props: {

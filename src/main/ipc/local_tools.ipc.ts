@@ -4,6 +4,8 @@ import { claudeAuthProbe, codexAuthProbe, engineLogins } from '../agents/drivers
 import { openInService } from '../services/localAgents/openInService'
 import { toolInstallService } from '../services/localAgents/toolInstallService'
 import { defaultEngineService } from '../services/localAgents/defaultEngineService'
+import { desktopAppsService } from '../services/localAgents/desktopAppsService'
+import { desktopAppConnectService } from '../services/localAgents/desktopAppConnectService'
 import { localAgentService } from '../services/localAgents/localAgentService'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
@@ -18,6 +20,11 @@ import {
   type ToolInstallProgress
 } from '../../shared/localTools'
 import type { ClaudeAuthStatus, EngineLoginResult, EngineLoginRunning } from '../../shared/engine'
+import type {
+  DesktopAppConnectResult,
+  DesktopAppConnectRunning,
+  DetectedDesktopApp
+} from '../../shared/desktopApps'
 
 const logger = createLogger('local-tools-ipc')
 
@@ -149,6 +156,32 @@ export function registerLocalToolsHandlers(): void {
   ipcHandle('local-tools:engine-login-running', (): EngineLoginRunning => {
     userActivation.requireActivated()
     return { claude: engineLogins.claude.running(), codex: engineLogins.codex.running() }
+  })
+
+  /**
+   * The vendor desktop apps on this Mac (Claude Desktop, ChatGPT) — ids, names
+   * and engines only; the bundle paths stay here. Detected once per launch.
+   */
+  ipcHandle('local-tools:desktop-apps', (): Promise<DetectedDesktopApp[]> => {
+    userActivation.requireActivated()
+    return desktopAppsService.list()
+  })
+
+  /**
+   * Install, sign in and adopt one desktop app's engine, in main, so it
+   * finishes even when the banner that asked unmounts. Only the app id
+   * crosses, checked against the literals in the service; the outcome comes
+   * back as data. A second call for the same app joins the running one.
+   */
+  ipcHandle('local-tools:desktop-app-connect', (_event, appId: unknown): Promise<DesktopAppConnectResult> => {
+    userActivation.requireActivated()
+    return desktopAppConnectService.connect(appId)
+  })
+
+  /** The connect running now and its phase, or null — for a banner mounted mid-connect. */
+  ipcHandle('local-tools:desktop-app-running', (): DesktopAppConnectRunning | null => {
+    userActivation.requireActivated()
+    return desktopAppConnectService.running()
   })
 
   /**

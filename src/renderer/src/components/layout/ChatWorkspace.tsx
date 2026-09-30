@@ -7,6 +7,7 @@ import { ChatInput, type ChatInputHandle } from '../chat/ChatInput'
 import { RefusableExamplePrompts, readinessRefusal } from '../chat/ComposerReadiness'
 import { ExamplePromptTags } from '../chat/ExamplePromptTags'
 import { HintBar } from '../ui/HintBar'
+import { DesktopAppsBanner } from '../chat/DesktopAppsBanner'
 import { useHintsEnabled } from '../../hooks/useHintsEnabled'
 import { extractExamplePrompts } from '../../utils/examplePrompts'
 import { resolveMcpNames } from '../../utils/mcpNames'
@@ -394,6 +395,9 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
           hintsEnabled ? 'pb-8' : ''
         }`}
       >
+        {/* Absolute at the top (like the HintBar at the bottom), so the offer
+            appearing or going away never moves the composition. */}
+        {!embedded && <DesktopAppsBanner />}
         {!embedded && <div className="mb-8 text-center">
           <CinnaLogoDraw className="mx-auto mb-3" />
           <h1 className="text-lg font-semibold text-[var(--color-text)]">What can I help with?</h1>

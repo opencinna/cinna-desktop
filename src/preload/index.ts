@@ -16,6 +16,7 @@ import type {
   ToolInstallProgress
 } from '../shared/localTools'
 import { TOOL_INSTALL_CHANNEL } from '../shared/localTools'
+import type { DesktopAppConnectResult, DesktopAppConnectRunning, DesktopAppId, DetectedDesktopApp } from '../shared/desktopApps'
 import type { GitDetail, GitStatus, GitUpdateResult } from '../shared/agentGit'
 import type {
   AddAgentFolderInput,
@@ -1506,6 +1507,18 @@ const api = {
     /** Which engine logins are running now (`preparing` / `waiting`, or null), for a surface mounted mid-login. */
     engineLoginRunning: (): Promise<EngineLoginRunning> =>
       ipcRenderer.invoke('local-tools:engine-login-running'),
+    /** Vendor desktop apps found on this Mac (Claude Desktop, ChatGPT): id, name and engine only. */
+    desktopApps: (): Promise<DetectedDesktopApp[]> => ipcRenderer.invoke('local-tools:desktop-apps'),
+    /**
+     * Install the app's engine if needed, sign in if needed and make it the
+     * default runtime. Only the id crosses; the outcome comes back as data. A
+     * second call for the same app joins the running one.
+     */
+    desktopAppConnect: (appId: DesktopAppId): Promise<DesktopAppConnectResult> =>
+      ipcRenderer.invoke('local-tools:desktop-app-connect', appId),
+    /** The connect main is running now and its phase, or null. */
+    desktopAppRunning: (): Promise<DesktopAppConnectRunning | null> =>
+      ipcRenderer.invoke('local-tools:desktop-app-running'),
     openIn: (request: OpenInRequest): Promise<{ success: true }> =>
       ipcRenderer.invoke('local-tools:open-in', request),
     /**
