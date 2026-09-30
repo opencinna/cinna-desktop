@@ -7,7 +7,7 @@
 
 PW := npx playwright test -c e2e/playwright.config.ts
 
-.PHONY: help test test-hub typecheck build kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine live-ctl live-help live-flow
+.PHONY: help test test-hub typecheck build kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -123,6 +123,24 @@ e2e-clean: ## Remove E2E artifacts (screenshots, traces, contexts)
 
 e2e-clean-engine: ## Drop the per-machine engine cache (next run downloads again)
 	rm -rf "$${CINNA_E2E_ENGINE_CACHE:-$$HOME/.cache/cinna-e2e/engine}"
+
+# The bare-Mac suite: the packaged app in a fresh macOS VM (Tart) with no
+# Command Line Tools, no Homebrew, no uv — failing on any system dialog the app
+# raises. Apple silicon only; manual, like e2e. docs/development/bare_mac/bare_mac.md
+PW_BARE := npx playwright test -c e2e/bare-mac/playwright.config.ts
+
+bare-mac-image: ## Build the bare-Mac base VM from Cirrus Labs' vanilla macOS (~55 GB): make bare-mac-image [FORCE=1]
+	scripts/bare-mac/build-image.sh $(if $(FORCE),--force)
+
+bare-mac: ## Install the app in a bare macOS VM and fail on any system dialog: make bare-mac [APP=<.dmg|.zip|.app>] [SPEC=<file>]
+	@command -v tart >/dev/null || { echo "tart not found: docs/development/bare_mac/bare_mac.md"; exit 1; }
+	@tart get $${CINNA_BARE_IMAGE:-cinna-bare-sequoia} >/dev/null 2>&1 || { echo "no base image: run make bare-mac-image"; exit 1; }
+	@APP_PATH="$(APP)"; \
+	if [ -z "$$APP_PATH" ]; then APP_PATH=$$(scripts/bare-mac/package-app.sh) || exit 1; fi; \
+	CINNA_BARE_APP="$$APP_PATH" $(PW_BARE) $(SPEC)
+
+bare-mac-clean: ## Delete run VMs a killed bare-mac run left behind (keeps the base image)
+	@for vm in $$(tart list --quiet 2>/dev/null | grep '^cinna-bare-run-'); do tart stop "$$vm" --timeout 5 >/dev/null 2>&1; tart delete "$$vm" && echo "deleted $$vm"; done
 
 live-ctl: ## Build, then hold the app for live-backend testing on your REAL profile (quit other Cinna apps; back up first)
 	npx electron-vite build
