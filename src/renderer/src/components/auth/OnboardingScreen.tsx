@@ -2,11 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   CheckCircle,
-  Cloud,
   ExternalLink,
   Eye,
   EyeOff,
-  HardDrive,
   KeyRound,
   Loader2,
   Server,
@@ -53,7 +51,7 @@ type Step =
   | 'welcome'
   | 'provider-type'
   | 'provider-key'
-  | 'cinna-hosting'
+  | 'cinna-server'
   | 'cinna-waiting'
   /** The deep link's confirmation. Never reached by navigating; only by arriving. */
   | 'cinna-confirm'
@@ -121,7 +119,6 @@ export function OnboardingScreen({
   const [providerError, setProviderError] = useState<string | null>(null)
 
   // Path B — Cinna server
-  const [cinnaHostingType, setCinnaHostingType] = useState<'cloud' | 'self_hosted'>('self_hosted')
   const [cinnaServerUrl, setCinnaServerUrl] = useState('')
   const [selfHostedHistory, setSelfHostedHistory] = useState<string[]>(() =>
     readSelfHostedHistory()
@@ -253,18 +250,17 @@ export function OnboardingScreen({
       onComplete()
     } else {
       setCinnaError(result.error ?? 'Authentication failed')
-      setStep('cinna-hosting')
+      setStep('cinna-server')
     }
   }
 
   const handleCinnaConnect = (): void => {
-    if (cinnaHostingType === 'cloud') return
     void connectSelfHosted(cinnaServerUrl)
   }
 
   const handleCinnaAbort = (): void => {
     cinnaAbort.mutate()
-    setStep('cinna-hosting')
+    setStep('cinna-server')
     setCinnaError('Authorization cancelled')
   }
 
@@ -332,7 +328,7 @@ export function OnboardingScreen({
 
             <button
               type="button"
-              onClick={() => setStep('cinna-hosting')}
+              onClick={() => setStep('cinna-server')}
               className="flex flex-col items-center text-center gap-2 p-4 rounded-lg border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] hover:border-[var(--color-text-muted)] transition-colors"
             >
               <Server size={22} className="text-[var(--color-text-muted)]" />
@@ -565,7 +561,7 @@ export function OnboardingScreen({
       )
     }
 
-    if (step === 'cinna-hosting') {
+    if (step === 'cinna-server') {
       return (
         <div className="space-y-4">
           <button
@@ -579,100 +575,63 @@ export function OnboardingScreen({
 
           <div className="text-sm font-semibold text-[var(--color-text)]">Connect to Cinna</div>
 
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={() => setCinnaHostingType('self_hosted')}
-              className={`flex-1 flex flex-col items-center gap-2 p-4 rounded-lg border transition-colors text-center ${
-                cinnaHostingType === 'self_hosted'
-                  ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/5'
-                  : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'
-              }`}
-            >
-              <HardDrive size={20} className="text-[var(--color-text-muted)]" />
-              <div>
-                <div className="text-sm font-medium text-[var(--color-text)]">Self-Hosted</div>
-                <div className="text-[11px] text-[var(--color-text-muted)]">Your own server</div>
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setCinnaHostingType('cloud')}
-              className={`flex-1 flex flex-col items-center gap-2 p-4 rounded-lg border transition-colors text-center ${
-                cinnaHostingType === 'cloud'
-                  ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/5'
-                  : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'
-              }`}
-            >
-              <Cloud size={20} className="text-[var(--color-text-muted)]" />
-              <div>
-                <div className="text-sm font-medium text-[var(--color-text)]">Cloud</div>
-                <div className="text-[11px] text-[var(--color-text-muted)]">opencinna.io</div>
-              </div>
-            </button>
+          <div className="space-y-1.5">
+            <label className="block text-[11px] text-[var(--color-text-muted)]">Server URL</label>
+            <input
+              type="url"
+              placeholder="https://your-server.com"
+              value={cinnaServerUrl}
+              onChange={(e) => setCinnaServerUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && cinnaServerUrl.trim() && !register.isPending) {
+                  e.preventDefault()
+                  void handleCinnaConnect()
+                }
+              }}
+              autoFocus
+              className={inputClass}
+            />
           </div>
 
-          {cinnaHostingType === 'cloud' && (
-            <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-hover)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
-              <span className="font-medium text-[var(--color-text)]">Under Development.</span>{' '}
-              opencinna.io cloud accounts are not available yet. For now, please use a self-hosted
-              Cinna server.
+          {selfHostedHistory.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-[11px] text-[var(--color-text-muted)]">Recent servers</div>
+              <ul className="space-y-1">
+                {selfHostedHistory.map((url) => (
+                  <li key={url}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => connectSelfHosted(url)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          connectSelfHosted(url)
+                        }
+                      }}
+                      title={`Connect to ${url}`}
+                      aria-label={`Connect to ${url}`}
+                      className="group w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] transition-colors cursor-pointer"
+                    >
+                      <span className="flex-1 truncate text-left">{url}</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleRemoveHistoryEntry(url)
+                        }}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        title="Remove from history"
+                        aria-label={`Remove ${url} from history`}
+                        className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-opacity"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </div>
-          )}
-
-          {cinnaHostingType === 'self_hosted' && (
-            <>
-              <input
-                type="url"
-                placeholder="https://your-server.com"
-                value={cinnaServerUrl}
-                onChange={(e) => setCinnaServerUrl(e.target.value)}
-                autoFocus
-                className={inputClass}
-              />
-
-              {selfHostedHistory.length > 0 && (
-                <div className="space-y-1">
-                  <div className="text-[11px] text-[var(--color-text-muted)]">Recent servers</div>
-                  <ul className="space-y-1">
-                    {selfHostedHistory.map((url) => (
-                      <li key={url}>
-                        <div
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => connectSelfHosted(url)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault()
-                              connectSelfHosted(url)
-                            }
-                          }}
-                          title={`Connect to ${url}`}
-                          aria-label={`Connect to ${url}`}
-                          className="group w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] transition-colors cursor-pointer"
-                        >
-                          <span className="flex-1 truncate text-left">{url}</span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleRemoveHistoryEntry(url)
-                            }}
-                            onKeyDown={(e) => e.stopPropagation()}
-                            title="Remove from history"
-                            aria-label={`Remove ${url} from history`}
-                            className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-opacity"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </>
           )}
 
           {cinnaError && <div className="text-xs text-[var(--color-danger)]">{cinnaError}</div>}
@@ -681,7 +640,7 @@ export function OnboardingScreen({
             <button
               type="button"
               onClick={handleCinnaConnect}
-              disabled={register.isPending || cinnaHostingType === 'cloud'}
+              disabled={register.isPending || !cinnaServerUrl.trim()}
               className={btnPrimaryClass}
             >
               Connect

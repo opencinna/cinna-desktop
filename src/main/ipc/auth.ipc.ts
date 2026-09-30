@@ -38,7 +38,7 @@ export function registerAuthHandlers(): void {
       try {
         if (data.accountType === 'cinna') {
           const { user } = await authService.registerCinna({
-            hostingType: data.cinnaHostingType ?? 'cloud',
+            hostingType: data.cinnaHostingType ?? 'self_hosted',
             serverUrl: data.cinnaServerUrl
           })
           return { success: true as const, user }
