@@ -1815,6 +1815,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           {chatId && <SessionMetaBadges chatId={chatId} />}
           {badgeInfo && (badgeInfo.router !== 'direct' || (chatId ? boundAgent : selectedAgent)) && (
             <RouterBadge
+              chatId={chatId ?? undefined}
               router={badgeInfo.router}
               connectionAgent={chatId ? boundAgent : selectedAgent}
               agentName={badgeInfo.agentName}

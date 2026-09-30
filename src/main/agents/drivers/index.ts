@@ -708,7 +708,7 @@ export const acpDriver = createAcpDriver({
   },
   // Subagents and background processes a session reports, for the composer's badges.
   activity: sessionActivityHub,
-  // Tokens, cost, context and login a session reports, for the session badge.
+  // Tokens, cost, context and login a session reports, for the mode badge's popover.
   telemetry: sessionTelemetryService,
   // A turn the agent starts between the user's turns becomes a run of the
   // chat. Imported when first needed: the service reaches this module back

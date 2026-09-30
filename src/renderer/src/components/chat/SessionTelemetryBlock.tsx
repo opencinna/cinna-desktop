@@ -1,6 +1,5 @@
-import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { Gauge } from 'lucide-react'
+import { useEffect, useId, useState } from 'react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import {
   CACHE_TTL_KNOWN,
   CACHE_WRITES_REPORTED,
@@ -29,104 +28,128 @@ import {
   formatTtl,
   formatUsd
 } from '../../utils/telemetryFormat'
-import { useHoverPopover } from '../ui/useHoverPopover'
-import { metaBadgeClass, metaPopoverClass } from './SessionActivityBadges'
 
 /**
- * The chat's session at a glance, under the composer: how full the context is,
- * and behind it what the session has spent, the prompt cache, what the next
- * message will cost and the prices it is charged at.
+ * The chat's session inside the mode badge's popover (`RouterBadge`): one
+ * `Context` row — how full the context is — and behind it what the session
+ * has spent, the prompt cache, what the next message will cost and the prices
+ * it is charged at.
  *
- * The rightmost session badge: it comes with the first report and stays, so a
- * badge that comes later pushes only what is to its left (`ux_rules.md` §1).
+ * The popover hangs above the pill and grows upward, so the toggle row is its
+ * last row and the details open above it: the row under the pointer never
+ * moves (`ux_rules.md` §1).
  */
-
-/**
- * The fill percentage: tabular digits in a fixed five-character width, so a
- * live reading mid-turn (`–` → `9%` → `10%` → `100%`) never changes the pill's
- * width. `4ch` is 3.6px short of `100%` at this weight.
- */
-export const telemetryCountClass = 'w-[5ch] text-center text-[11px] font-semibold tabular-nums'
-
-/** Shown in the pill while the window size is unknown: the pill keeps its size. */
-export const TELEMETRY_COUNT_UNKNOWN = '–'
 
 const HOUR_MS = 60 * 60_000
 const DEFAULT_TTL_MS = 5 * 60_000
 
+/** The details list's own cap; the popover's cap (below) may cut it further. */
+export const DETAILS_MAX_HEIGHT = 'min(70vh, 36rem)'
+
 /**
- * The scroll area's height cap. Once the popover's top is pinned it may only
- * grow down to 8px above the window's bottom edge; the popover's own padding
- * and border come off that as well — `py-2` in rem (the root size is not
- * always 16px) and a 1px border, each twice.
+ * The popover's height cap. It hangs from the pill's top edge and grows up, so
+ * it may only reach 8px below the window's top: the pill's top, less that.
+ * Border-box, so its own padding and border are inside the figure. Undefined
+ * until the pill has been measured.
  */
 const WINDOW_EDGE_PX = 8
-const POPOVER_CHROME = '1rem - 2px'
-export function detailsMaxHeight(pinnedTop: number | undefined): string {
-  const cap = 'min(70vh, 36rem)'
-  if (pinnedTop === undefined) return cap
-  return `min(70vh, 36rem, calc(100vh - ${pinnedTop + WINDOW_EDGE_PX}px - ${POPOVER_CHROME}))`
+export function popoverMaxHeight(anchorTop: number | undefined): string | undefined {
+  if (anchorTop === undefined || anchorTop <= WINDOW_EDGE_PX) return undefined
+  return `${anchorTop - WINDOW_EDGE_PX}px`
 }
 
-/** The badge's accessible name: the fill it shows, and nothing it does not (§10). */
-export function telemetryBadgeLabel(t: SessionTelemetry): string {
+/** The row's value: used tokens, then the fill — `27K – 3%`; just `27K` with no window size. */
+export function contextRowValue(t: SessionTelemetry): string {
+  const used = formatTokens(t.context.used)
   const percent = formatContextPercent(t.context.used, t.context.size)
-  return percent ? `Context ${percent} full` : 'Context size unknown'
+  return percent ? `${used} – ${percent}` : used
 }
 
-export function SessionTelemetryBadge({ chatId }: { chatId: string }): React.JSX.Element | null {
+/** The row's accessible name: what it shows, said as words (§10). */
+export function contextRowLabel(t: SessionTelemetry): string {
+  const used = formatTokens(t.context.used)
+  const percent = formatContextPercent(t.context.used, t.context.size)
+  return percent ? `Context ${used}, ${percent} full` : `Context ${used}`
+}
+
+export interface SessionTelemetryBlockModel {
+  chatId: string
+  telemetry: SessionTelemetry
+  measureContext: () => Promise<SessionTelemetryMeasureResult>
+  expanded: boolean
+  toggle: () => void
+  measureUnsupported: boolean
+  onUnsupported: () => void
+}
+
+/**
+ * The block's state, held by the badge rather than the popover: the popover
+ * unmounts on every close, and the open/closed choice and an `unsupported`
+ * answer both outlive it while the chat stays open. Both belong to one chat
+ * and reset when it changes. Null while the chat has no telemetry.
+ */
+export function useSessionTelemetryBlock(chatId: string): SessionTelemetryBlockModel | null {
   const { query, measureContext } = useSessionTelemetry(chatId)
   const telemetry = query.data ?? null
-  const popover = useHoverPopover<HTMLButtonElement, HTMLDivElement>('above-right')
+  const [expanded, setExpanded] = useState(false)
+  // Collapsed again on a chat change, back to that chat included.
+  const [expandedFor, setExpandedFor] = useState(chatId)
+  if (expandedFor !== chatId) {
+    setExpandedFor(chatId)
+    setExpanded(false)
+  }
   // The agent session whose runtime answered `unsupported`: Measure stays
   // hidden for it, across popover closes, until the session changes.
   const [unsupportedIn, setUnsupportedIn] = useState<string | null>(null)
-
-  const { open, setOpen } = popover
-  useEffect(() => {
-    if (!telemetry && open) setOpen(false)
-  }, [telemetry, open, setOpen])
-
   if (!telemetry) return null
-  const percent = formatContextPercent(telemetry.context.used, telemetry.context.size)
   const sessionKey = `${chatId}:${telemetry.context.sessionId ?? ''}`
-  const pinnedTop = typeof popover.style?.top === 'number' ? popover.style.top : undefined
+  return {
+    chatId,
+    telemetry,
+    measureContext,
+    expanded: expanded && expandedFor === chatId,
+    toggle: () => setExpanded((value) => !value),
+    measureUnsupported: unsupportedIn === sessionKey,
+    onUnsupported: () => setUnsupportedIn(sessionKey)
+  }
+}
 
+/**
+ * The block, mounted only while the popover is open. A flex column that may
+ * shrink: under the popover's cap the details scroll, the row stays.
+ */
+export function SessionTelemetryBlock({ model }: { model: SessionTelemetryBlockModel }): React.JSX.Element {
+  const { chatId, telemetry, expanded } = model
+  const detailsId = useId()
+  const Chevron = expanded ? ChevronDown : ChevronUp
   return (
-    <>
+    <div className="mt-2 pt-1.5 border-t border-[var(--color-border)] min-h-0 flex flex-col leading-4">
+      {expanded && (
+        // Keyed by chat: a measurement or refusal never carries into another chat.
+        <SessionDetails
+          key={chatId}
+          id={detailsId}
+          telemetry={telemetry}
+          measureContext={model.measureContext}
+          measureUnsupported={model.measureUnsupported}
+          onUnsupported={model.onUnsupported}
+        />
+      )}
       <button
-        ref={popover.triggerRef}
         type="button"
-        aria-label={telemetryBadgeLabel(telemetry)}
-        data-badge="telemetry"
-        className={metaBadgeClass}
-        {...popover.triggerProps}
+        aria-expanded={expanded}
+        aria-controls={expanded ? detailsId : undefined}
+        aria-label={contextRowLabel(telemetry)}
+        onClick={model.toggle}
+        className={`shrink-0 w-full flex items-center gap-1.5 rounded py-0.5 text-left
+          hover:text-[var(--color-text)] transition-colors
+          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]`}
       >
-        <Gauge size={12} className="shrink-0" />
-        <span className={telemetryCountClass}>{percent ?? TELEMETRY_COUNT_UNKNOWN}</span>
+        <span className="font-medium text-[var(--color-text)]">Context</span>
+        <span className="ml-auto tabular-nums text-[var(--color-text)]">{contextRowValue(telemetry)}</span>
+        <Chevron size={12} aria-hidden className="shrink-0 text-[var(--color-text-muted)]" />
       </button>
-      {popover.open &&
-        createPortal(
-          <div
-            ref={popover.popoverRef}
-            aria-label="Session details"
-            style={popover.style ?? { position: 'fixed', visibility: 'hidden' }}
-            className={metaPopoverClass}
-            {...popover.popoverProps}
-          >
-            {/* Keyed by chat: a measurement or refusal never carries into another chat. */}
-            <SessionDetails
-              key={chatId}
-              telemetry={telemetry}
-              measureContext={measureContext}
-              maxHeight={detailsMaxHeight(pinnedTop)}
-              measureUnsupported={unsupportedIn === sessionKey}
-              onUnsupported={() => setUnsupportedIn(sessionKey)}
-            />
-          </div>,
-          document.body
-        )}
-    </>
+    </div>
   )
 }
 
@@ -148,20 +171,21 @@ interface MeasureState {
 }
 
 /**
- * The popover's body. Mounted only while the popover is open, so its
- * one-second clock (the cache countdown) and a measure refusal both end with it.
- * Sections keep their order and rows update in place (§1).
+ * The expanded details. Mounted only while they are shown — expanded, in an
+ * open popover — so their one-second clock (the cache countdown) and a measure
+ * refusal both end with them. Sections keep their order and rows update in
+ * place (§1).
  */
 function SessionDetails({
+  id,
   telemetry: t,
   measureContext,
-  maxHeight,
   measureUnsupported,
   onUnsupported
 }: {
+  id: string
   telemetry: SessionTelemetry
   measureContext: () => Promise<SessionTelemetryMeasureResult>
-  maxHeight: string
   measureUnsupported: boolean
   onUnsupported: () => void
 }): React.JSX.Element {
@@ -197,11 +221,13 @@ function SessionDetails({
 
   return (
     <div
+      id={id}
       tabIndex={0}
       aria-label="Session details list"
       // A stable gutter: a scrollbar that appears as a section grows shifts nothing (§1).
-      style={{ maxHeight }}
-      className="overflow-y-auto [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]"
+      // Edge to edge of the popover (`-mx-3`), so the gutter sits at its border.
+      style={{ maxHeight: DETAILS_MAX_HEIGHT }}
+      className="-mx-3 min-h-0 pb-2 overflow-y-auto [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]"
     >
       <p className="px-3 pb-0.5 flex items-baseline gap-2">
         {model ? (

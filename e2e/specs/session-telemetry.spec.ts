@@ -7,7 +7,7 @@ import { costOf } from '../../src/shared/modelPricing'
 import { formatUsd } from '../../src/renderer/src/utils/telemetryFormat'
 
 /**
- * Session telemetry in the verbose message popup and the session badge.
+ * Session telemetry in the verbose message popup and the mode badge's popover.
  *
  * Only the Claude and Codex launchers report telemetry (`telemetryEngineOf`),
  * so the agent is a Codex folder agent. The Electron launcher, the pinned
@@ -150,11 +150,20 @@ test('the verbose popup of a Codex turn that reported usage shows its telemetry;
     }
   })
 
-  await test.step('the session badge shows the context fill, and its popover the model and the chat\'s cost', async () => {
-    const badge = cinna.page.getByTestId('session-meta-badges').getByRole('button', { name: /^Context/ })
-    await expect(badge).toBeVisible()
+  await test.step('the mode badge\'s popover shows the context row collapsed, and the model and the chat\'s cost once expanded', async () => {
+    // No separate session badge: telemetry lives in the mode badge's popover.
+    await expect(cinna.page.getByTestId('session-meta-badges').getByRole('button', { name: /^Context/ })).toHaveCount(0)
+    const badge = cinna.page.getByRole('status', { name: 'Local agent connection', exact: true })
     await badge.hover()
-    const popover = cinna.page.getByRole('dialog', { name: 'Session details', exact: true })
+    const popover = cinna.page.getByRole('dialog', { name: 'Chat routing', exact: true })
+    await expect(popover).toBeVisible()
+    const row = popover.getByRole('button', { name: /^Context / })
+    await expect(row).toHaveAttribute('aria-expanded', 'false')
+    // Used tokens, then the fill when the window size is known: `1.2K – 1%`.
+    await expect(row).toHaveText(/^Context\s*\d+(\.\d)?K?( – (<1|\d+)%)?$/)
+    await expect(popover.getByLabel('Session details list', { exact: true })).toHaveCount(0)
+    await row.click()
+    await expect(row).toHaveAttribute('aria-expanded', 'true')
     await expect(popover).toBeVisible()
     await expect(popover.locator('code').first()).toHaveText(MODEL)
     // The plain turn reported nothing, so the chat's cost is the metered turn's.
@@ -166,5 +175,10 @@ test('the verbose popup of a Codex turn that reported usage shows its telemetry;
     await expect(spent).not.toContainText('Cache write')
     await expect(popover.getByRole('region', { name: 'Cache', exact: true })).toHaveCount(0)
     await expect(popover.getByRole('button', { name: 'Measure', exact: true })).toHaveCount(0)
+    // The row stays last; a second click folds the details away and keeps the popover.
+    await row.click()
+    await expect(row).toHaveAttribute('aria-expanded', 'false')
+    await expect(popover.getByLabel('Session details list', { exact: true })).toHaveCount(0)
+    await expect(popover).toBeVisible()
   })
 })

@@ -1,7 +1,13 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { Radio, SquareTerminal, Users, Waypoints, Workflow } from 'lucide-react'
 import type { AgentData } from '../../../../preload'
 import { AgentConnectionDetails, agentLocation } from './AgentConnectionDetails'
+import {
+  SessionTelemetryBlock,
+  popoverMaxHeight,
+  useSessionTelemetryBlock,
+  type SessionTelemetryBlockModel
+} from './SessionTelemetryBlock'
 import type { ChatRouter } from '../../../../shared/chatRouting'
 
 type DisplayRouter = ChatRouter | 'script'
@@ -18,6 +24,11 @@ export interface RouterBadgeInfo {
   conductorName?: string
   conductorId?: string | null
   coordinateAction?: { conductorName: string; pending?: boolean; onCoordinate(): void }
+  /**
+   * The chat whose session the popover also describes (context fill, spend,
+   * cache, prices), once it has telemetry. Absent outside a chat.
+   */
+  chatId?: string
 }
 
 /** Icon, short label and tone per router. The label is what the pill shows. */
@@ -51,21 +62,49 @@ const ARIA: Record<DisplayRouter, string> = {
   coordinator: 'Coordinated by your local model'
 }
 
-/** Direct chats describe the agent's location; multi-agent chats explain routing. */
-export function RouterBadge({
+/**
+ * Direct chats describe the agent's location; multi-agent chats explain
+ * routing. In a chat, the popover also carries the session's telemetry.
+ */
+export function RouterBadge({ chatId, ...info }: RouterBadgeInfo): React.JSX.Element {
+  // Only a chat reads telemetry: the job pages' badge has no session to show.
+  return chatId ? <ChatRouterBadge chatId={chatId} {...info} /> : <RouterBadgeView {...info} telemetry={null} />
+}
+
+function ChatRouterBadge({ chatId, ...info }: RouterBadgeInfo & { chatId: string }): React.JSX.Element {
+  const telemetry = useSessionTelemetryBlock(chatId)
+  return <RouterBadgeView {...info} telemetry={telemetry} />
+}
+
+function RouterBadgeView({
   router,
   connectionAgent,
   agentName,
   answererName,
   modelName,
   conductorName,
-  coordinateAction
-}: RouterBadgeInfo): React.JSX.Element {
+  coordinateAction,
+  telemetry
+}: Omit<RouterBadgeInfo, 'chatId'> & { telemetry: SessionTelemetryBlockModel | null }): React.JSX.Element {
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
   const [dismissed, setDismissed] = useState(false)
   const tooltipId = useId()
   const open = (hovered || focused) && !dismissed
+  const hasTelemetry = telemetry !== null
+  // The pill's top edge, measured while the popover with telemetry is open:
+  // the popover grows up from it and must stop short of the window's top.
+  const anchorRef = useRef<HTMLDivElement>(null)
+  const [anchorTop, setAnchorTop] = useState<number | undefined>(undefined)
+  useLayoutEffect(() => {
+    if (open && hasTelemetry) setAnchorTop(anchorRef.current?.getBoundingClientRect().top)
+  }, [open, hasTelemetry])
+  useEffect(() => {
+    if (!open || !hasTelemetry) return
+    const measure = (): void => setAnchorTop(anchorRef.current?.getBoundingClientRect().top)
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [open, hasTelemetry])
   const location = router === 'direct' && connectionAgent ? agentLocation(connectionAgent) : null
   const face = location ? { ...FACE.direct, label: location, icon: location === 'Local' ? SquareTerminal : Waypoints } : router === 'coordinator' && conductorName ? { ...FACE.coordinator, label: `${conductorName} routes` } : FACE[router]
   const Icon = face.icon
@@ -75,6 +114,7 @@ export function RouterBadge({
 
   return (
     <div
+      ref={anchorRef}
       className="relative"
       onMouseEnter={() => { setHovered(true); setDismissed(false) }}
       onMouseLeave={() => setHovered(false)}
@@ -102,9 +142,11 @@ export function RouterBadge({
       {open && (
         <div
           id={tooltipId}
-          role={coordinateAction || router === 'coordinator' || router === 'human' ? "dialog" : "tooltip"}
+          // A dialog whenever it holds a control: the telemetry row is one.
+          role={hasTelemetry || coordinateAction || router === 'coordinator' || router === 'human' ? "dialog" : "tooltip"}
           aria-label="Chat routing"
-          className={`absolute bottom-full right-0 z-50 w-72 rounded-lg border
+          style={hasTelemetry ? { maxHeight: popoverMaxHeight(anchorTop) } : undefined}
+          className={`absolute bottom-full right-0 z-50 ${hasTelemetry ? 'w-80 flex flex-col' : 'w-72'} rounded-lg border
             border-[var(--color-border)] bg-[var(--color-overlay-panel)] backdrop-blur-xl
             shadow-xl px-3 py-2.5 text-[11px] leading-relaxed text-[var(--color-text-secondary)]`}
         >
@@ -169,6 +211,10 @@ export function RouterBadge({
               <p className="mt-1.5">Write to the coordinator. It can ask participants and use the connected tools; their work appears in sub-threads.</p>
             </>
           )}
+          {/* Last, under the routing: its row stays put as the details open above
+              it. The routing above keeps its height (a flex item's `min-height:
+              auto`); under the cap only the details shrink, and scroll. */}
+          {telemetry && <SessionTelemetryBlock model={telemetry} />}
         </div>
       )}
     </div>

@@ -1,5 +1,5 @@
 /**
- * How the session badge writes numbers: token counts, dollars, countdowns and
+ * How the session telemetry block writes numbers: token counts, dollars, countdowns and
  * "how long ago". Pure, so the badge's tests and these agree on one spelling.
  */
 

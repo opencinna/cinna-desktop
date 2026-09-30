@@ -9,9 +9,10 @@ import type {
 } from '../../../../shared/sessionTelemetry'
 
 /**
- * The session badge under the composer and its popover. Telemetry is read
- * once and then pushed, so the tests drive it the way main does: a `get`
- * answer, then `session-telemetry:changed` payloads into the hook's listener.
+ * The session telemetry block in the mode badge's popover (`RouterBadge` with
+ * a `chatId`). Telemetry is read once and then pushed, so the tests drive it
+ * the way main does: a `get` answer, then `session-telemetry:changed` payloads
+ * into the hook's listener.
  */
 
 const NOW = new Date('2026-09-30T10:00:00Z').getTime()
@@ -35,7 +36,8 @@ vi.mock('../../hooks/useRelativeNow', () => ({ useRelativeNow: () => new Date(NO
   }
 }
 
-const { SessionTelemetryBadge, TELEMETRY_COUNT_UNKNOWN, detailsMaxHeight, telemetryCountClass } = await import('./SessionTelemetryBadge')
+const { RouterBadge } = await import('./RouterBadge')
+const { DETAILS_MAX_HEIGHT, popoverMaxHeight } = await import('./SessionTelemetryBlock')
 const { useUIStore } = await import('../../stores/ui.store')
 
 function claude(patch: Partial<SessionTelemetry> = {}): SessionTelemetry {
@@ -79,12 +81,12 @@ async function mount(telemetry: SessionTelemetry | null): Promise<{ client: Quer
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element =>
     createElement(QueryClientProvider, { client }, children)
-  const view = render(createElement(SessionTelemetryBadge, { chatId: 'chat-1' }), { wrapper })
+  const view = render(createElement(RouterBadge, { router: 'direct', chatId: 'chat-1' }), { wrapper })
   await waitFor(() => {
     expect(client.getQueryState(['sessionTelemetry', 'chat-1'])?.status).toBe('success')
     expect(push.listener).not.toBeNull()
   })
-  return { client, switchTo: (chatId) => view.rerender(createElement(SessionTelemetryBadge, { chatId })) }
+  return { client, switchTo: (chatId) => view.rerender(createElement(RouterBadge, { router: 'direct', chatId })) }
 }
 
 async function send(telemetry: SessionTelemetry): Promise<void> {
@@ -94,14 +96,30 @@ async function send(telemetry: SessionTelemetry): Promise<void> {
   })
 }
 
-const pill = (): HTMLElement | null => document.querySelector<HTMLElement>('button[data-badge="telemetry"]')
-const dialog = (): HTMLElement | null => screen.queryByRole('dialog', { name: 'Session details' })
+const pill = (): HTMLElement => screen.getByRole('status', { name: 'Direct agent connection' })
+const dialog = (): HTMLElement | null => screen.queryByRole('dialog', { name: 'Chat routing' })
+const toggle = (): HTMLElement | null => (dialog() ? within(dialog()!).queryByRole('button', { name: /^Context / }) : null)
+const details = (): HTMLElement | null => (dialog() ? within(dialog()!).queryByLabelText('Session details list') : null)
 const section = (name: string): HTMLElement => within(dialog()!).getByRole('region', { name })
 
-function open(): HTMLElement {
-  fireEvent.mouseEnter(pill()!)
+function hover(): HTMLElement {
+  fireEvent.mouseEnter(pill())
   expect(dialog()).not.toBeNull()
   return dialog()!
+}
+
+/** Hovers the pill and expands the details, if they are not already. */
+function open(): HTMLElement {
+  hover()
+  if (toggle()!.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle()!)
+  expect(details()).not.toBeNull()
+  return dialog()!
+}
+
+function close(): void {
+  fireEvent.keyDown(dialog()!, { key: 'Escape' })
+  expect(dialog()).toBeNull()
+  fireEvent.mouseLeave(pill().parentElement!)
 }
 
 /** A row's value, found by its label. */
@@ -123,54 +141,112 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('the session badge', () => {
-  it('is hidden while the chat has no telemetry', async () => {
+describe('the Context row', () => {
+  it('is absent while the chat has no telemetry, and the popover stays a plain routing card', async () => {
     await mount(null)
-    expect(pill()).toBeNull()
+    fireEvent.mouseEnter(pill())
+    expect(dialog()).toBeNull()
+    const card = screen.getByRole('tooltip', { name: 'Chat routing' })
+    expect(within(card).queryByRole('button')).toBeNull()
+    expect(card.className).toContain('w-72')
+    expect(card.style.maxHeight).toBe('')
     await send(claude())
-    expect(pill()).not.toBeNull()
+    expect(toggle()).not.toBeNull()
+    expect(dialog()!.className).toContain('w-80')
   })
 
-  it('shows the context fill and is named by it alone, not by the cache it does not show', async () => {
-    await mount(claude())
-    expect(pill()!.textContent).toBe('42%')
-    expect(pill()!.getAttribute('aria-label')).toBe('Context 42% full')
+  it('is absent without a chat: the badge reads no telemetry', () => {
+    render(createElement(RouterBadge, { router: 'direct' }))
+    fireEvent.mouseEnter(pill())
+    expect(spies.get).not.toHaveBeenCalled()
+    expect(screen.getByRole('tooltip')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Context/ })).toBeNull()
+  })
 
-    await send(claude({ cache: { lastRequestAt: NOW - 400_000, ttlMs: 300_000, ttlSource: 'observed', expiresAt: NOW - 100_000 } }))
-    expect(pill()!.getAttribute('aria-label')).toBe('Context 42% full')
+  it('makes the popover a dialog even for a router whose card is a tooltip', async () => {
+    await mount(claude())
+    expect(hover().getAttribute('role')).toBe('dialog')
+  })
+
+  it('is collapsed by default: used tokens and fill, named in words', async () => {
+    await mount(claude())
+    hover()
+    const row = toggle()!
+    expect(row.getAttribute('aria-expanded')).toBe('false')
+    expect(row.textContent).toBe('Context84.2K – 42%')
+    expect(row.getAttribute('aria-label')).toBe('Context 84.2K, 42% full')
+    expect(details()).toBeNull()
+    expect(within(dialog()!).queryByRole('region')).toBeNull()
 
     await send(claude({ context: { used: 100, size: 1_000_000, sizeAuthoritative: true } }))
-    expect(pill()!.textContent).toBe('<1%')
+    expect(toggle()!.textContent).toBe('Context100 – <1%')
+    expect(toggle()!.getAttribute('aria-label')).toBe('Context 100, <1% full')
   })
 
-  it('shows a dash in the same span without a window size, so the pill keeps its size', async () => {
+  it('shows the used tokens alone without a window size', async () => {
     await mount(codex({ context: { used: 5_000, size: 0, sizeAuthoritative: false } }))
-    const span = pill()!.querySelector('span')!
-    expect(span.textContent).toBe(TELEMETRY_COUNT_UNKNOWN)
-    expect(span.className).toBe(telemetryCountClass)
-    expect(pill()!.getAttribute('aria-label')).toBe('Context size unknown')
-    await send(codex())
-    expect(pill()!.querySelector('span')).toBe(span)
-    expect(span.textContent).toBe('42%')
-    expect(pill()!.getAttribute('aria-label')).toBe('Context 42% full')
+    hover()
+    expect(toggle()!.textContent).toBe('Context5K')
+    expect(toggle()!.getAttribute('aria-label')).toBe('Context 5K')
   })
 
-  it('keeps the fill in one fixed-width span while it updates mid-turn', async () => {
-    await mount(claude({ context: { used: 9_000, size: 100_000, sizeAuthoritative: true } }))
-    const span = pill()!.querySelector('span')!
-    // A fixed width that holds `100%`: `4ch` is 3.6px short of it.
-    expect(telemetryCountClass).toContain('w-[5ch]')
-    expect(telemetryCountClass).not.toContain('min-w')
-    expect(telemetryCountClass).toContain('tabular-nums')
-    expect(span.className).toBe(telemetryCountClass)
-    await send(claude({ context: { used: 100_000, size: 100_000, sizeAuthoritative: true } }))
-    expect(pill()!.querySelector('span')).toBe(span)
-    expect(span.textContent).toBe('100%')
-    expect(span.className).toBe(telemetryCountClass)
+  it('expands and collapses on click, with the details above it and the row last', async () => {
+    await mount(claude())
+    hover()
+    const row = toggle()!
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-expanded')).toBe('true')
+    const list = details()!
+    expect(row.getAttribute('aria-controls')).toBe(list.id)
+    // Above the row in DOM order, and the row is the popover's last.
+    expect(list.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(row.parentElement!.lastElementChild).toBe(row)
+    expect(dialog()!.lastElementChild).toBe(row.parentElement)
+    // Below the routing copy.
+    const routing = within(dialog()!).getByText('Direct agent connection')
+    expect(routing.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // The same node stays: nothing under the pointer is replaced.
+    expect(toggle()).toBe(row)
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-expanded')).toBe('false')
+    expect(details()).toBeNull()
+    expect(dialog()).not.toBeNull()
+  })
+
+  it('keeps the popover open while focus is inside it', async () => {
+    await mount(claude())
+    fireEvent.focus(pill())
+    const row = toggle()!
+    fireEvent.blur(pill(), { relatedTarget: row })
+    fireEvent.focus(row)
+    fireEvent.click(row)
+    expect(dialog()).not.toBeNull()
+    const measure = within(section('Context')).getByRole('button', { name: 'Measure' })
+    fireEvent.blur(row, { relatedTarget: measure })
+    fireEvent.focus(measure)
+    fireEvent.click(measure)
+    expect(dialog()).not.toBeNull()
+  })
+
+  it('stays expanded across a close and reopen, and resets when the chat changes', async () => {
+    const { client, switchTo } = await mount(claude())
+    open()
+    close()
+    hover()
+    expect(toggle()!.getAttribute('aria-expanded')).toBe('true')
+    expect(details()).not.toBeNull()
+
+    client.setQueryData(['sessionTelemetry', 'chat-2'], claude({ chatId: 'chat-2' }))
+    spies.get.mockImplementation(async (chatId: string) => ({ ok: true, telemetry: claude({ chatId }) }))
+    act(() => switchTo('chat-2'))
+    expect(toggle()!.getAttribute('aria-expanded')).toBe('false')
+    expect(details()).toBeNull()
+    act(() => switchTo('chat-1'))
+    expect(toggle()!.getAttribute('aria-expanded')).toBe('false')
   })
 })
 
-describe('the session popover', () => {
+describe('the expanded details', () => {
   it('for Claude: model, login, context split, measure, cache clock, next message and prices', async () => {
     await mount(claude())
     const popover = open()
@@ -273,11 +349,12 @@ describe('the session popover', () => {
     expect(row('Context', 'Messages')).toBe('60K')
   })
 
-  it('counts the cache down every second while open', async () => {
+  it('counts the cache down every second while shown', async () => {
+    // After the mount: `waitFor` polls on the real `setInterval`.
+    await mount(claude())
     vi.useRealTimers()
     vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
     vi.setSystemTime(NOW)
-    await mount(claude())
     open()
     expect(row('Cache', 'State')).toBe('Warm cold in 3:12')
     act(() => vi.advanceTimersByTime(2_000))
@@ -293,14 +370,25 @@ describe('the session popover', () => {
     expect(within(section('Next message')).queryByText(/claude-sonnet-5/)).toBeNull()
   })
 
-  it('caps the list at the room below its pinned top, with a stable scrollbar gutter', async () => {
-    expect(detailsMaxHeight(undefined)).toBe('min(70vh, 36rem)')
-    // 8px from the window's bottom, less the popover's own padding and border.
-    expect(detailsMaxHeight(300)).toBe('min(70vh, 36rem, calc(100vh - 308px - 1rem - 2px))')
+  it('caps the popover at the room above the pill, the list scrolling inside with a stable gutter', async () => {
+    expect(popoverMaxHeight(undefined)).toBeUndefined()
+    // It grows up from the pill: 8px short of the window's top.
+    expect(popoverMaxHeight(300)).toBe('292px')
+    expect(popoverMaxHeight(4)).toBeUndefined()
     await mount(claude())
-    open()
-    const list = within(dialog()!).getByLabelText('Session details list')
-    expect(list.className).toContain('[scrollbar-gutter:stable]')
+    const top = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ top: 500 } as DOMRect)
+    try {
+      open()
+      expect(dialog()!.style.maxHeight).toBe('492px')
+      expect(dialog()!.className).toContain('flex-col')
+      const list = details()!
+      expect(list.style.maxHeight).toBe(DETAILS_MAX_HEIGHT)
+      expect(list.className).toContain('[scrollbar-gutter:stable]')
+      expect(list.className).toContain('overflow-y-auto')
+      expect(list.className).toContain('min-h-0')
+    } finally {
+      top.mockRestore()
+    }
   })
 
   it('shows the runtime block only in verbose mode', async () => {
@@ -308,9 +396,8 @@ describe('the session popover', () => {
     await mount(t)
     open()
     expect(within(dialog()!).queryByLabelText('Runtime details')).toBeNull()
-    fireEvent.keyDown(dialog()!, { key: 'Escape' })
+    close()
     act(() => useUIStore.setState({ verboseMode: true }))
-    fireEvent.mouseLeave(pill()!)
     open()
     const block = within(dialog()!).getByLabelText('Runtime details')
     expect(block.textContent).toContain('cli: 2.1.9')
@@ -366,9 +453,7 @@ describe('measuring the context', () => {
     await act(async () => { pending.resolve({ ok: false, code: 'busy' }) })
     expect(within(section('Context')).queryByRole('status')).not.toBeNull()
 
-    fireEvent.keyDown(dialog()!, { key: 'Escape' })
-    expect(dialog()).toBeNull()
-    fireEvent.mouseLeave(pill()!)
+    close()
     open()
     expect(within(section('Context')).queryByRole('status')).toBeNull()
     expect(within(section('Context')).getByRole('button', { name: 'Measure' })).toBeTruthy()
@@ -387,6 +472,7 @@ describe('measuring the context', () => {
 
     act(() => switchTo('chat-2'))
     expect(dialog()).not.toBeNull()
+    open()
     expect(within(section('Context')).getByRole('button', { name: 'Measure' })).toBeTruthy()
     expect(within(section('Context')).queryByRole('status')).toBeNull()
   })
@@ -401,8 +487,7 @@ describe('measuring the context', () => {
     expect(line.textContent).toBe("This agent can't report a breakdown.")
     expect(line.className).not.toContain('danger')
 
-    fireEvent.keyDown(dialog()!, { key: 'Escape' })
-    fireEvent.mouseLeave(pill()!)
+    close()
     open()
     expect(within(section('Context')).queryByRole('button', { name: 'Measure' })).toBeNull()
     expect(within(section('Context')).getByRole('status').textContent).toBe("This agent can't report a breakdown.")
