@@ -27,9 +27,10 @@ export const LOCAL_TOOLS_KEY = ['local-tools'] as const
  */
 export const CODEX_AUTH_KEY = ['codex-auth'] as const
 
-export function useCodexAuth() {
+export function useCodexAuth({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: CODEX_AUTH_KEY,
+    enabled,
     queryFn: () => window.api.localTools.codexAuth(),
     staleTime: 30_000,
     refetchOnWindowFocus: 'always',
@@ -97,9 +98,10 @@ export function useLocalTools() {
  */
 export const CLAUDE_AUTH_POLL_MS = 10_000
 
-export function useClaudeAuth() {
+export function useClaudeAuth({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: CLAUDE_AUTH_KEY,
+    enabled,
     queryFn: () => window.api.localTools.claudeAuth(),
     staleTime: 30_000,
     refetchOnWindowFocus: 'always',

@@ -3,12 +3,14 @@ import {
   DESKTOP_APP_BUTTON_LABEL,
   DESKTOP_APP_PHASE_LABEL,
   desktopAppsBannerText,
+  hasWorkingRuntime,
   visibleDesktopApps
 } from '../../../../shared/desktopApps'
+import { isCredentialActive } from '../../../../shared/credentials'
 import { useDesktopAppConnect, useDesktopAppRunning, useDesktopApps } from '../../hooks/useDesktopApps'
-import { useDefaultRuntime } from '../../hooks/useEngine'
-import { useDefaultChatMode } from '../../hooks/useChatModes'
-import { useAppSettings } from '../../hooks/useAppSettings'
+import { useClaudeBinary, useCodexBinary, useDefaultRuntime } from '../../hooks/useEngine'
+import { useClaudeAuth, useCodexAuth, useLocalTools } from '../../hooks/useLocalTools'
+import { useProviders } from '../../hooks/useProviders'
 import { useDesktopAppsStore } from '../../stores/desktopApps.store'
 import { unwrapIpcError } from '../../utils/ipcError'
 
@@ -24,32 +26,38 @@ const FAILED = "Couldn't set it up."
  * Absolutely positioned over the top of the screen, so appearing, changing
  * phase or going away never moves the composer below. Renders nothing — no
  * reserved space — when there is nothing to offer: every detected app
- * dismissed, or already the Default runtime.
+ * dismissed, or something already works (`hasWorkingRuntime`). The offer is
+ * for a Mac with no runtime yet, not a nudge to move a working one.
  */
 export function DesktopAppsBanner(): React.JSX.Element | null {
   const { data: detected } = useDesktopApps()
   const { data: defaultRuntime } = useDefaultRuntime()
-  const defaultMode = useDefaultChatMode()
-  const settings = useAppSettings()
+  const providers = useProviders()
   const dismissed = useDesktopAppsStore((state) => state.dismissed)
   const dismiss = useDesktopAppsStore((state) => state.dismiss)
   const connect = useDesktopAppConnect()
   const running = useDesktopAppRunning(connect.isPending)
 
-  // Held until the Default runtime and the default chat mode are known (the
-  // latter needs the settings for account-default precedence): offering an
-  // app that turns out to be in use already would show a banner and then take
-  // it away.
-  if (!detected || !defaultRuntime || !defaultMode.isSuccess || !settings.isSuccess) return null
-  const apps = visibleDesktopApps(detected, dismissed, defaultRuntime.engine, defaultMode.data?.engine ?? null)
-  if (apps.length === 0) return null
+  const apps = detected ? visibleDesktopApps(detected, dismissed) : []
+  const hasActiveCredential = providers.data?.some(isCredentialActive) ?? false
+  // OpenCode with a credential settles it without asking a CLI anything; only
+  // otherwise are the logins probed — `claude auth status` is a process, and it
+  // polls while signed out.
+  const needsCli =
+    apps.length > 0 && !!defaultRuntime && providers.isSuccess &&
+    !(defaultRuntime.engine === 'opencode' && hasActiveCredential)
+  const claudeAuth = useClaudeAuth({ enabled: needsCli })
+  const codexAuth = useCodexAuth({ enabled: needsCli })
+  const claudeBinary = useClaudeBinary({ enabled: needsCli })
+  const codexBinary = useCodexBinary({ enabled: needsCli })
+  // A user's own `claude`/`codex` on PATH at another version than the pin is
+  // not the binary the probe asks (that stays `unresolved` until a turn fetches
+  // the pin), yet its login is the one the pin would use — it follows HOME.
+  const tools = useLocalTools()
 
   const activeAppId = running.data?.appId ?? (connect.isPending ? connect.variables.appId : null)
   const phase = running.data?.phase ?? (connect.isPending ? 'installing' : null)
   const busy = activeAppId !== null
-  const activeApp = detected.find((app) => app.id === activeAppId) ?? null
-  const shownIds = apps.map((app) => app.id)
-
   const failure = connect.isPending
     ? null
     : connect.error
@@ -57,6 +65,27 @@ export function DesktopAppsBanner(): React.JSX.Element | null {
       : connect.data?.outcome === 'failed'
         ? (connect.data.reason ?? FAILED)
         : null
+
+  // Held until every fact is known, so an offer never shows and is then
+  // withdrawn. A connect in flight, or one that just failed, keeps the banner:
+  // its login may already count as working before adopt has run.
+  if (apps.length === 0 || !defaultRuntime || !providers.isSuccess) return null
+  if (!busy && !failure) {
+    if (needsCli && (!claudeAuth.data || !codexAuth.data || !claudeBinary.data || !codexBinary.data || !tools.data)) return null
+    const onPath = (id: 'claude' | 'codex'): boolean => tools.data?.some((tool) => tool.id === id && tool.available) ?? false
+    const working = hasWorkingRuntime({
+      defaultEngine: defaultRuntime.engine,
+      hasActiveCredential,
+      cli: {
+        claude: { auth: claudeAuth.data?.state ?? 'unknown', installed: claudeBinary.data?.state === 'ready' || onPath('claude') },
+        codex: { auth: codexAuth.data?.state ?? 'unknown', installed: codexBinary.data?.state === 'ready' || onPath('codex') }
+      }
+    })
+    if (working) return null
+  }
+
+  const activeApp = detected?.find((app) => app.id === activeAppId) ?? null
+  const shownIds = apps.map((app) => app.id)
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-[calc(var(--topbar-h)+0.75rem)] z-10 flex justify-center px-4">

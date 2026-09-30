@@ -47,26 +47,50 @@ export const DESKTOP_APP_BUTTON_LABEL: Record<DesktopAppId, string> = {
   chatgpt: 'Use ChatGPT'
 }
 
-/**
- * Which detected apps the banner offers: not dismissed, and not already what
- * chats and agents run on — the same two facts `adoptDesktopEngine` changes.
- *
- * The Default runtime alone is not enough: a machine whose `claude` locked it
- * to Claude, onboarded with an API key, has a default chat mode naming
- * `opencode`, so its chats spend the key and pressing "Use Claude" still
- * changes something. `defaultModeEngine` is that mode's engine, `null` when
- * there is no default mode or it names none (both inherit the Default runtime).
- * An unknown Default runtime (`undefined`) hides nothing on that ground.
- */
+/** Which detected apps the banner offers: those the user has not waved away. */
 export function visibleDesktopApps(
   detected: readonly DetectedDesktopApp[],
-  dismissed: readonly string[],
-  defaultEngine: AgentEngine | undefined,
-  defaultModeEngine: AgentEngine | null = null
+  dismissed: readonly string[]
 ): DetectedDesktopApp[] {
-  const inUse = (engine: AgentEngine): boolean =>
-    engine === defaultEngine && (defaultModeEngine === null || defaultModeEngine === engine)
-  return detected.filter((app) => !dismissed.includes(app.id) && !inUse(app.engine))
+  return detected.filter((app) => !dismissed.includes(app.id))
+}
+
+/** One CLI engine as the banner judges it: its login probe, and whether its binary is here. */
+export interface CliRuntimeSetup {
+  auth: 'logged_in' | 'logged_out' | 'unknown'
+  /** A binary is on this machine: the one the turns run (`ready`), or the user's own on PATH. */
+  installed: boolean
+}
+
+/** What {@link hasWorkingRuntime} decides from. */
+export interface RuntimeSetup {
+  defaultEngine: AgentEngine
+  /** Some AI credential is enabled and usable — what OpenCode runs on. */
+  hasActiveCredential: boolean
+  cli: Record<EngineLoginId, CliRuntimeSetup>
+}
+
+/**
+ * Whether this machine already has something chats and agents can run on —
+ * in which case the banner has nothing to fix and says nothing.
+ *
+ * The offer is for a Mac with **no** working runtime. It is not a nudge to
+ * move a working setup onto a subscription: which engine or key a user's
+ * chats spend is their choice, and a banner that keeps questioning it is
+ * noise. So any one of these is enough:
+ *
+ * - the Default runtime is OpenCode and a credential it can run on exists;
+ * - `claude` or `codex` is signed in — Default runtime or not;
+ * - `claude` or `codex` is installed and its probe could not tell. Uncertain
+ *   is not a reason to nag. A probe with **no binary** also answers
+ *   `unknown` (there is nothing to ask), and that one is not working — it is
+ *   the Mac the offer exists for.
+ */
+export function hasWorkingRuntime(setup: RuntimeSetup): boolean {
+  if (setup.defaultEngine === 'opencode' && setup.hasActiveCredential) return true
+  return (Object.values(setup.cli) as CliRuntimeSetup[]).some(
+    (cli) => cli.auth === 'logged_in' || (cli.auth === 'unknown' && cli.installed)
+  )
 }
 
 /** Whose subscription each app stands for, in the one-app sentence. */

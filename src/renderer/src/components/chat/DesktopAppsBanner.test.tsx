@@ -17,8 +17,12 @@ const api = vi.hoisted(() => ({
   desktopAppRunning: vi.fn(),
   engineLoginCancel: vi.fn(async () => true),
   defaultRuntime: vi.fn(),
-  chatModes: vi.fn(),
-  settings: vi.fn()
+  providers: vi.fn(),
+  claudeAuth: vi.fn(),
+  codexAuth: vi.fn(),
+  claudeBinary: vi.fn(),
+  codexBinary: vi.fn(),
+  tools: vi.fn()
 }))
 
 ;(window as unknown as { api: unknown }).api = {
@@ -26,12 +30,13 @@ const api = vi.hoisted(() => ({
     desktopApps: api.desktopApps,
     desktopAppConnect: api.desktopAppConnect,
     desktopAppRunning: api.desktopAppRunning,
-    engineLoginCancel: api.engineLoginCancel
+    engineLoginCancel: api.engineLoginCancel,
+    claudeAuth: api.claudeAuth,
+    codexAuth: api.codexAuth,
+    list: api.tools
   },
-  engine: { defaultRuntime: api.defaultRuntime },
-  chatModes: { list: api.chatModes },
-  providers: { onAccountConfigSynced: () => () => {} },
-  settings: { getAll: api.settings }
+  engine: { defaultRuntime: api.defaultRuntime, claudeBinary: api.claudeBinary, codexBinary: api.codexBinary },
+  providers: { list: api.providers, onAccountConfigSynced: () => () => {} }
 }
 
 const { DesktopAppsBanner } = await import('./DesktopAppsBanner')
@@ -48,6 +53,17 @@ function mount() {
 
 const region = () => screen.queryByRole('region', { name: 'Detected apps' })
 
+/**
+ * Wait until every fact the banner decides on has been asked for and answered,
+ * so "renders nothing" means the rule hid it, not that it was still loading.
+ */
+async function settle(): Promise<void> {
+  for (const probe of [api.claudeAuth, api.codexAuth, api.claudeBinary, api.codexBinary, api.tools]) {
+    await waitFor(() => expect(probe).toHaveBeenCalled())
+  }
+  for (let i = 0; i < 5; i++) await act(async () => {})
+}
+
 beforeEach(() => {
   localStorage.clear()
   useDesktopAppsStore.setState({ dismissed: [] })
@@ -55,9 +71,14 @@ beforeEach(() => {
   api.desktopAppConnect.mockReset()
   api.desktopAppRunning.mockReset().mockResolvedValue(null)
   api.engineLoginCancel.mockClear()
+  // A Mac with nothing working: no credential, no CLI (whose probe then says unknown).
   api.defaultRuntime.mockReset().mockResolvedValue({ engine: 'opencode' })
-  api.chatModes.mockReset().mockResolvedValue([])
-  api.settings.mockReset().mockResolvedValue({ prioritizeAccountDefaults: false })
+  api.providers.mockReset().mockResolvedValue([])
+  api.claudeAuth.mockReset().mockResolvedValue({ state: 'unknown', authMethod: null })
+  api.codexAuth.mockReset().mockResolvedValue({ state: 'unknown' })
+  api.claudeBinary.mockReset().mockResolvedValue({ state: 'unresolved' })
+  api.codexBinary.mockReset().mockResolvedValue({ state: 'unresolved' })
+  api.tools.mockReset().mockResolvedValue([])
 })
 
 describe('DesktopAppsBanner', () => {
@@ -74,14 +95,6 @@ describe('DesktopAppsBanner', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Use ChatGPT' })).toBeTruthy())
     expect(screen.getByRole('button', { name: 'Use Claude' })).toBeTruthy()
     expect(screen.getByText(/Claude Desktop and ChatGPT are installed/)).toBeTruthy()
-  })
-
-  it('renders nothing for an app that is already the default runtime', async () => {
-    api.defaultRuntime.mockResolvedValue({ engine: 'claude' })
-    mount()
-    await waitFor(() => expect(api.defaultRuntime).toHaveBeenCalled())
-    await act(async () => {})
-    expect(region()).toBeNull()
   })
 
   it('X dismisses every offered app, for good', async () => {
@@ -153,21 +166,73 @@ describe('DesktopAppsBanner', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Installing…' })).toBeTruthy())
     expect((screen.getByRole('button', { name: 'Dismiss' }) as HTMLButtonElement).disabled).toBe(true)
   })
-  it('hides an app whose engine chats and agents already run on', async () => {
+  it('stays hidden while a CLI is signed in, even when chats run on an API key', async () => {
+    api.desktopApps.mockResolvedValue([claude, chatgpt])
     api.defaultRuntime.mockResolvedValue({ engine: 'claude' })
+    api.providers.mockResolvedValue([{ id: 'p1', type: 'anthropic', enabled: true, hasApiKey: true, unsupported: false }])
+    api.claudeAuth.mockResolvedValue({ state: 'logged_in', authMethod: 'claude.ai' })
+    api.claudeBinary.mockResolvedValue({ state: 'ready', path: '/x/claude', source: 'managed', version: '1' })
     mount()
-    await waitFor(() => expect(api.chatModes).toHaveBeenCalled())
-    await act(async () => {})
+    await settle()
     expect(region()).toBeNull()
   })
 
-  it('still offers Claude when the Default runtime is Claude but the default chat mode runs on an API key', async () => {
+  it('stays hidden, and asks no CLI, when OpenCode has a credential to run on', async () => {
+    api.providers.mockResolvedValue([{ id: 'p1', type: 'openai', enabled: true, hasApiKey: true, unsupported: false }])
+    mount()
+    await waitFor(() => expect(api.providers).toHaveBeenCalled())
+    for (let i = 0; i < 5; i++) await act(async () => {})
+    expect(region()).toBeNull()
+    expect(api.claudeAuth).not.toHaveBeenCalled()
+    expect(api.codexAuth).not.toHaveBeenCalled()
+  })
+
+  it('stays hidden when an installed CLI cannot say whether it is signed in', async () => {
     api.defaultRuntime.mockResolvedValue({ engine: 'claude' })
-    api.chatModes.mockResolvedValue([
-      { id: 'm1', name: 'Default', isDefault: true, managed: false, enabled: true, engine: 'opencode', providerId: 'p1' }
-    ])
+    api.claudeBinary.mockResolvedValue({ state: 'ready', path: '/x/claude', source: 'managed', version: '1' })
+    mount()
+    await settle()
+    expect(region()).toBeNull()
+  })
+
+  it('stays hidden for a signed-in claude of its own on PATH, before the pinned copy exists', async () => {
+    // The probe asks only the pinned binary, so it cannot tell yet.
+    api.defaultRuntime.mockResolvedValue({ engine: 'claude' })
+    api.tools.mockResolvedValue([{ id: 'claude', available: true }])
+    mount()
+    await settle()
+    expect(region()).toBeNull()
+  })
+
+  it('stays hidden when an installed codex cannot say whether it is signed in', async () => {
+    api.desktopApps.mockResolvedValue([claude, chatgpt])
+    api.codexBinary.mockResolvedValue({ state: 'ready', path: '/x/codex', source: 'managed', version: '1' })
+    mount()
+    await settle()
+    expect(region()).toBeNull()
+  })
+
+  it('keeps a running connect on screen even once its login counts as working', async () => {
+    api.desktopAppRunning.mockResolvedValue({ appId: 'chatgpt', phase: 'checking' })
+    api.desktopApps.mockResolvedValue([chatgpt])
+    api.codexAuth.mockResolvedValue({ state: 'logged_in', method: 'chatgpt' })
+    api.codexBinary.mockResolvedValue({ state: 'ready', path: '/x/codex', source: 'managed', version: '1' })
+    mount()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Checking…' })).toBeTruthy())
+  })
+
+  it('offers when the Default runtime is a CLI that is signed out', async () => {
+    api.defaultRuntime.mockResolvedValue({ engine: 'claude' })
+    api.claudeAuth.mockResolvedValue({ state: 'logged_out', authMethod: 'none' })
+    api.claudeBinary.mockResolvedValue({ state: 'ready', path: '/x/claude', source: 'managed', version: '1' })
     mount()
     await waitFor(() => expect(region()).not.toBeNull())
     expect(screen.getByRole('button', { name: 'Use Claude' })).toBeTruthy()
+  })
+
+  it('offers when the only credential is switched off', async () => {
+    api.providers.mockResolvedValue([{ id: 'p1', type: 'openai', enabled: false, hasApiKey: true, unsupported: false }])
+    mount()
+    await waitFor(() => expect(region()).not.toBeNull())
   })
 })

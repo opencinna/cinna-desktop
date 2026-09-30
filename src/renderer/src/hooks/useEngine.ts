@@ -63,9 +63,10 @@ export const CODEX_BINARY_KEY = ['codex-binary'] as const
  * download that the user who triggered it (by sending a message) is not
  * watching from here.
  */
-export function useCodexBinary() {
+export function useCodexBinary({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery<EngineBinaryState>({
     queryKey: CODEX_BINARY_KEY,
+    enabled,
     queryFn: () => window.api.engine.codexBinary()
   })
 }
@@ -89,9 +90,10 @@ export function useResolveCodexBinary() {
 export const CLAUDE_BINARY_KEY = ['claude-binary'] as const
 
 /** The pinned Claude Code CLI, as Settings sees it. {@link useCodexBinary}'s twin. */
-export function useClaudeBinary() {
+export function useClaudeBinary({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery<EngineBinaryState>({
     queryKey: CLAUDE_BINARY_KEY,
+    enabled,
     queryFn: () => window.api.engine.claudeBinary()
   })
 }
