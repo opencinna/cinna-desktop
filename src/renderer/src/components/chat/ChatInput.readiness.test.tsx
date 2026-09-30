@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { ChatRouter } from '../../../../shared/chatRouting'
@@ -27,6 +27,10 @@ const spies = vi.hoisted(() => ({
   checkReadiness: vi.fn(async () => null as unknown),
   cinnaReauth: vi.fn(async () => ({ success: true }) as unknown),
   notesList: vi.fn(async () => [] as unknown[]),
+  engineLogin: vi.fn(async (_engine: string) => ({ outcome: 'logged_in', command: null }) as unknown),
+  engineLoginCancel: vi.fn(async (_engine: string) => true),
+  engineLoginRunning: vi.fn(async (): Promise<Record<'claude' | 'codex', 'preparing' | 'waiting' | null>> => ({ claude: null, codex: null })),
+  clipboardWrite: vi.fn(async (_text: string) => ({ success: true })),
   notesGet: vi.fn(async () => null as unknown)
 }))
 
@@ -61,6 +65,14 @@ const api: Record<string, unknown> = new Proxy(
       if (ns === 'llm') return namespace({ sendMessage: spies.llmSend })
       if (ns === 'auth') return namespace({ cinnaReauth: spies.cinnaReauth })
       if (ns === 'notes') return namespace({ list: spies.notesList, get: spies.notesGet })
+      if (ns === 'clipboard') return namespace({ writeText: spies.clipboardWrite })
+      if (ns === 'localTools') {
+        return namespace({
+          engineLogin: spies.engineLogin,
+          engineLoginCancel: spies.engineLoginCancel,
+          engineLoginRunning: spies.engineLoginRunning
+        })
+      }
       return namespace({})
     }
   }
@@ -175,6 +187,12 @@ beforeEach(() => {
   spies.llmSend.mockReset()
   spies.checkReadiness.mockReset()
   spies.checkReadiness.mockResolvedValue(null)
+  spies.engineLogin.mockReset()
+  spies.engineLogin.mockResolvedValue({ outcome: 'logged_in', command: null })
+  spies.engineLoginCancel.mockClear()
+  spies.engineLoginRunning.mockReset()
+  spies.engineLoginRunning.mockResolvedValue({ claude: null, codex: null })
+  spies.clipboardWrite.mockClear()
   spies.cinnaReauth.mockReset()
   spies.cinnaReauth.mockResolvedValue({ success: true })
   spies.notesList.mockReset()
@@ -455,5 +473,72 @@ describe('composer readiness refusal', () => {
     )
     expect(screen.getByRole('button', { name: 'Check again' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Re-authenticate' })).toBeNull()
+  })
+  describe('Log in, for a CLI engine the readiness names', () => {
+    const loggedOut = (engine: 'claude' | 'codex'): Record<string, unknown> =>
+      agent(
+        { state: 'not_logged_in', reason: "Claude Code is not logged in. Choose Log in above the message box or on the agent's Settings tab.", login: engine },
+        { driver: 'acp', capabilities: { attachments: 'none', commands: 'catalog', auth: 'none', cwd: true } }
+      )
+
+    it('offers Log in instead of Check again, and runs that engine’s login', async () => {
+      mountActive(loggedOut('codex'))
+      expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+      await waitFor(() => expect(spies.engineLogin).toHaveBeenCalledWith('codex'))
+      expect(spies.checkReadiness).not.toHaveBeenCalled()
+    })
+
+    it('waits on the browser with a Cancel beside it, and a second press starts nothing', async () => {
+      let finish!: (value: unknown) => void
+      spies.engineLogin.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+      mountActive(loggedOut('claude'))
+      // The mount's own read of the running flag has answered (a re-read asked
+      // while it is still in flight joins it).
+      await waitFor(() => expect(spies.engineLoginRunning).toHaveBeenCalled())
+      await act(tick)
+      // Before main says the CLI runs, the login is getting its binary ready.
+      spies.engineLoginRunning.mockResolvedValue({ claude: 'preparing', codex: null })
+      fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+      expect(await screen.findByRole('button', { name: 'Getting Claude Code ready…' })).toBeTruthy()
+      spies.engineLoginRunning.mockResolvedValue({ claude: 'waiting', codex: null })
+      const pending = await screen.findByRole('button', { name: 'Waiting for sign-in in your browser…' }, { timeout: 4000 })
+      fireEvent.click(pending)
+      expect(spies.engineLogin).toHaveBeenCalledTimes(1)
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      await waitFor(() => expect(spies.engineLoginCancel).toHaveBeenCalledWith('claude'))
+      spies.engineLoginRunning.mockResolvedValue({ claude: null, codex: null })
+      finish({ outcome: 'cancelled', command: "'/opt/claude' auth login" })
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull())
+      // A cancel is the user's own choice: nothing to explain.
+      expect(screen.queryByText(/Couldn't log in/)).toBeNull()
+    })
+
+    it('says a sign-in that did not finish, with the terminal command', async () => {
+      spies.engineLogin.mockResolvedValue({ outcome: 'timeout', command: "'/opt/claude' auth login" })
+      mountActive(loggedOut('claude'))
+      fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+      const line = await screen.findByText(/Couldn't log in/)
+      // The shared lead, and no command spliced into the prose…
+      expect(line.textContent).toContain("Couldn't log in — Sign-in timed out.")
+      expect(line.textContent).not.toContain('auth login')
+      expect(send().getAttribute('title')).toBe(line.textContent)
+      // …it is a second action after Log in, copied through main's clipboard.
+      await screen.findByRole('button', { name: 'Copy command' })
+      const buttons = screen.getAllByRole('button').map((b) => b.textContent)
+      expect(buttons.indexOf('Copy command')).toBe(buttons.indexOf('Log in') + 1)
+      fireEvent.click(screen.getByRole('button', { name: 'Copy command' }))
+      await waitFor(() => expect(spies.clipboardWrite).toHaveBeenCalledWith("'/opt/claude' auth login"))
+      expect(await screen.findByRole('button', { name: 'Copied' })).toBeTruthy()
+    })
+
+    it('says why a login that could not prepare its binary failed, with no command to copy', async () => {
+      spies.engineLogin.mockResolvedValue({ outcome: 'failed', command: null, reason: 'Claude Code could not be installed.' })
+      mountActive(loggedOut('claude'))
+      fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+      const line = await screen.findByText(/Couldn't log in/)
+      expect(line.textContent).toContain("Couldn't log in — Sign-in didn't finish: Claude Code could not be installed.")
+      expect(screen.queryByRole('button', { name: 'Copy command' })).toBeNull()
+    })
   })
 })

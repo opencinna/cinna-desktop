@@ -487,6 +487,16 @@ describe('the Claude launcher', () => {
     expect(isRefusal(result) && result.error).toMatch(/not logged in/)
   })
 
+  it('names the in-app login that fixes a logged-out readiness, and no terminal command', async () => {
+    const readiness = await createClaudeLauncher({
+      ...deps,
+      claudeAuth: async () => ({ state: 'logged_out' })
+    }).readiness!()
+    expect(readiness).toMatchObject({ state: 'not_logged_in', login: 'claude' })
+    expect(readiness.reason).toMatch(/Log in/)
+    expect(readiness.reason).not.toMatch(/terminal/)
+  })
+
   it('runs on an install whose login could not be determined', async () => {
     // A probe that could not answer is not evidence of a logged-out install,
     // and refusing a working engine on our own uncertainty is worse than not

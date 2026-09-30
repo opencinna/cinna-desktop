@@ -4,10 +4,12 @@ import { ComposerWarning } from './ComposerWarning'
 import { SettingsButton } from '../settings/SettingsLayout'
 import { useCheckAgentReadiness } from '../../hooks/useAgents'
 import { useCinnaReauth } from '../../hooks/useAuth'
+import { useEngineLogin } from '../../hooks/useLocalTools'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { RUN_REFERENCE_PATTERN } from '../../../../shared/kit/manifest'
 import { readinessBlocksTurn } from '../../../../shared/agentDrivers'
 import type { AgentReadiness, AgentReadinessState } from '../../../../shared/agentDrivers'
+import { loginFailureLead, loginPendingText } from '../../../../shared/engine'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 
@@ -93,6 +95,14 @@ export interface ReadinessAction {
   pendingLabel: string
   pending: boolean
   run: () => void
+  /** Offered beside the pending button — a login waiting on a browser can be stopped. */
+  cancel?: () => void
+  /**
+   * After a login that did not finish: the terminal command to run instead,
+   * offered as **Copy command** after the main button rather than spliced
+   * into the warning's prose.
+   */
+  copyCommand?: string | null
 }
 
 export interface ComposerReadiness {
@@ -124,15 +134,22 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
   const notice = readinessNotice(target)
   const refusal = readinessRefusal(target)
   const agentId = target?.id ?? null
+  // A CLI engine that is not logged in is fixed by its own login, run in-app
+  // on the binary the turns use — the readiness names which one.
+  const loginEngine =
+    notice?.state === 'not_logged_in' && target?.capabilities.auth !== 'cinna' ? (notice.login ?? null) : null
+  const login = useEngineLogin(loginEngine)
 
   // An earlier failure belongs to the agent and the answer it was shown
   // against; a new target, or a new answer, starts clean.
   const resetCheck = check.reset
   const resetReauth = reauth.reset
+  const resetLogin = login.reset
   useEffect(() => {
     resetCheck()
     resetReauth()
-  }, [agentId, notice?.state, notice?.reason, resetCheck, resetReauth])
+    resetLogin()
+  }, [agentId, notice?.state, notice?.reason, resetCheck, resetReauth, resetLogin])
 
   if (!target || !notice) {
     return { notice: null, refusal: null, blocksSend: false, text: null, title: null, action: null }
@@ -141,7 +158,9 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
   // An expired Cinna session is not fixed by asking again: it is fixed by
   // signing in again, the same flow the chat's error bubble offers.
   const reauthable = notice.state === 'not_logged_in' && target.capabilities.auth === 'cinna'
-  const failure = reauthable
+  const failure = loginEngine
+    ? loginFailureLead(login.failure)
+    : reauthable
     ? reauth.error
       ? unwrapIpcError(reauth.error, 'Re-authentication failed')
       : reauth.data && !reauth.data.success
@@ -151,10 +170,21 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
       ? unwrapIpcError(check.error, 'the check could not run')
       : null
   const suffix = failure
-    ? ` Couldn't ${reauthable ? 're-authenticate' : 'check again'} — ${failure}`
+    ? ` Couldn't ${loginEngine ? 'log in' : reauthable ? 're-authenticate' : 'check again'} — ${failure}`
     : ''
 
-  const action: ReadinessAction = reauthable
+  const action: ReadinessAction = loginEngine
+    ? {
+        label: 'Log in',
+        pendingLabel: loginPendingText(loginEngine, login.phase),
+        pending: login.pending,
+        // Pressed again while pending it would only join the running login;
+        // the button refuses the press anyway (`aria-disabled`).
+        run: login.start,
+        cancel: login.cancel,
+        copyCommand: loginFailureLead(login.failure) ? login.failure?.command ?? null : null
+      }
+    : reauthable
     ? {
         label: 'Re-authenticate',
         pendingLabel: 'Signing in…',
@@ -185,7 +215,7 @@ function ReadinessActionButton({ action }: { action: ReadinessAction }): React.J
   useEffect(() => () => { if (timer.current !== null) clearTimeout(timer.current) }, [])
   const pending = action.pending || feedback
   const isCheck = action.label === 'Check again'
-  return <SettingsButton aria-disabled={pending || undefined} aria-busy={pending}
+  const button = <SettingsButton aria-disabled={pending || undefined} aria-busy={pending}
     onClick={() => {
       if (action.pending || timer.current !== null) return
       // Keep an unchanged, immediate answer visibly checking, without delaying recovery.
@@ -197,6 +227,24 @@ function ReadinessActionButton({ action }: { action: ReadinessAction }): React.J
       : pending && <Loader2 size={13} className="animate-spin" />}
     {pending ? action.pendingLabel : action.label}
   </SettingsButton>
+  if (!action.cancel) return button
+  // Always wrapped when a cancel exists, so the button keeps its place in the
+  // tree — and its focus — as Copy command and Cancel come and go after it.
+  return <div className="flex items-center gap-2">
+    {button}
+    {!pending && action.copyCommand && <CopyCommandButton key={action.copyCommand} command={action.copyCommand} />}
+    {action.pending && <SettingsButton onClick={action.cancel}>Cancel</SettingsButton>}
+  </div>
+}
+
+/** Copies the terminal fallback through main's clipboard; `navigator.clipboard` rejects without document focus. */
+function CopyCommandButton({ command }: { command: string }): React.JSX.Element {
+  const [copied, setCopied] = useState<'yes' | 'failed' | null>(null)
+  return <SettingsButton title={command} onClick={() => {
+    void window.api.clipboard.writeText(command)
+      .then((result) => setCopied(result.success ? 'yes' : 'failed'))
+      .catch(() => setCopied('failed'))
+  }}>{copied === 'yes' ? 'Copied' : copied === 'failed' ? 'Copy failed' : 'Copy command'}</SettingsButton>
 }
 
 /** A complete, actionable warning above the input, hidden when ready. */

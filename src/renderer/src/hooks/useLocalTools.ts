@@ -9,9 +9,11 @@ import type {
   ToolInstallPlan,
   ToolInstallProgress
 } from '../../../shared/localTools'
+import type { EngineLoginId, EngineLoginPhase, EngineLoginResult } from '../../../shared/engine'
 import { DEFAULT_RUNTIME_KEY } from './useEngine'
 import { useAppSettings, useSetAppSetting } from './useAppSettings'
 import { launchableTools, resolveDefaultTool } from '../utils/localAgents'
+import { unwrapIpcError } from '../utils/ipcError'
 
 export const LOCAL_TOOLS_KEY = ['local-tools'] as const
 /**
@@ -64,10 +66,10 @@ export function useLocalTools() {
  * in flight, which the panel renders as *not knowing*, never as *no*.
  *
  * **It polls, but only while the answer is one the user is being asked to
- * change.** The panel's logged-out line says *"run `claude` in a terminal"*, so
- * the user leaves, does it, and comes back to a red alarm about a machine that
- * is now fine — and nothing re-asks while the agent page stays mounted. It
- * clears only on a remount.
+ * change.** The in-app Log in refreshes it when it ends, but a user may still
+ * log in from a terminal (the fallback command a failed sign-in shows), and
+ * come back to a red alarm about a machine that is now fine — and nothing
+ * re-asks while the agent page stays mounted. It clears only on a remount.
  *
  * Focus is the obvious trigger and **it does not work here**, which is worth
  * writing down because the option that looks like it does is a trap:
@@ -104,6 +106,112 @@ export function useClaudeAuth() {
     refetchInterval: (query) =>
       query.state.data?.state === 'logged_out' ? CLAUDE_AUTH_POLL_MS : false
   })
+}
+
+export const ENGINE_LOGIN_RUNNING_KEY = ['engine-login-running'] as const
+
+/** How often a surface mounted mid-login re-asks whether it has ended. */
+export const ENGINE_LOGIN_RUNNING_POLL_MS = 2_000
+
+/**
+ * Which in-app logins main is running. Polled only while one is, so a surface
+ * that mounted during a login (or outlived the one that started it) notices it
+ * ending.
+ */
+export function useEngineLoginRunning(enabled = true) {
+  return useQuery({
+    queryKey: ENGINE_LOGIN_RUNNING_KEY,
+    enabled,
+    queryFn: () => window.api.localTools.engineLoginRunning(),
+    // Polled while any login runs — which also carries it from `preparing`
+    // (a download) to `waiting` (the browser) on every surface.
+    refetchInterval: (query) =>
+      query.state.data?.claude || query.state.data?.codex ? ENGINE_LOGIN_RUNNING_POLL_MS : false
+  })
+}
+
+/** Each login's own auth answer — a table, not a branch on the engine id. */
+const ENGINE_AUTH_KEY: Record<EngineLoginId, readonly string[]> = { claude: CLAUDE_AUTH_KEY, codex: CODEX_AUTH_KEY }
+
+export interface EngineLoginControl {
+  /** Start the login, or join the one main is already running for this engine. */
+  start: () => void
+  cancel: () => void
+  /** A login for this engine is running — started here, or anywhere else. */
+  pending: boolean
+  /**
+   * Where a pending login is — `preparing` (binary, maybe a download) or
+   * `waiting` (the browser). Null when not pending; `preparing` until main has
+   * said otherwise.
+   */
+  phase: EngineLoginPhase | null
+  /** The last outcome here that was not `logged_in`; null otherwise. */
+  failure: EngineLoginResult | null
+  /** Forget `failure` — the surface's subject changed. */
+  reset: () => void
+}
+
+/**
+ * The in-app **Log in** for one CLI engine.
+ *
+ * **What happens when it ends is in the `useMutation` options**, not in a
+ * `mutate` callback: a login takes minutes in a browser, the surface that
+ * started it may well be gone by then, and a mutate-level callback is dropped
+ * with it. The auth answers, the running flag and the agent list (whose
+ * refusals re-ask readiness on every read) are all re-read.
+ *
+ * `null` is "no engine to log in to" — the hook is called unconditionally by a
+ * surface that only sometimes offers the button; it then asks main nothing.
+ */
+export function useEngineLogin(engine: EngineLoginId | null): EngineLoginControl {
+  const queryClient = useQueryClient()
+  const running = useEngineLoginRunning(engine !== null)
+  const mutation = useMutation<EngineLoginResult, Error, void>({
+    mutationKey: ['engine-login', engine],
+    mutationFn: () => {
+      if (!engine) return Promise.resolve({ outcome: 'failed', command: null, reason: 'Nothing to log in to.' })
+      // **The login is asked for first, then the running flag.** Both are IPC
+      // invokes, queued in order, so main has registered the login by the time
+      // it answers the re-read — and every other surface's `pending` agrees.
+      // (Invalidating from `start()` instead ran before this: TanStack awaits
+      // `onMutate` before calling `mutationFn`.)
+      const result = window.api.localTools.engineLogin(engine)
+      void queryClient.invalidateQueries({ queryKey: ENGINE_LOGIN_RUNNING_KEY })
+      return result
+    },
+    onSettled: () => {
+      if (engine) void queryClient.invalidateQueries({ queryKey: ENGINE_AUTH_KEY[engine] })
+      void queryClient.invalidateQueries({ queryKey: ENGINE_LOGIN_RUNNING_KEY })
+      void queryClient.invalidateQueries({ queryKey: ['agents'] })
+      // The build page's blocker is its own readiness read, not the agent list.
+      void queryClient.invalidateQueries({ queryKey: ['local-development-context'] })
+    }
+  })
+  const { mutate, reset } = mutation
+  const runningPhase = engine !== null ? (running.data?.[engine] || null) : null
+  const pending = mutation.isPending || runningPhase !== null
+  const data = mutation.data
+  const failure = mutation.error
+    ? { outcome: 'failed' as const, command: null, reason: unwrapIpcError(mutation.error, 'the login could not start') }
+    : data && data.outcome !== 'logged_in'
+      ? data
+      : null
+  return {
+    start: () => {
+      if (engine) mutate()
+    },
+    cancel: () => {
+      if (!engine) return
+      void window.api.localTools
+        .engineLoginCancel(engine)
+        .catch(() => false)
+        .finally(() => queryClient.invalidateQueries({ queryKey: ENGINE_LOGIN_RUNNING_KEY }))
+    },
+    pending,
+    phase: pending ? (runningPhase ?? 'preparing') : null,
+    failure: mutation.isPending ? null : failure,
+    reset
+  }
 }
 
 /** Only the installed tools of a given kind — what the Open-in row renders. */

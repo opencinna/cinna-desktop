@@ -8,8 +8,8 @@ import { useClaudeAuth, CLAUDE_AUTH_POLL_MS } from './useLocalTools'
  * When the panel's logged-out alarm gets to go away.
  *
  * This is the one query in the app whose answer changes *because the app told
- * the user to go and change it*: the panel says "run `claude` in a terminal",
- * so the user leaves, does it, and comes back. Nothing else re-asks while the
+ * the user to go and change it*: a login finished outside the app — the
+ * terminal command a failed in-app sign-in offers — leaves the user coming back. Nothing else re-asks while the
  * agent page stays mounted — the app-wide default is `refetchOnWindowFocus:
  * false` (`App.tsx`), and the Settings Refresh button lives on a screen this
  * hook is not mounted on — so without a trigger the red alarm outlives the

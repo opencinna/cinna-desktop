@@ -58,6 +58,9 @@ import type {
   ClaudeAuthStatus,
   DefaultEngineDto,
   EngineBinaryState,
+  EngineLoginId,
+  EngineLoginResult,
+  EngineLoginRunning,
   LocalAgentRuntimeInput
 } from '../shared/engine'
 import { CLAUDE_BINARY_CHANNEL, CODEX_BINARY_CHANNEL, ENGINE_BINARY_CHANNEL } from '../shared/engine'
@@ -1489,6 +1492,20 @@ const api = {
      */
     codexAuth: (): Promise<CodexAuthStatus> => ipcRenderer.invoke('local-tools:codex-auth'),
     claudeAuth: (): Promise<ClaudeAuthStatus> => ipcRenderer.invoke('local-tools:claude-auth'),
+    /**
+     * Run the engine's own login (`claude auth login` / `codex login`) on the
+     * binary the turns use; resolves when it ends, with the outcome as data.
+     * Only the engine id crosses — main owns the command. A second call while
+     * one runs joins it.
+     */
+    engineLogin: (engine: EngineLoginId): Promise<EngineLoginResult> =>
+      ipcRenderer.invoke('local-tools:engine-login', engine),
+    /** Stop a running login; false when none was running. */
+    engineLoginCancel: (engine: EngineLoginId): Promise<boolean> =>
+      ipcRenderer.invoke('local-tools:engine-login-cancel', engine),
+    /** Which engine logins are running now (`preparing` / `waiting`, or null), for a surface mounted mid-login. */
+    engineLoginRunning: (): Promise<EngineLoginRunning> =>
+      ipcRenderer.invoke('local-tools:engine-login-running'),
     openIn: (request: OpenInRequest): Promise<{ success: true }> =>
       ipcRenderer.invoke('local-tools:open-in', request),
     /**

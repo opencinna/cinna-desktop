@@ -17,7 +17,13 @@ const logger = createLogger('codex-launcher')
  * waits for it), or could not be fetched — and only the last one refuses.
  */
 export const CODEX_NOT_INSTALLED = 'Codex could not be installed. Try again in Settings → Agents → Runtime.'
-export const CODEX_NOT_LOGGED_IN = 'Codex is not logged in. Run `codex login` in a terminal, then check again.'
+/**
+ * The remedy is Cinna's own **Log in** (`codex login` on the binary the turns
+ * use, which is usually Cinna's managed copy and not on PATH) — offered above
+ * the message box and on the "Runs with" panel alike, so both read as one
+ * instruction.
+ */
+export const CODEX_NOT_LOGGED_IN = "Codex is not logged in. Choose Log in above the message box or on the agent's Settings tab."
 
 /**
  * What is known about the Codex binary **without downloading anything**.
@@ -111,7 +117,7 @@ export function createCodexLauncher(deps: CodexLauncherDeps): AcpLauncher {
       return { state: 'not_installed', reason: CODEX_NOT_INSTALLED, detail: known.error }
     }
     return (await loggedOut(options))
-      ? { state: 'not_logged_in', reason: CODEX_NOT_LOGGED_IN }
+      ? { state: 'not_logged_in', reason: CODEX_NOT_LOGGED_IN, login: 'codex' }
       : { state: 'ok', reason: null }
   }
   return {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Check, Circle, Loader2, Minus } from 'lucide-react'
 import {
   useOpenAgentCredentials,
@@ -9,7 +9,7 @@ import { unwrapIpcError } from '../../../utils/ipcError'
 import { useDefaultChatMode } from '../../../hooks/useChatModes'
 import { useModels } from '../../../hooks/useModels'
 import { useProviders } from '../../../hooks/useProviders'
-import { useClaudeAuth, useCodexAuth } from '../../../hooks/useLocalTools'
+import { useClaudeAuth, useCodexAuth, useEngineLogin, type EngineLoginControl } from '../../../hooks/useLocalTools'
 import { useClaudeBinary, useCodexBinary, useDefaultRuntime, useEngineBinary } from '../../../hooks/useEngine'
 import { claudeVersionLabel } from '../../settings/claudeStatus'
 import { codexVersionLabel } from '../../settings/codexStatus'
@@ -27,7 +27,10 @@ import {
   PINNED_CLAUDE_VERSION,
   PINNED_CODEX_VERSION,
   type AgentEngine,
-  type ClaudeAuthState
+  type ClaudeAuthState,
+  type EngineLoginId,
+  loginFailureLead,
+  loginPendingText
 } from '../../../../../shared/engine'
 import { FIELD, LABEL } from './fieldClasses'
 import { SettingsInfoTip } from '../../settings/SettingsLayout'
@@ -141,6 +144,102 @@ const UNSUPPORTED_OPTION = 'engine:unsupported'
 const NOTE = 'text-[10px] text-[var(--color-text-muted)]'
 const WARN = 'text-[10px] text-[var(--color-warning)]'
 const DANGER = 'text-[10px] text-[var(--color-danger)]'
+
+/** One line of the panel's reserved status slot; `login` makes it the logged-out line with its button. */
+type StatusLine = { text: string; tone: string; login?: EngineLoginId }
+
+/**
+ * A bordered button at **this panel's** scale, sized to the 16px status slot.
+ *
+ * Not `SettingsButton`: that is the Settings scale (13px, ~28px tall), and in
+ * the reserved `h-4` line it would either overflow it or grow the panel and move
+ * the tab strip below (ux_rules rules 1 and 12 — a component takes the scale of
+ * the surface it renders into). Primary text colour and a border, so it reads
+ * as a control beside the muted and red prose around it (rule 11).
+ */
+const LINE_BUTTON =
+  'inline-flex h-4 shrink-0 items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 ' +
+  'text-[10px] font-medium leading-none text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)] ' +
+  'aria-disabled:cursor-not-allowed aria-disabled:opacity-60'
+
+/**
+ * The logged-out line: **Log in**, then what is happening.
+ *
+ * The button runs the engine's own login (`claude auth login` / `codex login`)
+ * on the binary the turns use — usually Cinna's managed copy, which is not on
+ * PATH, so the old "run `claude` in a terminal" pointed at a binary that was
+ * not there. It stays in place in every state so the row never shifts: idle it
+ * says why, pending it waits on the browser beside Cancel, and after a sign-in
+ * that did not finish it introduces the terminal command shown on the row
+ * below ({@link LoginCommandRow}).
+ */
+function LoginLine({ text, tone, engine, login }: {
+  text: string
+  tone: string
+  engine: EngineLoginId
+  login: EngineLoginControl
+}): React.JSX.Element {
+  // The lead is shared with the composer and the build page, so all three say it alike.
+  const lead = loginFailureLead(login.failure)
+  const line = login.pending
+    ? loginPendingText(engine, login.phase)
+    : lead
+      ? login.failure?.command
+        ? `${lead} You can also run this in a terminal:`
+        : lead
+      : text
+  return (
+    <div className="flex h-4 min-w-0 items-center gap-2">
+      <button
+        type="button"
+        className={LINE_BUTTON}
+        aria-disabled={login.pending || undefined}
+        aria-busy={login.pending}
+        onClick={() => { if (!login.pending) login.start() }}
+      >
+        {login.pending && <Loader2 size={10} className="animate-spin" />}
+        Log in
+      </button>
+      <span className={`min-w-0 truncate ${login.pending ? NOTE : tone}`} title={line}>
+        {line}
+      </span>
+      {login.pending && (
+        <button type="button" className={LINE_BUTTON} onClick={login.cancel}>
+          Cancel
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The terminal fallback after a sign-in that did not finish: the exact command
+ * — absolute binary, quoted — and a copy button. Rendered only then, below the
+ * reserved line, so the healthy panel keeps its height (ux_rules rule 1).
+ */
+function LoginCommandRow({ command }: { command: string }): React.JSX.Element {
+  const [copied, setCopied] = useState<'yes' | 'failed' | null>(null)
+  return (
+    <div className="mt-1 flex min-w-0 items-center gap-2 text-[10px]">
+      <code className="min-w-0 truncate font-mono text-[var(--color-text-secondary)]" title={command}>
+        {command}
+      </code>
+      <button
+        type="button"
+        className={LINE_BUTTON}
+        onClick={() => {
+          // Main's clipboard: `navigator.clipboard` rejects without document focus.
+          void window.api.clipboard
+            .writeText(command)
+            .then((result) => setCopied(result.success ? 'yes' : 'failed'))
+            .catch(() => setCopied('failed'))
+        }}
+      >
+        {copied === 'yes' ? 'Copied' : copied === 'failed' ? 'Copy failed' : 'Copy'}
+      </button>
+    </div>
+  )
+}
 
 /**
  * The third column's row: a dot, a word, and optionally one button.
@@ -683,6 +782,23 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
   const claudeFailure = claudeTool ? null : cliFailureCopy('Claude Code', 'Claude', claudePathSet)
   const onCodex = effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'codex'
   const onCli = onClaude || onCodex
+  /** The in-app login for this agent's CLI engine; asks main nothing on OpenCode. */
+  const loginEngine: EngineLoginId | null = onCodex ? 'codex' : onClaude ? 'claude' : null
+  const login = useEngineLogin(loginEngine)
+  // A failed sign-in belongs to the agent and engine it was shown against.
+  const resetLogin = login.reset
+  /**
+   * The terminal command under the line: the last failed sign-in's, **kept
+   * while a retry is pending** so the card does not shrink on the press and
+   * grow again when the retry fails too (ux_rules rule 1). Dropped after a
+   * cancel or a sign-in that worked, and with the agent or engine it was for.
+   */
+  const [loginCommand, setLoginCommand] = useState<string | null>(null)
+  const failedCommand = loginFailureLead(login.failure) ? (login.failure?.command ?? null) : null
+  // The reset first: on mount both run, and it must not wipe the command just kept.
+  useEffect(() => { resetLogin(); setLoginCommand(null) }, [agent.id, loginEngine, resetLogin])
+  useEffect(() => { if (failedCommand) setLoginCommand(failedCommand) }, [failedCommand])
+  const shownLoginCommand = login.pending ? loginCommand : failedCommand
   /**
    * **The managed CLI's state, not PATH detection.** Every Codex session runs on
    * the pinned copy Cinna installs — or the explicit path from Settings — so a
@@ -1037,7 +1153,7 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
     tone: message.tone === 'warn' ? WARN : NOTE
   })
 
-  const status = ((): { text: string; tone: string } | null => {
+  const status = ((): StatusLine | null => {
     if (error) return { text: error, tone: DANGER }
     // What the user just clicked outranks a note about a write before it.
     if (secrets) return secrets
@@ -1089,7 +1205,9 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
       // Only a failure reaches here — an install, or a saved path; the copy
       // branches on which (`cliFailureCopy`).
       if (codexFailure) return { text: codexFailure.line, tone: DANGER }
-      if (codexAuth?.state === 'logged_out') return { text: 'Run `codex login` in a terminal, then check again.', tone: DANGER }
+      // The Log in button leads the line (see `LoginLine`); the turn error says
+      // "choose Log in", so the two surfaces give one instruction.
+      if (codexAuth?.state === 'logged_out') return { text: 'Codex is not logged in.', tone: DANGER, login: 'codex' }
       return { text: `Codex uses your CLI login and configuration, on ${declaredModel ?? 'its configured default model'}, with ${codexEffortForComplexity(declaredComplexity)} reasoning effort.`, tone: NOTE }
     }
     if (onClaude) {
@@ -1125,15 +1243,17 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
       if (claudeAuth === undefined) return null
       if (claudeAuth.state === 'logged_out') {
         return {
-          // **Remedy first, because this line is measured to clip.** At the
-          // 800px minimum it needs 432px and has 414px, so the problem-first
-          // wording lost `…in a ter|minal.` — the half rule 7 says has to
-          // survive, and the half the sibling entry 60 lines below already
-          // leads with. Not `describeEngineSkip('claude_not_logged_in')`: that
-          // sentence is a *turn error* and opens "This agent runs on Claude…",
-          // which is narration on a panel that says so two rows up.
-          text: 'Run `claude` in a terminal: that Claude Code install is not logged in.',
-          tone: DANGER
+          // **The remedy is the button that leads the line** (`LoginLine`): the
+          // engine's own login, run on the binary the turns use. The text after
+          // it is short on purpose — this slot is 414px at the 800px minimum,
+          // and the button takes some of it. Not
+          // `describeEngineSkip('claude_not_logged_in')`: that sentence is a
+          // *turn error* and opens "This agent runs on Claude…", which is
+          // narration on a panel that says so two rows up — but it names the
+          // same **Log in**, so the two read as one instruction.
+          text: 'Claude Code is not logged in.',
+          tone: DANGER,
+          login: 'claude'
         }
       }
       return {
@@ -1975,12 +2095,15 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
         wrap into a second row and reintroduce the shift.
       */}
       <div className="mt-2 h-4">
-        {status && (
+        {status?.login ? (
+          <LoginLine text={status.text} tone={status.tone} engine={status.login} login={login} />
+        ) : status && (
           <div className={`truncate ${status.tone}`} title={status.text}>
             {status.text}
           </div>
         )}
       </div>
+      {status?.login && shownLoginCommand && <LoginCommandRow key={shownLoginCommand} command={shownLoginCommand} />}
 
       {(agent.credentials.length > 0 || !canEdit || bare) && (
         <div className="mt-2 space-y-1.5 border-t border-[var(--color-border)] pt-2.5">

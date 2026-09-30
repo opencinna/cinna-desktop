@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CODEX_NOT_INSTALLED, codexBinaryKnownFrom, createCodexLauncher, type CodexLauncherDeps } from './codexLauncher'
+import { CODEX_NOT_INSTALLED, CODEX_NOT_LOGGED_IN, codexBinaryKnownFrom, createCodexLauncher, type CodexLauncherDeps } from './codexLauncher'
 import { isRefusal, type AcpLaunchContext } from './acpLaunchers'
 import type { AcpRuntimeMode } from './types'
 import { buildCodexEnv } from './codexEnv'
@@ -110,6 +110,13 @@ describe('Codex ACP launcher', () => {
       expect(isRefusal(await launcher.plan(context))).toBe(true)
     }
     expect(adapterEntry).not.toHaveBeenCalled()
+  })
+
+  it('names the in-app login that fixes a logged-out readiness, and no terminal command', async () => {
+    const launcher = createCodexLauncher(deps({ auth: async () => ({ state: 'logged_out' as const }) }))
+    expect(await launcher.readiness!()).toEqual({ state: 'not_logged_in', reason: CODEX_NOT_LOGGED_IN, login: 'codex' })
+    expect(CODEX_NOT_LOGGED_IN).toMatch(/Log in/)
+    expect(CODEX_NOT_LOGGED_IN).not.toMatch(/terminal/)
   })
 
   it('reports a failed install as not installed, with the remedy and the resolver’s sentence', async () => {

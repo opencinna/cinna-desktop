@@ -6,6 +6,8 @@ import { useLocalDevStore } from '../../stores/localDev.store'
 import { useDevelopmentWorkspace, type DevelopmentAction } from '../../hooks/useDevelopmentWorkspace'
 import { serverLabel } from '../../utils/agentNavigation'
 import { RuntimeInstallAction } from './RuntimeInstallAction'
+import { RuntimeLoginButton, RuntimeLoginCancel, RuntimeLoginStatus } from './RuntimeLoginAction'
+import { useEngineLogin } from '../../hooks/useLocalTools'
 import { LocalDevTaskList } from './LocalDevTaskList'
 import { DevelopmentRuntimeBadges } from './DevelopmentRuntimeBadges'
 import { BuildGuideModal } from './BuildGuideModal'
@@ -35,6 +37,10 @@ function DevelopmentWorkspace(): React.JSX.Element {
   /** @see the note on the attention actions — a re-auth locks only itself. */
   const held = (action: DevelopmentAction): boolean => pending === action || (busy && pending !== 'reauth')
   const [guideOpen, setGuideOpen] = useState(false)
+  // One login for the whole page: the button in the action row, its Cancel at
+  // the row's end and its status below the row all read the same state.
+  const loginTool = state.phase === 'ready' ? (data?.loginTool ?? null) : null
+  const login = useEngineLogin(data?.loginTool ?? null)
   const settingsOpen = useLocalDevStore((s) => s.pageMode === 'settings')
   const setSettingsOpen = (open: boolean): void => useLocalDevStore.getState().setPageMode(open ? 'settings' : 'chat')
   const openSettings = (runtime: boolean, tools = false): void => {
@@ -104,11 +110,15 @@ function DevelopmentWorkspace(): React.JSX.Element {
                 </>}
                 {state.phase === 'ready' && <>
                   {data?.installTool && <RuntimeInstallAction tool={data.installTool} onDone={() => void context.refetch()} />}
+                  {loginTool && <RuntimeLoginButton tool={loginTool} login={login} />}
                   <SettingsButton onClick={() => openSettings(!!data && data.setupTarget !== 'local-dev', true)}><Settings2 size={13} />{data && data.setupTarget !== 'local-dev' ? 'Open Runtime settings' : 'Local Development settings'}</SettingsButton>
                   <DevelopmentRecheckButton fetching={context.isFetching} onCheck={checkWorkspace} />
+                  {loginTool && <RuntimeLoginCancel login={login} />}
                 </>}
                 {!['ready', 'installing', 'attention'].includes(state.phase) && <button type="button" className={actionClass} onClick={() => (state.phase === 'consent' || state.phase === 'declined') ? useLocalDevStore.getState().setConsentOpen(true) : openSettings(false)}>Set up local development</button>}
               </div>
+              {/* Outside the wrapping row, so its lines never move a button. */}
+              {loginTool && <RuntimeLoginStatus tool={loginTool} login={login} />}
               {state.phase === 'installing' && <p className="text-xs text-[var(--color-text-muted)]">You can leave this page. Setup continues in the background.</p>}
             </DevelopmentSetupNotice>}
             {error && <ComposerWarning role="alert" className="mt-4"><p>{error}</p></ComposerWarning>}

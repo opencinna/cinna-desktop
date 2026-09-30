@@ -68,7 +68,16 @@ vi.mock('../services/localAgents/toolDetectionService', () => ({
 
 /** Records the path each probe resolved, so staleness is visible in the result. */
 const probed = vi.hoisted(() => ({ paths: [] as (string | null)[] }))
+const logins = vi.hoisted(() => {
+  const make = (engine: string) => ({
+    start: vi.fn(async () => ({ outcome: 'logged_in', command: `'/opt/${engine}' login` })),
+    cancel: vi.fn(() => true),
+    running: vi.fn((): 'preparing' | 'waiting' | null => null)
+  })
+  return { claude: make('claude'), codex: make('codex') }
+})
 vi.mock('../agents/drivers', () => ({
+  engineLogins: logins,
   codexAuthProbe: { status: async () => ({ state: 'unknown' }), refresh: async () => ({ state: 'unknown' }) },
   claudeAuthProbe: {
     status: async () => ({ state: 'unknown', authMethod: null, subscriptionType: null }),
@@ -153,5 +162,60 @@ describe('local-tools:refresh', () => {
     detect.state.installed = true
     const tools = await refresh()
     expect(tools).toBe('/usr/local/bin/claude#1')
+  })
+})
+
+/**
+ * The in-app login: the renderer sends an engine id and nothing else, and main
+ * runs a command it owns. Anything that is not one of the two literals starts
+ * nothing.
+ */
+describe('local-tools:engine-login', () => {
+  const call = (channel: string, ...args: unknown[]): unknown => {
+    const handler = handlers.get(channel)
+    if (!handler) throw new Error(`${channel} was never registered`)
+    return handler({}, ...args)
+  }
+
+  beforeEach(() => {
+    for (const login of [logins.claude, logins.codex]) {
+      login.start.mockClear()
+      login.cancel.mockClear()
+      login.running.mockClear()
+    }
+  })
+
+  it('starts the login for a known engine and answers with its outcome', async () => {
+    await expect(call('local-tools:engine-login', 'codex')).resolves.toEqual({
+      outcome: 'logged_in',
+      command: "'/opt/codex' login"
+    })
+    expect(logins.codex.start).toHaveBeenCalledTimes(1)
+    expect(logins.claude.start).not.toHaveBeenCalled()
+  })
+
+  it.each([['opencode'], ['claude; rm -rf /'], [{ engine: 'claude' }], [undefined], ['__proto__']])(
+    'refuses %j as data and starts nothing',
+    async (engine) => {
+      await expect(call('local-tools:engine-login', engine)).resolves.toMatchObject({ outcome: 'failed', command: null })
+      expect(call('local-tools:engine-login-cancel', engine)).toBe(false)
+      expect(logins.claude.start).not.toHaveBeenCalled()
+      expect(logins.codex.start).not.toHaveBeenCalled()
+      expect(logins.claude.cancel).not.toHaveBeenCalled()
+      expect(logins.codex.cancel).not.toHaveBeenCalled()
+    }
+  )
+
+  it('cancels only the named engine', () => {
+    expect(call('local-tools:engine-login-cancel', 'claude')).toBe(true)
+    expect(logins.claude.cancel).toHaveBeenCalledTimes(1)
+    expect(logins.codex.cancel).not.toHaveBeenCalled()
+  })
+
+  it('reports which logins are running, with their phase', () => {
+    logins.codex.running.mockReturnValueOnce('preparing')
+    expect(call('local-tools:engine-login-running')).toEqual({ claude: null, codex: 'preparing' })
+    logins.claude.running.mockReturnValueOnce('waiting')
+    expect(call('local-tools:engine-login-running')).toEqual({ claude: 'waiting', codex: null })
   })
 })

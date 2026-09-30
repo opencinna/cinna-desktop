@@ -16,7 +16,26 @@ const mocks = vi.hoisted(() => {
 vi.mock('../../hooks/useNewChatFlow', () => ({ useNewChatFlow: () => ({ startNewChat: mocks.start }) }))
 vi.mock('../../hooks/useAppSettings', () => ({ useSetAppSetting: () => ({ mutate: vi.fn() }), useAppSettings: () => { mocks.settings(); return { data: { localAgentsDefaultEngine: 'claude' } } } }))
 vi.mock('../../hooks/useEngine', () => ({ useDefaultRuntime: () => ({ data: { engine: 'claude' } }), useCodexBinary: () => ({ data: { state: 'unresolved' } }), useClaudeBinary: () => ({ data: { state: 'unresolved' } }) }))
-vi.mock('../../hooks/useLocalTools', () => ({ useClaudeAuth: () => ({ data: { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max' } }), useLocalTools: () => ({ data: [] }), useInstallRuntimeTool: () => ({}), useToolInstallPlan: () => null }))
+/** The page's one in-app login, as `useEngineLogin` hands it over; tests set its state. */
+const engineLogin = vi.hoisted(() => ({
+  start: vi.fn(),
+  cancel: vi.fn(),
+  reset: vi.fn(),
+  pending: false,
+  phase: null as 'preparing' | 'waiting' | null,
+  failure: null as { outcome: string; command: string | null; reason?: string } | null,
+  engines: [] as (string | null)[]
+}))
+vi.mock('../../hooks/useLocalTools', () => ({
+  useClaudeAuth: () => ({ data: { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max' } }),
+  useLocalTools: () => ({ data: [] }),
+  useInstallRuntimeTool: () => ({}),
+  useToolInstallPlan: () => null,
+  useEngineLogin: (engine: string | null) => {
+    engineLogin.engines.push(engine)
+    return engineLogin
+  }
+}))
 vi.mock('react-markdown', async (importOriginal) => {
   const original = await importOriginal<typeof import('react-markdown')>()
   return { ...original, default: (props: Parameters<typeof original.default>[0]) => {
@@ -196,6 +215,52 @@ describe('Local Development entry', () => {
     expect(prepareSession).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Open Runtime settings' }))
     expect(screen.getByRole('heading', { name: 'Local Development Runtime' })).toBeTruthy()
+  })
+  describe('Log in, when the build runtime is logged out', () => {
+    const loggedOut = { ...context, blocker: "Codex is not logged in. Choose Log in above the message box or on the agent's Settings tab.", loginTool: 'codex' }
+    const row = (): HTMLElement => screen.getByRole('button', { name: 'Log in to Codex' }).parentElement!
+    beforeEach(() => {
+      engineLogin.pending = false
+      engineLogin.phase = null
+      engineLogin.failure = null
+      engineLogin.start.mockClear()
+    })
+
+    it('runs the page’s one login from the action row', async () => {
+      sessionContext.mockResolvedValue(loggedOut)
+      renderPage()
+      fireEvent.click(await screen.findByRole('button', { name: 'Log in to Codex' }))
+      expect(engineLogin.start).toHaveBeenCalledTimes(1)
+      expect(engineLogin.engines).toContain('codex')
+      expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
+    })
+
+    it('keeps the button’s label while pending, puts Cancel last in the row and the phase below it', async () => {
+      sessionContext.mockResolvedValue(loggedOut)
+      engineLogin.pending = true
+      engineLogin.phase = 'preparing'
+      renderPage()
+      const button = await screen.findByRole('button', { name: 'Log in to Codex' })
+      expect(button.getAttribute('aria-disabled')).toBe('true')
+      fireEvent.click(button)
+      expect(engineLogin.start).not.toHaveBeenCalled()
+      const buttons = Array.from(row().children).map((child) => child.textContent)
+      expect(buttons[buttons.length - 1]).toBe('Cancel')
+      expect(buttons.indexOf('Check again')).toBe(buttons.length - 2)
+      const status = screen.getByText('Getting Codex ready…')
+      expect(row().contains(status)).toBe(false)
+      expect(row().compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('shows a sign-in that did not finish below the row, with the command to copy', async () => {
+      sessionContext.mockResolvedValue(loggedOut)
+      engineLogin.failure = { outcome: 'timeout', command: "'/opt/codex' login" }
+      renderPage()
+      const lead = await screen.findByText('Sign-in timed out. You can also run this in a terminal:')
+      expect(row().contains(lead)).toBe(false)
+      expect(screen.getByText("'/opt/codex' login")).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
+    })
   })
   it('does not send a prepared request after switching profiles', async () => {
     let resolve!: (value: { agentId: string }) => void

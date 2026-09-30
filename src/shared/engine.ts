@@ -276,6 +276,61 @@ export interface CodexAuthStatus {
   method?: 'chatgpt' | 'api_key'
 }
 
+/**
+ * An engine whose vendor login Cinna can run for the user: the same binary and
+ * child environment the turns use, so the login it leaves is the one every
+ * turn and every `auth status` probe sees (the login follows `HOME`).
+ */
+export type EngineLoginId = 'claude' | 'codex'
+
+export function isEngineLoginId(value: unknown): value is EngineLoginId {
+  return value === 'claude' || value === 'codex'
+}
+
+/**
+ * How one in-app login ended. Returned as data, never thrown: an error's code
+ * does not survive IPC here.
+ *
+ * `logged_in` is decided by asking the binary afterwards, not by the exit code.
+ * `command` is the absolute, shell-quoted command the user can run in a
+ * terminal instead — null when the binary itself could not be resolved, in
+ * which case `reason` says why.
+ */
+export interface EngineLoginResult {
+  outcome: 'logged_in' | 'cancelled' | 'timeout' | 'failed'
+  command: string | null
+  reason?: string
+}
+
+/**
+ * Where a running login is: `preparing` while its binary resolves (or the
+ * pinned copy downloads) and its environment is built, `waiting` once the CLI
+ * runs and waits on the browser sign-in.
+ */
+export type EngineLoginPhase = 'preparing' | 'waiting'
+
+/** Which engine logins the main process is running right now, and in which phase; null when none. */
+export type EngineLoginRunning = Record<EngineLoginId, EngineLoginPhase | null>
+
+/** The product name each login engine is shown under. */
+export const ENGINE_LOGIN_NAMES: Record<EngineLoginId, string> = { claude: 'Claude Code', codex: 'Codex' }
+
+/**
+ * The one sentence every surface opens a failed in-app login with — the agent
+ * panel, the composer and the build page say the same thing. Null for a login
+ * that worked, and for one the user cancelled (they know).
+ */
+export function loginFailureLead(result: EngineLoginResult | null): string | null {
+  if (!result || result.outcome === 'logged_in' || result.outcome === 'cancelled') return null
+  if (result.outcome === 'timeout') return 'Sign-in timed out.'
+  return result.reason ? `Sign-in didn't finish: ${result.reason}` : "Sign-in didn't finish."
+}
+
+/** What a surface says while a login runs, by phase. */
+export function loginPendingText(engine: EngineLoginId, phase: EngineLoginPhase | null): string {
+  return phase === 'preparing' ? `Getting ${ENGINE_LOGIN_NAMES[engine]} ready…` : 'Waiting for sign-in in your browser…'
+}
+
 /** Codex keeps its configured model; complexity controls reasoning effort. */
 export function codexEffortForComplexity(complexity: WorkComplexity | null): string {
   return complexity === 'simple' ? 'low' : complexity === 'complex' ? 'high' : 'medium'

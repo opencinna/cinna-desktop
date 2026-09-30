@@ -146,6 +146,12 @@ export interface AgentReadiness {
    * never the only thing a surface shows. Absent when the reason says it all.
    */
   detail?: string | null
+  /**
+   * On `not_logged_in` from a CLI engine: which in-app login fixes it, so the
+   * composer can offer **Log in** rather than *Check again*. Absent for every
+   * other state, and for a Cinna session (that is a re-authentication).
+   */
+  login?: 'claude' | 'codex'
 }
 
 /**

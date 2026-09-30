@@ -229,20 +229,20 @@ export function describeEngineSkip(code: EngineSkipCode): string {
       return 'The engine skipped this agent because its credential is not available to it.'
     case 'no_model':
       return 'The engine skipped this agent because its runtime names no model.'
-    // Names the remedy, and stops short of offering to do it. Logging in is
-    // something only the user can do, in their own terminal, against their own
-    // account — this app spawns the CLI and never brokers its credentials.
-    // **The second half is word-for-word the panel's line.** A user meets this
-    // condition on two surfaces — the "Runs with" panel before a turn, and here
-    // if they start one anyway — and two paraphrases of one instruction read as
-    // two instructions. The panel's own wording is what moved to match, not the
-    // other way round: it was measured at exactly 414px against 414px available
-    // at the 800px minimum, so it cannot afford `installation`.
+    // Names the remedy, and the remedy is Cinna's own **Log in** — the vendor's
+    // login, run on the binary the turns use (usually Cinna's managed copy,
+    // which is not on PATH, so "run `claude` in a terminal" pointed at a binary
+    // that was not there). The composer offers that button above the message
+    // box whenever readiness says `not_logged_in`, and the "Runs with" panel
+    // offers the same button: **one instruction on both surfaces**, because a
+    // user meets this condition on two of them — the panel before a turn, and
+    // here if they start one anyway — and two paraphrases of one instruction
+    // read as two instructions.
     //
-    // The opening clause stays, and is the reason this is not simply the same
-    // string: the panel says which engine two rows up, and a turn error in a
-    // chat transcript has nothing around it that does.
+    // The opening clause stays, and is the reason this is not simply the
+    // panel's line: the panel says which engine two rows up, and a turn error
+    // in a chat transcript has nothing around it that does.
     case 'claude_not_logged_in':
-      return 'This agent runs on Claude, and that Claude Code install is not logged in. Run `claude` in a terminal.'
+      return "This agent runs on Claude, and Claude Code is not logged in. Choose Log in above the message box or on the agent's Settings tab."
   }
 }

@@ -41,9 +41,10 @@ import { createLogger } from '../../logger/logger'
 import { CodexAuthProbe } from './acp/codexAuth'
 import { buildCodexEnv } from './acp/codexEnv'
 import { CODEX_NOT_INSTALLED, codexBinaryKnownFrom, createCodexLauncher } from './acp/codexLauncher'
-import { codexEffortForComplexity, isAgentEngine } from '../../../shared/engine'
+import { codexEffortForComplexity, isAgentEngine, type EngineLoginId } from '../../../shared/engine'
 import { isWorkComplexity } from '../../../shared/modelFamilies'
 import { ClaudeAuthProbe } from './acp/claudeAuth'
+import { EngineLogin } from './acp/engineLogin'
 import { pendingRequests } from './pendingRequests'
 import { runtimeService } from '../../services/localAgents/runtimeService'
 import { defaultEngineService } from '../../services/localAgents/defaultEngineService'
@@ -327,6 +328,52 @@ export const codexAuthProbe = new CodexAuthProbe({
   path: runningBinary(codexBinaryService),
   env: async () => withDeveloperToolShims(buildCodexEnv({ shellEnv: await getShellEnv() }))
 })
+
+/**
+ * The in-app login for each CLI engine — `claude auth login` / `codex login`,
+ * run on **the binary the turns use** (downloading the pin if it is not here
+ * yet, which `runningBinary` above deliberately never does) and under **the
+ * same environment the auth probe gets**, so the login it leaves is the one the
+ * probe and every turn will see. On exit the probe is invalidated before it is
+ * asked, so a probe already in flight from before the login cannot answer for it.
+ */
+export const engineLogins: Record<EngineLoginId, EngineLogin> = {
+  claude: new EngineLogin({
+    engine: 'claude',
+    binary: async () => {
+      try {
+        return { path: (await claudeBinaryService.ensure()).path }
+      } catch (error) {
+        return { error: error instanceof ManagedAssetError ? error.message : CLAUDE_NOT_INSTALLED }
+      }
+    },
+    env: async () => withDeveloperToolShims(buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() })),
+    refresh: () => {
+      claudeAuthProbe.invalidate()
+      return claudeAuthProbe.refresh()
+    }
+  }),
+  codex: new EngineLogin({
+    engine: 'codex',
+    binary: async () => {
+      try {
+        return { path: (await codexBinaryService.ensure()).path }
+      } catch (error) {
+        return { error: error instanceof ManagedAssetError ? error.message : CODEX_NOT_INSTALLED }
+      }
+    },
+    env: async () => withDeveloperToolShims(buildCodexEnv({ shellEnv: await getShellEnv() })),
+    refresh: () => {
+      codexAuthProbe.invalidate()
+      return codexAuthProbe.refresh()
+    }
+  })
+}
+
+/** App shutdown: kill any login still waiting on a browser. */
+export function shutdownEngineLogins(): Promise<void> {
+  return Promise.all([engineLogins.claude.shutdown(), engineLogins.codex.shutdown()]).then(() => undefined)
+}
 
 const syntheticRuntimeProfiles = new Map<string, { userId: string; context: ConductorContext }>()
 const aiFunctionProfiles = new Map<string, { userId: string; modelId: string | null; credentialId: string | null; systemPrompt: string }>()
@@ -797,13 +844,14 @@ export function respondToOrphanedAsk(
 }
 
 /** The same runtime gates used by the turn, before presenting the build composer. */
-export async function developmentRuntimeBlocker(engine: import('../../../shared/engine').AgentEngine): Promise<{ blocker: string | null; installTool?: 'claude' | 'codex' | null }> {
+export async function developmentRuntimeBlocker(engine: import('../../../shared/engine').AgentEngine): Promise<{ blocker: string | null; installTool?: 'claude' | 'codex' | null; loginTool?: 'claude' | 'codex' | null }> {
   const ready = await acpLaunchers[engine]?.readiness?.({ fresh: true })
   // Only Claude is a CLI the user installs. OpenCode and Codex are fetched by
   // Cinna, so offering to install a PATH copy of either would install a tool no
   // spawned session uses — a failed managed download is retried in Settings.
   if (ready && ready.state !== 'ok') return { blocker: ready.reason ?? 'Check your default runtime in Settings.',
-    installTool: ready.state === 'not_installed' && engine === 'claude' ? engine : null }
+    installTool: ready.state === 'not_installed' && engine === 'claude' ? engine : null,
+    loginTool: ready.state === 'not_logged_in' ? ready.login ?? null : null }
   if (engine === 'opencode') {
     try { await engineBinaryService.ensure() } catch (error) {
       return { blocker: error instanceof Error ? error.message : 'OpenCode could not be installed. Check Runtime settings.' }

@@ -118,7 +118,26 @@ let toolsLoaded = true
 let claudeAuth:
   | { state: string; authMethod: string | null; subscriptionType: string | null; email: string | null }
   | undefined
+/** The in-app login's control, as `useEngineLogin` hands it to the panel. */
+const loginStart = vi.fn()
+const loginCancel = vi.fn()
+const loginEngines: (string | null)[] = []
+const loginReset = vi.fn()
+let loginPending = false
+let loginPhase: 'preparing' | 'waiting' | null = null
+let loginFailure: { outcome: string; command: string | null; reason?: string } | null = null
 vi.mock('../../../hooks/useLocalTools', () => ({
+  useEngineLogin: (engine: string | null) => {
+    loginEngines.push(engine)
+    return {
+      start: loginStart,
+      cancel: loginCancel,
+      pending: loginPending,
+      phase: loginPending ? (loginPhase ?? 'preparing') : null,
+      failure: loginFailure,
+      reset: loginReset
+    }
+  },
   useLocalTools: () => ({
     data: !toolsLoaded
       ? undefined
@@ -207,6 +226,12 @@ beforeEach(() => {
   claudeInstalled = true
   toolsLoaded = true
   claudeAuth = undefined
+  loginStart.mockClear()
+  loginCancel.mockClear()
+  loginEngines.length = 0
+  loginPending = false
+  loginPhase = null
+  loginFailure = null
   save.mockClear()
   saveBare.mockClear()
   setSetting.mockClear()
@@ -1096,18 +1121,97 @@ describe('RuntimePanel', () => {
       expect(line.textContent).not.toMatch(/—\s*\(|\(\s*\)|—\s*,/)
     })
 
-    it('leads a logged-out machine with the remedy, because this line is measured to clip', () => {
-      // Problem-first, the sentence needed 432px against 414px available at the
-      // 800px minimum and lost `…in a ter|minal.` — the half rule 7 says has to
-      // survive. The assertion is on the order, not just the presence.
+    it('leads a logged-out machine with Log in, which runs the Claude login', () => {
+      // The remedy is the button, first in the line; the text after it is short
+      // because the slot is 414px at the 800px minimum. No terminal command:
+      // the `claude` that runs is usually Cinna's managed copy, not on PATH.
       claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
-      const line = screen.getByText(/not logged in/)
-      expect(line.textContent).toMatch(/^Run `claude` in a terminal/)
-      expect(line.textContent).toContain('that Claude Code install is not logged in')
+      const button = screen.getByRole('button', { name: 'Log in' })
+      const line = screen.getByText('Claude Code is not logged in.')
+      expect(button.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(screen.queryByText(/in a terminal/)).toBeNull()
+      fireEvent.click(button)
+      expect(loginStart).toHaveBeenCalledTimes(1)
+      expect(loginEngines).toContain('claude')
       // The Engine column still reports which binary runs — that and its
       // version are facts, and the reserved line carries what they mean.
       expect(screen.getByText(/Claude Code 2\.1\.276 managed/)).toBeTruthy()
+    })
+
+    it('waits on the browser with Cancel, and a press while pending starts nothing', () => {
+      claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
+      loginPending = true
+      loginPhase = 'waiting'
+      render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.getByText('Waiting for sign-in in your browser…')).toBeTruthy()
+      const button = screen.getByRole('button', { name: 'Log in' })
+      expect(button.getAttribute('aria-disabled')).toBe('true')
+      fireEvent.click(button)
+      expect(loginStart).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(loginCancel).toHaveBeenCalledTimes(1)
+    })
+
+    it('offers the terminal command, with a copy button, after a sign-in that did not finish', async () => {
+      claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
+      loginFailure = { outcome: 'timeout', command: "'/data/runtimes/claude-2.1.276/claude' auth login" }
+      const writeText = vi.fn(async () => ({ success: true }))
+      const host = window as unknown as { api: unknown }
+      const previous = host.api
+      host.api = { clipboard: { writeText } }
+      render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.getByText('Sign-in timed out. You can also run this in a terminal:')).toBeTruthy()
+      expect(screen.getByText("'/data/runtimes/claude-2.1.276/claude' auth login")).toBeTruthy()
+      // Log in stays where it was, so the line does not shift.
+      expect(screen.getByRole('button', { name: 'Log in' })).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+      expect(writeText).toHaveBeenCalledWith("'/data/runtimes/claude-2.1.276/claude' auth login")
+      expect(await screen.findByRole('button', { name: 'Copied' })).toBeTruthy()
+      host.api = previous
+    })
+
+    it('says it is getting the engine ready while the binary resolves', () => {
+      claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
+      loginPending = true
+      loginPhase = 'preparing'
+      render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.getByText('Getting Claude Code ready…')).toBeTruthy()
+    })
+
+    it('says why a login that could not prepare its binary failed, with no command row', () => {
+      claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
+      loginFailure = { outcome: 'failed', command: null, reason: 'Claude Code could not be installed.' }
+      render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.getByText("Sign-in didn't finish: Claude Code could not be installed.")).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Copy' })).toBeNull()
+    })
+
+    it('keeps the last command row while a retry is pending, so the card does not shrink and grow', () => {
+      claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
+      loginFailure = { outcome: 'failed', command: "'/opt/claude' auth login" }
+      const { rerender } = render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.getByText("'/opt/claude' auth login")).toBeTruthy()
+      // The retry: the hook reports no failure while its login is pending.
+      loginFailure = null
+      loginPending = true
+      loginPhase = 'waiting'
+      rerender(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.getByText('Waiting for sign-in in your browser…')).toBeTruthy()
+      expect(screen.getByText("'/opt/claude' auth login")).toBeTruthy()
+      // Cancelled: the user's own press, and the row goes with it.
+      loginPending = false
+      loginFailure = { outcome: 'cancelled', command: "'/opt/claude' auth login" }
+      rerender(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.queryByText("'/opt/claude' auth login")).toBeNull()
+    })
+
+    it('shows no command row after a cancel', () => {
+      claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
+      loginFailure = { outcome: 'cancelled', command: "'/opt/claude' auth login" }
+      render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.getByText('Claude Code is not logged in.')).toBeTruthy()
+      expect(screen.queryByText("'/opt/claude' auth login")).toBeNull()
     })
 
     it('marks the Engine dot as awaiting auth when the login is the thing missing', () => {
@@ -1444,7 +1548,10 @@ describe('Codex runtime', () => {
     codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.155.0/codex', source: 'managed', version: 'codex-cli 0.155.0' }
     codexAuth = { state: 'logged_out' }
     const view = render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
-    expect(screen.getByText(/Run `codex login`/)).toBeTruthy()
+    expect(screen.getByText('Codex is not logged in.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+    expect(loginStart).toHaveBeenCalledTimes(1)
+    expect(loginEngines).toContain('codex')
     codexBinary = { state: 'failed', error: 'The downloaded Codex did not match its expected checksum.' }
     view.rerender(<RuntimePanel agent={agent({ engine: 'codex' })} />)
     expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('engine:codex')

@@ -84,7 +84,7 @@ export async function loadDevelopmentContext(): Promise<DevelopmentContext> {
 
 /** The public build-page snapshot and runtime prerequisite probe are one guarded service operation. */
 export async function getDevelopmentSessionContext(
-  probe: (engine: DevelopmentContext['runtime']['launcher']) => Promise<Pick<DevelopmentContext, 'blocker' | 'installTool'>>,
+  probe: (engine: DevelopmentContext['runtime']['launcher']) => Promise<Pick<DevelopmentContext, 'blocker' | 'installTool' | 'loginTool'>>,
   fresh = false
 ): Promise<DevelopmentContext> {
   if (fresh) {

@@ -93,6 +93,8 @@ describe('development sessions', () => {
   it('owns the runtime prerequisite check and rejects a stale result', async () => {
     const probe = vi.fn().mockResolvedValue({ blocker: 'Install Claude Code.', installTool: 'claude' })
     await expect(getDevelopmentSessionContext(probe)).resolves.toMatchObject({ blocker: 'Install Claude Code.', installTool: 'claude' })
+    probe.mockResolvedValueOnce({ blocker: 'Codex is not logged in.', installTool: null, loginTool: 'codex' })
+    await expect(getDevelopmentSessionContext(probe)).resolves.toMatchObject({ blocker: 'Codex is not logged in.', loginTool: 'codex' })
     probe.mockImplementation(async () => { state.complexity = 'simple'; return { blocker: null } })
     await expect(getDevelopmentSessionContext(probe)).rejects.toThrow('profile or runtime changed')
   })

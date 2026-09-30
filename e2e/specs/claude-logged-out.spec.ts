@@ -37,10 +37,10 @@ import type { DetectedTool } from '../../src/shared/localTools'
  * guards is not "no line" — it is the *wrong* line, and specifically the
  * reassuring one. Hence two assertions that must hold together:
  *
- * 1. The status line reads the remedy-first sentence, in the danger tone. It
- *    leads with `Run \`claude\` in a terminal` because it is measured to clip
- *    at the 800px minimum, and the remedy is the half that must survive
- *    (ux_rules rule 7).
+ * 1. The status line reads "Claude Code is not logged in.", in the danger
+ *    tone, after its **Log in** button — the remedy is the in-app login,
+ *    placed first so it survives the clip at the 800px minimum (ux_rules
+ *    rule 7).
  * 2. The Engine column still reads `Claude Code <version>`. The install and its
  *    version are facts about the machine and stay true; only the reserved line
  *    carries what they *mean*. Asserting it here is what distinguishes "logged
@@ -71,8 +71,8 @@ const AGENT = 'Ledger Watcher'
 /** The Runs-on select's value for the engine — `CLAUDE_OPTION` in the panel. */
 const CLAUDE_VALUE = 'engine:claude'
 
-/** The rung under test: remedy first, danger tone. */
-const LOGGED_OUT = 'Run `claude` in a terminal: that Claude Code install is not logged in.'
+/** The rung under test, in the danger tone, after its **Log in** button. */
+const LOGGED_OUT = 'Claude Code is not logged in.'
 /**
  * The rung one step weaker — what a probe that could not answer produces. Must
  * not be on screen: it is the sentence that reads as "everything is fine".
@@ -189,7 +189,7 @@ test('a Claude agent on a logged-out install is told to log in, and still names 
   const panel = page.getByRole('region', { name: 'Runs with' })
   await expect(panel.getByLabel('Runs on')).toHaveValue(CLAUDE_VALUE)
 
-  await test.step('the reserved line leads with the remedy, in the alarm tone', async () => {
+  await test.step('the reserved line offers Log in, in the alarm tone', async () => {
     // **Waited for, never asserted on first paint.** The line is empty while
     // detection is in flight and empty again while the login probe is — two
     // deliberate silences rather than a sentence the panel would retract — so
@@ -205,6 +205,9 @@ test('a Claude agent on a logged-out install is told to log in, and still names 
     // one rung whose whole job is to be noticed, and a note-grey remedy is the
     // same defect as no remedy (ux_rules rule 9).
     await expect(line).toHaveCSS('color', await themeColour(page, 'danger'))
+    // The remedy is the in-app login, offered on the line itself. Never
+    // clicked: it would open a real sign-in in the browser.
+    await expect(panel.getByRole('button', { name: 'Log in', exact: true })).toBeVisible()
   })
 
   await test.step('the Engine column still names the Claude Code that runs', async () => {

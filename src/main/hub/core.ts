@@ -15,7 +15,7 @@ import { getSettingsScopeUserId } from '../auth/scope'
 import { taskRuntimeService } from '../services/taskRuntimeService'
 import { interruptedTurnService } from '../services/interruptedTurnService'
 import { registerRecoverer, remoteTurnRecoveryService } from '../services/remoteTurnRecoveryService'
-import { a2aTurnRecoverer, managedTurnRecoverer, acpProcessPool } from '../agents/drivers'
+import { a2aTurnRecoverer, managedTurnRecoverer, acpProcessPool, shutdownEngineLogins } from '../agents/drivers'
 import { localAgentService } from '../services/localAgents/localAgentService'
 import { a2aStreamingService } from '../services/a2aStreamingService'
 import { localScheduleScheduler } from '../services/localScheduleScheduler'
@@ -66,7 +66,9 @@ export async function shutdownHubCore(reason = 'Execution stopped when the app c
   taskSyncScheduler.stop()
   const processes = acpProcessPool.shutdown()
   const conductor = conductorBridge.shutdown()
+  // A login waiting on a browser sign-in holds a loopback port; it ends with the app.
+  const logins = shutdownEngineLogins()
   toolInstallService.shutdown()
   watcherService.stopAll()
-  await Promise.all([processes, conductor, mcpManager.disconnectAll()])
+  await Promise.all([processes, conductor, logins, mcpManager.disconnectAll()])
 }

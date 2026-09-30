@@ -470,7 +470,7 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
     // worse than not checking.
     const auth = await deps.claudeAuth(options).catch(() => null)
     if (auth?.state === 'logged_out') {
-      return { state: 'not_logged_in', reason: describeEngineSkip('claude_not_logged_in') }
+      return { state: 'not_logged_in', reason: describeEngineSkip('claude_not_logged_in'), login: 'claude' }
     }
     return { state: 'ok', reason: null }
   }

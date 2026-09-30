@@ -20,6 +20,8 @@ export interface DevelopmentContext {
   instructions: string
   setupTarget?: 'runtime' | 'local-dev'
   installTool?: 'claude' | 'codex' | null
+  /** The engine whose in-app Log in clears the blocker; set only for `not_logged_in`. */
+  loginTool?: 'claude' | 'codex' | null
   blocker: string | null
 }
 

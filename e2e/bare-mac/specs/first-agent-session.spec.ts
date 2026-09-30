@@ -45,7 +45,7 @@ test('first Claude agent message downloads Claude Code and asks for a login', as
   await box.press('Enter')
 
   vm.step('Claude Code download and login check')
-  await expect(page.getByText('that Claude Code install is not logged in').first()).toBeVisible({
+  await expect(page.getByText('Claude Code is not logged in').first()).toBeVisible({
     timeout: 10 * 60_000
   })
   const claudeVersion = await vm.sh(`ls ${q(`${vm.userData}/runtimes`)}`)

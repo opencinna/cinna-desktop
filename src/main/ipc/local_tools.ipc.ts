@@ -1,6 +1,6 @@
 import { userActivation } from '../auth/activation'
 import { toolDetectionService } from '../services/localAgents/toolDetectionService'
-import { claudeAuthProbe, codexAuthProbe } from '../agents/drivers'
+import { claudeAuthProbe, codexAuthProbe, engineLogins } from '../agents/drivers'
 import { openInService } from '../services/localAgents/openInService'
 import { toolInstallService } from '../services/localAgents/toolInstallService'
 import { defaultEngineService } from '../services/localAgents/defaultEngineService'
@@ -8,7 +8,7 @@ import { localAgentService } from '../services/localAgents/localAgentService'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
 import { getMainWindow } from '../index'
-import { DEFAULT_AGENT_ENGINE } from '../../shared/engine'
+import { DEFAULT_AGENT_ENGINE, isEngineLoginId } from '../../shared/engine'
 import { ipcHandle } from './_wrap'
 import {
   TOOL_INSTALL_CHANNEL,
@@ -17,7 +17,7 @@ import {
   type ToolInstallPlan,
   type ToolInstallProgress
 } from '../../shared/localTools'
-import type { ClaudeAuthStatus } from '../../shared/engine'
+import type { ClaudeAuthStatus, EngineLoginResult, EngineLoginRunning } from '../../shared/engine'
 
 const logger = createLogger('local-tools-ipc')
 
@@ -118,6 +118,37 @@ export function registerLocalToolsHandlers(): void {
   ipcHandle('local-tools:claude-auth', (): Promise<ClaudeAuthStatus> => {
     userActivation.requireActivated()
     return claudeAuthProbe.status()
+  })
+
+  /**
+   * Run the vendor's own login for one engine — `claude auth login` /
+   * `codex login` on the binary and environment the turns use — and resolve
+   * once it ends, with the outcome as data (a rejection would lose it on the
+   * way). A second call while one runs joins it.
+   *
+   * **The id is the only thing that crosses**, checked against the two
+   * literals; the command and its arguments are fixed on this side, so nothing
+   * the renderer sends is executed.
+   */
+  ipcHandle('local-tools:engine-login', (_event, engine: unknown): Promise<EngineLoginResult> => {
+    userActivation.requireActivated()
+    if (!isEngineLoginId(engine)) {
+      return Promise.resolve({ outcome: 'failed', command: null, reason: 'Unknown engine.' })
+    }
+    return engineLogins[engine].start()
+  })
+
+  /** Stop a running login. False when there was none (or the id is not an engine). */
+  ipcHandle('local-tools:engine-login-cancel', (_event, engine: unknown): boolean => {
+    userActivation.requireActivated()
+    if (!isEngineLoginId(engine)) return false
+    return engineLogins[engine].cancel()
+  })
+
+  /** Which logins are running and in which phase, so a surface mounted mid-login still shows it. */
+  ipcHandle('local-tools:engine-login-running', (): EngineLoginRunning => {
+    userActivation.requireActivated()
+    return { claude: engineLogins.claude.running(), codex: engineLogins.codex.running() }
   })
 
   /**
