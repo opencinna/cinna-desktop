@@ -40,6 +40,7 @@ import {
   installHtmlPreviewSession,
   registerHtmlPreviewScheme
 } from './host/desktop/htmlPreview'
+import { clearPastedFilesAtStart } from './host/desktop/clipboard'
 import { BACKGROUND_WINDOW, focusMainWindow, installWindowResolver } from './window/focus'
 import { AGENT_SHORTCUT_SLOTS, type AppShortcut } from '../shared/appShortcuts'
 import {
@@ -441,6 +442,7 @@ function startup(): void {
   registerAllIpcHandlers()
   installHtmlPreviewSession()
   clearOpenInBrowserCopiesAtStart()
+  clearPastedFilesAtStart()
   // Providers are activated through auth flow (auth:get-startup / auth:login)
 
   createWindow()

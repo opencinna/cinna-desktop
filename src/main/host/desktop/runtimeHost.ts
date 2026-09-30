@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { app, net, safeStorage, session, shell, BrowserWindow } from 'electron'
 import type { RuntimeHost } from '../runtimeHost'
+import { nativeImageThumbnail } from './imageThumbnails'
 import type { EventPublisher } from '../events'
 
 /** Electron objects never cross this interface into the runtime. Paths stay lazy:
@@ -28,6 +29,7 @@ export function createDesktopHost(): RuntimeHost {
       : createRequire(import.meta.url).resolve(specifier),
     nodeRuntime: () => ({ command: process.execPath, args: [], env: { ELECTRON_RUN_AS_NODE: '1' } }),
     onShutdown: (listener) => { app.on('will-quit', listener) },
+    images: { thumbnail: (bytes, maxSide) => nativeImageThumbnail(bytes, maxSide) },
     shell: {
       openExternal: (url) => shell.openExternal(url),
       openPath: (path) => shell.openPath(path),

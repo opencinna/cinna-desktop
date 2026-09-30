@@ -37,6 +37,15 @@ import { SessionMetaBadges } from './SessionMetaBadges'
 import { canConduct, routingOf } from '../../../../shared/chatRouting'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { AttachmentList } from './AttachmentBadge'
+import { composerCanPreview, useComposerAttachmentOpen } from '../../hooks/useAttachmentOpen'
+import { attachmentImageRef } from '../../utils/imageDataCache'
+import {
+  PASTE_NEEDS_DESTINATION,
+  PASTE_NOTHING_USABLE,
+  PASTE_NOT_ACCEPTED,
+  PASTE_WHILE_STREAMING,
+  pasteIntent
+} from '../../utils/composerPaste'
 import { NoteBadgeList } from './NoteBadge'
 import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
 import { AgentPickerModal } from '../agents/AgentPickerModal'
@@ -913,6 +922,37 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [canAcceptDrop, pickAttachmentsFromPaths, setAttachError, focusComposer, observeHint]
   )
 
+  // Paste: files and images attach as a drop does; text pastes natively. See
+  // `pasteIntent` for how an Excel copy and a Finder copy are told apart. A
+  // paste of files the composer cannot take says why, rather than nothing.
+  const openComposerAttachment = useComposerAttachmentOpen()
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const types = Array.from(e.clipboardData?.types ?? [])
+      if (!types.includes('Files')) return
+      // Files cannot be taken now: whatever text came with them pastes as
+      // usual; only a paste with no text to fall back on says why.
+      if (!canShowAttachButton || isStreaming) {
+        if (types.includes('text/plain')) return
+        e.preventDefault()
+        setAttachError(isStreaming ? PASTE_WHILE_STREAMING : chatId ? PASTE_NOT_ACCEPTED : PASTE_NEEDS_DESTINATION)
+        return
+      }
+      if (pasteIntent(types, () => window.api.files.clipboardHasFileRefs()) === 'text') return
+      e.preventDefault()
+      void window.api.files
+        .pasteFromClipboard()
+        .then(async (result) => {
+          if (!result.success) setAttachError(result.error)
+          else if (result.paths.length === 0) setAttachError(PASTE_NOTHING_USABLE)
+          else await pickAttachmentsFromPaths(result.paths)
+        })
+        .catch((err: unknown) => setAttachError(unwrapIpcError(err)))
+        .finally(focusComposer)
+    },
+    [canShowAttachButton, isStreaming, chatId, pickAttachmentsFromPaths, setAttachError, focusComposer]
+  )
+
   /** Agent whose example_prompts `#` should surface. Bound agent wins in an active chat, else the selected agent on the new-chat screen. */
   const promptSourceAgent = boundAgent ?? selectedAgent ?? null
   const examplePrompts = useMemo(
@@ -1662,6 +1702,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           value={input}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={held ? sendHold ?? undefined : chatId && isStreaming ? 'Send a follow-up · Esc Esc to stop' : 'Type a message...'}
           rows={1}
           role="combobox"
@@ -1684,7 +1725,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             px-4 pt-3 pb-3 resize-none text-sm leading-relaxed focus:outline-none"
         />
         {(pendingAttachments.length > 0 || pendingNotes.length > 0) && (
-          <div className="px-3 pb-2 pt-1 flex flex-wrap gap-1 justify-end">
+          <div className="px-3 pb-2 pt-1 flex flex-wrap items-end gap-1 justify-end">
             <AttachmentList
               attachments={pendingAttachments}
               variant="input"
@@ -1692,6 +1733,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 const att = pendingAttachments.find((a) => a.id === id)
                 if (att) handleRemoveAttachment(att)
               }}
+              onClick={openComposerAttachment}
+              canClick={composerCanPreview}
+              previewsOnClick
+              thumbnailFor={attachmentImageRef}
               align="right"
             />
             <NoteBadgeList
@@ -1715,11 +1760,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         )}
       </div>
 
-      {attachError && (
-        <div className="mt-1 text-[11px] text-[var(--color-danger)] text-right px-1">
-          {attachError}
-        </div>
-      )}
 
       {previewNote && (
         <NotePreviewModal
@@ -1819,6 +1859,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               />
             ) : null}
           </div>
+        </div>
+
+        {/* An attach error sits in the toolbar's empty middle, one line, so
+            showing it moves neither the composer nor Send (ux_rules §1). */}
+        <div
+          role={attachError ? 'alert' : undefined}
+          title={attachError ?? undefined}
+          className="flex-1 min-w-0 truncate text-right text-[11px] text-[var(--color-danger)]"
+        >
+          {attachError}
         </div>
 
         {/* `shrink-0`: the left cluster gives way (its chips shrink, then

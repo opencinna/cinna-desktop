@@ -1,6 +1,7 @@
 /**
  * In-app file preview for a small set of text-based attachment types
- * (`txt`, `csv`, `md`, `json`, `yaml`/`yml`, `py`, `xml` and its dialects). Clicking a previewable
+ * (`txt`, `csv`, `md`, `json`, `yaml`/`yml`, `py`, `xml` and its dialects)
+ * and the common image formats (`png`, `jpg`, `gif`, `webp`, `bmp`, `svg`). Clicking a previewable
  * attachment badge opens a modal showing the decoded content instead of
  * going straight to a save dialog; non-previewable types still download.
  *
@@ -9,7 +10,7 @@
  */
 
 /** How the preview modal should render a previewable file's text. */
-export type PreviewRenderKind = 'markdown' | 'json' | 'csv' | 'python' | 'xml' | 'text' | 'html'
+export type PreviewRenderKind = 'markdown' | 'json' | 'csv' | 'python' | 'xml' | 'text' | 'html' | 'image'
 
 /**
  * Max bytes the main process reads for a preview. Preview is for quick
@@ -17,6 +18,25 @@ export type PreviewRenderKind = 'markdown' | 'json' | 'csv' | 'python' | 'xml' |
  * modal shows a notice and the Download button gets the complete file).
  */
 export const MAX_PREVIEW_BYTES = 512 * 1024 // 512 KB
+
+/**
+ * Max bytes of an image main hands the renderer as a `data:` URL, for the
+ * preview and the inline thumbnails. An image is never cut: a larger one is
+ * refused with {@link IMAGE_TOO_LARGE_ERROR} and the badge downloads it.
+ */
+export const MAX_IMAGE_PREVIEW_BYTES = 20 * 1024 * 1024 // 20 MB
+
+/** The longest side of an inline thumbnail main returns, in px (2× the 64 px box, and some). */
+export const THUMBNAIL_MAX_SIDE = 160
+
+/**
+ * An image the host cannot scale (SVG, or a format it does not decode) is sent
+ * as it is for a thumbnail only up to this size; a larger one has none.
+ */
+export const THUMBNAIL_ORIGINAL_MAX_BYTES = 256 * 1024
+
+/** The refusal for an image over {@link MAX_IMAGE_PREVIEW_BYTES}. */
+export const IMAGE_TOO_LARGE_ERROR = 'Image too large to preview.'
 
 /** Extensions → how the modal renders them. */
 const PREVIEW_KIND_BY_EXT: Record<string, PreviewRenderKind> = {
@@ -44,7 +64,14 @@ const PREVIEW_KIND_BY_EXT: Record<string, PreviewRenderKind> = {
   xaml: 'xml',
   html: 'html',
   htm: 'html',
-  xhtml: 'html'
+  xhtml: 'html',
+  png: 'image',
+  jpg: 'image',
+  jpeg: 'image',
+  gif: 'image',
+  webp: 'image',
+  bmp: 'image',
+  svg: 'image'
 }
 
 /** MIME types → how the modal renders them (fallback when the extension
@@ -63,7 +90,13 @@ const PREVIEW_KIND_BY_MIME: Record<string, PreviewRenderKind> = {
   'application/xml': 'xml',
   'text/xml': 'xml',
   'text/html': 'html',
-  'application/xhtml+xml': 'html'
+  'application/xhtml+xml': 'html',
+  'image/png': 'image',
+  'image/jpeg': 'image',
+  'image/gif': 'image',
+  'image/webp': 'image',
+  'image/bmp': 'image',
+  'image/svg+xml': 'image'
 }
 
 /**
@@ -98,3 +131,25 @@ export function decodePreviewText(bytes: Uint8Array, truncated: boolean): string
 export function isPreviewable(filename: string, mimeType?: string): boolean {
   return previewKindFor(filename, mimeType) !== null
 }
+
+/**
+ * `files:read-image`: an attachment by id and store, or a file the user
+ * surfaced in this session (a composer file not yet sent) by its path.
+ */
+export type FilesReadImageInput =
+  | { fileId: string; source?: 'cinna' | 'local' }
+  | { path: string }
+
+export type FilesReadImageResult =
+  | { success: true; dataUrl: string; mimeType: string }
+  | { success: false; error: string; code?: string }
+
+/** `files:read-preview-path`: the text of a composer file not yet sent. */
+export type FilesReadPreviewPathResult =
+  | { success: true; text: string; truncated: boolean }
+  | { success: false; error: string; code?: string }
+
+/** `files:paste-from-clipboard`: the files a paste attaches; empty when none. */
+export type FilesPasteFromClipboardResult =
+  | { success: true; paths: string[] }
+  | { success: false; error: string; code?: string }

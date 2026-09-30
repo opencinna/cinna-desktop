@@ -197,6 +197,12 @@ export type FileErrorCode =
   | 'not_previewable'
   /** The file is on disk, but nothing opened it. */
   | 'launch_failed'
+  /** Over the cap of the read that was asked for (an image preview). */
+  | 'too_large'
+  /** A path the user never surfaced (dialog, drop or paste), or one that has expired. */
+  | 'not_allowed'
+  /** A folder, or a path that no longer resolves to a file. */
+  | 'not_a_file'
 
 export type AppSettingsErrorCode = 'invalid_key' | 'invalid_value'
 

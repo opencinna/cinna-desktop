@@ -13,6 +13,9 @@ import type { MessageAttachment } from '../../shared/attachments'
 
 const logger = createLogger('cinna-files')
 
+/** `readBytes` gives up after this; it feeds previews and thumbnails, which must not wait forever. */
+const READ_TIMEOUT_MS = 60_000
+
 /**
  * Common extensions the Cinna backend's MIME whitelist accepts. We send a
  * best-effort Content-Type so the backend's validator doesn't reject the
@@ -359,7 +362,9 @@ export const cinnaFileService = {
     try {
       response = await runtimeHost.http.fetch(url, {
         method: 'GET',
-        headers: { Authorization: authHeader }
+        headers: { Authorization: authHeader },
+        // A hung backend must not hold a preview or thumbnail read forever.
+        signal: AbortSignal.timeout(READ_TIMEOUT_MS)
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -385,7 +390,14 @@ export const cinnaFileService = {
       )
     }
 
-    const full = Buffer.from(await response.arrayBuffer())
+    let full: Buffer
+    try {
+      full = Buffer.from(await response.arrayBuffer())
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      logger.error(`read body error`, { url, error: msg, durationMs: Date.now() - started })
+      throw new CinnaFileError('download_failed', msg)
+    }
     const truncated = full.length > maxBytes
     logger.info('read', {
       fileId,

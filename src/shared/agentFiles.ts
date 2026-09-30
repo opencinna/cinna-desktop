@@ -231,12 +231,14 @@ export function agentFileExtension(name: string): string {
 
 /**
  * How the modal renders a file from an agent folder: every attachment kind,
- * plus code and config as text. Separate from {@link previewKindFor} so
+ * except images, plus code and config as text. Separate from {@link previewKindFor} so
  * attachment behaviour stays exactly as it was.
  */
 export function agentFilePreviewKindFor(filename: string): PreviewRenderKind | null {
   const kind = previewKindFor(filename)
-  if (kind) return kind
+  // An agent file is read as text (`agent-files:read-preview`); images are
+  // previewed only as attachments, so an agent's image is not previewable here.
+  if (kind && kind !== 'image') return kind
   return AGENT_TEXT_EXTENSIONS.has(agentFileExtension(filename)) ? 'text' : null
 }
 

@@ -1,13 +1,29 @@
 import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron'
 import { basename, isAbsolute, join } from 'path'
-import { fileService, assertFileScope, type FileScope } from '../services/fileService'
+import {
+  fileService,
+  assertFileScope,
+  pathPreview,
+  readImageAttachment,
+  readThumbnail,
+  type FileScope
+} from '../services/fileService'
+import { pastedRoot, resolvePastedFiles } from '../services/pastedFiles'
+import { runtimeHost } from '../host/runtimeHost'
+import { clipboardHasFileRefs, readClipboardFileSources, readClipboardImagePng } from '../host/desktop/clipboard'
 import { cinnaFileService } from '../services/cinnaFileService'
 import { pathGuard } from '../services/pathGuard'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { ipcErrorShape } from '../errors'
 import { ipcHandle } from './_wrap'
-import { MAX_PREVIEW_BYTES } from '../../shared/filePreview'
+import {
+  MAX_PREVIEW_BYTES,
+  type FilesPasteFromClipboardResult,
+  type FilesReadImageInput,
+  type FilesReadImageResult,
+  type FilesReadPreviewPathResult
+} from '../../shared/filePreview'
 import type { MessageAttachment, PendingAttachment } from '../../shared/attachments'
 import type { FilesOpenInBrowserInput, FilesOpenInBrowserResult } from '../../shared/htmlPreview'
 import { openAttachmentInBrowser } from '../host/desktop/htmlPreview'
@@ -51,6 +67,42 @@ export function registerFilesHandlers(): void {
   ipcMain.on('files:track-path', (_event, path: unknown) => {
     if (typeof path === 'string' && path.length > 0 && isAbsolute(path)) {
       pathGuard.record(path)
+    }
+  })
+
+  // Asked synchronously from inside the composer's paste event, and only when
+  // the clipboard carries both files and text: a Finder copy (file references,
+  // attach them) and an Excel or Word copy (a picture of the text, paste the
+  // text) look the same to the renderer. Answering in the event is what lets a
+  // text paste stay the native one. A boolean only; no activation, no paths.
+  ipcMain.on('files:clipboard-has-file-refs', (event) => {
+    try {
+      event.returnValue = clipboardHasFileRefs()
+    } catch {
+      event.returnValue = false
+    }
+  })
+
+  /**
+   * Paste into the composer: the files the clipboard references, or its image
+   * saved as a PNG under `<userData>/tmp/pasted/`. Every path returned is
+   * recorded in the path guard, like a picked or dropped one, so the
+   * renderer's resolve/ingest round trip accepts it.
+   */
+  ipcHandle('files:paste-from-clipboard', async (): Promise<FilesPasteFromClipboardResult> => {
+    userActivation.requireActivated()
+    try {
+      const paths = await resolvePastedFiles({
+        sources: readClipboardFileSources(),
+        readImagePng: () => readClipboardImagePng(),
+        dir: pastedRoot(runtimeHost.getPath('userData')),
+        now: new Date()
+      })
+      pathGuard.recordMany(paths)
+      return { success: true, paths }
+    } catch (err) {
+      const e = ipcErrorShape(err)
+      return { success: false, error: e.message, code: e.code }
     }
   })
 
@@ -350,6 +402,70 @@ export function registerFilesHandlers(): void {
           source: sourceRaw,
           maxBytes: MAX_PREVIEW_BYTES
         })
+        return { success: true, text, truncated }
+      } catch (err) {
+        const e = ipcErrorShape(err)
+        return { success: false, error: e.message, code: e.code }
+      }
+    }
+  )
+
+  /**
+   * An image as a `data:` URL, for the preview and the inline thumbnails. An
+   * attachment goes through the same gates as `files:read-preview`; a path
+   * (a composer file not sent yet) must be in the path guard. Over
+   * `MAX_IMAGE_PREVIEW_BYTES` is refused, never cut.
+   */
+  ipcHandle('files:read-image', async (_event, data: FilesReadImageInput): Promise<FilesReadImageResult> => {
+    userActivation.requireActivated()
+    try {
+      if (data && 'path' in data) {
+        return { success: true, ...(await pathPreview.readImage(data.path)) }
+      }
+      const userId = getProfileScopeUserId()
+      const sourceRaw = data?.source ?? 'cinna'
+      assertFileScope(sourceRaw)
+      if (typeof data?.fileId !== 'string' || data.fileId === '') {
+        return { success: false, error: 'Nothing to preview.', code: 'invalid_input' }
+      }
+      return {
+        success: true,
+        ...(await readImageAttachment({ userId, attachmentId: data.fileId, source: sourceRaw }))
+      }
+    } catch (err) {
+      const e = ipcErrorShape(err)
+      return { success: false, error: e.message, code: e.code }
+    }
+  })
+
+  /**
+   * `files:read-image` scaled down for an inline thumbnail — same inputs and
+   * gates, a small `data:` URL back. The preview itself still reads the image.
+   */
+  ipcHandle('files:read-thumbnail', async (_event, data: FilesReadImageInput): Promise<FilesReadImageResult> => {
+    userActivation.requireActivated()
+    try {
+      if (data && 'path' in data) return { success: true, ...(await readThumbnail({ path: data.path })) }
+      const userId = getProfileScopeUserId()
+      const sourceRaw = data?.source ?? 'cinna'
+      assertFileScope(sourceRaw)
+      if (typeof data?.fileId !== 'string' || data.fileId === '') {
+        return { success: false, error: 'Nothing to preview.', code: 'invalid_input' }
+      }
+      return { success: true, ...(await readThumbnail({ userId, attachmentId: data.fileId, source: sourceRaw })) }
+    } catch (err) {
+      const e = ipcErrorShape(err)
+      return { success: false, error: e.message, code: e.code }
+    }
+  })
+
+  /** `files:read-preview` for a composer file not sent yet, by its path-guarded path. */
+  ipcHandle(
+    'files:read-preview-path',
+    async (_event, data: { path: string }): Promise<FilesReadPreviewPathResult> => {
+      userActivation.requireActivated()
+      try {
+        const { text, truncated } = await pathPreview.readText(data?.path, MAX_PREVIEW_BYTES)
         return { success: true, text, truncated }
       } catch (err) {
         const e = ipcErrorShape(err)

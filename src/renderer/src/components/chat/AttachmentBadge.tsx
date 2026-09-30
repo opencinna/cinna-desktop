@@ -1,5 +1,7 @@
 import { Paperclip, X, Image, FileText, Archive, Loader2 } from 'lucide-react'
 import { previewKindFor } from '../../../../shared/filePreview'
+import { AttachmentThumbnail } from './AttachmentThumbnail'
+import type { ImageRef } from '../../utils/imageDataCache'
 
 /**
  * Visual subset of an attachment the badge needs to render. Carries no
@@ -45,7 +47,7 @@ function pickIcon(mime: string): React.JSX.Element {
   return <Paperclip size={size} className="shrink-0" />
 }
 
-function formatSize(bytes: number): string {
+export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
@@ -70,8 +72,8 @@ function truncate(name: string, max = 24): string {
  *    file it can show when `previewsOnClick` — named to match
  *  - neither → static read-only display
  *
- * `onRemove` and `onClick` are mutually exclusive at the call site — input
- * badges remove, message badges download.
+ * Both on the input variant (a composer file the preview can show): the name
+ * is one button and the [x] a sibling button beside it, never nested.
  */
 export function AttachmentBadge({
   attachment,
@@ -86,8 +88,8 @@ export function AttachmentBadge({
   const baseClasses =
     'inline-flex items-center gap-1 rounded-md border max-w-[18rem] ' +
     (isInput
-      ? 'pl-1.5 pr-1 py-0.5 text-[11px] bg-[var(--color-bg-elevated)] border-[var(--color-border)] text-[var(--color-text-secondary)]'
-      : 'pl-1.5 pr-1.5 py-0.5 text-[10px] bg-[var(--color-bg-elevated)] border-[var(--color-border)] text-[var(--color-text-muted)]') +
+      ? 'pl-1.5 pr-1 py-0.5 text-[11px] bg-[var(--color-bg-secondary)] border-[var(--color-border)] text-[var(--color-text-secondary)]'
+      : 'pl-1.5 pr-1.5 py-0.5 text-[10px] bg-[var(--color-bg-secondary)] border-[var(--color-border)] text-[var(--color-text-muted)]') +
     (isClickable
       ? ' cursor-pointer hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors'
       : '')
@@ -113,11 +115,7 @@ export function AttachmentBadge({
       {!isInput && hasSize && (
         <span className="opacity-70 ml-0.5">{formatSize(attachment.size)}</span>
       )}
-      {onRemove && (
-        // The remove button is also a real <button>; its onClick stops
-        // propagation so a click on the X doesn't bubble up to the parent
-        // download trigger (relevant if both ever overlap on the input
-        // variant — today they don't, but cheap to keep correct).
+      {onRemove && !isClickable && (
         <button
           type="button"
           onClick={(e) => {
@@ -127,12 +125,51 @@ export function AttachmentBadge({
           className="ml-0.5 p-0.5 rounded hover:bg-[var(--color-bg-hover)]
             text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
           aria-label={`Remove ${attachment.filename}`}
+          title={`Remove ${attachment.filename}`}
         >
           <X size={10} />
         </button>
       )}
     </>
   )
+
+  const removeButton = onRemove && (
+    <button
+      type="button"
+      onClick={onRemove}
+      className="ml-0.5 p-0.5 rounded hover:bg-[var(--color-bg-hover)]
+        text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+      aria-label={`Remove ${attachment.filename}`}
+      title={`Remove ${attachment.filename}`}
+    >
+      <X size={10} />
+    </button>
+  )
+
+  // A composer file the preview can show: the name opens it, the [x] beside
+  // it removes it — two sibling buttons inside one chip.
+  if (isClickable && removeButton) {
+    return (
+      <span
+        className={
+          'inline-flex items-center rounded-md border max-w-[18rem] pl-1.5 pr-1 py-0.5 text-[11px] ' +
+          'bg-[var(--color-bg-secondary)] border-[var(--color-border)] text-[var(--color-text-secondary)]'
+        }
+      >
+        <button
+          type="button"
+          onClick={onClick}
+          title={titleText}
+          aria-label={`${clickVerb} ${attachment.filename}`}
+          className="inline-flex items-center gap-1 min-w-0 rounded cursor-pointer
+            hover:text-[var(--color-text)] transition-colors"
+        >
+          {innerContent}
+        </button>
+        {removeButton}
+      </span>
+    )
+  }
 
   if (isClickable) {
     return (
@@ -170,6 +207,17 @@ interface AttachmentListProps<T extends AttachmentBadgeData> {
   align?: 'left' | 'right'
   /** See {@link AttachmentBadgeProps.previewsOnClick}. */
   previewsOnClick?: boolean
+  /**
+   * Whether a badge takes `onClick`; all do when omitted. The composer's
+   * badges are clickable only when the preview can show the file.
+   */
+  canClick?: (attachment: T) => boolean
+  /**
+   * Where an image's bytes come from. When given, an attachment the preview
+   * shows as an image renders as a thumbnail instead of a badge; thumbnails
+   * come first.
+   */
+  thumbnailFor?: (attachment: T) => ImageRef | null
 }
 
 /**
@@ -185,27 +233,51 @@ export function AttachmentList<T extends AttachmentBadgeData>({
   onClick,
   isLoading,
   align = 'left',
-  previewsOnClick
+  previewsOnClick,
+  canClick,
+  thumbnailFor
 }: AttachmentListProps<T>): React.JSX.Element | null {
   if (attachments.length === 0) return null
+  const refs = new Map<string, ImageRef>()
+  if (thumbnailFor) {
+    for (const a of attachments) {
+      const ref = previewKindFor(a.filename, a.mimeType) === 'image' ? thumbnailFor(a) : null
+      if (ref) refs.set(a.id, ref)
+    }
+  }
+  const badge = (a: T): React.JSX.Element => (
+    <AttachmentBadge
+      key={a.id}
+      attachment={a}
+      variant={variant}
+      onRemove={onRemove ? () => onRemove(a.id) : undefined}
+      onClick={onClick && (canClick?.(a) ?? true) ? () => onClick(a) : undefined}
+      isLoading={isLoading ? isLoading(a.id) : false}
+      previewsOnClick={previewsOnClick}
+    />
+  )
+  // Thumbnails first, then badges, in one wrap aligned on their bottom edge.
+  const ordered = [...attachments.filter((a) => refs.has(a.id)), ...attachments.filter((a) => !refs.has(a.id))]
   return (
     <div
       className={
-        'flex flex-wrap gap-1 ' +
+        'flex flex-wrap items-end gap-1 ' +
         (align === 'right' ? 'justify-end' : 'justify-start')
       }
     >
-      {attachments.map((a) => (
-        <AttachmentBadge
-          key={a.id}
-          attachment={a}
-          variant={variant}
-          onRemove={onRemove ? () => onRemove(a.id) : undefined}
-          onClick={onClick ? () => onClick(a) : undefined}
-          isLoading={isLoading ? isLoading(a.id) : false}
-          previewsOnClick={previewsOnClick}
-        />
-      ))}
+      {ordered.map((a) => {
+        const ref = refs.get(a.id)
+        if (!ref) return badge(a)
+        return (
+          <AttachmentThumbnail
+            key={a.id}
+            attachment={a}
+            imageRef={ref}
+            onClick={onClick ? () => onClick(a) : undefined}
+            onRemove={onRemove ? () => onRemove(a.id) : undefined}
+          />
+        )
+      })}
     </div>
   )
 }

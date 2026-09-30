@@ -15,11 +15,39 @@ describe('previewKindFor', () => {
     }
     expect(previewKindFor('feed', 'application/xml')).toBe('xml')
     expect(previewKindFor('feed', 'text/xml')).toBe('xml')
-    expect(previewKindFor('logo.svg', 'image/svg+xml')).toBeNull()
+    // An SVG is shown as the picture it draws, not as its XML.
+    expect(previewKindFor('logo.svg', 'image/svg+xml')).toBe('image')
   })
 
   it('lets the extension win over the MIME type', () => {
     expect(previewKindFor('notes.txt', 'text/x-python')).toBe('text')
+  })
+})
+
+describe('the image kind', () => {
+  it('previews png, jpg/jpeg, gif, webp, bmp and svg by extension', () => {
+    for (const name of ['shot.png', 'photo.JPG', 'photo.jpeg', 'anim.gif', 'pic.webp', 'old.bmp', 'logo.svg']) {
+      expect(previewKindFor(name)).toBe('image')
+    }
+  })
+
+  it('falls back to the image MIME types, and the extension still wins', () => {
+    for (const mime of ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml']) {
+      expect(previewKindFor('pasted', mime)).toBe('image')
+    }
+    expect(previewKindFor('notes.txt', 'image/png')).toBe('text')
+    expect(previewKindFor('shot.png', 'application/octet-stream')).toBe('image')
+  })
+
+  it('leaves HEIC and TIFF to the download', () => {
+    expect(previewKindFor('IMG_0001.HEIC', 'image/heic')).toBeNull()
+    expect(previewKindFor('scan.tiff', 'image/tiff')).toBeNull()
+    expect(previewKindFor('scan.tif')).toBeNull()
+  })
+
+  it('is not offered for an agent file, which is read as text', () => {
+    expect(agentFilePreviewKindFor('/agent/out/chart.png')).toBeNull()
+    expect(agentFilePreviewKindFor('/agent/out/logo.svg')).toBeNull()
   })
 })
 

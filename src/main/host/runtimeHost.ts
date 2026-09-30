@@ -19,6 +19,14 @@ export interface RuntimeHost {
   resolvePackageFile(specifier: string): string
   nodeRuntime(): { command: string; args: string[]; env: Record<string, string> }
   onShutdown(listener: () => void): void
+  /**
+   * Optional image operations. A host without them (the plain-Node hub) gets
+   * no resized thumbnails; callers fall back to the original bytes or refuse.
+   */
+  images?: {
+    /** `bytes` scaled to fit `maxSide`×`maxSide`, re-encoded; null when the host cannot decode them. */
+    thumbnail(bytes: Buffer, maxSide: number): { bytes: Buffer; mimeType: string } | null
+  }
   shell: {
     openExternal(url: string): Promise<void>
     openPath(path: string): Promise<string>

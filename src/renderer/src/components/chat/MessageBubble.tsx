@@ -55,6 +55,7 @@ import { presetForAgentId } from '../../utils/agentColors'
 import { AttachmentList, type AttachmentBadgeData } from './AttachmentBadge'
 import { useFileDownload } from '../../hooks/useFileDownload'
 import { useAttachmentOpen } from '../../hooks/useAttachmentOpen'
+import { attachmentImageRef } from '../../utils/imageDataCache'
 import { stripCinnaAttachTags } from '../../../../shared/cinnaAttach'
 
 export interface MessageMeta {
@@ -163,6 +164,7 @@ export function MessageBubble({
             onClick={(a) => openAttachment(a)}
             isLoading={isDownloading}
             previewsOnClick
+            thumbnailFor={attachmentImageRef}
           />
         )}
         {downloadErrorForThisBubble && (

@@ -2,6 +2,7 @@ import { X } from 'lucide-react'
 import { AttachmentList } from './AttachmentBadge'
 import { useFileDownload } from '../../hooks/useFileDownload'
 import { useAttachmentOpen } from '../../hooks/useAttachmentOpen'
+import { attachmentImageRef } from '../../utils/imageDataCache'
 import type { MessagePartFile } from '../../../../shared/messageParts'
 import { agentFileToAttachment } from '../../../../shared/attachments'
 
@@ -40,6 +41,7 @@ export function AgentAttachment({
         onClick={(a) => openAttachment(a)}
         isLoading={isDownloading}
         previewsOnClick
+        thumbnailFor={attachmentImageRef}
       />
       {errorForThisFile && (
         <div

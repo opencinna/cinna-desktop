@@ -10,6 +10,7 @@ import {
 } from '../../../shared/agentFiles'
 import { authorizeAgentFile as authorize } from '../utils/agentFileAccess'
 import { unwrapIpcError } from '../utils/ipcError'
+import { loadImage, type ImageRef } from '../utils/imageDataCache'
 import { createLogger } from './logger.store'
 
 const log = createLogger('file-preview')
@@ -20,10 +21,30 @@ export interface PreviewOrigin {
   y: number
 }
 
-/** What the modal shows: a message attachment, or a file in a folder agent's folder. */
+/**
+ * What the modal shows: a message attachment, a file in a folder agent's
+ * folder, or a composer file not sent yet (a new chat holds its files as
+ * paths). `composer` marks an attachment opened from the composer, whose
+ * preview offers no Download: the file is the user's own and not yet sent.
+ */
 export type PreviewTarget =
-  | { type: 'attachment'; attachment: MessageAttachment }
+  | { type: 'attachment'; attachment: MessageAttachment; composer?: boolean }
   | { type: 'agentFile'; agentId: string; ref: AgentFileRef }
+  | { type: 'path'; path: string; filename: string; mimeType: string }
+
+/** A composer file not sent yet, previewed by its path. */
+export interface PathPreviewFile {
+  path: string
+  filename: string
+  mimeType: string
+}
+
+/** A decoded image: its `data:` URL and natural size (0 when the size could not be read). */
+export interface PreviewImage {
+  url: string
+  width: number
+  height: number
+}
 
 /** A body that is a sentence rather than content. */
 export type PreviewNotice = 'credential' | 'unsupported'
@@ -65,6 +86,8 @@ interface FilePreviewState {
   /** How the modal should render the text; null when there is nothing to render. */
   kind: PreviewRenderKind | null
   text: string
+  /** The image, decoded, for `kind === 'image'`; null until then. */
+  image: PreviewImage | null
   /** True while the content fetch is in flight. */
   isLoading: boolean
   /** True when the file exceeded the byte cap and only a prefix is shown. */
@@ -87,7 +110,13 @@ interface FilePreviewState {
   pendingAction: PreviewAction | null
   /** Why the last Open / Open folder failed; shown inline, closes nothing. */
   actionError: PreviewActionError | null
-  openPreview: (attachment: MessageAttachment, kind: PreviewRenderKind) => Promise<void>
+  openPreview: (
+    attachment: MessageAttachment,
+    kind: PreviewRenderKind,
+    options?: { composer?: boolean }
+  ) => Promise<void>
+  /** A composer file not sent yet, read by its path. */
+  openPathPreview: (file: PathPreviewFile, kind: PreviewRenderKind) => Promise<void>
   openAgentFile: (agentId: string, ref: AgentFileRef, origin?: PreviewOrigin | null) => Promise<void>
   openAgentFileExternally: () => Promise<void>
   revealAgentFile: () => Promise<void>
@@ -127,6 +156,7 @@ const closedState = {
   attachment: null,
   kind: null,
   text: '',
+  image: null,
   isLoading: false,
   truncated: false,
   error: null,
@@ -182,7 +212,67 @@ export function actionErrorRepeatsBody(
   return actionError.reason === error
 }
 
+/**
+ * The image decoded before the modal counts as settled, so its entrance
+ * measures the card at its final size (the card never grows under the
+ * pointer). Where `decode` is missing, the size is left to the `<img>`.
+ */
+async function decodePreviewImage(url: string): Promise<PreviewImage> {
+  if (typeof Image === 'undefined') return { url, width: 0, height: 0 }
+  const img = new Image()
+  if (typeof img.decode !== 'function') return { url, width: 0, height: 0 }
+  img.src = url
+  await img.decode()
+  return { url, width: img.naturalWidth, height: img.naturalHeight }
+}
+
 export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
+  /**
+   * Fill the open preview under `requestId`: an image through the shared
+   * thumbnail cache and a decode, text through `readText`. A newer open or a
+   * close in the meantime drops the result.
+   */
+  const fill = async (
+    requestId: number,
+    kind: PreviewRenderKind,
+    image: ImageRef,
+    readText: () => Promise<{ success: true; text: string; truncated: boolean } | { success: false; error: string }>
+  ): Promise<void> => {
+    try {
+      if (kind === 'image') {
+        const load = await loadImage(image)
+        if (get().requestId !== requestId) return
+        if (!load.ok) {
+          set({ error: load.error, isLoading: false })
+          return
+        }
+        let decoded: PreviewImage
+        try {
+          decoded = await decodePreviewImage(load.dataUrl)
+        } catch {
+          if (get().requestId !== requestId) return
+          set({ error: 'The image could not be decoded.', isLoading: false })
+          return
+        }
+        if (get().requestId !== requestId) return
+        set({ image: decoded, isLoading: false })
+        return
+      }
+      const result = await readText()
+      // A newer open (or a close) happened while we were fetching — drop this
+      // result so we don't clobber the current modal.
+      if (get().requestId !== requestId) return
+      if (result.success) {
+        set({ text: result.text, truncated: result.truncated, isLoading: false })
+      } else {
+        set({ error: result.error, isLoading: false })
+      }
+    } catch (err) {
+      if (get().requestId !== requestId) return
+      set({ error: err instanceof Error ? err.message : String(err), isLoading: false })
+    }
+  }
+
   const runAction = async (action: PreviewAction): Promise<void> => {
     const target = get().target
     if (target?.type !== 'agentFile' || target.ref.kind !== 'file' || get().pendingAction) return
@@ -219,14 +309,15 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
     ...closedState,
     openSeq: 0,
     requestId: 0,
-    openPreview: async (attachment, kind) => {
+    openPreview: async (attachment, kind, options) => {
       // An agent-file open still waiting on its consent dialog must not
       // replace the attachment the user opened after it.
       agentOpenToken += 1
       const requestId = get().requestId + 1
+      const source = attachment.source ?? 'cinna'
       set({
         ...closedState,
-        target: { type: 'attachment', attachment },
+        target: { type: 'attachment', attachment, ...(options?.composer ? { composer: true } : {}) },
         attachment,
         kind,
         isLoading: true,
@@ -234,23 +325,26 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
         openSeq: get().openSeq + 1,
         requestId
       })
-      try {
-        const result = await window.api.files.readPreview({
-          fileId: attachment.id,
-          source: attachment.source ?? 'cinna'
-        })
-        // A newer open (or a close) happened while we were fetching — drop this
-        // result so we don't clobber the current modal.
-        if (get().requestId !== requestId) return
-        if (result.success) {
-          set({ text: result.text, truncated: result.truncated, isLoading: false })
-        } else {
-          set({ error: result.error, isLoading: false })
-        }
-      } catch (err) {
-        if (get().requestId !== requestId) return
-        set({ error: err instanceof Error ? err.message : String(err), isLoading: false })
-      }
+      await fill(requestId, kind, { type: 'attachment', fileId: attachment.id, source }, () =>
+        window.api.files.readPreview({ fileId: attachment.id, source })
+      )
+    },
+
+    openPathPreview: async (file, kind) => {
+      agentOpenToken += 1
+      const requestId = get().requestId + 1
+      set({
+        ...closedState,
+        target: { type: 'path', path: file.path, filename: file.filename, mimeType: file.mimeType },
+        kind,
+        isLoading: true,
+        origin: recentPointer(),
+        openSeq: get().openSeq + 1,
+        requestId
+      })
+      await fill(requestId, kind, { type: 'path', path: file.path }, () =>
+        window.api.files.readPreviewPath({ path: file.path })
+      )
     },
 
     openAgentFile: async (agentId, ref, origin = null) => {

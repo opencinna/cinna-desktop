@@ -60,6 +60,12 @@ import type {
   HtmlPreviewOpenResult
 } from '../shared/htmlPreview'
 import type {
+  FilesPasteFromClipboardResult,
+  FilesReadImageInput,
+  FilesReadImageResult,
+  FilesReadPreviewPathResult
+} from '../shared/filePreview'
+import type {
   ClaudeApproval,
   CodexAuthStatus,
   ClaudeAuthStatus,
@@ -1123,6 +1129,31 @@ const api = {
     /** An HTML attachment in the default web browser, from a temp copy. */
     openInBrowser: (data: FilesOpenInBrowserInput): Promise<FilesOpenInBrowserResult> =>
       ipcRenderer.invoke('files:open-in-browser', data),
+    /**
+     * An image as a `data:` URL for the preview and the inline thumbnails: an
+     * attachment by id, or a composer file not sent yet by its path (main reads
+     * only paths the user picked, dropped or pasted).
+     */
+    readImage: (data: FilesReadImageInput): Promise<FilesReadImageResult> =>
+      ipcRenderer.invoke('files:read-image', data),
+    /** `readImage` scaled down for an inline thumbnail (a small `data:` URL). */
+    readThumbnail: (data: FilesReadImageInput): Promise<FilesReadImageResult> =>
+      ipcRenderer.invoke('files:read-thumbnail', data),
+    /** `readPreview` for a composer file not sent yet, by its path. */
+    readPreviewPath: (data: { path: string }): Promise<FilesReadPreviewPathResult> =>
+      ipcRenderer.invoke('files:read-preview-path', data),
+    /**
+     * Paste into the composer: the files the clipboard references, or its
+     * image saved as a PNG. Paths come back ready for `resolvePaths` /
+     * `ingestPaths`; empty when the clipboard holds neither.
+     */
+    pasteFromClipboard: (): Promise<FilesPasteFromClipboardResult> =>
+      ipcRenderer.invoke('files:paste-from-clipboard'),
+    /**
+     * Whether the clipboard references files. Synchronous, so the composer can
+     * decide inside its paste event whether to let a text paste through.
+     */
+    clipboardHasFileRefs: (): boolean => ipcRenderer.sendSync('files:clipboard-has-file-refs') === true,
     /**
      * Save-as for a TaskAttachment (cinna task-scoped). Distinct from
      * `download` above because these are not FileUpload rows — their

@@ -7,6 +7,7 @@ import {
   Filter,
   Folder,
   Globe,
+  Image as ImageIcon,
   Loader2,
   TableOfContents,
   X
@@ -261,6 +262,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
     attachment,
     kind,
     text,
+    image,
     isLoading,
     truncated,
     error,
@@ -304,7 +306,9 @@ export function FilePreviewModal(): React.JSX.Element | null {
     ? null
     : target.type === 'attachment'
       ? `attachment:${target.attachment.id}`
-      : `agent-file:${target.agentId}:${target.ref.path}`
+      : target.type === 'path'
+        ? `path:${target.path}`
+        : `agent-file:${target.agentId}:${target.ref.path}`
   // CSV-only: toggles the per-column filter/sort controls. Reset whenever a
   // different file opens so the controls don't carry over between previews.
   const [filtersEnabled, setFiltersEnabled] = useState(false)
@@ -442,7 +446,13 @@ export function FilePreviewModal(): React.JSX.Element | null {
   if (!target) return null
   const agentFile = target.type === 'agentFile' ? target : null
   const attachmentTarget = target.type === 'attachment' ? target.attachment : null
-  const filename = agentFile ? agentFileName(agentFile.ref.path) : (attachmentTarget?.filename ?? '')
+  // A file still in the composer is the user's own and not sent yet: no Download.
+  const downloadable = attachmentTarget !== null && !(target.type === 'attachment' && target.composer)
+  const filename = agentFile
+    ? agentFileName(agentFile.ref.path)
+    : target.type === 'path'
+      ? target.filename
+      : (attachmentTarget?.filename ?? '')
   // A folder only reaches the modal when showing it failed: no file actions.
   const fileActions = agentFile?.ref.kind === 'file'
   // A file the body already says has gone: its actions could only fail, and
@@ -457,10 +467,13 @@ export function FilePreviewModal(): React.JSX.Element | null {
   const showActionError =
     actionError !== null &&
     (agentFile === null || !actionErrorRepeatsBody({ actionError, error, errorCode, isLoading }))
-  const html = kind === 'html'
+  // A composer file not sent yet has no preview frame to serve it: its HTML
+  // shows as source (see PreviewBody).
+  const html = kind === 'html' && target.type !== 'path'
+  const imageShown = kind === 'image' && image !== null && !isLoading && bodyError === null
   // The page fills a fixed-height body, so the card never resizes as the frame loads.
   const htmlRendered = html && htmlView === 'rendered' && !isLoading && bodyError === null && !notice
-  const TitleIcon = agentFile?.ref.kind === 'dir' ? Folder : FileText
+  const TitleIcon = agentFile?.ref.kind === 'dir' ? Folder : kind === 'image' ? ImageIcon : FileText
 
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
   const geometry = contentsGeometry(windowWidth, rem)
@@ -608,7 +621,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 {pendingAction === 'browser' ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />}
               </button>
             )}
-            {attachmentTarget && (
+            {attachmentTarget && downloadable && (
               <button
                 type="button"
                 onClick={() => void download(attachmentTarget)}
@@ -657,7 +670,11 @@ export function FilePreviewModal(): React.JSX.Element | null {
             ref={bodyRef}
             style={showContents ? { width: closedWidth - CARD_BORDER_X, flex: 'none' } : undefined}
             className={
-              (htmlRendered ? 'overflow-hidden' : 'px-5 py-4 overflow-auto') +
+              (htmlRendered
+                ? 'overflow-hidden'
+                : imageShown
+                  ? 'px-5 py-4 overflow-auto flex items-center justify-center'
+                  : 'px-5 py-4 overflow-auto') +
               ' flex-1 min-w-0 rounded-b-xl focus-visible:outline-2' +
               ' focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)]'
             }
@@ -677,7 +694,9 @@ export function FilePreviewModal(): React.JSX.Element | null {
               </div>
             ) : kind ? (
               <>
-                {kind === 'markdown' ? (
+                {kind === 'image' ? (
+                  image && <ImagePreview image={image} alt={filename} />
+                ) : kind === 'markdown' ? (
                   <MarkdownPreview key={targetKey} card={markdown.card} body={markdown.body} />
                 ) : kind === 'xml' ? (
                   <XmlPreview key={targetKey} text={text} parsed={xml} truncated={truncated} revealRef={xmlReveal} />
@@ -713,7 +732,9 @@ export function FilePreviewModal(): React.JSX.Element | null {
                   <div className="mt-3 text-[10px] italic text-[var(--color-text-muted)]">
                     {agentFile
                       ? 'Preview truncated — open the file to see the full content.'
-                      : 'Preview truncated — download the file to see the full content.'}
+                      : downloadable
+                        ? 'Preview truncated — download the file to see the full content.'
+                        : 'Preview truncated at 512 KB.'}
                   </div>
                 )}
               </>
@@ -733,6 +754,32 @@ export function FilePreviewModal(): React.JSX.Element | null {
       </div>
     </div>,
     document.body
+  )
+}
+
+/**
+ * The card's height above and below the body — the header and the body's
+ * padding — so an image fits the `max-h-[80vh]` card without a scrollbar.
+ */
+const IMAGE_CHROME_REM = 6
+
+/**
+ * An image, fitted inside the card and centred. It renders only once decoded
+ * (the store settles after `decode()`), and with its natural size as `width`
+ * and `height` so the box is final on the first paint.
+ */
+function ImagePreview({ image, alt }: { image: { url: string; width: number; height: number }; alt: string }): React.JSX.Element {
+  return (
+    <img
+      data-testid="image-preview"
+      src={image.url}
+      alt={alt}
+      width={image.width || undefined}
+      height={image.height || undefined}
+      draggable={false}
+      className="block max-w-full object-contain"
+      style={{ width: 'auto', height: 'auto', maxHeight: `calc(80vh - ${IMAGE_CHROME_REM}rem)` }}
+    />
   )
 }
 
@@ -833,6 +880,11 @@ function PreviewBody({
 
   if (kind === 'python') {
     return <CodePreview text={text} language="python" anchorLines={anchorLines} />
+  }
+
+  // Only a composer file not sent yet gets here as `html`: no frame serves it.
+  if (kind === 'html') {
+    return <CodePreview text={text} language="xml" />
   }
 
   return (

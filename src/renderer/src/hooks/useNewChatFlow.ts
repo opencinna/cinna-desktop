@@ -17,6 +17,7 @@ import { deriveTitleFromMessage } from '../../../shared/chatTitle'
 import { newChatRouter, routingOf, type ChatRouter, type DefaultMultiAgentRouting } from '../../../shared/chatRouting'
 import { pickDefaultModelId } from '../../../shared/modelDefaults'
 import { unwrapIpcError } from '../utils/ipcError'
+import { carryIngestedImages } from '../utils/imageDataCache'
 
 type ProviderData = Awaited<ReturnType<typeof window.api.providers.list>>[number]
 type ModelData = Awaited<ReturnType<typeof window.api.providers.listModels>>[number]
@@ -137,6 +138,9 @@ export function useNewChatFlow(): {
       if (result.files.length !== pending.length) {
         throw new Error('Some files are no longer available. Remove and reattach them before sending.')
       }
+      // The composer's thumbnails were loaded by path; the sent message shows
+      // the same images under the attachment ids, without a placeholder flash.
+      carryIngestedImages(pending, result.files)
       const ingestedByPath = new Map<string, MessageAttachment>()
       pending.forEach((p, i) => {
         const ingested = result.files[i]
