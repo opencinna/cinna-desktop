@@ -14,8 +14,8 @@
 
 ### Renderer — Layout
 
-- `src/renderer/src/components/layout/TopBar.tsx` — Persistent top strip; sidebar toggle + Agent Status + Inbox + new chat icons; `app-drag-strip` makes the area draggable, traffic-light gutter via `pl-[76px]`. Absolutely positioned (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) so it overlays the sidebar/main row rather than stealing height from it
-- `src/renderer/src/components/layout/Sidebar.tsx` — Floating sidebar; renders Chats/Jobs/Notes/Agents tab content or the settings menu; footer composes `UserMenu`, local-development/update status and `InterfaceMenu`
+- `src/renderer/src/components/layout/TopBar.tsx` — Persistent top strip; `SidebarButton` (toggle, or dock in hover docking, with the right-click Sidebar docking menu) + Agent Status + Inbox + new chat icons; `app-drag-strip` makes the area draggable, traffic-light gutter via `pl-[76px]`. Absolutely positioned (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) so it overlays the sidebar/main row rather than stealing height from it
+- `src/renderer/src/components/layout/Sidebar.tsx` — Floating sidebar; in hover docking adds `is-floating` and portals the edge strip (see [Sidebar docking](#sidebar-docking)); renders Chats/Jobs/Notes/Agents tab content or the settings menu; footer composes `UserMenu`, local-development/update status and `InterfaceMenu`
 - `src/renderer/src/components/layout/InterfaceMenu.tsx` — Sliders icon + portaled popover with Console / Verbose / Theme toggles
 - `src/renderer/src/components/layout/MainArea.tsx` — View router for chat, settings, Inbox, task/job/note and local/external agent pages; mounts `useLiveRunWatch`, `useReadChatResult` and `useReadJobResult` once above the individual workspaces. Only activeView=chat supplies a visible chat ID, and only activeView=job-detail a visible job ID, for foreground result acknowledgement; [status details](../../chat/session_status/session_status_tech.md#renderer-components).
 
@@ -27,6 +27,7 @@
 ### Renderer — Shared UI / Hooks
 
 - `src/renderer/src/components/ui/usePopover.ts` — Generic popover wiring: trigger ref, popover ref, fixed-position computation, outside-click handler with portal-aware exclusion, and a clamp back inside the window (horizontal for every placement, vertical for `right`); placements `above-left | above-right | below-left | below-right | right`
+- `src/renderer/src/hooks/useSidebarHoverDock.ts` — hover docking's pointer tracking and timers: `createHoverDockTimers` (React-free), `sidebarCloseBlocked`, `useSidebarHoverDock`, and the `PEEK_*` delays. See [Sidebar docking](#sidebar-docking)
 - `src/renderer/src/hooks/useStartNewChat.ts` — Stable callback: clears `activeChatId`, sets `activeView` to `chat`
 
 ### Renderer — Styles
@@ -40,6 +41,8 @@
   - `.app-sidebar-wrap` — `--sidebar-page-width: 240px` + `--sidebar-tab-rail: 28px` (`--sidebar-width` is their sum), and the width / transform / opacity transitions (collapse/expand)
   - `.app-sidebar-wrap > .app-sidebar` — absolute position with `top: calc(var(--topbar-h) + 4px)` so the visible card sits below the overlaid TopBar (the wrap itself stays full-height to keep the width-collapse animation pristine); `left: var(--sidebar-tab-rail)` leaves room for the tab rail; `bottom: 0`
   - `.app-sidebar-wrap.is-collapsed` — `width: 0` + `transform: translateX(calc(-1 * var(--sidebar-width)))` + `opacity: 0` + `pointer-events: none`. The slide and fade live on the **wrap**, not on the rail and the card separately: a per-element `translateX(-100%)` resolves against each element's own width (28 px vs 240 px), which tore the tabs off the page mid-animation
+  - `.app-sidebar-wrap.is-floating` — hover docking: `width: 0` always, `z-index: 20` (above the main area, below the TopBar's 30 and dialogs), and `will-change: auto`. **No `will-change` here**: an ancestor that promises opacity/transform becomes the card's backdrop root, so the card's blur sampled nothing of the chat below — the dark card went see-through over the composer. Its `::before` extends the hit area over the whole rail + card rectangle and 8 px left into the window gutter, below the TopBar, so the gaps between rail tabs count as on the sidebar. The card gets a drop shadow (stronger in dark)
+  - `.app-sidebar-hot-zone` — the edge strip: `position: fixed`, 8 px wide at `left: 0` (the Shell's padding), from `top: calc(var(--topbar-h) + 8px)` to the bottom, `z-index: 20`
   - `.app-drag-strip` — `-webkit-app-region: drag`, with `no-drag` exception for buttons/anchors
 
 ### Removed
@@ -52,7 +55,9 @@
 
 | State | Purpose |
 |-------|---------|
-| `sidebarOpen` | Drives `.is-collapsed` on the sidebar wrapper. Persisted as `cinna-sidebar-open`: read synchronously in the store initializer (only `0` collapses; missing or anything else is open) and written by `toggleSidebar` as `1`/`0`. Direct `setState` calls — tests only — do not write it |
+| `sidebarOpen` | Fixed docking's open state; hover docking neither reads nor writes it. Persisted as `cinna-sidebar-open`: read synchronously in the store initializer (only `0` collapses; missing or anything else is open) and written by `toggleSidebar` as `1`/`0`, and as `1` by `setSidebarDocking('fixed')`. Direct `setState` calls — tests only — do not write it |
+| `sidebarDocking` | `'fixed' \| 'hover'`, persisted as `cinna-sidebar-docking` (only `hover` means hover; anything else is fixed). `setSidebarDocking` writes the key and clears `sidebarPeek`; `'fixed'` also sets `sidebarOpen: true`, writing `cinna-sidebar-open` **before** the docking key so another window reacting to the docking event never reads the old closed state beside it. The `storage` listener (`syncAppearance`) applies a changed mode the same way, and a null key rereads it |
+| `sidebarPeek` | Hover docking only: floating on screen now. Not persisted; always starts `false`. Set by `useSidebarHoverDock` through `setSidebarPeek`, and by `revealSidebar` |
 | `activeView` | `ActiveView` — chat, settings, inbox, task, job-detail, job-edit, cinna-task-run, note-detail, local-agent or external-agent |
 | `sidebarTab` | Chats / Jobs / Notes / Agents, retained when opening a cross-tab view such as Inbox |
 | `activeLocalAgentId`, `activeExternalAgentId` | Mutually exclusive agent selections; each setter clears the other |
@@ -68,9 +73,23 @@
 | `logsOpen` | Toggled from `InterfaceMenu` and via ⌘\` |
 | `agentStatusOpen` | Toggled from `AgentStatusButton` |
 
+`selectSidebarVisible` is the one answer to "is the sidebar on screen": `sidebarOpen` in fixed, `sidebarPeek` in hover. `Sidebar` drives `.is-collapsed` and `AmbientGrid active` from it. `revealSidebar()` is how code shows the sidebar — opening it in fixed, peeking it in hover — and `TaskActionsMenu`'s Show in the Chats list uses it; code that calls `toggleSidebar` after checking `sidebarOpen` does nothing visible in hover docking.
+
 Most shell components select individual store keys to limit unrelated renders; `ChatWorkspace` also reads the whole UI store for its view and pending selection.
 
-**What survives a relaunch.** `sidebarOpen`, `themePreference`, `extraUIAnimation`, `verboseMode` and the Chats-list grouping fields read `localStorage` at store creation. Everything navigational — `activeView` (`chat`), `sidebarTab` (`chats`), `settingsTab`, the agent/job/task/note selections, and `activeChatId` in `src/renderer/src/stores/chat.store.ts` (`null`) — starts from its literal default, which is what puts every launch on the new-chat screen. Persisting any of them would change that; the comment on `SIDEBAR_KEY` says so at the point someone would add one.
+**What survives a relaunch.** `sidebarOpen`, `sidebarDocking`, `themePreference`, `extraUIAnimation`, `verboseMode` and the Chats-list grouping fields read `localStorage` at store creation. Everything navigational — `activeView` (`chat`), `sidebarTab` (`chats`), `settingsTab`, the agent/job/task/note selections, and `activeChatId` in `src/renderer/src/stores/chat.store.ts` (`null`) — starts from its literal default, which is what puts every launch on the new-chat screen. Persisting any of them would change that; the comment on `SIDEBAR_KEY` says so at the point someone would add one.
+
+### Sidebar docking
+
+Behaviour is in [App Shell](./app_shell.md#using-the-sidebar-on-hover); this is how it is held. Renderer only — no IPC, no `app_settings` key.
+
+**Timers** (`createHoverDockTimers`, kept free of React so fake timers drive it): `enterZone` arms a `PEEK_OPEN_DELAY_MS` (120) open that `leaveZone` cancels. A move off the sidebar schedules a close after `PEEK_CLOSE_DELAY_MS` (300); a move back on cancels it. Before closing it asks again whether the pointer is on the sidebar, then whether anything blocks; a blocked close polls every `PEEK_BLOCK_POLL_MS` (150) and, once unblocked, takes the full 300 ms again if the pointer is still away. `start` (the peek began) schedules a `PEEK_REVEAL_HOLD_MS` (2500) close only when the pointer is not on the sidebar — which is what a `revealSidebar` peek looks like. `closeNow` (window `blur`) tries at once, still subject to blockers. While peeking, `check` runs on the same 150 ms interval.
+
+**Where the pointer is** comes from a document-level `mousemove`, not from enter/leave on the sidebar: a peek that starts under a pointer elsewhere, or a portaled dialog that unmounts under a still pointer, produces no leave event, and the sidebar would stay up. A move counts as on the sidebar when the wrapper's React `onMouseMove` saw the same native event — React bubbles along the component tree, so a popover portaled from inside the sidebar, and the portaled edge strip, count as on it. Before a close, `elementFromPoint` at the last coordinates must still hit the sidebar or that portal's `body` child. A `mouseout` with no `relatedTarget` means the pointer left the window and starts the ordinary close.
+
+**Blockers** (`sidebarCloseBlocked`): any `[role="menu"]`, `listbox`, `dialog`, `alertdialog`, `[aria-modal="true"]` in the document, or a `.app-popover-surface` that is a direct child of `body` (the footer's Interface popover has no role); or a focused `input`/`textarea`/`select`/contenteditable **inside** the sidebar. Portaled menus live outside the sidebar's DOM, so the check is document-wide and cannot tell whose menu it is — any menu or dialog anywhere holds a peek (the known limit in the business doc). A toast (`role="status"`) is not a blocker.
+
+Listeners and timers exist only in hover docking; leaving it, or the peek ending, resets every timer.
 
 ## IPC Channels
 
@@ -85,7 +104,7 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 ### TopBar (`TopBar.tsx`)
 
 - Absolutely positioned overlay (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) — sits on top of the sidebar card and MainArea so the chat scroll viewport keeps full window height. Inset by 8 px on top/left/right to match the Shell's `p-2` window border
-- Reads `sidebarOpen` to pick icon (`PanelLeftClose` vs `PanelLeft`)
+- `SidebarButton`: in fixed docking it calls `toggleSidebar` and shows `PanelLeftClose`/`PanelLeft` by `sidebarOpen` (titles Collapse/Open sidebar); in hover docking it calls `setSidebarDocking('fixed')`, always shows `PanelLeft` and is titled **Dock sidebar**. `onContextMenu` (either mode) toggles a `usePopover('below-left')` menu portaled to `body`: `role="menu"` `aria-label="Sidebar docking"`, two `menuitemradio`s (Fixed, On Hover) with `aria-checked` and a check on the current one, styled with `OpenInMenu`'s `MENU_SURFACE`/`MENU_ITEM`. Picking closes it; so do Escape and an outside mousedown
 - Renders `AgentStatusButton` between sidebar toggle and Inbox, independently of sidebar state, active view, profile type and available statuses. This keeps the overlay reachable with the sidebar collapsed.
 - Renders `InboxButton` between Agent Status and `+`. Its 29×29 px control overlays an aria-hidden count (blank at zero, `99+` above 99, `!` on read error). On a partial read (`unreadable` non-empty) the count keeps its value in the warning tint, falling back to `!` at zero, and the accessible name appends `describeUnreadable`'s sentence (`Inbox — 2 waiting, one service could not be read`). The button exposes the full count/state in its title and accessible name, and sets `aria-pressed` for the Inbox view.
 - Calls `useStartNewChat()` for the `+` button
@@ -94,7 +113,8 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 
 ### Sidebar (`Sidebar.tsx`)
 
-- Outer wrapper element has `app-sidebar-wrap` + conditional `is-collapsed`; inner `app-sidebar` is the visible card
+- Outer wrapper element has `app-sidebar-wrap` + `is-floating` in hover docking + `is-collapsed` when `selectSidebarVisible` is false; inner `app-sidebar` is the visible card. The wrapper carries `useSidebarHoverDock`'s `onMouseMove`
+- In hover docking, while hidden, the edge strip (`data-testid="sidebar-hot-zone"`, aria-hidden) is portaled to `document.body`: the wrap's transform would make `position: fixed` resolve inside the wrap
 - `overflow: hidden` on the inner sidebar is required so its rounded corners clip child content; popovers escape this via `createPortal`
 - Two body modes:
   - `activeView === 'settings'` — Back button, "Settings" header, vertical menu items + Trash with a divider
@@ -157,7 +177,7 @@ Layout is unmeasurable in jsdom, so the horizontal behaviour is covered by an E2
 - The non-embedded new-chat heading renders `src/renderer/src/components/ui/CinnaLogoDraw.tsx`. Its shown state is component-local and resets whenever the new-chat branch unmounts; drawing, sweep timing and theme colors belong to [Appearance](../appearance/appearance_tech.md#new-chat-logo).
 
 - `Shell` mounts `src/renderer/src/hooks/useAmbientButtons.ts` once. `TopBar` owns its independent header-wave timer and passes the shared decorative class to all four controls.
-- `Sidebar` marks its card as `ambient-grid-surface` and mounts `src/renderer/src/components/ui/AmbientGrid.tsx` with explicit border glow and `active={sidebarOpen}`; collapse cancels decoration without unmounting the sidebar.
+- `Sidebar` marks its card as `ambient-grid-surface` and mounts `src/renderer/src/components/ui/AmbientGrid.tsx` with explicit border glow and `active={visible}` (`selectSidebarVisible`); collapse, or a peek ending, cancels decoration without unmounting the sidebar.
 - Every `ChatWorkspace` path reaches the shared decorated `ChatInput`; Local Development has its own active/ready-gated host. The neutral Settings button on folder/external agent pages opts into secondary glows; its accent Start chat state does not.
 - Preference storage, System/cross-window propagation, scheduler timing and reduced-motion/interaction cleanup belong to [Appearance technical details](../appearance/appearance_tech.md). Draft lifetime belongs to [Conversation UI](../../chat/conversation_ui/conversation_ui_tech.md#draft-ownership); decoration and the curtain do not consume or persist drafts.
 
@@ -193,13 +213,16 @@ The tracker keeps its own copy of the normal frame instead of calling `getNormal
 ### Tests
 
 - `src/main/window/windowState.test.ts` — the resolver over malformed input, off-screen, partly-visible and multi-monitor layouts; load and save over a real temp `userData` with a fake window whose `getNormalBounds()` reproduces the macOS behaviour above, so a tracker that trusted it fails, and a replay of the maximize animation's growing frames, so a tracker that recorded per event fails too.
-- `src/renderer/src/stores/ui.appearance.test.ts` — `sidebar open state`: default open, written on every toggle, a fresh store reads it back and still starts on `chat` / `chats`.
+- `src/renderer/src/stores/ui.appearance.test.ts` — `sidebar open state`: default open, written on every toggle, a fresh store reads it back and still starts on `chat` / `chats`. `sidebar docking`: default fixed, hover leaves the fixed open state alone and shows only on a peek, `revealSidebar` in both modes, cross-window sync including docking open with the open key written first, and a fresh store starts in the stored mode never peeking.
+- `src/renderer/src/hooks/useSidebarHoverDock.test.tsx` — dwell and early leave, fixed mode inert, close delay and return, reveal hold, a dialog closing under a still pointer, window blur, leaving the window, each blocker (menu, role-less popover but not a toast, dialog, focused field inside but not outside) and a pointer returning during a held close.
+- `src/renderer/src/components/layout/Sidebar.docking.test.tsx` and `TopBar.sidebarDocking.test.tsx` — the floating wrapper and edge strip end to end; the button's toggle/dock and the right-click menu. Layout, the shadow and the backdrop blur are not measurable in jsdom and are not asserted.
 - `e2e/specs/window-state.spec.ts` — see [End-to-End Tests](../../development/e2e/e2e.md). A plain relaunch cannot prove the save on `close` (Playwright's teardown outlasts the debounce), so the spec also resizes and closes in one tick; the reasoning is in [Writing E2E Tests](../../development/e2e/e2e_llm.md).
 
 ## Configuration
 
 - **Window size** — default 1200 × 800 and minimum 800 × 600, exported from `src/main/window/windowState.ts`; the saved state lives in `<userData>/window-state.json`. No setting or environment variable changes either.
 - **Sidebar open state** — `localStorage` key `cinna-sidebar-open`, `1`/`0`.
+- **Sidebar docking** — `localStorage` key `cinna-sidebar-docking`, `fixed`/`hover`, default fixed. Peek delays are the `PEEK_*` constants in `useSidebarHoverDock.ts`; the edge strip's width is in `main.css`. No environment variable.
 - **macOS traffic-light position** — `src/main/index.ts` `BrowserWindow` config: `titleBarStyle: 'hiddenInset'`, `trafficLightPosition: { x: 15, y: 10 }`. The renderer's `pl-[76px]` gutter in `TopBar.tsx` mirrors this offset (~58 px cluster width + small margin). Keep them in sync.
 - **Agent sidebar sections** — `showAgentSidebarSections: boolean`, default `true`, in `src/shared/appSettings.ts` and `src/main/db/appSettings.ts`; persisted via installation-wide `app_settings`. Features settings surfaces read/save failures, including the restart guidance for an unknown key.
 - **Base font size** — `html { font-size: 17px }` in `main.css`. Scales every rem-based size.
@@ -209,7 +232,7 @@ The tracker keeps its own copy of the normal frame instead of calling `getNormal
 
 ## Security
 
-No new surface. Console/Verbose/Theme toggles and the sidebar toggle only mutate UI state (`localStorage` + the UI store). Profile actions reuse the existing user-account IPC channels. `window-state.json` holds only screen coordinates and is never exposed to the renderer; a hand-edited or corrupt file can at worst open the window at the defaults, because every value is type-checked and fitted to the attached displays before use.
+No new surface. Console/Verbose/Theme toggles and the sidebar toggle and docking only mutate UI state (`localStorage` + the UI store). Profile actions reuse the existing user-account IPC channels. `window-state.json` holds only screen coordinates and is never exposed to the renderer; a hand-edited or corrupt file can at worst open the window at the defaults, because every value is type-checked and fitted to the attached displays before use.
 
 ## Related
 

@@ -8,6 +8,7 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 
 - **Top Bar** — A persistent ~36 px strip across the window top. Holds the macOS traffic-light gutter plus the **Collapse/Expand Sidebar**, **Agent Status**, **Inbox** and **New Chat** icon buttons, in that order. Its position and contents never change with sidebar state.
 - **Floating Sidebar** — A rounded, slightly inset panel on the left. Always slot-reserves its position; expanding/collapsing only animates its visibility (slide + fade), not the surrounding layout.
+- **Sidebar Docking** — How the sidebar sits beside the chat. **Fixed** (the default) keeps it in the layout, opened and closed by the top-bar button. **On Hover** hides it and floats it over the chat while the pointer is at the window's left edge or on the sidebar — a **peek**. Chosen in Settings → Features → Interface or from a right-click on the top-bar sidebar button.
 - **Sidebar Footer** — Bottom row of the sidebar with the profile menu on the left and local-development status, update status and Interface controls on the right.
 - **Profile Menu** — Avatar-only trigger that opens an upward dropdown listing local profiles, the Settings entry, "Add Account", and "Sign Out".
 - **Interface Menu** — Popover above the gear-toggle button containing three preference toggles: **Console** (app logs overlay), **Verbose**, and **Theme**.
@@ -22,6 +23,19 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 2. Sidebar slides left and fades out (or slides in and fades in). Top-bar buttons stay put.
 3. Main area smoothly expands or contracts as the sidebar's reserved width changes.
 4. The choice is remembered: the next launch opens with the sidebar the way it was left.
+
+This is Fixed docking. In On Hover the same button does something else — see below.
+
+### Using the sidebar On Hover
+
+1. User picks **On Hover** in Settings → Features → Interface → **Sidebar docking**, or right-clicks the top-bar sidebar button and picks it from the **Sidebar docking** menu (the current mode carries a check; Escape or an outside click closes the menu).
+2. The sidebar slides away as if collapsed, and the chat takes the full width.
+3. User rests the pointer on the window's left edge, below the top bar, for a moment; the sidebar slides in over the chat with a shadow. The chat underneath does not move.
+4. User works in the sidebar — opens a chat, renames one, opens its right-click menu. It stays while the pointer is on it and while any menu, popover or dialog is open or a field inside it has focus.
+5. User moves the pointer away; a moment later the sidebar slides out again. Moving back onto it before then keeps it.
+6. User clicks the top-bar sidebar button (titled **Dock sidebar** in this mode): docking returns to Fixed with the sidebar open.
+
+A reveal made by the app — **Show in the Chats list** on a task page — peeks the sidebar on Chats in On Hover instead of opening it. If the pointer does not go onto it, it stays about two and a half seconds so the user sees the revealed row, then hides.
 
 ### Reopening the App
 
@@ -72,8 +86,15 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 - **Agent grouping is optional.** Settings → Features → Interface → **Show sections in Agents sidebar** is installation-wide and on by default. Turning it off removes headings and section spacing without changing order: default Local folder root, active Cinna server, other folder roots, direct A2A, ACP connections, Managed agents. Hidden Cinna agents remain in Settings → Profile → Agents.
 - **Appearance decoration follows one preference.** Default-on Extra UI animation adds a quick stationary-text curtain between main chat layouts, the new-chat logo's draw and sweep, sidebar grid/border bursts, a left-to-right header background wave and occasional secondary-button glows. Composer interaction quiets its own artwork, reduced motion suppresses all extra effects, and collapsing the sidebar disables its decoration. See [Appearance](../appearance/appearance.md) for scope and lifecycle.
 - **Top bar is always present.** Buttons do not shift when the sidebar toggles — they share a row with the macOS traffic lights via a fixed left gutter.
-- **Sidebar reserves its slot.** Collapse animates the inner panel away (translate + fade) and shrinks the wrapper width, but it does not unmount; the main area reflows in step.
+- **Sidebar reserves its slot — in Fixed docking.** Collapse animates the inner panel away (translate + fade) and shrinks the wrapper width, but it does not unmount; the main area reflows in step.
 - **Sidebar always renders.** Even when collapsed the wrapper exists in the flex layout (width 0); the inner panel uses `pointer-events: none` when invisible.
+- **On Hover never reflows the chat.** The sidebar keeps no width in that mode and floats above the main area (below the top bar and every dialog), because a chat that narrows and widens each time the pointer brushes the edge is unreadable. Switching into On Hover from an open fixed sidebar is the ordinary collapse, width included, played once.
+- **A peek opens on a rest, not a pass.** The pointer has to stay on the 8 px edge strip for about 120 ms; leaving it sooner opens nothing, so sweeping the pointer to the window's edge on the way to something else does not throw the sidebar over the chat. The strip starts below the top bar, so the sidebar button and the traffic lights never trigger it.
+- **A peek closes about 300 ms after the pointer leaves**, and returning within that time cancels the close. The gaps between the tab rail's tabs and the 8 px edge strip count as on the sidebar, so crossing them does not start a close.
+- **What holds a peek open.** Any open menu, listbox, popover or dialog, and a focused text field inside the sidebar — a rename or search must not vanish under the user's typing. When the hold ends, the sidebar closes if the pointer is away. **Known limit:** the check cannot tell a menu opened from the sidebar from one opened anywhere else, so a menu or dialog opened elsewhere in the window while a peek is up holds it open too, until that menu closes.
+- **Leaving the window ends a peek.** The window losing focus closes it at once (the holds above still apply), and the pointer leaving the window starts the ordinary close — a sidebar left floating over another app's window would sit there until the user came back.
+- **A code reveal waits for the user.** A peek the app starts with the pointer elsewhere holds about 2.5 s before closing; once the pointer goes onto it, it behaves like any peek.
+- **The top-bar button docks in On Hover.** A click there switches to Fixed with the sidebar open — the user asked for the sidebar to stay — and right-click opens the **Sidebar docking** menu in either mode. The peek itself has no button.
 - **Traffic-light gutter is hard-coded.** The renderer pads the top bar by 76 px to clear the macOS controls (which are positioned by Electron at x=15, y=10). Changing one without the other breaks alignment — see `src/main/index.ts` `trafficLightPosition`.
 - **Settings entry-point.** Settings is reachable from the profile dropdown only — there is no longer a dedicated Settings button in the sidebar footer.
 - **Console toggle is always available.** The Interface popover always shows the Console (App Logs) toggle, regardless of whether the logger has been enabled in Development settings. Opening it surfaces logs from that point forward.
@@ -89,6 +110,7 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 - **Fullscreen is deliberately not restored.** Launching straight into a macOS fullscreen Space is disorienting. A window quit in fullscreen reopens at its normal frame, maximized only if it was maximized before it went fullscreen.
 - **Saved as it settles, and again on close.** A drag or resize is written once it has been still for half a second, so a crash keeps the last settled size; closing the window writes immediately, so a resize made just before closing is not lost. The size a maximized window returns to is only taken from a settled window, since the maximize animation passes through near-maximized sizes that must not be mistaken for it. So a resize followed by a maximize within that half second is forgotten, and the window un-maximizes to the size it had before.
 - **The sidebar's open state is remembered for the machine, not the profile.** Stored in renderer `localStorage` beside the theme, so every local profile shares it and nothing syncs it. It is read when the UI store is created, so the first paint already has the sidebar in its remembered state instead of rendering open and then collapsing. Only the toggle writes it; no stored value means open.
+- **The docking mode is remembered the same way, and shared between windows.** Stored beside the open state; a change made in one app window is applied in every other. A window that sees another switch to Fixed docks open too. A peek is never remembered — every launch in On Hover starts hidden. The open state belongs to Fixed only: switching to On Hover leaves it as it was, and switching back to Fixed always opens.
 - **Nothing else about the layout is remembered.** Active view, sidebar tab, settings tab, open chat and agent page all start fresh, so every launch lands on the new-chat screen. A remembered chat, task or agent page can have been deleted, hidden or belong to a different profile by the next launch, and the new-chat screen is valid in every one of those cases.
 - **Window state belongs to the main window only.** The menu-bar tray popover is positioned from its icon and is neither saved nor restored.
 
@@ -98,12 +120,13 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 App
 └── Shell
     ├── TopBar (always visible, draggable, contains traffic-light gutter + icons)
-    │     ├── Collapse/Expand button → ui.store.toggleSidebar()
+    │     ├── Sidebar button → Fixed: ui.store.toggleSidebar(); On Hover: setSidebarDocking('fixed')
+    │     │                    right-click → Sidebar docking menu → setSidebarDocking()
     │     ├── Agent Status button   → ui.store.setAgentStatusOpen()
     │     ├── Inbox button          → ui.store.setActiveView('inbox')
     │     └── New Chat button       → useStartNewChat()
     └── flex row
-        ├── Sidebar (animated wrapper)
+        ├── Sidebar (animated wrapper; On Hover: floating, plus the left-edge strip → peek)
         │     ├── Settings menu OR Chats / Jobs / Notes / Agents tab content
         │     └── Footer
         │           ├── UserMenu compact (portaled dropdown)
@@ -121,19 +144,20 @@ Launch / macOS Dock reopen
   resize / move / maximize / unmaximize -> save once settled;  close -> save now
 
 Renderer boot
-  -> UI store reads the sidebar's stored open state -> sidebarOpen
+  -> UI store reads the sidebar's stored open state and docking -> sidebarOpen, sidebarDocking (never peeking)
   -> activeView = chat, no active chat -> new-chat screen
 ```
 
 ## Integration Points
 
-- **UI Store** — Owns `sidebarOpen` (the only one of these kept across launches), `activeView`, `settingsTab`, `theme`, `verboseMode`, `logsOpen`, `agentStatusOpen`. See `src/renderer/src/stores/ui.store.ts`.
+- **UI Store** — Owns `sidebarOpen` and `sidebarDocking` (the only ones of these kept across launches), `sidebarPeek`, `activeView`, `settingsTab`, `theme`, `verboseMode`, `logsOpen`, `agentStatusOpen`. See `src/renderer/src/stores/ui.store.ts`.
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — Window state and the sidebar's open state are machine-wide, like the theme.
 - [Boot Resilience](../../core/boot_resilience/boot_resilience.md) — Window state is read inside `createWindow()`, within the startup boundary where a throw is fatal; it falls back to the defaults instead of throwing, so a bad state file can never become a ghost app.
 - [End-to-End Tests](../../development/e2e/e2e.md) — `window-state.spec.ts` covers size and sidebar state across a quit and across a window close.
 - [Inbox](../../jobs/tasks/inbox.md) — Global waiting asks, opened from the top bar.
 - [Appearance](../appearance/appearance.md) — Theme preference/resolution, shared storage and decorative motion across shell and composers.
-- [Settings](../settings/settings.md) — The settings page rendered in the main area; entered via the profile dropdown.
+- [Settings](../settings/settings.md) — The settings page rendered in the main area; entered via the profile dropdown. Features → Interface holds the Sidebar docking choice.
+- [Tasks](../../jobs/tasks/tasks.md) — **Show in the Chats list** reveals the sidebar: opens it in Fixed, peeks it in On Hover.
 - [Verbose Mode](../verbose_mode/verbose_mode.md) — Toggled from the Interface popover.
 - [Keyboard Shortcuts](../keyboard_shortcuts/keyboard_shortcuts.md) — ⌘\` opens the logs overlay regardless of the Console toggle.
 - [User Accounts](../../auth/user_accounts/user_accounts.md) — Profile dropdown lists local accounts and triggers account switching / sign-out.
