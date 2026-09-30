@@ -180,14 +180,16 @@ export function useSidebarHoverDock(sidebarRef: RefObject<HTMLElement | null>): 
     const pointerInside = (): boolean => {
       const state = pointer.current
       const sidebar = sidebarRef.current
-      if (!state.inside || !sidebar) return false
+      if (!sidebar) return false
       const target = state.target
       const doc = sidebar.ownerDocument
       if (state.x !== null && state.y !== null && typeof doc.elementFromPoint === 'function') {
         const hit = doc.elementFromPoint(state.x, state.y)
         if (!hit) return false
+        // Asked before `inside`: a reveal can slide the sidebar in under a
+        // pointer that has not moved since it was over the chat.
         if (sidebar.contains(hit)) return true
-        if (!target || !target.isConnected || sidebar.contains(target)) return false
+        if (!state.inside || !target || !target.isConnected || sidebar.contains(target)) return false
         return bodyChild(target)?.contains(hit) ?? false
       }
       return !!target && target.isConnected

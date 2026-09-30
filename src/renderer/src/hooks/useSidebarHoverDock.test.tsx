@@ -145,6 +145,24 @@ describe('useSidebarHoverDock', () => {
     expect(peek()).toBe(false)
   })
 
+  it('keeps a reveal that slid in under a still pointer', () => {
+    render(<Harness />)
+    move('main')
+    // The pointer has not moved, but the sidebar now lies under it.
+    const sidebar = screen.getByTestId('sidebar')
+    const doc = document as unknown as { elementFromPoint?: (x: number, y: number) => Element | null }
+    const original = doc.elementFromPoint
+    doc.elementFromPoint = () => sidebar
+    try {
+      act(() => useUIStore.getState().revealSidebar())
+      advance(PEEK_REVEAL_HOLD_MS * 2)
+      expect(peek()).toBe(true)
+    } finally {
+      if (original) doc.elementFromPoint = original
+      else delete doc.elementFromPoint
+    }
+  })
+
   it('keeps a reveal the pointer goes onto, and hides it a delay after it leaves', () => {
     render(<Harness />)
     move('main')
