@@ -14,7 +14,7 @@ This is the "develop your agent in your own assistant" half of Local Agents: the
 - **Tool Kind** — How a tool is offered: `cli-assistant` (launched in a terminal at the folder), `editor` (opens the folder as a project), or `runtime` (not launchable — its presence merely gates features, e.g. `uv`, `git`, `make`, `python3`)
 - **Tool Source** — Where the executable was found: `path` (on the login-shell `PATH`) or `app-bundle` (a macOS `.app`, used when the CLI shim was never installed)
 - **Open-In Action** — What the renderer asks for: `terminal-command`, `editor`, `reveal`, or `terminal`. For a tool the action follows its kind — `editor` for an editor, `terminal-command` for an assistant — and nothing else is ever sent for a tool
-- **Default Tool** — The one `cli-assistant` or `editor` the agent page's **Open in** button launches in a single click, remembered in the `localAgentsDefaultTool` setting. Rewritten by the last pick from the Open-in menu or the New-agent flow's "Build it with…" step; set or cleared explicitly in Settings → Agents. Resolved against the detected list on every read, so a tool that was uninstalled after being chosen degrades to "ask"
+- **Default Tool** — The one `cli-assistant` or `editor` the agent page's **Open in** button launches in a single click, remembered in the `localAgentsDefaultTool` setting. Rewritten by the last pick from the Open-in menu; set or cleared explicitly in Settings → Agents. It drives that button and nothing else — creating an agent never launches it. Resolved against the detected list on every read, so a tool that was uninstalled after being chosen degrades to "ask"
 - **Agents Root** — A registered folder that local agent folders live under. Every open-in target must resolve inside one — see [Path guard](#path-guard)
 - **Init Prompt** — The paste-anywhere briefing for one agent folder: its absolute path, the agent's name, and the one file to read first. Built in the main process, copied to the clipboard by the menu; nothing is launched and nothing is written
 - **Entry Document** — The file the init prompt points an assistant at: the first of `AGENTS.md`, `CLAUDE.md`, `README.md` the folder actually has. With none of them the prompt names `cinna-agent.json` and `Local/<slug>/docs/WORKFLOW_PROMPT.md` instead. A [bare](bare_agents.md) folder has its own two-file order — see the init-prompt rules below
@@ -48,12 +48,10 @@ This is the "develop your agent in your own assistant" half of Local Agents: the
 4. User pastes it into whatever assistant they are using — a chat window, a browser tab, a session already running elsewhere — and that assistant now knows where the folder is and what to read first
 5. A failure (the folder is gone, the browser refused the clipboard) is shown at the bottom of the still-open menu, so the item is right there to retry from
 
-### Building a new agent in a tool
-1. The New-agent form creates the folder and then asks **Build it with…**: the same launchable list, the default marked and focused, plus Terminal, Reveal folder and Not now
-2. Picking a tool launches it at the new folder and makes it the default. Ticking "Open new agents this way without asking" also sets `localAgentsAutoOpen`
-3. With auto-open on and a default that resolves, the step never appears: Create reads "Create and open in <tool>" and the launch happens as the page opens. With the default unset or not installed, the step asks as before
-4. The modal closes only on a **successful** launch. A refusal from main — `tool_unavailable`, `automation_denied`, a path-guard code — keeps (or, on the auto-open path, puts) the modal on the "Build it with…" step with the error under the choices, so the folder is never created-and-silently-not-opened
-5. The rest of that flow — the name, the optional description, the draft — is [Agents Tab & Agent Page](agents_tab.md)'s
+### Opening a new agent in a tool
+1. The New-agent dialog's **Create** is its last step: it closes onto the new agent's page in chat mode, and launches nothing
+2. The page header's **Open in <default tool>** is right there; the user opens the folder in a tool from it, exactly as for any other agent
+3. The rest of the create flow — the name, the optional description, the draft — is [Agents Tab & Agent Page](agents_tab.md)'s
 
 ### Refreshing detection after installing a tool
 1. User installs, say, Claude Code while the app is running
@@ -76,11 +74,12 @@ This is the "develop your agent in your own assistant" half of Local Agents: the
 
 Most people build every agent with the same assistant. The button's primary action is that assistant, and the menu behind the chevron is for the exception.
 
-- **A pick is a statement of the default.** Choosing a tool from the Open-in menu or from "Build it with…" rewrites `localAgentsDefaultTool` — the setting exists so the button says the right thing next time, and the pick is the clearest statement of what "right" is. Nobody should have to go to Settings to say so; Settings → Default → Agents → Runtime → **Open agents with** is there to set or clear it explicitly ("Ask each time")
+- **A pick is a statement of the default.** Choosing a tool from the Open-in menu rewrites `localAgentsDefaultTool` — the setting exists so the button says the right thing next time, and the pick is the clearest statement of what "right" is. Nobody should have to go to Settings to say so; Settings → Default → Agents → Runtime → **Open agents with** is there to set or clear it explicitly ("Ask each time")
 - **Only a launchable kind can be the default.** Assistants and editors are launchable; a `runtime` tool (`uv`, `git`, `make`, `python3`) is detected for feature gating and never launched. Terminal, Reveal and Open credentials/.env are actions, not tools, and never become the default
 - **The setting is validated against the known ids, not against what is installed.** A tool can be uninstalled after being chosen, or the setting can predate this machine's `PATH`. The renderer resolves the id against the detected list on every read and falls back to "ask" — a button that fails after the click would be worse than a menu. The value check accepts any id in the tool table, runtimes included; the kind restriction is applied by that resolve, which only searches launchable tools, and again in main, where `requireTool` refuses a `runtime` for either open-in action — so a `git` written into the setting by hand degrades to "ask" and could not launch even if it reached the channel. An arbitrary string, though, is refused at the write — that string is exactly what `local-tools:open-in` would otherwise be asked to launch
-- **Auto-open is subordinate to the default.** `localAgentsAutoOpen` means nothing without a resolved default: the Settings checkbox is disabled until one resolves, and the New-agent flow asks as before when the default is unset or missing. **Clearing the default also turns auto-open off.** "Ask each time" and "open automatically" contradict each other, and a cleared default that left auto-open armed would silently re-arm it the next time any tool was picked from the page menu — so `useSetDefaultTool(null)` writes both settings
-- **A refusal moves nothing.** The Open-in button and the ⋯ menu report into one message slot the agent page owns — red for a refusal, muted for the one note the `.env` item can add; the New-agent dialog's error line is a fixed-height slot on both steps. See [UX Rules](../../development/ui_guidelines/ux_rules.md)
+- **Creating an agent launches nothing.** The New-agent dialog has no tool step and no "open new agents automatically" option; Create lands on the agent's page in chat mode. An in-app runtime runs the agent's turns directly, so the next thing to do with a new agent is talk to it, and the header's Open-in button is already on that page for whoever wants their own tool. A dialog step that offered the same tools duplicated that button and stood between the user and the agent. A runtime that is not ready is explained where the agent runs — the page's readiness strip and Runs with panel — not by a launcher
+- **The default is one setting.** `useSetDefaultTool` writes `localAgentsDefaultTool` and no other key, whether it is setting a tool or clearing to "Ask each time"
+- **A refusal moves nothing.** The Open-in button and the ⋯ menu report into one message slot the agent page owns — red for a refusal, muted for the one note the `.env` item can add; the New-agent dialog's create error is a fixed-height slot. See [UX Rules](../../development/ui_guidelines/ux_rules.md)
 
 ### The init prompt
 
@@ -141,9 +140,9 @@ The init prompt is the exception, and deliberately so: it throws a local-agent `
 ## Architecture Overview
 
 ```
-Agent page (Open-in split button + ⋯ menu) · New-agent "Build it with…" · Settings (Open agents with)
+Agent page (Open-in split button + ⋯ menu) · Settings (Open agents with)
   -> useLocalTools / useDefaultTool / useOpenIn   (window.api.localTools.*)
-       |   useSetDefaultTool -> app-settings: localAgentsDefaultTool (allowlisted), localAgentsAutoOpen
+       |   useSetDefaultTool -> app-settings: localAgentsDefaultTool (allowlisted)
        -> local-tools:list | local-tools:refresh | local-tools:open-in | local-tools:claude-auth
             -> toolDetectionService  -> which() over the login-shell PATH
                                      -> macOS .app bundle fallback (editors)
@@ -182,6 +181,6 @@ Agent page (Open-in menu -> "Open credentials/.env", kit agents only)
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the index row the init prompt takes its folder and its display name from, and the `local-agent:*` channel family it is registered with
 - [Release & Distribution](../../development/distribution/release.md) — the macOS entitlement and usage description ship with the signed, notarised build
 - [Logger](../../development/logger/logger.md) — the `local-tools` and `open-in` scopes carry the diagnostics above
-- [UX Rules](../../development/ui_guidelines/ux_rules.md) — the rules the split button, the "Build it with…" step and their error reporting follow: remember the last choice with an explicit override and opt-in auto-use, errors close nothing and move nothing
+- [UX Rules](../../development/ui_guidelines/ux_rules.md) — the rules the split button and its error reporting follow: remember the last choice with an explicit override, errors close nothing and move nothing
 - [Agents Tab & Agent Page](agents_tab.md) — the page that hosts the button and owns the alert slot it reports into
 - [Bare Agents & External Roots](bare_agents.md) — an adopted folder is a registered root like any other, so it is an allowed area for this guard; and its init prompt reads `README.md` before its instructions file

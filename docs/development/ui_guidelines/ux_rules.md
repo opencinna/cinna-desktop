@@ -33,14 +33,15 @@ Creating something asks for the one field it cannot invent, creates immediately,
 - Optional fields sit under a collapsed **More options**; a sensible default fills each in main (a folder created from a name alone gets the name as its description, because the schema needs one).
 - Enter submits. One name, one key.
 - A derived value the user might care about (the folder name) is shown as a live preview, editable on demand, never a required confirmation.
+- **Create is the last step.** Nothing stands between the user and the thing created — no follow-up step offering to open it somewhere the page it lands on already offers.
 
-**Origin:** the New agent form asked for a sentence, a name, a folder and a root. Users build the agent in their own tool, where the description gets written anyway.
+**Origin:** the New agent form asked for a sentence, a name, a folder and a root. The agent is built after it exists — in chat on its page, or in the user's own tool — and that is where the description gets written anyway. A later "Build it with…" step after Create offered the same tools as the agent page's Open-in button, one dialog away from it, and was removed for the same reason.
 
 ## 4. Remember the last choice, offer an explicit override
 
 Where a user makes the same choice repeatedly (which tool opens a folder), the last pick becomes the default and the primary action uses it in one click. A menu behind a chevron holds the alternatives; picking one rewrites the default. Settings exposes the same value with a way to clear it back to "ask".
 
-- **Auto-use is opt-in.** Skipping a step on the user's behalf (open the new agent straight in the default tool) needs an explicit checkbox, offered at the moment the user makes the choice ("Open new agents this way without asking") and mirrored in Settings.
+- **Auto-use is opt-in.** Skipping a step on the user's behalf needs an explicit choice, offered at the moment the user makes it and visible — and reversible — in Settings afterwards. A folder agent's permission ask offers **Always allow** beside Allow once; the grant it writes is listed on the agent's Permissions tab (under its Settings) with a revoke.
 - A remembered choice that is no longer valid (the tool was uninstalled) degrades to "ask", never to a button that fails after the click.
 
 ## 5. Destructive actions confirm, and say what is and is not recoverable
@@ -55,7 +56,7 @@ Where a user makes the same choice repeatedly (which tool opens a folder), the l
 
 - A dialog or step closes on **success only**. A failed launch, save or create keeps the surface open and shows the reason beside the control that triggered it, so the user can pick something else.
 - Every message that crossed IPC goes through `unwrapIpcError` (`src/renderer/src/utils/ipcError.ts`) — the user must never read `Error invoking remote method '…'`.
-- Silent failure is the worst outcome: a folder created and no tool opened, with no message anywhere, is a defect even when the folder is fine.
+- Silent failure is the worst outcome: a launch that did not happen, or a "Copied" over a clipboard the browser refused to write, with no message anywhere, is a defect even when everything else worked.
 
 ## 7. Copy fits, and sub-lines add information
 

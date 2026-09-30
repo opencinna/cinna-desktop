@@ -4,7 +4,7 @@
 
 ### Shared
 - `src/shared/localTools.ts` — `LOCAL_TOOL_IDS` (the runtime list `LocalToolId` is derived from, so a setting can be validated against it without the two drifting), `isLocalToolId()`, `LocalToolKind` (`cli-assistant | editor | runtime`), `LAUNCHABLE_TOOL_KINDS` (`cli-assistant`, `editor` — the only kinds that may be the default), `actionForTool(tool)` (`editor` → `'editor'`, else `'terminal-command'`), `LocalToolSource`, `DetectedTool`, `OpenInAction`, `OpenInRequest`. Shared so preload, renderer and the main-process services see one set of shapes
-- `src/shared/appSettings.ts` — `localAgentsDefaultTool: string` (a `LocalToolId` or `''`), `localAgentsAutoOpen: boolean`
+- `src/shared/appSettings.ts` — `localAgentsDefaultTool: string` (a `LocalToolId` or `''`)
 - `src/shared/agentInitPrompt.ts` — `AGENT_INIT_ENTRY_FILES` (`AGENTS.md`, `CLAUDE.md`, `README.md`, in the order an assistant should be pointed at them), `AgentInitPromptInput` (`folder`, `name`, `entryFile | null`) and `buildAgentInitPrompt(input)`. Shared so the wording has one copy: main decides *which* entry document exists, this file decides what is said about it. The no-entry-document branch names `MANIFEST_FILE` and `LOCAL_AGENT_PROMPT_PATHS.workflow` rather than repeating either literal. **Rewording it is a two-file change:** `e2e/specs/agent-page.spec.ts` asserts the whole string, character for character, against both the real clipboard and `initPrompt`, so the prose is pinned by an E2E rather than merely by the service test's `toContain` checks — deliberate (a silent reword of a briefing an assistant acts on should not pass), but it means the spec literal has to move with it
 
 ### Main Process
@@ -13,8 +13,8 @@
 - `src/main/services/localAgents/terminalCommand.ts` — pure command construction, quoting and the root-containment test. No Electron, no `node:fs`, so the escaping rules are directly unit tested
 - `src/main/services/localAgents/terminalCommand.test.ts` — coverage for the quoting, argv building and containment rules
 - `src/main/errors.ts` — `LocalToolsError` / `LocalToolsErrorCode`, a `DomainError` subclass, alongside the other domain error codes
-- `src/main/services/appSettingsService.ts` — the `localAgentsDefaultTool` entry of `VALUE_CHECKS`: empty, or `isLocalToolId`, else `AppSettingsError('invalid_value')`. `localAgentsAutoOpen` has only the generic `typeof` gate against its `false` default (`src/main/db/appSettings.ts`)
-- `src/main/services/appSettingsService.test.ts` — `codex` and `''` accepted, `vim` refused, the boolean round-trips
+- `src/main/services/appSettingsService.ts` — the `localAgentsDefaultTool` entry of `VALUE_CHECKS`: empty, or `isLocalToolId`, else `AppSettingsError('invalid_value')`
+- `src/main/services/appSettingsService.test.ts` — `codex` and `''` accepted, `vim` refused
 - `src/main/ipc/local_tools.ipc.ts` — the three thin handlers
 - `src/main/services/localAgents/localAgentService.ts` — `initPrompt(userId, agentId)`, the briefing half of this feature. Lives with the other folder-resolving methods rather than in `openInService`, because it resolves an agent id through the index, not a folder path through the launch guard
 - `src/main/ipc/local_agent.ipc.ts` — `local-agent:init-prompt`, registered with the rest of the `local-agent:*` family
@@ -29,8 +29,7 @@
 - `src/renderer/src/utils/localAgents.ts` — `launchableTools(tools)` (available assistants, then available editors, detection order within each) and `resolveDefaultTool(launchable, settingId)` (`null` for `''` or an id not in the launchable list); pure, tested in `localAgents.test.ts`
 - `src/renderer/src/components/agents/local/OpenInMenu.tsx` — the split button and its menu, including the **Open credentials/.env** item (`openEnv`, `useOpenAgentCredentials`, hidden for `kind === 'bare'`, `onNote` for the file-manager fallback); `OpenInMenu.test.tsx`
 - `src/renderer/src/components/agents/local/AgentActionsMenu.tsx` — Reveal and Terminal again, from the ⋯ menu
-- `src/renderer/src/components/agents/local/NewLocalAgentModal.tsx` — the "Build it with…" step
-- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — Runtime owns the Open agents with select and auto-open checkbox. Detected non-runtime tools and their Refresh action are rendered by `src/renderer/src/components/settings/DeveloperToolsSettingsSection.tsx` under Default → Local Development; runtime availability remains beside its picker under Agents.
+- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — Runtime owns the Open agents with select. Detected non-runtime tools and their Refresh action are rendered by `src/renderer/src/components/settings/DeveloperToolsSettingsSection.tsx` under Default → Local Development; runtime availability remains beside its picker under Agents.
 
 ### Packaging
 - `build/entitlements.mac.plist` — `com.apple.security.automation.apple-events`
@@ -99,11 +98,11 @@ All four `local-tools:*` handlers call `userActivation.requireActivated()` and a
 - `useAvailableTools(kind)` — filters to `available && kind === …`; the Settings tools card's list
 - `useRefreshLocalTools()` — mutation over `local-tools:refresh`, writing the result straight into the query cache and invalidating `CLAUDE_AUTH_KEY`, since main re-asks the login on the same call. `useClaudeAuth()` is documented with [The Claude Engine](claude_engine_tech.md#useclaudeauth-uselocaltoolsts-and-why-it-polls)
 - `useOpenIn()` — mutation over `local-tools:open-in`. Main re-validates the folder, so a rejection here is expected and must be surfaced, not swallowed
-- `useDefaultTool()` — `{tool, launchable, autoOpen}`, memoised over the tools query and the app-settings query. `tool` is `null` when the setting is empty **or** names a tool that is not currently launchable; `autoOpen` is true only when `tool` resolved and `localAgentsAutoOpen` is on. This is where an uninstalled default degrades to "ask"
+- `useDefaultTool()` — `{tool, launchable}`, memoised over the tools query and the app-settings query. `tool` is `null` when the setting is empty **or** names a tool that is not currently launchable. This is where an uninstalled default degrades to "ask"
 - `useCopyAgentInitPrompt()` — mutation over `local-agent:init-prompt` **plus** `navigator.clipboard.writeText`, both inside the `mutationFn`. A rejected clipboard write is re-thrown as an app-authored `Error`, never the `DOMException`: it *is* an `Error`, so `unwrapIpcError` would take its message verbatim and show the user Chromium's own words ("Document is not focused." — what a notification stealing focus mid-copy produces)
 - `OpenInMenu` owns the copy's presentation, not this hook: `copied` / `copyError` state, a `COPIED_REVERT_MS = 1500` timer cleared on unmount, and a `menuOpen` ref the mutation callbacks read because they resolve after the click that started them and cannot see the `menu.open` their closure captured. Closing the menu clears both `copied` and `copyError`; `onSuccess` returns early when the menu has since closed, `onError` routes to the page's `onError` slot in that case
 - `OpenInMenu`'s `.env` item is the one that reports through `onNote` as well as `onError`: `openEnv` closes the menu, calls `useOpenAgentCredentials().mutate(agent.id, …)`, and on `revealed: true` hands the page a muted note rather than an error — the file was shown, just not in an editor. A `shownAgentId` ref guards both callbacks, since the macOS fallback can take 15 s and the page re-renders rather than remounts on an agent switch; the item is `disabled` while pending so a second click cannot open a second editor. Rendered only for a non-bare agent
-- `useSetDefaultTool()` — `(toolId | null) => void` over `useSetAppSetting`; `null` writes `''` **and** `localAgentsAutoOpen: false`, since "ask each time" with auto-open armed would re-arm it on the next pick. Called by the Open-in menu and the "Build it with…" step on a pick that differs from the current default, and by the Settings select. Pinned by `src/renderer/src/hooks/useLocalTools.test.tsx`
+- `useSetDefaultTool()` — `(toolId | null) => void` over `useSetAppSetting`; `null` writes `''`. It writes that one key and no other, either way. Called by the Open-in menu on a pick that differs from the current default, and by the Settings select — the only two writers; the New-agent dialog neither reads nor writes the default. Pinned by `src/renderer/src/hooks/useLocalTools.test.tsx`
 
 ## Configuration
 
@@ -111,7 +110,7 @@ All four `local-tools:*` handlers call `userActivation.requireActivated()` and a
 - `electron-builder.yml` — `NSAppleEventsUsageDescription` in `mac.extendInfo`, the string macOS shows in the Automation prompt
 - `OSASCRIPT_TIMEOUT_MS` — 15 s, the ceiling on `osascript` and `open`
 - `localAgentsDefaultTool` (`app_settings`, default `''`) — the default tool's id, or empty for "ask". Validated on write against `LOCAL_TOOL_IDS` (any known id, runtimes included), resolved on read against the launchable list
-- `localAgentsAutoOpen` (`app_settings`, default `false`) — launch the default at a freshly created folder without the "Build it with…" step
+- There is no setting for opening a new agent in a tool. A `localAgentsAutoOpen` row an older build wrote stays in `app_settings` and is inert: `appSettingsRepo.getAll` skips keys absent from `DEFAULTS`, and `appSettingsService.set` refuses them (`assertKnownKey`)
 
 ## Security
 

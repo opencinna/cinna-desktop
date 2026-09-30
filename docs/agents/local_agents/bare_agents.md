@@ -37,7 +37,7 @@ The same convention as the rest of this folder:
 1. The Agents sidebar's **+** — now "Add an agent" — opens Add an agent: **New agent** scaffolds a kit folder (and a Cinna account also gets **Install from catalog**); **Advanced options** leads to the tiles, where **Add a folder** is adoption and the rest connect external agents
 2. **Add a folder** (on the advanced step) opens a native directory picker in main. What was picked is walked, and the result previewed: nothing is registered yet and nothing has been written
 3. One folder found means the picked folder *is* the agent. The step shows a single **Name** field, prefilled from the first `# heading` in its instructions file or the folder's own name, so Enter is a complete answer. The hint under it names the file main found — "`CLAUDE.md` is its instructions" — not the first name on the list
-4. **Add agent** registers the folder as an external root, scans it, and lands the user on the new agent — adopting is a create in every sense the user cares about, so it obeys the same rule ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 3). There is no "Build it with…" step: nothing was scaffolded, so there is nothing to hand to an assistant
+4. **Add agent** registers the folder as an external root, scans it, and lands the user on the new agent's page in chat mode — adopting is a create in every sense the user cares about, so it obeys the same rule ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 3), and like a created agent it launches no tool; the page header's Open in is there for that
 
 ### Adopting a repository of them
 
