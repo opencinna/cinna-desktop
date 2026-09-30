@@ -2,9 +2,9 @@ import { renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 /**
- * Clearing the default tool also clears auto-open: "ask each time" and "open
- * automatically" contradict each other, and a cleared default that left
- * auto-open armed re-armed it silently the next time any tool was picked.
+ * The default tool is one setting and nothing else: picking writes the id,
+ * clearing writes the empty string ("ask each time"), and neither touches any
+ * other key.
  */
 
 const mutate = vi.fn()
@@ -22,18 +22,19 @@ vi.mock('@tanstack/react-query', async (importOriginal) => ({
 const { useSetDefaultTool } = await import('./useLocalTools')
 
 describe('useSetDefaultTool', () => {
-  it('writes the tool id and leaves auto-open alone', () => {
+  it('writes the tool id and nothing else', () => {
+    mutate.mockClear()
     const { result } = renderHook(() => useSetDefaultTool())
     result.current('codex')
     expect(mutate).toHaveBeenCalledTimes(1)
     expect(mutate).toHaveBeenCalledWith({ key: 'localAgentsDefaultTool', value: 'codex' })
   })
 
-  it('clearing the tool also turns auto-open off', () => {
+  it('clearing the tool writes the empty default and nothing else', () => {
     mutate.mockClear()
     const { result } = renderHook(() => useSetDefaultTool())
     result.current(null)
+    expect(mutate).toHaveBeenCalledTimes(1)
     expect(mutate).toHaveBeenCalledWith({ key: 'localAgentsDefaultTool', value: '' })
-    expect(mutate).toHaveBeenCalledWith({ key: 'localAgentsAutoOpen', value: false })
   })
 })

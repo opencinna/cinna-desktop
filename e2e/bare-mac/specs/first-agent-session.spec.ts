@@ -35,7 +35,8 @@ test('first Claude agent message downloads Claude Code and asks for a login', as
   const form = page.getByRole('dialog', { name: 'New agent' })
   await form.getByLabel('Name').fill('Probe')
   await form.getByLabel('Name').press('Enter')
-  await page.getByRole('dialog', { name: 'Build it with' }).getByRole('button', { name: 'Not now' }).click()
+  // Create closes the dialog onto the new agent's page, in chat mode.
+  await expect(form).toBeHidden()
 
   vm.step('send the first message')
   // A new agent opens on its own page, composer already addressed to it.

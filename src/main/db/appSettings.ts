@@ -41,8 +41,6 @@ export const DEFAULTS: AppSettingsSchema = {
   localDevelopmentEngine: '',
   localDevelopmentCredentialId: '',
   localDevelopmentComplexity: 'complex',
-  // Only meaningful with a default tool set: skip the "build it with…" step.
-  localAgentsAutoOpen: false,
   // Work Complexity is the default view; the raw model list is opt-in.
   localAgentsModelAdvanced: false,
   // JSON `{ "<path>": true }`. Empty = the agents home has never been explained.

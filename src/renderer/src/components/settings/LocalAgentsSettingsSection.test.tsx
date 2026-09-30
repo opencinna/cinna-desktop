@@ -55,7 +55,7 @@ vi.mock('../../hooks/useLocalAgents', () => ({
   useRescanLocalAgents: mutation
 }))
 vi.mock('../../hooks/useLocalTools', () => ({
-  useDefaultTool: () => ({ tool: null, launchable: [], autoOpen: false }),
+  useDefaultTool: () => ({ tool: null, launchable: [] }),
   useInstallRuntimeTool: mutation,
   useLocalTools: () => ({ data: [] }),
   useOpenIn: mutation,

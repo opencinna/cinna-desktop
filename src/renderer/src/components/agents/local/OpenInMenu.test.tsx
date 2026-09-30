@@ -35,7 +35,7 @@ let defaultTool: DetectedTool | null = CLAUDE
 const openIn = vi.fn()
 const setDefaultTool = vi.fn()
 vi.mock('../../../hooks/useLocalTools', () => ({
-  useDefaultTool: () => ({ tool: defaultTool, launchable: [CLAUDE, CODE], autoOpen: false }),
+  useDefaultTool: () => ({ tool: defaultTool, launchable: [CLAUDE, CODE] }),
   useOpenIn: () => ({ mutate: openIn, isPending: false }),
   useSetDefaultTool: () => setDefaultTool
 }))

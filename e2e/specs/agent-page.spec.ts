@@ -53,13 +53,12 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
     await form.getByLabel('Name').fill(NAME)
     await form.getByLabel('Name').press('Enter')
 
-    const buildWith = page.getByRole('dialog', { name: 'Build it with' })
-    await expect(buildWith).toBeVisible()
-    await expect(buildWith).toContainText(`Build ${NAME} with…`)
-    await expect(buildWith.getByRole('button', { name: 'Terminal' })).toBeVisible()
-    await expect(buildWith.getByRole('button', { name: 'Reveal folder' })).toBeVisible()
-    await buildWith.getByRole('button', { name: 'Not now' }).click()
-    await expect(buildWith).toBeHidden()
+    // Create is the last step: the dialog closes onto the agent's page, in
+    // chat mode — no "Build it with" step in between.
+    await expect(form).toBeHidden()
+    await expect(page.getByRole('dialog', { name: 'Build it with' })).toHaveCount(0)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(NAME)
+    await expect(page.getByRole('combobox', { name: 'Type a message...', exact: true })).toBeVisible()
   })
 
   let folder = ''
@@ -184,9 +183,7 @@ test('Copy prompt for another tool confirms inside the menu and copies a briefin
     await expect(form).toBeVisible()
     await form.getByLabel('Name').fill(COPY_NAME)
     await form.getByLabel('Name').press('Enter')
-    const buildWith = page.getByRole('dialog', { name: 'Build it with' })
-    await expect(buildWith).toBeVisible()
-    await buildWith.getByRole('button', { name: 'Not now' }).click()
+    await expect(form).toBeHidden()
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(COPY_NAME)
   })
 

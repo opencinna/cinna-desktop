@@ -334,30 +334,24 @@ export function useOpenIn() {
 export function useDefaultTool(): {
   tool: DetectedTool | null
   launchable: DetectedTool[]
-  /** True when a new agent should open in `tool` without asking. */
-  autoOpen: boolean
 } {
   const { data: tools } = useLocalTools()
   const { data: settings } = useAppSettings()
   return useMemo(() => {
     const launchable = launchableTools(tools ?? [])
     const tool = resolveDefaultTool(launchable, settings?.localAgentsDefaultTool ?? '')
-    return { tool, launchable, autoOpen: tool !== null && settings?.localAgentsAutoOpen === true }
-  }, [tools, settings?.localAgentsDefaultTool, settings?.localAgentsAutoOpen])
+    return { tool, launchable }
+  }, [tools, settings?.localAgentsDefaultTool])
 }
 
 /**
- * Remember a tool as the default. Called from the Open-in menu and the
- * new-agent flow on every pick — the last choice is the default — and from
- * Settings, where `null` clears it back to "ask".
+ * Remember a tool as the default. Called from the Open-in menu on every pick —
+ * the last choice is the default — and from Settings, where `null` clears it
+ * back to "ask".
  */
 export function useSetDefaultTool(): (toolId: LocalToolId | null) => void {
   const setSetting = useSetAppSetting()
   return (toolId) => {
     setSetting.mutate({ key: 'localAgentsDefaultTool', value: toolId ?? '' })
-    // "Ask each time" and "open automatically" contradict each other; a
-    // cleared default that left auto-open armed would silently re-arm it the
-    // next time any tool was picked from the page menu.
-    if (toolId === null) setSetting.mutate({ key: 'localAgentsAutoOpen', value: false })
   }
 }

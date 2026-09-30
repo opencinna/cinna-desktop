@@ -146,13 +146,6 @@ export interface AppSettingsSchema {
   /** Building work complexity; complex means Opus / high effort by default. */
   localDevelopmentComplexity: string
   /**
-   * When true, creating a local agent opens the new folder in the default tool
-   * straight away instead of asking which tool to build it with. Meaningless
-   * without `localAgentsDefaultTool`; the new-agent flow asks as before when
-   * the default is unset or not installed.
-   */
-  localAgentsAutoOpen: boolean
-  /**
    * When true, the agent page's "Runs with" panel offers the raw model list
    * instead of the Simple / Medium / Complex tier.
    *

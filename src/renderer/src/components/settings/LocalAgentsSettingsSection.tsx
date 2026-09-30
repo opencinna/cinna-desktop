@@ -881,22 +881,6 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
                 ))}
               </select>
             </div>
-            <label
-              className={`mt-2.5 flex items-start gap-2 text-[13px] leading-relaxed ${
-                defaultTool ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-muted)]'
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={appSettings?.localAgentsAutoOpen === true}
-                disabled={!defaultTool}
-                onChange={(event) =>
-                  setAppSetting.mutate({ key: 'localAgentsAutoOpen', value: event.target.checked })
-                }
-                className="mt-0.5 accent-[var(--color-accent)]"
-              />
-              Open a new agent there right after creating it, without asking
-            </label>
           </SettingsRow>
         </SettingsRows>
       </SettingsSection>

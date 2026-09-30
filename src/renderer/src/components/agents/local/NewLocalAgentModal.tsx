@@ -7,12 +7,9 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Code2,
   FolderInput,
-  FolderOpen,
   Sparkles,
   Store,
-  TerminalSquare,
   Waypoints,
   X
 } from 'lucide-react'
@@ -23,15 +20,12 @@ import {
   useCreateLocalAgent,
   usePickAgentFolder
 } from '../../../hooks/useLocalAgents'
-import { useDefaultTool, useOpenIn, useSetDefaultTool } from '../../../hooks/useLocalTools'
-import { useSetAppSetting } from '../../../hooks/useAppSettings'
 import {
   describeAgentSlug,
   bareInstructionsFileList,
   type DiscoveredBareAgent,
   type LocalAgentDto
 } from '../../../../../shared/localAgents'
-import { actionForTool, type DetectedTool } from '../../../../../shared/localTools'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { isUnsettledClick, useSettleGuard } from '../../../hooks/useSettleGuard'
 
@@ -59,21 +53,18 @@ const TILE =
 const TILE_BUTTON =
   'flex w-full flex-1 flex-col items-start gap-1.5 p-3 text-left ' +
   'transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-40'
-const CHOICE =
-  'flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-xs ' +
-  'transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-40'
 
 /** Dialog `aria-label` and heading per step. Tests and E2E find it by this. */
 const DIALOG_LABEL: Record<Step['kind'], string> = {
   choose: 'Add an agent',
   advanced: 'Advanced options',
   name: 'New agent',
-  folder: 'Add a folder',
-  tool: 'Build it with'
+  folder: 'Add a folder'
 }
 
 /**
- * `choose` → (`name` → `tool`) | `advanced`, and `advanced` → `folder` → `tool`.
+ * `choose` → `name` | `advanced`, and `advanced` → `folder`. Both `name` and
+ * `folder` end the dialog: they close it and land on the agent they produced.
  *
  * `choose` offers the two paths most people want — Install from catalog (Cinna
  * accounts only; it hands off to the catalog modal) and New agent. Everything
@@ -93,7 +84,6 @@ type Step =
   | { kind: 'advanced' }
   | { kind: 'name' }
   | { kind: 'folder'; pick: PickedFolder }
-  | { kind: 'tool'; agent: LocalAgentDto }
 
 /** The folder the user picked, and what is in it. Never a path they typed. */
 interface PickedFolder {
@@ -112,21 +102,21 @@ interface PickedFolder {
 }
 
 /**
- * A name in, a folder out, and then the tool the user builds agents with.
+ * A name in, a folder out, and the user lands on the new agent's page.
  *
  * The name is the only thing the form asks for. The description, the folder
  * name and which agents folder to use are all real choices — but they are
  * choices almost nobody makes at creation time, because the agent is about to
- * be built in Claude Code or Codex or OpenCode and *that* is where its
- * description gets written. They sit under "More options". A description given
- * here is still what the AI draft is fed; without one there is nothing to
- * draft from, so the draft simply does not run.
+ * be built and *that* is where its description gets written. They sit under
+ * "More options". A description given here is still what the AI draft is fed;
+ * without one there is nothing to draft from, so the draft simply does not run.
  *
- * Creating is two steps on purpose. The folder appears the instant Create is
- * pressed; the second step — "build it with…" — launches the user's tool at
- * that folder and remembers it as the default. With the default already set
- * and "open automatically" on, the second step is skipped entirely: one name,
- * one Enter, and the assistant is running in the new folder.
+ * Create is the last step: one name, one Enter, and the dialog closes onto the
+ * agent's page in chat mode. There is no "open it in a tool" step — the page
+ * header already has the Open-in button, and the in-app runtime runs the
+ * agent's turns directly, so the next thing to do is talk to it. A runtime that
+ * is not ready is the page's to explain (the readiness strip and Runs with
+ * panel), not this dialog's.
  */
 export function NewLocalAgentModal({
   onClose,
@@ -139,13 +129,10 @@ export function NewLocalAgentModal({
 }: NewLocalAgentModalProps): React.JSX.Element {
   const { data: roots } = useAgentRoots()
   const createAgent = useCreateLocalAgent()
-  const openIn = useOpenIn()
-  const { tool: defaultTool, launchable, autoOpen } = useDefaultTool()
-  const setDefaultTool = useSetDefaultTool()
-  const setSetting = useSetAppSetting()
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const setPendingDraftAgentId = useUIStore((s) => s.setPendingDraftAgentId)
   const setActiveView = useUIStore((s) => s.setActiveView)
+  const setAgentPageMode = useUIStore((s) => s.setAgentPageMode)
   const cardRef = useRef<HTMLDivElement>(null)
   const nameRef = useRef<HTMLInputElement>(null)
 
@@ -163,10 +150,6 @@ export function NewLocalAgentModal({
   // `null` means "still following the name"; a string is the user's own.
   const [slugOverride, setSlugOverride] = useState<string | null>(null)
   const [rootId, setRootId] = useState<string | null>(null)
-  // `null` until touched: the box mirrors the current setting, so arriving on
-  // this step after a failed automatic open shows it checked, and unticking it
-  // turns auto-open off.
-  const [rememberAuto, setRememberAuto] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
   // The advanced tiles open under the pointer that clicked "Advanced options".
   const settled = useSettleGuard(step.kind)
@@ -202,38 +185,19 @@ export function NewLocalAgentModal({
 
   const canCreate = name.trim() !== '' && slug !== '' && !createAgent.isPending
 
-  /** Land on the new agent's page. The modal may stay open on top of it. */
+  /**
+   * Land on the new agent's page, in chat mode. Chat, not whatever mode the
+   * page was last left in: a new agent's next step is talking to it, and a
+   * settings view left open on another agent would hide that.
+   */
   const landOn = (agent: LocalAgentDto, drafted: boolean): void => {
     setActiveLocalAgentId(agent.id)
+    setAgentPageMode('chat')
     // The page runs the AI call and shows its progress, so closing this form
     // never cancels or hides it. Only with a description: the draft's whole
     // input is that sentence, and the name alone would draft fiction.
     if (drafted) setPendingDraftAgentId(agent.id)
     setActiveView('local-agent')
-  }
-
-  /**
-   * Hand the folder to a tool, and close only once it has actually opened.
-   *
-   * `local-tools:open-in` rejects for a tool uninstalled since detection, a
-   * folder outside the registered roots, and — on macOS, the first time — a
-   * refused Terminal automation prompt. Closing on the click would make every
-   * one of those a folder created and nothing opened, with no message anywhere;
-   * with auto-open on, that would be the default path. So the modal stays on
-   * the tool step and shows the refusal, and the user can pick something else.
-   */
-  const launchTool = (agent: LocalAgentDto, tool: DetectedTool): void => {
-    setError(null)
-    openIn.mutate(
-      { folder: agent.path, toolId: tool.id, action: actionForTool(tool) },
-      {
-        onSuccess: onClose,
-        onError: (err) => {
-          setStep({ kind: 'tool', agent })
-          setError(unwrapIpcError(err, `Could not open ${tool.label}.`))
-        }
-      }
-    )
   }
 
   /**
@@ -316,9 +280,8 @@ export function NewLocalAgentModal({
         ...(single && folderAgentName.trim() !== '' ? { name: folderAgentName.trim() } : {})
       },
       {
-        // Nothing was scaffolded and nothing needs opening in a tool, so there
-        // is no second step here — but the user is still landed on what they
-        // just added (ux_rules rule 3), the way the New agent branch is. Closing
+        // Nothing was scaffolded, and the user is landed on what they just
+        // added (ux_rules rule 3), the way the New agent branch is. Closing
         // straight to the empty pane left them reading "Select an agent from the
         // sidebar, or create one with +" with the agent they had just added
         // sitting unselected behind it. With several, the first: the sidebar
@@ -330,6 +293,7 @@ export function NewLocalAgentModal({
           const first = result.agentIds[0]
           if (first !== undefined && adding > 0) {
             setActiveLocalAgentId(first)
+            setAgentPageMode('chat')
             setActiveView('local-agent')
           }
           onClose()
@@ -355,34 +319,11 @@ export function NewLocalAgentModal({
       {
         onSuccess: (agent) => {
           landOn(agent, trimmedDescription !== '')
-          if (autoOpen && defaultTool) {
-            launchTool(agent, defaultTool)
-            return
-          }
-          setStep({ kind: 'tool', agent })
+          onClose()
         },
         onError: (err) => {
           setError(unwrapIpcError(err, 'Could not create that agent.'))
         }
-      }
-    )
-  }
-
-  /** Step two's pick: remember the tool, maybe remember to stop asking, launch. */
-  const pickTool = (agent: LocalAgentDto, tool: DetectedTool): void => {
-    if (tool.id !== defaultTool?.id) setDefaultTool(tool.id)
-    const wantAuto = rememberAuto ?? autoOpen
-    if (wantAuto !== autoOpen) setSetting.mutate({ key: 'localAgentsAutoOpen', value: wantAuto })
-    launchTool(agent, tool)
-  }
-
-  const pickAction = (agent: LocalAgentDto, action: 'terminal' | 'reveal'): void => {
-    setError(null)
-    openIn.mutate(
-      { folder: agent.path, action },
-      {
-        onSuccess: onClose,
-        onError: (err) => setError(unwrapIpcError(err, 'Could not open that.'))
       }
     )
   }
@@ -392,8 +333,8 @@ export function NewLocalAgentModal({
       type="button"
       onClick={onClose}
       className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-      title={step.kind === 'tool' ? 'Close' : 'Cancel'}
-      aria-label={step.kind === 'tool' ? 'Close' : 'Cancel'}
+      title="Cancel"
+      aria-label="Cancel"
     >
       <X size={14} />
     </button>
@@ -439,14 +380,8 @@ export function NewLocalAgentModal({
                 <Bot size={28} className="text-[var(--color-accent)]" />
               </div>
               <div className="text-lg font-semibold text-[var(--color-text)]">
-                {step.kind === 'tool' ? `Build ${step.agent.name} with…` : DIALOG_LABEL[step.kind]}
+                {DIALOG_LABEL[step.kind]}
               </div>
-              {step.kind === 'tool' && (
-                <div className="text-[11px] text-[var(--color-text-muted)]">
-                  The folder is ready. Open it in the tool you build agents with — your choice
-                  becomes the default.
-                </div>
-              )}
               {step.kind === 'folder' && <PickedPath path={step.pick.path} />}
             </div>
           </>
@@ -470,7 +405,7 @@ export function NewLocalAgentModal({
               <Tile
                 icon={Sparkles}
                 title="New agent"
-                sub="A new folder, ready to build in Claude Code, Codex or your editor."
+                sub="A folder of its own to chat with and shape as you go."
                 autoFocus={!onCatalog}
                 settled
                 onClick={() => {
@@ -562,7 +497,7 @@ export function NewLocalAgentModal({
             }}
             onAdd={() => handleAddFolder(step.pick)}
           />
-        ) : step.kind === 'name' ? (
+        ) : (
           <form
             className="mt-5 space-y-4"
             onSubmit={(event) => {
@@ -624,8 +559,8 @@ export function NewLocalAgentModal({
                       className={`${INPUT} resize-none`}
                     />
                     <div className="text-[10px] text-[var(--color-text-muted)]">
-                      One sentence. With it, the prompts are drafted for you; without it, the
-                      folder starts empty for your tool to fill in.
+                      One sentence. With it, the prompts are drafted for you; without it, they
+                      start as templates for you to fill in.
                     </div>
                   </div>
                   <div className="space-y-1.5">
@@ -685,96 +620,10 @@ export function NewLocalAgentModal({
                 className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] text-white
                   hover:bg-[var(--color-accent-hover)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               >
-                {createAgent.isPending
-                  ? 'Creating…'
-                  : autoOpen && defaultTool
-                    ? `Create and open in ${defaultTool.label}`
-                    : 'Create'}
+                {createAgent.isPending ? 'Creating…' : 'Create'}
               </button>
             </div>
           </form>
-        ) : (
-          <div className="mt-5 space-y-3">
-            <div className="space-y-1.5">
-              {launchable.map((tool) => {
-                const isDefault = tool.id === defaultTool?.id
-                return (
-                  <button
-                    key={tool.id}
-                    type="button"
-                    autoFocus={isDefault}
-                    disabled={openIn.isPending}
-                    onClick={() => pickTool(step.agent, tool)}
-                    className={`${CHOICE} ${
-                      isDefault
-                        ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/5'
-                        : 'border-[var(--color-border)]'
-                    }`}
-                  >
-                    {tool.kind === 'editor' ? <Code2 size={14} /> : <TerminalSquare size={14} />}
-                    <span className="flex-1 text-[var(--color-text)]">{tool.label}</span>
-                    {isDefault && (
-                      <span className="text-[10px] text-[var(--color-text-muted)]">Default</span>
-                    )}
-                  </button>
-                )
-              })}
-              {launchable.length === 0 && (
-                <div className="rounded-lg border border-dashed border-[var(--color-border)] px-3 py-2.5 text-[11px] text-[var(--color-text-muted)]">
-                  No coding assistant or editor was found on this machine. Install Claude Code,
-                  Codex, OpenCode, VS Code or Cursor, then Refresh in Settings → Agents.
-                </div>
-              )}
-              <div className="flex gap-1.5">
-                <button
-                  type="button"
-                  disabled={openIn.isPending}
-                  onClick={() => pickAction(step.agent, 'terminal')}
-                  className={`${CHOICE} border-[var(--color-border)] py-2`}
-                >
-                  <TerminalSquare size={12} className="text-[var(--color-text-muted)]" />
-                  <span className="text-[var(--color-text-secondary)]">Terminal</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={openIn.isPending}
-                  onClick={() => pickAction(step.agent, 'reveal')}
-                  className={`${CHOICE} border-[var(--color-border)] py-2`}
-                >
-                  <FolderOpen size={12} className="text-[var(--color-text-muted)]" />
-                  <span className="text-[var(--color-text-secondary)]">Reveal folder</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Reserved: a launch refusal must not move the checkbox or Not now (UX rule 1). */}
-            <div role="alert" className="min-h-8 text-[10px] text-[var(--color-danger)]">
-              {error}
-            </div>
-
-            {launchable.length > 0 && (
-              <label className="flex cursor-pointer items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
-                <input
-                  type="checkbox"
-                  checked={rememberAuto ?? autoOpen}
-                  onChange={(e) => setRememberAuto(e.target.checked)}
-                  className="accent-[var(--color-accent)]"
-                />
-                Open new agents this way without asking
-              </label>
-            )}
-
-            <div className="flex justify-end pt-1">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-text-muted)]
-                  hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors"
-              >
-                Not now
-              </button>
-            </div>
-          </div>
         )}
       </div>
     </div>,

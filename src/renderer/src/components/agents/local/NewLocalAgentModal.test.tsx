@@ -1,7 +1,6 @@
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { DetectedTool } from '../../../../../shared/localTools'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 
 /**
@@ -10,21 +9,9 @@ import type { LocalAgentDto } from '../../../../../shared/localAgents'
  * - a name alone is a complete request — `description` is *absent* from the
  *   payload, not empty, and no AI draft is queued for it;
  * - a description given under More options travels and queues the draft;
- * - the second step launches the picked tool at the new folder and makes it
- *   the default;
- * - with auto-open on, there is no second step.
+ * - Create is the last step: it lands on the new agent's page in chat mode and
+ *   closes the dialog. There is no "build it with…" step after it.
  */
-
-const CLAUDE: DetectedTool = {
-  id: 'claude',
-  kind: 'cli-assistant',
-  label: 'Claude Code',
-  path: '/usr/local/bin/claude',
-  available: true,
-  version: null,
-  source: 'path'
-}
-const CODEX: DetectedTool = { ...CLAUDE, id: 'codex', label: 'Codex' }
 
 const CREATED = {
   id: 'folder:new',
@@ -32,21 +19,17 @@ const CREATED = {
   path: '/tmp/agents/Local/invoice-watcher'
 } as LocalAgentDto
 
-let defaultTool: DetectedTool | null = null
-let autoOpen = false
 const create = vi.fn()
-const openIn = vi.fn()
-const setDefaultTool = vi.fn()
-const setSetting = vi.fn()
 const setActiveLocalAgentId = vi.fn()
 const setPendingDraftAgentId = vi.fn()
 const setActiveView = vi.fn()
+const setAgentPageMode = vi.fn()
 const pickFolder = vi.fn()
 const addFolder = vi.fn()
 
 vi.mock('../../../stores/ui.store', () => ({
   useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({ setActiveLocalAgentId, setPendingDraftAgentId, setActiveView })
+    selector({ setActiveLocalAgentId, setPendingDraftAgentId, setActiveView, setAgentPageMode })
 }))
 vi.mock('../../../hooks/useLocalAgents', () => ({
   useAgentRoots: () => ({
@@ -55,14 +38,6 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
   useCreateLocalAgent: () => ({ mutate: create, isPending: false }),
   usePickAgentFolder: () => ({ mutate: pickFolder, isPending: false }),
   useAddAgentFolder: () => ({ mutate: addFolder, isPending: false })
-}))
-vi.mock('../../../hooks/useLocalTools', () => ({
-  useDefaultTool: () => ({ tool: defaultTool, launchable: [CLAUDE, CODEX], autoOpen }),
-  useOpenIn: () => ({ mutate: openIn, isPending: false }),
-  useSetDefaultTool: () => setDefaultTool
-}))
-vi.mock('../../../hooks/useAppSettings', () => ({
-  useSetAppSetting: () => ({ mutate: setSetting })
 }))
 
 const { NewLocalAgentModal } = await import('./NewLocalAgentModal')
@@ -74,10 +49,10 @@ function succeedCreate(): void {
   act(() => options.onSuccess(CREATED))
 }
 
-type OpenInOptions = { onSuccess: () => void; onError: (err: Error) => void }
-function lastOpenIn(): { request: Record<string, unknown>; options: OpenInOptions } {
-  const [request, options] = openIn.mock.calls[0] as [Record<string, unknown>, OpenInOptions]
-  return { request, options }
+/** Fail the create mutation the way react-query would, through `onError`. */
+function failCreate(err: Error): void {
+  const [, options] = create.mock.calls[0] as [unknown, { onError: (e: Error) => void }]
+  act(() => options.onError(err))
 }
 
 /** Render the dialog. It opens on the choice step. */
@@ -113,12 +88,10 @@ function open(): { onClose: ReturnType<typeof vi.fn> } {
 
 afterEach(() => {
   vi.clearAllMocks()
-  defaultTool = null
-  autoOpen = false
 })
 
 describe('NewLocalAgentModal', () => {
-  it('creates from a name alone, sending no description and queueing no draft', async () => {
+  it('creates from a name alone, sending no description and queueing no draft', () => {
     open()
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
@@ -129,10 +102,36 @@ describe('NewLocalAgentModal', () => {
     expect('description' in input).toBe(false)
 
     succeedCreate()
-    await waitFor(() => expect(screen.getByRole('dialog', { name: /build it with/i })).toBeTruthy())
+    expect(setPendingDraftAgentId).not.toHaveBeenCalled()
+  })
+
+  it('lands on the new agent in chat mode and closes — no "build it with" step', () => {
+    const { onClose } = open()
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    expect(onClose).not.toHaveBeenCalled()
+
+    succeedCreate()
     expect(setActiveLocalAgentId).toHaveBeenCalledWith('folder:new')
     expect(setActiveView).toHaveBeenCalledWith('local-agent')
-    expect(setPendingDraftAgentId).not.toHaveBeenCalled()
+    // Chat, whatever mode the page was last left in.
+    expect(setAgentPageMode).toHaveBeenCalledWith('chat')
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog', { name: /build it with/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /not now/i })).toBeNull()
+  })
+
+  it('keeps the dialog open and shows the error when create fails', () => {
+    const { onClose } = open()
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    failCreate(new Error('There is already a folder called "invoice-watcher".'))
+    expect(onClose).not.toHaveBeenCalled()
+    expect(setActiveLocalAgentId).not.toHaveBeenCalled()
+    expect(setAgentPageMode).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'New agent' })).toBeTruthy()
+    expect(screen.getByText(/already a folder called/i)).toBeTruthy()
   })
 
   it('submits on Enter — one name, one key', () => {
@@ -158,78 +157,6 @@ describe('NewLocalAgentModal', () => {
     expect(setPendingDraftAgentId).toHaveBeenCalledWith('folder:new')
   })
 
-  it('launches the picked tool at the new folder, remembers it, and closes', async () => {
-    const { onClose } = open()
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
-    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
-    succeedCreate()
-    await waitFor(() => screen.getByRole('button', { name: /codex/i }))
-
-    fireEvent.click(screen.getByRole('checkbox', { name: /without asking/i }))
-    fireEvent.click(screen.getByRole('button', { name: /codex/i }))
-
-    expect(setDefaultTool).toHaveBeenCalledWith('codex')
-    expect(setSetting).toHaveBeenCalledWith({ key: 'localAgentsAutoOpen', value: true })
-    expect(lastOpenIn().request).toEqual({
-      folder: CREATED.path,
-      toolId: 'codex',
-      action: 'terminal-command'
-    })
-    // Closed once the tool has actually opened, not on the click.
-    expect(onClose).not.toHaveBeenCalled()
-    act(() => lastOpenIn().options.onSuccess())
-    expect(onClose).toHaveBeenCalled()
-  })
-
-  it('stays open and says why when the tool could not be opened', async () => {
-    const { onClose } = open()
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
-    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
-    succeedCreate()
-    await waitFor(() => screen.getByRole('button', { name: /codex/i }))
-    fireEvent.click(screen.getByRole('button', { name: /codex/i }))
-
-    act(() => lastOpenIn().options.onError(new Error('Terminal automation was denied.')))
-    expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByRole('dialog', { name: /build it with/i })).toBeTruthy()
-    expect(screen.getByText(/automation was denied/i)).toBeTruthy()
-  })
-
-  it('skips the tool step entirely when auto-open is on and the default is installed', () => {
-    defaultTool = CLAUDE
-    autoOpen = true
-    const { onClose } = open()
-    expect(screen.getByRole('button', { name: /create and open in claude code/i })).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
-    fireEvent.click(screen.getByRole('button', { name: /create and open/i }))
-    succeedCreate()
-
-    expect(lastOpenIn().request).toEqual({
-      folder: CREATED.path,
-      toolId: 'claude',
-      action: 'terminal-command'
-    })
-    expect(screen.queryByRole('dialog', { name: /build it with/i })).toBeNull()
-    act(() => lastOpenIn().options.onSuccess())
-    expect(onClose).toHaveBeenCalled()
-  })
-
-  it('falls back to the tool step when the automatic open fails', () => {
-    defaultTool = CLAUDE
-    autoOpen = true
-    const { onClose } = open()
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
-    fireEvent.click(screen.getByRole('button', { name: /create and open/i }))
-    succeedCreate()
-
-    act(() => lastOpenIn().options.onError(new Error('claude is no longer installed.')))
-    expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByRole('dialog', { name: /build it with/i })).toBeTruthy()
-    expect(screen.getByText(/no longer installed/i)).toBeTruthy()
-    // The folder exists and the page is behind the modal either way.
-    expect(setActiveLocalAgentId).toHaveBeenCalledWith('folder:new')
-  })
-
   it('never inserts a hint under the name while typing — the dialog must not jump', () => {
     // One character makes an adjusted slug ("1-agent"); the sentence explaining
     // that used to appear on this keystroke and vanish on the next, resizing
@@ -242,23 +169,6 @@ describe('NewLocalAgentModal', () => {
     fireEvent.change(name, { target: { value: '12' } })
     expect(screen.queryByText(/folder names/i)).toBeNull()
     expect(screen.getByText('12')).toBeTruthy()
-  })
-
-  it('mirrors the auto-open setting in the checkbox and turns it off when unticked', async () => {
-    defaultTool = CLAUDE
-    autoOpen = true
-    open()
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Invoice watcher' } })
-    fireEvent.click(screen.getByRole('button', { name: /create and open/i }))
-    succeedCreate()
-    // The automatic open failed, so the tool step shows — with the box
-    // reflecting the setting that is actually on.
-    act(() => lastOpenIn().options.onError(new Error('nope')))
-    const box = screen.getByRole('checkbox', { name: /without asking/i }) as HTMLInputElement
-    expect(box.checked).toBe(true)
-    fireEvent.click(box)
-    fireEvent.click(screen.getByRole('button', { name: /codex/i }))
-    expect(setSetting).toHaveBeenCalledWith({ key: 'localAgentsAutoOpen', value: false })
   })
 
   it('keeps a reserved line for errors so the buttons never move', () => {

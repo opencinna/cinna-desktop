@@ -155,9 +155,9 @@ describe('app settings', () => {
     expect(appSettingsService.getAll().localAgentsDefaultTool).toBe('')
   })
 
-  it('round-trips the auto-open flag', () => {
-    appSettingsService.set('localAgentsAutoOpen', true)
-    expect(appSettingsService.getAll().localAgentsAutoOpen).toBe(true)
+  it('round-trips a boolean flag', () => {
+    appSettingsService.set('localAgentsModelAdvanced', true)
+    expect(appSettingsService.getAll().localAgentsModelAdvanced).toBe(true)
   })
 
   it('does not require the engine path to exist', () => {
