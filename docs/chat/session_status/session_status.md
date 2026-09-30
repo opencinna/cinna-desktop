@@ -22,14 +22,14 @@ Show which conversations are still working and which have new results to read, e
 ### Return to unseen results
 
 1. Leave a session working in another chat, or put the application in the background.
-2. When work ends, its row replaces the spinner with a result icon: a green check for completion, an amber question mark for needed input, or a red alert for failure. Hover/focus still exposes **Delete session** for stopped work.
+2. When work ends, its row replaces the spinner with a result icon: a green check for completion, an amber question mark for needed input, or a red alert for failure. Hover/focus still exposes **Delete session** for stopped work. While it is running or unread, the row sits in the [Active block](../chat_list_grouping/active_block.md) at the top of the list, unless the user switched that off.
 3. Open that conversation in the foreground and let its saved transcript load. The indicator clears only when the loaded conversation contains that same latest result.
 4. Leave and return, or restart the app. An acknowledged result stays read; an unopened result remains unread across restart.
 
 ### A row pointed at from elsewhere
 
 1. On a task page, choose **⋯ → Show in the Chats list**. A chat a job spawned is moved out of hiding first.
-2. The sidebar opens on Chats and any collapsed [group](../chat_list_grouping/chat_list_grouping.md) holding the chat opens — or the [Pinned](../chat_list_order/chat_list_order.md) block, for a pinned chat; the chat's row scrolls into view and is outlined in the accent colour for under two seconds. The chat is not opened; the task stays on screen.
+2. The sidebar opens on Chats and any collapsed [group](../chat_list_grouping/chat_list_grouping.md) holding the chat opens — or the [Pinned](../chat_list_order/chat_list_order.md) block, for a pinned chat, and nothing for a chat in the [Active block](../chat_list_grouping/active_block.md); the chat's row scrolls into view and is outlined in the accent colour for under two seconds. The chat is not opened; the task stays on screen.
 
 ## Business Rules
 

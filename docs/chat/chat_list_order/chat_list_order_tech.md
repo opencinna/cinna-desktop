@@ -50,7 +50,7 @@ How many drops fit in one gap is how many times it halves before reaching the fl
 
 ### `ChatList`
 
-- `pinnedChats(chats)` is drawn first, under `ChatGroupHeader label="Pinned"` (no `who`, so it is drawn like a day header). Its collapse key is `PINNED_GROUP` (`'pinned'`) in the same `chatGroupCollapsed` map as the group keys, default open. A reveal of a pinned chat expands `[PINNED_GROUP]` instead of `groupKeysOf`.
+- `pinnedChats(listed)` — the list minus the rows in the [Active block](../chat_list_grouping/chat_list_grouping_tech.md#the-active-block), which is drawn before it — comes next, under `ChatGroupHeader label="Pinned"` (no `who`, so it is drawn like a day header). Its collapse key is `PINNED_GROUP` (`'pinned'`) in the same `chatGroupCollapsed` map as the group keys, default open. A reveal of a pinned chat expands `[PINNED_GROUP]` instead of `groupKeysOf`.
 - Each row gets `dragGroup` — `FLAT_GROUP` (`'flat'`), the who key, the day key or `PINNED_GROUP` — and an `onDropChat` built by `dropInto(list, shown, rank)` with that group's drawn chats and its rank function (`listRank`, `dayRank` or `pinnedRank`), so the rank comes from exactly the neighbours on screen.
 - `dropInto` → `'unchanged'` does nothing; `'no-room'` sets the notice `NO_ROOM` without a write; a number calls `useMoveChat().mutate`. A mutation error becomes the notice through `unwrapIpcError`.
 - The notice is a `role="alert"` absolutely positioned at the bottom of a `relative` wrapper around the scroller, `pointer-events-none`, cleared after `MOVE_NOTICE_MS` (4 s).
@@ -72,7 +72,7 @@ Portaled to `body`, `role="menu"` `aria-label="Chat actions"`, `position: fixed`
 
 ### `chatDragContext.ts`
 
-`ChatsDragContext` — `drag: { id, group } | null` and `menuOpen`, with setters. Shared state only, provided by `ChatList`; the default value is inert. A row without `dragGroup` and `onDropChat` is neither a drag source nor a target.
+`ChatsDragContext` — `drag: { id, group } | null`, `menuOpen` and `renaming` (a row's rename input is open; `ChatItem` sets it, and it holds the Active block so the row does not remount under the input), with setters. Shared state only, provided by `ChatList`; the default value is inert. A row without `dragGroup` and `onDropChat` is neither a drag source nor a target.
 
 ### Hooks (`useChat.ts`)
 

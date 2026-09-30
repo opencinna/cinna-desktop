@@ -7,10 +7,10 @@ The user decides where a chat sits in the sidebar's Chats list instead of leavin
 ## Core Concepts
 
 - **Row menu** — the right-click menu of a Chats row, opened at the pointer: **Pin** (or **Unpin**), **Rename**, **Open Folder** (only when the chat's agent is a local folder agent), a separator, then **Delete**.
-- **Pinned block** — a **Pinned** header at the top of the list, above every group, holding the pinned chats in the order the user gave them. It is drawn only while something is pinned, and collapses like a day group. Not to be confused with the transcript's "pinned to the bottom" ([Transcript Scrolling](../conversation_ui/scroll_following.md)).
+- **Pinned block** — a **Pinned** header at the top of the list, above every group — only the [Active block](../chat_list_grouping/active_block.md) sits higher — holding the pinned chats in the order the user gave them. It is drawn only while something pinned is not in Active, and collapses like a day group. Not to be confused with the transcript's "pinned to the bottom" ([Transcript Scrolling](../conversation_ui/scroll_following.md)).
 - **Pinned rank** — a pinned chat's place inside Pinned, higher first; none means not pinned.
 - **Dragged place** — the place a user dragged a chat to inside its group. A chat never dragged has none and sorts by recency. One chat has one dragged place, used in every grouping.
-- **Innermost group** — the group a row is drawn in: the flat list, one agent or mode group, one day group (inside a who group when both groupings are on), or Pinned. See [Chats List Grouping](../chat_list_grouping/chat_list_grouping.md).
+- **Innermost group** — the group a row is drawn in: the flat list, one agent or mode group, one day group (inside a who group when both groupings are on), or Pinned. A row in the Active block is in no innermost group, so it cannot be dragged. See [Chats List Grouping](../chat_list_grouping/chat_list_grouping.md).
 
 ## User Stories / Flows
 
@@ -47,6 +47,7 @@ The user decides where a chat sits in the sidebar's Chats list instead of leavin
 - **One dragged place per chat, across groupings.** A drag made while grouped by date is the place the chat has in the flat list too; the rank was computed from the neighbours the user saw, so under another grouping it may sit somewhere the user did not choose.
 - **A newly pinned chat goes to the top of Pinned**, above every chat already there. It can then be dragged inside Pinned.
 - **Grouping has no effect inside Pinned.** Pinned is flat and ordered only by the user; its chats appear in no group below. A who group whose chats are all pinned is not drawn.
+- **A running or unread pinned chat is shown in Active, not Pinned**, while the [Active block](../chat_list_grouping/active_block.md) is on; it returns to its pinned place when it leaves. Pinning or unpinning a chat that is in Active therefore shows nothing until it leaves, and a drag cannot start or land on an Active row.
 - **Pinning and the dragged place are separate.** Unpinning returns the chat to the place it had in its group before, not to wherever Pinned had it.
 - **Rename, pin and move are not activity.** None of them changes when the chat was last updated; otherwise renaming a chat would throw it to the top of a list sorted by recency.
 - **A drop that changes nothing writes nothing.** Dropping a chat back where it was, or next to itself, is not saved.
@@ -77,14 +78,15 @@ Drag row -> same innermost group? -> dropRank(neighbours as drawn)
       -> optimistic list row -> chat:move { list: pinned | chats, rank }
       -> chats.pinned_rank | chats.sort_key  (updated_at untouched)
 
-chat:list -> pinnedChats() -> Pinned block
+chat:list -> Active block (running / unread; taken out of what follows)
+          -> pinnedChats() -> Pinned block
           -> groupChats() (unpinned only, by sort_key ?? recency) -> groups
 ```
 
 ## Integration Points
 
 - [Technical details](chat_list_order_tech.md) — columns, channels, the rank arithmetic and tests.
-- [Chats List Grouping](../chat_list_grouping/chat_list_grouping.md) — the groups a drag stays inside and Pinned sits above.
+- [Chats List Grouping](../chat_list_grouping/chat_list_grouping.md) — the groups a drag stays inside and Pinned sits above; [the Active block](../chat_list_grouping/active_block.md) above Pinned, which an open row menu or a rename holds still.
 - [Chat Row Summary](../chat_row_summary/chat_row_summary.md) — the tooltip held back while a menu or drag is on.
 - [Sidebar Session Status](../session_status/session_status.md) — the row's running state that disables Delete, and the reveal that opens Pinned when its chat is pinned.
 - [Local Agents](../../agents/local_agents/agents_tab.md) — the folder agents Open Folder applies to.

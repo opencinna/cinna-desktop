@@ -6,7 +6,7 @@ The sidebar's Chats list can be grouped by who each chat is with, by the day of 
 
 ## Core Concepts
 
-- **Group chats menu** — the list-icon button beside **+** in the Chats header, shown only while the pointer is on the header, the button has keyboard focus, or its menu is open (opacity only, so nothing shifts). Two independent switches, **Group by Agent** and **Group by Date**, each checked while on. Either, both or neither; neither is one flat list. Both off is the default.
+- **Chats list options menu** — the list-icon button beside **+** in the Chats header, shown only while the pointer is on the header, the button has keyboard focus, or its menu is open (opacity only, so nothing shifts). Two independent switches, **Group by Agent** and **Group by Date**, each checked while on. Either, both or neither; neither is one flat list. Both off is the default. Below a separator, a third switch, **Show Active group**, off by default, draws running and unread chats in their own block above everything — see [the Active block](active_block.md).
 - **Who group** — one per counterpart, the same counterpart the [row summary](../chat_row_summary/chat_row_summary.md)'s who line names:
   - an **agent** — its type icon and name;
   - a **chat mode** — a chat icon in the mode's colour and the mode's name;
@@ -20,8 +20,8 @@ The sidebar's Chats list can be grouped by who each chat is with, by the day of 
 
 ### Group the list
 
-1. The user opens **Group chats** in the Chats header. The first switch takes focus; the arrow keys move between the two and Escape closes the menu and returns focus to the button.
-2. The user turns on **Group by Agent**. The list regroups at once and the menu stays open, so **Group by Date** can be set in the same visit.
+1. The user opens **Chats list options** in the Chats header. The first switch takes focus; the arrow keys move between the switches and Escape closes the menu and returns focus to the button.
+2. The user turns on **Group by Agent**. The list regroups at once and the menu stays open, so **Group by Date** and **Show Active group** can be set in the same visit.
 3. The choice is remembered across restarts.
 
 ### Collapse a group
@@ -51,23 +51,24 @@ The sidebar's Chats list can be grouped by who each chat is with, by the day of 
 - **The start button appears only where a chat can start.** For an agent it follows the Agents list's chat shortcut: the agent must still be listed and enabled, and a folder agent's manifest must not be invalid. A deleted, disabled or invalid agent's group keeps its count and has no button — a button that opens a composer the agent cannot answer in is worse than none. A chat mode or the plain **Chat** group can always start.
 - **A pending agent pick beats a pending mode.** If both requests reach the new-chat screen together, the agent is selected and the mode request dropped; letting the mode run afterwards would clear the agents the pick had just selected. A mode deleted since the list was drawn is dropped too, without closing the chat that was open.
 - **Nothing shifts under the pointer.** The start button has a fixed slot of its own; it is always rendered (invisible until hover or focus), so it is reachable by Tab and showing it moves nothing.
-- **Revealing only opens.** A reveal expands the groups it needs — only the Pinned block for a pinned chat — and never collapses others; a chat that is not listed yet is found when the list is next read.
+- **Revealing only opens.** A reveal expands the groups it needs — only the Pinned block for a pinned chat, none for a chat in the [Active block](active_block.md) — and never collapses others; a chat that is not listed yet is found when the list is next read.
 - **An open row summary closes when a group above it opens or closes**, because the row has moved; it is positioned once, on opening.
-- **Preferences are per machine, not per profile.** The two switches and the open/closed choices live in the renderer's local storage. Group keys carry agent and mode ids, so a key from another profile simply matches nothing. Keys of groups that no longer exist are not pruned.
+- **Preferences are per machine, not per profile.** The three switches and the open/closed choices live in the renderer's local storage. Group keys carry agent and mode ids, so a key from another profile simply matches nothing. Keys of groups that no longer exist are not pruned.
 
 ### What it does not do
 
-- It does not filter or hide chats: every listed chat appears in exactly one group, or in the Pinned block above them — pinned chats are never grouped. Hidden chats (job runs) stay hidden as before.
+- It does not filter or hide chats: every listed chat appears in exactly one group, or in the Pinned block above them — pinned chats are never grouped — or, while it is active, in the [Active block](active_block.md) above Pinned, and then nowhere else. Hidden chats (job runs) stay hidden as before.
 - It does not group by model, by job or by folder, and there is no manual ordering of groups — that is what [Job folders](../../jobs/jobs/jobs.md) are for. Chats inside a group can be reordered by hand; that is [Chats List Order](../chat_list_order/chat_list_order.md).
 - It does not change what the row, its tooltip or its session status show.
 
 ## Architecture Overview
 
 ```
-Group chats menu -> ui.store (chatGroupByAgent / chatGroupByDate, localStorage)
+Chats list options menu -> ui.store (chatGroupByAgent / chatGroupByDate / chatShowActive, localStorage)
 ChatList -> chats (polled) + summaries (unpolled) + agents / modes (fallback)
-         -> pinnedChats() -> Pinned block (never grouped)
-         -> groupChats() (unpinned) -> flat | who groups [-> day groups] | day groups
+         -> Active block (running / unread, held under the pointer; see active_block.md)
+         -> the rest -> pinnedChats() -> Pinned block (never grouped)
+         -> groupChats() (unpinned, not active) -> flat | who groups [-> day groups] | day groups
          -> ChatGroupHeader (collapse: ui.store.chatGroupCollapsed ?? chatGroupCollapsedByDefault)
                 -> start button -> pendingAgentId | pendingModeId
                 -> ChatWorkspace consumes the one-shot -> new-chat screen
@@ -77,6 +78,7 @@ revealChatId -> ChatList expands the chat's groups -> ChatItem scrolls and outli
 ## Integration Points
 
 - [Technical details](chat_list_grouping_tech.md) — keys, store fields, the pure grouping module and tests.
+- [The Active block](active_block.md) — running and unread chats above Pinned, the menu's third switch, and why the block never changes under the pointer.
 - [Chats List Order](../chat_list_order/chat_list_order.md) — the Pinned block above the groups, dragging inside the innermost group, and the row menu.
 - [Chat Row Summary](../chat_row_summary/chat_row_summary.md) — supplies who each chat is with and its last message time; the header icon is the tooltip's who icon.
 - [Sidebar Session Status](../session_status/session_status.md) — the rows inside the groups, and the reveal request that opens them.
