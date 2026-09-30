@@ -162,4 +162,5 @@ playwright test -> fixtures/app.ts -> electron.launch(repoRoot, HOME=sandbox, CI
 - The observed wire string backs the fixtures around `src/renderer/src/utils/ipcError.ts` — see [Main-Process Layering](../main_layering/main_layering_llm.md)
 - Scaffolding and roots: [Kit Contract](../../agents/local_agents/kit_contract.md) and [Commands](../../agents/local_agents/commands.md)
 - Writing and debugging specs, for an agent or a person: [Writing E2E Tests](e2e_llm.md)
+- A Mac with nothing installed, and the system dialogs this suite cannot see on a developer's machine: [Bare-Mac Tests](../bare_mac/bare_mac.md)
 - Dropped for now: a fake or real Cinna server for E1/E2, and a mocked OpenAI server via `baseUrl` — the live specs use the real key instead (`plans/e2e-testing.md`, local)

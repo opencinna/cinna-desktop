@@ -81,5 +81,6 @@ Engine / custom agent / stdio MCP child env
 - [Custom Agents](../../agents/custom_agents/custom_agents.md), [MCP Connections](../../mcp/connections/connections.md) — the other children that get the shims
 - [Open in Tools](../../agents/local_agents/open_in_tools.md) — tool detection reads a stub as not installed
 - [E2E](../e2e/e2e_llm.md) — `CINNA_GIT_DOWNLOAD=off`
+- [Bare-Mac Tests](../bare_mac/bare_mac.md) — [A fresh Mac, nothing installed](#a-fresh-mac-nothing-installed) on a real VM with no developer tools, failing on any system dialog: startup, the managed git download and tool detection (steps 3 and 5). Step 2 is not reached — with no login no engine child starts
 
 Technical detail: [developer_tools_tech.md](developer_tools_tech.md).
