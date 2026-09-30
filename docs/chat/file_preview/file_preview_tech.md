@@ -5,14 +5,16 @@
 ### Shared (cross-process)
 - `src/shared/filePreview.ts`:
   - `previewKindFor(filename, mimeType)` → `PreviewRenderKind | null`, and `isPreviewable(filename, mimeType)`.
-  - The `PreviewRenderKind` type (`'markdown' | 'json' | 'csv' | 'python' | 'xml' | 'text' | 'html'`) and `MAX_PREVIEW_BYTES` (512 KB).
+  - The `PreviewRenderKind` type (`'markdown' | 'json' | 'csv' | 'python' | 'xml' | 'text' | 'html' | 'image'`) and `MAX_PREVIEW_BYTES` (512 KB).
+  - Images: `MAX_IMAGE_PREVIEW_BYTES` (20 MB), `IMAGE_TOO_LARGE_ERROR`, `THUMBNAIL_MAX_SIDE` (160) and `THUMBNAIL_ORIGINAL_MAX_BYTES` (256 KB).
+  - IPC types: `FilesReadImageInput` (`{ fileId, source? }` or `{ path }`), `FilesReadImageResult`, `FilesReadPreviewPathResult`, `FilesPasteFromClipboardResult`.
   - The extension table wins over the MIME table. The extension is parsed inline, without Node `path`, because the sandboxed renderer imports this file.
   - `decodePreviewText(bytes, truncated)` decodes UTF-8. When `truncated`, it decodes with `{ stream: true }` and skips the final flush, so a multi-byte sequence cut by the cap is dropped (no trailing `�`). Attachment reads and agent-file reads both use it.
 - `src/shared/htmlPreview.ts`: the preview frame's IPC contract — `HtmlPreviewOpenInput` (`{ type: 'attachment', fileId, source?, filename, mimeType? }` or `{ type: 'agentFile', agentId, path }`), `HtmlPreviewOpenResult`, `FilesOpenInBrowserInput` / `FilesOpenInBrowserResult` — and `HTML_PREVIEW_SANDBOX`, the frame's `sandbox` tokens, so the renderer's `<iframe>` and the reasoning behind them live in one place.
 - `src/shared/attachments.ts`:
   - `MessageAttachment` is the shape preview consumes: id, filename, size, mimeType, `source?`.
   - `agentFileToAttachment(file)` adapts an agent `MessagePartFile` into it; the preview/download click router reuses it.
-- `src/shared/agentFiles.ts`: `agentFilePreviewKindFor`, `isCredentialFilePath`, `agentFileName`, and the `agent-files:*` result types. See [File References — Technical Details](../file_references/file_references_tech.md).
+- `src/shared/agentFiles.ts`: `agentFilePreviewKindFor` (never `image`: an agent file is read through the text-only `agent-files:read-preview`), `isCredentialFilePath`, `agentFileName`, and the `agent-files:*` result types. See [File References — Technical Details](../file_references/file_references_tech.md).
 
 ### Main process — services
 - `src/main/services/fileService.ts`:
@@ -23,8 +25,12 @@
     Decodes the result of `readBytes` with `decodePreviewText` and returns `{ text, truncated }`.
   - `readBytes({ userId, attachmentId, source, maxBytes })` → `{ bytes, truncated }`: the capped, source-routed read itself, in memory. Shared by `readTextPreview` and the HTML preview server, so the frame reads an attachment through the same ownership and bearer gates as its text.
   - `assertFileScope(value)`: reused to narrow the renderer-supplied `'cinna' | 'local'`.
+  - `sniffPreviewImageMime(bytes)`: PNG, JPEG, GIF, WebP and BMP by magic bytes; SVG by an `<svg` in the first 4 KB with no `<html`; else `null`. Every image `data:` URL is typed from this, never from the name or the renderer.
+  - `readImageAttachment({ userId, attachmentId, source })` → `{ dataUrl, mimeType }`: a `local` row is stat'ed and refused over `MAX_IMAGE_PREVIEW_BYTES` before any read; then `readBytes` with that cap, and a `truncated` result is `FileError('too_large', IMAGE_TOO_LARGE_ERROR)`; bytes that do not sniff are `not_previewable`.
+  - `pathPreview.readText(path, maxBytes)` / `pathPreview.readImage(path)`: a composer file by path. `assertSurfacedPath` (a string, absolute, `pathGuard.isAllowed`, else `not_allowed`), `stat` (`not_a_file` for a folder, `not_found` when gone), then a capped `open` + `read` decoded with `decodePreviewText`, or the image read under the 20 MB refusal.
+  - `readThumbnail(input)`: the same gates as the two image reads, then `thumbnailOf` — `runtimeHost.images?.thumbnail(bytes, THUMBNAIL_MAX_SIDE)` for anything but SVG; with no scaled result, the original up to `THUMBNAIL_ORIGINAL_MAX_BYTES`, else `not_previewable` ("No thumbnail for this image."). An LRU of `THUMBNAIL_CACHE_ENTRIES` (200) keyed by user, source and attachment id, or by path, size and `mtimeMs`, so a changed file is read again. `_resetThumbnailCache()` for tests.
 - `src/main/services/cinnaFileService.ts`:
-  - `readBytes(userId, fileId, maxBytes)`: `net.fetch GET /api/v1/files/{fileId}/download` with the OAuth bearer. Reads `arrayBuffer()` and returns `{ bytes: Buffer (capped), truncated }`.
+  - `readBytes(userId, fileId, maxBytes)`: `net.fetch GET /api/v1/files/{fileId}/download` with the OAuth bearer, aborted after `READ_TIMEOUT_MS` (60 s) so a hung backend cannot hold a preview, a thumbnail or the HTML frame forever; a network failure or timeout is `CinnaFileError('download_failed')`. Reads `arrayBuffer()` and returns `{ bytes: Buffer (capped), truncated }`.
   - Logs a `read` success line (`fileId, bytes, truncated, durationMs`), and `logger.error` on a network failure or non-OK status.
   - In memory only; never writes to disk, unlike `downloadToPath`.
 - `src/main/services/agentFiles/agentFileService.ts`: `readPreview()` reads an agent file, after the containment, consent and credential checks. Documented with [File References](../file_references/file_references_tech.md). For the HTML frame and Open in browser:
@@ -47,6 +53,8 @@
 - `src/main/db/chatFiles.ts`: `chatFileRepo.getOwned(userId, attachmentId)`, an ownership-scoped lookup for the `local` read path.
 
 ### Main process — desktop host
+- `src/main/host/runtimeHost.ts`: `RuntimeHost.images?.thumbnail(bytes, maxSide)` → `{ bytes, mimeType } | null`, optional; a host without it (the plain-Node hub) gets unscaled thumbnails up to 256 KB and none above. See [Hub core](../../development/hub_core/hub_core_llm.md).
+- `src/main/host/desktop/imageThumbnails.ts`: `nativeImageThumbnail(bytes, maxSide, create?)`, wired as the desktop host's `images.thumbnail` in `host/desktop/runtimeHost.ts`. `nativeImage.createFromBuffer`, fit inside `maxSide` (never enlarged, `quality: 'good'`), `toPNG()` when the source is a PNG (transparency), else `toJPEG(80)`; `null` when empty, sizeless or undecodable.
 - `src/main/host/desktop/htmlPreview.ts`: the Electron side.
   - `registerHtmlPreviewScheme()`: `protocol.registerSchemesAsPrivileged` for `cinna-preview` (`standard`, `secure`, `supportFetchAPI`, `corsEnabled`, `stream`). Called from `src/main/index.ts` before `app` is ready; the app's only call, since a second would replace the first's list.
   - `htmlPreviewServer`: the production server, wired to `getProfileScopeUserId`, `fileService.readBytes`, `agentFileService.readHtmlDocument` and `readHtmlAsset`.
@@ -58,12 +66,15 @@
 - `src/main/host/desktop/openInBrowserCopies.ts`: `OPEN_IN_BROWSER_DIR` (`html-open-in-browser`), `openInBrowserRoot(userData)`, `prepareOpenInBrowserDir(userData, userId, attachmentId)` and `clearOpenInBrowserCopies(userData)`.
 - `src/main/host/desktop/agentFiles.ts`: `openInBrowser`, the production `createBrowserLauncher` (the browser from `app.getApplicationInfoForProtocol('https://')`, `shell.openPath` as the fallback), handed to `agentFileService` and used by `openAttachmentInBrowser`.
 - `src/main/index.ts`: `nodeIntegrationInSubFrames: false` stated on the main window, `guardPreviewFrames(mainWindow, appUrl)` with the dev server's URL or the packaged `file://` index, and the three calls above.
-- `src/main/errors.ts`: `FileErrorCode` gains `not_previewable` and `launch_failed`.
+- `src/main/errors.ts`: `FileErrorCode` includes `not_previewable`, `launch_failed`, `too_large` (an image over its cap), `not_allowed` (a path not in the path guard) and `not_a_file`.
 
 ### Main process — IPC
 - `src/main/ipc/files.ipc.ts`:
   - `files:read-preview`: a thin controller. Calls `userActivation.requireActivated()` → `getProfileScopeUserId()` → `assertFileScope` → `fileService.readTextPreview({ maxBytes: MAX_PREVIEW_BYTES })`. Returns `{ success, text, truncated }`, or `{ success: false, error, code }` via `ipcErrorShape`.
   - Reuses the existing `files:download` for the modal's Download button; there is no new download channel.
+  - `files:read-image`: `requireActivated()`; `{ path }` → `pathPreview.readImage`; otherwise `getProfileScopeUserId()`, `assertFileScope`, a non-empty `fileId` (else `invalid_input`, "Nothing to preview."), then `readImageAttachment`. Returns `{ success, dataUrl, mimeType }`.
+  - `files:read-thumbnail`: the same inputs and gates, then `readThumbnail`.
+  - `files:read-preview-path`: `requireActivated()`, then `pathPreview.readText(path, MAX_PREVIEW_BYTES)`.
   - `files:open-in-browser`: the same gates as `files:read-preview` (activation, profile, `assertFileScope`), a string `fileId` and `filename` (else `invalid_input`), then `openAttachmentInBrowser`. Failures return as data via `ipcErrorShape`.
 - `src/main/ipc/agent_files.ipc.ts`: the `agent-files:*` channels an agent-file preview uses: `authorize`, `read-preview`, `open`, `open-in-browser` and `reveal`.
 - `src/main/ipc/html_preview.ipc.ts`: `registerHtmlPreviewHandlers()`, registered after the agent-file handlers.
@@ -74,31 +85,35 @@
 - `src/preload/index.ts`:
   - `window.api.files.readPreview({ fileId, source? })` → `ipcRenderer.invoke('files:read-preview', …)`. The return type is the success/error union, inferred into `API = typeof api` and surfaced through `src/preload/index.d.ts`.
   - `window.api.files.openInBrowser({ fileId, filename, source? })` → `files:open-in-browser`.
+  - `window.api.files.readImage(input)`, `readThumbnail(input)` and `readPreviewPath({ path })` → `files:read-image`, `files:read-thumbnail`, `files:read-preview-path`.
   - `window.api.agentFiles.*` serves agent files, `openInBrowser(input)` → `agent-files:open-in-browser` included.
   - `window.api.htmlPreview.{ open(input), release(token) }` → `html-preview:open` / `html-preview:release`.
 
 ### Renderer — store / hook
 - `src/renderer/src/stores/filePreview.store.ts`: `useFilePreviewStore` (Zustand).
   - **What is open:**
-    - `target`: `{ type: 'attachment', attachment }` or `{ type: 'agentFile', agentId, ref }`;
+    - `target`: `{ type: 'attachment', attachment, composer? }`, `{ type: 'agentFile', agentId, ref }` or `{ type: 'path', path, filename, mimeType }`;
     - `attachment`: set for attachment targets only;
-    - `kind`, `text`, `isLoading` and `truncated`.
+    - `kind`, `text`, `image` (`PreviewImage`: `url`, natural `width` and `height`, 0 when unknown), `isLoading` and `truncated`.
   - **What went wrong:**
     - `error` and `errorCode`;
     - `failedStep`: `authorize`, `preview` or `reveal`;
     - `notice`: `credential` or `unsupported`.
   - **The entrance:** `origin` (`{x, y}`, or null for a keyboard open) and `openSeq`.
   - **Guards and actions:** `requestId`, `pendingAction` and `actionError`.
-  - `openPreview(attachment, kind)`: the signature is unchanged.
+  - `openPreview(attachment, kind, options?)`: `options.composer` marks the target so the modal offers no Download.
     1. Takes `origin` from `recentPointer()`: the last `pointerdown` recorded by a window capture-phase listener, if it is at most `POINTER_ORIGIN_MAX_AGE_MS` old.
     2. Bumps `openSeq`, and bumps `agentOpenToken` so a pending agent-file open cannot replace it.
-    3. Fetches under `requestId`.
+    3. Fills under `requestId` through `fill`.
+  - `openPathPreview(file, kind)`: the same steps for a `path` target, reading with `readPreviewPath` or an `ImageRef` of type `path`.
+  - `fill(requestId, kind, imageRef, readText)` (private): for `image`, `loadImage(ref)` from the shared `imageDataCache` (the `full` LRU), then `decodePreviewImage` (`new Image()`, `decode()`, natural size; skipped where `decode` is missing), and only then `image` is set and `isLoading` cleared — a failed decode is "The image could not be decoded."; otherwise `readText()`. Every step drops its result when `requestId` moved.
   - `openAgentFile`, `openAgentFileExternally` and `revealAgentFile`: see [File References — Technical Details](../file_references/file_references_tech.md).
   - `openInBrowser()`: for an agent file, `runAction('browser')` (the Open / Open folder path, `window.api.agentFiles.openInBrowser`); for an attachment, its own `pendingAction: 'browser'` run of `window.api.files.openInBrowser`, dropped if the target changed meanwhile. A failure is an `actionError` with `action: 'browser'`, `code: 'launch_failed'` only when main said so.
   - `PreviewAction` (`'open' | 'reveal' | 'browser'`) types `pendingAction` and `actionError.action`; `actionErrorText` words `browser` as "Couldn't open it in the browser: …", and `launch_failed` as main's own sentence.
   - `agentFileErrorText`, `actionErrorText` and `actionErrorRepeatsBody`: the error copy the modal renders.
   - `close()`: resets to `closedState` and bumps `requestId`, so any fetch still in flight is discarded. The store closes at once; the fade-out belongs to the modal, which renders a snapshot.
-- `src/renderer/src/hooks/useAttachmentOpen.ts`: `useAttachmentOpen()` returns `(attachment) => void`. It calls `previewKindFor`, then `openPreview` for a previewable file or `useFileDownloadStore.download` for everything else. This is the single branch point between preview and download.
+- `src/renderer/src/hooks/useAttachmentOpen.ts`: `useAttachmentOpen()` returns `(attachment) => void`. It calls `previewKindFor`, then `openPreview` for a previewable file or `useFileDownloadStore.download` for everything else. This is the single branch point between preview and download. `useComposerAttachmentOpen()` is the composer's: previewable files only, `openPathPreview` for `pending`, `openPreview(…, { composer: true })` otherwise, never a download; `composerCanPreview(a)` tells `AttachmentList` which composer badges are clickable.
+- `src/renderer/src/utils/imageDataCache.ts`: the image cache the modal and the inline thumbnails share — `loadImage(ref, 'full' | 'thumbnail')`, `useImage`, `carryIngestedImages`. See [File Attachments — Technical Details](../file_attachments/file_attachments_tech.md).
 - `src/renderer/src/stores/fileDownload.store.ts`: `useFileDownloadStore`, reused unchanged for the modal's Download button (shared spinner and error state).
 
 ### Renderer — components
@@ -108,13 +123,13 @@
     - a separate backdrop layer (`backdropRef`);
     - the card (`cardRef`, `tabIndex={-1}`, `max-h-[80vh]`).
   - **Header**, in order:
-    1. the title icon (`FileText`, or `Folder` for a folder);
+    1. the title icon (`FileText`, `Image` for `kind === 'image'`, or `Folder` for a folder);
     2. the filename, with a `title`;
     3. `CopyablePath`: the agent file's display path, when it differs from the name;
     4. the CSV Filter toggle, not shown with a notice;
     5. the **Contents** toggle (`HEADER_ACTION_CLASS`, accent-tinted while open), only while `showContents`: loaded (not loading, no error, no notice) and `toc.show`, where `toc` is `markdownToc` for markdown or `pythonOutline` for python. `aria-expanded` and `aria-controls={CONTENTS_PANEL_ID}`;
     6. for agent files, `FileActionsMenu` (`key={targetKey}`, `dismissed={exiting}`), given `pendingAction`, `fileGone`, `openAgentFileExternally` and `revealAgentFile`;
-    7. for attachments, Download;
+    7. for attachments, Download — not when `target.composer` (`downloadable`);
     8. Close.
   - **Also in the header**: for `kind === 'html'` with no body error or notice, a `role="group"` `aria-label="View"` pair of `aria-pressed` buttons, **Rendered** / **Source**; for an HTML attachment, an icon-only Open in browser (`Globe`, `aria-label="Open <name> in browser"`, `Loader2` while `pendingAction === 'browser'`, disabled while any action runs) before Download. `FileActionsMenu` gets `onOpenInBrowser` only for `html`.
   - **Action error row:** `role="alert"`, for attachments too now (Open in browser), rendered for an agent file unless `actionErrorRepeatsBody` says it would repeat the body.
@@ -134,7 +149,9 @@
     - `closingFor`: set to `openSeq` when a toggle closes the panel; cleared after `ENTRANCE.duration`.
     - `slowOpenFor`: set to `openSeq` when `isLoading` outlasts `ENTRANCE_WAIT_MS`. While it matches, `sideBySide` is forced false. `toggleContents` clears it.
     - `toggledAt`: a ref stamped by `toggleContents`, for the press guard.
-  - **Body:** loading, then an error (`agentFileErrorText`, or "Couldn't load preview: …" for an attachment), then a notice, then `PreviewBody`. The truncation copy depends on the target.
+  - **Body:** loading, then an error (`agentFileErrorText`, or "Couldn't load preview: …" for an attachment or a path), then a notice, then `ImagePreview` for `image`, else `PreviewBody`. The truncation copy depends on the target: open it (agent file), download it (a downloadable attachment), or "Preview truncated at 512 KB." (a composer file). `imageShown` centres the body with flex.
+  - `ImagePreview({ image, alt })`: `data-testid="image-preview"`, the natural `width`/`height` attributes so the box is final on first paint, `max-w-full`, `object-contain`, `maxHeight: calc(80vh - IMAGE_CHROME_REM rem)` (6 rem of header and padding).
+  - **Path targets:** `targetKey` is `path:<path>`; `html` is false for them, so an HTML composer file renders `PreviewBody`'s `CodePreview language="xml"` with no frame, no Rendered/Source toggle and no Open in browser.
   - `useCardEntrance({ cardRef, backdropRef, open, openSeq, settled })`:
     - **On each open:**
       - records whether the open came from the keyboard;
@@ -223,7 +240,8 @@
   - Each value: `raw` → preformatted text; `list`, or `text` that `commaSeparatedItems` splits → chips; otherwise `whitespace-pre-wrap` text.
   - `Linkified` wraps every `linkifySegments` URL in `<a target="_blank" rel="noreferrer noopener">`, which reaches `setWindowOpenHandler` in `src/main/index.ts` and opens only `http(s)` externally.
 - `src/renderer/src/components/chat/MessageBubble.tsx`: user-message badges use `AttachmentList onClick={(a) => openAttachment(a)}`.
-- `src/renderer/src/components/chat/AgentAttachment.tsx`: agent-attachment badges use the same `openAttachment` routing.
+- `src/renderer/src/components/chat/AgentAttachment.tsx`: agent-attachment badges use the same `openAttachment` routing. Both lists pass `thumbnailFor={attachmentImageRef}`, so image attachments render as `AttachmentThumbnail`.
+- `src/renderer/src/components/chat/ChatInput.tsx`: the composer's list passes `useComposerAttachmentOpen()`, `canClick={composerCanPreview}` and `thumbnailFor`.
 - `src/renderer/src/App.tsx`: mounts `<FilePreviewModal />` once at the app root, beside the other global overlays and modals.
 
 ### Renderer — utils
@@ -248,7 +266,7 @@
 - `src/renderer/src/assets/main.css` (`@layer base`): the zebra rows, `.file-preview-table tbody tr:nth-child(odd) td` and `.file-preview-markdown tbody tr:nth-child(odd) td`. `CsvPreview` puts `file-preview-table` on its `<table>`, and `MarkdownPreview` puts `file-preview-markdown` on the markdown wrapper, beside `markdown-body`.
 
 ### Attachment badge names
-- `src/renderer/src/components/chat/AttachmentBadge.tsx`: `AttachmentList` / `AttachmentBadge`, still source-agnostic. Preview routing lives entirely in the `onClick` callers. `previewsOnClick` (passed through `AttachmentList`) only changes the words: with it, a badge whose `previewKindFor(filename, mimeType)` is non-null is titled and named "Preview <name>", every other one "Download <name>". `MessageBubble.tsx` and `AgentAttachment.tsx` pass it; lists whose click always downloads do not.
+- `src/renderer/src/components/chat/AttachmentBadge.tsx`: `AttachmentList` / `AttachmentBadge`, still source-agnostic. Preview routing lives entirely in the `onClick` callers. `previewsOnClick` (passed through `AttachmentList`) only changes the words: with it, a badge whose `previewKindFor(filename, mimeType)` is non-null is titled and named "Preview <name>", every other one "Download <name>". `MessageBubble.tsx`, `AgentAttachment.tsx` and the composer pass it; lists whose click always downloads do not. A thumbnail is always named "Preview <name>".
 
 ### Tests
 - `src/renderer/src/components/chat/FilePreviewModal.test.tsx`:
@@ -268,10 +286,13 @@
 - `src/renderer/src/utils/frontmatter.test.ts`: `splitFrontmatter` value shapes, nested values kept as source, CRLF/BOM/empty blocks; documents that are not frontmatter (prose or `**Summary**:` between rules, a `#` comment first, a non-key line after a key, no closing rule) left untouched; `commaSeparatedItems`; `linkifySegments`, including `**url**` and comma-joined URLs.
 - `src/renderer/src/components/notes/NoteDetail.test.tsx` and `src/renderer/src/components/agents/local/InlineFileEditor.test.tsx`: the card renders above the document, a click on a link in it does not start editing, and the textarea a click elsewhere opens holds the raw text, frontmatter included.
 - `src/renderer/src/stores/filePreview.store.test.ts`: agent-file opens, header actions (Open in browser included), error copy and attachment previews.
-- `src/shared/filePreview.test.ts`: xml and its dialects, and `html`/`htm`/`xhtml`, by extension then MIME, for attachments and agent files.
+- `src/shared/filePreview.test.ts`: xml and its dialects, `html`/`htm`/`xhtml`, and the image formats (SVG as `image`, HEIC and TIFF not previewable, no image kind for agent files), by extension then MIME, for attachments and agent files.
 - `src/renderer/src/components/chat/XmlTree.test.tsx` and `src/renderer/src/utils/xmlOutline.test.ts`: every node type rendered, chevron and Alt-click folds, a large document folded below the root, paging, row ids, `reveal` through folded ancestors and past the page cutoff; outline depth, ids, labels, the 50-per-parent note and its place, leaves left out, the two-entry threshold, and nothing for malformed text. `FilePreviewModal.test.tsx`, `xml`: the tree with Contents, a note entry that is not a button, the source fallback and its two notes, and a Contents click unfolding before it scrolls.
 - `src/renderer/src/components/chat/FilePreviewModal.html.test.tsx`: the frame's URL and exact sandbox, token release on close, on another file and after a late answer, main's refusal in the body, the wide fixed-height card; Rendered/Source (the frame kept loaded, the truncation notice on Source only, Rendered again on the next open, not offered for other kinds); Open in browser in the ⋯ menu and as an attachment header button, its error row, and the ⋯ menu closing when the frame takes focus.
-- `src/renderer/src/components/chat/AttachmentBadge.test.tsx`: "Preview" versus "Download" names, with and without `previewsOnClick`.
+- `src/renderer/src/components/chat/AttachmentBadge.test.tsx`: "Preview" versus "Download" names, with and without `previewsOnClick`; thumbnails and composer badges (see [File Attachments](../file_attachments/file_attachments_tech.md#tests)).
+- `src/renderer/src/components/chat/FilePreviewModal.image.test.tsx`: the image read and settling only after decode, the over-cap refusal in the body, no Download for a composer open, a composer file read by path (text and image) with a slower earlier open dropped.
+- `src/main/services/fileService.preview.test.ts`: the MIME sniff; `readImageAttachment` scoped to the owning profile, refused over the cap before reading (local) or when the capped read was cut (Cinna), and for non-images; `pathPreview` reading nothing unsurfaced, the capped text read, the image read and a folder refused; `readThumbnail` scaling once and caching, keeping the attachment and path gates, and the unscaled fallback with its limit.
+- `src/main/host/desktop/imageThumbnails.test.ts`: fitting the longer side, PNG kept and JPEG otherwise, never enlarging, `null` for undecodable bytes.
 - `src/main/services/htmlPreview/htmlPreviewServer.test.ts`: token shape and URL, headers, assets typed by extension and a sibling page given the helper, 404 for unknown/released tokens and refused assets, encoded traversal reaching the gate as one segment, an attachment serving only its document, 413 over the cap, another profile served nothing (and the token forgotten), `GET`/`HEAD` only, the token cap.
 - `src/main/services/htmlPreview/previewLinkHelper.test.ts`: where the helper goes (after `<head>`, not `<header>`; after a doctype or XML declaration), a page's own `<base>`, encodings and UTF-16 left alone, XHTML-safe; and in jsdom, web links retargeted to `_top`, fragments and sibling pages kept in the frame, `window.open` of a web URL turned into a top navigation.
 - `src/main/host/desktop/htmlPreviewGuards.test.ts`: the main-frame and subframe navigation verdicts, the permission requester rule, preview download URLs, `safeHtmlFilename`, a preview never navigating the window to the app's own page, and the external-open gate (one open per activation window, and at once again after the user left the app and came back). The Electron wiring itself (`htmlPreview.ts`) and Chromium's sandbox enforcement have no automated test.
@@ -285,6 +306,9 @@
 | `files:read-preview` | renderer → main | `{ fileId: string, source?: 'cinna' \| 'local' }` | `{ success: true, text: string, truncated: boolean }` / `{ success: false, error, code? }` |
 | `files:download` | renderer → main | `{ fileId, filename, source? }` | Reused for the modal Download button. See [File Attachments](../file_attachments/file_attachments_tech.md) |
 | `agent-files:read-preview`, `agent-files:authorize`, `agent-files:open`, `agent-files:open-in-browser`, `agent-files:reveal` | renderer → main | `{ agentId, path }` | See [File References — Technical Details](../file_references/file_references_tech.md#ipc-channels) |
+| `files:read-image` | renderer → main | `{ fileId, source? }` or `{ path }` | `{ success: true, dataUrl, mimeType }` / `{ success: false, error, code? }` (`too_large`, `not_previewable`, `not_allowed`, `not_a_file`, `not_found`, `invalid_input`, …) |
+| `files:read-thumbnail` | renderer → main | `{ fileId, source? }` or `{ path }` | Same shape; a scaled-down `data:` URL |
+| `files:read-preview-path` | renderer → main | `{ path }` | `{ success: true, text, truncated }` / `{ success: false, error, code? }` |
 | `files:open-in-browser` | renderer → main | `{ fileId, filename, source? }` | `{ success: true }` / `{ success: false, error, code? }` (`not_previewable`, `launch_failed`, `invalid_input`, …) |
 | `html-preview:open` | renderer → main | `HtmlPreviewOpenInput` | `{ success: true, token, url }` / `{ success: false, error, code? }`. Never asks for consent |
 | `html-preview:release` | renderer → main | `token: string` | `{ success: true }` |
@@ -294,7 +318,8 @@ The `cinna-preview:` scheme is not IPC: the frame's requests reach `htmlPreviewS
 ## Services & Key Methods
 
 - `src/main/services/fileService.ts:readTextPreview()`: a capped read routed by source, decoded with `decodePreviewText`. Throws `FileError('not_found' | 'read_failed')`.
-- `src/main/services/fileService.ts:readBytes()`: the same read without the decode, for the HTML frame.
+- `src/main/services/fileService.ts:readBytes()`: the same read without the decode, for the HTML frame and the image reads.
+- `src/main/services/fileService.ts:readImageAttachment()`, `readThumbnail()`, `pathPreview.readText()` / `readImage()`, `sniffPreviewImageMime()`: the image and by-path reads.
 - `src/main/services/htmlPreview/htmlPreviewServer.ts:createHtmlPreviewServer()`: `register`, `release`, `handle`.
 - `src/main/services/agentFiles/agentFileService.ts`: `htmlDocumentAccess()`, `readHtmlDocument()`, `readHtmlAsset()`, `openInBrowser()`.
 - `src/main/host/desktop/htmlPreview.ts:openAttachmentInBrowser()`: copy, then launch.
@@ -313,6 +338,7 @@ The `cinna-preview:` scheme is not IPC: the frame's requests reach `htmlPreviewS
   - `lastPointer`: the last window pointer-down, the origin for attachment opens;
   - `agentOpenToken`: the newest-open guard across an agent file's consent dialog.
 - `useFileDownloadStore` (Zustand): reused for the modal's Download button.
+- `imageDataCache` (module state in `src/renderer/src/utils/imageDataCache.ts`): the last 20 full images and 300 thumbnails as `data:` URLs, and reads in flight, shared by the modal and the inline thumbnails for the renderer session. Keys carry the active profile's id, so a profile switch never serves another profile's image from the cache. Failures are not kept.
 - `useUIStore.previewContentsOpen` / `togglePreviewContents()` (`src/renderer/src/stores/ui.store.ts`): whether the Contents panel shows, global across previews, persisted to `localStorage` key `cinna-preview-contents-open` (`'0'` closed; anything else, including absent, open).
 - In `FilePreviewModal`: `windowWidth`, `animateWidthFor`, `closingFor` and `slowOpenFor` state and the `toggledAt` ref, for where the Contents panel goes and the press guard after a toggle.
 - In `FilePreviewContents`: `active` state, the `pinned` ref for a clicked entry, and `fullTitle` state with its timer ref.
@@ -320,7 +346,7 @@ The `cinna-preview:` scheme is not IPC: the frame's requests reach `htmlPreviewS
   - `filters: Record<number, string>`, a substring per column;
   - `sort: { col, dir } | null`.
 
-  Both reset per file through `key={targetKey}` on `PreviewBody`, where `targetKey` is `attachment:<id>` or `agent-file:<agentId>:<path>`.
+  Both reset per file through `key={targetKey}` on `PreviewBody`, where `targetKey` is `attachment:<id>`, `path:<path>` or `agent-file:<agentId>:<path>`.
 - `filtersEnabled` lives one level up, in `FilePreviewModal`, because the header toggle and the table must agree. It resets when `targetKey` changes.
 - In `useCardEntrance`, refs hold the entrance state (started, timer, animations), the element focus goes back to, and whether the latest open came from the keyboard. `openedAt` in the modal is used by the press guard.
 - In `FilePreviewModal`, the `lastOpen` ref and the `prevTarget` / `exitView` state hold the snapshot a closing preview fades out with.
@@ -344,7 +370,10 @@ The `cinna-preview:` scheme is not IPC: the frame's requests reach `htmlPreviewS
 
 ## Configuration
 
-- `MAX_PREVIEW_BYTES` = 512 KB (`src/shared/filePreview.ts`): the read cap in main, for both attachments and agent files.
+- `MAX_PREVIEW_BYTES` = 512 KB (`src/shared/filePreview.ts`): the read cap in main, for attachments, agent files and composer paths.
+- `READ_TIMEOUT_MS` = 60 s (`cinnaFileService.ts`): how long a Cinna `readBytes` may take.
+- `MAX_IMAGE_PREVIEW_BYTES` = 20 MB (`src/shared/filePreview.ts`): the largest image returned as a `data:` URL; above it the read is refused.
+- `IMAGE_CHROME_REM` = 6 (`FilePreviewModal.tsx`): the header and padding subtracted from 80vh for an image's max height.
 - `MAX_PREVIEW_ROWS` = 500 (`FilePreviewModal.tsx`): the CSV table render cap.
 - `ENTRANCE_WAIT_MS` = 150 (`FilePreviewModal.tsx`): how long the card stays hidden waiting for a settled state.
 - `ENTRANCE` = 170 ms, `cubic-bezier(0.2, 0, 0, 1)`. The exit uses the same options, with `fill: 'forwards'`.
@@ -361,8 +390,8 @@ The `cinna-preview:` scheme is not IPC: the frame's requests reach `htmlPreviewS
 - `OUTLINE_PER_PARENT` = 50, `MAX_DEPTH` = 4 (`xmlOutline.ts`); `INLINE_TEXT_MAX` = 80 (`xmlDocument.ts`).
 - `<userData>/html-open-in-browser/` (`OPEN_IN_BROWSER_DIR`): Open in browser's attachment copies.
 - Previewable extensions and MIME types:
-  - attachments: the tables in `src/shared/filePreview.ts` (`txt`, `log`, `md`, `markdown`, `json`, `csv`, `tsv`, `yaml`, `yml`, and `py`/`pyi` plus MIME `text/x-python` / `text/x-script.python` as `python`; `xml`, `xsd`, `xsl`, `xslt`, `plist`, `rss`, `atom`, `kml`, `gpx`, `csproj`, `xaml` plus `application/xml` / `text/xml` as `xml`; `html`, `htm`, `xhtml` plus `text/html` / `application/xhtml+xml` as `html`);
-  - agent files add `AGENT_TEXT_EXTENSIONS` from `src/shared/agentFiles.ts`.
+  - attachments: the tables in `src/shared/filePreview.ts` (`txt`, `log`, `md`, `markdown`, `json`, `csv`, `tsv`, `yaml`, `yml`, and `py`/`pyi` plus MIME `text/x-python` / `text/x-script.python` as `python`; `xml`, `xsd`, `xsl`, `xslt`, `plist`, `rss`, `atom`, `kml`, `gpx`, `csproj`, `xaml` plus `application/xml` / `text/xml` as `xml`; `html`, `htm`, `xhtml` plus `text/html` / `application/xhtml+xml` as `html`; `png`, `jpg`, `jpeg`, `gif`, `webp`, `bmp`, `svg` plus the matching `image/*` MIME types as `image`);
+  - agent files add `AGENT_TEXT_EXTENSIONS` from `src/shared/agentFiles.ts`, and never get `image`.
 
 ## Security
 
@@ -373,12 +402,14 @@ The `cinna-preview:` scheme is not IPC: the frame's requests reach `htmlPreviewS
 
   Preview exposes no file the user could not already download.
 - **Agent files** are gated by containment or consent and by the credential rule. See [File References — Technical Details](../file_references/file_references_tech.md#security).
-- **Bytes stay in main.** File bytes are read only in the main process. For attachments, the renderer receives decoded text over IPC, never a path or a raw handle. An HTML page's bytes go to its frame over `cinna-preview:`, never over IPC; the renderer holds only the token URL.
+- **Bytes stay in main.** File bytes are read only in the main process. For attachments, the renderer receives decoded text over IPC, or an image as a `data:` URL typed by main's sniff, never a path or a raw handle.
+- **Reads by path are the path guard's.** `files:read-preview-path`, and `files:read-image` / `files:read-thumbnail` with `{ path }`, read only an absolute path the user surfaced in the last hour (dialog, drop or paste), and only a regular file. A compromised renderer cannot name another. An HTML page's bytes go to its frame over `cinna-preview:`, never over IPC; the renderer holds only the token URL.
 - **No injection surface.**
   - `text` and unparseable `json` render inside `<pre>{text}</pre>`; `python` renders the hast lowlight builds from the text, as React elements (no `innerHTML`), the JSON tree renders keys and values as React text, and CSV cells render as `{cell}`, all escaped by React. Links in the tree are `http(s)` only, like frontmatter's.
   - Markdown uses the existing `react-markdown` stack without `rehype-raw`, the same trust boundary chat bubbles already use.
   - Frontmatter values render as React text; the only links it makes are `http(s)` URLs, and the main process's window-open handler refuses any other scheme anyway.
   - The XML tree renders names, attributes and text as React text. `DOMParser` fetches no external entity or DTD.
+  - An image, SVG included, renders only as `<img src="data:…">`: an SVG's scripts do not run and it fetches nothing in an image context. The `data:` URL's type is main's sniff, not a renderer-supplied MIME type.
   - HTML is the one kind that runs. It is never put into the app's document: it runs in the frame below, and its Source view is the same escaped `CodePreview` as Python.
 
 ### HTML preview frame

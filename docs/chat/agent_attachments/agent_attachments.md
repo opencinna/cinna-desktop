@@ -3,15 +3,16 @@
 ## Purpose
 
 Lets a remote Cinna agent attach files it produced to its reply, and renders
-them in the desktop transcript as downloadable badges — the mirror image of a
+them in the desktop transcript as badges and image thumbnails — the mirror image of a
 user attaching a file to their own message ([File Attachments](../file_attachments/file_attachments.md)).
 The agent declares a file with a `<cinna_attach>` tag; the Cinna backend
 materialises the bytes into durable storage and delivers the reference to the
 desktop as a native **A2A `FilePart`** carrying `cinna.content_kind: 'file'` and
 `cinna.file_*` metadata. The desktop turns that into a `file`-kind
 `MessagePart`, persists it on the assistant message, and renders an attachment
-badge under the reply. Clicking the badge previews text types in place or
-downloads other types via the user's OAuth bearer session — no signed URL.
+badge — or, for an image, a 64×64 thumbnail — under the reply. Clicking it
+previews images and text types in place or downloads other types via the
+user's OAuth bearer session — no signed URL.
 
 The FilePart is delivered **live at finalize** (the backend yields it into the
 A2A stream after the reply text), so on desktop the badge lands at the **end**
@@ -19,11 +20,14 @@ of the turn — not spliced at the tag's textual position the way the web render
 it from the persisted trace.
 
 Text-based attachments (`txt`/`csv`/`md`/`json`/`yaml`/`py`, XML and its
-dialects, and HTML) open an in-app read-only preview on click, and the badge is
-named "Preview *name*" rather than "Download *name*" — see
-[File Preview](../file_preview/file_preview.md). An HTML attachment renders
-with its scripts and remote content in a sandboxed frame, and can be opened in
-the default browser. Image / PDF / binary attachments still download on click.
+dialects, and HTML) and images (`png`/`jpg`/`gif`/`webp`/`bmp`/`svg`) open an
+in-app read-only preview on click, and the badge is named "Preview *name*"
+rather than "Download *name*" — see [File Preview](../file_preview/file_preview.md).
+An image shows as a thumbnail first in the row, read and scaled by main
+through the same OAuth path ([File Attachments](../file_attachments/file_attachments.md#thumbnails)).
+An HTML attachment renders with its scripts and remote content in a sandboxed
+frame, and can be opened in the default browser. PDF / HEIC / binary
+attachments still download on click.
 
 ## Core Concepts
 
@@ -49,13 +53,16 @@ the default browser. Image / PDF / binary attachments still download on click.
    `cinna.file_name` / `cinna.file_mime` / `cinna.file_size`.
 3. The desktop's `StreamPartsAccumulator` reads each FilePart, builds a
    `MessagePartFile`, and appends a `file` part (deduped by `file_id`).
-4. A `file` delta posts over the stream port → a download badge renders live
-   below the reply text (the FilePart arrives after the text at finalize).
+4. A `file` delta posts over the stream port → a badge (or an image thumbnail)
+   renders live below the reply text (the FilePart arrives after the text at
+   finalize).
 5. On stream completion the `file` parts persist in `messages.parts`; the
    post-`done` refetch replaces the live badge with the persisted one (no visual
    change).
-6. The user clicks the badge → OS save dialog → the file streams from the Cinna
-   backend to disk and is revealed in the file manager.
+6. The user clicks the badge or thumbnail. A previewable file opens the
+   preview modal (Download in its header); anything else → OS save dialog →
+   the file streams from the Cinna backend to disk and is revealed in the
+   file manager.
 
 ### Viewing an agent attachment in an orchestrated sub-thread
 1. An orchestrated agent-as-tool turn produces a `FilePart` in its sub-stream.
@@ -137,7 +144,8 @@ Renderer:
   handleRun('delta') → chat.store.appendDelta(..., file)   [direct]
     or handleRun('child') → appendToolSubEvent → appendAgentDeltaPart(..., file)  [orchestrated]
   MessageStream / AgentContribution: kind === 'file' → <AgentAttachment file>
-    → AttachmentList (badge) onClick → useFileDownload.download(att)
+    → AttachmentList (badge, or AttachmentThumbnail via thumbnailFor) onClick
+    → useAttachmentOpen(att): previewable → File Preview, else useFileDownload.download(att)
 
 Download:
   useFileDownload.download({ id: fileId, source: 'cinna' })
@@ -182,9 +190,8 @@ desktop's live stream).
 
 ## Future Enhancements (Out of Scope)
 
-- **Inline preview for image/PDF** — image and PDF preview modal (text preview
-  shipped via [File Preview](../file_preview/file_preview.md); image/PDF still
-  download).
+- **Inline preview for PDF** — text and image preview shipped via
+  [File Preview](../file_preview/file_preview.md); a PDF still downloads.
 - **`FileWithBytes` inline transport** — fully offline fetch without a backend round-trip.
 - **Non-Cinna FilePart support** — downloading via the FilePart `uri` for agents
   that don't carry a `cinna.file_id`.

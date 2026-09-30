@@ -2,12 +2,12 @@
 
 ## Purpose
 
-One read-only modal for looking at a file **in place**, reached two ways.
+One read-only modal for looking at a file **in place**, reached three ways.
 
-**An attachment badge in a chat message.**
-- **What previews:** `txt`, `csv`, `md`, `json`, `yaml`/`yml`, Python (`py`/`pyi`), XML and its dialects (`xml`, `xsd`, `xsl`/`xslt`, `plist`, `rss`, `atom`, `kml`, `gpx`, `csproj`, `xaml`), and HTML (`html`, `htm`, `xhtml`). These open the modal instead of the save dialog.
+**An attachment badge or thumbnail in a chat message.**
+- **What previews:** `txt`, `csv`, `md`, `json`, `yaml`/`yml`, Python (`py`/`pyi`), XML and its dialects (`xml`, `xsd`, `xsl`/`xslt`, `plist`, `rss`, `atom`, `kml`, `gpx`, `csproj`, `xaml`), HTML (`html`, `htm`, `xhtml`), and images (`png`, `jpg`/`jpeg`, `gif`, `webp`, `bmp`, `svg`). These open the modal instead of the save dialog. An image attachment shows in the transcript as a 64×64 thumbnail rather than a badge ([File Attachments](../file_attachments/file_attachments.md#thumbnails)).
 - **Download stays:** the modal header keeps a **Download** button, so previewing never replaces saving the file. An HTML attachment also gets **Open in browser** beside it.
-- **Everything else downloads:** images, PDF, Office binaries, archives and the rest still go straight to the save dialog. Preview is an extra shortcut, not a new gate.
+- **Everything else downloads:** PDF, HEIC, TIFF, Office binaries, archives and the rest still go straight to the save dialog. Preview is an extra shortcut, not a new gate.
 - **Both directions of attachment:**
   - **User attachments** under a sent user message ([File Attachments](../file_attachments/file_attachments.md)), `cinna` or `local` source.
   - **Agent attachments** under an assistant reply ([Agent Attachments](../agent_attachments/agent_attachments.md)), always `cinna` source.
@@ -15,6 +15,9 @@ One read-only modal for looking at a file **in place**, reached two ways.
 **A [file reference](../file_references/file_references.md) in a folder agent's chat.** This is an inline code span that names a real file.
 - **Open instead of Download:** the file is already on disk, so the header's **⋯** menu offers **Open** and **Open folder**.
 - **More types:** other code and config preview as plain text as well; Python is highlighted, as it is for an attachment.
+- **Not images.** An agent file is read as text, so an image it names opens in its system app, as before.
+
+**A file still in the composer**, not sent yet: a thumbnail or a previewable badge above the text box. It opens the same modal with **no Download** — the file is the user's own. A new chat's files are read from their path on disk, since no chat exists to hold them yet.
 
 **A long markdown file**, from either way in, also gets a **Contents** panel: its headings, beside the body or over its right edge, so the user can jump to a section and see where they are. **A Python file** with more than one definition gets the same panel as an outline: top-level functions and classes, and under each class its own methods (no nested functions, nested classes or constants). **An XML file** gets it as the document's sections: the elements that hold other elements, down to four levels below the root.
 
@@ -23,13 +26,15 @@ One read-only modal for looking at a file **in place**, reached two ways.
 ## Core Concepts
 
 - **Previewable type**: a filename or MIME type the modal knows how to render.
-  - `previewKindFor(filename, mimeType)` (`src/shared/filePreview.ts`) maps it to a `PreviewRenderKind` (`markdown`, `json`, `csv`, `python`, `xml`, `html` or `text`), or `null` when it is not previewable and should download. The extension wins over the MIME type, because the stores' MIME type is only a best guess.
-  - Agent files use `agentFilePreviewKindFor`, which adds other code and config as `text` and leaves attachment behaviour unchanged. A `.py` file resolves to `python` through `previewKindFor` first, so it is highlighted in both places.
+  - `previewKindFor(filename, mimeType)` (`src/shared/filePreview.ts`) maps it to a `PreviewRenderKind` (`markdown`, `json`, `csv`, `python`, `xml`, `html`, `image` or `text`), or `null` when it is not previewable and should download. The extension wins over the MIME type, because the stores' MIME type is only a best guess.
+  - Agent files use `agentFilePreviewKindFor`, which adds other code and config as `text`, drops `image` (agent files are read as text), and leaves attachment behaviour unchanged. A `.py` file resolves to `python` through `previewKindFor` first, so it is highlighted in both places.
 - **Preview read path**: the IPC call that reads a file's bytes into memory and returns decoded UTF-8 plus a `truncated` flag.
   - Attachments use `files:read-preview`, and agent files use `agent-files:read-preview`.
   - Both are **capped at `MAX_PREVIEW_BYTES` (512 KB)** in main and use the same truncation-safe decode.
   - The preview read is separate from `files:download`, which writes the *full* file to a path the user chooses.
-- **Preview target**: what is open, either an `attachment` or an `agentFile` (an agent id plus the resolved reference).
+  - An image is read whole instead, as a `data:` URL: `files:read-image`, refused above 20 MB rather than cut. The thumbnails use `files:read-thumbnail`, a scaled-down copy.
+  - A composer file not sent yet is read by path: `files:read-preview-path` for text, `files:read-image` with `{ path }` for an image, only for a path the user picked, dropped or pasted this session.
+- **Preview target**: what is open — an `attachment` (marked `composer` when opened from the composer), an `agentFile` (an agent id plus the resolved reference), or a `path` (a new chat's composer file).
 - **Single global modal**: one `FilePreviewModal` mounted at the app root, driven by `useFilePreviewStore`.
   - Opening a second preview replaces the first.
   - A monotonic `requestId` discards a stale fetch that finishes after the user opened another file or closed the modal.
@@ -42,11 +47,12 @@ One read-only modal for looking at a file **in place**, reached two ways.
   - `python` is a wrapped `<pre>` highlighted by lowlight, the engine behind the chat's `rehype-highlight`, so a `.py` file is tokenised and coloured exactly like a fenced `python` block in a message (the same `.hljs-*` palette). If highlighting throws, it shows the plain text, so a file cut at the cap still previews.
   - `xml` is a collapsible tree, falling back to highlighted source when it does not parse; see [XML tree](#xml-tree).
   - `html` is the page rendered in a sandboxed frame, or its highlighted source; see [HTML pages](#html-pages).
+  - `image` is the picture, fitted inside the card and centred; see [Images](#images).
   - `text` (including yaml) is a wrapped `<pre>`.
 - **Preview frame**: the `<iframe>` an HTML page renders in. Main serves it over the app's own `cinna-preview:` scheme, under a **token** issued for that one file and released when the preview closes.
 - **Notice**: a body that is a sentence rather than content. For agent files it is either "Preview is off for credential files." or "No preview for this file type."
 - **Header actions**:
-  - Attachments get an icon-only Download. An HTML attachment also gets an icon-only **Open in browser** (a globe) before it.
+  - Attachments get an icon-only Download, except one opened from the composer. An HTML attachment also gets an icon-only **Open in browser** (a globe) before it.
   - Agent files get an icon-only **⋯** button ("More file actions"). Its menu holds **Open**, then **Open in browser** for an HTML file, then **Open folder**.
   - For `csv` only, a **Filter** toggle reveals per-column controls. It is hidden while a notice shows.
   - For `html` only, a **Rendered / Source** segmented toggle. It is hidden while the body is an error or a notice.
@@ -69,6 +75,19 @@ One read-only modal for looking at a file **in place**, reached two ways.
 2. `useAttachmentOpen` gets a non-null `previewKindFor` result, so it calls `useFilePreviewStore.openPreview(attachment, kind)` instead of downloading.
 3. The store fetches `files:read-preview`. The modal expands from the badge and shows the rendered content.
 4. The user clicks the **Download** icon in the header to save the full file. This is the standard `files:download` save-as flow, through the shared `useFileDownloadStore`, so the spinner and reveal behave exactly as a badge download does.
+
+### Viewing an image
+1. The user clicks an image thumbnail under a message, their own or an agent's.
+2. The store reads the whole image as a `data:` URL (`files:read-image`) and decodes it before the modal counts as loaded, so the card appears at its final size.
+3. The image sits centred, scaled down to fit the card and never enlarged. The title icon is an image.
+4. **Download** in the header saves the original file.
+5. An image over 20 MB is not shown: the body reads "Couldn't load preview: Image too large to preview." Bytes that are not an image the preview can show, or do not decode, say so the same way.
+
+### Previewing a file still in the composer
+1. The user clicks a thumbnail or a previewable badge above the composer.
+2. The modal opens as it would for a sent file, without Download. A cut text file says "Preview truncated at 512 KB." rather than pointing at a download that is not there.
+3. On the new-chat screen the file is read from its path. An HTML file there shows its highlighted source only: there is no attachment for the preview frame to serve yet. Once a file is ingested into an open chat, it previews as the attachment it is, HTML rendered.
+4. A path the user surfaced more than an hour ago is no longer readable: "This file is no longer available to preview. Attach it again."
 
 ### Previewing a file an agent named
 1. The user clicks a file reference in a folder agent's chat, and main authorizes the path. See [File References](../file_references/file_references.md).
@@ -108,13 +127,15 @@ One read-only modal for looking at a file **in place**, reached two ways.
 4. **Open in browser** (the globe button for an attachment, the **⋯** menu for an agent file) opens the file in the default web browser. A failure appears in the row under the header: "Couldn't open it in the browser: …", or "No browser could open this file."
 
 ### Clicking a non-previewable attachment
-1. The user clicks a `png` / `pdf` / `zip` / … badge.
+1. The user clicks a `pdf` / `heic` / `zip` / … badge.
 2. `previewKindFor` returns `null`, so `useAttachmentOpen` falls through to `download(attachment)`: the existing save dialog, unchanged.
 
 ### Large or non-UTF-8 file
 1. **Large files:** a previewable file larger than 512 KB shows its first 512 KB, plus a notice under the content.
    - For an attachment: "Preview truncated — download the file to see the full content."
    - For an agent file: "…open the file to see the full content."
+   - For a composer file: "Preview truncated at 512 KB."
+   - An image is never cut: over 20 MB it is refused (see [Images](#images)).
 2. **Invalid bytes:** invalid byte sequences decode to the replacement character instead of failing, so the modal always shows *something*. Download or Open still gets the exact bytes.
 
 ### Closing
@@ -125,7 +146,8 @@ One read-only modal for looking at a file **in place**, reached two ways.
 ## Business Rules
 
 - **Only the attachment click decides preview versus download.** `useAttachmentOpen` is the one place that branches.
-  - The shared badge component (`AttachmentBadge`) does not route clicks. It only names them: a list whose click goes through `useAttachmentOpen` passes `previewsOnClick`, and then a previewable badge's tooltip and accessible name say "Preview *name*" while the rest say "Download *name*" ([UX rule 10](../../development/ui_guidelines/ux_rules.md)).
+  - The composer's `useComposerAttachmentOpen` never downloads: it previews, and a composer badge the preview cannot show is not clickable at all.
+  - The shared badge component (`AttachmentBadge`) does not route clicks. It only names them: a list whose click goes through `useAttachmentOpen` (or the composer's) passes `previewsOnClick`, and then a previewable badge's tooltip and accessible name say "Preview *name*" while the rest say "Download *name*" ([UX rule 10](../../development/ui_guidelines/ux_rules.md)).
   - Without the flag every badge says "Download", which keeps correct the badges used elsewhere that always download, such as cinna task attachments.
 - **Preview never modifies anything.** It is read-only: no write-back and no re-upload.
 - **The byte cap is enforced in main.** The renderer cannot request more than `MAX_PREVIEW_BYTES`.
@@ -135,7 +157,7 @@ One read-only modal for looking at a file **in place**, reached two ways.
   - `local` requires `chatFileRepo.getOwned`.
   - `cinna` calls `GET /api/v1/files/{id}/download` with the user's OAuth bearer.
 
-  Preview shows no file the user could not already download. Agent files follow main's containment, consent and credential rules instead. See [File References](../file_references/file_references.md).
+  Preview shows no file the user could not already download. Agent files follow main's containment, consent and credential rules instead. A composer file read by path must be in the [path guard](../file_attachments/file_attachments.md#path-guard-allowlist): the user picked, dropped or pasted it in the last hour. See [File References](../file_references/file_references.md).
 - **A slow fetch never replaces a newer preview.**
   - `requestId` changes on every open and on close. A finished fetch whose id no longer matches is dropped, so a slow load for file A cannot overwrite the modal now showing file B.
   - An agent-file open that is still waiting on its consent dialog is dropped too, when a newer open of either kind happens. An attachment opened after it is never replaced.
@@ -292,6 +314,15 @@ One read-only modal for looking at a file **in place**, reached two ways.
 - **An attachment is copied first**, because a browser needs a file. The copy goes to a folder of the app's own data that only the user may enter, one per attachment (a second Open in browser replaces it), and every copy is removed at the next start. A tab still showing one keeps working until then.
 - **Only HTML is offered it**: `.html`, `.htm` and `.xhtml`. It is also in the transcript's right-click menu on an HTML [file reference](../file_references/file_references.md).
 
+### Images
+- **The formats are the ones Chromium draws everywhere**: PNG, JPEG, GIF (animated too), WebP, BMP and SVG. HEIC and TIFF are not previewable and download: Chromium has no decoder for either, and main's sniff does not recognise them.
+- **An SVG is a picture, not XML.** `.svg` and `image/svg+xml` resolve to `image`, and it renders through an `<img>`, where its scripts do not run and it loads nothing.
+- **The bytes decide the type.** Main sniffs the first bytes (and an SVG root element) and builds the `data:` URL from that, never from the name or the renderer; a `.png` that is not an image is refused, "This file is not an image the preview can show."
+- **Refused above 20 MB, never cut.** Half an image is not a preview. The refusal points at Download.
+- **The card settles after the decode.** The store decodes the image before it clears loading, and the `<img>` gets the natural width and height, so the entrance measures the final card and nothing grows under the pointer.
+- **It fits, it never enlarges.** The image is at most the body's width and the card's 80% height less its header, centred on both axes.
+- **Full images are cached too**, the last 20 in the session, so opening the same image twice reads it once.
+
 ### Known limits and accepted risks
 Allowing full remote content was a deliberate choice. These follow from it and are accepted, not open bugs:
 - **The page shares the app's cookie jar.** Its remote requests are made from the app's default session, so they carry whatever cookies that session holds for the sites they reach, and the page can reach services on `localhost`.
@@ -306,7 +337,7 @@ Allowing full remote content was a deliberate choice. These follow from it and a
 ## Architecture Overview
 
 ```
-Badge click (MessageBubble user badge | AgentAttachment):
+Badge or thumbnail click (MessageBubble user badge | AgentAttachment):
   AttachmentList onClick → useAttachmentOpen(attachment)
     previewKindFor(filename, mime)
       → null     → useFileDownloadStore.download(attachment)   [save-as]
@@ -317,10 +348,17 @@ Badge click (MessageBubble user badge | AgentAttachment):
                               local : chatFileRepo.getOwned + readFile (capped)
                               cinna : cinnaFileService.readBytes (GET /files/{id}/download, capped)
                            → decodePreviewText → { text, truncated }
-                     → FilePreviewModal renders by kind (markdown|json|csv|python|xml|html|text)
+                     image → imageDataCache.loadImage → files:read-image → data: URL (sniffed, ≤ 20 MB) → decode()
+                     → FilePreviewModal renders by kind (markdown|json|csv|python|xml|html|image|text)
                         header Download → useFileDownloadStore.download (full file)
                         header Open in browser (html) → files:open-in-browser
                            → copy under userData/html-open-in-browser → default web browser
+
+Composer badge or thumbnail click:
+  useComposerAttachmentOpen(attachment)
+    pending  → openPathPreview → files:read-preview-path { path } | files:read-image { path }   [path guard]
+    ingested → openPreview(attachment, kind, { composer: true })
+    → FilePreviewModal, no Download
 
 File reference click (folder agent chat):
   useFilePreviewStore.openAgentFile(agentId, ref, click point)
@@ -355,14 +393,15 @@ For file paths, IPC signatures and method-level detail see [File Preview — Tec
 
 ## Integration Points
 
-- [File Attachments](../file_attachments/file_attachments.md): user-uploaded badges route through `useAttachmentOpen`, and preview reuses the same `cinna`/`local` source split.
+- [File Attachments](../file_attachments/file_attachments.md): user-uploaded badges and thumbnails route through `useAttachmentOpen`, and preview reuses the same `cinna`/`local` source split. The composer's files, pasted ones included, open here through `useComposerAttachmentOpen`, and the inline thumbnails share this feature's image read and cache.
 - [Agent Attachments](../agent_attachments/agent_attachments.md): agent-attached badges preview too; they used to be download-only.
 - [File References](../file_references/file_references.md): the second way into this modal. It covers resolution, consent, credential files and the Open strategy. An HTML page's assets go through the same containment, consent and credential checks, and its right-click menu offers Open in browser.
 - [Note Attachments](../note_attachments/note_attachments.md): a separate preview surface, `NotePreviewModal`, which shows a live note body at the composer stage. This feature previews files already sent or on disk.
 
 ## Future Enhancements (Out of Scope)
 
-- **Image / PDF preview**: render image bytes and PDF pages inline. Today they download, or open in their system app for an agent file.
+- **PDF preview**: render PDF pages inline. Today a PDF downloads, or opens in its system app for an agent file.
+- **Image preview for agent files**: an image a folder agent names still opens in its system app; the agent-file read is text only.
 - **Syntax highlighting for more code** (`.ts`, `.sh`, …): those attachments still download, and agent files show them as plain text. `CodePreview` registers only the grammars its kinds need (python, and xml with css and javascript for HTML source); another language is a new `PreviewRenderKind` plus its grammar, not a switch to lowlight's whole `common` set.
 - **Copying the file's content** from the preview modal: only an agent file's header path copies today.
 - **A dialog role and a focus trap**: today, Shift+Tab from the card walks back into the page, and Tab walks out of an HTML page's frame the same way.
