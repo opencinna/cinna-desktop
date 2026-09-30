@@ -51,7 +51,7 @@ All columns are nullable — NULL for `local_user` accounts. Migration uses `has
 
 | Channel | Signature | Purpose |
 |---------|-----------|---------|
-| `auth:register` | `({ username?, displayName?, password?, accountType, cinnaHostingType?, cinnaServerUrl? }) → { success, user?, error? }` | Create local or Cinna account; Cinna triggers OAuth flow (username/displayName come from OAuth for Cinna) |
+| `auth:register` | `({ username?, displayName?, password?, accountType, cinnaHostingType?, cinnaServerUrl? }) → { success, user?, error? }` | Create local or Cinna account; Cinna triggers OAuth flow (username/displayName come from OAuth for Cinna). An omitted `cinnaHostingType` defaults to `'self_hosted'` in `auth.ipc.ts`, so a caller that forgets it and sends no URL fails with "Server URL is required" rather than silently connecting somewhere it never named. `CINNA_CLOUD_URL` is reached only when a caller passes `'cloud'` explicitly, and no renderer caller does |
 | `auth:cinna-oauth-abort` | `() → { success }` | Abort an in-progress Cinna OAuth flow |
 
 ### Modified channels
@@ -100,16 +100,16 @@ Multi-step form with state machine:
 
 | Step | UI | Transitions |
 |------|----|-------------|
-| `type-select` | Two cards: Local / Cinna. No Cancel — dismiss via click-outside on the modal backdrop. | Local → `local-form`; Cinna → `cinna-hosting` |
-| `cinna-hosting` | Two cards: Self-Hosted (left, default) / Cloud (right, shows "Under Development" notice + disables Connect when selected). URL input + "Recent servers" list (self-hosted only, sourced from `localStorage('cinna-selfhosted-history')`). Each recent row is full-width clickable (immediately connects) with an X-on-hover (`stopPropagation`) to remove. Centered "Connect" button. No Cancel. | Connect (or click on a recent row) → `cinna-waiting`; Back → `type-select` |
+| `type-select` | Two cards: Local / Cinna. No Cancel — dismiss via click-outside on the modal backdrop. | Local → `local-form`; Cinna → `cinna-server` |
+| `cinna-server` | "Connect to Cinna": no hosting choice — the labelled "Server URL" input (autofocused; Enter connects unless the field is blank or a connect is pending) + "Recent servers" list (sourced from `localStorage('cinna-selfhosted-history')`, shown only when non-empty). Registers with `cinnaHostingType: 'self_hosted'`. Each recent row is full-width clickable (immediately connects) with an X-on-hover (`stopPropagation`) to remove. Centered "Connect" button, disabled while the trimmed URL is empty — so the "Server URL is required" error cannot come from this form. No Cancel. | Connect, Enter (or click on a recent row) → `cinna-waiting`; Back → `type-select` |
 | `local-form` | Username, Display Name, Password (all optional except username). Centered "Create" button. No Cancel. | Create → success; Back → `type-select` |
-| `cinna-waiting` | Spinner + Cancel button (only step that keeps Cancel — it calls `auth:cinna-oauth-abort` to terminate the in-flight flow). | Cancel → abort + `cinna-hosting`; Success → `onSuccess` |
+| `cinna-waiting` | Spinner + Cancel button (only step that keeps Cancel — it calls `auth:cinna-oauth-abort` to terminate the in-flight flow). | Cancel → abort + `cinna-server`; Failure → `cinna-server` with the error inline; Success → `onSuccess` |
 
 For Cinna accounts, there is no form step — username and display name are received from the OAuth server's userinfo endpoint after authentication. Password can be set later.
 
 Rendered as a centered modal overlay (fixed inset, `bg-black/50` backdrop) instead of inside the dropdown. The dropdown, the modal panel, and the sign-out confirm panel all use the `.app-popover-surface` utility class (frosted-glass, theme-aware) defined in `src/renderer/src/assets/main.css`.
 
-The `RegisterFormProps` interface no longer carries an `onCancel` callback — only `onSuccess`. Dismissal of `type-select` / `cinna-hosting` / `local-form` is the caller's responsibility (click-outside on the backdrop in `UserMenu.tsx`).
+The `RegisterFormProps` interface no longer carries an `onCancel` callback — only `onSuccess`. Dismissal of `type-select` / `cinna-server` / `local-form` is the caller's responsibility (click-outside on the backdrop in `UserMenu.tsx`).
 
 ### Self-hosted history (renderer-only)
 

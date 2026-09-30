@@ -152,7 +152,7 @@ Every list/get/create/update/delete handler in these IPC files calls `userActiva
 ### `RegisterForm` in `src/renderer/src/components/auth/RegisterForm.tsx`
 - Multi-step modal: type selection → form/OAuth
 - Type selection step: **horizontal cards** (`flex gap-3`) with centered icons — "Local Account" and "Cinna Account"
-- Cinna hosting step: also horizontal cards for Cloud vs Self-Hosted
+- Cinna server step: labelled "Server URL" input (Enter connects), Recent servers list and Connect (disabled while the URL is blank) — no Cloud/Self-Hosted cards; every new Cinna account is self-hosted
 - Local form: labeled fields (username, display name, password) with larger sizing (`text-sm`, `px-3 py-2`)
 - Cinna waiting: spinner + cancel button
 

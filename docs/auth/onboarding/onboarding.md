@@ -41,9 +41,9 @@ A `cinna://connect` deep link opens the same screen on a **confirm** step instea
 
 ### Cinna Server Path
 1. User clicks "Cinna Server"
-2. Hosting picker: Self-Hosted is pre-selected (Cloud shows the "Under Development" notice and disables Connect — same gate as [Cinna Accounts](../cinna_accounts/cinna_accounts.md))
-3. User enters a URL or clicks a "Recent servers" entry (history shared with `RegisterForm` via the same `selfHostedHistory` module)
-4. Connect → "Waiting for browser authorization…" spinner with a single Cancel button (calls `auth:cinna-oauth-abort`)
+2. "Connect to Cinna" opens straight on the server URL input — there is no Cloud/Self-Hosted choice; every connection is self-hosted (same as [Cinna Accounts](../cinna_accounts/cinna_accounts.md))
+3. User enters a URL in the labelled "Server URL" field or clicks a "Recent servers" entry (history shared with `RegisterForm` via the same `selfHostedHistory` module)
+4. Connect (or Enter in the field; both inert while the field is blank) → "Waiting for browser authorization…" spinner with a single Cancel button (calls `auth:cinna-oauth-abort`)
 5. Browser-based bootstrap + authorize completes; the new Cinna user is created and activated (existing flow)
 6. Dismissed flag is set; onboarding screen unmounts; user lands in the app as the Cinna user. Nothing about local development is asked on the way: when the server offers it, the sidebar footer shows a quiet Local development icon that opens the question on click
 
@@ -125,7 +125,7 @@ AuthGate (App.tsx)
                      │   useTestProviderKey →  provider:test-key
                      │   useUpsertProvider  →  provider:upsert
                      │   useUpsertChatMode  →  chatmode:upsert  (isDefault, non-blocking)
-                     ├─ cinna-hosting   ┐
+                     ├─ cinna-server    ┐
                      ├─ cinna-waiting   │  Cinna Server path
                      │   useRegister    →  auth:register {accountType:'cinna'}
                      │                      (switches activated user)
@@ -137,7 +137,7 @@ Step reachability, since the union is no longer a single line:
 (intent) ──► cinna-confirm ──┬─ connected / switched ─► (app)
                              └─ declined ─► welcome
 welcome ──┬─ provider-type ─► provider-key ─► (app)
-          └─ cinna-hosting ─► cinna-waiting ─► (app)
+          └─ cinna-server ─► cinna-waiting ─► (app)
 ```
 
 ## Integration Points

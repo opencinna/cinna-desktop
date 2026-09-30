@@ -6,7 +6,7 @@ Implementation companion to [onboarding.md](onboarding.md). The onboarding logic
 
 ### Renderer — components
 - `src/renderer/src/App.tsx` — `OnboardingGate` wrapper, mounted inside `AuthGate` and outside `Shell`
-- `src/renderer/src/components/auth/OnboardingScreen.tsx` — full-screen overlay with cinna-confirm / welcome / provider-type / provider-key / cinna-hosting / cinna-waiting steps
+- `src/renderer/src/components/auth/OnboardingScreen.tsx` — full-screen overlay with cinna-confirm / welcome / provider-type / provider-key / cinna-server / cinna-waiting steps
 - `src/renderer/src/components/auth/ConnectIntentPanel.tsx` — rendered by the `cinna-confirm` step (and by `ConnectIntentModal` past first run)
 - `src/renderer/src/components/settings/DevelopmentSettingsSection.tsx` — Settings → Development → Testing toggle ("Enable onboarding on restart")
 
@@ -61,7 +61,7 @@ The renderer-only feature delegates all server-side work through existing servic
 
 ## Renderer Components
 
-- `src/renderer/src/components/auth/OnboardingScreen.tsx` — state machine over the `Step` union (`welcome | provider-type | provider-key | cinna-hosting | cinna-waiting | cinna-confirm`); owns `selectedProvider`, `apiKey`, `selectedModelId`, `cinnaHostingType`, `cinnaServerUrl`, `selfHostedHistory`; renders all step contents inline via `renderStep()`. The initial step is `connectIntent ? 'cinna-confirm' : 'welcome'`, and a `lastIntentAt` ref re-enters `cinna-confirm` only for an intent with a **new** `receivedAt` — so the intent the step just consumed cannot bounce a user who declined straight back into it
+- `src/renderer/src/components/auth/OnboardingScreen.tsx` — state machine over the `Step` union (`welcome | provider-type | provider-key | cinna-server | cinna-waiting | cinna-confirm`); owns `selectedProvider`, `apiKey`, `selectedModelId`, `cinnaServerUrl`, `selfHostedHistory`; renders all step contents inline via `renderStep()`. The initial step is `connectIntent ? 'cinna-confirm' : 'welcome'`, and a `lastIntentAt` ref re-enters `cinna-confirm` only for an intent with a **new** `receivedAt` — so the intent the step just consumed cannot bounce a user who declined straight back into it
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — the `cinna-confirm` step's `onDone(outcome)`: `declined` → `welcome`, `connected` / `switched` → `onComplete()`, since the panel's checkbox has already recorded the local-development answer. `onConnectIntentDone?.()` fires first, in every case
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — `connectSelfHosted()` ends on `onComplete()`: local development is not asked on this path at all
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — `handleSaveAndFinish()` orchestrates the API-key save: blocking `upsertProvider`, then non-blocking `upsertChatMode`, then `onComplete()`

@@ -2,14 +2,14 @@
 
 ## Purpose
 
-Cinna Accounts let users connect the desktop app to a remote Cinna server (cloud or self-hosted) via OAuth. This enables future access to hosted Cinna features (agents, shared resources) while keeping local data isolation and optional local password protection.
+Cinna Accounts let users connect the desktop app to a remote Cinna server via OAuth. Every connection the UI makes is to a self-hosted server whose URL the user supplies; the main process still knows a `cloud` hosting type, but nothing in the app creates one. This enables future access to hosted Cinna features (agents, shared resources) while keeping local data isolation and optional local password protection.
 
 ## Core Concepts
 
 | Term | Definition |
 |------|-----------|
 | **Cinna Account** | A user account (`type: cinna_user`) linked to a remote Cinna server via OAuth tokens |
-| **Hosting Type** | Either `cloud` (hardcoded to `opencinna.io`, currently disabled — UI shows an "Under Development" notice and the Connect action is blocked) or `self_hosted` (user-provided URL) |
+| **Hosting Type** | Stored per Cinna account. Every account the UI creates is `self_hosted` (user-provided URL). `cloud` (hardcoded to `opencinna.io`) survives only in the main process and the schema: no UI path offers it, and an existing `cloud` row is still displayed as "Cloud" in Settings |
 | **Self-Hosted History** | Renderer-only list of server URLs the user has successfully connected to from this device. Surfaced as a clickable list under the URL input; saved on successful connect only; each entry has an X-on-hover to remove it. Capped at 8 entries, most-recent-first. |
 | **Instance Discovery** | The desktop app fetches `/.well-known/cinna-desktop` from the server to discover OAuth endpoints (RFC 8414-style metadata) |
 | **Bootstrap Flow** | Combined browser-based flow: the server handles login + client registration + authorization in a single redirect, returning both `client_id` and `code` to the desktop callback |
@@ -19,18 +19,11 @@ Cinna Accounts let users connect the desktop app to a remote Cinna server (cloud
 
 ## User Stories / Flows
 
-### Create Cinna Account (Cloud) — currently unavailable
+### Create Cinna Account
 1. User opens user menu, clicks "Add Account"
 2. Centered modal appears with two options: "Local Account" and "Cinna Account"
 3. User selects "Cinna Account"
-4. Hosting selection step: Self-Hosted is pre-selected on the left; selecting Cloud (opencinna.io) on the right shows an inline "Under Development" notice and disables the Connect button
-5. The full cloud bootstrap/authorize flow described below is implemented end-to-end in main process; only the UI entry point is blocked. When the notice is removed, steps 5–13 below execute against `https://opencinna.io`
-
-### Create Cinna Account (Self-Hosted)
-1. User opens user menu, clicks "Add Account"
-2. Centered modal appears with two options: "Local Account" and "Cinna Account"
-3. User selects "Cinna Account"
-4. Hosting selection step: Self-Hosted is pre-selected. User enters a server URL (e.g. `https://cinna.mycompany.com`) — or clicks one of the "Recent servers" rows below the input to reuse a previously-successful URL — and clicks the centered "Connect" button. Each recent-server row has an X-on-hover to drop that entry from history without connecting
+4. "Connect to Cinna" step: there is no hosting choice — the step opens on the labelled "Server URL" input. User enters a server URL (e.g. `https://cinna.mycompany.com`) — or clicks one of the "Recent servers" rows below the input to reuse a previously-successful URL — and clicks the centered "Connect" button or presses Enter. Connect stays disabled while the field is blank, so an empty URL never reaches the server call. Each recent-server row has an X-on-hover to drop that entry from history without connecting
 5. Modal shows "Waiting for browser authorization..." spinner; only this step retains a Cancel button (it actively aborts the OAuth flow via `auth:cinna-oauth-abort`)
 6. Browser opens to the self-hosted server's combined bootstrap/authorize endpoint
 7. User logs in on the web and authorizes the desktop app
@@ -73,7 +66,7 @@ When tokens have been cleared (replay detection, manual revoke on the server, re
 - Discovery responses are cached per server URL for the session (cleared on app restart)
 - Concurrent token refresh attempts are deduplicated per account (a per-user mutex) to prevent race conditions and cross-account token bleed — see [Token Lifecycle](./token_lifecycle.md)
 - If token refresh fails with replay detection, all tokens are wiped and the user must re-authenticate. Re-auth is offered in-app and preserves all local data — see [Re-authentication](./reauthentication.md)
-- The Cloud (opencinna.io) hosting option is currently gated behind an "Under Development" notice in the UI — the Connect button is disabled while Cloud is selected. Self-Hosted is the default and only-reachable path. The underlying OAuth + token machinery treats `cloud` and `self_hosted` identically; lifting the gate is a UI-only change
+- The "Connect to Cinna" step offers no Cloud/Self-Hosted choice: it goes straight to the server URL, the Recent servers list and Connect, and every new connection is `self_hosted`. A Cloud (opencinna.io) card used to sit beside Self-Hosted, but it could only show an "Under Development" notice and disable Connect — a choice the user could make but never complete, so it was removed. The main process still resolves `cloud` to `CINNA_CLOUD_URL` and treats both types identically, but only when a caller passes `cloud` explicitly: `auth:register` defaults a missing hosting type to `self_hosted`, so a caller that forgets it fails on the missing URL instead of silently connecting to opencinna.io. Offering cloud again is a UI-only change
 - Self-hosted history is stored in `localStorage` under `cinna-selfhosted-history` as a JSON array of URL strings. It is scoped to the renderer profile (shared across OS users of the desktop install — URLs only, no credentials)
 
 ## Architecture Overview
@@ -84,7 +77,7 @@ Account Creation (Cinna):
   ─────────                   ────────────                    ──────────────────────
   RegisterForm (modal)
   Step: type-select
-  Step: cinna-hosting
+  Step: cinna-server
   Click "Connect" ─────────→ auth:register (accountType=cinna)
   Step: cinna-waiting         discoverCinnaEndpoints()  ────→ GET /.well-known/cinna-desktop
                               startCinnaOAuthFlow()     ────→ shell.openExternal(authorizeUrl)

@@ -65,7 +65,7 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 ### Edit Account (Settings)
 1. User expands an account card in Settings → User Accounts
 2. **Local users**: can change display name (via "Save Changes") and manage the local password (via "Set/Change Local Password")
-3. **Cinna users**: profile fields are read-only (username/email from OAuth), but read-only details are shown — host, hosting type (Cloud/Self-Hosted), connection status. The card also hosts an in-place **Re-authenticate** button (see [Cinna Re-authentication](../cinna_accounts/reauthentication.md)). User can set a local password for session lock
+3. **Cinna users**: profile fields are read-only (username/email from OAuth), but read-only details are shown — host, hosting type (Self-Hosted for every account the app creates now; an older `cloud` row still reads "Cloud"), connection status. The card also hosts an in-place **Re-authenticate** button (see [Cinna Re-authentication](../cinna_accounts/reauthentication.md)). User can set a local password for session lock
 4. Click "Save Changes" to apply display-name edits
 
 ### Set / Change Local Password (Settings)
