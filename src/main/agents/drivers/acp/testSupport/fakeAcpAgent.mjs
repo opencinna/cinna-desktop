@@ -206,13 +206,19 @@ async function emit(client, steps, sessionId) {
  * results the driver has to report, not throws. A thrown `RequestError` is what
  * the SDK's connection layer turns back into that JSON-RPC error verbatim.
  */
+/** How many times each script key has been handled: picks a `sequence` entry. */
+const handled = {}
+
 function handler(name, method, respond) {
   return async (ctx) => {
     // Logged under the *wire* method, not the script key: a test asserting what
     // the client sent asks for `session/prompt`, the same name it would look
     // for in a recording, and `session/cancel` was always logged that way.
     log({ dir: 'in', kind: 'request', method, params: ctx.params })
-    const plan = script[name] ?? {}
+    const base = script[name] ?? {}
+    const count = (handled[name] = (handled[name] ?? 0) + 1)
+    // A `sequence` scripts successive calls; the last entry repeats.
+    const plan = base.sequence ? (base.sequence[count - 1] ?? base.sequence[base.sequence.length - 1]) : base
     const sessionId = ctx.params?.sessionId ?? lastSessionId
     await emit(ctx.client, plan.emit, sessionId)
     if (plan.hang) await new Promise(() => {})

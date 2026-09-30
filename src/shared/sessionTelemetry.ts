@@ -26,6 +26,20 @@ export type TelemetryEngine = 'claude' | 'codex'
  */
 export const CACHE_TTL_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false })
 
+/**
+ * Whether the engine reports cache writes at all. Claude's usage splits them
+ * out (and prices them); Codex reports cached reads only, so its cache-write
+ * count is always 0 and says nothing.
+ */
+export const CACHE_WRITES_REPORTED: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false })
+
+/**
+ * Whether the engine can measure its context by category on demand
+ * (`sessionTelemetry:measureContext`): Claude, through the patched adapter's
+ * `_cinna/contextUsage`. Codex answers `unsupported`.
+ */
+export const CONTEXT_CATEGORIES_KNOWN: Readonly<Record<TelemetryEngine, boolean>> = Object.freeze({ claude: true, codex: false })
+
 export interface TokenTally {
   /** Uncached input. */
   input: number
@@ -63,18 +77,11 @@ export interface SessionTelemetrySessionTotals {
    * tokens are what it grew by, across a restart too.
    */
   lastTokenTotal?: TokenTally
-  /**
-   * The session's last `usage_update.cost.amount` — a running total the
-   * runtime restores when the session is resumed — so the first reading after
-   * a restart is measured against it instead of counted whole.
-   */
-  lastCostReading?: number
-  /**
-   * The session's last `result.modelUsage[model].costUSD` per model (Claude's
-   * raw stream) — running totals like {@link lastCostReading}, kept for the
-   * same reason.
-   */
-  modelCostReadings?: Record<string, number>
+  // No Claude cost readings are kept: Claude's running totals start at 0 with
+  // each fresh adapter query, restart included (observed 2026-09-30, claude
+  // 2.1.276, claude-agent-acp 0.76.0). Rows written before that may still
+  // carry `lastCostReading` / `modelCostReadings`; they are dropped on the
+  // session's next write and read by nothing.
   /**
    * A digest of the params the session was last set up under (cwd and MCP
    * servers; never the params themselves, which can hold secrets). A load
@@ -245,8 +252,6 @@ export interface SessionTelemetryContextChange {
   size?: number
   /** The reading came with a cost: the adapter's size is authoritative from here. */
   costed: boolean
-  /** That cost reading (`cost.amount`), kept per session to measure the next one against. */
-  costReading?: number
   rateLimit?: unknown
   at: number
   /**
@@ -266,8 +271,6 @@ export interface SessionTelemetryTurnChange {
   byModel?: Record<string, TokenTally>
   /** The turn's cost per model: runtime deltas (Claude's raw `result`) or estimates (Codex). */
   byModelCost?: Record<string, number>
-  /** The session's latest per-model cost readings (Claude's raw `result`), to keep. */
-  modelCostReadings?: Record<string, number>
   /** The session's latest running token total (Codex's patched quota), to keep. */
   tokenTotalReading?: TokenTally
   /** The main model's window per the raw `result`: authoritative. */
@@ -359,15 +362,11 @@ export type SessionTelemetryChange =
 
 /**
  * The port a driver receives in its deps. Drivers report; the one thing they
- * read back is a session's last cost reading, which the runtime carries
- * across a restart and this app must measure the next reading against.
+ * read back is a Codex session's last running token total, which the runtime
+ * carries across a restart and this app must measure the next reading against.
  */
 export interface SessionTelemetryReporter {
   report(chatId: string, change: SessionTelemetryChange): void
-  /** The last `cost.amount` recorded for the chat's ACP session, if any. */
-  lastCostReading?(chatId: string, sessionId: string): number | undefined
-  /** The last per-model cost readings recorded for the chat's ACP session, if any. */
-  lastModelCostReadings?(chatId: string, sessionId: string): Record<string, number> | undefined
   /** The last running token total recorded for the chat's ACP session, if any (Codex). */
   lastTokenTotal?(chatId: string, sessionId: string): TokenTally | undefined
 }

@@ -92,7 +92,7 @@ import {
   type TurnTelemetryOptions,
   type ConnectionAuth
 } from './acpTelemetry'
-import type { ContextMeasurement, SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
+import { CONTEXT_CATEGORIES_KNOWN, type ContextMeasurement, type SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
 import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } from './acpLaunchers'
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
 import { toElicitationContent, toInputQuestions } from './acpQuestions'
@@ -682,7 +682,9 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
       if (running.has(chatId)) return { ok: false, code: 'busy' }
       const known = measurable.get(chatId)
       if (!known) return { ok: false, code: 'not_running' }
-      if (telemetryEngineOf(known.launcherId) !== 'claude') return { ok: false, code: 'unsupported' }
+      // The renderer shows Measure from the same table, so the two cannot drift.
+      const engine = telemetryEngineOf(known.launcherId)
+      if (!engine || !CONTEXT_CATEGORIES_KNOWN[engine]) return { ok: false, code: 'unsupported' }
       const connection = deps.pool.peek?.(known.agentId, known.specKey)
       if (!connection || connection !== known.connection || !connection.alive) return { ok: false, code: 'not_running' }
       let current: string | null
@@ -1253,7 +1255,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
 
     const remembered = conductor?.freshSession ? null : runtime.readSession(chatId)
     const sessionParams = newSessionParams(plan, sessionCwd)
-    // Marked live only by a result the adapter measured under these params (see `isSessionLive`).
+    // Marked live once this connection holds the session's query under these params (see `isSessionLive`).
     const fingerprint = sessionFingerprint(sessionParams)
     const canLoad = connection.initialized.agentCapabilities?.loadSession === true
     // Before anything that can produce traffic for it: from here the session's
@@ -1288,12 +1290,17 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         deps.recordModelCatalog?.(input.runScope?.profileUserId ?? ctx.userId, ctx.launcherId, loaded)
         runtime.validate(chatId)
         sessionId = remembered
-        ctx.telemetry?.session(remembered, false, fingerprint)
-        ctx.telemetry?.model(selectedModelOf((loaded as { configOptions?: unknown } | null)?.configOptions))
         // Not prompted on this connection yet, or loaded under other params: the
-        // adapter built a fresh session object over the restored history (see
-        // `TurnTelemetry.resumed`).
-        if (!isSessionLive(connection, remembered, fingerprint)) ctx.telemetry?.resumed()
+        // adapter started a fresh query over the restored history, and every
+        // running total (cost, per-model cost, API time) starts at 0 — not
+        // restored, as observed on 2026-09-30 with claude 2.1.276 and
+        // claude-agent-acp 0.76.0 (see `TurnTelemetry.session`).
+        ctx.telemetry?.session(remembered, false, fingerprint, connection, !isSessionLive(connection, remembered, fingerprint))
+        // From here this connection's readings describe the adapter's query for
+        // the session, zeroed or not: a turn that fails after taking a reading
+        // must not have the next turn zero it again and count it twice.
+        noteSessionLive(connection, remembered, fingerprint)
+        ctx.telemetry?.model(selectedModelOf((loaded as { configOptions?: unknown } | null)?.configOptions))
       } catch (err) {
         // **A remembered session is verified by use, not by a probe** — there
         // is nothing to ask. A load against a session the engine has forgotten
@@ -2443,16 +2450,15 @@ function finish(
 
 /**
  * Where a turn's telemetry goes: the reporter, and the chat's last persisted
- * cost reading per session for the first reading after a restart. Empty
- * without a telemetry service.
+ * Codex token total per session for the first reading after a restart (Codex
+ * restores it on resume; Claude's running totals start over, so nothing of
+ * Claude's is read back). Empty without a telemetry service.
  */
-function telemetrySink(deps: AcpDriverDeps, chatId: string): Pick<TurnTelemetryOptions, 'reporter' | 'lastCostReading' | 'lastModelCostReadings' | 'lastTokenTotal'> {
+function telemetrySink(deps: AcpDriverDeps, chatId: string): Pick<TurnTelemetryOptions, 'reporter' | 'lastTokenTotal'> {
   const reporter = deps.telemetry
   if (!reporter) return {}
   return {
     reporter,
-    ...(reporter.lastCostReading ? { lastCostReading: (sessionId: string) => reporter.lastCostReading?.(chatId, sessionId) } : {}),
-    ...(reporter.lastModelCostReadings ? { lastModelCostReadings: (sessionId: string) => reporter.lastModelCostReadings?.(chatId, sessionId) } : {}),
     ...(reporter.lastTokenTotal ? { lastTokenTotal: (sessionId: string) => reporter.lastTokenTotal?.(chatId, sessionId) } : {})
   }
 }

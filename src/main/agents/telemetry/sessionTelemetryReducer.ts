@@ -18,10 +18,12 @@
  *   tied to its session, beside the coarse `breakdown`; a new session and a
  *   compaction drop it with the baseline — for every engine, not only those
  *   with a known cache TTL.
- * - A costed `context` reading records the session's running cost total
- *   (`bySession[id].lastCostReading`); the driver measures the next reading
- *   against it after a restart. It is a reading, not an addition. So are a
- *   turn's per-model readings (`modelCostReadings`).
+ * - Only Codex's running token total is kept per session
+ *   (`bySession[id].lastTokenTotal`), a reading rather than an addition, for
+ *   the driver to measure the first turn after a restart against. Claude's
+ *   running totals start at 0 with each fresh adapter query (observed
+ *   2026-09-30, claude 2.1.276, claude-agent-acp 0.76.0), so none of its cost
+ *   readings are kept; a legacy row's are dropped on the session's next write.
  * - **The cache clock is Claude's.** A main-agent `request` sets
  *   `lastRequestAt`, the TTL its writes show (1h over 5m, else the last one
  *   seen, else an assumed 5m) and `expiresAt`. A model switch, a new session,
@@ -102,8 +104,16 @@ function withoutCategories(context: SessionTelemetry['context']): SessionTelemet
   return rest
 }
 
+/** Claude cost readings rows written before 2026-09-30 carry; nothing reads them. */
+const LEGACY_SESSION_KEYS = ['lastCostReading', 'modelCostReadings'] as const
+
 function sessionTotals(state: SessionTelemetry, sessionId: string): SessionTelemetrySessionTotals {
-  return state.totals.bySession[sessionId] ?? { tokens: { ...EMPTY_TOKEN_TALLY }, turns: 0 }
+  const totals = state.totals.bySession[sessionId]
+  if (!totals) return { tokens: { ...EMPTY_TOKEN_TALLY }, turns: 0 }
+  if (!LEGACY_SESSION_KEYS.some((key) => key in totals)) return totals
+  const rest: Record<string, unknown> = { ...totals }
+  for (const key of LEGACY_SESSION_KEYS) delete rest[key]
+  return rest as unknown as SessionTelemetrySessionTotals
 }
 
 function withSession(state: SessionTelemetry, sessionId: string, patch: Partial<SessionTelemetrySessionTotals>): SessionTelemetry['totals'] {
@@ -179,9 +189,6 @@ export function applyTelemetryChange(
         }
       }
       if (change.rateLimit !== undefined) next.rateLimit = change.rateLimit
-      if (change.costReading !== undefined) {
-        next.totals = withSession(base, change.sessionId, { lastCostReading: change.costReading })
-      }
       return next
     }
     case 'runtime': {
@@ -277,7 +284,6 @@ export function applyTelemetryChange(
             tokens: add(priorSession.tokens, message.tokens),
             ...(sessionCost !== undefined ? { costUsd: sessionCost } : {}),
             turns: priorSession.turns + 1,
-            ...(change.modelCostReadings ? { modelCostReadings: { ...(priorSession.modelCostReadings ?? {}), ...change.modelCostReadings } } : {}),
             ...(change.tokenTotalReading ? { lastTokenTotal: { ...change.tokenTotalReading } } : {})
           }
         }

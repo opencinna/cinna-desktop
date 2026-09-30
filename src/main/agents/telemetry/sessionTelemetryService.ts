@@ -166,20 +166,6 @@ export function createSessionTelemetryService(options: {
       return () => { listeners.delete(listener) }
     },
 
-    /**
-     * The last `cost.amount` recorded for one of the chat's ACP sessions — the
-     * runtime's running total, which it restores on resume — or undefined.
-     */
-    lastCostReading(chatId: string, sessionId: string): number | undefined {
-      return load(chatId)?.totals.bySession[sessionId]?.lastCostReading
-    },
-
-    /** The same, per model: the session's last `modelUsage[model].costUSD` readings, or undefined. */
-    lastModelCostReadings(chatId: string, sessionId: string): Record<string, number> | undefined {
-      const readings = load(chatId)?.totals.bySession[sessionId]?.modelCostReadings
-      return readings ? { ...readings } : undefined
-    },
-
     /** The session's last running token total (Codex's patched quota), or undefined. */
     lastTokenTotal(chatId: string, sessionId: string): TokenTally | undefined {
       const reading = load(chatId)?.totals.bySession[sessionId]?.lastTokenTotal

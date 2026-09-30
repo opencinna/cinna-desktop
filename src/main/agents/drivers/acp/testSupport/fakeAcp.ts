@@ -114,6 +114,8 @@ export interface FakeAcpHandlerScript {
    * sends on its own between prompts (a turn it starts by itself).
    */
   after?: FakeAcpStep[]
+  /** Successive calls take successive entries (the last repeats); the other fields are then ignored. */
+  sequence?: FakeAcpHandlerScript[]
 }
 
 export type FakeAcpStep =

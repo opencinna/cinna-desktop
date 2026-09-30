@@ -2394,47 +2394,100 @@ describe('session telemetry', () => {
     expect(changes.find((change) => change.type === 'model')).toEqual({ type: 'model', engine: 'codex', selected: 'gpt-5.5-codex' })
   })
 
-  it('counts only the turn’s own spend on the first turn after a restart, when the resumed session reports its whole history', async () => {
+  it('does not zero a loaded session twice when its first turn failed after taking a reading', async () => {
+    const { telemetry } = reporter()
+    // A new process loads the session; the first prompt fails after a costed
+    // reading, on a connection that survives. The second turn reuses the
+    // adapter's query: its reading is a running total over both.
+    const w = world({ launcher: 'claude', remembered: 'ses_fake', deps: { telemetry }, script: { prompt: { sequence: [
+      { emit: [usage({ used: 1_000, size: 200_000, cost: { amount: 0.03, currency: 'USD' } })], error: { code: -32603, message: 'Internal error: upstream hiccup' } },
+      { emit: [usage({ used: 1_200, size: 200_000, cost: { amount: 0.05, currency: 'USD' } })], response: CLAUDE_ANSWER }
+    ] } } })
+    const failed = await w.run()
+    expect(failed.error).toBeDefined()
+    const next = await w.run()
+    expect(w.fake.received('session/load')).toHaveLength(2)
+    expect(next.telemetry?.costUsd).toBeCloseTo(0.02)
+  })
+
+  it('measures the first turn after a restart from 0: the fresh query’s cost, API time and rows are that turn’s own', async () => {
     // The chat's aggregate, folded as the service folds it, surviving the "restart".
     let state: SessionTelemetry | null = null
     const service: SessionTelemetryReporter = {
-      report: (chatId, change) => { state = applyTelemetryChange(state, chatId, change, 1) },
-      lastCostReading: (_chatId, sessionId) => state?.totals.bySession[sessionId]?.lastCostReading
+      report: (chatId, change) => { state = applyTelemetryChange(state, chatId, change, 1) }
     }
+    const raw = (message: object): FakeAcpStep => ({ kind: 'notify', method: '_claude/sdkMessage', params: sdkParams(message, 'ses_fake') })
     const first = world({ launcher: 'claude', deps: { telemetry: service }, script: { prompt: {
-      emit: [usage({ used: 16_400, size: 1_000_000, cost: { amount: 0.04, currency: 'USD' } })],
+      emit: [
+        raw(resultMessage({ costs: { 'claude-sonnet-5[1m]': 0.04 }, apiDurationMs: 2_000, numTurns: 1 })),
+        usage({ used: 16_400, size: 1_000_000, cost: { amount: 0.04, currency: 'USD' } })
+      ],
       response: CLAUDE_ANSWER
     } } })
     await first.run()
     expect(state!.totals.costUsd).toBeCloseTo(0.04)
     expect(state!.totals.tokens).toEqual({ input: 15, output: 320, cacheRead: 38_000, cacheWrite: 2_400 })
 
-    // A new process loads the session. The CLI restored its cost-state, so the
-    // reading is the session's running total; the adapter's model_usage
-    // baseline started over, so the rows are both turns.
+    // A new process loads the session. Observed 2026-09-30 (claude 2.1.276,
+    // claude-agent-acp 0.76.0): the CLI does not restore its running totals and
+    // the adapter's model_usage baseline matches the fresh query, so every
+    // reading, and the rows, are this turn's only — the rows with a side
+    // request the main-loop `usage` misses.
     const RESUMED_ANSWER = {
       stopReason: 'end_turn',
       usage: { inputTokens: 7, outputTokens: 50, cachedReadTokens: 31_000, cachedWriteTokens: 0, totalTokens: 31_057 },
       _meta: { quota: { token_count: q(7, 31_000, 0, 50), model_usage: [
-        { model: 'claude-sonnet-5[1m]', token_count: q(17, 61_000, 1_500, 250) },
-        { model: 'claude-haiku-4-5', token_count: q(5, 8_000, 900, 120) }
+        { model: 'claude-sonnet-5[1m]', token_count: q(7, 31_000, 0, 50) },
+        { model: 'claude-haiku-4-5', token_count: q(3, 2_000, 0, 10) }
       ] } }
     }
     const second = world({ launcher: 'claude', remembered: 'ses_fake', deps: { telemetry: service }, script: { prompt: {
-      emit: [usage({ used: 16_500, size: 1_000_000, cost: { amount: 0.1, currency: 'USD' } })],
+      emit: [
+        raw(resultMessage({ costs: { 'claude-sonnet-5[1m]': 0.05 }, apiDurationMs: 900, numTurns: 1 })),
+        usage({ used: 16_500, size: 1_000_000, cost: { amount: 0.05, currency: 'USD' } })
+      ],
       response: RESUMED_ANSWER
     } } })
     const resumed = await second.run()
-    expect(resumed.telemetry?.costUsd).toBeCloseTo(0.06)
-    expect(resumed.telemetry?.tokens).toEqual({ input: 7, output: 50, cacheRead: 31_000, cacheWrite: 0 })
-    expect(state!.totals.costUsd).toBeCloseTo(0.1)
-    expect(state!.totals.tokens).toEqual({ input: 22, output: 370, cacheRead: 69_000, cacheWrite: 2_400 })
+    expect(second.fake.received('session/load')).toHaveLength(1)
+    expect(resumed.telemetry?.costUsd).toBeCloseTo(0.05)
+    expect(resumed.telemetry?.apiDurationMs).toBe(900)
+    expect(resumed.telemetry?.tokens).toEqual({ input: 10, output: 60, cacheRead: 33_000, cacheWrite: 0 })
+    expect(state!.totals.costUsd).toBeCloseTo(0.09)
+    expect(state!.totals.byModel['claude-sonnet-5[1m]'].costUsd).toBeCloseTo(0.09)
+    expect(state!.totals.tokens).toEqual({ input: 25, output: 380, cacheRead: 71_000, cacheWrite: 2_400 })
     expect(state!.totals.turns).toBe(2)
 
-    // The next turn on that connection is live again: its rows are its own.
+    // The next turn on that connection is live: measured against its readings
+    // (the fake repeats them, so this turn added nothing).
     const next = await second.run()
-    expect(next.telemetry?.tokens).toEqual({ input: 22, output: 370, cacheRead: 69_000, cacheWrite: 2_400 })
     expect(next.telemetry?.costUsd ?? 0).toBeCloseTo(0)
+    expect(next.telemetry?.apiDurationMs).toBe(0)
+  })
+
+  it('measures from 0 again after a load on the same connection under other params (the adapter recreated the session)', async () => {
+    const raw = (message: object): FakeAcpStep => ({ kind: 'notify', method: '_claude/sdkMessage', params: sdkParams(message, 'ses_fake') })
+    let servers = ['docs']
+    const w = world({ launcher: 'claude', script: { prompt: {
+      emit: [
+        raw(resultMessage({ costs: { 'claude-sonnet-5[1m]': 0.04 }, apiDurationMs: 2_000, numTurns: 1 })),
+        usage({ used: 16_400, size: 1_000_000, cost: { amount: 0.04, currency: 'USD' } })
+      ],
+      response: CLAUDE_ANSWER
+    } }, deps: {
+      prepareConductor: async (_user, _agent, _input, plan) => {
+        plan.session.mcpServers = servers.map((name) => ({ type: 'http' as const, name, url: `http://127.0.0.1:1/${name}`, headers: [] }))
+        return { close() {}, hasCalls: () => false }
+      }
+    } })
+    expect((await w.run()).telemetry).toMatchObject({ costUsd: 0.04, apiDurationMs: 2_000 })
+    // Loaded under the same params: live, and the repeated readings add nothing.
+    expect((await w.run()).telemetry).toMatchObject({ costUsd: 0, apiDurationMs: 0 })
+    // A connector added: the load rebuilds the session, a fresh query.
+    servers = ['docs', 'git']
+    const rebuilt = await w.run()
+    expect(w.fake.received('session/load')).toHaveLength(2)
+    expect(rebuilt.telemetry).toMatchObject({ costUsd: 0.04, apiDurationMs: 2_000 })
   })
 
   it('reports nothing for a nested turn, and nothing for an engine it does not read', async () => {

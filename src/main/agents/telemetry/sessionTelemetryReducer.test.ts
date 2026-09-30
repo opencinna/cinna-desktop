@@ -105,14 +105,18 @@ describe('the session telemetry reducer', () => {
     expect(applyTelemetryChange(proven, 'chat', context(50, 1_000_000), 9).context.sizeAuthoritative).toBe(true)
   })
 
-  it('keeps the session’s last cost reading, without adding it to the totals', () => {
+  it('keeps no Claude cost reading, and drops the ones a legacy row carries on the session’s next write', () => {
     const state = fold([
-      { type: 'context', engine: 'claude', sessionId: 's1', used: 1, size: 2, costed: true, costReading: 1.25, at: 1 },
-      turn({ tokens: tally(1, 2), costUsd: 0.25 }),
-      { type: 'context', engine: 'claude', sessionId: 's1', used: 1, size: 2, costed: false, at: 2 }
+      { type: 'context', engine: 'claude', sessionId: 's1', used: 1, size: 2, costed: true, at: 1 },
+      turn({ tokens: tally(1, 2), costUsd: 0.25 })
     ])
-    expect(state.totals.bySession.s1).toMatchObject({ lastCostReading: 1.25, turns: 1, costUsd: 0.25 })
-    expect(state.totals.costUsd).toBe(0.25)
+    expect(state.totals.bySession.s1).toEqual({ tokens: tally(1, 2), costUsd: 0.25, turns: 1 })
+    // A row written before 2026-09-30, when Claude's cost was thought restored on resume.
+    const legacy = structuredClone(state)
+    Object.assign(legacy.totals.bySession.s1, { lastCostReading: 1.25, modelCostReadings: { 'claude-sonnet-5[1m]': 1.25 } })
+    const next = applyTelemetryChange(legacy, 'chat', turn({ tokens: tally(1, 2), costUsd: 0.1 }), 3)
+    expect(next.totals.bySession.s1).toEqual({ tokens: tally(2, 4), costUsd: 0.35, turns: 2 })
+    expect(next.totals.costUsd).toBeCloseTo(0.35)
   })
 
   it('forgets what answered when the selected model changes', () => {
@@ -255,24 +259,22 @@ describe('the raw stream in the session telemetry', () => {
     expect(applyTelemetryChange(switched, 'chat', request(61, { input: 81_000 }), 61).context.breakdown).toEqual({ baseline: 20_000, conversation: 60_000 })
   })
 
-  it('adds per-model costs, keeps the session’s per-model readings, and takes the main window as authoritative', () => {
+  it('adds per-model costs, keeps no per-model readings, and takes the main window as authoritative', () => {
     const state = fold([
       context(30_000, 200_000),
       turn({ model: 'claude-sonnet-5[1m]', tokens: tally(1, 2), costUsd: 0.3 }, {
         byModel: { 'claude-sonnet-5[1m]': tally(1, 2) },
         byModelCost: { 'claude-sonnet-5[1m]': 0.25, 'claude-haiku-4-5': 0.05 },
-        modelCostReadings: { 'claude-sonnet-5[1m]': 1.25, 'claude-haiku-4-5': 0.05 },
         contextWindow: 1_000_000,
         maxOutputTokens: 64_000
       }),
       turn({ model: 'claude-sonnet-5[1m]', tokens: tally(1, 2), costUsd: 0.1 }, {
-        byModelCost: { 'claude-sonnet-5[1m]': 0.1 },
-        modelCostReadings: { 'claude-sonnet-5[1m]': 1.35 }
+        byModelCost: { 'claude-sonnet-5[1m]': 0.1 }
       })
     ])
     expect(state.totals.byModel['claude-sonnet-5[1m]'].costUsd).toBeCloseTo(0.35)
     expect(state.totals.byModel['claude-haiku-4-5']).toEqual({ ...tally(0, 0), costUsd: 0.05 })
-    expect(state.totals.bySession.s1.modelCostReadings).toEqual({ 'claude-sonnet-5[1m]': 1.35, 'claude-haiku-4-5': 0.05 })
+    expect(state.totals.bySession.s1).not.toHaveProperty('modelCostReadings')
     expect(state.context).toMatchObject({ size: 1_000_000, sizeAuthoritative: true, maxOutput: 64_000 })
     expect(state.totals.lastTurn).toEqual(tally(1, 2))
     expect(state.totals.costSource).toBe('runtime')

@@ -9,15 +9,21 @@
  * - **Claude (`claude-agent-acp` 0.76.0).** The prompt response's `usage` is
  *   the turn's main loop only; `_meta.quota.model_usage[]` is the same turn
  *   split by model with subagents and compaction included, so it is the fuller
- *   figure and the one used. `usage_update.cost.amount` is the SDK's
- *   `total_cost_usd` — a running total for the session, which the CLI
- *   persists in the transcript (`cost-state`) and restores on resume — so a
- *   turn's cost is what the reading grew by ({@link costDelta}), measured
- *   after a restart against the last reading the chat's telemetry kept.
- *   The adapter's `model_usage` baseline does *not* survive: each session
- *   object it creates on `session/load` starts `lastModelUsageReading` at
- *   `{}`, so the first result's rows are the whole restored history. That
- *   turn's tokens come from `usage` instead ({@link TurnTelemetry.resumed}).
+ *   figure and the one used (its rows also count side requests `usage`
+ *   misses). `usage_update.cost.amount` is the SDK's `total_cost_usd`, a
+ *   running total **of the adapter's query**, so a turn's cost is what the
+ *   reading grew by ({@link costDelta}). Observed live on 2026-09-30 (claude
+ *   2.1.276, patched `claude-agent-acp` 0.76.0): within one adapter process
+ *   `total_cost_usd`, `modelUsage` (its `costUSD` included) and
+ *   `duration_api_ms` accumulate per query, `num_turns` is per turn; after a
+ *   restart and `session/load` in a fresh adapter **all of them start from
+ *   0** — the CLI does not restore them — and the first turn's `model_usage`
+ *   rows are that turn's only (the adapter's `{}` baseline matches the fresh
+ *   query). So whenever the adapter starts a fresh query for a session
+ *   (`session/new`, a load not live on the connection, a load under another
+ *   fingerprint) every running total is measured from 0
+ *   ({@link TurnTelemetry.session}); nothing is read back from what the
+ *   chat's telemetry persisted.
  * - **Codex (`codex-acp`).** The same response shape, but both `usage` and
  *   `_meta.quota` hold the turn's **last request** only (`tokenUsage.last`).
  *   The patched adapter (`scripts/patch-codex-acp.cjs`) adds
@@ -33,7 +39,7 @@
  *   from the first request, each main-agent request's time and cache-write
  *   TTL, and per result the per-model running cost, context window and max
  *   output, API time (a running total like the cost, measured against this
- *   process's earlier reading only) and request count. A follow-up turn (no prompt
+ *   connection's earlier reading only) and request count. A follow-up turn (no prompt
  *   response) takes its tokens from the raw `result`'s `usage`.
  * - **Codex cost is estimated** from `shared/modelPricing.ts` (the runtime
  *   reports none) — a lower bound while its tokens are the last request's.
@@ -76,41 +82,46 @@ export function telemetryEngineOf(launcher: AcpLauncherId): TelemetryEngine | nu
 
 /**
  * What one turn cost, from one `usage_update.cost.amount` reading and the
- * previous reading for the same session (this process's, else the one the
- * chat's telemetry persisted).
+ * previous reading this connection took for the same session.
  *
- * The reading is taken to be a **running total** (the SDK's `total_cost_usd`
- * accumulates over the session and is restored on resume). So the turn's
- * cost is the growth; a reading that dropped (a session whose total started
- * over), or a session with no earlier reading anywhere, is taken as is.
- *
- * If live data shows the amount is per result instead, return `reading` here
- * and nothing else changes.
+ * The reading is a **running total of the adapter's query** (the SDK's
+ * `total_cost_usd`), so the turn's cost is the growth. Observed on 2026-09-30
+ * (claude 2.1.276, `claude-agent-acp` 0.76.0): it is not restored on resume —
+ * a fresh query starts it at 0, and {@link TurnTelemetry.session} seeds the
+ * previous reading to 0 then. A reading that dropped anyway (a reset nobody
+ * saw: the adapter's signed-out or provider-update rebuilds), or one with no
+ * earlier reading, is taken as is.
  */
 export function costDelta(previous: number | undefined, reading: number): number {
   if (previous === undefined || reading < previous) return reading
   return reading - previous
 }
 
-/**
- * The last cost reading per session, per connection. A connection with no
- * reading for a session (a new process, the session resumed) asks `persisted`
- * for the last one the chat's telemetry kept.
- */
+/** The per-session map of one connection, created on first use. */
+function sessionsOf<T>(readings: WeakMap<AcpConnection, Map<string, T>>, connection: AcpConnection): Map<string, T> {
+  let sessions = readings.get(connection)
+  if (!sessions) {
+    sessions = new Map()
+    readings.set(connection, sessions)
+  }
+  return sessions
+}
+
+/** The last cost reading per session, per connection. In memory only. */
 export class CostReadings {
   private readonly readings = new WeakMap<AcpConnection, Map<string, number>>()
 
   /** Records `reading` and answers what it added (see {@link costDelta}). */
-  take(connection: AcpConnection, sessionId: string, reading: number, persisted?: (sessionId: string) => number | undefined): number {
-    let sessions = this.readings.get(connection)
-    if (!sessions) {
-      sessions = new Map()
-      this.readings.set(connection, sessions)
-    }
-    const previous = sessions.has(sessionId) ? sessions.get(sessionId) : persisted?.(sessionId)
-    const delta = costDelta(previous, reading)
+  take(connection: AcpConnection, sessionId: string, reading: number): number {
+    const sessions = sessionsOf(this.readings, connection)
+    const delta = costDelta(sessions.get(sessionId), reading)
     sessions.set(sessionId, reading)
     return delta
+  }
+
+  /** The adapter started a fresh query for the session: its total starts at 0. */
+  reset(connection: AcpConnection, sessionId: string): void {
+    sessionsOf(this.readings, connection).set(sessionId, 0)
   }
 }
 
@@ -118,30 +129,25 @@ export const costReadings = new CostReadings()
 
 /**
  * The same bookkeeping per model, for the raw `result.modelUsage[m].costUSD`
- * readings — running totals for the session's query, like `total_cost_usd`.
- * A connection that has readings for the session measures a model it has
- * none for from zero; one that has none asks `persisted`.
+ * readings — running totals for the adapter's query, like `total_cost_usd`.
+ * A model with no reading yet is measured from zero.
  */
 export class ModelCostReadings {
   private readonly readings = new WeakMap<AcpConnection, Map<string, Record<string, number>>>()
 
   /** Records `readings` and answers what each model's added (see {@link costDelta}). */
-  take(
-    connection: AcpConnection,
-    sessionId: string,
-    readings: Record<string, number>,
-    persisted?: (sessionId: string) => Record<string, number> | undefined
-  ): Record<string, number> {
-    let sessions = this.readings.get(connection)
-    if (!sessions) {
-      sessions = new Map()
-      this.readings.set(connection, sessions)
-    }
-    const previous = sessions.get(sessionId) ?? persisted?.(sessionId) ?? {}
+  take(connection: AcpConnection, sessionId: string, readings: Record<string, number>): Record<string, number> {
+    const sessions = sessionsOf(this.readings, connection)
+    const previous = sessions.get(sessionId) ?? {}
     const deltas: Record<string, number> = {}
     for (const [model, reading] of Object.entries(readings)) deltas[model] = costDelta(previous[model], reading)
     sessions.set(sessionId, { ...previous, ...readings })
     return deltas
+  }
+
+  /** The adapter started a fresh query for the session: every model starts at 0. */
+  reset(connection: AcpConnection, sessionId: string): void {
+    sessionsOf(this.readings, connection).set(sessionId, {})
   }
 }
 
@@ -149,10 +155,11 @@ export const modelCostReadings = new ModelCostReadings()
 
 /**
  * The raw `result.duration_api_ms` readings, per session, per connection. Like
- * `total_cost_usd` it comes from the CLI's cumulative cost ledger, so it is a
- * running total for the session, not the result's own time. In memory only:
- * a connection with no reading for a session has nothing to measure against,
- * and the turn's API time stays unknown rather than guessed.
+ * `total_cost_usd` it is a running total of the adapter's query, not the
+ * result's own time, and starts at 0 with a fresh query. In memory only: a
+ * connection with no reading for a session (and no fresh query seen) has
+ * nothing to measure against, and the turn's API time stays unknown rather
+ * than guessed.
  */
 export class ApiDurationReadings {
   private readonly readings = new WeakMap<AcpConnection, Map<string, number>>()
@@ -163,12 +170,7 @@ export class ApiDurationReadings {
   }
 
   record(connection: AcpConnection, sessionId: string, reading: number): void {
-    let sessions = this.readings.get(connection)
-    if (!sessions) {
-      sessions = new Map()
-      this.readings.set(connection, sessions)
-    }
-    sessions.set(sessionId, reading)
+    sessionsOf(this.readings, connection).set(sessionId, reading)
   }
 }
 
@@ -205,15 +207,15 @@ export class PriceCalibration {
 export const priceCalibration = new PriceCalibration()
 
 /**
- * The sessions each connection has run a prompt on, or created, with the
+ * The sessions each connection has created, loaded or run a prompt on, with the
  * fingerprint of the params they were last set up under. A session
  * `session/load`ed on a connection where it is not in here is a fresh adapter
- * session object over a restored history ({@link TurnTelemetry.resumed}). So
- * is one loaded under a different fingerprint: `claude-agent-acp` tears a live
- * session down and recreates it when its cwd or MCP servers change
- * (`getOrCreateSession`), which resets its model-usage baseline just the same.
- * The adapter's other rebuilds (a signed-out query, a provider update) are not
- * seen, and count as live.
+ * query over a restored history, whose running totals start at 0
+ * ({@link TurnTelemetry.session}). So is one loaded under a different
+ * fingerprint: `claude-agent-acp` tears a live session down and recreates it
+ * when its cwd or MCP servers change (`getOrCreateSession`). The adapter's
+ * other rebuilds (a signed-out query, a provider update) are not seen, and
+ * count as live; a reading that dropped covers them ({@link costDelta}).
  */
 const liveSessions = new WeakMap<AcpConnection, Map<string, string>>()
 
@@ -482,9 +484,8 @@ export function mainModel(rows: Record<string, TokenTally>, selected?: string): 
  *
  * Claude: the tokens are the sum of `_meta.quota.model_usage[]` (subagents and
  * compaction included), falling back to `usage` (main loop) and then
- * `quota.token_count`. With `mainLoopOnly` (the first turn of a resumed
- * session, whose rows are its whole history) `usage` is taken instead and no
- * per-model rows are kept; the rows still name the model. Codex: `usage`,
+ * `quota.token_count` — on a resumed session's first turn too, whose rows
+ * are that turn's only (observed 2026-09-30). Codex: `usage`,
  * falling back to `quota.token_count`; both are the last request only —
  * unless `turnTokens` (the growth of the patched adapter's running total)
  * is given, which is then the turn's, with scope `turn`.
@@ -493,7 +494,7 @@ export function parsePromptTelemetry(
   response: unknown,
   engine: TelemetryEngine,
   selectedModel?: string,
-  options: { mainLoopOnly?: boolean; turnTokens?: TokenTally } = {}
+  options: { turnTokens?: TokenTally } = {}
 ): PromptTelemetry | null {
   const r = record(response)
   if (!r) return null
@@ -510,7 +511,6 @@ export function parsePromptTelemetry(
   const summed = Object.values(byModel).reduce<TokenTally | null>((sum, tally) => (sum ? addTally(sum, tally) : tally), null)
   const usage = tallyOfUsage(r.usage)
   const total = tallyOfQuota(quota?.token_count)
-  const mainLoopOnly = engine === 'claude' && options.mainLoopOnly === true
   const model = mainModel(byModel, selectedModel)
   // Codex with the running total: the turn's growth of it, every request.
   if (engine === 'codex' && options.turnTokens) {
@@ -523,12 +523,12 @@ export function parsePromptTelemetry(
       ...(lastRequest ? { lastRequest } : {})
     }
   }
-  const tokens = mainLoopOnly ? usage ?? total : engine === 'claude' ? summed ?? usage ?? total : usage ?? total ?? summed
+  const tokens = engine === 'claude' ? summed ?? usage ?? total : usage ?? total ?? summed
   if (!tokens) return null
   return {
     ...(model ? { model } : {}),
     tokens,
-    byModel: mainLoopOnly ? {} : byModel,
+    byModel,
     tokenScope: engine === 'claude' ? 'turn' : 'last_request'
   }
 }
@@ -653,10 +653,6 @@ export interface TurnTelemetryOptions {
   modelCosts?: ModelCostReadings
   apiDurations?: ApiDurationReadings
   calibration?: PriceCalibration
-  /** The last cost reading the chat's telemetry kept for a session (see {@link CostReadings}). */
-  lastCostReading?: (sessionId: string) => number | undefined
-  /** The same per model (see {@link ModelCostReadings}). */
-  lastModelCostReadings?: (sessionId: string) => Record<string, number> | undefined
   tokenTotals?: TokenTotalReadings
   /** The last running token total the chat's telemetry kept for a session (see {@link TokenTotalReadings}). */
   lastTokenTotal?: (sessionId: string) => TokenTally | undefined
@@ -694,7 +690,6 @@ export class TurnTelemetry {
   private tokenTotalReading?: TokenTally
   private turnTokens?: TokenTally
   private settled = false
-  private mainLoopOnly = false
   /** The turn runs on a session `session/load` restored (see {@link TokenTotalReadings}). */
   private restored = false
   private result?: MessageTelemetry
@@ -712,7 +707,6 @@ export class TurnTelemetry {
   private apiDurationBefore?: number | null
   private apiDurationLatest?: number
   private readonly modelCostDelta: Record<string, number> = {}
-  private readonly modelCostLatest: Record<string, number> = {}
   private readonly modelCostBasis: Record<string, string> = {}
   private contextWindow?: number
   private maxOutputTokens?: number
@@ -758,31 +752,30 @@ export class TurnTelemetry {
   /**
    * The turn's ACP session was created (`fresh`) or loaded, under the params
    * whose {@link sessionFingerprint} is `fingerprint`. Only a digest goes on.
-   * A session this connection created starts its API-time ledger at zero, so
-   * its first turn's API time is known rather than left unset.
+   *
+   * `freshQuery` (default: `fresh`): the adapter started a fresh query for
+   * the session on `connection` — `session/new`, a load of a session not live
+   * there, or a load under another fingerprint ({@link isSessionLive}). Every
+   * Claude running total (cost, per-model cost, API time) starts at 0 with
+   * it, as observed on 2026-09-30 (claude 2.1.276, `claude-agent-acp`
+   * 0.76.0), so this connection's readings for the session are seeded to 0:
+   * the first turn's cost and API time are its own, and known.
    */
-  session(sessionId: string, fresh: boolean, fingerprint: string, connection?: AcpConnection): void {
-    if (fresh && connection) this.apiDurations.record(connection, sessionId, 0)
+  session(sessionId: string, fresh: boolean, fingerprint: string, connection?: AcpConnection, freshQuery: boolean = fresh): void {
+    if (freshQuery && connection) {
+      this.costs.reset(connection, sessionId)
+      this.modelCosts.reset(connection, sessionId)
+      this.apiDurations.record(connection, sessionId, 0)
+    }
     this.restored = !fresh
     this.report({ type: 'session', engine: this.options.engine, sessionId, fresh, fingerprint: fingerprintDigest(fingerprint), at: this.now() })
-  }
-
-  /**
-   * The turn runs on a session `session/load` restored into a fresh adapter
-   * session object. Claude's `_meta.quota.model_usage` is then measured from
-   * zero, so it holds the whole restored history, not this turn: the turn's
-   * tokens come from the response's `usage` (main loop only, subagents and
-   * compaction not counted) — an undercount rather than a double count.
-   */
-  resumed(): void {
-    this.mainLoopOnly = true
   }
 
   /** One `usage_update` of the turn's own session (not a child session's). */
   frame(connection: AcpConnection, sessionId: string, frame: AcpTelemetryFrame): void {
     const costed = frame.costUsd !== undefined
     if (frame.costUsd !== undefined) {
-      this.costUsd = (this.costUsd ?? 0) + this.costs.take(connection, sessionId, frame.costUsd, this.options.lastCostReading)
+      this.costUsd = (this.costUsd ?? 0) + this.costs.take(connection, sessionId, frame.costUsd)
     }
     if (frame.used !== undefined) this.lastUsed = frame.used
     this.report({
@@ -792,7 +785,6 @@ export class TurnTelemetry {
       ...(frame.used !== undefined ? { used: frame.used } : {}),
       ...(frame.size !== undefined ? { size: frame.size } : {}),
       costed,
-      ...(frame.costUsd !== undefined ? { costReading: frame.costUsd } : {}),
       ...(frame.rateLimit !== undefined ? { rateLimit: frame.rateLimit } : {}),
       at: this.now(),
       ...(this.requests > 0 ? { cacheTimed: true } : {})
@@ -878,9 +870,8 @@ export class TurnTelemetry {
           if (row.costBasis) this.modelCostBasis[model] = row.costBasis
         }
         if (Object.keys(readings).length) {
-          const deltas = this.modelCosts.take(connection, sessionId, readings, this.options.lastModelCostReadings)
+          const deltas = this.modelCosts.take(connection, sessionId, readings)
           for (const [model, delta] of Object.entries(deltas)) this.modelCostDelta[model] = (this.modelCostDelta[model] ?? 0) + delta
-          Object.assign(this.modelCostLatest, readings)
         }
         // The window is the main model's; a subagent's model has its own.
         const models = Object.keys(frame.models)
@@ -941,8 +932,7 @@ export class TurnTelemetry {
 
   /**
    * Claude: each model's tokens at list price against what the runtime
-   * charged for it. Not on a resumed session's first turn (its rows are not
-   * the turn's), and not for a model the runtime priced other than at list.
+   * charged for it. Not for a model the runtime priced other than at list.
    */
   private calibrate(rows: Record<string, TokenTally>): void {
     const models = Object.keys(rows)
@@ -988,7 +978,7 @@ export class TurnTelemetry {
     this.logTraffic()
     const engine = this.options.engine
     const parsed = this.answer !== undefined
-      ? parsePromptTelemetry(this.answer, engine, this.selected, { mainLoopOnly: this.mainLoopOnly, ...(this.turnTokens ? { turnTokens: this.turnTokens } : {}) })
+      ? parsePromptTelemetry(this.answer, engine, this.selected, this.turnTokens ? { turnTokens: this.turnTokens } : {})
       : null
     // No prompt response (a follow-up the agent started): the raw result's
     // main-loop usage is the turn's.
@@ -1002,7 +992,7 @@ export class TurnTelemetry {
     let costUsd = this.costUsd
     let costSource: MessageTelemetry['costSource'] = 'runtime'
     let byModelCost = this.costsByModel(rows)
-    if (engine === 'claude' && parsed && !this.mainLoopOnly) this.calibrate(rows)
+    if (engine === 'claude' && parsed) this.calibrate(rows)
     // Codex reports no cost: the table's, unless a partner cloud paid (its
     // prices differ) or the model is not in it. A lower bound while the
     // tokens are the last request's. The long-context tier is judged by one
@@ -1019,7 +1009,7 @@ export class TurnTelemetry {
 
     const end = this.endedAt ?? this.now()
     const requests = this.numTurns ?? (this.requests > 0 ? this.requests : undefined)
-    // No earlier reading in this process: the turn's API time is not known.
+    // No earlier reading on this connection (and no fresh query seen): the turn's API time is not known.
     const apiDurationMs =
       this.apiDurationLatest !== undefined && typeof this.apiDurationBefore === 'number'
         ? costDelta(this.apiDurationBefore, this.apiDurationLatest)
@@ -1044,7 +1034,6 @@ export class TurnTelemetry {
         message,
         ...(Object.keys(rows).length ? { byModel: rows } : {}),
         ...(Object.keys(byModelCost).length ? { byModelCost } : {}),
-        ...(Object.keys(this.modelCostLatest).length ? { modelCostReadings: { ...this.modelCostLatest } } : {}),
         ...(this.tokenTotalReading ? { tokenTotalReading: { ...this.tokenTotalReading } } : {}),
         ...(this.contextWindow !== undefined ? { contextWindow: this.contextWindow } : {}),
         ...(this.maxOutputTokens !== undefined ? { maxOutputTokens: this.maxOutputTokens } : {}),

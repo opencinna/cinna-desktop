@@ -88,18 +88,6 @@ describe('the prompt response', () => {
     expect(parsed).toEqual({ tokens: { input: 10, output: 200, cacheRead: 30_000, cacheWrite: 1_500 }, byModel: {}, tokenScope: 'turn' })
   })
 
-  it('takes Claude’s main-loop usage on a resumed session’s first turn, whose rows are its whole history', () => {
-    const parsed = parsePromptTelemetry(CLAUDE_RESPONSE, 'claude', 'default', { mainLoopOnly: true })
-    expect(parsed).toEqual({
-      model: 'claude-sonnet-5[1m]',
-      tokens: { input: 10, output: 200, cacheRead: 30_000, cacheWrite: 1_500 },
-      byModel: {},
-      tokenScope: 'turn'
-    })
-    // Codex has no such history in its rows: unchanged.
-    expect(parsePromptTelemetry(CODEX_RESPONSE, 'codex', undefined, { mainLoopOnly: true })?.byModel).toHaveProperty('gpt-5.5-codex')
-  })
-
   it('reads Codex’s usage as the last request only', () => {
     expect(parsePromptTelemetry(CODEX_RESPONSE, 'codex', 'gpt-5.5-codex')).toEqual({
       model: 'gpt-5.5-codex',
@@ -135,17 +123,14 @@ describe('the cost of a turn', () => {
     expect(readings.take(b, 's1', 0.02)).toBe(0.02)
   })
 
-  it('is measured against the persisted reading when this connection has none for the session', () => {
+  it('starts over at 0 when the adapter starts a fresh query for the session', () => {
     const readings = new CostReadings()
-    const restarted = {} as AcpConnection
-    const persisted = (sessionId: string): number | undefined => (sessionId === 's1' ? 1.2 : undefined)
-    // The resumed session's total carries on from 1.2.
-    expect(readings.take(restarted, 's1', 1.25, persisted)).toBeCloseTo(0.05)
-    // From then on, this connection's own reading.
-    expect(readings.take(restarted, 's1', 1.3, () => 1.2)).toBeCloseTo(0.05)
-    // A total that started over, and a session nobody read before, are taken as they are.
-    expect(readings.take({} as AcpConnection, 's1', 0.1, persisted)).toBe(0.1)
-    expect(readings.take(restarted, 's2', 0.3, persisted)).toBe(0.3)
+    const connection = {} as AcpConnection
+    readings.take(connection, 's1', 0.05)
+    readings.reset(connection, 's1')
+    // Higher than before the reset: without it, only 0.03 would count.
+    expect(readings.take(connection, 's1', 0.08)).toBe(0.08)
+    expect(readings.take(connection, 's1', 0.1)).toBeCloseTo(0.02)
   })
 })
 
@@ -225,18 +210,82 @@ describe('one turn', () => {
     expect(changes.filter((change) => change.type === 'turn')).toHaveLength(1)
   })
 
-  it('takes a resumed session’s tokens from its main loop, its cost against the persisted reading, and reports the reading', () => {
-    const changes: SessionTelemetryChange[] = []
-    const turn = new TurnTelemetry({
-      engine: 'claude', chatId: 'chat', costs: new CostReadings(), lastCostReading: () => 5,
-      reporter: { report: (_chatId, change) => changes.push(change) }
-    })
-    turn.resumed()
-    turn.frame(connection, 's1', { used: 1, size: 2, costUsd: 5.25 })
-    turn.answered(CLAUDE_RESPONSE)
-    expect(turn.settle('s1')).toMatchObject({ tokens: { input: 10, output: 200, cacheRead: 30_000, cacheWrite: 1_500 }, costUsd: 0.25 })
-    expect(changes.find((change) => change.type === 'context')).toMatchObject({ costed: true, costReading: 5.25 })
-    expect(changes.find((change) => change.type === 'turn')).not.toHaveProperty('byModel')
+  it('takes a restored session’s first turn from 0: its rows are its tokens, its readings its cost and API time', () => {
+    const costs = new CostReadings()
+    const modelCosts = new ModelCostReadings()
+    const apiDurations = new ApiDurationReadings()
+    const sdk = (message: object) => readSdkMessage(sdkParams(message, 's1'))!
+    const turnOn = (conn: AcpConnection, setUp: (turn: TurnTelemetry) => void, cost: number, apiDurationMs: number) => {
+      const changes: SessionTelemetryChange[] = []
+      const turn = new TurnTelemetry({
+        engine: 'claude', chatId: 'chat', costs, modelCosts, apiDurations, calibration: new PriceCalibration(),
+        reporter: { report: (_chatId, change) => changes.push(change) }
+      })
+      setUp(turn)
+      turn.sdk(conn, 's1', sdk(resultMessage({ costs: { 'claude-sonnet-5[1m]': cost }, apiDurationMs, numTurns: 1 })))
+      turn.frame(conn, 's1', { used: 1, size: 2, costUsd: cost })
+      turn.answered(CLAUDE_RESPONSE)
+      return { message: turn.settle('s1'), turnChange: changes.find((change) => change.type === 'turn') as Extract<SessionTelemetryChange, { type: 'turn' }> }
+    }
+    const before = {} as AcpConnection
+    const first = turnOn(before, (turn) => turn.session('s1', true, 'fp', before), 0.2, 3_000)
+    expect(first.message).toMatchObject({ costUsd: 0.2, apiDurationMs: 3_000 })
+    // A new process loads the session (not live there): every running total started over.
+    const after = {} as AcpConnection
+    const resumed = turnOn(after, (turn) => turn.session('s1', false, 'fp', after, true), 0.05, 900)
+    expect(resumed.message).toMatchObject({ tokens: { input: 15, output: 320, cacheRead: 38_000, cacheWrite: 2_400 }, costUsd: 0.05, apiDurationMs: 900 })
+    expect(resumed.turnChange.byModel).toHaveProperty('claude-haiku-4-5-20251001')
+    expect(resumed.turnChange.byModelCost).toEqual({ 'claude-sonnet-5[1m]': 0.05 })
+    expect(resumed.turnChange).not.toHaveProperty('modelCostReadings')
+  })
+
+  it('resets a connection’s readings when a load there rebuilt the session (another fingerprint)', () => {
+    const costs = new CostReadings()
+    const modelCosts = new ModelCostReadings()
+    const apiDurations = new ApiDurationReadings()
+    const sdk = (message: object) => readSdkMessage(sdkParams(message, 's1'))!
+    const turnOn = (setUp: (turn: TurnTelemetry) => void, cost: number, apiDurationMs: number) => {
+      const changes: SessionTelemetryChange[] = []
+      const turn = new TurnTelemetry({
+        engine: 'claude', chatId: 'chat', costs, modelCosts, apiDurations, calibration: new PriceCalibration(),
+        reporter: { report: (_chatId, change) => changes.push(change) }
+      })
+      setUp(turn)
+      turn.sdk(connection, 's1', sdk(resultMessage({ costs: { 'claude-sonnet-5[1m]': cost }, apiDurationMs, numTurns: 1 })))
+      turn.frame(connection, 's1', { used: 1, size: 2, costUsd: cost })
+      turn.answered(CLAUDE_RESPONSE)
+      return { message: turn.settle('s1'), turnChange: changes.find((change) => change.type === 'turn') as Extract<SessionTelemetryChange, { type: 'turn' }> }
+    }
+    turnOn((turn) => turn.session('s1', true, 'fp', connection), 0.125, 2_000)
+    // Loaded live on the same connection: measured against the last readings.
+    expect(turnOn((turn) => turn.session('s1', false, 'fp', connection, false), 0.25, 2_500).message).toMatchObject({ costUsd: 0.125, apiDurationMs: 500 })
+    // Loaded under another fingerprint: the adapter recreated the session, a fresh query.
+    // Higher readings than before, so a missed reset would show as a smaller delta.
+    const rebuilt = turnOn((turn) => turn.session('s1', false, 'fp2', connection, true), 0.3, 4_000)
+    expect(rebuilt.message).toMatchObject({ costUsd: 0.3, apiDurationMs: 4_000 })
+    expect(rebuilt.turnChange.byModelCost!['claude-sonnet-5[1m]']).toBeCloseTo(0.3)
+  })
+
+  it('takes a reading that dropped as is, when no fresh query was seen (the adapter’s unseen rebuilds)', () => {
+    const costs = new CostReadings()
+    const modelCosts = new ModelCostReadings()
+    const apiDurations = new ApiDurationReadings()
+    const sdk = (message: object) => readSdkMessage(sdkParams(message, 's1'))!
+    const turnOn = (cost: number, apiDurationMs: number) => {
+      const changes: SessionTelemetryChange[] = []
+      const turn = new TurnTelemetry({
+        engine: 'claude', chatId: 'chat', costs, modelCosts, apiDurations, calibration: new PriceCalibration(),
+        reporter: { report: (_chatId, change) => changes.push(change) }
+      })
+      turn.sdk(connection, 's1', sdk(resultMessage({ costs: { 'claude-sonnet-5[1m]': cost }, apiDurationMs, numTurns: 1 })))
+      turn.frame(connection, 's1', { used: 1, size: 2, costUsd: cost })
+      turn.answered(CLAUDE_RESPONSE)
+      return { message: turn.settle('s1'), turnChange: changes.find((change) => change.type === 'turn') as Extract<SessionTelemetryChange, { type: 'turn' }> }
+    }
+    turnOn(0.5, 6_000)
+    const dropped = turnOn(0.02, 700)
+    expect(dropped.message).toMatchObject({ costUsd: 0.02, apiDurationMs: 700 })
+    expect(dropped.turnChange.byModelCost!['claude-sonnet-5[1m]']).toBeCloseTo(0.02)
   })
 
   it('settles nothing, and reports no turn, when the runtime said nothing about usage', () => {
@@ -268,14 +317,13 @@ describe('which loaded sessions start a fresh model-usage baseline', () => {
 
 describe('one turn, with Claude’s raw SDK stream', () => {
   const sdk = (message: object) => readSdkMessage(sdkParams(message, 's1'))!
-  const collect = (options: { engine?: 'claude' | 'codex'; calibration?: PriceCalibration; persisted?: Record<string, number> } = {}) => {
+  const collect = (options: { engine?: 'claude' | 'codex'; calibration?: PriceCalibration } = {}) => {
     const changes: SessionTelemetryChange[] = []
     let clock = 1_000
     const connection = {} as AcpConnection
     const turn = new TurnTelemetry({
       engine: options.engine ?? 'claude', chatId: 'chat', now: () => (clock += 500),
       costs: new CostReadings(), modelCosts: new ModelCostReadings(), calibration: options.calibration ?? new PriceCalibration(),
-      ...(options.persisted ? { lastModelCostReadings: () => options.persisted } : {}),
       reporter: { report: (_chatId, change) => changes.push(change) }
     })
     return { turn, changes, connection }
@@ -322,21 +370,22 @@ describe('one turn, with Claude’s raw SDK stream', () => {
     expect(turnChange.maxOutputTokens).toBe(64_000)
     // Per-model costs, keyed like the token rows where the ids name the same model.
     expect(turnChange.byModelCost).toEqual({ 'claude-sonnet-5[1m]': 0.04, 'claude-haiku-4-5-20251001': 0.003 })
-    expect(turnChange.modelCostReadings).toEqual({ 'claude-sonnet-5[1m]': 0.04, 'claude-haiku-4-5-20251001': 0.003 })
+    expect(turnChange).not.toHaveProperty('modelCostReadings')
   })
 
-  it('measures per-model cost against the session’s previous reading, and after a restart against the persisted one', () => {
-    const { turn, changes, connection } = collect({ persisted: { 'claude-sonnet-5[1m]': 1 } })
+  it('measures per-model cost against the session’s previous reading on the connection, a model with none from zero', () => {
+    const { turn, changes, connection } = collect()
+    turn.session('s1', true, 'fp', connection)
+    turn.sdk(connection, 's1', sdk(resultMessage({ costs: { 'claude-sonnet-5[1m]': 1, 'claude-haiku-4-5': 0 } })))
     turn.sdk(connection, 's1', sdk(resultMessage({ costs: { 'claude-sonnet-5[1m]': 1.2, 'claude-haiku-4-5': 0.01 } })))
     // A second result in the same turn (a queued turn): its growth only.
     turn.sdk(connection, 's1', sdk(resultMessage({ costs: { 'claude-sonnet-5[1m]': 1.5, 'claude-haiku-4-5': 0.01 } })))
     turn.answered(CLAUDE_RESPONSE)
     turn.settle('s1')
     const turnChange = changes.find((change) => change.type === 'turn') as Extract<SessionTelemetryChange, { type: 'turn' }>
-    expect(turnChange.byModelCost!['claude-sonnet-5[1m]']).toBeCloseTo(0.5)
+    expect(turnChange.byModelCost!['claude-sonnet-5[1m]']).toBeCloseTo(1.5)
     // Keyed like the token row that names the same model.
     expect(turnChange.byModelCost!['claude-haiku-4-5-20251001']).toBeCloseTo(0.01)
-    expect(turnChange.modelCostReadings).toEqual({ 'claude-sonnet-5[1m]': 1.5, 'claude-haiku-4-5': 0.01 })
   })
 
   it('takes a follow-up’s tokens from the raw result’s usage, and keeps none without one', () => {
@@ -356,7 +405,7 @@ describe('one turn, with Claude’s raw SDK stream', () => {
     expect(bare.turn.settle('s1')).toMatchObject({ tokenScope: 'none' })
   })
 
-  it('checks each model’s list price against the runtime’s cost, but not on a resumed turn or a managed price', () => {
+  it('checks each model’s list price against the runtime’s cost, a restored session’s first turn included, but not a managed price', () => {
     const check = vi.fn()
     const calibration = { check } as unknown as PriceCalibration
     const { turn, connection } = collect({ calibration })
@@ -370,11 +419,13 @@ describe('one turn, with Claude’s raw SDK stream', () => {
     expect(check.mock.calls[0][2]).toBeCloseTo(0.02)
 
     const resumed = collect({ calibration })
-    resumed.turn.resumed()
+    resumed.turn.session('s1', false, 'fp', resumed.connection, true)
     resumed.turn.sdk(resumed.connection, 's1', sdk(resultMessage({ costs: { 'claude-sonnet-5[1m]': 0.02 } })))
     resumed.turn.answered(CLAUDE_RESPONSE)
     resumed.turn.settle('s1')
-    expect(check).toHaveBeenCalledTimes(1)
+    // Its rows are the turn's own, so it is checked (the subagent's row has no runtime cost of its own).
+    const sonnet = check.mock.calls.slice(1).find((call) => call[0] === 'claude-sonnet-5[1m]')!
+    expect(sonnet[2]).toBeCloseTo(0.02)
   })
 
   it('logs a price drift once per model per process, with the model and the two figures only', () => {
@@ -424,7 +475,7 @@ describe('one turn, with Claude’s raw SDK stream', () => {
     expect(turnOn(connection, [{ apiDurationMs: 7_000, numTurns: 2 }])).toMatchObject({ apiDurationMs: 4_000, requests: 2 })
     // Two results in one turn: the last reading less the pre-turn one, never a sum; requests still add up.
     expect(turnOn(connection, [{ apiDurationMs: 8_000, numTurns: 1 }, { apiDurationMs: 9_500, numTurns: 2 }])).toMatchObject({ apiDurationMs: 2_500, requests: 3 })
-    // A new connection (a restarted process) has no earlier reading.
+    // A new connection with no fresh query seen has no earlier reading.
     expect(turnOn({} as AcpConnection, [{ apiDurationMs: 12_000, numTurns: 1 }])).not.toHaveProperty('apiDurationMs')
   })
 
