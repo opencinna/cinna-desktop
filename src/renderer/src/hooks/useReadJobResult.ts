@@ -13,7 +13,10 @@ import type { JobData } from '../../../shared/jobs'
  */
 export function useReadJobResult(visibleJobId: string | null): void {
   const foreground = useAppForeground()
-  const { data: jobs } = useJobList()
+  // Only while a job page is open: MainArea mounts this hook from launch, and an
+  // always-on list observer would fetch `['jobs']` at startup and serve that
+  // snapshot to the Jobs sidebar for the whole stale window.
+  const { data: jobs } = useJobList({ enabled: !!visibleJobId })
   const detail = useJob(visibleJobId)
   const queryClient = useQueryClient()
   const userId = useAuthStore((s) => s.currentUser?.id)

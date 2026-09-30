@@ -56,6 +56,11 @@ async function adoptFolder(
     }
   )
   if (!added.ok) throw new Error(`folder-add refused: ${added.message}`)
+  // Added over raw IPC, so no mutation invalidated the renderer's cache — and
+  // the Chats list holds the folder-agent list from launch, so the Agents view
+  // would open on that pre-adoption snapshot. A reload starts a fresh cache.
+  await cinna.page.reload()
+  await cinna.page.getByRole('button', { name: 'Chats', exact: true }).waitFor()
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { AgentEngine, EngineLoginId } from './engine'
+import { isEngineLoginId, type AgentEngine, type EngineLoginId } from './engine'
 
 /**
  * A vendor desktop app found on this Mac — Claude Desktop, ChatGPT — whose
@@ -87,10 +87,19 @@ export interface RuntimeSetup {
  *   the Mac the offer exists for.
  */
 export function hasWorkingRuntime(setup: RuntimeSetup): boolean {
-  if (setup.defaultEngine === 'opencode' && setup.hasActiveCredential) return true
+  if (settledByCredential(setup.defaultEngine, setup.hasActiveCredential)) return true
   return (Object.values(setup.cli) as CliRuntimeSetup[]).some(
     (cli) => cli.auth === 'logged_in' || (cli.auth === 'unknown' && cli.installed)
   )
+}
+
+/**
+ * The Default runtime runs on an AI credential (not on a CLI login) and one is
+ * enabled — working, without asking any CLI. The login engines are exactly the
+ * ones that do not run on a credential.
+ */
+export function settledByCredential(defaultEngine: AgentEngine, hasActiveCredential: boolean): boolean {
+  return hasActiveCredential && !isEngineLoginId(defaultEngine)
 }
 
 /** Whose subscription each app stands for, in the one-app sentence. */

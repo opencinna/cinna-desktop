@@ -19,10 +19,11 @@ import { unwrapIpcError } from '../utils/ipcError'
 
 const jobRunLog = createLogger('job-run')
 
-export function useJobList() {
+export function useJobList({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['jobs'],
     queryFn: () => window.api.jobs.list(),
+    enabled,
     refetchInterval: (query) => query.state.data?.some((job) => job.inProgressRunsCount > 0) ? 5000 : false
   })
 }

@@ -4,6 +4,7 @@ import {
   DESKTOP_APP_PHASE_LABEL,
   desktopAppsBannerText,
   hasWorkingRuntime,
+  settledByCredential,
   visibleDesktopApps
 } from '../../../../shared/desktopApps'
 import { isCredentialActive } from '../../../../shared/credentials'
@@ -45,7 +46,7 @@ export function DesktopAppsBanner(): React.JSX.Element | null {
   // polls while signed out.
   const needsCli =
     apps.length > 0 && !!defaultRuntime && providers.isSuccess &&
-    !(defaultRuntime.engine === 'opencode' && hasActiveCredential)
+    !settledByCredential(defaultRuntime.engine, hasActiveCredential)
   const claudeAuth = useClaudeAuth({ enabled: needsCli })
   const codexAuth = useCodexAuth({ enabled: needsCli })
   const claudeBinary = useClaudeBinary({ enabled: needsCli })
