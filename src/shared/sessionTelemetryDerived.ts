@@ -39,6 +39,11 @@ export interface CurrentPrices {
   model: string
   prices: TokenPrices
   fast: boolean
+  /**
+   * Fast mode is on and the table lists no fast rate for the model: `prices`
+   * are then its base rates, which fast mode is charged above.
+   */
+  fastPriceUnknown: boolean
   /** The long-context tier applies at the current context size. */
   longContext: boolean
   checkedAt: string
@@ -51,19 +56,22 @@ function pricedModel(t: SessionTelemetry): string | undefined {
 /**
  * The current model's prices per MTok at the session's context size and
  * fast mode, or undefined when the table does not know the model ("price
- * unknown") or cannot price that context size.
+ * unknown") or cannot price that context size. Fast mode on a model with no
+ * listed fast rate keeps the base rates, flagged `fastPriceUnknown`.
  */
 export function currentPrices(t: SessionTelemetry): CurrentPrices | undefined {
   const model = pricedModel(t)
   const price = priceOf(model)
   if (!model || !price) return undefined
   const fast = t.runtime?.fastMode === 'on'
-  const prices = effectivePrices(price, { fast, contextTokens: t.context.used })
+  const fastPriceUnknown = fast && !price.fast
+  const prices = effectivePrices(price, { fast: fast && !fastPriceUnknown, contextTokens: t.context.used })
   if (!prices) return undefined
   return {
     model,
     prices,
     fast,
+    fastPriceUnknown,
     longContext: price.longContext !== undefined && t.context.used > price.longContext.aboveInputTokens,
     checkedAt: PRICES_CHECKED_AT
   }
@@ -97,6 +105,7 @@ export function nextMessageEstimate(t: SessionTelemetry, now: number): NextMessa
   if (t.auth.kind === 'cloud') return { basis, note: 'No estimate: cloud provider pricing differs from list prices.' }
   const current = currentPrices(t)
   if (!current) return { basis, note: 'Price unknown for this model.' }
+  if (current.fastPriceUnknown) return { basis, note: 'Price unknown in fast mode.' }
   const used = t.context.used
   if (used <= 0) return { basis, note: 'No context yet.' }
   const { prices } = current
@@ -132,4 +141,23 @@ export function cacheHitRatio(t: SessionTelemetry): { session?: number; lastTurn
     ...(session !== undefined ? { session } : {}),
     ...(lastTurn !== undefined ? { lastTurn } : {})
   }
+}
+
+/**
+ * What a measured context category is. The pinned Claude CLI's
+ * `getContextUsage` lists the window's unused room (`Free space`) and the
+ * room held back for compaction (`Autocompact buffer`, `Compact buffer`)
+ * beside what is in it; its own `/context` counts neither as usage.
+ * Matched by exact name, case-insensitively.
+ */
+export type ContextCategoryKind = 'content' | 'free' | 'reserved'
+
+const FREE_CATEGORY = 'free space'
+const RESERVED_CATEGORIES: ReadonlySet<string> = new Set(['autocompact buffer', 'compact buffer'])
+
+export function contextCategoryKind(name: string): ContextCategoryKind {
+  const key = name.trim().toLowerCase()
+  if (key === FREE_CATEGORY) return 'free'
+  if (RESERVED_CATEGORIES.has(key)) return 'reserved'
+  return 'content'
 }

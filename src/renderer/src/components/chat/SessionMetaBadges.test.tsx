@@ -34,7 +34,12 @@ const spies = vi.hoisted(() => ({
       }
     }
   },
-  tasks: { list: (query: unknown) => spies.listTasks(query) }
+  tasks: { list: (query: unknown) => spies.listTasks(query) },
+  sessionTelemetry: {
+    get: async () => ({ ok: true, telemetry: null }),
+    measureContext: async () => ({ ok: false, code: 'unsupported' }),
+    onChanged: () => () => undefined
+  }
 }
 
 const { SessionMetaBadges } = await import('./SessionMetaBadges')

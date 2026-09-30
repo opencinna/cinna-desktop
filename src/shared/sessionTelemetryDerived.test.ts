@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionTelemetry } from './sessionTelemetry'
-import { cacheHitRatio, cacheState, currentPrices, nextMessageEstimate } from './sessionTelemetryDerived'
+import { cacheHitRatio, cacheState, contextCategoryKind, currentPrices, nextMessageEstimate } from './sessionTelemetryDerived'
 
 const NOW = 1_000_000_000
 const MIN = 60_000
@@ -89,6 +89,28 @@ describe('the current prices', () => {
     const fast = currentPrices(telemetry({ model: { resolved: 'claude-opus-5-5', source: 'init' }, runtime: { fastMode: 'on' } }))
     expect(fast).toMatchObject({ prices: { input: 8, output: 40 }, fast: true })
     expect(currentPrices(telemetry({ model: { selected: 'default', source: 'config' } }))).toBeUndefined()
+  })
+
+  it('keep the base rates in fast mode for a model with no listed fast rate, flagged', () => {
+    const fast = currentPrices(telemetry({ runtime: { fastMode: 'on' } }))
+    expect(fast).toMatchObject({ prices: { input: 2, output: 10, cacheRead: 0.2 }, fast: true, fastPriceUnknown: true })
+    expect(currentPrices(telemetry())?.fastPriceUnknown).toBe(false)
+    expect(currentPrices(telemetry({ model: { resolved: 'claude-opus-5-5', source: 'init' }, runtime: { fastMode: 'on' } }))?.fastPriceUnknown).toBe(false)
+  })
+
+  it('give the next message no figures in fast mode without a fast rate, and say so', () => {
+    expect(nextMessageEstimate(telemetry({ runtime: { fastMode: 'on' } }), NOW)).toEqual({ basis: 'api', note: 'Price unknown in fast mode.' })
+  })
+})
+
+describe('a measured context category', () => {
+  it('is free space or a compaction reserve by exact name, any case; else content', () => {
+    expect(contextCategoryKind('Free space')).toBe('free')
+    expect(contextCategoryKind('free SPACE')).toBe('free')
+    expect(contextCategoryKind('Autocompact buffer')).toBe('reserved')
+    expect(contextCategoryKind('Compact buffer')).toBe('reserved')
+    expect(contextCategoryKind('Messages')).toBe('content')
+    expect(contextCategoryKind('Free space used by tools')).toBe('content')
   })
 })
 

@@ -3,6 +3,7 @@ import { useSessionActivity } from '../../hooks/useSessionActivity'
 import { useSessionActivityStop } from '../../hooks/useSessionActivityStop'
 import { ChatTasksBadge } from './ChatTasksBadge'
 import { SessionActivityBadge } from './SessionActivityBadges'
+import { SessionTelemetryBadge } from './SessionTelemetryBadge'
 
 /**
  * Live meta information about this chat's session, under the composer, to the
@@ -11,8 +12,10 @@ import { SessionActivityBadge } from './SessionActivityBadges'
  *
  * **Order is the layout rule** (`ux_rules.md` §1). The cluster is right-aligned,
  * so a badge that appears pushes only what is to its left. The badges that come
- * and go with running work (Agents, Background) are therefore leftmost, and
- * Tasks — which stays once a chat has one — sits next to the router badge.
+ * and go with running work (Agents, Background) are therefore leftmost, then
+ * Tasks, which stays once a chat has one, and rightmost, next to the router
+ * badge, the session badge (context fill), which comes with the first turn and
+ * never leaves.
  *
  * Only for a chat that exists: an unsent chat has no session and no tasks.
  */
@@ -43,6 +46,7 @@ export function SessionMetaBadges({ chatId }: { chatId: string }): React.JSX.Ele
       <SessionActivityBadge kind="background" items={items} stop={stop} className={SPLIT} />
       <SessionActivityBadge kind="all" items={items} stop={stop} className={COLLAPSED} />
       <ChatTasksBadge chatId={chatId} />
+      <SessionTelemetryBadge chatId={chatId} />
     </div>
   )
 }

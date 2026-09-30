@@ -4,9 +4,10 @@ import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
 import { costOf } from '../../src/shared/modelPricing'
+import { formatUsd } from '../../src/renderer/src/utils/telemetryFormat'
 
 /**
- * Session telemetry in the verbose message popup.
+ * Session telemetry in the verbose message popup and the session badge.
  *
  * Only the Claude and Codex launchers report telemetry (`telemetryEngineOf`),
  * so the agent is a Codex folder agent. The Electron launcher, the pinned
@@ -147,5 +148,23 @@ test('the verbose popup of a Codex turn that reported usage shows its telemetry;
       expect(rows).not.toHaveProperty('telemetry')
       await closePopup(cinna)
     }
+  })
+
+  await test.step('the session badge shows the context fill, and its popover the model and the chat\'s cost', async () => {
+    const badge = cinna.page.getByTestId('session-meta-badges').getByRole('button', { name: /^Context/ })
+    await expect(badge).toBeVisible()
+    await badge.hover()
+    const popover = cinna.page.getByRole('dialog', { name: 'Session details', exact: true })
+    await expect(popover).toBeVisible()
+    await expect(popover.locator('code').first()).toHaveText(MODEL)
+    // The plain turn reported nothing, so the chat's cost is the metered turn's.
+    const cost = costOf(MODEL, { input: 1400, output: 100, cacheRead: 600, cacheWrite: 0 }, { contextTokens: 1200 })!
+    const spent = popover.getByRole('region', { name: 'Spent in this chat', exact: true })
+    await expect(spent).toContainText(formatUsd(cost))
+    await expect(spent).toContainText('estimated')
+    // Codex reports no cache TTL and no cache writes: no section and no row for them.
+    await expect(spent).not.toContainText('Cache write')
+    await expect(popover.getByRole('region', { name: 'Cache', exact: true })).toHaveCount(0)
+    await expect(popover.getByRole('button', { name: 'Measure', exact: true })).toHaveCount(0)
   })
 })
