@@ -37,6 +37,12 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 2. The action is **Re-authenticate**, not Check again: asking again does not fix a session, signing in does. It runs the same flow as the chat's error chip ([Cinna Re-authentication](../../auth/cinna_accounts/reauthentication.md))
 3. If either action fails, the warning adds that (*Couldn't re-authenticate — …*) and the reason stays
 
+### A CLI engine that is not logged in
+1. A folder agent on Claude Code or Codex answers `not_logged_in`, and the answer names which engine's login fixes it
+2. The action is **Log in**, not Check again: it runs that engine's own login (`claude auth login` / `codex login`) on the binary the turns use, and the CLI opens the browser. While it runs the button reads what it is waiting on, with **Cancel** beside it. See [The Claude Engine](../local_agents/claude_engine.md#claude-code-is-there-but-not-logged-in) for why it runs in-app and what the app never sees
+3. When the login ends the readiness is asked again. A sign-in that did not finish adds *Couldn't log in — …* to the warning and offers **Copy command**, the exact terminal command for the same binary
+4. A turn that fails in the chat for this reason re-checks readiness, so the warning and its Log in appear under the error. A task or Inbox run refused the same way carries the sentence but no button
+
 ### An agent whose credentials are not filled in yet
 1. A folder agent's `credentials/.env` lacks a variable its manifest requires, so its readiness is `credentials_needed`
 2. The warning panel shows the reason with **Check again**, in the warning tone. Send and Enter still work, and on the new-chat screen its example prompts stay live

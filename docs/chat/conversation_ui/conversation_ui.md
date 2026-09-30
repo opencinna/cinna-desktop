@@ -98,7 +98,7 @@ Defines message presentation, transcript text actions and unsent composer state.
 1. Read an assistant's answer with its tool steps folded into dots in compact mode and its thinking open between them. Expand the dots to inspect the command headers, then expand a Cinna CLI header to see its associated output.
 2. A recognized command appears once rather than repeating in a Bash argument card and narration. Real explanatory narration and stderr stay visible inside the expanded command block. The same rendering applies to saved, streaming and nested-agent replies.
 3. Unrecognized shell commands keep ordinary tool/output blocks. Whole-output console/text wrappers are still removed there; a command such as `cd workspace && cinna …` does not need CLI recognition to display its console output cleanly.
-4. When the answering agent has a known readiness problem, read the warning above the input and use Check again or Re-authenticate. The message draft stays intact; when recovery clears the warning, input focus returns.
+4. When the answering agent has a known readiness problem, read the warning above the input and use Check again, Re-authenticate, or Log in for a logged-out Claude Code or Codex. The message draft stays intact; when recovery clears the warning, input focus returns.
 
 ### Subagent work in the transcript
 

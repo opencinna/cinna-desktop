@@ -29,7 +29,7 @@ Install the packaged app on a Mac with nothing installed — no Command Line Too
 ### The specs
 - `first-launch` (~1.7 min) — the Welcome card, then a minute idle on it while startup work runs
 - `developer-tools` (~1 min) — Settings → Local Development → Developer Tools reads `make` and `python3` as not found, then, once the managed git has downloaded, shows its pinned version for Git. Steps 3 and 5 of [A fresh Mac, nothing installed](../shell_environment/developer_tools.md#a-fresh-mac-nothing-installed); step 2, the engine child's `git`, is out of reach (below)
-- `first-agent-session` (~1 min) — create a Claude folder agent and send it a message: the app downloads its pinned Claude Code (~215 MB) and says the install is not logged in. The agents home, the Claude default runtime and the home folder itself are arranged through `window.api` before the UI flow (below), so the spec clicks only through Agents → Add an agent → New agent
+- `first-agent-session` (~1 min) — create a Claude folder agent and send it a message: the app downloads its pinned Claude Code (~215 MB) and says Claude Code is not logged in. The agents home, the Claude default runtime and the home folder itself are arranged through `window.api` before the UI flow (below), so the spec clicks only through Agents → Add an agent → New agent
 
 The whole suite takes about 3.5 minutes on Apple silicon, plus packaging. The 15-minute test timeout is headroom for a slow download, not an expected duration
 
