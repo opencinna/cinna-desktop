@@ -30,6 +30,7 @@ Install the packaged app on a Mac with nothing installed — no Command Line Too
 - `first-launch` (~1.7 min) — the Welcome card, then a minute idle on it while startup work runs
 - `developer-tools` (~1 min) — Settings → Local Development → Developer Tools reads `make` and `python3` as not found, then, once the managed git has downloaded, shows its pinned version for Git. Steps 3 and 5 of [A fresh Mac, nothing installed](../shell_environment/developer_tools.md#a-fresh-mac-nothing-installed); step 2, the engine child's `git`, is out of reach (below)
 - `first-agent-session` (~1 min) — create a Claude folder agent and send it a message: the app downloads its pinned Claude Code (~215 MB) and says Claude Code is not logged in. The agents home, the Claude default runtime and the home folder itself are arranged through `window.api` before the UI flow (below), so the spec clicks only through Agents → Add an agent → New agent
+- `desktop-apps-offer` (~2 min, two VMs) — stub `Claude.app` and `ChatGPT.app` planted in the real `/Applications` over SSH while the app sits on Welcome (detection is lazy and memoized, so it has not looked yet); after Skip the new-chat screen offers both with no system dialog in a 20 s idle. A second test writes a dummy API-key `~/.codex/auth.json`, presses Use ChatGPT and waits for the pinned Codex download and adoption. Use Claude is never pressed: it would open a real browser sign-in. See [Detected Desktop Apps](../../agents/local_agents/desktop_app_offer.md)
 
 The whole suite takes about 3.5 minutes on Apple silicon, plus packaging. The 15-minute test timeout is headroom for a slow download, not an expected duration
 
@@ -69,7 +70,7 @@ make bare-mac -> package-app.sh (or APP=) -> playwright -c e2e/bare-mac/playwrig
 - `scripts/bare-mac/windows.js` — JXA window listing (owner, pid, layer, size)
 - `e2e/bare-mac/playwright.config.ts` — one worker, no retries, 15-minute test timeout, 1-minute action timeout (a missing control fails in a minute, not at the test timeout)
 - `e2e/bare-mac/fixtures/vm.ts` — the `vm` fixture: clone, install, launch, nag watch, teardown
-- `e2e/bare-mac/specs/` — `first-launch`, `developer-tools`, `first-agent-session`
+- `e2e/bare-mac/specs/` — `first-launch`, `developer-tools`, `first-agent-session`, `desktop-apps-offer`
 
 ## Integration Points
 

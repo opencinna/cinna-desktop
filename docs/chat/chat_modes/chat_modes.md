@@ -67,6 +67,7 @@ Let users define named presets that bundle a runtime engine, credential/model, i
 - Switching modes on an active chat replaces the baseline with the new mode's list verbatim — switching to a mode with no MCPs clears it. On-demand engagements live in their own table and survive the switch
 - **A chat mode is the only way to choose a chat's model or change its baseline MCP set.** There is no per-chat model picker or baseline toggle strip: every plain chat is answered by a runtime, not by a model the chat picks, so a picker beside the composer would describe nothing that runs. (One existed, `ChatControls`, from when a mode-less chat was answered by a provider model directly.) The baseline MCP servers of every chat, moded or not, are surfaced as **locked chips** below the composer (and as locked selections in the `[+]` picker) — visible, but managed on the mode itself. See [On-Demand MCP](../../mcp/on_demand/on_demand.md)
 - At most one mode per user is `isDefault`. Marking a mode as default in Settings clears the flag on any previously default mode (single-default invariant, enforced in the same transaction)
+- **Settings is not the only thing that sets the default.** Onboarding's API-key path creates one, and *Use Claude* / *Use ChatGPT* on the [detected desktop apps](../../agents/local_agents/desktop_app_offer.md) offer moves it when the effective default names a different engine explicitly — to an existing local, credential-less mode on the new engine, or to a new "Claude" / "Codex" mode. A default that names no engine already follows the Default runtime and is not touched, nor is an account default that wins by precedence. The move is needed because a chat runs on its mode's engine before the Default runtime: changing only the runtime would leave chats spending the onboarding key
 - The default chat mode applies until the user explicitly chooses or deselects a mode. That choice stays with the dashboard or agent-page draft across navigation. Confirmed send dispatch resets unchanged mode intent to the current default; a different selection made during preparation remains in the source draft
 - Mode selection is available on the new-chat screen and on active chats that were created with a mode
 - Switching modes on an active chat updates its provider, model, and MCP configuration immediately
@@ -105,6 +106,7 @@ Active Chat (ChatWorkspace -> ChatInput -> ComposerPlusMenu "Chat mode" sub-menu
 - [Switching an AI Credential Off](../../llm/adapters/credential_enablement.md) — what the `Inactive` badge means, and the confirm that names the modes a credential's off switch will stop
 - [MCP Connections](../../mcp/connections/connections.md) — Mode stores a list of MCP provider IDs to enable for the chat
 - [Settings](../../ui/settings/settings.md) — "Chats" tab in settings is the management UI for modes
+- [Detected Desktop Apps](../../agents/local_agents/desktop_app_offer.md) — connecting Claude Desktop or ChatGPT may make a "Claude" / "Codex" mode the default
 
 ## Runtime profile rules
 

@@ -235,7 +235,7 @@ Two UX rules are load-bearing here and both are argued in the components themsel
 
 ## Configuration
 
-`src/main/services/localAgents/defaultEngineService.ts` owns `localAgentsDefaultEngine`: a saved `opencode`, `claude` or `codex`, initially settled from installed tooling with existing-folder preservation. `src/shared/engine.ts` owns `effectiveEngine` and `resolveDefaultEngine`; an explicit credential/model without an engine keeps OpenCode. Engine-specific login, environment and approval configuration is in the [Codex](codex_engine_tech.md#configuration) and [Claude](claude_engine_tech.md#configuration) technical references.
+`src/main/services/localAgents/defaultEngineService.ts` owns `localAgentsDefaultEngine`: a saved `opencode`, `claude` or `codex`, initially settled from installed tooling with existing-folder preservation. Besides that pass, it is written by `settings:set` (the Settings → Agents picker, and a runtime installed from there) and by `adoptDesktopEngine()` in `desktopAppConnectService.ts` ([Detected Desktop Apps](desktop_app_offer_tech.md)), which calls `appSettingsService.set` directly and so repeats `settings:set`'s `localAgentService.rescan()` itself — a new writer that skipped it would leave `driver_config.launcher` describing the old engine. `src/shared/engine.ts` owns `effectiveEngine` and `resolveDefaultEngine`; an explicit credential/model without an engine keeps OpenCode. Engine-specific login, environment and approval configuration is in the [Codex](codex_engine_tech.md#configuration) and [Claude](claude_engine_tech.md#configuration) technical references.
 
 | Setting | Scope | Meaning |
 |---|---|---|
