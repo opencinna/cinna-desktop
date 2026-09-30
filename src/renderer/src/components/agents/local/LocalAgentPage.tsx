@@ -226,7 +226,7 @@ export function LocalAgentPage(): React.JSX.Element {
     <div className="flex flex-1 flex-col overflow-y-auto pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
       {/* A flex column that fills the page, so the chat below the header can
           take the remaining height and centre itself like the New Chat screen. */}
-      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col space-y-3 px-6 py-6">
+      <div data-sidebar-band-limit className="mx-auto flex w-full max-w-3xl flex-1 flex-col space-y-3 px-6 py-6">
         <header className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <h1 className="flex items-center gap-2 text-xl font-semibold text-[var(--color-text)]">

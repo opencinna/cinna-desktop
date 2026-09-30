@@ -36,34 +36,39 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.useRealTimers()
 })
 
 describe('Sidebar docking', () => {
-  it('in fixed docking takes its width and has no edge strip', () => {
+  it('in fixed docking takes its width and has no edge band', () => {
     const { container } = render(createElement(Sidebar), { wrapper })
     expect(wrap(container).className).not.toContain('is-floating')
     expect(wrap(container).className).not.toContain('is-collapsed')
     expect(screen.queryByTestId('sidebar-hot-zone')).toBeNull()
   })
 
-  it('in hover docking floats hidden, peeks from the edge strip and hides after the pointer leaves', () => {
+  it('in hover docking floats hidden, peeks from the edge band and hides after the pointer leaves', () => {
     useUIStore.setState({ sidebarDocking: 'hover' })
     const { container } = render(createElement(Sidebar), { wrapper })
     expect(wrap(container).className).toContain('is-floating')
     expect(wrap(container).className).toContain('is-collapsed')
 
-    // The strip is portaled out of the transformed wrap, into body.
+    // The band is portaled out of the transformed wrap, into body. It takes no
+    // pointer events; a move over the chat inside its rect is what counts.
     const zone = screen.getByTestId('sidebar-hot-zone')
     expect(zone.parentElement).toBe(document.body)
-    fireEvent.mouseEnter(zone)
+    vi.spyOn(zone, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 44, right: 142, bottom: 800, x: 0, y: 44, width: 142, height: 756, toJSON: () => ({})
+    } as DOMRect)
+    fireEvent.mouseMove(document.body, { clientX: 40, clientY: 400 })
     act(() => {
       vi.advanceTimersByTime(PEEK_OPEN_DELAY_MS)
     })
     expect(useUIStore.getState().sidebarPeek).toBe(true)
     expect(wrap(container).className).not.toContain('is-collapsed')
     expect(wrap(container).className).toContain('is-floating')
-    // No strip while it is showing.
+    // No band while it is showing.
     expect(screen.queryByTestId('sidebar-hot-zone')).toBeNull()
     // The fixed open state is left alone.
     expect(useUIStore.getState().sidebarOpen).toBe(true)

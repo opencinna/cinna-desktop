@@ -1568,7 +1568,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     : modeColor ? modeColor.border : 'var(--color-border)'
 
   return (
-    <div className="w-full max-w-3xl mx-auto px-4 relative">
+    <div data-sidebar-band-limit className="w-full max-w-3xl mx-auto px-4 relative">
       <div className="absolute bottom-full right-4 mb-2"><PendingHandoffControl chatId={chatId} /></div>
       {agentPopupOpen &&
         (useCombinedPopup ? (

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent, type RefObject } from 'react'
 import { useUIStore } from '../stores/ui.store'
 
-/** How long the pointer rests at the window's left edge before the sidebar peeks. */
-export const PEEK_OPEN_DELAY_MS = 120
+/** How long the pointer stays in the band at the window's left edge before the sidebar peeks. */
+export const PEEK_OPEN_DELAY_MS = 60
 /** How long after the pointer leaves the sidebar before it hides. */
 export const PEEK_CLOSE_DELAY_MS = 300
 /**
@@ -45,12 +45,12 @@ export function sidebarCloseBlocked(sidebar: HTMLElement | null, doc: Document =
 }
 
 export interface HoverDockTimers {
-  /** Pointer arrived at the edge strip. */
+  /** Pointer arrived in the edge band. */
   enterZone: () => void
   leaveZone: () => void
   /** The pointer moved, on the sidebar or off it. */
   pointerMoved: (inside: boolean) => void
-  /** The peek started: with the pointer elsewhere it was revealed from code, and holds a while before closing. */
+  /** The peek started: unless the band opened it, a pointer elsewhere means a reveal from code, which holds a while before closing. */
   start: () => void
   /** Something may have changed under a still pointer: close if it is not on the sidebar. */
   check: () => void
@@ -62,7 +62,7 @@ export interface HoverDockTimers {
 
 /**
  * The timer rules of hover docking, apart from React so they can be driven
- * with fake timers: a dwell at the edge opens, leaving the edge first cancels;
+ * with fake timers: a dwell in the edge band opens, leaving it first cancels;
  * the pointer off the sidebar closes it after a delay that coming back
  * cancels, and a blocked close waits for the block to clear, then takes the
  * full delay if the pointer is still away.
@@ -79,6 +79,8 @@ export function createHoverDockTimers({
 }): HoverDockTimers {
   let openTimer: ReturnType<typeof setTimeout> | undefined
   let closeTimer: ReturnType<typeof setTimeout> | undefined
+  /** The band opened this peek: the pointer is where the sidebar slides in, not elsewhere. */
+  let openedFromZone = false
 
   const clearOpen = (): void => {
     clearTimeout(openTimer)
@@ -112,6 +114,7 @@ export function createHoverDockTimers({
       clearOpen()
       openTimer = setTimeout(() => {
         openTimer = undefined
+        openedFromZone = true
         setPeek(true)
       }, PEEK_OPEN_DELAY_MS)
     },
@@ -121,7 +124,11 @@ export function createHoverDockTimers({
       else if (closeTimer === undefined) scheduleClose()
     },
     start: () => {
-      if (!pointerInside()) scheduleClose(PEEK_REVEAL_HOLD_MS)
+      // A dwell still running would fire into this peek and leave the flag set.
+      clearOpen()
+      const fromZone = openedFromZone
+      openedFromZone = false
+      if (!fromZone && !pointerInside()) scheduleClose(PEEK_REVEAL_HOLD_MS)
     },
     check: () => {
       if (closeTimer === undefined && !pointerInside()) scheduleClose()
@@ -133,13 +140,30 @@ export function createHoverDockTimers({
     reset: () => {
       clearOpen()
       clearClose()
+      openedFromZone = false
     }
   }
 }
 
 export interface SidebarHoverDockHandlers {
-  hotZone: { onMouseEnter: () => void; onMouseLeave: () => void }
+  /** The edge band's element, measured on every move: it takes no pointer events itself. */
+  hotZone: { ref: (el: HTMLElement | null) => void }
   sidebar: { onMouseMove: (event: ReactMouseEvent) => void }
+}
+
+/**
+ * Whether `x` is left of every content column on screen — the chat's
+ * transcript and composer, a page's centred body — marked with
+ * `data-sidebar-band-limit`. The band stops where they start, so in a narrow
+ * window it shrinks to the margin beside them instead of covering their
+ * controls. Columns not laid out (width 0) do not count.
+ */
+export function leftOfContentColumns(x: number, doc: Document = document): boolean {
+  for (const column of doc.querySelectorAll('[data-sidebar-band-limit]')) {
+    const rect = column.getBoundingClientRect()
+    if (rect.width > 0 && x >= rect.left) return false
+  }
+  return true
 }
 
 /** The element a portal put straight into `body` that holds `node`. */
@@ -158,17 +182,24 @@ function bodyChild(node: Element): Element | null {
  * (`revealSidebar`) or a portaled dialog that unmounts under a still pointer
  * produces no leave at all. A move counts as "on the sidebar" when it passed
  * through the sidebar's React handler — React bubbles along the component
- * tree, so a popover portaled from inside the sidebar (and the edge strip) is
- * on it while the pointer is there. Before a close, the pointer is looked up
+ * tree, so a popover portaled from inside the sidebar is on it
+ * while the pointer is there. Before a close, the pointer is looked up
  * again: the element under it has to still be the sidebar or that popover.
+ *
+ * The edge band is found the same way: the hot zone takes no pointer events,
+ * so the chat under it stays usable, and each move is tested against its
+ * rect, clamped to the left of the content columns. A move with a button held
+ * (a text selection), or with a menu or dialog open, does not count.
  */
 export function useSidebarHoverDock(sidebarRef: RefObject<HTMLElement | null>): SidebarHoverDockHandlers {
   const docking = useUIStore((s) => s.sidebarDocking)
   const peek = useUIStore((s) => s.sidebarPeek)
   const hover = docking === 'hover'
-  const hoverRef = useRef(hover)
   /** The last move the sidebar's React handler saw, to recognise it at document level. */
   const lastInsideMove = useRef<{ event: Event; target: Element } | null>(null)
+  const hotZone = useRef<HTMLElement | null>(null)
+  /** Whether the last move was in the edge band, to turn moves into enter/leave. */
+  const inZone = useRef(false)
   const pointer = useRef<{ inside: boolean; target: Element | null; x: number | null; y: number | null }>({
     inside: false,
     target: null,
@@ -204,10 +235,6 @@ export function useSidebarHoverDock(sidebarRef: RefObject<HTMLElement | null>): 
     })
   }, [sidebarRef])
 
-  useEffect(() => {
-    hoverRef.current = hover
-  }, [hover])
-
   // The pointer, followed for as long as the mode is on: a reveal has to know
   // it starts with the pointer elsewhere.
   useEffect(() => {
@@ -220,11 +247,31 @@ export function useSidebarHoverDock(sidebarRef: RefObject<HTMLElement | null>): 
         x: event.clientX,
         y: event.clientY
       }
-      if (useUIStore.getState().sidebarPeek) timers.pointerMoved(inside)
+      if (useUIStore.getState().sidebarPeek) {
+        timers.pointerMoved(inside)
+        return
+      }
+      const zone = hotZone.current?.getBoundingClientRect()
+      // A menu or dialog over the chat covers the band, as it covers the chat.
+      const inBand =
+        !!zone &&
+        event.buttons === 0 &&
+        !sidebarCloseBlocked(null) &&
+        event.clientX >= zone.left &&
+        event.clientX < zone.right &&
+        event.clientY >= zone.top &&
+        event.clientY < zone.bottom &&
+        leftOfContentColumns(event.clientX)
+      if (inBand === inZone.current) return
+      inZone.current = inBand
+      if (inBand) timers.enterZone()
+      else timers.leaveZone()
     }
     const leftDocument = (event: MouseEvent): void => {
       if (event.relatedTarget) return
       pointer.current = { inside: false, target: null, x: null, y: null }
+      inZone.current = false
+      timers.leaveZone()
       if (useUIStore.getState().sidebarPeek) timers.pointerMoved(false)
     }
     const blurred = (): void => {
@@ -244,6 +291,7 @@ export function useSidebarHoverDock(sidebarRef: RefObject<HTMLElement | null>): 
   // While it peeks: close if the pointer is not on it, now and whenever
   // something under a still pointer may have gone.
   useEffect(() => {
+    inZone.current = false
     if (!hover || !peek) {
       timers.reset()
       return
@@ -257,10 +305,9 @@ export function useSidebarHoverDock(sidebarRef: RefObject<HTMLElement | null>): 
   return useMemo(
     () => ({
       hotZone: {
-        onMouseEnter: () => {
-          if (hoverRef.current && !useUIStore.getState().sidebarPeek) timers.enterZone()
-        },
-        onMouseLeave: timers.leaveZone
+        ref: (el: HTMLElement | null) => {
+          hotZone.current = el
+        }
       },
       sidebar: {
         onMouseMove: (event: ReactMouseEvent) => {

@@ -119,7 +119,7 @@ export function JobDetail(): React.JSX.Element {
 
   return (
     <div data-job-scroll className="@container flex-1 overflow-y-auto pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
-      <div className="max-w-4xl mx-auto px-6 py-6 space-y-3">
+      <div data-sidebar-band-limit className="max-w-4xl mx-auto px-6 py-6 space-y-3">
         {/*
           The title and the actions share a top edge, as on the local agent
           page and the task page, so moving between them moves nothing. One

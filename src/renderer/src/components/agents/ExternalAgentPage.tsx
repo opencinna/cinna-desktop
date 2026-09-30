@@ -53,7 +53,7 @@ export function ExternalAgentPage(): React.JSX.Element {
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
-      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col space-y-4 px-6 py-6">
+      <div data-sidebar-band-limit className="mx-auto flex w-full max-w-3xl flex-1 flex-col space-y-4 px-6 py-6">
         {agent ? <>
           <header className="flex items-start gap-3">
             <div className="min-w-0 flex-1">

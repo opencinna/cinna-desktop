@@ -67,7 +67,7 @@ export function NoteDetail(): React.JSX.Element {
 
   return (
     <div className="flex-1 overflow-y-auto pt-[var(--topbar-h)]">
-      <div className="max-w-2xl mx-auto px-6 py-6 space-y-4">
+      <div data-sidebar-band-limit className="max-w-2xl mx-auto px-6 py-6 space-y-4">
         <input
           type="text"
           value={hideDefaultTitle ? '' : title}

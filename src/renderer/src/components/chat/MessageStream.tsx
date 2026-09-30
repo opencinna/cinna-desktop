@@ -678,7 +678,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
         maskImage: 'linear-gradient(to bottom, transparent 0, black 10px)'
       }}
     >
-      <div ref={contentRef} className="max-w-3xl mx-auto space-y-3">
+      <div data-sidebar-band-limit ref={contentRef} className="max-w-3xl mx-auto space-y-3">
         {messages.length === 0 && !isStreaming && !hasStreamingContent && (
           <div className="text-center text-[var(--color-text-muted)] py-16">
             <p className="text-sm">Start a conversation</p>

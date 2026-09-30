@@ -374,7 +374,7 @@ function TaskPage({
   */
   return (
     <div data-task-scroll className="@container flex-1 overflow-y-auto pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
-      <div className="max-w-4xl mx-auto px-6 py-6 space-y-3">
+      <div data-sidebar-band-limit className="max-w-4xl mx-auto px-6 py-6 space-y-3">
         {/*
           **One line, always.** The title is a sentence an agent or a job
           wrote and can run to a paragraph; the goal below says everything, so

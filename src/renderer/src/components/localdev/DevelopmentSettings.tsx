@@ -43,7 +43,7 @@ export function DevelopmentSettings({ data, onOpenWorkspace, onSetup, onCheck, c
   const selected = isAgentEngine(settings?.localDevelopmentEngine) ? settings.localDevelopmentEngine : null
   const inheritedName = defaultRuntime ? DEVELOPMENT_RUNTIME_NAMES[defaultRuntime.engine] : 'Local-agent default'
   const complexity = isWorkComplexity(settings?.localDevelopmentComplexity) ? settings.localDevelopmentComplexity : DEFAULT_DEVELOPMENT_COMPLEXITY
-  return <div className="mx-auto max-w-4xl space-y-6 px-6 py-8">
+  return <div data-sidebar-band-limit className="mx-auto max-w-4xl space-y-6 px-6 py-8">
     <SettingsSection title="Local Development Runtime">
       <SettingsCard>
         <RuntimeChoiceButtons selected={selected} tools={tools} codexBinary={codexBinary} claudeBinary={claudeBinary}

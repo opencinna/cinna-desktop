@@ -131,6 +131,11 @@
      the buttons. */
   :root {
     --topbar-h: 36px;
+    /* On :root rather than the sidebar wrap: the hover-docking hot zone is
+       portaled into body and sizes itself from the sidebar's width. */
+    --sidebar-page-width: 240px;
+    --sidebar-tab-rail: 28px;
+    --sidebar-width: calc(var(--sidebar-page-width) + var(--sidebar-tab-rail));
   }
 
   html {
@@ -427,9 +432,6 @@
      carries the slide + fade, so the rail and the page move as ONE piece and
      the shadow leaves with them (no residual strip). */
   .app-sidebar-wrap {
-    --sidebar-page-width: 240px;
-    --sidebar-tab-rail: 28px;
-    --sidebar-width: calc(var(--sidebar-page-width) + var(--sidebar-tab-rail));
     position: relative;
     width: var(--sidebar-width);
     transition:
@@ -481,15 +483,17 @@
   [data-theme="dark"] .app-sidebar-wrap.is-floating > .app-sidebar {
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
   }
-  /* The invisible strip at the window's left edge (the shell's 8px padding),
-     below the TopBar, that a resting pointer peeks the sidebar from. */
+  /* The invisible band at the window's left edge, below the TopBar, that the
+     pointer peeks the sidebar from: the shell's 8px padding plus half of the
+     sidebar it reveals. Geometry only — the hook tests document mousemoves
+     against its rect — so the chat under it keeps its clicks and selection. */
   .app-sidebar-hot-zone {
     position: fixed;
     left: 0;
     top: calc(var(--topbar-h) + 8px);
     bottom: 0;
-    width: 8px;
-    z-index: 20;
+    width: calc(8px + var(--sidebar-width) * 0.5);
+    pointer-events: none;
   }
   .app-sidebar-wrap > .app-sidebar {
     position: absolute;

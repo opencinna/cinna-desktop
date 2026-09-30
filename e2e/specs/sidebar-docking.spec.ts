@@ -5,8 +5,9 @@ import { test, expect, type CinnaApp } from '../fixtures/app'
  * Sidebar docking: right-click the TopBar sidebar button for Fixed / On Hover.
  *
  * In On Hover the wrap is `.is-floating` (width 0, so the chat never reflows)
- * and `.is-collapsed` (opacity 0) until the pointer rests on the invisible
- * strip at the window's left edge, below the TopBar. It then peeks over the
+ * and `.is-collapsed` (opacity 0) until the pointer stays in the invisible
+ * band at the window's left edge, below the TopBar — the shell's 8px padding
+ * plus half the sidebar's width, ~142px. It then peeks over the
  * chat, stays while the pointer is on it, and hides 300ms after the pointer
  * leaves. Playwright calls a collapsed sidebar visible (opacity 0, still laid
  * out), so visibility is the wrap's class and computed opacity, which
@@ -16,7 +17,8 @@ import { test, expect, type CinnaApp } from '../fixtures/app'
  * restart; the peek itself does not.
  */
 
-const EDGE = { x: 3, y: 400 }
+/** Well inside the band, over the chat: the band takes no pointer events. */
+const IN_BAND = { x: 60, y: 400 }
 const ON_SIDEBAR = { x: 150, y: 400 }
 const IN_CHAT = { x: 700, y: 400 }
 
@@ -41,10 +43,10 @@ async function expectHidden(page: Page, timeout?: number): Promise<void> {
   await expect(wrap(page)).toHaveCSS('opacity', '0')
 }
 
-/** Walk the pointer to the left edge and rest there until the sidebar peeks. */
+/** Walk the pointer into the edge band and stay there until the sidebar peeks. */
 async function peekFromEdge(page: Page): Promise<void> {
   await page.mouse.move(IN_CHAT.x, IN_CHAT.y)
-  await page.mouse.move(EDGE.x, EDGE.y, { steps: 20 })
+  await page.mouse.move(IN_BAND.x, IN_BAND.y, { steps: 20 })
   await expectPeeking(page)
 }
 

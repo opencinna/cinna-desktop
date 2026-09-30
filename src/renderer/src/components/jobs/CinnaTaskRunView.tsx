@@ -137,7 +137,7 @@ export function CinnaTaskRunView(): React.JSX.Element {
 
   return (
     <div className="flex-1 overflow-y-auto pt-[var(--topbar-h)]">
-      <div className="max-w-2xl mx-auto px-6 py-6 space-y-6">
+      <div data-sidebar-band-limit className="max-w-2xl mx-auto px-6 py-6 space-y-6">
         {/* Header */}
         <header className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">

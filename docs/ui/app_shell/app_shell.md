@@ -30,7 +30,7 @@ This is Fixed docking. In On Hover the same button does something else — see b
 
 1. User picks **On Hover** in Settings → Features → Interface → **Sidebar docking**, or right-clicks the top-bar sidebar button and picks it from the **Sidebar docking** menu (the current mode carries a check; Escape or an outside click closes the menu).
 2. The sidebar slides away as if collapsed, and the chat takes the full width.
-3. User rests the pointer on the window's left edge, below the top bar, for a moment; the sidebar slides in over the chat with a shadow. The chat underneath does not move.
+3. User moves the pointer to the left edge of the window — anywhere in the band about half the sidebar's width in from it, below the top bar — and keeps it there for a moment; the sidebar slides in over the chat with a shadow. The chat underneath does not move.
 4. User works in the sidebar — opens a chat, renames one, opens its right-click menu. It stays while the pointer is on it and while any menu, popover or dialog is open or a field inside it has focus.
 5. User moves the pointer away; a moment later the sidebar slides out again. Moving back onto it before then keeps it.
 6. User clicks the top-bar sidebar button (titled **Dock sidebar** in this mode): docking returns to Fixed with the sidebar open.
@@ -89,11 +89,13 @@ A reveal made by the app — **Show in the Chats list** on a task page — peeks
 - **Sidebar reserves its slot — in Fixed docking.** Collapse animates the inner panel away (translate + fade) and shrinks the wrapper width, but it does not unmount; the main area reflows in step.
 - **Sidebar always renders.** Even when collapsed the wrapper exists in the flex layout (width 0); the inner panel uses `pointer-events: none` when invisible.
 - **On Hover never reflows the chat.** The sidebar keeps no width in that mode and floats above the main area (below the top bar and every dialog), because a chat that narrows and widens each time the pointer brushes the edge is unreadable. Switching into On Hover from an open fixed sidebar is the ordinary collapse, width included, played once.
-- **A peek opens on a rest, not a pass.** The pointer has to stay on the 8 px edge strip for about 120 ms; leaving it sooner opens nothing, so sweeping the pointer to the window's edge on the way to something else does not throw the sidebar over the chat. The strip starts below the top bar, so the sidebar button and the traffic lights never trigger it.
-- **A peek closes about 300 ms after the pointer leaves**, and returning within that time cancels the close. The gaps between the tab rail's tabs and the 8 px edge strip count as on the sidebar, so crossing them does not start a close.
+- **A peek opens on a stay, not a pass.** The peek zone is a band at the window's left edge: the 8 px window border plus half the sidebar's width (about 142 px), so the pointer does not have to find the last few pixels of the window. Entering it anywhere starts a wait of about 60 ms and moving within it does not restart that wait; leaving it sooner opens nothing, so crossing the left of the chat on the way to something else does not throw the sidebar over it. The band starts below the top bar, so the sidebar button and the traffic lights never trigger it.
+- **The band is invisible and takes nothing from the chat.** Clicks, links and text selection under it reach the chat as usual, and a move with a mouse button held — dragging out a selection — does not count towards a peek, so selecting text near the left margin never covers it. Nor does the band open anything while a menu or dialog is open over the chat: it is covered, like the chat.
+- **The band stops where the content starts.** In a window too narrow for the chat column (or a page's body) to leave 142 px beside it, the band shrinks to the margin left of the column, so pausing on the composer's left-most button does not slide the sidebar over it.
+- **A peek closes about 300 ms after the pointer leaves**, and returning within that time cancels the close. The gaps between the tab rail's tabs and the 8 px window border beside the sidebar count as on the sidebar, so crossing them does not start a close.
 - **What holds a peek open.** Any open menu, listbox, popover or dialog, and a focused text field inside the sidebar — a rename or search must not vanish under the user's typing. When the hold ends, the sidebar closes if the pointer is away. **Known limit:** the check cannot tell a menu opened from the sidebar from one opened anywhere else, so a menu or dialog opened elsewhere in the window while a peek is up holds it open too, until that menu closes.
 - **Leaving the window ends a peek.** The window losing focus closes it at once (the holds above still apply), and the pointer leaving the window starts the ordinary close — a sidebar left floating over another app's window would sit there until the user came back.
-- **A code reveal waits for the user.** A peek the app starts with the pointer elsewhere holds about 2.5 s before closing; once the pointer goes onto it, it behaves like any peek.
+- **A code reveal waits for the user.** A peek the app starts with the pointer elsewhere holds about 2.5 s before closing; once the pointer goes onto it, it behaves like any peek. A peek opened from the band does not take that hold: the pointer is already where the sidebar slides in.
 - **The top-bar button docks in On Hover.** A click there switches to Fixed with the sidebar open — the user asked for the sidebar to stay — and right-click opens the **Sidebar docking** menu in either mode. The peek itself has no button.
 - **Traffic-light gutter is hard-coded.** The renderer pads the top bar by 76 px to clear the macOS controls (which are positioned by Electron at x=15, y=10). Changing one without the other breaks alignment — see `src/main/index.ts` `trafficLightPosition`.
 - **Settings entry-point.** Settings is reachable from the profile dropdown only — there is no longer a dedicated Settings button in the sidebar footer.
@@ -126,7 +128,7 @@ App
     │     ├── Inbox button          → ui.store.setActiveView('inbox')
     │     └── New Chat button       → useStartNewChat()
     └── flex row
-        ├── Sidebar (animated wrapper; On Hover: floating, plus the left-edge strip → peek)
+        ├── Sidebar (animated wrapper; On Hover: floating, plus the left-edge band → peek)
         │     ├── Settings menu OR Chats / Jobs / Notes / Agents tab content
         │     └── Footer
         │           ├── UserMenu compact (portaled dropdown)

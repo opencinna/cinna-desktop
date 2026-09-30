@@ -54,7 +54,7 @@ export function JobEditPage(): React.JSX.Element {
 
   return (
     <div className="flex-1 overflow-y-auto pt-[var(--topbar-h)]">
-      <div className="max-w-2xl mx-auto px-6 py-6 space-y-6">
+      <div data-sidebar-band-limit className="max-w-2xl mx-auto px-6 py-6 space-y-6">
         <header className="flex items-center justify-between gap-4">
           <button
             type="button"

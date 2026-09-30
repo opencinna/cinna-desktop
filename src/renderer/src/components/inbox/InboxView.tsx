@@ -183,7 +183,7 @@ export function InboxView(): React.JSX.Element {
         either block.
       */}
       <div className="min-h-full flex flex-col">
-        <div className="w-full max-w-2xl mx-auto px-6 py-6 space-y-4">
+        <div data-sidebar-band-limit className="w-full max-w-2xl mx-auto px-6 py-6 space-y-4">
           <header className="flex items-center gap-2">
             <h1 className="text-base font-semibold text-[var(--color-text)]">Inbox</h1>
             {/*
