@@ -1,7 +1,8 @@
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import { installFakeAcpEngine } from '../fixtures/fakeAcpEngine'
 import { customAcpCommand } from '../fixtures/customAcpCommand'
-import { scriptAcpEngine, SCRIPT_MODEL } from '../fixtures/scriptAcpEngine'
+import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine } from '../fixtures/scriptAcpEngine'
+import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { readFileSync } from 'node:fs'
@@ -105,7 +106,7 @@ test('AI routes previews Local and remote-first coordinators without reordering 
   await cinna.page.screenshot({ path: '/tmp/runtime-conductor-remote-preview.png', animations: 'disabled' })
 })
 
-test('badge coordination is one-way and a Local conductor preserves its ACP session without AI credentials', async ({ cinna }) => {
+test('chip coordination is one-way and a Local conductor preserves its ACP session without AI credentials', async ({ cinna }) => {
   const { localId, remoteId, peer } = await arrangeAgents(cinna)
   expect(await cinna.page.evaluate(() => window.api.providers.list())).toEqual([])
   await pick(cinna, LOCAL)
@@ -114,9 +115,12 @@ test('badge coordination is one-way and a Local conductor preserves its ACP sess
   await expect(cinna.page.getByText(ANSWER, { exact: true })).toBeVisible()
   await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
   const [chat] = await cinna.page.evaluate(() => window.api.chat.list())
-  await cinna.page.getByRole('status', { name: 'Local agent connection', exact: true }).focus()
-  await cinna.page.getByRole('dialog', { name: 'Chat routing', exact: true }).getByRole('button', { name: `Coordinate by ${LOCAL}`, exact: true }).click()
+  await expect(cinna.page.getByRole('status', { name: 'Local agent connection', exact: true })).toBeVisible()
+  // The badge no longer carries "Coordinate by …": the bound chip's menu does.
+  await cinna.page.getByRole('group', { name: LOCAL, exact: true }).click({ button: 'right' })
+  await cinna.page.getByRole('menu', { name: `Agent ${LOCAL}`, exact: true }).getByRole('menuitem', { name: 'Set as Coordinator', exact: true }).click()
   await expect(cinna.page.getByRole('status', { name: `Coordinated by ${LOCAL}`, exact: true })).toBeVisible()
+  await expect(cinna.page.getByRole('group', { name: `${LOCAL} — Coordinator`, exact: true })).toBeVisible()
   await expect.poll(() => cinna.page.evaluate((id) => window.api.chat.get(id), chat.id)).toMatchObject({ router: 'coordinator', agentId: localId })
   await cinna.page.keyboard.press('Escape')
   await pick(cinna, REMOTE)
@@ -178,4 +182,147 @@ test('a plain chat with no provider reaches its Default runtime and reports its 
   expect(await cinna.page.evaluate((id) => window.api.agents.list().then((agents) => agents.find((agent) => agent.id === id)), detail!.agentId!)).toMatchObject({ conductor: true, name: 'OpenCode' })
   await expect(cinna.page.getByText('The engine skipped this agent because its credential is not available to it.', { exact: true })).toBeVisible()
   expect(fake.received('session/prompt')).toEqual([])
+})
+
+const KEEPER = 'Ledger Keeper'
+const PARTNER = 'Audit Partner'
+const KEEPER_TOOL = 'ledger_keeper'
+const PARTNER_TOOL = 'audit_partner'
+const PARTICIPANT = (name: string): string => `Agent "${name}" attached as a participant`
+/** The composer is renamed while a turn runs; attaching mid-turn types into that one. */
+const anyComposer = (cinna: CinnaApp) => cinna.page.getByRole('combobox', { name: /^(Type a message\.\.\.|Send a follow-up · Esc Esc to stop)$/ })
+const chipTitles = (cinna: CinnaApp) => cinna.page.locator(`[title$=" — Coordinator"], [title$=" attached as a participant"]`)
+  .evaluateAll((chips) => chips.map((chip) => chip.getAttribute('title')))
+
+/**
+ * A folder agent (OpenCode engine) and a command-line agent, both the script
+ * fake: every prompt is held at the controller, and `release({ tools: [] })`
+ * makes the agent connect to the Cinna MCP descriptor its session was handed
+ * and report what `tools/list` offered it (`fake.tools[i].params.offered`).
+ */
+async function arrangeChat(cinna: CinnaApp, fake: ScriptAcpEngine, title: string, mode: 'direct' | 'coordinator', attached: boolean) {
+  await cinna.skipOnboarding()
+  await fake.install(cinna)
+  const root = await addAgentRoot(cinna)
+  const keeper = await createFolderAgent(cinna, root, KEEPER)
+  const ids = await cinna.page.evaluate(async ({ host, model, config, keeperId, partnerName, title, mode, attached }) => {
+    await window.api.settings.set('autoChatTitles', false)
+    const credential = await window.api.providers.upsert({ type: 'ollama', name: 'Local fixture', baseUrl: host, enabled: true })
+    await window.api.chatModes.upsert({ name: 'Fixture mode', engine: 'opencode', providerId: credential.id, modelId: model, toolPolicy: 'connectors', isDefault: true })
+    const probe = await window.api.customAgents.test({ config })
+    const partner = await window.api.customAgents.save({ name: partnerName, config, testToken: probe.token })
+    await window.api.localAgents.rescan()
+    const chat = await window.api.chat.create()
+    await window.api.chat.update(chat.id, { title, agentId: keeperId })
+    if (mode === 'coordinator') await window.api.chat.setCoordinator(chat.id, keeperId)
+    if (attached) await window.api.chat.addOnDemandAgent(chat.id, partner.id)
+    await window.api.chat.showInList(chat.id)
+    return { chatId: chat.id, partnerId: partner.id }
+  }, { host: fake.host, model: SCRIPT_MODEL, config: fake.customConfig(cinna), keeperId: keeper.id, partnerName: PARTNER, title, mode, attached })
+  await cinna.relaunch()
+  await cinna.skipOnboarding()
+  await cinna.page.evaluate(() => window.api.localAgents.rescan())
+  expect(await cinna.page.evaluate((id) => window.api.chat.get(id), ids.chatId)).toMatchObject({ router: mode, agentId: keeper.id })
+  await cinna.page.getByText(title, { exact: true }).click()
+  return { ...ids, keeperId: keeper.id, keeperPath: keeper.path }
+}
+
+async function attachMidTurn(cinna: CinnaApp, name: string): Promise<void> {
+  await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible()
+  await anyComposer(cinna).fill('@')
+  await cinna.page.getByRole('listbox', { name: 'Agents and MCP servers' }).getByRole('option').filter({ hasText: name }).click()
+}
+
+test('Set as Coordinator on a participant chip hands the chat to it, and the old folder-agent conductor becomes its tool', async ({ cinna }) => {
+  test.setTimeout(90_000)
+  const fake = await scriptAcpEngine()
+  try {
+    const { chatId, keeperId, partnerId } = await arrangeChat(cinna, fake, 'Coordinator handover', 'coordinator', true)
+    expect(await chipTitles(cinna)).toEqual([`${KEEPER} — Coordinator`, PARTICIPANT(PARTNER)])
+    await test.step('the folder agent conducts the first turn, with the participant as its tool', async () => {
+      await composer(cinna).fill('Reconcile the March ledger.')
+      await composer(cinna).press('Enter')
+      await expect.poll(() => fake.calls.length, { timeout: 20_000 }).toBe(1)
+      expect(fake.calls[0].cwd).not.toContain('script-acp-cwd')
+      fake.calls[0].release({ tools: [] })
+      await expect.poll(() => fake.tools.length).toBe(1)
+      expect(fake.tools[0].params.offered).toContain(PARTNER_TOOL)
+      expect(fake.tools[0].params.offered).not.toContain(KEEPER_TOOL)
+      fake.tools[0].release({ text: 'Ledger reconciled by the keeper: alder-3307.' })
+      await expect(cinna.page.getByText('Ledger reconciled by the keeper: alder-3307.', { exact: true })).toBeVisible()
+      await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
+    })
+    await test.step('right-click the participant chip and set it as coordinator', async () => {
+      await cinna.page.getByTitle(PARTICIPANT(PARTNER), { exact: true }).click({ button: 'right' })
+      const menu = cinna.page.getByRole('menu', { name: `Agent ${PARTNER}`, exact: true })
+      await menu.getByRole('menuitem', { name: 'Set as Coordinator', exact: true }).click()
+      await expect(menu).toHaveCount(0)
+      await expect(cinna.page.getByRole('group', { name: `${PARTNER} — Coordinator`, exact: true })).toBeVisible()
+      expect(await chipTitles(cinna)).toEqual([`${PARTNER} — Coordinator`, PARTICIPANT(KEEPER)])
+      await expect.poll(() => cinna.page.evaluate((id) => window.api.chat.get(id), chatId)).toMatchObject({ router: 'coordinator', agentId: partnerId })
+      expect((await cinna.page.evaluate((id) => window.api.chat.listOnDemandAgents(id), chatId)).map((row) => row.agentId)).toEqual([keeperId])
+      await cinna.page.screenshot({ path: '/tmp/runtime-conductor-set-coordinator.png', animations: 'disabled' })
+    })
+    await test.step('the next turn is the new conductor’s, and it is offered the old conductor as a tool', async () => {
+      await composer(cinna).fill('Now audit what the keeper did.')
+      await composer(cinna).press('Enter')
+      await expect.poll(() => fake.calls.length, { timeout: 20_000 }).toBe(2)
+      expect(fake.calls[1].cwd).toContain('script-acp-cwd')
+      fake.calls[1].release({ tools: [] })
+      await expect.poll(() => fake.tools.length).toBe(2)
+      expect(fake.tools[1].params.offered).toContain(KEEPER_TOOL)
+      expect(fake.tools[1].params.offered).not.toContain(PARTNER_TOOL)
+      fake.tools[1].release({ text: 'Audit complete under the new coordinator: rowan-6158.' })
+      await expect(cinna.page.getByText('Audit complete under the new coordinator: rowan-6158.', { exact: true })).toBeVisible()
+    })
+    expect(fake.unexpected).toEqual([])
+  } finally { await fake.close() }
+})
+
+test('an agent attached while the conductor turn runs is offered to that same running turn', async ({ cinna }) => {
+  test.setTimeout(90_000)
+  const fake = await scriptAcpEngine()
+  try {
+    const { chatId, partnerId } = await arrangeChat(cinna, fake, 'Attach mid-turn', 'coordinator', false)
+    await composer(cinna).fill('Start the quarterly close.')
+    await composer(cinna).press('Enter')
+    await expect.poll(() => fake.calls.length, { timeout: 20_000 }).toBe(1)
+    // The running turn's first look at its tools: nobody to call yet.
+    fake.calls[0].release({ tools: [] })
+    await expect.poll(() => fake.tools.length).toBe(1)
+    expect(fake.tools[0].params.offered).not.toContain(PARTNER_TOOL)
+    await attachMidTurn(cinna, PARTNER)
+    await expect(cinna.page.getByTitle(PARTICIPANT(PARTNER), { exact: true })).toBeVisible()
+    await expect.poll(() => cinna.page.evaluate((id) => window.api.chat.listOnDemandAgents(id), chatId)).toEqual([expect.objectContaining({ agentId: partnerId })])
+    await expect(cinna.page.getByRole('alert')).toHaveCount(0)
+    // Same prompt, same session descriptor: the endpoint still answers and now names the new agent.
+    fake.tools[0].release({ tools: [] })
+    await expect.poll(() => fake.tools.length).toBe(2)
+    expect(fake.tools[1].params.sessionId).toBe(fake.tools[0].params.sessionId)
+    expect(fake.tools[1].params.offered).toContain(PARTNER_TOOL)
+    fake.tools[1].release({ text: 'Quarterly close finished with the partner on hand: spruce-4410.' })
+    await expect(cinna.page.getByText('Quarterly close finished with the partner on hand: spruce-4410.', { exact: true })).toBeVisible()
+    await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
+    expect(fake.calls).toHaveLength(1)
+    expect(fake.unexpected).toEqual([])
+  } finally { await fake.close() }
+})
+
+test('attaching an agent to a direct folder-agent chat mid-turn is refused and the turn finishes', async ({ cinna }) => {
+  test.setTimeout(90_000)
+  const fake = await scriptAcpEngine()
+  try {
+    const { chatId, keeperId } = await arrangeChat(cinna, fake, 'Direct mid-turn', 'direct', false)
+    await composer(cinna).fill('Count the receipts.')
+    await composer(cinna).press('Enter')
+    await expect.poll(() => fake.calls.length, { timeout: 20_000 }).toBe(1)
+    await attachMidTurn(cinna, PARTNER)
+    await expect(cinna.page.getByRole('alert').filter({ hasText: 'Interrupt the session before changing who answers.' })).toHaveText('Interrupt the session before changing who answers.')
+    expect(await cinna.page.evaluate((id) => window.api.chat.get(id), chatId)).toMatchObject({ router: 'direct', agentId: keeperId })
+    expect(await cinna.page.evaluate((id) => window.api.chat.listOnDemandAgents(id), chatId)).toEqual([])
+    fake.calls[0].release('Receipts counted by the keeper: willow-2286.')
+    await expect(cinna.page.getByText('Receipts counted by the keeper: willow-2286.', { exact: true })).toBeVisible()
+    await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
+    expect(fake.unexpected).toEqual([])
+  } finally { await fake.close() }
 })
