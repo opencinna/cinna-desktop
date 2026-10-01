@@ -11,6 +11,7 @@ vi.mock('../db/tasks', () => ({ taskRepo: { getByChatId: () => ({ id: 'delegated
 vi.mock('../db/delegations', () => ({ delegationRepo: { byTaskId: () => ({ targetAgentId: 'root' }) } }))
 vi.mock('../db/chatMcp', () => ({ chatMcpRepo: { listProviderIds: () => [] } }))
 vi.mock('../db/chatOnDemandMcp', () => ({ chatOnDemandMcpRepo: { listProviderIds: () => [] } }))
+vi.mock('./agentMcpService', () => ({ agentMcpService: { providerIds: () => [], ensureConnected: async () => {} } }))
 vi.mock('../db/messages', () => ({ messageRepo: { saveToolCall: state.save } }))
 vi.mock('../db/conductorSessions', () => ({ conductorSessionRepo: { get: vi.fn(), save: state.digest } }))
 vi.mock('../mcp/manager', () => ({ mcpManager: {} }))

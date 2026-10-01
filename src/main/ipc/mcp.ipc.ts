@@ -2,6 +2,7 @@ import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { mcpService } from '../services/mcpService'
 import { mcpRegistryService } from '../services/mcpRegistryService'
+import { agentMcpService } from '../services/agentMcpService'
 import { ipcErrorShape } from '../errors'
 import { ipcHandle } from './_wrap'
 
@@ -62,6 +63,12 @@ export function registerMcpHandlers(): void {
   ipcHandle('mcp:list-tools', async (_event, providerId: string) => {
     userActivation.requireActivated()
     return mcpService.listTools(getSettingsScopeUserId(), providerId)
+  })
+
+  // The delete confirm names the folder agents that would lose this connector.
+  ipcHandle('mcp:agents-using', async (_event, providerId: string) => {
+    userActivation.requireActivated()
+    return agentMcpService.agentsUsing(getSettingsScopeUserId(), providerId)
   })
 
   ipcHandle('mcp:registry-list', async () => {

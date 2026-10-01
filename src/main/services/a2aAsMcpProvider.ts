@@ -71,7 +71,13 @@ export class A2AAsMcpProvider implements ToolProvider {
     /** Owner userId — local agents in default scope, remote in profile scope. */
     private readonly ownerId: string,
     /** Final, collision-resolved LLM-facing tool name. */
-    readonly toolName: string
+    readonly toolName: string,
+    /**
+     * The calling chat's scope. A folder agent's own MCP addons are served to
+     * its nested turn in this scope (`conductorBridge.prepare`); without it the
+     * nested turn runs with no Cinna tools.
+     */
+    private readonly runScope?: import('../agents/drivers/driver').FollowUpScope
   ) {}
 
   get displayName(): string {
@@ -155,6 +161,7 @@ export class A2AAsMcpProvider implements ToolProvider {
       nested: { toolCallId: opts?.toolCallId ?? nanoid() },
       wireContent: message,
       signal,
+      ...(this.runScope ? { runScope: this.runScope } : {}),
       ...(opts?.queueWhenBusy ? { queueWhenBusy: true } : {}),
       onEvent: opts?.onEvent
     })
@@ -221,7 +228,7 @@ export function buildAgentToolProviders(
       }
     }
     taken.add(name)
-    providers.push(new A2AAsMcpProvider(chatId, row, located.userId, name))
+    providers.push(new A2AAsMcpProvider(chatId, row, located.userId, name, { profileUserId, settingsUserId: defaultUserId }))
   }
 
   return providers

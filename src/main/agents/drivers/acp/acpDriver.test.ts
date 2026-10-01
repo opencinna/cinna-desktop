@@ -279,6 +279,28 @@ describe('conductor session integration', () => {
     expect(sessionReady).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps a nested session in the lease’s own slot, leaving the agent’s session in the chat alone', async () => {
+    const slot = new Map<string, string>()
+    let fresh = true
+    const w = world({ launcher: 'codex', script: SAYS_HELLO, remembered: 'ses_direct', deps: {
+      prepareConductor: async () => ({ close() {}, hasCalls: () => false, freshSession: fresh,
+        session: { read: () => slot.get('nested') ?? null, save: (id: string) => { slot.set('nested', id) } } }) } })
+    const nested = (): ReturnType<AgentDriver['run']> => w.driver.run(USER_ID, ROW, { chatId: CHAT_ID, wireContent: 'hello',
+      signal: new AbortController().signal, nested: { toolCallId: 'call_1' }, runScope: { profileUserId: USER_ID, settingsUserId: USER_ID } })
+    await nested()
+    expect(w.fake.received('session/new')).toHaveLength(1)
+    expect(w.saved).toEqual([])
+    expect(w.sessions.get(CHAT_ID)).toBe('ses_direct')
+    const own = slot.get('nested')
+    expect(own).toBeDefined()
+    // The next nested call under a matching digest takes its own session back.
+    fresh = false
+    await nested()
+    expect(w.fake.received('session/new')).toHaveLength(1)
+    expect(w.fake.received('session/load').map((request) => request.params?.sessionId)).toEqual([own])
+    expect(w.sessions.get(CHAT_ID)).toBe('ses_direct')
+  })
+
   it('ends an engine turn for a trusted task control without reporting user cancellation', async () => {
     let stop!: Parameters<NonNullable<AcpDriverDeps['prepareConductor']>>[4]
     const w = world({ script: { prompt: { emit: [{kind:'update',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Working'}}},{kind:'awaitCancel'}] } }, deps: {

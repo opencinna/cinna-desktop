@@ -6,7 +6,8 @@ const inputClass =
 
 type AuthType = 'oauth' | 'bearer'
 
-export function AddCustomMcpForm({ onClose }: { onClose: () => void }): React.JSX.Element {
+/** `onCreated` gets the new connector's id once it is saved, before `onClose`. */
+export function AddCustomMcpForm({ onClose, onCreated }: { onClose: () => void; onCreated?: (id: string) => void }): React.JSX.Element {
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
   const [authType, setAuthType] = useState<AuthType>('oauth')
@@ -18,7 +19,9 @@ export function AddCustomMcpForm({ onClose }: { onClose: () => void }): React.JS
 
   const handleConnect = (): void => {
     if (!canConnect) return
-    upsertMcp.mutate(
+    // The promise, not mutate-level callbacks: TanStack drops those when the
+    // form unmounts, and a connector created for an agent must still reach it.
+    upsertMcp.mutateAsync(
       {
         name: name.trim(),
         transportType: 'streamable-http',
@@ -26,9 +29,8 @@ export function AddCustomMcpForm({ onClose }: { onClose: () => void }): React.JS
         enabled: true,
         authType,
         bearerToken: needsToken ? bearerToken.trim() : undefined
-      },
-      { onSuccess: () => onClose() }
-    )
+      }
+    ).then((result) => { onCreated?.(result.id); onClose() }, () => {})
   }
 
   return (

@@ -98,6 +98,11 @@ vi.mock('./ReadOnlyCards', () => ({
 }))
 vi.mock('./FolderTab', () => ({ FolderTab: marker('folder-tab') }))
 vi.mock('./PermissionsCard', () => ({ PermissionsCard: marker('permissions-card') }))
+const addonsBadge = { count: 0, problems: 0 }
+vi.mock('./AgentAddonsTab', () => ({
+  AgentAddonsTab: marker('addons-tab'),
+  useAddonsBadge: () => addonsBadge
+}))
 
 const { LocalAgentPage } = await import('./LocalAgentPage')
 
@@ -176,14 +181,19 @@ describe('LocalAgentPage — layout', () => {
 
   it('opens on Overview and switches the panel with the tabs', () => {
     renderPage(agent({ commands: [{ name: 'check' }] as LocalAgentDto['commands'] }))
+    // The prompts sit on Overview under the cards that say what the agent is;
+    // there is no Prompts tab. Mutation: move them back under a tab of their
+    // own and the first half fails.
     expect(screen.getByText('status-card')).toBeTruthy()
     expect(screen.getByText('description-card')).toBeTruthy()
-    expect(screen.queryByText('doc-workflow')).toBeNull()
-
-    fireEvent.click(screen.getByRole('tab', { name: /prompts/i }))
     expect(screen.getByText('doc-workflow')).toBeTruthy()
     expect(screen.getByText('doc-entrypoint')).toBeTruthy()
     expect(screen.getByText('doc-refiner')).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: /prompts/i })).toBeNull()
+
+    fireEvent.click(screen.getByRole('tab', { name: /addons/i }))
+    expect(screen.getByText('addons-tab')).toBeTruthy()
+    expect(screen.queryByText('doc-workflow')).toBeNull()
     expect(screen.queryByText('description-card')).toBeNull()
 
     // The command count rides on the tab so a catalog is discoverable unopened.
@@ -225,20 +235,39 @@ describe('LocalAgentPage — layout', () => {
     expect(screen.getByRole('tab', { name: /folder/i }).textContent).toContain('1')
   })
 
-  it('puts a bare folder’s README on Overview and leaves Prompts to AGENT.md', () => {
+  it('puts a bare folder’s name, README and AGENT.md on Overview, and gives it Addons', () => {
     // The README is what the folder tells a *person*; `AGENT.md` is the whole
-    // of what the agent is told. Showing both on Prompts read as though the
-    // README were part of the prompt, and buried the one document that is.
-    // Mutation: move `BareReadmeCard` back under `tab === 'prompts'` and both
-    // halves of this fail.
+    // of what the agent is told — both describe the agent, so both are on the
+    // tab that does. A bare folder takes MCP connectors like a kit one.
     renderPage(agent({ kind: 'bare' } as Partial<LocalAgentDto>))
     expect(screen.getByText('bare-name-card')).toBeTruthy()
     expect(screen.getByText('bare-readme-card')).toBeTruthy()
-
-    fireEvent.click(screen.getByRole('tab', { name: /prompts/i }))
     expect(screen.getByText('doc-bare_prompt')).toBeTruthy()
     expect(screen.queryByText('doc-bare_readme')).toBeNull()
-    expect(screen.queryByText('bare-readme-card')).toBeNull()
+
+    fireEvent.click(screen.getByRole('tab', { name: /addons/i }))
+    expect(screen.getByText('addons-tab')).toBeTruthy()
+  })
+
+  it('counts attached connectors on Addons, warning-toned when one is not connected', () => {
+    // The count makes an agent's connectors discoverable unopened; the tone is
+    // the only place a disconnected one is mentioned outside its tab.
+    // Mutation: drop the problems branch and the second half fails.
+    addonsBadge.count = 2
+    addonsBadge.problems = 0
+    const { unmount } = renderPage(agent())
+    let badge = screen.getByRole('tab', { name: /addons/i }).querySelector('span')!
+    expect(badge.textContent).toBe('2')
+    expect(badge.title).toBe('2 connectors')
+    unmount()
+
+    addonsBadge.problems = 1
+    renderPage(agent())
+    badge = screen.getByRole('tab', { name: /addons/i }).querySelector('span')!
+    expect(badge.title).toBe('1 of 2 connectors needs attention')
+    expect(badge.className).toContain('--color-warning')
+    addonsBadge.count = 0
+    addonsBadge.problems = 0
   })
 
   it('shows the description in the header, and a nudge when it is only the name', () => {

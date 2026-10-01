@@ -477,3 +477,20 @@ it('completes OAuth for legacy SSE and encrypts the client registration', async 
   expect(stored).toEqual({ encrypted: expect.any(String) })
   expect(JSON.parse(Buffer.from(stored.encrypted, 'base64').toString()).client_id).toBe('peer-public-client')
 })
+
+it('says a non-interactive OAuth connect needs the user, and exposes the attempt only while it runs', async () => {
+  const remote = await peer({ protocol: 'modern', oauth: true })
+  const attempt = manager.connect(config({ url: remote.url, authType: 'oauth', bearerTokenEncrypted: undefined }), { interactive: false })
+  const running = manager.connecting('peer-provider')
+  expect(running).toBeDefined()
+  const connection = await attempt
+  expect((await running)?.status).toBe('error')
+  expect(connection.status).toBe('error')
+  expect(edge.openExternal).not.toHaveBeenCalled()
+  expect(manager.needsUser('peer-provider')).toBe(true)
+  await vi.waitFor(() => expect(manager.connecting('peer-provider')).toBeUndefined())
+  // A failure of another kind is not one the user has to answer.
+  await manager.connect(config({ url: 'http://127.0.0.1:9/mcp', authType: 'bearer' }))
+  expect(manager.getConnection('peer-provider')?.status).toBe('error')
+  expect(manager.needsUser('peer-provider')).toBe(false)
+})

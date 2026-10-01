@@ -19,7 +19,7 @@ import { NoteMentionPopup } from './NoteMentionPopup'
 import { useAgents, useAttachAgentToChat, useChatOnDemandAgents } from '../../hooks/useAgents'
 import { useHasAttachDestination } from '../../hooks/useAttachDestination'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
-import { useMcpProviders, useAddOnDemandMcp, useChatMcpProviders } from '../../hooks/useMcp'
+import { useMcpProviders, useAddOnDemandMcp, useChatMcpProviders, useAgentMcpProviders } from '../../hooks/useMcp'
 import { useCapabilityPicker } from '../../hooks/useCapabilityPicker'
 import { useCatalogPicker } from '../../hooks/useCatalogPicker'
 import { useChatAttachments } from '../../hooks/useChatAttachments'
@@ -784,6 +784,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     if (chatId) return (chatBaselineLinks ?? []).map((l) => l.mcpProviderId)
     return baselineMcpIds ?? []
   }, [chatId, chatBaselineLinks, baselineMcpIds])
+  // The folder agent's own MCP addons — the bound one in a chat, the selected
+  // one on the new-chat screen: they come with the agent into every session,
+  // so they are locked here like the mode's baseline from the first keystroke.
+  const addonAgent = chatId ? boundAgent : (selectedAgent ?? null)
+  const { data: agentAddonData } = useAgentMcpProviders(addonAgent?.id ?? null)
+  const agentAddonIds = useMemo(() => (addonAgent ? (agentAddonData ?? []) : []), [addonAgent, agentAddonData])
+  const lockedMcpIds = useMemo(
+    () => [...new Set([...baselineIds, ...agentAddonIds])],
+    [baselineIds, agentAddonIds]
+  )
 
   // The `[+]` "Add agents / MCP" picker — cards, selection set, and toggle that
   // mirrors the `@`-mention routing. Logic lives in the hook (testable, out of
@@ -798,7 +808,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     enabledAgents,
     enabledMcps,
     boundAgent,
-    baselineMcpIds: baselineIds,
+    baselineMcpIds: lockedMcpIds,
     pendingAgentIds,
     pendingMcpIds,
     onTogglePendingAgent,
@@ -1897,12 +1907,19 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               />
             ) : null}
             {chatId ? (
-              <ActiveMcpChips chatId={chatId} baselineIds={baselineIds} />
+              <ActiveMcpChips
+                chatId={chatId}
+                baselineIds={baselineIds}
+                agentAddonIds={agentAddonIds}
+                agentName={addonAgent?.name}
+              />
             ) : pendingMcpIds && onRemovePendingMcp ? (
               <ActiveMcpChips
                 pendingIds={pendingMcpIds}
                 onRemovePending={onRemovePendingMcp}
                 baselineIds={baselineIds}
+                agentAddonIds={agentAddonIds}
+                agentName={addonAgent?.name}
               />
             ) : null}
             </AgentChipMenuHost>

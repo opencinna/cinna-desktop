@@ -225,6 +225,27 @@ export const chatMcpProviders = sqliteTable(
 )
 
 /**
+ * MCP connectors attached to a folder agent as addons: every session of that
+ * agent is offered their tools through the conductor bridge. A link only — the
+ * connector stays in the global list. See `db/agentMcp.ts`.
+ */
+export const agentMcpProviders = sqliteTable(
+  'agent_mcp_providers',
+  {
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    mcpProviderId: text('mcp_provider_id')
+      .notNull()
+      .references(() => mcpProviders.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date())
+  },
+  (table) => [primaryKey({ columns: [table.agentId, table.mcpProviderId] })]
+)
+
+/**
  * On-demand MCP attachments: MCPs the user `@-mentions` into a specific chat
  * to engage them lazily without bloating every chat's token budget. Lives
  * separately from `chat_mcp_providers` (which is owned by the chat mode) so

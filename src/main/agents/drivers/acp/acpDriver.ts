@@ -789,6 +789,12 @@ interface TurnContext {
    * not write the same id twice. See {@link rememberSession}.
    */
   savedSession: string | null
+  /**
+   * Where this turn's session id is read and saved instead of the runtime's
+   * (chat, agent) slot: a nested lease that forced a fresh session keeps its
+   * own (see `ConductorLease.session`). Absent: the runtime's slot.
+   */
+  sessionSlot?: { read(): string | null; save(sessionId: string): void }
   /** Where a root turn leaves its session for a context measurement between turns. Absent for a nested turn. */
   measurable?: Map<string, MeasurableSession>
 }
@@ -1200,6 +1206,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       setTimeout(() => { if (turn.open) askAgentToStop() }, 0)
     }, () => ctx.observers.wake(chatId, agent.id))
     ctx.offersCinnaTool = conductor?.offers ? (toolName) => conductor?.offers?.(toolName) === true : undefined
+    if (conductor?.session) ctx.sessionSlot = conductor.session
     /**
      * **A listener added to an already-aborted signal never fires**, and
      * everything before this point can await — planning walks the login-shell
@@ -1274,7 +1281,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       }
     }
 
-    const remembered = conductor?.freshSession ? null : runtime.readSession(chatId)
+    const remembered = conductor?.freshSession ? null : ctx.sessionSlot ? ctx.sessionSlot.read() : runtime.readSession(chatId)
     const sessionParams = newSessionParams(plan, sessionCwd)
     // Marked live once this connection holds the session's query under these params (see `isSessionLive`).
     const fingerprint = sessionFingerprint(sessionParams)
@@ -2509,7 +2516,8 @@ function rememberSession(ctx: TurnContext, sessionId: string): void {
   if (ctx.savedSession === sessionId) return
   try {
     ctx.runtime.validate(ctx.input.chatId)
-    ctx.runtime.saveSession(ctx.input.chatId, sessionId)
+    if (ctx.sessionSlot) ctx.sessionSlot.save(sessionId)
+    else ctx.runtime.saveSession(ctx.input.chatId, sessionId)
     ctx.savedSession = sessionId
   } catch (err) {
     // Continuity is a convenience; losing it must not fail a turn that

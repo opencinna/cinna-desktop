@@ -280,7 +280,7 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   { file: 'src/main/services/localAgents/watcherService.ts', category: 'kind', count: 3, why: 'owns folder layout event classification and watch paths' },
   { file: 'src/renderer/src/components/agents/local/AgentActionsMenu.tsx', category: 'kind', count: 5, why: 'owns folder Remove versus Trash actions and consent' },
   { file: 'src/renderer/src/components/agents/local/FolderTab.tsx', category: 'kind', count: 6, why: 'presents actual file and state ownership' },
-  { file: 'src/renderer/src/components/agents/local/LocalAgentPage.tsx', category: 'kind', count: 4, why: 'owns manifest versus bare instruction editing and declaration tabs' },
+  { file: 'src/renderer/src/components/agents/local/LocalAgentPage.tsx', category: 'kind', count: 3, why: 'owns manifest versus bare Overview cards and declaration tabs' },
   { file: 'src/renderer/src/components/agents/local/PermissionsCard.tsx', category: 'kind', count: 1, why: 'presents the actual grants state source' },
   { file: 'src/renderer/src/components/agents/local/ReadOnlyCards.tsx', category: 'kind', count: 1, why: 'presents the actual desktop state storage' },
   { file: 'src/renderer/src/components/agents/local/RuntimePanel.tsx', category: 'kind', count: 1, why: 'writes manifest versus desktop-owned runtime configuration' },

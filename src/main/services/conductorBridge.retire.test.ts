@@ -25,6 +25,7 @@ const state = vi.hoisted(() => ({
 vi.mock('../auth/chatScope', () => ({ visibleChat: () => state.chat }))
 vi.mock('../db/chatMcp', () => ({ chatMcpRepo: { listProviderIds: () => [] } }))
 vi.mock('../db/chatOnDemandMcp', () => ({ chatOnDemandMcpRepo: { listProviderIds: () => [] } }))
+vi.mock('./agentMcpService', () => ({ agentMcpService: { providerIds: () => [], ensureConnected: async () => {} } }))
 vi.mock('../db/messages', () => ({ messageRepo: { saveToolCall: vi.fn() } }))
 vi.mock('../db/conductorSessions', () => ({ conductorSessionRepo: { get: vi.fn(), save: vi.fn() } }))
 vi.mock('../tasks/toolCallBudget', () => ({ taskToolCallBudgetForChat: () => null }))

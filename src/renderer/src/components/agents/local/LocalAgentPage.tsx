@@ -28,12 +28,16 @@ import { PermissionsCard } from './PermissionsCard'
 import { FolderTab } from './FolderTab'
 import { SchedulesTab } from './SchedulesTab'
 import { AgentInterfaceTab } from '../AgentInterfaceTab'
+import { AgentAddonsTab, useAddonsBadge } from './AgentAddonsTab'
 
-export type AgentPageTab = 'overview' | 'prompts' | 'commands' | 'schedules' | 'permissions' | 'folder' | 'credentials' | 'interface'
+export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 'permissions' | 'folder' | 'credentials' | 'interface'
 
 const TABS: { id: AgentPageTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
-  { id: 'prompts', label: 'Prompts' },
+  // What the agent runs *with*, beyond its folder: MCP connectors today,
+  // catalog plugins and skills later. The prompts it used to hold moved to
+  // Overview, which is the tab that says what the agent is.
+  { id: 'addons', label: 'Addons' },
   { id: 'credentials', label: 'Credentials' },
   { id: 'commands', label: 'Commands' },
   { id: 'schedules', label: 'Schedules' },
@@ -82,12 +86,13 @@ export function LocalAgentPage(): React.JSX.Element {
   const homeAccess = useAgentsHomeQuestion()
   const { data: agent, isLoading, error } = useLocalAgent(activeLocalAgentId)
   const { data: grants } = useLocalAgentGrants(activeLocalAgentId)
+  const addons = useAddonsBadge(activeLocalAgentId)
   const draft = useDraftLocalAgent()
   const rescan = useRescanLocalAgents()
   const openPath = useOpenAgentPath()
   const stamp = useStampAgentIdentity()
-  // Kept across agents on purpose: someone working through the prompts of
-  // three agents does not want to click "Prompts" three times.
+  // Kept across agents on purpose: someone working through the addons of
+  // three agents does not want to click "Addons" three times.
   const [tab, setTab] = useState<AgentPageTab>('overview')
   // One slot for every header action's refusal (Open in, Rescan, Reveal,
   // Terminal, Stamp). Two menus each drawing their own absolutely-positioned
@@ -213,7 +218,7 @@ export function LocalAgentPage(): React.JSX.Element {
   // A bare folder has no `docs/CLI_COMMANDS.yaml` and never will, so the tab
   // would be permanently empty and would say "no commands" about a file the
   // folder was never asked to have. Every other tab still has something true to
-  // show: Overview its name and status, Prompts its `AGENT.md`, Permissions the
+  // show: Overview its name and `AGENT.md`, Addons its connectors, Permissions the
   // profile it runs under, Folder the findings that explain what it is.
   const tabs = agent.kind === 'bare' ? TABS.filter((entry) => !['commands', 'schedules'].includes(entry.id)) : TABS
   // The selected tab persists across agents, so someone on Commands who clicks
@@ -359,6 +364,25 @@ export function LocalAgentPage(): React.JSX.Element {
                     {grantCount}
                   </span>
                 )}
+                {/* Warning-toned when an attached connector is not connected:
+                    the agent's sessions are running without its tools, and
+                    the Overview no longer says so anywhere. */}
+                {entry.id === 'addons' && addons.count > 0 && (
+                  <span
+                    className={`ml-1.5 rounded px-1 text-[10px] ${
+                      addons.problems > 0
+                        ? 'bg-[var(--color-warning)]/15 text-[var(--color-warning)]'
+                        : 'bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]'
+                    }`}
+                    title={
+                      addons.problems > 0
+                        ? `${addons.problems} of ${addons.count} connector${addons.count === 1 ? '' : 's'} need${addons.problems === 1 ? 's' : ''} attention`
+                        : `${addons.count} connector${addons.count === 1 ? '' : 's'}`
+                    }
+                  >
+                    {addons.count}
+                  </span>
+                )}
                 {entry.id === 'commands' && agent.commands.length > 0 && (
                   <span className="ml-1.5 rounded bg-[var(--color-bg-tertiary)] px-1 text-[10px] text-[var(--color-text-muted)]">
                     {agent.commands.length}
@@ -385,53 +409,48 @@ export function LocalAgentPage(): React.JSX.Element {
         <div role="tabpanel" className="space-y-3">
           {activeTab === 'credentials' && <ServiceCredentialsTab key={agent.id} agent={agent} />}
           {activeTab === 'schedules' && <SchedulesTab agentId={agent.id} />}
+          {activeTab === 'addons' && <AgentAddonsTab key={agent.id} agent={agent} />}
           {activeTab === 'overview' &&
-            /* Three of the four Overview cards name a file only a kit folder
-               has: `app-data/storage/STATUS.md`, and the manifest twice. A card
-               is a viewer over a file, and one naming a file the folder was
-               never asked to have is worse than no card — it reads as something
+            /* Three of the kit cards name a file only a kit folder has:
+               `app-data/storage/STATUS.md`, and the manifest twice. A card is a
+               viewer over a file, and one naming a file the folder was never
+               asked to have is worse than no card — it reads as something
                missing rather than as something that does not apply. What a bare
-               folder *does* have that the user can change is its name. */
+               folder *does* have that the user can change is its name.
+
+               The prompts follow the cards that say what the agent is, each
+               collapsed to ten lines: a workflow prompt runs to hundreds, and
+               six full cards would push everything but the first off screen.
+               `key` resets the collapse when the page switches agents. */
             (agent.kind === 'bare' ? (
               <>
                 <BareNameCard agent={agent} />
-                {/* Where a folder describes itself, that description belongs on
-                    the tab that asks what this agent is. Rendered, not raw: a
-                    README is written to be read as markdown, and a bare folder
-                    is very often a repository whose README is the only prose
-                    about it anywhere. It renders nothing at all when the folder
-                    has no README. */}
+                {/* Rendered, not raw: a README is written to be read as
+                    markdown, and a bare folder is very often a repository whose
+                    README is the only prose about it anywhere. It renders
+                    nothing at all when the folder has no README. */}
                 <BareReadmeCard agent={agent} />
+                {/* One document, because a bare agent has one: its instructions
+                    file (`AGENT.md`, `AGENTS.md` or `CLAUDE.md`, as main
+                    resolved it) is the whole system prompt. */}
+                <PromptDocCard
+                  key={`${agent.id}:bare_prompt`}
+                  agentId={agent.id}
+                  prompt="bare_prompt"
+                  instructionsFile={agent.instructionsFile}
+                  title="Instructions"
+                  hint="This file is the agent: it is loaded as the system prompt for every conversation."
+                  placeholder="Describe what this agent does, step by step, addressed to the agent."
+                  missingNote={`This folder has no ${bareInstructionsFileList()}. Add one — it is the file that makes this folder an agent.`}
+                />
               </>
             ) : (
               <>
                 <StatusCard agent={agent} />
                 <DescriptionCard agent={agent} />
                 <ExamplePromptsCard agent={agent} />
-              </>
-            ))}
-          {activeTab === 'prompts' &&
-            (agent.kind === 'bare' ? (
-              /* One document, because a bare agent has one: its instructions
-                 file (`AGENT.md`, `AGENTS.md` or `CLAUDE.md`, as main resolved
-                 it) is the whole system prompt. The folder's README moved to
-                 Overview, where a description of the agent is what the tab is
-                 for — here it was the longer of two cards on the tab whose
-                 point is the shorter one, and read as though it too were sent
-                 to the agent. */
-              <PromptDocCard
-                agentId={agent.id}
-                prompt="bare_prompt"
-                instructionsFile={agent.instructionsFile}
-                title="Instructions"
-                hint="This file is the agent: it is loaded as the system prompt for every conversation."
-                placeholder="Describe what this agent does, step by step, addressed to the agent."
-                markdown
-                missingNote={`This folder has no ${bareInstructionsFileList()}. Add one — it is the file that makes this folder an agent.`}
-              />
-            ) : (
-              <>
                 <PromptDocCard
+                  key={`${agent.id}:workflow`}
                   agentId={agent.id}
                   prompt="workflow"
                   title="Workflow prompt"
@@ -439,6 +458,7 @@ export function LocalAgentPage(): React.JSX.Element {
                   placeholder="Describe what this agent does, step by step, addressed to the agent."
                 />
                 <PromptDocCard
+                  key={`${agent.id}:entrypoint`}
                   agentId={agent.id}
                   prompt="entrypoint"
                   title="Entrypoint prompt"
@@ -446,6 +466,7 @@ export function LocalAgentPage(): React.JSX.Element {
                   placeholder="One or two self-contained sentences telling the agent what to do."
                 />
                 <PromptDocCard
+                  key={`${agent.id}:refiner`}
                   agentId={agent.id}
                   prompt="refiner"
                   title="Refiner prompt"

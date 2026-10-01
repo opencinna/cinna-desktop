@@ -9,9 +9,13 @@ import type { McpRegistryEntry, McpRegistryInfo } from '../../../../shared/mcpRe
 
 interface Props {
   onClose: () => void
+  /** Called with the new connector's id once it is saved, before `onClose`. */
+  onCreated?: (id: string) => void
+  /** The dismiss button's label: "Back" where it returns to a list rather than closing. */
+  closeLabel?: string
 }
 
-export function MCPRegistryPicker({ onClose }: Props): React.JSX.Element {
+export function MCPRegistryPicker({ onClose, onCreated, closeLabel = 'Close' }: Props): React.JSX.Element {
   const { data: registries } = useMcpRegistries()
   const [query, setQuery] = useState('')
   const upsertMcp = useUpsertMcpProvider()
@@ -31,18 +35,16 @@ export function MCPRegistryPicker({ onClose }: Props): React.JSX.Element {
     // mcp:upsert with enabled:true triggers the same mcpManager.connect()
     // path the explicit Connect button uses. Closing the picker on success
     // surfaces the freshly-created card (with its live status) right away.
-    upsertMcp.mutate(
+    // The promise, not mutate-level callbacks: TanStack drops those when the
+    // form unmounts, and a connector created for an agent must still reach it.
+    upsertMcp.mutateAsync(
       {
         name: entry.title?.trim() || entry.name,
         transportType: remote.type,
         url: remote.url,
         enabled: true
-      },
-      {
-        onSuccess: () => onClose(),
-        onError: () => setAddingId(null)
       }
-    )
+    ).then((result) => { onCreated?.(result.id); onClose() }, () => setAddingId(null))
   }
 
   const inputClass =
@@ -56,7 +58,7 @@ export function MCPRegistryPicker({ onClose }: Props): React.JSX.Element {
           onClick={onClose}
           className="text-[14px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
         >
-          Close
+          {closeLabel}
         </button>
       </div>
 

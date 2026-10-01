@@ -144,7 +144,7 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
           assertCurrent()
           const located = agentService.findAgent(scope.settingsUserId, userId, agentId)
           if (!located || !agents(scope, next.chatId).some((agent) => agent.id === agentId)) throw new Error('The delegated agent is no longer available.')
-          const result = await new A2AAsMcpProvider(next.chatId, located.row, located.userId, 'delegate').callTool('delegate', { message }, { ...opts, queueWhenBusy: true })
+          const result = await new A2AAsMcpProvider(next.chatId, located.row, located.userId, 'delegate', scope).callTool('delegate', { message }, { ...opts, queueWhenBusy: true })
           return { ...result, needsInput: taskInputRequestRepo.listOpenForTask(taskId).some((request) => request.agentId === agentId && request.resume === 'next_message') }
         }),
         askUser: (question, toolCallId) => {

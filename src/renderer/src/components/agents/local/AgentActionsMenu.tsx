@@ -34,7 +34,8 @@ interface DeleteAgentDialogProps {
  *
  * The folder is recoverable from the Trash. What is not: the engine sessions
  * behind its chats (`a2a_sessions`), its on-demand attachments to other chats
- * (`chat_on_demand_agents`) and its job bindings (`job_agents`) all cascade
+ * (`chat_on_demand_agents`), its job bindings (`job_agents`) and its MCP
+ * addon links (`agent_mcp_providers`) all cascade
  * from the agent row the rescan prunes. The chats themselves stay —
  * `chats.agent_id` has no foreign key — with a binding that no longer
  * resolves, so the dialog says exactly that. A refusal because the agent is
@@ -125,7 +126,8 @@ function DeleteAgentDialog({ agent, remove, onCancel }: DeleteAgentDialogProps):
             <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
               Remove <strong className="text-[var(--color-text)]">{agent.name}</strong>? Existing
               chats stay but can no longer reach this agent, and any job that uses it will refuse
-              to run — and will need it selected again even if you put the agent back.
+              to run — and will need it selected again even if you put the agent back. Its MCP
+              connectors are detached; they stay in Settings → MCP.
             </p>
             {/* The recoverable option first, and selected — UX rule 5. This is
                 the user's own folder, very often a repository they share with
@@ -177,7 +179,8 @@ function DeleteAgentDialog({ agent, remove, onCancel }: DeleteAgentDialogProps):
           <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
             Move <strong className="text-[var(--color-text)]">{agent.name}</strong> to the Trash?
             The folder can be put back from there. Existing chats stay, but they can no longer
-            reach this agent, and any job that uses it will refuse to run.
+            reach this agent, and any job that uses it will refuse to run. Its MCP connectors are
+            detached; they stay in Settings → MCP.
           </p>
         )}
         {/* Reserved, so a refusal does not push the buttons down (UX rule 1). */}

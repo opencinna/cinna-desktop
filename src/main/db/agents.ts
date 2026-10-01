@@ -10,6 +10,7 @@ import {
   chatOnDemandAgents,
   chats,
   jobAgents,
+  agentMcpProviders,
   jobs,
   messages
 } from './schema'
@@ -636,6 +637,15 @@ export const agentRepo = {
         'job_agents',
         tx.update(jobAgents).set({ agentId: newId }).where(eq(jobAgents.agentId, oldId)).run()
           .changes
+      )
+      // MCP addons: the stamped agent keeps the connectors it was given.
+      count(
+        'agent_mcp_providers',
+        tx
+          .update(agentMcpProviders)
+          .set({ agentId: newId })
+          .where(eq(agentMcpProviders.agentId, oldId))
+          .run().changes
       )
       // Columns that name an agent with no foreign key behind them. These are
       // the ones a cascade would have missed entirely: they do not disappear

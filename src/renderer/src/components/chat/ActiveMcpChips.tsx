@@ -15,6 +15,13 @@ type ActiveMcpChipsProps = {
    * **locked** — the chat mode owns them, so they carry no `×`.
    */
   baselineIds: string[]
+  /**
+   * The bound folder agent's own MCP addons. Drawn after the baseline and
+   * locked too — they come with the agent, and are changed on its page.
+   */
+  agentAddonIds?: string[]
+  /** The bound agent's name, for the addon chips' tooltip. */
+  agentName?: string
 } & (
   | { chatId: string; pendingIds?: never; onRemovePending?: never }
   | { chatId?: null; pendingIds: string[]; onRemovePending: (id: string) => void }
@@ -48,16 +55,17 @@ export function ActiveMcpChips(props: ActiveMcpChipsProps): React.JSX.Element | 
 
   const rows = useMemo(() => {
     const byId = new Map((mcps ?? []).map((m) => [m.id, m]))
-    const locked = new Set(props.baselineIds)
+    const baseline = new Set(props.baselineIds)
+    const addons = new Set(props.agentAddonIds ?? [])
     const seen = new Set<string>()
     const out: Array<{
       id: string
       name: string
       status: string
       error: string | undefined
-      locked: boolean
+      locked: 'mode' | 'agent' | null
     }> = []
-    for (const id of [...props.baselineIds, ...onDemandIds]) {
+    for (const id of [...props.baselineIds, ...(props.agentAddonIds ?? []), ...onDemandIds]) {
       if (seen.has(id)) continue
       seen.add(id)
       const mcp = byId.get(id)
@@ -69,11 +77,11 @@ export function ActiveMcpChips(props: ActiveMcpChipsProps): React.JSX.Element | 
         name: mcp.name,
         status: mcp.status,
         error: mcp.error,
-        locked: locked.has(id)
+        locked: baseline.has(id) ? 'mode' : addons.has(id) ? 'agent' : null
       })
     }
     return out
-  }, [props.baselineIds, onDemandIds, mcps])
+  }, [props.baselineIds, props.agentAddonIds, onDemandIds, mcps])
 
   if (rows.length === 0) return null
 
@@ -102,9 +110,11 @@ export function ActiveMcpChips(props: ActiveMcpChipsProps): React.JSX.Element | 
               text-[var(--color-accent)] border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10
               ${m.locked ? 'pr-2' : 'pr-1'}`}
             title={
-              m.locked
+              m.locked === 'mode'
                 ? `MCP "${m.name}" comes with this chat mode — change it in Settings → Chats`
-                : `MCP "${m.name}" engaged for this chat`
+                : m.locked === 'agent'
+                  ? `MCP "${m.name}" comes with ${props.agentName ? `the agent ${props.agentName}` : 'this agent'} — change it on the agent's page`
+                  : `MCP "${m.name}" engaged for this chat`
             }
           >
             <Plug size={12} className="shrink-0" />

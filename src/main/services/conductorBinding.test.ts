@@ -15,6 +15,7 @@ vi.mock('../db/conductorSessions', () => ({ conductorSessionRepo: { get: () => '
 vi.mock('../db/chats', () => ({ chatRepo: { getOwned: () => ({ agentId: 'root', router: 'coordinator' }) } }))
 vi.mock('../db/chatMcp', () => ({ chatMcpRepo: { listProviderIds: () => ['connector'] } }))
 vi.mock('../db/chatOnDemandMcp', () => ({ chatOnDemandMcpRepo: { listProviderIds: () => [] } }))
+vi.mock('./agentMcpService', () => ({ agentMcpService: { providerIds: () => [], ensureConnected: async () => {} } }))
 vi.mock('../db/messages', () => ({ messageRepo: { saveToolCall: state.saved } }))
 vi.mock('../mcp/manager', () => ({ mcpManager: { getConnection: () => undefined } }))
 vi.mock('../llm/toolProvider', () => ({ McpToolProvider: class {} }))

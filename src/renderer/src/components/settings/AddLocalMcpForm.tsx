@@ -5,7 +5,8 @@ import { parseEnvVars } from '../../utils/envVars'
 const inputClass =
   'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
 
-export function AddLocalMcpForm({ onClose }: { onClose: () => void }): React.JSX.Element {
+/** `onCreated` gets the new connector's id once it is saved, before `onClose`. */
+export function AddLocalMcpForm({ onClose, onCreated }: { onClose: () => void; onCreated?: (id: string) => void }): React.JSX.Element {
   const [name, setName] = useState('')
   const [command, setCommand] = useState('')
   const [argsStr, setArgsStr] = useState('')
@@ -15,7 +16,9 @@ export function AddLocalMcpForm({ onClose }: { onClose: () => void }): React.JSX
   const handleConnect = (): void => {
     if (!name.trim() || !command.trim()) return
     const envObj = parseEnvVars(envStr)
-    upsertMcp.mutate(
+    // The promise, not mutate-level callbacks: TanStack drops those when the
+    // form unmounts, and a connector created for an agent must still reach it.
+    upsertMcp.mutateAsync(
       {
         name: name.trim(),
         transportType: 'stdio',
@@ -23,9 +26,8 @@ export function AddLocalMcpForm({ onClose }: { onClose: () => void }): React.JSX
         args: argsStr.split(/\s+/).filter(Boolean),
         env: Object.keys(envObj).length > 0 ? envObj : undefined,
         enabled: true
-      },
-      { onSuccess: () => onClose() }
-    )
+      }
+    ).then((result) => { onCreated?.(result.id); onClose() }, () => {})
   }
 
   return (

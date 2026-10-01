@@ -1,7 +1,9 @@
 import { useState } from 'react'
-import { Trash2, ChevronDown, Wrench, Circle, Shield } from 'lucide-react'
+import { AlertTriangle, Trash2, ChevronDown, Wrench, Circle, Shield, Unlink } from 'lucide-react'
 import { useUpsertMcpProvider, useDeleteMcpProvider, useConnectMcp, useDisconnectMcp } from '../../hooks/useMcp'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
+import { mcpProblem } from './mcpPresentation'
+import { DeleteMcpProviderDialog } from './DeleteMcpProviderDialog'
 import { formatEnvVars, parseEnvVars } from '../../utils/envVars'
 
 interface MCPProviderCardProps {
@@ -20,9 +22,15 @@ interface MCPProviderCardProps {
     tools: Array<{ name: string; description: string }>
     error?: string
   }
+  /**
+   * Set where the card lists a connector attached to an agent (its Addons
+   * tab): the header offers Detach instead of Delete — the connector itself
+   * stays in Settings → MCP. Everything else behaves as in Settings.
+   */
+  detach?: { onDetach: () => void; disabled?: boolean }
 }
 
-export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.Element {
+export function MCPProviderCard({ provider, detach }: MCPProviderCardProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [name, setName] = useState(provider.name)
   const [transportType, setTransportType] = useState(provider.transportType)
@@ -33,12 +41,14 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
   const [authType, setAuthType] = useState(provider.authType === 'bearer' ? 'bearer' : 'oauth')
   // Never prefilled with the stored token — write-only, left blank to keep it.
   const [bearerToken, setBearerToken] = useState('')
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   const upsert = useUpsertMcpProvider()
   const deleteMcp = useDeleteMcpProvider()
   const connectMcp = useConnectMcp()
   const disconnectMcp = useDisconnectMcp()
 
+  const problem = mcpProblem(provider)
   const statusColor =
     provider.status === 'connected'
       ? 'text-[var(--color-success)]'
@@ -115,12 +125,29 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
+      {/* Outside the clickable header: a portal's clicks still bubble up the React tree. */}
+      {confirmingDelete && (
+        <DeleteMcpProviderDialog
+          provider={provider}
+          remove={deleteMcp}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
       <div
         className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         <Circle size={6} className={`fill-current ${statusColor}`} />
-        <span className="flex-1 font-medium text-[14px]">{provider.name}</span>
+        <span className="min-w-0 truncate font-medium text-[14px]">{provider.name}</span>
+        {/* The dot is colour only; a state that needs attention also gets a
+            glyph whose name is the sentence, as the attach picker draws it
+            (ux_rules rule 13) — the error used to be readable only expanded. */}
+        {problem && (
+          <span role="img" aria-label={problem} title={problem} className="inline-flex shrink-0 text-[var(--color-warning)]">
+            <AlertTriangle size={12} aria-hidden />
+          </span>
+        )}
+        <span className="flex-1" />
 
         {provider.hasAuth && (
           <Shield
@@ -147,12 +174,26 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
           />
         </button>
 
-        <button
-          onClick={(e) => { e.stopPropagation(); deleteMcp.mutate(provider.id) }}
-          className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
-        >
-          <Trash2 size={12} />
-        </button>
+        {detach ? (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); detach.onDetach() }}
+            disabled={detach.disabled}
+            title={`Detach ${provider.name} from this agent`}
+            aria-label={`Detach ${provider.name} from this agent`}
+            className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors disabled:opacity-40"
+          >
+            <Unlink size={12} />
+          </button>
+        ) : (
+          <button
+            onClick={(e) => { e.stopPropagation(); setConfirmingDelete(true) }}
+            aria-label={`Delete MCP ${provider.name}`}
+            className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
 
         <div className={`p-1 text-[var(--color-text-muted)] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
           <ChevronDown size={12} />

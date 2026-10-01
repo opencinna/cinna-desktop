@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   useAgentFileEditor,
   useLocalAgentDoc,
@@ -22,18 +22,6 @@ interface PromptDocCardProps {
   hint: string
   placeholder: string
   /**
-   * Render the file as markdown while it is not being edited.
-   *
-   * Off for the kit's three prompts. Those are written for a model, and the
-   * scaffold template leads with an HTML comment telling their author what to
-   * put where — `documentMarkdownComponents` strips raw HTML, as every other
-   * viewer of these files does, so rendering them would hide the one line the
-   * author most needs to read from a card that claims to be a viewer over the
-   * file. On for a bare agent's instructions file, which is prose its author
-   * wrote and reads as markdown everywhere else they open it.
-   */
-  markdown?: boolean
-  /**
    * What to say when the file is not in the folder.
    *
    * The default names the scaffolder, which is right for a kit prompt and
@@ -51,7 +39,7 @@ interface PromptDocCardProps {
 }
 
 /**
- * One of the three prompt documents, edited in place.
+ * One prompt document, edited in place, on the agent's Overview.
  *
  * The text is read on its own rather than carried in the agent DTO, so that the
  * fingerprint the editor saves against comes from the same read as the text it
@@ -64,11 +52,15 @@ export function PromptDocCard({
   title,
   hint,
   placeholder,
-  markdown = false,
   missingNote,
   instructionsFile = null
 }: PromptDocCardProps): React.JSX.Element {
   const { data: doc, isLoading } = useLocalAgentDoc(agentId, prompt)
+  // Collapsed by default: these sit on Overview under the cards that say what
+  // the agent is, and a workflow prompt runs to hundreds of lines. Per card and
+  // per visit — opening one prompt says nothing about wanting the next one.
+  const [expanded, setExpanded] = useState(false)
+  const [overflows, setOverflows] = useState(false)
   const openPath = useOpenAgentPath()
   // With no instructions file the editor still needs a key for its stamp
   // lookup; `AGENT.md` holds no stamp in that folder, so nothing can be saved
@@ -116,21 +108,41 @@ export function PromptDocCard({
       file={namesFile ? relPath : undefined}
       onReveal={namesFile ? () => openPath.mutate({ agentId, relPath }) : undefined}
       actions={
-        editor.isSaving ? (
-          <span className="text-[10px] text-[var(--color-text-muted)]">Saving…</span>
-        ) : null
+        <>
+          {editor.isSaving && (
+            <span className="text-[10px] text-[var(--color-text-muted)]">Saving…</span>
+          )}
+          {overflows && (
+            <button
+              type="button"
+              onClick={() => setExpanded(!expanded)}
+              aria-expanded={expanded}
+              aria-label={expanded ? `Collapse ${title}` : `Show all of ${title}`}
+              className="text-[10px] font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
+            >
+              {expanded ? 'Show less' : 'Show all'}
+            </button>
+          )}
+        </>
       }
     >
       <div className="mb-2 text-[10px] text-[var(--color-text-muted)]">{hint}</div>
       {isLoading ? (
         <div className="text-[10px] text-[var(--color-text-muted)]">Loading…</div>
       ) : (
-        // Rendered or raw per document — see `markdown` above. Either way the
-        // click that starts editing puts the file's own bytes in the textarea;
-        // rendering changes how it reads, never what is saved.
+        // Rendered as markdown, with the scaffold's HTML comments kept as
+        // muted author notes rather than dropped the way a README viewer drops
+        // them: the comment telling the author what to write is the line they
+        // most need. The click that starts editing puts the file's own bytes in
+        // the textarea; rendering changes how it reads, never what is saved.
         <InlineFileEditor
           editor={editor}
-          markdown={markdown}
+          markdown
+          commentNotes
+          clipped={!expanded}
+          onOverflowChange={setOverflows}
+          onEditStart={() => setExpanded(true)}
+          cardTitle={title}
           placeholder={placeholder}
           missingNote={missingNote}
         />

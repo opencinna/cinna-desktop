@@ -128,3 +128,12 @@ it('reuses the redirect URI retained with a client registration', async () => {
     expect(second.clientInformation()?.client_id).toBe('registered-client')
   } finally { first.cleanup(); second?.cleanup() }
 })
+
+it('never opens a browser for a non-interactive connect, even with a callback pending', async () => {
+  const quiet = new ElectronOAuthProvider({}, { assertCurrent: () => {}, save: () => {}, interactive: false })
+  try {
+    await quiet.prepareForAuth()
+    await expect(quiet.redirectToAuthorization(new URL('https://issuer.test/authorize'))).rejects.toThrow('needs the user')
+    expect(edge.open).not.toHaveBeenCalled()
+  } finally { quiet.cleanup() }
+})

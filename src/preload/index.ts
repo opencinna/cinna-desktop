@@ -858,6 +858,9 @@ const api = {
       ipcRenderer.invoke('mcp:disconnect', providerId),
     listTools: (providerId: string): Promise<unknown[]> =>
       ipcRenderer.invoke('mcp:list-tools', providerId),
+    /** The folder agents this connector is attached to as an addon, oldest first. */
+    agentsUsing: (mcpProviderId: string): Promise<{ id: string; name: string }[]> =>
+      ipcRenderer.invoke('mcp:agents-using', mcpProviderId),
     registryList: (): Promise<McpRegistryInfo[]> =>
       ipcRenderer.invoke('mcp:registry-list'),
     registrySearchAll: (data: {
@@ -1759,6 +1762,14 @@ const api = {
     /** Revoke every grant this agent holds. */
     grantsClear: (agentId: string): Promise<StoredPermissionGrant[]> =>
       ipcRenderer.invoke('local-agent:grants-clear', agentId),
+    /** MCP connectors attached to this agent as addons (provider ids), oldest first. */
+    listMcpProviders: (agentId: string): Promise<string[]> =>
+      ipcRenderer.invoke('local-agent:mcp-list', agentId),
+    /** Attach a connector; attaching one already attached is a no-op. */
+    attachMcpProvider: (agentId: string, mcpProviderId: string): Promise<{ success: true }> =>
+      ipcRenderer.invoke('local-agent:mcp-attach', { agentId, mcpProviderId }),
+    detachMcpProvider: (agentId: string, mcpProviderId: string): Promise<{ success: true }> =>
+      ipcRenderer.invoke('local-agent:mcp-detach', { agentId, mcpProviderId }),
     rootsList: (): Promise<AgentRootDto[]> => ipcRenderer.invoke('local-agent:roots-list'),
     /** Opens the OS directory picker; the renderer never supplies the path. */
     rootAdd: (): Promise<{ cancelled: true } | { cancelled: false; root: AgentRootDto }> =>

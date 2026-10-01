@@ -11,6 +11,12 @@ export interface OAuthStoredState {
 export interface OAuthProviderCallbacks {
   assertCurrent: () => void
   save: (patch: { tokens?: StoredOAuthTokens | null; clientInfo?: StoredOAuthClientInformation | null; discovery?: OAuthDiscoveryState | null }) => void
+  /**
+   * False for a connect nobody is watching (an agent turn starting): stored
+   * tokens may still be used and refreshed, but a browser is never opened —
+   * the authorization redirect fails instead.
+   */
+  interactive?: boolean
 }
 
 export class McpReauthorizationRequiredError extends Error {}
@@ -89,6 +95,7 @@ export class ElectronOAuthProvider implements OAuthClientProvider {
   }
   async redirectToAuthorization(url: URL): Promise<void> {
     this.assertUsable()
+    if (this.callbacks.interactive === false) throw new McpReauthorizationRequiredError('MCP authorization needs the user. Connect it in Settings.')
     if (!this.callback?.isPending()) throw new McpReauthorizationRequiredError('MCP authorization needs a new connection. Connect again.')
     await runtimeHost.shell.openExternal(url.toString())
   }

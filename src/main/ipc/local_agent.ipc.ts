@@ -2,6 +2,7 @@ import { dialog, type OpenDialogOptions } from 'electron'
 import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { localAgentService } from '../services/localAgents/localAgentService'
+import { agentMcpService } from '../services/agentMcpService'
 import { runtimeService } from '../services/localAgents/runtimeService'
 import { providerService } from '../services/providerService'
 import { localAgentDraftService } from '../services/localAgents/draftService'
@@ -387,6 +388,33 @@ export function registerLocalAgentHandlers(): void {
     userActivation.requireActivated()
     return localAgentService.forgetAllPermissionGrants(getSettingsScopeUserId(), agentId)
   })
+
+  /**
+   * MCP addons: connectors attached to a folder agent. Both the agent and the
+   * connector live in the settings scope; the service checks each belongs to it.
+   */
+  ipcHandle('local-agent:mcp-list', (_event, agentId: string): string[] => {
+    userActivation.requireActivated()
+    return agentMcpService.list(getSettingsScopeUserId(), agentId)
+  })
+
+  ipcHandle(
+    'local-agent:mcp-attach',
+    (_event, data?: { agentId: string; mcpProviderId: string }): { success: true } => {
+      userActivation.requireActivated()
+      agentMcpService.attach(getSettingsScopeUserId(), data?.agentId as string, data?.mcpProviderId as string)
+      return { success: true }
+    }
+  )
+
+  ipcHandle(
+    'local-agent:mcp-detach',
+    (_event, data?: { agentId: string; mcpProviderId: string }): { success: true } => {
+      userActivation.requireActivated()
+      agentMcpService.detach(getSettingsScopeUserId(), data?.agentId as string, data?.mcpProviderId as string)
+      return { success: true }
+    }
+  )
 
   ipcHandle('local-agent:roots-list', (): AgentRootDto[] => {
     userActivation.requireActivated()

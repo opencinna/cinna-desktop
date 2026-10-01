@@ -6,6 +6,7 @@ import type { AgentRow } from '../db/agents'
 import { visibleChat } from '../auth/chatScope'
 import { chatMcpRepo } from '../db/chatMcp'
 import { chatOnDemandMcpRepo } from '../db/chatOnDemandMcp'
+import { agentMcpService } from './agentMcpService'
 import { messageRepo } from '../db/messages'
 import { mcpManager } from '../mcp/manager'
 import { onMcpToolsChanged } from '../mcp/toolChanges'
@@ -37,6 +38,12 @@ interface Entry {
    * its lease closes, which disposes it.
    */
   retiring?: boolean
+  /**
+   * Serves an agent invoked as a tool inside another agent's turn (it runs on
+   * the parent's chat id): only that agent's own MCP addons — no chat MCPs, no
+   * coordinator controls, no handovers, no agent tools.
+   */
+  nested?: boolean
 }
 const logger = createLogger('conductor-bridge')
 const server = new ConductorMcpServer((error) => logger.warn('Conductor MCP listener error', { error: String(error) }))
@@ -56,9 +63,47 @@ const generations = new Map<string, number>()
 const serverKey = (key: string): string => { const generation = generations.get(key); return generation ? `${key}#${generation}` : key }
 const live = (chatId?: string): Entry[] => [...entries.values(), ...retiring].filter((entry) => chatId === undefined || entry.chatId === chatId)
 const MAX_CALLS = 100
+/**
+ * Descriptor digests of nested sessions, by entry key. In memory: the durable
+ * `conductor_sessions` row for (chat, agent) belongs to the agent's own session
+ * in that chat, and a nested digest saved there would force it fresh.
+ */
+const nestedDigests = new Map<string, string>()
+/**
+ * Engine session ids of nested sessions whose engine fixes its tools at
+ * creation, by entry key, beside `nestedDigests` and dropped with it. Such a
+ * session holds the addons-only tool list: saved in the runtime's (chat, agent)
+ * slot it would replace the agent's own session in that chat, which the next
+ * direct turn would then load under a matching digest, without its transcript.
+ */
+const nestedSessions = new Map<string, string>()
+const forgetNested = (key: string): void => { nestedDigests.delete(key); nestedSessions.delete(key) }
+
+/**
+ * The agent's own MCP addons, owned by the run's settings scope. Only a folder
+ * agent can hold any: attaching checks it (`agentMcpService.attach`).
+ */
+function addonIds(agent: AgentRow, scope: NonNullable<RunInput['runScope']>): string[] {
+  return agentMcpService.providerIds(scope.settingsUserId, agent.id)
+}
+
+function connectedMcp(ids: Iterable<string>): ToolProvider[] {
+  const result: ToolProvider[] = []
+  for (const id of ids) {
+    const connection = mcpManager.getConnection(id)
+    if (connection?.status === 'connected') result.push(new McpToolProvider(id, connection.config.name))
+  }
+  return result
+}
 
 export interface ConductorLease {
   freshSession?: boolean
+  /**
+   * The session slot this lease owns: the driver reads and saves the engine
+   * session id here instead of the runtime's (chat, agent) slot. Set for a
+   * nested run on an engine that fixes its tools at creation.
+   */
+  session?: { read(): string | null; save(sessionId: string): void }
   sessionReady?(): void
   /** The driver had to create a session: whatever digest was saved describes one that is gone. */
   sessionLost?(): void
@@ -76,16 +121,15 @@ export interface ConductorLease {
 
 async function providers(entry: Entry): Promise<ToolProvider[]> {
   const chat = visibleChat(entry.scope.profileUserId, entry.chatId)
-  if (!chat || chat.deletedAt || (chat.agentId !== entry.agent.id && chat.router !== 'human')) return []
+  if (!chat || chat.deletedAt) return []
   if (isChatConductor(entry.agent) && conductorContext(entry.agent).toolPolicy === 'none') return []
+  // The agent's own addons follow it into every session, whoever's chat it is.
+  const addons = addonIds(entry.agent, entry.scope)
+  if (entry.nested || (chat.agentId !== entry.agent.id && chat.router !== 'human')) return connectedMcp(addons)
   const controls = entry.binding?.input.coordinator
   const result: ToolProvider[] = controls ? [controls] : []
   if (entry.binding?.handovers) result.push(entry.binding.handovers)
-  const ids = new Set([...chatMcpRepo.listProviderIds(entry.chatId), ...chatOnDemandMcpRepo.listProviderIds(entry.chatId)])
-  for (const id of ids) {
-    const connection = mcpManager.getConnection(id)
-    if (connection?.status === 'connected') result.push(new McpToolProvider(id, connection.config.name))
-  }
+  result.push(...connectedMcp(new Set([...chatMcpRepo.listProviderIds(entry.chatId), ...chatOnDemandMcpRepo.listProviderIds(entry.chatId), ...addons])))
   const names = new Set(result.flatMap((provider) => provider.getTools().map((tool) => tool.name)))
   if (!controls && chat.router === 'coordinator') result.push(...buildAgentToolProviders(entry.chatId, entry.scope.settingsUserId,
     entry.scope.profileUserId, names, entry.agent.id))
@@ -107,12 +151,22 @@ async function openBetweenTurns(entry: Entry, signal: AbortSignal): Promise<void
 
 export const conductorBridge = {
   async prepare(ownerId: string, agent: AgentRow, input: RunInput, plan: AcpLaunchPlan, stop: (outcome: import('../agents/drivers/acp/acpDriver').ConductorOutcome) => void, wake: () => boolean): Promise<ConductorLease | undefined> {
-    if (input.nested || !input.runScope || !canConduct(agent) || plan.spec.remote) return undefined
-    if (isChatConductor(agent)) Object.assign(plan, applyConductorToolPolicy(plan, conductorContext(agent).engine))
-    const key = JSON.stringify([input.chatId, agent.id])
+    if (!input.runScope || !canConduct(agent) || plan.spec.remote) return undefined
+    const addons = addonIds(agent, input.runScope)
+    // A nested run with no addons keeps running with no Cinna server at all.
+    const nested = !!input.nested
+    if (nested && addons.length === 0) return undefined
+    if (addons.length > 0) await agentMcpService.ensureConnected(input.runScope.settingsUserId, agent.id, { signal: input.signal })
+    if (!nested && isChatConductor(agent)) Object.assign(plan, applyConductorToolPolicy(plan, conductorContext(agent).engine))
+    // Nested turns of one agent in one chat are serialized (`nestedAgentTurn`),
+    // so one nested endpoint per (chat, agent) is never bound twice at once.
+    const key = JSON.stringify(nested ? ['nested', input.chatId, agent.id] : [input.chatId, agent.id])
+    // A nested session cannot open a turn of its own between turns: it has no
+    // listener, and the parent chat's observer for this agent is not its turn.
+    if (nested) wake = () => false
     let entry = entries.get(key)
     const binding: Binding = { input, pending: 0, calls: 0 }
-    if (agent.source === 'folder' && agent.localPath) {
+    if (!nested && agent.source === 'folder' && agent.localPath) {
       const [{ DelegationToolProvider }, { taskRepo }, { delegationRepo }] = await Promise.all([
         import('./delegationToolProvider'), import('../db/tasks'), import('../db/delegations')
       ])
@@ -157,7 +211,9 @@ export const conductorBridge = {
         } catch (error) { result = { content: error instanceof Error ? error.message : String(error), isError: true } }
         try {
           const content = typeof result.content === 'string' ? result.content : JSON.stringify(result.content) ?? ''
-          messageRepo.saveToolCall({ chatId: input.chatId, content, toolCallId: id, toolName: name, toolInput: args,
+          // A nested call reaches the parent's transcript inside the child's
+          // block (through `publish`); a row of its own would sit top-level.
+          if (!nested) messageRepo.saveToolCall({ chatId: input.chatId, content, toolCallId: id, toolName: name, toolInput: args,
             toolError: !!result.isError, toolProvider: provider.displayName, toolAgentId: agentId, parts: result.parts })
           publish(result.isError ? { type: 'tool_error', id, error: content } : { type: 'tool_result', id, result: result.content })
           if (result.budget) stop({ budget: true })
@@ -179,7 +235,7 @@ export const conductorBridge = {
     // Re-read: the entry seen before the awaits may have been released since.
     entry = entries.get(key)
     if (!entry) {
-      entry = { chatId: input.chatId, agent, ownerId, scope: input.runScope, session, binding, wake, waiters: new Set(), correlation: new ConductorToolCorrelation() }
+      entry = { chatId: input.chatId, agent, ownerId, scope: input.runScope, session, binding, wake, waiters: new Set(), correlation: new ConductorToolCorrelation(), nested }
       entries.set(key, entry)
     } else { entry.binding = binding; entry.wake = wake }
     entry.agent = agent
@@ -190,11 +246,19 @@ export const conductorBridge = {
     input.signal.addEventListener('abort', abort, { once: true })
     // An engine that never re-reads its tools can only meet a new one in a new session.
     const fixedTools = plan.sessionToolsFixed ? (await providers(entry)).flatMap((provider) => provider.getTools().map((tool) => tool.name)).sort() : null
-    const hash = createHash('sha256').update(JSON.stringify([session.descriptor, isChatConductor(agent) ? conductorContext(agent) : null, ...(fixedTools ? [fixedTools] : [])])).digest('hex')
+    const hash = createHash('sha256').update(JSON.stringify([session.descriptor, !nested && isChatConductor(agent) ? conductorContext(agent) : null, ...(fixedTools ? [fixedTools] : [])])).digest('hex')
+    // Nested: the session is reused as before unless the engine fixes its tools
+    // at creation and they (or the endpoint) changed since this agent's last
+    // nested session in this chat. Nothing durable — see `nestedDigests`.
+    const durable = nested ? null : { fresh: conductorSessionRepo.get(input.chatId, agent.id) !== hash }
     return {
-      freshSession: conductorSessionRepo.get(input.chatId, agent.id) !== hash,
-      sessionReady: () => conductorSessionRepo.save(input.chatId, agent.id, hash),
-      sessionLost: () => conductorSessionRepo.save(input.chatId, agent.id, ''),
+      freshSession: durable ? durable.fresh : !!plan.sessionToolsFixed && nestedDigests.get(key) !== hash,
+      ...(nested && plan.sessionToolsFixed ? { session: {
+        read: () => nestedSessions.get(key) ?? null,
+        save: (sessionId: string) => { nestedSessions.set(key, sessionId) }
+      } } : {}),
+      sessionReady: () => { if (nested) nestedDigests.set(key, hash); else conductorSessionRepo.save(input.chatId, agent.id, hash) },
+      sessionLost: () => { if (nested) forgetNested(key); else conductorSessionRepo.save(input.chatId, agent.id, '') },
       observe: (notification) => entry!.correlation.observe(notification),
       owns: (id) => entry!.correlation.owns(id),
       offers: (toolName) => entry!.session.offers(toolName),
@@ -215,6 +279,10 @@ export const conductorBridge = {
   async refresh(chatId: string): Promise<void> {
     await Promise.all(live(chatId).map((entry) => entry.session.refreshTools()))
   },
+  /** The agent's addons changed: every live session of it, in any chat, re-lists. */
+  async refreshAgent(agentId: string): Promise<void> {
+    await Promise.all(live().filter((entry) => entry.agent.id === agentId).map((entry) => entry.session.refreshTools()))
+  },
   /** The follow-up a between-turn call was waiting for will not open. */
   abandonWaiters(chatId: string, agentId: string, reason: string): void {
     const entry = entries.get(JSON.stringify([chatId, agentId]))
@@ -233,7 +301,7 @@ export const conductorBridge = {
 
 onMcpToolsChanged((providerId) => {
   for (const entry of live()) {
-    const ids = [...chatMcpRepo.listProviderIds(entry.chatId), ...chatOnDemandMcpRepo.listProviderIds(entry.chatId)]
+    const ids = [...chatMcpRepo.listProviderIds(entry.chatId), ...chatOnDemandMcpRepo.listProviderIds(entry.chatId), ...addonIds(entry.agent, entry.scope)]
     if (ids.includes(providerId)) void entry.session.refreshTools().catch((error) => logger.warn('Could not refresh conductor tools', { error: String(error) }))
   }
 })
@@ -241,6 +309,7 @@ onMcpToolsChanged((providerId) => {
 installChatSessionForgetter((chatId, agentId) => {
   for (const [key, entry] of entries) if (entry.chatId === chatId && (!agentId || agentId === entry.agent.id)) {
     entries.delete(key)
+    forgetNested(key)
     // Waiters only park while no turn is bound (a binding resolves them), so
     // for a retiring entry this is empty; none can join while it stays bound.
     for (const waiter of entry.waiters) waiter.reject(new Error('The conductor session ended.'))

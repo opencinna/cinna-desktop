@@ -51,6 +51,22 @@ export const documentMarkdownComponents: Components = {
     )
 }
 
+/** The document map, plus how `remarkHtmlCommentNotes` draws an author note. */
+export const promptMarkdownComponents: Components = {
+  ...documentMarkdownComponents,
+  // A note, not a landmark: one `complementary` region per comment would
+  // crowd a screen reader's landmark list with every scaffold hint.
+  aside: ({ children }) => (
+    <div
+      role="note"
+      aria-label="Author note"
+      className="my-2 whitespace-pre-line border-l-2 border-[var(--color-border)] pl-2.5 italic text-[var(--color-text-muted)]"
+    >
+      {children}
+    </div>
+  )
+}
+
 /**
  * Drop raw HTML from a document before it is rendered.
  *
@@ -78,4 +94,46 @@ export function remarkStripHtml() {
     for (const child of node.children) strip(child)
   }
   return strip
+}
+
+interface MdastHtml extends MdastNode {
+  value?: string
+}
+
+// One comment and nothing else: the body may not contain `-->`, so a line of
+// two comments with markup between them is not read as one long note.
+const COMMENT = /^\s*<!--((?:(?!-->)[\s\S])*)-->\s*$/
+
+/**
+ * `remarkStripHtml`, except that a block-level HTML comment survives as a
+ * muted author note instead of disappearing.
+ *
+ * For the kit's prompt documents. Their scaffold opens with a comment telling
+ * the author what to write — the one line that author most needs — and these
+ * cards render the prompt rather than its source, so dropping comments the way
+ * a README viewer does would hide it. A comment inside a sentence is still
+ * dropped: a note is a block, and there is no block to put inside a paragraph.
+ * Every other kind of raw HTML is dropped exactly as `remarkStripHtml` drops it.
+ */
+export function remarkHtmlCommentNotes() {
+  const walk = (node: MdastNode): void => {
+    if (!Array.isArray(node.children)) return
+    const block = node.type === 'root' || node.type === 'blockquote' || node.type === 'listItem'
+    node.children = node.children.flatMap((child): MdastNode[] => {
+      if (child.type !== 'html') return [child]
+      const comment = block ? COMMENT.exec((child as MdastHtml).value ?? '') : null
+      // Reflowed: the comment's own line breaks are where its author's editor
+      // wrapped, and kept they wrap a second time in a narrow card. Only a
+      // blank line is a break the author meant.
+      const text = comment?.[1].replace(/^[ \t]+/gm, '').trim().replace(/([^\n])\n(?!\n)/g, '$1 ')
+      if (!text) return []
+      return [{
+        type: 'paragraph',
+        data: { hName: 'aside' },
+        children: [{ type: 'text', value: text } as MdastHtml]
+      } as MdastNode]
+    })
+    for (const child of node.children) walk(child)
+  }
+  return walk
 }

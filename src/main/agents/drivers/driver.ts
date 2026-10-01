@@ -84,8 +84,9 @@ export interface RunInput {
    * The profile and settings scope the chat's turn runs under. A driver that
    * listens to a session between turns opens a follow-up turn in this scope
    * ({@link FollowUpRequest}), not in whichever profile is active by then.
-   * Absent for a turn with no chat of its own to report into (an orchestrated
-   * call): nothing is opened for it.
+   * A nested turn (an orchestrated call) never opens one; when it carries a
+   * scope, that is only to serve the agent's own MCP addons in it
+   * (`conductorBridge.prepare`).
    */
   runScope?: FollowUpScope
 }

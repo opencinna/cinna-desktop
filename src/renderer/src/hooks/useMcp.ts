@@ -4,6 +4,7 @@ import { createLogger } from '../stores/logger.store'
 
 const onDemandLog = createLogger('on-demand-mcp')
 const baselineLog = createLogger('chat-mcp')
+const agentAddonLog = createLogger('agent-mcp')
 
 export function useMcpProviders() {
   const queryClient = useQueryClient()
@@ -62,6 +63,9 @@ export function useDeleteMcpProvider() {
     mutationFn: (providerId: string) => window.api.mcp.delete(providerId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mcp-providers'] })
+      // The delete cascades to every agent the connector was attached to.
+      queryClient.invalidateQueries({ queryKey: ['agent-mcp'] })
+      queryClient.invalidateQueries({ queryKey: ['mcp-agents-using'] })
     }
   })
 }
@@ -197,5 +201,63 @@ export function useRemoveOnDemandMcp() {
         error: error instanceof Error ? error.message : String(error)
       })
     }
+  })
+}
+
+/**
+ * MCP connectors attached to a folder agent as addons (provider ids, oldest
+ * first). Also what an agent-bound chat's chips draw as locked. Empty for an
+ * agent that is not a folder agent.
+ */
+export function useAgentMcpProviders(agentId: string | null) {
+  return useQuery({
+    queryKey: ['agent-mcp', agentId],
+    queryFn: () =>
+      agentId ? window.api.localAgents.listMcpProviders(agentId) : Promise.resolve([]),
+    enabled: !!agentId
+  })
+}
+
+function useAgentMcpMutation(
+  action: 'attach' | 'detach',
+  call: (agentId: string, mcpProviderId: string) => Promise<{ success: true }>
+) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ agentId, mcpProviderId }: { agentId: string; mcpProviderId: string }) =>
+      call(agentId, mcpProviderId),
+    onSuccess: (_data, { agentId, mcpProviderId }) => {
+      queryClient.invalidateQueries({ queryKey: ['agent-mcp', agentId] })
+      queryClient.invalidateQueries({ queryKey: ['mcp-agents-using', mcpProviderId] })
+    },
+    onError: (error, { agentId, mcpProviderId }) => {
+      agentAddonLog.error(`${action} failed`, {
+        agentId,
+        mcpProviderId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  })
+}
+
+export function useAttachAgentMcp() {
+  return useAgentMcpMutation('attach', (agentId, mcpProviderId) =>
+    window.api.localAgents.attachMcpProvider(agentId, mcpProviderId)
+  )
+}
+
+export function useDetachAgentMcp() {
+  return useAgentMcpMutation('detach', (agentId, mcpProviderId) =>
+    window.api.localAgents.detachMcpProvider(agentId, mcpProviderId)
+  )
+}
+
+/** The folder agents a connector is attached to — named by the delete confirm. */
+export function useMcpAgentsUsing(mcpProviderId: string | null) {
+  return useQuery({
+    queryKey: ['mcp-agents-using', mcpProviderId],
+    queryFn: () =>
+      mcpProviderId ? window.api.mcp.agentsUsing(mcpProviderId) : Promise.resolve([]),
+    enabled: !!mcpProviderId
   })
 }

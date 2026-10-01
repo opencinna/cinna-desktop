@@ -908,8 +908,8 @@ function FolderStep({
           <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
             <strong className="font-medium text-[var(--color-text)]">{named(leaving)}</strong>{' '}
             {leaving.length === 1
-              ? 'leaves the list. Its folder stays exactly where it is, and ticking it here again puts it back. Existing chats stay but can no longer reach this agent, and any job that uses one will refuse to run — and will need it selected again even if you add it back.'
-              : 'leave the list. Their folders stay exactly where they are, and ticking them here again puts them back. Existing chats stay but can no longer reach these agents, and any job that uses one will refuse to run — and will need it selected again even if you add it back.'}
+              ? 'leaves the list. Its folder stays exactly where it is, and ticking it here again puts it back. Existing chats stay but can no longer reach this agent, and any job that uses one will refuse to run — and will need it selected again even if you add it back. MCP connectors attached to it are detached.'
+              : 'leave the list. Their folders stay exactly where they are, and ticking them here again puts them back. Existing chats stay but can no longer reach these agents, and any job that uses one will refuse to run — and will need it selected again even if you add it back. MCP connectors attached to them are detached.'}
           </p>
         </div>
       )}

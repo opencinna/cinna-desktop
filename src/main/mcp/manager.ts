@@ -28,6 +28,8 @@ interface InternalConnection extends McpConnection {
   client?: Client
   transport?: AnyTransport
   oauthProvider?: ElectronOAuthProvider
+  /** The attempt failed because the server needs the user to authorize (a non-interactive connect). */
+  needsUser?: boolean
 }
 
 function broadcastStatusChange(providerId: string, status: string): void {
@@ -40,6 +42,8 @@ export class MCPManager {
   private connections = new Map<string, InternalConnection>()
   /** Tail of each provider's task queue — see `enqueue()`. */
   private queues = new Map<string, Promise<unknown>>()
+  /** The latest `connect()` per provider until it settles — see `connecting()`. */
+  private attempts = new Map<string, Promise<McpConnection>>()
 
   /**
    * Serialize lifecycle work per provider. The map holds one entry per id, so
@@ -164,12 +168,34 @@ export class MCPManager {
     })
   }
 
-  async connect(config: McpProviderConfig): Promise<McpConnection> {
+  /**
+   * `interactive: false` never opens a browser: an OAuth server that needs
+   * the user ends the attempt as `error` instead of `awaiting-auth`.
+   */
+  async connect(config: McpProviderConfig, options: { interactive?: boolean } = {}): Promise<McpConnection> {
     const generation = this.invalidate(config.id)
-    return this.enqueue(config.id, () => this._connect(config, generation))
+    const attempt = this.enqueue(config.id, () => this._connect(config, generation, options.interactive !== false))
+    this.attempts.set(config.id, attempt)
+    const settled = (): void => { if (this.attempts.get(config.id) === attempt) this.attempts.delete(config.id) }
+    attempt.then(settled, settled)
+    return attempt
   }
 
-  private async _connect(config: McpProviderConfig, generation: number): Promise<McpConnection> {
+  /**
+   * The connect in flight for this provider, if any. Its status reads
+   * `disconnected` meanwhile, so a caller that only wants the provider up waits
+   * on this rather than calling `connect()`, which would cancel the attempt.
+   */
+  connecting(providerId: string): Promise<McpConnection> | undefined {
+    return this.attempts.get(providerId)
+  }
+
+  /** The provider's last connect failed because its server needs the user to authorize it. */
+  needsUser(providerId: string): boolean {
+    return this.connections.get(providerId)?.needsUser === true
+  }
+
+  private async _connect(config: McpProviderConfig, generation: number, interactive = true): Promise<McpConnection> {
     if (this.generations.get(config.id) !== generation) return { config, tools: [], status: 'disconnected' }
     await this._disconnect(config.id)
     const connection: InternalConnection = { config, generation, tools: [], status: 'disconnected' }
@@ -247,7 +273,8 @@ export class MCPManager {
 
         const oauthProvider = new ElectronOAuthProvider(storedState, {
           assertCurrent: () => this.assertCurrent(connection),
-          save: (patch) => this.persistOAuth(connection, patch)
+          save: (patch) => this.persistOAuth(connection, patch),
+          interactive
         })
 
         // Prepare callback server before connecting
@@ -337,6 +364,8 @@ export class MCPManager {
         return this.toPublic(connection)
       }
       await this.discardSuperseded(connection, 'connect failed; closing connection', config.id)
+      connection.needsUser = err instanceof McpReauthorizationRequiredError ||
+        (err instanceof Error && err.cause instanceof McpReauthorizationRequiredError)
       this.setStatus(config.id, connection, 'error', String(err))
       logger.error(`Connect failed for ${config.name}`, err)
       return this.toPublic(connection)
