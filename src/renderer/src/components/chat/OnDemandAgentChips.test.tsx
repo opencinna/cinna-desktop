@@ -18,7 +18,8 @@ vi.mock('../../hooks/useAgents', () => ({
 }))
 
 const MARK = 'shadow-[inset_1px_0_0_var(--chip-border),inset_-1px_0_0_var(--chip-border)]'
-const chip = (name: string): HTMLElement => screen.getByText(name).parentElement as HTMLElement
+/** The chip box itself (title, border, marks), not the button inside it. */
+const chip = (name: string): HTMLElement => screen.getByText(name).closest('[title]') as HTMLElement
 const FOLDERS = { roots: [], agents: [{ id: 'folder:c' }, { id: 'b' }], homeAccess: null }
 ;(window as unknown as { api: unknown }).api = { localAgents: { list: async () => FOLDERS } }
 const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element => {
@@ -47,6 +48,9 @@ describe('new-chat coordination chips', () => {
     expect(chip('Beta').className).not.toContain('ring-2')
     expect(screen.queryByText('Coordinator')).toBeNull()
     expect(screen.queryByText('Participant')).toBeNull()
+    // The role is in the chip button's name too, and the names are not selectable text.
+    expect(screen.getByRole('button', { name: 'Beta — Coordinator' }).getAttribute('aria-haspopup')).toBe('menu')
+    expect(chip('Beta').className).toContain('select-none')
   })
 
   it('shows a marked, non-removable Default runtime coordinator for remote-first selection', () => {
@@ -59,6 +63,26 @@ describe('new-chat coordination chips', () => {
     // Nothing to go to or hand over: the hidden runtime has no menu.
     fireEvent.contextMenu(runtime, { clientX: 10, clientY: 10 })
     expect(screen.queryByRole('menu')).toBeNull()
+  })
+})
+
+describe('new-chat chip click', () => {
+  it('opens the menu on a click on the chip, and the × removes without opening it', () => {
+    const onRemovePending = vi.fn()
+    render(
+      <OnDemandAgentChips pendingIds={['a', 'b']} onRemovePending={onRemovePending}
+        coordination={{ conductorId: 'b', conductorName: 'Beta' }}
+        coordinatorMenu={{ conductorId: 'b', blockedReason: null, onSet: vi.fn() }} />,
+      { wrapper }
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Remove agent Alpha' }), { clientX: 10, clientY: 10, detail: 1 })
+    expect(onRemovePending).toHaveBeenCalledWith('a')
+    expect(screen.queryByRole('menu')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Beta — Coordinator' }), { clientX: 10, clientY: 10, detail: 1 })
+    const menu = screen.getByRole('menu', { name: 'Agent Beta' })
+    // The conductor has no action item: no separator above Go to Agent.
+    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Go to Agent', 'Open Agent Folder'])
+    expect(within(menu).queryByRole('separator')).toBeNull()
   })
 })
 
@@ -89,6 +113,9 @@ describe('new-chat chip menu', () => {
     fireEvent.contextMenu(chip('Gamma'), { clientX: 10, clientY: 10 })
     menu = screen.getByRole('menu', { name: 'Agent Gamma' })
     expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Set as Coordinator', 'Go to Agent', 'Open Agent Folder'])
+    // Nothing to address before the chat exists.
+    expect(within(menu).getAllByRole('separator')).toHaveLength(1)
+    expect(within(menu).getByRole('separator').previousElementSibling).toBe(within(menu).getByRole('menuitem', { name: 'Set as Coordinator' }))
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Set as Coordinator' }))
     expect(onSet).toHaveBeenCalledWith('folder:c')
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())

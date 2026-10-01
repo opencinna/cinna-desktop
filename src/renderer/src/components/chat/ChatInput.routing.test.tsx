@@ -9,7 +9,7 @@ import type { ChatRouter } from '../../../../shared/chatRouting'
  *
  * The rule under test is `ux_rules.md` rule 1 as much as the routing: **the
  * badge and the chips move only on a gesture the user made.** The addressed
- * agent changes when a chip is clicked or an agent is picked from `@` — never
+ * agent changes when Address Next Message is picked from a chip or an agent is picked from `@` — never
  * while the user types, which is what a mention parsed out of the text would
  * have meant.
  */
@@ -136,8 +136,22 @@ async function mount(opts: MountOptions): Promise<void> {
 }
 
 const badge = (): HTMLElement | null => screen.queryByRole('status')
+/** The chip's own button — its label quotes the name, addressed or not. */
 const chip = (name: string): HTMLElement =>
-  screen.getByRole('button', { name: new RegExp(`“${name}”`) })
+  screen.getByRole('button', { name: new RegExp(`[“"]${name}[”"]`) })
+/** The addressed chip says so in its label; the ring is the visible half of it. */
+const addressed = (name: string): boolean => {
+  const button = chip(name)
+  const yes = button.getAttribute('aria-label') === `Agent “${name}” answers your next message`
+  expect(button.closest('div')!.className.includes('ring-2')).toBe(yes)
+  return yes
+}
+/** Addressing is a menu item now: click the chip, pick Address Next Message. */
+const address = (name: string): void => {
+  fireEvent.click(chip(name), { clientX: 20, clientY: 20, detail: 1 })
+  const menu = screen.getByRole('menu', { name: `Agent ${name}` })
+  fireEvent.click(within(menu).getByRole('menuitem', { name: 'Address Next Message' }))
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -249,9 +263,9 @@ describe('agent chip width', () => {
       // The full name is in the chip's own title, beside the role; the name
       // carries none of its own, which would hide that one on hover.
       expect(text.getAttribute('title')).toBeNull()
-      expect(text.closest('[title]')!.getAttribute('title')).toContain(`“${agentName}”`)
+      expect(text.closest('[title]')!.getAttribute('title')).toMatch(new RegExp(`[“"]${agentName}[”"]`))
       expect(button.closest('div')!.className).toContain('max-w-[12rem]')
-      expect(button.getAttribute('aria-label')).toContain(`“${agentName}”`)
+      expect(button.getAttribute('aria-label')).toMatch(new RegExp(`[“"]${agentName}[”"]`))
     }
   })
 })
@@ -260,8 +274,8 @@ describe('addressing a human chat', () => {
   it('marks the agent that would answer before the user has picked anyone', async () => {
     await mount({ router: 'human', attached: ['a-1', 'a-2'] })
     // The first attached, which is what main falls back to as well.
-    expect(chip('Research').getAttribute('aria-pressed')).toBe('true')
-    expect(chip('Builder').getAttribute('aria-pressed')).toBe('false')
+    expect(addressed('Research')).toBe(true)
+    expect(addressed('Builder')).toBe(false)
   })
 
   it('is sticky: the agent the last message addressed answers the next one', async () => {
@@ -270,19 +284,36 @@ describe('addressing a human chat', () => {
       attached: ['a-1', 'a-2'],
       messages: [{ id: 'm-1', role: 'user', content: 'go', addressedAgentId: 'a-2' }]
     })
-    expect(chip('Builder').getAttribute('aria-pressed')).toBe('true')
+    expect(addressed('Builder')).toBe(true)
   })
 
-  it('moves the address when a chip is clicked', async () => {
+  it('moves the address when Address Next Message is picked from a chip menu', async () => {
     await mount({ router: 'human', attached: ['a-1', 'a-2'] })
-    fireEvent.click(chip('Builder'))
-    await waitFor(() => expect(chip('Builder').getAttribute('aria-pressed')).toBe('true'))
-    expect(chip('Research').getAttribute('aria-pressed')).toBe('false')
+    // Opening the menu alone addresses nobody.
+    fireEvent.click(chip('Builder'), { clientX: 20, clientY: 20, detail: 1 })
+    expect(addressed('Research')).toBe(true)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    address('Builder')
+    await waitFor(() => expect(addressed('Builder')).toBe(true))
+    expect(addressed('Research')).toBe(false)
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('offers no Address Next Message on the agent already addressed', async () => {
+    await mount({ router: 'human', attached: ['a-1', 'a-2'] })
+    fireEvent.click(chip('Research'), { clientX: 20, clientY: 20, detail: 1 })
+    const menu = screen.getByRole('menu', { name: 'Agent Research' })
+    expect(within(menu).queryByRole('menuitem', { name: 'Address Next Message' })).toBeNull()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.click(chip('Builder'), { clientX: 20, clientY: 20, detail: 1 })
+    const other = screen.getByRole('menu', { name: 'Agent Builder' })
+    // First: what the chip does in this chat comes before where the agent lives.
+    expect(within(other).getAllByRole('menuitem')[0].textContent).toBe('Address Next Message')
   })
 
   it('sends to the agent the user addressed', async () => {
     await mount({ router: 'human', attached: ['a-1', 'a-2'] })
-    fireEvent.click(chip('Builder'))
+    address('Builder')
     const box = screen.getByRole('combobox')
     fireEvent.change(box, { target: { value: 'now build it' } })
     fireEvent.keyDown(box, { key: 'Enter' })
@@ -297,15 +328,21 @@ describe('addressing a human chat', () => {
     const box = screen.getByRole('combobox')
     for (const value of ['h', 'he', '@Builder', '@Builder do it', '']) {
       fireEvent.change(box, { target: { value } })
-      expect(chip('Research').getAttribute('aria-pressed')).toBe('true')
-      expect(chip('Builder').getAttribute('aria-pressed')).toBe('false')
+      expect(addressed('Research')).toBe(true)
+      expect(addressed('Builder')).toBe(false)
     }
   })
 
   it('offers no addressing at all in a coordinated chat', async () => {
     // The chips are a list of what the model can call, not an address book.
     await mount({ router: 'coordinator', attached: ['a-1', 'a-2'] })
-    expect(screen.queryByRole('button', { name: /Address your next message/ })).toBeNull()
+    for (const name of ['Research', 'Builder']) {
+      expect(screen.queryByRole('button', { name: /answers your next message/ })).toBeNull()
+      fireEvent.click(chip(name), { clientX: 20, clientY: 20, detail: 1 })
+      const menu = screen.getByRole('menu', { name: `Agent ${name}` })
+      expect(within(menu).queryByRole('menuitem', { name: 'Address Next Message' })).toBeNull()
+      fireEvent.keyDown(document, { key: 'Escape' })
+    }
   })
 })
 
@@ -360,14 +397,14 @@ describe('refusing a send in a human chat', () => {
       fireEvent.change(box, { target: { value } })
       expect(screen.queryByText('Could not reach the agent.')).toBeNull()
     }
-    // The chip click is the gesture, and the notice follows it.
-    fireEvent.click(chip('Builder'))
+    // Picking the address is the gesture, and the notice follows it.
+    address('Builder')
     await waitFor(() => expect(screen.getByText('Could not reach the agent.')).toBeTruthy())
   })
 
   it('blocks the send to a refused agent', async () => {
     await mount({ router: 'human', attached: ['a-1', 'a-2'], readiness: { 'a-2': DOWN } })
-    fireEvent.click(chip('Builder'))
+    address('Builder')
     await waitFor(() => expect(screen.getByText('Could not reach the agent.')).toBeTruthy())
     const box = screen.getByRole('combobox')
     fireEvent.change(box, { target: { value: 'now build it' } })

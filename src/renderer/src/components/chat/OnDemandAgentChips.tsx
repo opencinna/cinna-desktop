@@ -111,10 +111,8 @@ export function OnDemandAgentChips(
       {rows.map((a) => {
         const coordinator = props.coordination?.conductorId === a.id
         const addressed = props.addressing?.addressedId === a.id
-        const label = props.addressing
-          ? addressed
-            ? `Agent “${a.name}” answers your next message`
-            : `Address your next message to “${a.name}”`
+        const label = addressed
+          ? `Agent “${a.name}” answers your next message`
           : props.coordination ? `${a.name} — ${coordinator ? 'Coordinator' : 'Participant'}` : `Agent "${a.name}" attached as a participant`
         return (
           <AgentChip
@@ -127,9 +125,12 @@ export function OnDemandAgentChips(
             coordinator={coordinator}
             addressed={addressed}
             label={label}
-            onAddress={props.addressing ? () => props.addressing?.onAddress(a.id) : undefined}
             onRemove={() => handleRemove(a.id)}
-            menu={{ agent: a, setCoordinator: coordinatorAction(a) }}
+            menu={{
+              agent: a,
+              address: props.addressing && !addressed ? () => props.addressing?.onAddress(a.id) : undefined,
+              setCoordinator: coordinatorAction(a)
+            }}
           />
         )
       })}

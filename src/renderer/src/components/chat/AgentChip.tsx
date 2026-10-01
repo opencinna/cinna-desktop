@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
-import { Bot, FolderOpen, SquareArrowOutUpRight, Workflow, X } from 'lucide-react'
+import { AtSign, Bot, FolderOpen, SquareArrowOutUpRight, Workflow, X } from 'lucide-react'
 import { CONTEXT_MENU_ITEM, ContextMenu, useContextMenuAction } from '../ui/ContextMenu'
 import { hasAgentPage, useOpenAgentPage } from '../../hooks/useOpenAgentPage'
 import { useLocalAgents, useOpenAgentPath } from '../../hooks/useLocalAgents'
@@ -34,10 +34,12 @@ export interface ChipCoordinatorAction {
   onSet: () => unknown
 }
 
-/** What a chip's right-click menu offers. */
+/** What a chip's menu (a click, a right-click, Shift+F10) offers. */
 export interface AgentChipMenu {
   /** The agent the menu acts on. */
   agent: { id: string; name: string; source?: string | null; enabled?: boolean }
+  /** In a chat the user routes, "Address Next Message"; absent for the agent already addressed. */
+  address?: () => void
   setCoordinator?: ChipCoordinatorAction
 }
 
@@ -54,10 +56,11 @@ interface AgentChipProps {
   addressed?: boolean
   /** The chip's `title` and accessible name — the role is in it ("Beta — Coordinator"). */
   label: string
-  /** Supplied in a chat the user routes, where clicking a chip addresses it. */
-  onAddress?: () => void
   onRemove?: () => void
-  /** The right-click (Shift+F10, ContextMenu key) menu; absent for a chip that is not an agent. */
+  /**
+   * Opened by a click on the chip (anywhere but its ×), a right-click,
+   * Shift+F10 or the ContextMenu key; absent for a chip that is not an agent.
+   */
   menu?: AgentChipMenu
 }
 
@@ -79,7 +82,7 @@ interface AgentChipProps {
  * than one overwriting the other.
  */
 export function AgentChip({
-  name, colors, coordinator, addressed, label, onAddress, onRemove, menu
+  name, colors, coordinator, addressed, label, onRemove, menu
 }: AgentChipProps): React.JSX.Element {
   const chipRef = useRef<HTMLDivElement>(null)
   const host = useContext(MenuHostContext)
@@ -89,7 +92,7 @@ export function AgentChip({
   const openAt = (x: number, y: number, restore: HTMLElement | null): void => {
     if (menu) menus.open({ x, y, anchor: chipRef.current, restore, menu })
   }
-  const onContextMenu = (event: MouseEvent<HTMLDivElement>): void => {
+  const onContextMenu = (event: MouseEvent<HTMLElement>): void => {
     if (!menu) return
     event.preventDefault()
     // A keyboard-raised contextmenu event carries no pointer position.
@@ -105,9 +108,6 @@ export function AgentChip({
     openAt(rect.left, rect.top, document.activeElement as HTMLElement | null)
   }
 
-  // A chip with no control inside it is focusable itself, so the keyboard can
-  // reach its menu; otherwise the address and remove buttons carry the key.
-  const ownFocus = !!menu && !onAddress && !onRemove
   const style = { color: colors.border, borderColor: colors.border, backgroundColor: colors.bg, '--chip-border': colors.border } as CSSProperties
   const content = (
     <>
@@ -122,31 +122,34 @@ export function AgentChip({
       <div
         ref={chipRef}
         data-coordinator={coordinator || undefined}
-        className={`flex items-center gap-1 pl-1.5 ${onRemove ? 'pr-1' : 'pr-2'} py-1 rounded-lg border ${agentChipClass} transition-shadow${
+        // A label, not text: a click opens the menu, and a drag across the
+        // row must not select the names.
+        className={`flex items-center gap-1 pl-1.5 ${onRemove ? 'pr-1' : 'pr-2'} py-1 rounded-lg border select-none ${agentChipClass} transition-shadow${
           coordinator ? ' shadow-[inset_1px_0_0_var(--chip-border),inset_-1px_0_0_var(--chip-border)]' : ''
-        }${addressed ? ' ring-2 ring-[var(--color-text)]' : ''}${
-          ownFocus ? ' focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]' : ''
-        }`}
+        }${addressed ? ' ring-2 ring-[var(--color-text)]' : ''}`}
         style={style}
         title={label}
-        role={ownFocus ? 'group' : undefined}
-        aria-label={ownFocus ? label : undefined}
-        aria-haspopup={ownFocus ? 'menu' : undefined}
-        tabIndex={ownFocus ? 0 : undefined}
         onContextMenu={onContextMenu}
         onKeyDown={onKeyDown}
       >
-        {onAddress ? (
+        {menu ? (
           <button
             type="button"
-            onClick={onAddress}
-            aria-pressed={!!addressed}
+            onClick={(event) => {
+              // Enter or Space raise a click with no pointer position.
+              if (event.detail === 0) {
+                const rect = event.currentTarget.getBoundingClientRect()
+                openAt(rect.left, rect.top, event.currentTarget)
+              } else openAt(event.clientX, event.clientY, null)
+            }}
             aria-label={label}
+            aria-haspopup="menu"
             // `cursor-pointer` explicitly: preflight gives every `button` a
             // default cursor, so a chip that is a control looked exactly as
             // inert as one that is not.
-            className="flex items-center gap-1 min-w-0 rounded cursor-pointer
-              hover:bg-black/10 [[data-theme=light]_&]:hover:bg-black/5 transition-colors"
+            className="flex flex-1 items-center gap-1 min-w-0 rounded cursor-pointer
+              hover:bg-black/10 [[data-theme=light]_&]:hover:bg-black/5 transition-colors
+              focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
           >
             {content}
           </button>
@@ -226,8 +229,15 @@ function AgentChipContextMenu({
   const { agent, setCoordinator } = menu
   const reason = setCoordinator?.disabledReason ?? null
   const reasonId = useId()
+  const isFolder = !!folders?.agents.some((folder) => folder.id === agent.id)
   return (
     <ContextMenu x={x} y={y} anchor={anchor} label={`Agent ${agent.name}`} error={error} onClose={onClose}>
+      {menu.address && (
+        <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} disabled={busy}
+          onClick={() => { menu.address?.(); onClose() }}>
+          <AtSign size={12} aria-hidden="true" />Address Next Message
+        </button>
+      )}
       {setCoordinator && (
         <>
           <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM}
@@ -246,13 +256,17 @@ function AgentChipContextMenu({
           )}
         </>
       )}
+      {/* What the chip does in this chat, then where the agent lives. */}
+      {(menu.address || setCoordinator) && (hasAgentPage(agent) || isFolder) && (
+        <div role="separator" className="my-1 border-t border-[var(--color-border)]" />
+      )}
       {hasAgentPage(agent) && (
         <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} disabled={busy}
           onClick={() => { openAgentPage(agent); onClose() }}>
           <SquareArrowOutUpRight size={12} aria-hidden="true" />Go to Agent
         </button>
       )}
-      {folders?.agents.some((folder) => folder.id === agent.id) && (
+      {isFolder && (
         <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} disabled={busy}
           onClick={() => void run(() => openAgentPath.mutateAsync({ agentId: agent.id }), 'Could not open the agent folder.')}>
           <FolderOpen size={12} aria-hidden="true" />Open Agent Folder

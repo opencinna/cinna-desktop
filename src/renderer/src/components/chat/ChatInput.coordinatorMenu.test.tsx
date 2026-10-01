@@ -5,7 +5,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { ChatRouter } from '../../../../shared/chatRouting'
 
 /**
- * The agent chips' right-click menu and the coordinator mark.
+ * The agent chips' menu (a click, a right-click, Shift+F10) and the coordinator mark.
  *
  * "Set as Coordinator" moved here from the router badge. The chip that
  * coordinates carries a mark that does not change its size (ux_rules §1), the
@@ -216,6 +216,8 @@ describe('the agent chip menu', () => {
     const menu = openMenuOn('Planner')
     expect(within(menu).queryByRole('menuitem', { name: 'Set as Coordinator' })).toBeNull()
     expect(item(menu, 'Open Agent Folder')).toBeTruthy()
+    // No action item above Go to Agent, so nothing to separate it from.
+    expect(within(menu).queryByRole('separator')).toBeNull()
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(item(openMenuOn('Coder'), 'Set as Coordinator').disabled).toBe(false)
   })
@@ -256,7 +258,7 @@ describe('the agent chip menu', () => {
     const menu = screen.getByRole('menu', { name: 'Agent Coder' })
     expect((await within(menu).findByRole('alert')).textContent).toBe('Stop the autonomous task before changing who coordinates it.')
     // Rolled back: Coder is an attached, addressable chip again, and unmarked.
-    await waitFor(() => expect(screen.getByRole('button', { name: /“Coder”/ })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Agent "Coder" attached as a participant' })).toBeTruthy())
     expect(chipOf('Coder').dataset.coordinator).toBeUndefined()
   })
 
@@ -282,24 +284,68 @@ describe('the agent chip menu', () => {
 
   it('opens from the keyboard on a focused chip and hands focus back on Escape', async () => {
     await mount({ router: 'human', attached: [FOLDER, FOLDER_2] })
+    const button = within(chipOf('Coder')).getByRole('button', { name: 'Agent "Coder" attached as a participant' })
+    expect(button.getAttribute('aria-haspopup')).toBe('menu')
+    button.focus()
+    // Enter or Space: a click with no pointer position (detail 0).
+    fireEvent.click(button, { detail: 0 })
+    let menu = screen.getByRole('menu', { name: 'Agent Coder' })
+    expect(document.activeElement).toBe(item(menu, 'Address Next Message'))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(document.activeElement).toBe(button)
+
+    // Shift+F10 still opens it, from the × as from the chip button.
     const remove = screen.getByRole('button', { name: 'Remove agent Coder' })
     remove.focus()
     fireEvent.keyDown(remove, { key: 'F10', shiftKey: true })
-    const menu = screen.getByRole('menu', { name: 'Agent Coder' })
-    expect(document.activeElement).toBe(item(menu, 'Set as Coordinator'))
+    menu = screen.getByRole('menu', { name: 'Agent Coder' })
+    expect(document.activeElement).toBe(item(menu, 'Address Next Message'))
     fireEvent.keyDown(document, { key: 'Escape' })
-    expect(screen.queryByRole('menu')).toBeNull()
     expect(document.activeElement).toBe(remove)
   })
 
-  it('opens with the ContextMenu key on the bound chip, which is focusable for it', async () => {
+  it('opens with the ContextMenu key on the bound chip, whose button is focusable for it', async () => {
     await mount({ router: 'direct', agentId: FOLDER })
-    const bound = screen.getByRole('group', { name: 'Planner' })
-    expect(bound.tabIndex).toBe(0)
+    const bound = screen.getByRole('button', { name: 'Planner' })
+    expect(bound.getAttribute('aria-haspopup')).toBe('menu')
+    // The old focusable wrapper is gone: the button is the one tab stop.
+    expect(screen.queryByRole('group', { name: 'Planner' })).toBeNull()
     bound.focus()
     fireEvent.keyDown(bound, { key: 'ContextMenu' })
     const menu = screen.getByRole('menu', { name: 'Agent Planner' })
     // A direct chat has no coordinator yet: its own agent can become one.
     expect(item(menu, 'Set as Coordinator').disabled).toBe(false)
+    // Nobody to address in a direct chat.
+    expect(within(menu).queryByRole('menuitem', { name: 'Address Next Message' })).toBeNull()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(document.activeElement).toBe(bound)
+  })
+
+  it('opens on a left click at the pointer, and the × removes without opening it', async () => {
+    await mount({ router: 'human', attached: [FOLDER, FOLDER_2] })
+    expect(chipOf('Coder').className).toContain('select-none')
+    fireEvent.click(within(chipOf('Coder')).getByRole('button', { name: 'Agent "Coder" attached as a participant' }),
+      { clientX: 140, clientY: 60, detail: 1 })
+    const menu = screen.getByRole('menu', { name: 'Agent Coder' })
+    // At the pointer, as a right-click would open it.
+    expect(menu.style.left).toBe('140px')
+    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual([
+      'Address Next Message', 'Set as Coordinator', 'Go to Agent', 'Open Agent Folder'
+    ])
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove agent Coder' }), { clientX: 40, clientY: 40, detail: 1 })
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('separates the action items from Go to Agent and Open Agent Folder', async () => {
+    await mount({ router: 'human', attached: [FOLDER, FOLDER_2] })
+    const menu = openMenuOn('Coder')
+    const separators = within(menu).getAllByRole('separator')
+    expect(separators).toHaveLength(1)
+    // Right after the action group, right before Go to Agent.
+    expect(separators[0].previousElementSibling).toBe(item(menu, 'Set as Coordinator'))
+    expect(separators[0].nextElementSibling).toBe(item(menu, 'Go to Agent'))
+    fireEvent.keyDown(document, { key: 'Escape' })
   })
 })
