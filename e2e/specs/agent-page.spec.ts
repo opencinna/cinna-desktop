@@ -76,7 +76,7 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
     // absent rather than a zero (`agent-permissions.spec.ts` has the counted case).
     await expect(tabs.getByRole('tab')).toHaveText([
       'Overview',
-      'Prompts',
+      'Addons',
       'Credentials',
       'Commands1',
       'Schedules',

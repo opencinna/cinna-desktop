@@ -107,6 +107,9 @@ async function openAdvanced(cinna: CinnaApp): Promise<Locator> {
   return advanced
 }
 
+/** A bare agent's Settings tabs, in order. */
+const BARE_TABS = ['Overview', 'Addons', 'Credentials', 'Permissions', 'Folder', 'Interface']
+
 const FOUND = [
   ['accounting_meta_agent', 'Accounting Meta Agent'],
   ['exchange_rates_agent', 'Exchange Rates Agent'],
@@ -254,15 +257,18 @@ test.describe('a folder defined by CLAUDE.md or AGENTS.md', () => {
       await expect(cinna.page.getByRole('dialog')).toHaveCount(0)
     })
 
-    await test.step('Prompts → Instructions is a view over CLAUDE.md', async () => {
+    await test.step('Overview → Instructions is a view over CLAUDE.md', async () => {
       const { page } = cinna
       const row = page.getByRole('button', { name: 'ledger-tools', exact: true })
       await expect(row).toHaveText('ledger-tools')
       await row.click()
       await expect(page.getByRole('heading', { level: 1 })).toHaveText('ledger-tools')
       await page.getByRole('button', { name: 'Settings', exact: true }).click()
-      await page.getByRole('tab', { name: 'Prompts' }).click()
-      await expect(page.getByRole('tab', { name: 'Prompts' })).toHaveAttribute(
+      // A bare agent has Addons like a kit one, no Commands or Schedules, and
+      // no Prompts tab: its one document, the instructions file, is on Overview.
+      const tabs = page.getByRole('tablist', { name: 'Agent details' }).getByRole('tab')
+      await expect(tabs).toHaveText(BARE_TABS)
+      await expect(page.getByRole('tab', { name: 'Overview' })).toHaveAttribute(
         'aria-selected',
         'true'
       )
