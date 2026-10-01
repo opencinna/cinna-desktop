@@ -11,8 +11,8 @@ import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
 
 /**
  * Real UTC minute boundaries, no patched clock or private scheduler pump.
- * Three boundaries cover dispatch, a second occurrence admitted while the first
- * is still unfinished, and persisted disable.
+ * Three boundaries cover dispatch, a second occurrence whose agent turn runs
+ * beside the first (still parked on its Inbox question), and persisted disable.
  * Pure/service tests cover DST and admission transaction failure exhaustively.
  */
 const AGENT = 'Scheduled Report Verifier'
@@ -46,7 +46,9 @@ function writeSchedule(path: string, prompt: string) {
 }
 async function arrange(cinna: CinnaApp, host: string) {
   await cinna.skipOnboarding()
-  const acp = await installFakeAcpEngine(cinna, { prompt: { emit: [
+  // Two occurrences' turns run side by side, so each needs its own session id
+  // for the fake's updates to reach the right chat.
+  const acp = await installFakeAcpEngine(cinna, { newSession: { uniqueIds: true }, prompt: { emit: [
     { kind: 'elicitation', params: { message: QUESTION, requestedSchema: { type: 'object', properties: {
       question_0: { type: 'string', title: 'Publication', description: QUESTION,
         oneOf: [{ const: ANSWER, title: ANSWER, description: 'Publish the verified report' }, { const: 'Hold', title: 'Hold' }] }
@@ -181,9 +183,31 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
     expect(bothRuns).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: run.id, taskId, status: 'running' }),
       expect.objectContaining({ id: secondRunId, taskId: secondTaskId, localChatId: second.chatId })]))
+    await test.step('the second occurrence prompts its own agent turn at once, without the first being answered', async () => {
+      await expect.poll(() => acp.received('session/prompt').length, { timeout: MINUTE_TIMEOUT, intervals: [250, 500] }).toBe(2)
+    })
+    // Turns on one agent run side by side: the first is still parked on its question.
+    expect(acp.answers('elicitation/create')).toEqual([])
     expect(await cinna.page.evaluate((id) => window.api.tasks.get(id), taskId)).toMatchObject({ status: 'blocked' })
+    expect(await cinna.page.evaluate((id) => window.api.tasks.get(id), child.id)).toMatchObject({ status: 'blocked' })
+    const secondWire = acp.received('session/prompt')[1].params?.prompt as { type: string; text: string }[]
+    expect(splitTurnHeader(secondWire.map((part) => part.text).join('')).prompt).toBe(PROMPT)
+    await expect.poll(async () => (await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)).length).toBe(2)
+    const twoEntries = await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)
+    const firstEntry = twoEntries.find((entry) => entry.taskId === child.id)!
+    const secondEntry = twoEntries.find((entry) => entry.taskId !== child.id)!
+    expect(firstEntry).toBeTruthy()
+    const secondChild = await cinna.page.evaluate((id) => window.api.tasks.get(id), secondEntry.taskId!)
+    expect(secondChild).toMatchObject({ parentTaskId: secondTaskId, assignee: { kind: 'agent', agentId: agent.id }, status: 'blocked' })
+    // The two cards read the same. The Inbox has been open since before either
+    // ask and keeps rows in the order it first saw them (an arrival joins at the
+    // end), so the first occurrence's card is the first one; the task statuses
+    // after the answer prove which ask it reached.
+    await expect(ask).toHaveCount(2, { timeout: 20_000 })
+    expect(new Date(firstEntry.createdAt).getTime()).toBeLessThan(new Date(secondEntry.createdAt).getTime())
+    const firstAsk = ask.first()
     await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
-    await ask.getByRole('button', { name: 'Answer', exact: true }).click()
+    await firstAsk.getByRole('button', { name: 'Answer', exact: true }).click()
     await cinna.page.getByRole('button', { name: /^Publish/ }).click()
     await cinna.page.getByRole('button', { name: 'Send answer', exact: true }).click()
     await expect.poll(() => acp.answers('elicitation/create').map((entry) => entry.result))
@@ -191,18 +215,15 @@ test('a locally reviewed schedule dispatches on real minutes, waits for Inbox in
     await expect.poll(() => cinna.page.evaluate((id) => window.api.tasks.get(id), taskId)).toMatchObject({ status: 'completed' })
     const childChat = await cinna.page.evaluate((id) => window.api.chat.get(id), child.chatId!)
     expect(childChat?.messages.filter((message) => message.role === 'assistant' && message.content === OUTPUT)).toHaveLength(1)
+    // The second occurrence still waits on its own question.
+    expect(await cinna.page.evaluate((id) => window.api.tasks.get(id), secondTaskId)).toMatchObject({ status: 'blocked' })
+    expect(await cinna.page.evaluate((id) => window.api.tasks.get(id), secondChild.id)).toMatchObject({ status: 'blocked' })
+    expect((await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)).map((entry) => entry.taskId))
+      .toEqual([secondChild.id])
 
-    await test.step('the second occurrence runs its own agent turn and asks in the Inbox', async () => {
-      await expect.poll(() => acp.received('session/prompt').length, { timeout: MINUTE_TIMEOUT, intervals: [250, 500] }).toBe(2)
-      await expect.poll(async () => (await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)).length).toBe(1)
-    })
-    const secondWire = acp.received('session/prompt')[1].params?.prompt as { type: string; text: string }[]
-    expect(splitTurnHeader(secondWire.map((part) => part.text).join('')).prompt).toBe(PROMPT)
-    const [secondEntry] = await cinna.page.evaluate(async () => (await window.api.inbox.list()).entries)
-    const secondChild = await cinna.page.evaluate((id) => window.api.tasks.get(id), secondEntry.taskId!)
-    expect(secondChild).toMatchObject({ parentTaskId: secondTaskId, assignee: { kind: 'agent', agentId: agent.id }, status: 'blocked' })
-    await expect(ask).toHaveCount(1)
-    await ask.getByRole('button', { name: 'Answer', exact: true }).click()
+    const open = ask.filter({ has: cinna.page.getByRole('button', { name: 'Answer', exact: true }) })
+    await expect(open).toHaveCount(1)
+    await open.getByRole('button', { name: 'Answer', exact: true }).click()
     await cinna.page.getByRole('button', { name: /^Publish/ }).click()
     await cinna.page.getByRole('button', { name: 'Send answer', exact: true }).click()
     await expect.poll(() => acp.answers('elicitation/create').length).toBe(2)
