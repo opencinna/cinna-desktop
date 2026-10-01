@@ -49,10 +49,11 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 - The `[+]` button is hidden entirely when none of the rows apply.
 
 ### Choosing coordination
-- Coordinate by <conductor> is a menuitem action, also available in the routing badge's details popover.
+- Coordinate by <conductor> is a menuitem action, and the only visible path to coordination: the routing badge no longer carries it. Choosing a *particular* conductor is the agent chip's right-click **Set as Coordinator** ([Chat Routing](../chat_routing/chat_routing.md)); this row is kept so a user who never right-clicks a chip can still coordinate.
+- The name in the row is who would conduct: in a chat, the bound agent, else the first attached one, when it can conduct, else Default runtime; on the new-chat screen, the agent set as coordinator on its chip if it is still picked, else the same rule over the picks.
 - It moves the chat to coordinator and disappears after success. There is no uncheck/back-to-human action.
 - The candidate is an eligible Local root/participant or Default runtime; promotion does not require an API provider merely to choose a conductor.
-- Pending/error handling uses the existing mutation and chat error surface. See [Chat Routing](../chat_routing/chat_routing.md).
+- Pending/error handling uses the existing mutation and chat error surface; a refusal — including "Interrupt the session before changing who answers." while a turn runs — lands in the send-error banner. See [Chat Routing](../chat_routing/chat_routing.md).
 
 ### Capability selection & routing (mirrors `@`)
 - **New chat**: toggles buffer in the renderer-only pending lists (`pendingAgentIds`, `pendingMcpIds`) owned by `ChatWorkspace`; flushed onto the chat row at creation. The router is derived at send time from the whole selection — one agent with no MCPs binds it directly, several agents follow Default multi-agent routing; agents mixed with MCPs require a Local conductor.

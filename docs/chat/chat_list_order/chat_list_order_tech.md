@@ -68,7 +68,7 @@ How many drops fit in one gap is how many times it halves before reaching the fl
 
 ### `ChatRowMenu`
 
-Portaled to `body`, `role="menu"` `aria-label="Chat actions"`, `position: fixed` at the pointer and clamped 8 px inside the viewport after measuring (re-clamped when an error line grows it). The first enabled item takes focus; ArrowUp/ArrowDown wrap over enabled items; Tab and Escape close. Closes on outside `pointerdown`, a capture-phase `scroll` whose target contains the row (the streaming transcript does not count), `resize` and `blur`. Async picks (Pin, Open Folder) run through `run()`: busy-disables every item, closes on success, stays open with a `role="alert"` line on failure. Rename and Delete close at once; their outcome shows in the row.
+The items only; the shell is the shared `ContextMenu` (`src/renderer/src/components/ui/ContextMenu.tsx`, see [UI Guidelines](../../development/ui_guidelines/ui_guidelines_llm.md#key-files)), with `aria-label="Chat actions"`: portaled, opened at the pointer and kept 8 px inside the viewport, first enabled item focused, ArrowUp/ArrowDown wrapping, Tab and Escape closing, and closing on outside `pointerdown`, a capture-phase `scroll` whose target contains the row (the streaming transcript does not count), `resize` and `blur`. Async picks (Pin, Open Folder) run through `useContextMenuAction().run`: busy-disables every item, closes on success, stays open with a `role="alert"` line on failure. Rename and Delete close at once; their outcome shows in the row.
 
 ### `chatDragContext.ts`
 

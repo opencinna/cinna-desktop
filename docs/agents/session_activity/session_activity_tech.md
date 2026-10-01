@@ -20,7 +20,7 @@ Implementation reference for [Session Activity](session_activity.md). Follow-up 
 - `src/main/services/sessionActivityHub.ts` — `createSessionActivityHub(now?)`, the `sessionActivityHub` singleton, `ENDED_PER_KIND` (5)
 - `src/main/services/sessionActivityStop.ts` — `installSessionActivityStopper(provider, stopper)`, `stopSessionActivity(chatId, itemId, hub?)`, `SessionActivityStopper`, `SessionActivityStopOutcome`
 - `src/main/services/chatSessionRelease.ts` — `installChatSessionForgetter`, `forgetChatSessions(chatId, agentId?)`, `releaseChatSessions(chatId, agentId?)` (forget, then `endAll(…, 'lost')`)
-- `src/main/services/chatService.ts` — `delete` / `permanentDelete` call `forgetChatSessions` and `hub.clear`; `update` (router or bound agent changed), `setRouter` and `removeOnDemandAgent` call `releaseChatSessions`
+- `src/main/services/chatService.ts` — `delete` / `permanentDelete` call `forgetChatSessions` and `hub.clear`; `update` (router or bound agent changed), `setRouter` / `setCoordinator` and `removeOnDemandAgent` call `releaseChatSessions` — a router change per agent, only for those that left the chat and the old root when another agent now coordinates
 - `src/main/ipc/session_activity.ipc.ts` — `registerSessionActivityHandlers()`: the push listener and the two channels
 - `src/main/db/chats.ts` — `chatRepo.isTrashed(chatId)`, profile-independent, for the push listener only
 - `src/main/db/tasks.ts`, `src/main/ipc/task.ipc.ts` — the `chatId` filter on `task:list`
