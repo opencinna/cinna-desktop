@@ -2,15 +2,16 @@ import { clipboard } from 'electron'
 import { clearPastedFiles, clipboardFilePaths, type ClipboardFileSources } from '../../services/pastedFiles'
 import { runtimeHost } from '../runtimeHost'
 import { createLogger } from '../../logger/logger'
+import { MAX_AGENT_FILE_COPY_BYTES } from '../../../shared/agentFiles'
 
 const logger = createLogger('clipboard')
 
 /**
- * The most text the renderer may put on the clipboard in one call — above the
- * 4 MB whole-file read (a UTF-8 file decodes to at most as many characters as
- * it has bytes), well short of anything that could stall main.
+ * The most text the renderer may put on the clipboard in one call — exactly
+ * the **Copy contents** read cap (a UTF-8 file decodes to at most as many
+ * characters as it has bytes), well short of anything that could stall main.
  */
-export const MAX_CLIPBOARD_TEXT_LENGTH = 8 * 1024 * 1024
+export const MAX_CLIPBOARD_TEXT_LENGTH = MAX_AGENT_FILE_COPY_BYTES
 
 /**
  * Write plain text to the system clipboard from main. The renderer's

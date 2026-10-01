@@ -186,17 +186,17 @@ describe('the file actions', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Copy contents' }))
     await waitFor(() => expect(bridge).toHaveBeenCalledWith('print(1)\n'))
     expect(authorize).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/src/main.py', purpose: 'read' })
-    expect(readText).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/src/main.py' })
+    expect(readText).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/src/main.py', use: 'copy' })
     expect(clipboardText).not.toHaveBeenCalled()
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
   })
 
   it("shows main's reason in the menu, which stays open", async () => {
-    readText.mockResolvedValueOnce({ success: false, code: 'too_large', error: 'This file is over 4 MB.' })
+    readText.mockResolvedValueOnce({ success: false, code: 'too_large', error: 'This file is over 25 MB.' })
     mount()
     openOn('src/main.py')
     fireEvent.click(screen.getByRole('menuitem', { name: 'Copy contents' }))
-    expect((await screen.findByRole('alert')).textContent).toBe('This file is over 4 MB.')
+    expect((await screen.findByRole('alert')).textContent).toBe('This file is over 25 MB.')
     expect(screen.getByRole('menu')).toBeTruthy()
     expect(bridge).not.toHaveBeenCalled()
   })
@@ -274,6 +274,8 @@ describe('the file actions', () => {
     openOn('src/main.py')
     fireEvent.click(screen.getByRole('menuitem', { name: 'Save to Notes' }))
     await waitFor(() => expect(create).toHaveBeenCalledWith({ title: 'main.py', body: '```py\nprint(1)\n```' }))
+    // Notes keep the smaller cap: main is asked for a note read, not a copy.
+    expect(readText).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/src/main.py', use: 'note' })
   })
 
   it('copies the full path without reading or asking', async () => {

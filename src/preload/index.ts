@@ -49,6 +49,7 @@ import type {
   AuthorizeAgentFileInput,
   AuthorizeAgentFileResult,
   ReadAgentFilePreviewResult,
+  ReadAgentFileTextInput,
   ReadAgentFileTextResult,
   ResolveAgentFileRefsInput,
   ResolveAgentFileRefsResult
@@ -1615,8 +1616,8 @@ const api = {
     /** Capped UTF-8 text for the preview modal. Refuses credential files. */
     readPreview: (input: AgentFilePathInput): Promise<ReadAgentFilePreviewResult> =>
       ipcRenderer.invoke('agent-files:read-preview', input),
-    /** The whole file as UTF-8 text, up to 4 MB — refused, never truncated. Refuses credential and binary files. */
-    readText: (input: AgentFilePathInput): Promise<ReadAgentFileTextResult> =>
+    /** The whole file as UTF-8 text, up to 4 MB for a note or 25 MB to copy — refused, never truncated. Refuses credential and binary files. */
+    readText: (input: ReadAgentFileTextInput): Promise<ReadAgentFileTextResult> =>
       ipcRenderer.invoke('agent-files:read-text', input),
     /** Open with the default editor, the default app or a text editor — never executed. */
     open: (input: AgentFilePathInput): Promise<AgentFileActionResult> =>

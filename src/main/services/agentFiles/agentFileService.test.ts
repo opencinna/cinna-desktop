@@ -100,6 +100,7 @@ interface ServiceOptions {
   paths?: PathCanonicalizer
   isGuardedLocation?: (path: string) => boolean
   maxTextBytes?: number
+  maxCopyBytes?: number
   /** Runs while the service looks up the default editor, between its check and its launch. */
   onEditorLookup?: () => void
   browserFailure?: boolean
@@ -121,6 +122,7 @@ function makeService(options: ServiceOptions = {}) {
     home: options.home,
     maxPreviewBytes: 7,
     maxTextBytes: options.maxTextBytes ?? 16,
+    maxCopyBytes: options.maxCopyBytes ?? 32,
     getDefaultEditor: async () => {
       options.onEditorLookup?.()
       return options.editor
@@ -324,6 +326,21 @@ describe('readText', () => {
       success: false,
       code: 'too_large',
       error: 'This file is over 4 MB.'
+    })
+  })
+
+  it('lets a copy read up to its own, larger cap and names that cap when refusing', async () => {
+    const service = makeService({ maxTextBytes: 16, maxCopyBytes: 32 })
+    write(join(agent, 'mid.txt'), 'x'.repeat(20))
+    write(join(agent, 'huge.txt'), 'x'.repeat(33))
+    const copy = (path: string): { agentId: string; path: string; use: 'copy' } => ({ ...at(path), use: 'copy' })
+    expect(await service.readText(at(join(agent, 'mid.txt')))).toMatchObject({ code: 'too_large' })
+    expect(await service.readText({ ...at(join(agent, 'mid.txt')), use: 'note' })).toMatchObject({ code: 'too_large' })
+    expect(await service.readText(copy(join(agent, 'mid.txt')))).toEqual({ success: true, text: 'x'.repeat(20) })
+    expect(await service.readText(copy(join(agent, 'huge.txt')))).toEqual({
+      success: false,
+      code: 'too_large',
+      error: 'This file is over 25 MB.'
     })
   })
 

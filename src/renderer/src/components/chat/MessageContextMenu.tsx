@@ -2,7 +2,12 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, ty
 import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Copy, Globe, Link, Loader2, MessageSquarePlus, NotebookPen, type LucideIcon } from 'lucide-react'
-import { agentFileContentKind, isCredentialFileRef, type AgentFileRef } from '../../../../shared/agentFiles'
+import {
+  agentFileContentKind,
+  isCredentialFileRef,
+  type AgentFileRef,
+  type AgentFileTextUse
+} from '../../../../shared/agentFiles'
 import { previewKindFor } from '../../../../shared/filePreview'
 import { useSaveMessageNote } from '../../hooks/useNotes'
 import { useAuthStore } from '../../stores/auth.store'
@@ -273,8 +278,12 @@ function MessageContextMenu({ x, y, text, highlight, file, onClose }: MenuState 
   }
 
   /** The referenced file's text, or null once the failure is said (or the user declined). */
-  const fileText = async (target: FileRefTarget, fail: (reason: string) => void): Promise<string | null> => {
-    const outcome = await readAgentFileText(target.agentId, target.ref, {
+  const fileText = async (
+    target: FileRefTarget,
+    use: AgentFileTextUse,
+    fail: (reason: string) => void
+  ): Promise<string | null> => {
+    const outcome = await readAgentFileText(target.agentId, target.ref, use, {
       onAuthorize: (pending) => {
         consentPending.current = pending
       }
@@ -295,7 +304,7 @@ function MessageContextMenu({ x, y, text, highlight, file, onClose }: MenuState 
     // focus back, and `navigator.clipboard` rejects without it.
     'copy-contents': () => run('copy-contents', async (fail) => {
       if (!file) return
-      const contents = await fileText(file, fail)
+      const contents = await fileText(file, 'copy', fail)
       if (contents === null) return
       const result = await window.api.clipboard.writeText(contents)
       if (result.success) onClose()
@@ -303,7 +312,7 @@ function MessageContextMenu({ x, y, text, highlight, file, onClose }: MenuState 
     }, 'Could not copy the file.'),
     'save-contents': () => run('save-contents', async (fail) => {
       if (!file) return
-      const contents = await fileText(file, fail)
+      const contents = await fileText(file, 'note', fail)
       if (contents === null) return
       const note = fileNoteFromContents(file.ref.path, contents)
       await saveNote(note.body, note.title)

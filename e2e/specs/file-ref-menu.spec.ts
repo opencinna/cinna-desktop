@@ -38,7 +38,7 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  * ## What it does not
  *
  * - A file outside the agent folder (the consent dialog before a read), the
- *   in-menu failures (over 4 MB, not text, gone), a folder reference, a
+ *   in-menu failures (over the copy or note cap, not text, gone), a folder reference, a
  *   selection inside a path winning over the reference items, a switched-off
  *   agent's toast, and text already in the new-chat composer being kept —
  *   `MessageContextMenu.fileRefs.test.tsx`, `fileNote.test.ts` and

@@ -6,6 +6,7 @@ import { createLogger } from '../../logger/logger'
 import { isPlausiblePath, isWithin } from '../localAgents/pathRules'
 import { MAX_PREVIEW_BYTES, decodePreviewText } from '../../../shared/filePreview'
 import {
+  MAX_AGENT_FILE_COPY_BYTES,
   MAX_AGENT_FILE_TEXT_BYTES,
   MAX_FILE_REF_CANDIDATES,
   agentFileContentKind,
@@ -44,8 +45,14 @@ const MESSAGES: Record<AgentFileErrorCode, string> = {
   not_a_file: 'That is a folder, not a file.',
   read_failed: 'Could not read the file.',
   launch_failed: 'Could not open the file.',
-  too_large: `This file is over ${MAX_AGENT_FILE_TEXT_BYTES / (1024 * 1024)} MB.`,
+  too_large: 'This file is too large.',
   not_text: "This isn't a text file."
+}
+
+/** A whole-file read refused over its cap, the shipped figure for that use named. */
+function tooLarge(copy: boolean): AgentFileFailure {
+  const cap = copy ? MAX_AGENT_FILE_COPY_BYTES : MAX_AGENT_FILE_TEXT_BYTES
+  return fail('too_large', `This file is over ${cap / (1024 * 1024)} MB.`)
 }
 
 function fail(code: AgentFileErrorCode, error: string = MESSAGES[code]): AgentFileFailure {
@@ -71,8 +78,10 @@ export interface AgentFileServiceDeps {
   paths?: PathCanonicalizer
   home?: string
   maxPreviewBytes?: number
-  /** Defaults to {@link MAX_AGENT_FILE_TEXT_BYTES}. */
+  /** The **Save to Notes** cap. Defaults to {@link MAX_AGENT_FILE_TEXT_BYTES}. */
   maxTextBytes?: number
+  /** The **Copy contents** cap. Defaults to {@link MAX_AGENT_FILE_COPY_BYTES}. */
+  maxCopyBytes?: number
   getDefaultEditor: () => Promise<(DetectedTool & { path: string }) | null>
   launchEditor: (tool: DetectedTool & { path: string }, target: string, cwd: string) => Promise<void>
   /** `shell.openPath`: resolves to an error string, empty on success. */
@@ -134,6 +143,7 @@ interface Target {
 export function createAgentFileService(deps: AgentFileServiceDeps) {
   const maxPreviewBytes = deps.maxPreviewBytes ?? MAX_PREVIEW_BYTES
   const maxTextBytes = deps.maxTextBytes ?? MAX_AGENT_FILE_TEXT_BYTES
+  const maxCopyBytes = deps.maxCopyBytes ?? MAX_AGENT_FILE_COPY_BYTES
   const paths = deps.paths ?? createPathCanonicalizer({ platform: deps.platform })
   const home = (): string => deps.home ?? homedir()
   /** One dialog per (user, path) at a time: a second click waits for the first answer. */
@@ -356,10 +366,13 @@ export function createAgentFileService(deps: AgentFileServiceDeps) {
      * The whole file as text, for **Copy contents** and **Save to Notes**. The
      * same gate as {@link readPreview} — containment or approval, files only,
      * never a credential file, the identity checked again once open — but
-     * never truncated: a file over the cap is refused as `too_large`, and a
-     * binary type, invalid UTF-8 or a NUL byte as `not_text`.
+     * never truncated: a file over the cap — larger for `use: 'copy'` than
+     * for a note — is refused as `too_large`, and a binary type, invalid UTF-8
+     * or a NUL byte as `not_text`.
      */
     async readText(input: unknown): Promise<ReadAgentFileTextResult> {
+      const copy = (input as { use?: unknown } | null)?.use === 'copy'
+      const cap = copy ? maxCopyBytes : maxTextBytes
       const found = await permitted(input)
       if (isFailure(found)) return found
       if (found.kind !== 'file') return fail('not_a_file')
@@ -375,17 +388,20 @@ export function createAgentFileService(deps: AgentFileServiceDeps) {
             })
             return fail('not_found')
           }
-          if (opened.size > maxTextBytes) return fail('too_large')
-          // One byte past the cap: a file that grew since the stat is caught
-          // by the read rather than cut short.
-          const buffer = Buffer.alloc(maxTextBytes + 1)
+          if (opened.size > cap) return tooLarge(copy)
+          // One byte past the opened size, so a small file does not hold the
+          // whole cap: a file that grew since the stat fills that byte and is
+          // refused below rather than cut short.
+          const buffer = Buffer.allocUnsafe(Math.min(opened.size, cap) + 1)
           let offset = 0
           while (offset < buffer.length) {
             const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset)
             if (bytesRead === 0) break
             offset += bytesRead
           }
-          if (offset > maxTextBytes) return fail('too_large')
+          if (offset > cap) return tooLarge(copy)
+          // Grew while being read, still under the cap: what was read is not the whole file.
+          if (offset > opened.size) return fail('read_failed')
           const bytes = buffer.subarray(0, offset)
           if (bytes.includes(0)) return fail('not_text')
           let text: string

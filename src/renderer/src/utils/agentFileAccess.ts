@@ -1,6 +1,7 @@
 import type {
   AgentFileErrorCode,
   AgentFileRef,
+  AgentFileTextUse,
   AuthorizeAgentFileInput,
   AuthorizeAgentFileResult
 } from '../../../shared/agentFiles'
@@ -31,6 +32,7 @@ export type AgentFileTextOutcome =
 export async function readAgentFileText(
   agentId: string,
   ref: AgentFileRef,
+  use: AgentFileTextUse,
   options: {
     /** Told when the authorize call — during which main may show its consent dialog — starts and ends. */
     onAuthorize?: (pending: boolean) => void
@@ -47,7 +49,7 @@ export async function readAgentFileText(
     }
     if (!access.success) return { status: 'failed', code: access.code, error: access.error }
     if (!access.approved) return { status: 'denied' }
-    const result = await window.api.agentFiles.readText(input)
+    const result = await window.api.agentFiles.readText({ ...input, use })
     if (!result.success) return { status: 'failed', code: result.code, error: result.error }
     return { status: 'text', text: result.text }
   } catch (err) {

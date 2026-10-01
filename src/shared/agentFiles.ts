@@ -433,8 +433,21 @@ export type ReadAgentFilePreviewResult =
 
 export type AgentFileActionResult = { success: true } | AgentFileFailure
 
-/** The most a whole-file text read (**Copy contents**, **Save to Notes**) takes. */
+/**
+ * What a whole-file text read is for: `copy` its contents to the clipboard,
+ * or save it as a `note` (the default). Each has its own cap.
+ */
+export type AgentFileTextUse = 'copy' | 'note'
+
+export interface ReadAgentFileTextInput extends AgentFilePathInput {
+  use?: AgentFileTextUse
+}
+
+/** The most a whole-file text read for **Save to Notes** takes: a note is edited in place. */
 export const MAX_AGENT_FILE_TEXT_BYTES = 4 * 1024 * 1024
+
+/** The most a whole-file text read for **Copy contents** takes, as much as a preview reads. */
+export const MAX_AGENT_FILE_COPY_BYTES = 25 * 1024 * 1024
 
 /** The whole file as UTF-8 text, never truncated. */
 export type ReadAgentFileTextResult = { success: true; text: string } | AgentFileFailure
