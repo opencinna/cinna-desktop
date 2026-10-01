@@ -21,9 +21,29 @@ const lowlight = createLowlight({
 export type CodeLanguage = 'python' | 'xml'
 
 /**
+ * Above this many characters a file is shown as plain text, not highlighted:
+ * highlighting builds a node per token in one synchronous pass, and a
+ * multi-MB file stalled the window for seconds — tens of MB ran it out of
+ * memory. Markdown shares the limit (its parse costs more still).
+ */
+export const MAX_HIGHLIGHT_CHARS = 1024 * 1024
+
+/** A muted line above a preview body saying why it is shown the way it is. */
+export function PreviewNote({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <div className="mb-3 text-xs text-[var(--color-text-muted)]">{children}</div>
+}
+
+/** Why a file over {@link MAX_HIGHLIGHT_CHARS} is plain; markdown is formatted, not highlighted. */
+export function plainTextNote(what: 'highlight' | 'format'): string {
+  return `This file is too large to ${what}, so it is shown as plain text.`
+}
+
+/**
  * A source file as a highlighted, wrapped `<pre>`. Highlighting runs once per
  * text; a grammar failure falls back to the plain text rather than erroring,
- * so a truncated file still shows.
+ * so a truncated file still shows. Over {@link MAX_HIGHLIGHT_CHARS} the text
+ * is plain from the start, under a note saying why, anchors kept. A caller
+ * with its own reason passes `note`, shown instead, so one line explains.
  *
  * Each of `anchorLines` (1-based) starts with an empty `data-heading-line`
  * span: the marker the Contents panel scrolls to and tracks, as a markdown
@@ -32,13 +52,17 @@ export type CodeLanguage = 'python' | 'xml'
 export function CodePreview({
   text,
   language,
-  anchorLines
+  anchorLines,
+  note
 }: {
   text: string
   language: CodeLanguage
   anchorLines?: readonly number[]
+  note?: string
 }): React.JSX.Element {
+  const plain = text.length > MAX_HIGHLIGHT_CHARS
   const highlighted = useMemo(() => {
+    if (plain) return anchorLines?.length ? plainWithAnchors(text, anchorLines) : text
     try {
       const tree = lowlight.highlight(language, text)
       if (anchorLines?.length) insertLineAnchors(tree, new Set(anchorLines))
@@ -46,17 +70,46 @@ export function CodePreview({
     } catch {
       return text
     }
-  }, [text, language, anchorLines])
+  }, [plain, text, language, anchorLines])
 
   return (
-    <pre
-      data-testid="code-preview"
-      className="text-xs font-mono whitespace-pre-wrap break-words
-        text-[var(--color-text)]"
-    >
-      {highlighted}
-    </pre>
+    <>
+      {(note !== undefined || plain) && <PreviewNote>{note ?? plainTextNote('highlight')}</PreviewNote>}
+      <pre
+        data-testid="code-preview"
+        className="text-xs font-mono whitespace-pre-wrap break-words
+          text-[var(--color-text)]"
+      >
+        {highlighted}
+      </pre>
+    </>
   )
+}
+
+/**
+ * `text` with an empty anchor span at the start of each wanted line, the rest
+ * left as text. `anchorLines` is ascending, as an outline lists them; no
+ * spread over it — a generated file can list more lines than a call takes.
+ */
+function plainWithAnchors(text: string, anchorLines: readonly number[]): React.ReactNode[] {
+  const out: React.ReactNode[] = []
+  const lines = new Set(anchorLines)
+  const last = anchorLines[anchorLines.length - 1]
+  let from = 0
+  let line = 1
+  for (let at = 0; line <= last; ) {
+    if (lines.has(line)) {
+      if (at > from) out.push(text.slice(from, at))
+      out.push(<span key={line} data-heading-line={line} />)
+      from = at
+    }
+    const next = text.indexOf('\n', at)
+    if (next === -1) break
+    at = next + 1
+    line++
+  }
+  out.push(text.slice(from))
+  return out
 }
 
 function anchor(line: number): ElementContent {

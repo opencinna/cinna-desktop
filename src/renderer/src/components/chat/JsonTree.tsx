@@ -15,8 +15,8 @@ export const EXPAND_ALL_LIMIT = 2000
 const FOLDED_DEPTH = 1
 /**
  * Children a container shows before a "Show more" row. Folding alone does not
- * bound a document whose root is itself huge: a 512 KB array of numbers is a
- * quarter of a million rows with nothing to fold.
+ * bound a document whose root is itself huge: a 25 MB array of numbers is
+ * millions of rows with nothing to fold.
  */
 export const CHILD_PAGE = 200
 /** Deeper than this a container starts folded, whatever the document's size. */

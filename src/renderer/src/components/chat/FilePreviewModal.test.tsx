@@ -12,6 +12,7 @@ vi.mock('../../stores/fileDownload.store', () => ({
 
 import { contentsGeometry, ENTRANCE_WAIT_MS, FilePreviewModal, OPEN_PRESS_GUARD_MS } from './FilePreviewModal'
 import { FULL_TITLE_DELAY_MS } from './FilePreviewContents'
+import { MAX_HIGHLIGHT_CHARS } from './CodePreview'
 import { useFilePreviewStore } from '../../stores/filePreview.store'
 import { useUIStore } from '../../stores/ui.store'
 
@@ -552,6 +553,52 @@ describe('python', () => {
     expect(marked).toEqual(['3', '4', '9'])
     expect(screen.getByRole('button', { name: 'Contents' })).toBeTruthy()
   })
+
+  it('shows a file over the highlight limit as plain text, still marked for the Contents panel', () => {
+    render(<FilePreviewModal />)
+    const pad = '# pad\n'.repeat(Math.ceil(MAX_HIGHLIGHT_CHARS / 6))
+    const source = `class A:\n    def run(self):\n        pass\n${pad}def b():\n    pass\n`
+    open({ target: agentTarget(), kind: 'python', text: source })
+    const pre = screen.getByTestId('code-preview')
+    expect(pre.textContent).toBe(source)
+    expect(pre.querySelector('[class^="hljs-"]')).toBeNull()
+    expect(screen.getByText('This file is too large to highlight, so it is shown as plain text.')).toBeTruthy()
+    const marked = [...pre.querySelectorAll('[data-heading-line]')].map((el) => el.getAttribute('data-heading-line'))
+    expect(marked).toEqual(['1', '2', String(source.split('\n').length - 2)])
+    expect(screen.getByRole('button', { name: 'Contents' })).toBeTruthy()
+  })
+})
+
+describe('a large markdown or csv file', () => {
+  it('shows markdown over the highlight limit as written, with no Contents panel', () => {
+    render(<FilePreviewModal />)
+    const text = `# One\n\n## Two\n\n## Three\n\n${'x'.repeat(MAX_HIGHLIGHT_CHARS)}\n`
+    open({ target: agentTarget(), kind: 'markdown', text })
+    expect(screen.getByText('This file is too large to format, so it is shown as plain text.')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Two' })).toBeNull()
+    expect(document.querySelector('pre')?.textContent).toBe(text)
+    expect(screen.queryByRole('button', { name: 'Contents' })).toBeNull()
+  })
+
+  it('gives a cut xml source over the highlight limit one note, the cut', () => {
+    render(<FilePreviewModal />)
+    const text = `<feed>${'<e>1</e>'.repeat(Math.ceil(MAX_HIGHLIGHT_CHARS / 8))}<e`
+    open({ target: agentTarget({ text: 'feed.xml', path: '/agent/feed.xml', displayPath: 'feed.xml', kind: 'file', inside: true }), kind: 'xml', text, truncated: true })
+    expect(screen.getByText('The preview is cut at 25 MB, so it is shown as source.')).toBeTruthy()
+    expect(screen.queryByText(/too large to highlight/)).toBeNull()
+    expect(screen.getByTestId('code-preview').textContent).toBe(text)
+  })
+
+  it('stops a csv at the row cap, blank lines not counted', () => {
+    render(<FilePreviewModal />)
+    const lines = ['h1,h2']
+    for (let i = 0; i < 2000; i++) lines.push(`r${i},${i}`, '')
+    open({ target: agentTarget(), kind: 'csv', text: lines.join('\n') })
+    expect(screen.getByText('Showing first 500 rows.')).toBeTruthy()
+    const cells = [...document.querySelectorAll('tbody tr td:first-child')].map((td) => td.textContent)
+    expect(cells.length).toBe(499)
+    expect(cells[498]).toBe('r498')
+  })
 })
 
 describe('a press outside the card straight after an open', () => {
@@ -994,7 +1041,7 @@ describe('xml', () => {
     const text = '<feed><entry id="a"><t>1</t></entry><entry'
     open({ target: agentTarget(xmlFile), kind: 'xml', text, truncated: true })
     expect(screen.queryByTestId('xml-tree')).toBeNull()
-    expect(screen.getByText('The preview is cut at 512 KB, so it is shown as source.')).toBeTruthy()
+    expect(screen.getByText('The preview is cut at 25 MB, so it is shown as source.')).toBeTruthy()
     expect(screen.queryByText(/could not be parsed/)).toBeNull()
     expect(screen.getByTestId('code-preview').textContent).toBe(text)
   })

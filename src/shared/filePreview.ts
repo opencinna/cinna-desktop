@@ -13,18 +13,19 @@
 export type PreviewRenderKind = 'markdown' | 'json' | 'csv' | 'python' | 'xml' | 'text' | 'html' | 'image'
 
 /**
- * Max bytes the main process reads for a preview. Preview is for quick
- * inspection, not full-file viewing — anything larger is truncated (the
- * modal shows a notice and the Download button gets the complete file).
+ * Max bytes the main process reads for a preview. Large enough that a
+ * multi-MB data file arrives whole — a JSON file cut short no longer parses
+ * and loses its tree. Anything larger is truncated (the modal shows a notice
+ * and the Download button gets the complete file).
  */
-export const MAX_PREVIEW_BYTES = 512 * 1024 // 512 KB
+export const MAX_PREVIEW_BYTES = 25 * 1024 * 1024 // 25 MB
 
 /**
  * Max bytes of an image main hands the renderer as a `data:` URL, for the
  * preview and the inline thumbnails. An image is never cut: a larger one is
  * refused with {@link IMAGE_TOO_LARGE_ERROR} and the badge downloads it.
  */
-export const MAX_IMAGE_PREVIEW_BYTES = 20 * 1024 * 1024 // 20 MB
+export const MAX_IMAGE_PREVIEW_BYTES = 25 * 1024 * 1024 // 25 MB
 
 /** The longest side of an inline thumbnail main returns, in px (2× the 64 px box, and some). */
 export const THUMBNAIL_MAX_SIDE = 160

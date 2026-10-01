@@ -10,7 +10,7 @@ const logger = createLogger('html-preview')
 export const HTML_PREVIEW_SCHEME = 'cinna-preview'
 
 /** The most a document or asset served to the frame may weigh. */
-export const MAX_HTML_PREVIEW_BYTES = 20 * 1024 * 1024
+export const MAX_HTML_PREVIEW_BYTES = 25 * 1024 * 1024
 
 /** Open previews at once; the oldest is dropped past it (a modal that never released). */
 export const MAX_HTML_PREVIEW_TOKENS = 16

@@ -31,7 +31,7 @@ import {
   previewMarkdownComponents
 } from './FilePreviewContents'
 import { JsonTree, JsonTreeBoundary, useParsedJson } from './JsonTree'
-import { CodePreview } from './CodePreview'
+import { CodePreview, MAX_HIGHLIGHT_CHARS, PreviewNote, plainTextNote } from './CodePreview'
 import { XmlTree, type XmlReveal } from './XmlTree'
 import { HtmlPreview, type HtmlPreviewView } from './HtmlPreview'
 import {
@@ -60,6 +60,8 @@ const OVERLAY_PADDING_X_REM = 2
 const WINDOW_MARGIN = 16
 /** The card's left and right borders together, inside its border-box width. */
 const CARD_BORDER_X = 2
+/** The text read cap, as the truncation notices name it. */
+const MAX_PREVIEW_MB = MAX_PREVIEW_BYTES / (1024 * 1024)
 
 /**
  * Where the Contents panel goes, from the window width alone.
@@ -293,7 +295,10 @@ export function FilePreviewModal(): React.JSX.Element | null {
   const toc = useMemo(
     () =>
       kind === 'markdown'
-        ? markdownToc(markdown.body)
+        ? // Shown plain over the limit (see MarkdownPreview): no headings to list.
+          markdown.body.length > MAX_HIGHLIGHT_CHARS
+          ? null
+          : markdownToc(markdown.body)
         : kind === 'python'
           ? pythonOutline(text)
           : kind === 'xml'
@@ -734,7 +739,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
                       ? 'Preview truncated — open the file to see the full content.'
                       : downloadable
                         ? 'Preview truncated — download the file to see the full content.'
-                        : 'Preview truncated at 512 KB.'}
+                        : `Preview truncated at ${MAX_PREVIEW_MB} MB.`}
                   </div>
                 )}
               </>
@@ -897,8 +902,26 @@ function PreviewBody({
   )
 }
 
-/** Split by the modal (see `useFrontmatter` there), which also reads the headings. */
+/**
+ * Split by the modal (see `useFrontmatter` there), which also reads the
+ * headings. Over {@link MAX_HIGHLIGHT_CHARS} the body is shown as written:
+ * rendering a multi-MB document hung the window.
+ */
 function MarkdownPreview({ card, body }: { card: React.JSX.Element | null; body: string }): React.JSX.Element {
+  if (body.length > MAX_HIGHLIGHT_CHARS) {
+    return (
+      <>
+        {card}
+        <PreviewNote>{plainTextNote('format')}</PreviewNote>
+        <pre
+          className="text-xs font-mono whitespace-pre-wrap break-words
+            text-[var(--color-text)]"
+        >
+          {body}
+        </pre>
+      </>
+    )
+  }
   return (
     <>
       {card}
@@ -954,16 +977,11 @@ function XmlPreview({
 }): React.JSX.Element {
   const source = <CodePreview text={text} language="xml" />
   if (!parsed) {
-    return (
-      <>
-        <div className="mb-3 text-xs text-[var(--color-text-muted)]">
-          {truncated
-            ? `The preview is cut at ${Math.round(MAX_PREVIEW_BYTES / 1024)} KB, so it is shown as source.`
-            : 'This XML could not be parsed, so it is shown as source.'}
-        </div>
-        {source}
-      </>
-    )
+    // Passed in, so a source too large to highlight still shows one note.
+    const note = truncated
+      ? `The preview is cut at ${MAX_PREVIEW_MB} MB, so it is shown as source.`
+      : 'This XML could not be parsed, so it is shown as source.'
+    return <CodePreview text={text} language="xml" note={note} />
   }
   return (
     <JsonTreeBoundary key={text} fallback={source}>
@@ -977,9 +995,10 @@ function XmlPreview({
  * contain the delimiter, embedded newlines, and `""` escaped quotes
  * (RFC-4180-ish). A single pass over the whole text — not line-by-line — so a
  * quoted cell spanning multiple physical lines stays one cell instead of
- * splitting into bogus rows. Returns one array of cells per record.
+ * splitting into bogus rows. Returns one array of cells per non-blank
+ * record, and stops once it has more than `maxRows`.
  */
-function parseDelimited(text: string, delimiter: string): string[][] {
+function parseDelimited(text: string, delimiter: string, maxRows = Infinity): string[][] {
   const rows: string[][] = []
   let row: string[] = []
   let field = ''
@@ -1005,9 +1024,11 @@ function parseDelimited(text: string, delimiter: string): string[][] {
       field = ''
     } else if (ch === '\n') {
       row.push(field)
-      rows.push(row)
+      // A blank physical line parses to a single empty cell: not a row.
+      if (!(row.length === 1 && row[0] === '')) rows.push(row)
       row = []
       field = ''
+      if (rows.length > maxRows) return rows
     } else {
       field += ch
     }
@@ -1046,11 +1067,9 @@ function CsvPreview({
 }): React.JSX.Element {
   const { rows, clipped } = useMemo(() => {
     const delimiter = text.includes('\t') && !text.includes(',') ? '\t' : ','
-    // Drop fully-blank records (a blank physical line parses to a single
-    // empty cell) so they don't show as empty table rows.
-    const all = parseDelimited(text, delimiter).filter(
-      (r) => !(r.length === 1 && r[0] === '')
-    )
+    // One past the cap is enough to know the table is clipped; a 25 MB file
+    // is not split into millions of cells to show 500 rows.
+    const all = parseDelimited(text, delimiter, MAX_PREVIEW_ROWS)
     const clipped = all.length > MAX_PREVIEW_ROWS
     return { rows: clipped ? all.slice(0, MAX_PREVIEW_ROWS) : all, clipped }
   }, [text])

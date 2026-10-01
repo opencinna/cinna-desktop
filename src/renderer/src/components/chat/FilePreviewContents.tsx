@@ -92,7 +92,8 @@ export function FilePreviewContents({
   /** The entry the user clicked, held until they scroll themselves. */
   const pinned = useRef<number | null>(null)
   const listed = useMemo(() => new Set(entries.filter((entry) => !entry.note).map((entry) => entry.line)), [entries])
-  const minDepth = useMemo(() => Math.min(...entries.map((entry) => entry.depth)), [entries])
+  // A loop, not a spread: a generated file can list more entries than a call takes.
+  const minDepth = useMemo(() => entries.reduce((min, entry) => Math.min(min, entry.depth), Infinity), [entries])
 
   const compute = useCallback((): void => {
     const body = bodyRef.current

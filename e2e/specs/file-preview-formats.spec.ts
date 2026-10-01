@@ -50,7 +50,7 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  * ## What it does not
  *
  * - Links and navigation inside the frame (the external-link gate), assets
- *   outside the page's folder, the 20 MB cap, attachments (the header's globe
+ *   outside the page's folder, the 25 MB cap, attachments (the header's globe
  *   button and `files:open-in-browser`), the truncated-XML note, Alt-click
  *   branch folding and paging — unit tests cover those
  *   (`htmlPreviewGuards.test.ts`, `htmlPreviewServer.test.ts`,
