@@ -175,7 +175,7 @@ async function admit(scope: RunScope, binding: JobBinding, current: () => boolea
   let prepared: ReturnType<Awaited<ReturnType<typeof prepareScheduledJob>>> | undefined
   try {
     // A due occurrence is never gated on earlier work: it launches its own
-    // task/run/chat, and a busy agent refuses it through the turn lock instead.
+    // task/run/chat and runs beside the agent's other turns.
     const factory = await prepareScheduledJob(scope, requireJob(scope, binding.jobId), current)
     if (!valid()) return
     const live = requireBinding(scope, binding.id)

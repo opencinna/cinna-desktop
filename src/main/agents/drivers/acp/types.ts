@@ -285,13 +285,22 @@ export type AcpProcessState =
 export interface AcpProcessPool {
   /** Bind a synthetic chat to a compatible process group before taking its hold. */
   share?(agentId: string, poolKey: string): void
-  /** A direct process kill would also affect another logical session owner. */
-  hasOtherOwners?(agentId: string): boolean
+  /**
+   * A direct process kill would also affect another logical session owner.
+   * `ownHolds` is how many holds the caller itself has on the process (a
+   * turn: one, until it releases); every other hold counts as another owner,
+   * including a concurrent turn of the same agent. Absent: all of `agentId`'s.
+   */
+  hasOtherOwners?(agentId: string, ownHolds?: number): boolean
   /** Read-only warm lookup: never starts/replaces a process for a background utility. */
   peek?(agentId: string, specKey: string): AcpConnection | undefined
   /**
    * The live connection for an agent: the running one when its spec key still
    * matches, else a fresh start. Concurrent calls for one agent share one start.
+   * A live process that cannot serve the call (its key moved, or a retire marked
+   * it) is replaced once every other turn holding it has released; the call
+   * waits for that, so take the {@link hold} first — a waiter's own hold is how
+   * the pool tells it from a turn still using the process.
    * A process that exited is restarted here, on the next turn — never on its own.
    */
   acquire(agentId: string, spec: AcpLaunchSpec, init: InitializeRequest, signal?: AbortSignal): Promise<AcpConnection>
@@ -299,7 +308,10 @@ export interface AcpProcessPool {
   hold(agentId: string): () => void
   /** Stop an agent's process — now if nothing holds it, else when the last hold releases. */
   retire(agentId: string): void
-  /** A turn holds the agent's process, or a start is in flight: a retire now would wait for it. */
+  /**
+   * Some turn holds the agent's process, or a start is in flight: a retire now
+   * would wait for it. Any turn of the agent — not necessarily the caller's.
+   */
   held(agentId: string): boolean
   status(agentId: string): AcpProcessState
   /** Called with the agent id whenever its state changes. Returns unsubscribe. */

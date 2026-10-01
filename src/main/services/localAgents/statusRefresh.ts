@@ -256,8 +256,10 @@ const failed = (error: string): StatusRefreshOutcome => ({ ran: false, skipped: 
  *
  * ## Busy and cancelled are not failures
  *
- * `commandService.run()` takes the per-agent turn lock as owner `'command'`, so
- * a refresh fired while a model turn streams is refused. That refusal comes
+ * `commandService.run()` takes the per-agent turn lock (shared) as owner
+ * `'command'`, so a refresh fired while an exclusive folder write (an editor
+ * save, credential files) holds the agent is refused; a streaming model turn
+ * does not refuse it. That refusal comes
  * back as `busy` and is treated exactly the way the remote `get` treats a 429:
  * a soft no-op, the on-disk snapshot is returned, nothing is shown. A cancel
  * (`aborted`) is likewise never a failure — this module calls `run()` directly

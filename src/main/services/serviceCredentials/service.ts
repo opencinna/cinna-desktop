@@ -112,11 +112,15 @@ function attachmentState(row?: ServiceCredentialRow): Exclude<ServiceCredentialA
 function queue(a: LocalAgentDto): void {
   if (pendingAgents.has(a.id)) return
   pendingAgents.add(a.id)
-  turnLock.whenFree(a.id, () => {
+  // Queued, so the exclusive hold is taken atomically once the agent is free:
+  // a shared turn that fires first from the same release must not turn this
+  // into a refusal (and a spurious cleanup error). Never canceled, like the
+  // `whenFree` waiter it replaces: a suspension is checked when it runs.
+  void turnLock.withQueuedLock(a.id, 'credentials', new AbortController().signal, () => {
     pendingAgents.delete(a.id)
     if (suspended) return
-    void turnLock.withLock(a.id, 'credentials', () => materialize(a, false)).catch(() => { cleanupError = 'cleanup_failed'; changed() })
-  })
+    return materialize(a, false)
+  }).catch(() => { cleanupError = 'cleanup_failed'; changed() })
 }
 function regenerate(filter?: (a: LocalAgentDto) => boolean): void { for (const a of allAgents()) if (!filter || filter(a)) queue(a) }
 function signal(account: Account): AbortSignal { return AbortSignal.any([lifecycleAbort.signal, account.abort.signal]) }
@@ -149,7 +153,22 @@ async function fetchValues(account: Account, selected: ServiceCredentialRow[], g
     rememberCredentialSecrets(account.synthetic)
   }
 }
-async function materialize(a: LocalAgentDto, refresh: boolean): Promise<{ path?: string; generation: string; prompt: string }> {
+/**
+ * One materialization per agent folder at a time. Turns of one agent run side
+ * by side and each prepares credentials, and `writeCredentials` reads the old
+ * files, awaits (the cloud fetch, the path check) and only then writes or
+ * unlinks: two interleaved would act on a stale read. Chained here so every
+ * caller — turns, commands, attachment edits, regeneration — is covered.
+ */
+const materializing = new Map<string, Promise<unknown>>()
+function materialize(a: LocalAgentDto, refresh: boolean): Promise<{ path?: string; generation: string; prompt: string }> {
+  const run = (materializing.get(a.path) ?? Promise.resolve()).then(() => materializeNow(a, refresh))
+  const tail = run.catch(() => undefined)
+  materializing.set(a.path, tail)
+  void tail.then(() => { if (materializing.get(a.path) === tail) materializing.delete(a.path) })
+  return run
+}
+async function materializeNow(a: LocalAgentDto, refresh: boolean): Promise<{ path?: string; generation: string; prompt: string }> {
   const g = guard(attachedAccounts(a))
   check(g)
   let attached = resolve(a).filter(v => v.available)

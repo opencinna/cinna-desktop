@@ -21,6 +21,9 @@ import {
   type StartAcpConnection
 } from './types'
 
+/** Lets every pending promise chain run. */
+const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
 const INIT: InitializeRequest = { protocolVersion: ACP_PROTOCOL_VERSION, clientCapabilities: {} }
 const INITIALIZED: InitializeResponse = { protocolVersion: 1, agentCapabilities: {}, authMethods: [] }
 
@@ -199,18 +202,25 @@ describe('createAcpProcessPool', () => {
     releaseTwo()
   })
 
-  it('refuses an incompatible replacement while another chat holds the shared process', async () => {
-    const connection = stubConnection(42)
-    const { pool } = poolWith([connection])
+  it('waits for the other chat to finish before replacing a shared process whose key moved', async () => {
+    const [old, fresh] = [stubConnection(42), stubConnection(43)]
+    const { pool, start } = poolWith([old, fresh])
     pool.share?.('chat-one', 'mode')
     pool.share?.('chat-two', 'mode')
     const releaseOne = pool.hold('chat-one')
     await pool.acquire('chat-one', spec('same'), INIT)
     const releaseTwo = pool.hold('chat-two')
-    await expect(pool.acquire('chat-two', spec('new-environment'), INIT)).rejects.toThrow('another chat is running')
-    expect(connection.disposals).toBe(0)
-    expect(pool.peek?.('chat-one', 'same')).toBe(connection)
+    let got: AcpConnection | undefined
+    void pool.acquire('chat-two', spec('new-environment'), INIT).then((conn) => { got = conn })
+    await flush()
+    expect(got).toBeUndefined()
+    expect(old.disposals).toBe(0)
+    expect(pool.peek?.('chat-one', 'same')).toBe(old)
     releaseOne()
+    await flush()
+    expect(got).toBe(fresh)
+    expect(old.disposals).toBe(1)
+    expect(start).toHaveBeenCalledTimes(2)
     releaseTwo()
   })
 
@@ -284,6 +294,81 @@ describe('createAcpProcessPool', () => {
 
     expect(await both).toEqual([conn, conn])
     expect(start).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets one turn stop during a joined start without failing the other turn', async () => {
+    const conn = stubConnection(1)
+    let finish!: (connection: AcpConnection) => void
+    let startSignal: AbortSignal | undefined
+    const start = vi.fn((_spec: AcpLaunchSpec, _init: InitializeRequest, options?: { signal?: AbortSignal }) => {
+      startSignal = options?.signal
+      // Like the real start: an abort kills the process being started.
+      return new Promise<AcpConnection>((resolve, reject) => {
+        finish = resolve
+        options?.signal?.addEventListener('abort', () => reject(new Error('The ACP start was canceled.')))
+      })
+    })
+    const { pool } = poolWith([], { start: start as unknown as StartAcpConnection })
+    const stopA = new AbortController()
+    const stopB = new AbortController()
+    const a = pool.acquire('a', spec('k1'), INIT, stopA.signal)
+    const b = pool.acquire('a', spec('k1'), INIT, stopB.signal)
+
+    stopA.abort()
+    await expect(a).rejects.toThrow('canceled')
+    expect(startSignal?.aborted).toBe(false)
+
+    finish(conn)
+    expect(await b).toBe(conn)
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(conn.disposals).toBe(0)
+    expect(pool.status('a')).toEqual({ state: 'running', pid: 1, since: 1_000 })
+  })
+
+  it('cancels a joined start once every turn waiting on it has stopped', async () => {
+    const conn = stubConnection(1)
+    let finish!: (connection: AcpConnection) => void
+    let startSignal: AbortSignal | undefined
+    const start = vi.fn((_spec: AcpLaunchSpec, _init: InitializeRequest, options?: { signal?: AbortSignal }) => {
+      startSignal = options?.signal
+      // Like the real start: an abort kills the process being started.
+      return new Promise<AcpConnection>((resolve, reject) => {
+        finish = resolve
+        options?.signal?.addEventListener('abort', () => reject(new Error('The ACP start was canceled.')))
+      })
+    })
+    const { pool } = poolWith([], { start: start as unknown as StartAcpConnection })
+    const stopA = new AbortController()
+    const stopB = new AbortController()
+    const a = pool.acquire('a', spec('k1'), INIT, stopA.signal)
+    const b = pool.acquire('a', spec('k1'), INIT, stopB.signal)
+
+    stopA.abort()
+    await expect(a).rejects.toThrow('canceled')
+    expect(startSignal?.aborted).toBe(false)
+    stopB.abort()
+    await expect(b).rejects.toThrow('canceled')
+    expect(startSignal?.aborted).toBe(true)
+
+    await vi.waitFor(() => expect(pool.status('a')).toEqual({ state: 'stopped' }))
+    finish(conn)
+    expect(conn.disposals).toBe(0)
+  })
+
+  it('still cancels a start whose only caller stops', async () => {
+    let startSignal: AbortSignal | undefined
+    const start = vi.fn((_spec: AcpLaunchSpec, _init: InitializeRequest, options?: { signal?: AbortSignal }) => {
+      startSignal = options?.signal
+      return new Promise<AcpConnection>((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(new Error('The ACP start was canceled.')))
+      })
+    })
+    const { pool } = poolWith([], { start: start as unknown as StartAcpConnection })
+    const stop = new AbortController()
+    const only = pool.acquire('a', spec('k1'), INIT, stop.signal)
+    stop.abort()
+    await expect(only).rejects.toThrow('canceled')
+    expect(startSignal?.aborted).toBe(true)
   })
 
   it('keeps one process per agent', async () => {
@@ -465,6 +550,235 @@ describe('createAcpProcessPool', () => {
     release()
     await Promise.resolve()
     expect(conn.disposals).toBe(1)
+  })
+
+  it('never hands a retired live process to a new turn: it waits for the drain and gets a fresh one', async () => {
+    const [conn, fresh] = [stubConnection(1), stubConnection(2)]
+    const { pool, start } = poolWith([conn, fresh])
+
+    const releaseFirst = pool.hold('a')
+    await pool.acquire('a', spec('k1'), INIT)
+    // The first turn's orphaned cancel (or its ceiling) asks for a retire.
+    pool.retire('a')
+    // Another chat's turn on the same agent arrives while it still runs.
+    const releaseSecond = pool.hold('a')
+    let got: AcpConnection | undefined
+    void pool.acquire('a', spec('k1'), INIT).then((c) => { got = c })
+    await flush()
+    expect(got).toBeUndefined()
+    expect(conn.disposals).toBe(0)
+    expect(start).toHaveBeenCalledOnce()
+
+    releaseFirst()
+    await flush()
+    expect(conn.disposals).toBe(1)
+    expect(got).toBe(fresh)
+    expect(start).toHaveBeenCalledTimes(2)
+    // The mark was the old process's; the fresh one outlives its turn.
+    releaseSecond()
+    await flush()
+    expect(fresh.disposals).toBe(0)
+    expect(pool.peek?.('a', 'k1')).toBe(fresh)
+  })
+
+  it('starts nothing for a turn waiting out a drain once the app is shutting down', async () => {
+    const [old, fresh] = [stubConnection(1), stubConnection(2)]
+    const { pool, start } = poolWith([old, fresh])
+    pool.hold('a')
+    await pool.acquire('a', spec('k1'), INIT)
+    pool.hold('a')
+    const waiting = pool.acquire('a', spec('k2'), INIT, new AbortController().signal)
+    await flush()
+    await pool.shutdown()
+    await expect(waiting).rejects.toThrow('The ACP start was canceled.')
+    expect(start).toHaveBeenCalledOnce()
+    expect(old.disposals).toBe(1)
+  })
+
+  it('waits for a sibling turn before replacing a process whose key moved, instead of refusing', async () => {
+    const [old, fresh] = [stubConnection(1), stubConnection(2)]
+    const { pool } = poolWith([old, fresh])
+    const releaseSibling = pool.hold('a')
+    await pool.acquire('a', spec('k1'), INIT)
+    const releaseOwn = pool.hold('a')
+    let got: AcpConnection | undefined
+    void pool.acquire('a', spec('k2'), INIT, new AbortController().signal).then((c) => { got = c })
+    await flush()
+    expect(got).toBeUndefined()
+    expect(old.disposals).toBe(0)
+    releaseSibling()
+    await flush()
+    expect(old.disposals).toBe(1)
+    expect(got).toBe(fresh)
+    expect(pool.status('a')).toEqual({ state: 'running', pid: 2, since: 1_000 })
+    releaseOwn()
+  })
+
+  it('lets two turns waiting for the same new key share one start, without waiting on each other', async () => {
+    const [old, fresh] = [stubConnection(1), stubConnection(2)]
+    const { pool, start } = poolWith([old, fresh])
+    const releaseSibling = pool.hold('a')
+    await pool.acquire('a', spec('k1'), INIT)
+    const releaseX = pool.hold('a')
+    const x = pool.acquire('a', spec('k2'), INIT, new AbortController().signal)
+    const releaseY = pool.hold('a')
+    const y = pool.acquire('a', spec('k2'), INIT)
+    await flush()
+    releaseSibling()
+    expect(await x).toBe(fresh)
+    expect(await y).toBe(fresh)
+    expect(start).toHaveBeenCalledTimes(2)
+    expect(old.disposals).toBe(1)
+    releaseX()
+    releaseY()
+  })
+
+  it('serves two waiting turns with different keys one after the other, without deadlock', async () => {
+    const [old, two, three] = [stubConnection(1), stubConnection(2), stubConnection(3)]
+    const { pool } = poolWith([old, two, three])
+    const releaseSibling = pool.hold('a')
+    await pool.acquire('a', spec('k1'), INIT)
+    const releaseX = pool.hold('a')
+    const x = pool.acquire('a', spec('k2'), INIT)
+    const releaseY = pool.hold('a')
+    let gotY: AcpConnection | undefined
+    void pool.acquire('a', spec('k3'), INIT).then((c) => { gotY = c })
+    await flush()
+    releaseSibling()
+    expect(await x).toBe(two)
+    await flush()
+    // Y's process is not X's: it waits for X's turn to end.
+    expect(gotY).toBeUndefined()
+    expect(two.disposals).toBe(0)
+    releaseX()
+    await flush()
+    expect(two.disposals).toBe(1)
+    expect(gotY).toBe(three)
+    releaseY()
+  })
+
+  it('lets a turn waiting for the drain stop at once, without holding up the others', async () => {
+    const [old, fresh] = [stubConnection(1), stubConnection(2)]
+    const { pool, start } = poolWith([old, fresh])
+    const releaseSibling = pool.hold('a')
+    await pool.acquire('a', spec('k1'), INIT)
+    const releaseX = pool.hold('a')
+    const stopX = new AbortController()
+    const x = pool.acquire('a', spec('k2'), INIT, stopX.signal)
+    const releaseY = pool.hold('a')
+    let gotY: AcpConnection | undefined
+    void pool.acquire('a', spec('k2'), INIT).then((c) => { gotY = c })
+    await flush()
+    stopX.abort()
+    await expect(x).rejects.toThrow('The ACP start was canceled.')
+    releaseX()
+    await flush()
+    // X left; the sibling still runs, so nothing is replaced yet.
+    expect(gotY).toBeUndefined()
+    expect(old.disposals).toBe(0)
+    releaseSibling()
+    await flush()
+    expect(gotY).toBe(fresh)
+    expect(start).toHaveBeenCalledTimes(2)
+    releaseY()
+  })
+
+  it('stops waiting, and starts nothing, once the only waiting turn stops', async () => {
+    const old = stubConnection(1)
+    const { pool, start } = poolWith([old])
+    const releaseSibling = pool.hold('a')
+    await pool.acquire('a', spec('k1'), INIT)
+    const releaseX = pool.hold('a')
+    const stopX = new AbortController()
+    const x = pool.acquire('a', spec('k2'), INIT, stopX.signal)
+    await flush()
+    stopX.abort()
+    await expect(x).rejects.toThrow('The ACP start was canceled.')
+    releaseX()
+    releaseSibling()
+    await flush()
+    expect(start).toHaveBeenCalledOnce()
+    expect(old.disposals).toBe(0)
+  })
+
+  it('lets a waiting turn proceed when a retired process exits on its own', async () => {
+    const [conn, fresh] = [stubConnection(1), stubConnection(2)]
+    const { pool } = poolWith([conn, fresh])
+    const releaseFirst = pool.hold('a')
+    await pool.acquire('a', spec('k1'), INIT)
+    pool.retire('a')
+    const releaseSecond = pool.hold('a')
+    let got: AcpConnection | undefined
+    void pool.acquire('a', spec('k1'), INIT).then((c) => { got = c })
+    await flush()
+    expect(got).toBeUndefined()
+    conn.die()
+    await flush()
+    expect(got).toBe(fresh)
+    // The mark died with the process it was aimed at.
+    releaseFirst()
+    releaseSecond()
+    await flush()
+    expect(fresh.disposals).toBe(0)
+    expect(pool.peek?.('a', 'k1')).toBe(fresh)
+  })
+
+  it('keeps a retire aimed at a start in flight when a sibling turn joins that start', async () => {
+    const conn = stubConnection(1)
+    let finish!: () => void
+    const gate = new Promise<void>((resolve) => { finish = resolve })
+    const start = vi.fn(async () => { await gate; return conn })
+    const { pool } = poolWith([], { start: start as unknown as StartAcpConnection })
+
+    const releaseFirst = pool.hold('a')
+    const first = pool.acquire('a', spec('k1'), INIT)
+    pool.retire('a')
+    const releaseSecond = pool.hold('a')
+    const second = pool.acquire('a', spec('k1'), INIT)
+    finish()
+    expect(await first).toBe(conn)
+    expect(await second).toBe(conn)
+    expect(start).toHaveBeenCalledOnce()
+
+    releaseFirst()
+    await Promise.resolve()
+    expect(conn.disposals).toBe(0)
+    releaseSecond()
+    await Promise.resolve()
+    expect(conn.disposals).toBe(1)
+  })
+
+  it('does not let a retire aimed at a failed start doom the next fresh process', async () => {
+    const fresh = stubConnection(2)
+    let fail!: (err: Error) => void
+    let calls = 0
+    const start = vi.fn(() => {
+      calls += 1
+      if (calls === 1) return new Promise<AcpConnection>((_resolve, reject) => { fail = reject })
+      return Promise.resolve(fresh as AcpConnection)
+    })
+    const { pool } = poolWith([], { start: start as unknown as StartAcpConnection })
+
+    const first = pool.acquire('a', spec('k1'), INIT)
+    pool.retire('a')
+    fail(new Error('spawn failed'))
+    await expect(first).rejects.toThrow('spawn failed')
+
+    expect(await pool.acquire('a', spec('k1'), INIT)).toBe(fresh)
+    await Promise.resolve()
+    expect(fresh.disposals).toBe(0)
+    expect(pool.status('a').state).toBe('running')
+  })
+
+  it('counts a sibling turn of the same agent as another owner, but not the caller’s own hold', async () => {
+    const { pool } = poolWith([stubConnection(1)])
+    const own = pool.hold('a')
+    await pool.acquire('a', spec('k1'), INIT)
+    expect(pool.hasOtherOwners?.('a', 1)).toBe(false)
+    const sibling = pool.hold('a')
+    expect(pool.hasOtherOwners?.('a', 1)).toBe(true)
+    sibling()
+    own()
   })
 
   it('stops a process that was still starting when it was retired', async () => {

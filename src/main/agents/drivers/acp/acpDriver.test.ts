@@ -30,6 +30,7 @@ import {
 import { goldenRow } from '../__golden__/driverWorld'
 import { ACP_FOLLOW_UP_EXITED, createAcpDriver, exitListenerCount, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
 import { createAcpProcessPool } from './acpProcessPool'
+import { turnLock } from '../../../services/localAgents/turnLock'
 import { startAcpConnection } from './acpConnection'
 import type { AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
 import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpScript, type FakeAcpStep } from './testSupport/fakeAcp'
@@ -3094,4 +3095,71 @@ it('prepares credentials for the agent alone: delivery does not depend on the cu
   expect(seen).toHaveLength(1)
   expect(seen[0]).toHaveLength(2)
   expect((seen[0][0] as { id: string }).id).toBe(ROW.id)
+})
+
+describe('concurrent turns on one agent', () => {
+  /** The production dependency: a shared hold per turn. */
+  const sharedLock: AcpDriverDeps['withLock'] = (agentId, owner, fn) => turnLock.withSharedLock(agentId, owner, fn)
+  const chunk = (text: string): FakeAcpStep => ({
+    kind: 'update',
+    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }
+  })
+
+  afterEach(() => turnLock.releaseAll())
+
+  it('runs two chats’ turns side by side in one process', async () => {
+    let inside = 0
+    let peak = 0
+    const w = world({
+      script: { newSession: { uniqueIds: true }, prompt: { emit: [{ kind: 'delay', ms: 250 }, chunk('Hello.')] } },
+      deps: { withLock: (agentId, owner, fn) => sharedLock(agentId, owner, async () => {
+        inside++; peak = Math.max(peak, inside)
+        try { return await fn() } finally { inside-- }
+      }) }
+    })
+    const [one, two] = await Promise.all([w.run({ chatId: 'chat-a' }), w.run({ chatId: 'chat-b' })])
+    expect(one.error).toBeUndefined()
+    expect(two.error).toBeUndefined()
+    expect(one.text).toBe('Hello.')
+    expect(two.text).toBe('Hello.')
+    expect(peak).toBe(2)
+    expect(w.fake.received('session/prompt')).toHaveLength(2)
+    expect(w.fake.log().filter((entry) => entry.dir === 'start')).toHaveLength(1)
+    expect(turnLock.isLocked(AGENT_ID)).toBe(false)
+  })
+
+  it('keeps a sibling turn’s process when another turn is stopped while its session starts', async () => {
+    const w = world({
+      script: { newSession: { uniqueIds: true }, setMode: { delayMs: 300 }, prompt: { emit: [{ kind: 'delay', ms: 700 }, chunk('Hello.')] } },
+      setup: { modeId: 'default' },
+      deps: { withLock: sharedLock }
+    })
+    const first = w.run({ chatId: 'chat-a' })
+    await waitFor(() => w.fake.received('session/prompt').length === 1, 'the first turn to prompt')
+    const controller = new AbortController()
+    const second = w.run({ chatId: 'chat-b', signal: controller.signal })
+    await waitFor(() => w.fake.received('session/set_mode').length === 2, 'the second turn’s setup')
+    controller.abort()
+    expect((await second).error).toBeUndefined()
+    // Nor does the stop retire that process: a third chat runs beside the first
+    // instead of waiting for it to drain.
+    let firstDone = false
+    void first.then(() => { firstDone = true })
+    const third = w.run({ chatId: 'chat-c' })
+    await waitFor(() => w.fake.received('session/prompt').length === 2, 'the third turn to prompt')
+    expect(firstDone).toBe(false)
+    const result = await first
+    expect(result.error).toBeUndefined()
+    expect(result.text).toBe('Hello.')
+    expect((await third).error).toBeUndefined()
+  })
+
+  it('refuses a turn while an exclusive folder write holds the agent', async () => {
+    const w = world({ script: SAYS_HELLO, deps: { withLock: sharedLock } })
+    const editor = turnLock.acquire(AGENT_ID, 'editor')
+    try {
+      expect((await w.run()).error?.message).toMatch(/busy/i)
+      expect(w.fake.log().some((entry) => entry.dir === 'start')).toBe(false)
+    } finally { editor.release() }
+  })
 })

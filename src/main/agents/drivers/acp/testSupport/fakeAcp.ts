@@ -79,7 +79,8 @@ export interface FakeAcpScript {
   initialize?: FakeAcpHandlerScript
   /** Explicitly log attempted authentication; probes must not invoke it. */
   authenticate?: FakeAcpHandlerScript
-  newSession?: FakeAcpHandlerScript & { sessionId?: string }
+  /** `uniqueIds`: every `session/new` answers a fresh id (`ses_fake_1`, …), for concurrent chats in one process. */
+  newSession?: FakeAcpHandlerScript & { sessionId?: string; uniqueIds?: boolean }
   loadSession?: FakeAcpHandlerScript
   setMode?: FakeAcpHandlerScript
   setConfigOption?: FakeAcpHandlerScript

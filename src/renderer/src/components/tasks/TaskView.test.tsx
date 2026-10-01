@@ -729,6 +729,17 @@ describe('the other states', () => {
     })
   })
 
+  it('says why a blocked task with nothing waiting stopped, when it recorded a reason', async () => {
+    await renderTask({ status: 'blocked', executor: 'desktop', remote: null, errorMessage: 'The active profile changed before launch.' })
+    await screen.findByText('The active profile changed before launch.')
+    expect(screen.queryByText(/the request it stopped on expired/)).toBeNull()
+  })
+
+  it('falls back to the expired-request sentence for a blocked task with no recorded reason', async () => {
+    await renderTask({ status: 'blocked', executor: 'desktop', remote: null, errorMessage: null })
+    await screen.findByText(/the request it stopped on expired/)
+  })
+
   it('renders a replica running in a connected service read-only', async () => {
     // Nothing produces one yet — the adapters land in steps 8–9 — but the page
     // binds to the shape rather than to what happens to fill it today. There is

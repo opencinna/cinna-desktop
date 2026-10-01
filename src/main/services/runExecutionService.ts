@@ -280,6 +280,8 @@ export const runExecutionService = {
     nested?: { toolCallId: string }
     coordinator?: CoordinatorToolProvider
     inputOrigin?: TurnInputOrigin
+    /** Wait for the agent's turn lock instead of refusing while it is held. */
+    queueWhenBusy?: boolean
   }): RunHandle {
     if (options.handbackEligible && (!options.runnerTaskId || !options.agentId || options.coordinator)) {
       throw new Error('Handback requires a handed-off agent owned by a task runner.')
@@ -455,6 +457,7 @@ export const runExecutionService = {
       toolCallBudget: options.toolCallBudget,
       inputOrigin: options.inputOrigin,
       runnerOwned: !!options.runnerTaskId,
+      queueWhenBusy: options.queueWhenBusy,
       handbackEligible: options.handbackEligible
     }).catch((error) => {
       const message = error instanceof Error ? error.message : String(error)
@@ -473,6 +476,7 @@ interface RunLifecycle {
   nested?: { toolCallId: string }
   handbackEligible?: boolean
   runnerOwned: boolean
+  queueWhenBusy?: boolean
   inputOrigin?: TurnInputOrigin
   observe: RunObserver
   finish: TurnCompletion
@@ -527,7 +531,7 @@ async function resolveAndRun(
     inputOrigin: lifecycle.inputOrigin,
     includeToolResults: lifecycle.runnerOwned,
     runnerOwned: lifecycle.runnerOwned,
-    queueWhenBusy: lifecycle.runnerOwned,
+    queueWhenBusy: lifecycle.runnerOwned || !!lifecycle.queueWhenBusy,
     handbackEligible: lifecycle.handbackEligible,
     nested: lifecycle.nested,
     toolCallBudget: lifecycle.toolCallBudget,
@@ -677,7 +681,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
         // closed while your message was being answered" about a message nobody
         // typed, and a remote resend would carry an id `resendAgentTurn`
         // refuses. Not `runnerOwned`, which also decides `includeToolResults`
-        // and `queueWhenBusy`.
+        // and (with a scheduled launch's own flag) `queueWhenBusy`.
         marker: {
           profileId: profileUserId,
           userMessageId: isDesktopAuthored(input.inputOrigin) ? null : userMessageId ?? null,
@@ -798,7 +802,8 @@ function bindTurn(input: {
         ...(io.registerSnapshot ? { registerSnapshot: io.registerSnapshot } : {}),
         ...(input.runScope ? { runScope: input.runScope } : {}),
         onEvent: io.onEvent
-      })
+      }),
+    !!input.queueWhenBusy
   )
 }
 

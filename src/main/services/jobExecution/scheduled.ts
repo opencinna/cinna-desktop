@@ -8,7 +8,6 @@ import { createLogger } from '../../logger/logger'
 import type { RunScope } from '../runExecutionService'
 import { desktopJobExecutor } from './desktop'
 import { canScheduleJob } from '../../../shared/localJobSchedules'
-import { turnLock } from '../localAgents/turnLock'
 
 const logger = createLogger('scheduled-job')
 
@@ -86,16 +85,13 @@ export async function prepareScheduledJob(scope: RunScope, job: JobRow, current:
         if (launched) throw new Error('This prepared job was already launched.')
         const task = taskRepo.getById(scope.profileUserId, prepared.taskId)
         if (!task || task.deletedAt || task.status !== 'in_progress') throw new Error('This prepared job is no longer awaiting launch.')
-        // A due occurrence is never skipped for earlier work, but an agent still
-        // in a turn would refuse this one as a failure. Throwing here takes the
-        // caller's interrupt path instead: the task is blocked with this reason
-        // and the occurrence reads "Needs review", for the user to re-run or dismiss.
-        if (prepared.agentId && turnLock.isLocked(prepared.agentId)) {
-          throw new Error('The agent was still busy with an earlier turn, so this scheduled run did not start. Re-run it from the task, or dismiss it.')
-        }
+        // A due occurrence is never skipped for earlier work: it runs beside the
+        // agent's other turns, and waits out only the desktop's own exclusive
+        // folder writes (an editor save, credential files) rather than failing.
         const handle = runExecutionService.start(scope, { chatId: prepared.chatId, content: prepared.prompt,
           ...(prepared.agentId ? { addressedAgentId: prepared.agentId } : {}) }, {
           preserveOnRefusal: true,
+          queueWhenBusy: true,
           observe: (ctx, event) => inboxService.recordRunEvent(ctx, event),
           onAccepted: () => assertScope()
         })

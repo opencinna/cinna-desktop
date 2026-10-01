@@ -883,7 +883,9 @@ function Attention({ task, asks }: { task: TaskDto; asks: AskState }): React.JSX
     )
   }
 
-  if (task.status === 'blocked') return <RerunBanner task={task} />
+  // A blocked task with no ask says why it stopped when it recorded a reason —
+  // an interrupted scheduled launch, say — rather than blaming an expired request.
+  if (task.status === 'blocked') return <RerunBanner task={task} reason={task.errorMessage ?? undefined} />
 
   return null
 }

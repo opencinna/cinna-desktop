@@ -139,8 +139,8 @@ function finalizeOrphanedRuns(): void {
  * running turn, a task runner's reservation, a handoff being made, an
  * answerable next-message ask,
  * or — for its task — another executor, a runtime, an unresolved handoff, or
- * the user: a `blocked` task is waiting for them (a scheduled launch refused
- * because its agent was busy reads "Needs review" and must stay that way).
+ * the user: a `blocked` task is waiting for them (an interrupted scheduled
+ * launch reads "Needs review" and must stay that way).
  * Such a run is left for that owner to end.
  */
 function ownedBySomeoneElse(run: JobRunRow, chatId: string, hasMarker: boolean): boolean {

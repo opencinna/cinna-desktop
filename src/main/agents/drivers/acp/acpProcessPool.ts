@@ -26,8 +26,11 @@
  * process still holds the old ones — so the launcher summarises all of it into
  * `spec.key`, and a key that moved means the next `acquire` retires the old
  * process before the turn starts rather than running the turn against stale
- * config. The key is a digest precisely because it must be safe to hold in
- * memory and to log; the values behind it include credentials.
+ * config. Other chats' turns may still be running on it: the acquire waits
+ * for them to finish (the process to drain) and then replaces it, rather than
+ * killing their turns or failing its own. The key is a digest precisely
+ * because it must be safe to hold in memory and to log; the values behind it
+ * include credentials.
  *
  * ## Why holds instead of "is a turn running"
  *
@@ -88,8 +91,41 @@ export interface AcpProcessPoolDeps {
   lastActivityAt?: (agentId: string) => number | undefined
 }
 
+/**
+ * The callers waiting on one start. Concurrent turns of one agent join the
+ * same start, so no single caller's Stop may cancel it: each caller leaves on
+ * its own abort, and the start is canceled only when the last one has left.
+ */
+interface StartGroup {
+  /** Absent when the start cannot be canceled (a shared runtime, or a first caller with no signal). */
+  cancel?: AbortController
+  /** Callers still waiting; `Infinity` once one joined that can never leave. */
+  waiters: number
+  /** The start with its bookkeeping done, which every caller's promise follows. */
+  settled: Promise<AcpConnection>
+  /** Who of this start's callers still counts as blocked; see {@link Blocked}. */
+  blocked: Blocked
+}
+
+/**
+ * The callers of one start that are still waiting on it, for the drain count.
+ *
+ * A caller takes its {@link AcpProcessPool.hold} *before* it acquires, so a
+ * caller waiting for the live process to drain is itself one of the holds on
+ * it. The process is drained when every hold left belongs to such a caller:
+ * counting them is what keeps two waiters from waiting on each other. A caller
+ * stops counting when it aborts, and all of a start's callers stop counting
+ * the moment that start resolves — from then on they are using the process,
+ * not waiting for it.
+ */
+interface Blocked {
+  callers: Set<() => void>
+  /** The start has resolved; a caller joining now is not blocked. */
+  finished: boolean
+}
+
 interface Entry {
-  startSignal?: AbortSignal
+  startGroup?: StartGroup
   state: AcpProcessState
   /** The live process, if there is one. */
   conn?: AcpConnection
@@ -102,8 +138,16 @@ interface Entry {
   reap?: TimerHandle
   /** When the last hold was released (or the start finished), for the busy ceiling's fallback. */
   idleSince?: number
-  /** A retire arrived while a turn held the process; stop on the last release. */
+  /**
+   * A retire arrived while a turn held the process; stop on the last release.
+   * A marked live process is never handed to a new caller: it waits for the
+   * drain and gets a fresh one.
+   */
   retireOnRelease: boolean
+  /** Callers blocked inside `acquire` (every start's {@link Blocked} callers). */
+  blocked: number
+  /** Starts waiting for the live process to drain; woken by anything that may have drained it. */
+  drainWaiters: Set<() => void>
 }
 
 export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
@@ -114,6 +158,8 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
   const idleReapMs = deps.idleReapMs ?? ACP_IDLE_REAP_MS
   const entries = new Map<string, Entry>()
   const aliases = new Map<string, string>()
+  /** Set by `shutdown`: a start waiting out a drain must not spawn a process the app is quitting past. */
+  let closing = false
   const ownerHolds = new Map<string, number>()
   const listeners = new Set<(agentId: string, state: AcpProcessState) => void>()
   const keyFor = (agentId: string): string => aliases.get(agentId) ?? agentId
@@ -134,7 +180,7 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
   const entryFor = (agentId: string): Entry => {
     const existing = entries.get(agentId)
     if (existing) return existing
-    const fresh: Entry = { state: { state: 'stopped' }, holds: 0, retireOnRelease: false }
+    const fresh: Entry = { state: { state: 'stopped' }, holds: 0, retireOnRelease: false, blocked: 0, drainWaiters: new Set() }
     entries.set(agentId, fresh)
     return fresh
   }
@@ -159,12 +205,63 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
     entry.reap = undefined
   }
 
+  /** Something that may have drained the live process happened: every waiting start looks again. */
+  const wakeDrain = (entry: Entry): void => {
+    const waiters = [...entry.drainWaiters]
+    entry.drainWaiters.clear()
+    for (const wake of waiters) wake()
+  }
+
+  /** Until the next {@link wakeDrain}, or the signal's abort. */
+  const nextDrainChange = (entry: Entry, signal: AbortSignal | undefined): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const aborted = (): void => {
+        entry.drainWaiters.delete(woken)
+        reject(new Error('The ACP start was canceled.'))
+      }
+      const woken = (): void => {
+        signal?.removeEventListener('abort', aborted)
+        resolve()
+      }
+      if (signal?.aborted) {
+        reject(new Error('The ACP start was canceled.'))
+        return
+      }
+      entry.drainWaiters.add(woken)
+      signal?.addEventListener('abort', aborted, { once: true })
+    })
+
+  /**
+   * Count one caller as blocked on this start until it aborts or the start
+   * resolves. A caller with no signal counts until the start resolves.
+   */
+  const countBlocked = (entry: Entry, blocked: Blocked, signal: AbortSignal | undefined): void => {
+    if (blocked.finished || signal?.aborted) return
+    const leave = (): void => {
+      if (!blocked.callers.delete(leave)) return
+      signal?.removeEventListener('abort', leave)
+      entry.blocked -= 1
+    }
+    blocked.callers.add(leave)
+    entry.blocked += 1
+    signal?.addEventListener('abort', leave, { once: true })
+    // One more of the holds is a waiter's: that may be the drain.
+    wakeDrain(entry)
+  }
+
+  const finishBlocked = (blocked: Blocked): void => {
+    blocked.finished = true
+    for (const leave of [...blocked.callers]) leave()
+  }
+
   const stopNow = async (agentId: string, entry: Entry, why: string): Promise<void> => {
     cancelReap(entry)
     const conn = entry.conn
     entry.conn = undefined
     entry.key = undefined
     entry.retireOnRelease = false
+    // A start waiting for this process to drain has nothing left to wait for.
+    wakeDrain(entry)
     if (!conn) return
     logger.info('stopping an ACP process', { agentId, why, pid: conn.pid })
     setState(agentId, entry, { state: 'stopped' })
@@ -225,9 +322,48 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
       if (entry.conn !== conn) return
       entry.conn = undefined
       entry.key = undefined
+      // A retire mark on a live process was aimed at this one, which is gone.
+      entry.retireOnRelease = false
       cancelReap(entry)
       logger.warn('an ACP process exited', { agentId, code: exit.code, signal: exit.signal })
       setState(agentId, entry, { state: 'exited', exit, at: now() })
+      // A start waiting for it to drain may proceed.
+      wakeDrain(entry)
+    })
+  }
+
+  /**
+   * One caller's promise for a start in flight. A caller that aborts gets its
+   * rejection at once and leaves; the start itself is canceled only when no
+   * caller is left waiting on it. A caller that cannot leave — no signal, or a
+   * shared runtime, whose owners race their own signals and are cleaned up by
+   * retirement — pins the start for good.
+   */
+  const join = (entry: Entry, group: StartGroup, signal: AbortSignal | undefined, shared: boolean): Promise<AcpConnection> => {
+    // A shared caller cannot leave the start, but it stops counting as a
+    // drain waiter on its own abort all the same: its hold is about to go.
+    countBlocked(entry, group.blocked, signal)
+    if (shared || !signal) {
+      group.waiters = Number.POSITIVE_INFINITY
+      return group.settled
+    }
+    group.waiters += 1
+    return new Promise<AcpConnection>((resolve, reject) => {
+      const aborted = (): void => {
+        signal.removeEventListener('abort', aborted)
+        reject(new Error('The ACP start was canceled.'))
+        group.waiters -= 1
+        if (group.waiters === 0) group.cancel?.abort()
+      }
+      if (signal.aborted) {
+        aborted()
+        return
+      }
+      signal.addEventListener('abort', aborted, { once: true })
+      group.settled.then(
+        (conn) => { signal.removeEventListener('abort', aborted); resolve(conn) },
+        (err) => { signal.removeEventListener('abort', aborted); reject(err) }
+      )
     })
   }
 
@@ -241,49 +377,76 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
     agentId = keyFor(agentId)
     const entry = entryFor(agentId)
     cancelReap(entry)
-    entry.retireOnRelease = false
+    // A retire mark aimed at a process that no longer exists (it exited, or
+    // its start failed) must not doom the fresh one this acquire starts. A
+    // mark on a live process or a start in flight stands: other turns of this
+    // agent may share that process, and it dies after the last release. A new
+    // caller is not handed a marked live process; it waits for the drain.
+    if (!entry.conn && !entry.starting) entry.retireOnRelease = false
     // Concurrent turns on one agent share one start. Only the key decides: two
     // callers asking for the same key want the same process by definition.
-    if (entry.starting && entry.startKey === spec.key && !entry.startSignal?.aborted) return entry.starting
+    // A start every caller already left is canceled, and is not joined.
+    const current = entry.startGroup
+    if (entry.starting && current && entry.startKey === spec.key && !current.cancel?.signal.aborted) {
+      return join(entry, current, signal, shared)
+    }
 
+    // One chat canceling a shared startup cannot cancel another chat's
+    // process: a shared start gets no cancel at all. Its caller races its own
+    // signal; retirement handles the case where every owner leaves before
+    // initialization finishes.
+    const cancel = signal && !shared ? new AbortController() : undefined
+    // A caller that already stopped never spawns anything.
+    if (signal?.aborted) cancel?.abort()
+    const startSignal = cancel?.signal
+    const blocked: Blocked = { callers: new Set(), finished: false }
     const run = (async (): Promise<AcpConnection> => {
-      // A start already in flight for a *different* key still owns the entry;
-      // let it finish rather than spawning a second process behind its back.
-      if (entry.starting) await entry.starting.catch(() => undefined)
+      try {
+        // A start already in flight for a *different* key still owns the entry;
+        // let it finish rather than spawning a second process behind its back.
+        if (entry.starting) await entry.starting.catch(() => undefined)
 
-      if (signal?.aborted) throw new Error('The ACP start was canceled.')
-      if (entry.conn && (entry.key !== spec.key || !entry.conn.alive)) {
-        if (entry.conn.alive && entry.key !== spec.key && entry.holds > 1) {
-          throw new Error('This shared runtime changed while another chat is running. Try again when its turn finishes.')
+        if ((shared ? signal : startSignal)?.aborted) throw new Error('The ACP start was canceled.')
+        // The live process cannot serve this start — its key moved, or a retire
+        // marked it — but other turns may still be using it. One process per
+        // agent: wait for it to drain (every hold left is a caller blocked in
+        // here), then replace it. A dead one is replaced at once. The wait ends
+        // early when every caller of this start has left (`startSignal`); a
+        // shared start has no such signal, and its callers race their own.
+        while (entry.conn && (entry.key !== spec.key || entry.retireOnRelease || !entry.conn.alive)) {
+          if (entry.conn.alive && entry.holds > entry.blocked) {
+            await nextDrainChange(entry, startSignal)
+            continue
+          }
+          await stopNow(agentId, entry, !entry.conn.alive ? 'not alive' : entry.key !== spec.key ? 'spec changed' : 'retired')
         }
-        await stopNow(agentId, entry, entry.key === spec.key ? 'not alive' : 'spec changed')
-      }
-      if (entry.conn) return entry.conn
+        if (startSignal?.aborted || closing) throw new Error('The ACP start was canceled.')
+        if (entry.conn) return entry.conn
 
-      setState(agentId, entry, { state: 'starting' })
-      // One chat canceling a shared startup cannot cancel another chat's
-      // process. Its caller races its own signal; retirement handles the case
-      // where every owner leaves before initialization finishes.
-      const conn = await (signal && !shared ? deps.start(spec, init, { signal }) : deps.start(spec, init))
-      if (signal?.aborted && !shared) { await conn.dispose(); throw new Error('The ACP start was canceled.') }
-      entry.conn = conn
-      entry.key = spec.key
-      watch(agentId, entry, conn)
-      setState(agentId, entry, { state: 'running', pid: conn.pid, since: now() })
-      return conn
+        setState(agentId, entry, { state: 'starting' })
+        const conn = await (startSignal ? deps.start(spec, init, { signal: startSignal }) : deps.start(spec, init))
+        if (startSignal?.aborted) { await conn.dispose(); throw new Error('The ACP start was canceled.') }
+        entry.conn = conn
+        entry.key = spec.key
+        watch(agentId, entry, conn)
+        setState(agentId, entry, { state: 'running', pid: conn.pid, since: now() })
+        return conn
+      } finally {
+        // Its callers are using the process now (or have their failure): none
+        // of their holds is a waiter's any more. Before the next start in the
+        // chain looks at the count.
+        finishBlocked(blocked)
+      }
     })()
 
-    entry.starting = run
-    entry.startKey = spec.key
-    entry.startSignal = shared ? undefined : signal
     const done = (): void => {
       if (entry.starting === run) {
         entry.starting = undefined
         entry.startKey = undefined
-        entry.startSignal = undefined
+        entry.startGroup = undefined
       }
     }
-    return run.then(
+    const settled = run.then(
       (conn) => {
         done()
         // A retire (or a shutdown) that landed while this was starting has
@@ -299,6 +462,13 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
         throw err
       }
     )
+    // Every caller may have left before it settles; its failure is theirs, not unhandled.
+    settled.catch(() => undefined)
+    const group: StartGroup = { cancel, waiters: 0, settled, blocked }
+    entry.starting = run
+    entry.startKey = spec.key
+    entry.startGroup = group
+    return join(entry, group, signal, shared)
   }
 
   const hold = (agentId: string): (() => void) => {
@@ -316,6 +486,8 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
       if (remaining > 0) ownerHolds.set(ownerId, remaining)
       else ownerHolds.delete(ownerId)
       entry.holds -= 1
+      // The holds left may all be callers waiting for this process to drain.
+      wakeDrain(entry)
       if (entry.holds > 0) return
       if (entry.retireOnRelease) {
         void stopNow(agentId, entry, 'retired')
@@ -358,10 +530,12 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
       const entry = entries.get(poolKey)
       if (entry) notify(agentId, entry.state)
     },
-    hasOtherOwners: (agentId) => {
+    hasOtherOwners: (agentId, ownHolds) => {
       const key = keyFor(agentId)
       const entry = entries.get(key)
-      return owners(key).some((id) => id !== key && id !== agentId) || (entry?.holds ?? 0) > (ownerHolds.get(agentId) ?? 0)
+      // `ownHolds` is what the caller itself holds: every other hold — another
+      // alias's, or a sibling turn's of this very agent — is another owner.
+      return owners(key).some((id) => id !== key && id !== agentId) || (entry?.holds ?? 0) > (ownHolds ?? ownerHolds.get(agentId) ?? 0)
     },
     peek: (agentId, specKey) => {
       const entry = entries.get(keyFor(agentId))
@@ -380,6 +554,7 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
       return () => listeners.delete(listener)
     },
     shutdown: async () => {
+      closing = true
       /**
        * **Every live process is killed before the first await, and the reason is
        * that nobody awaits this.**
@@ -407,9 +582,9 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
        *
        * A process that finishes starting after the app is gone is an orphan
        * holding a session open, so they are waited out — and this half is the
-       * one an unawaited `will-quit` can lose. It is a ~1 s window per agent,
-       * and the alternative (refusing to start a process while quitting) needs a
-       * quitting flag the pool does not have; noted rather than papered over.
+       * one an unawaited `will-quit` can lose. It is a ~1 s window per agent.
+       * `closing` keeps it from growing: a start still waiting out a drain
+       * refuses here, so only starts already spawning are left to wait out.
        */
       const starting = [...entries.entries()]
         .filter(([, entry]) => entry.starting !== undefined)

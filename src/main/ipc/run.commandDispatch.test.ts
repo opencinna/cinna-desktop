@@ -173,7 +173,8 @@ describe('run:send — the /run: dispatch call site', () => {
       '/run:check', // wireContent
       'owner-1', // agentOwnerId
       'folder:alpha', // agentId
-      expect.any(Function) // the driver's turn, bound
+      expect.any(Function), // the driver's turn, bound
+      false // an interactive send never queues behind a busy agent
     )
     expect(streamToAgent).toHaveBeenCalledTimes(1)
     const call = streamToAgent.mock.calls[0][0] as { run: unknown }

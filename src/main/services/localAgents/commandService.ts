@@ -15,30 +15,23 @@
  *
  * ## The turn-lock decision
  *
- * A command runs under the same per-agent {@link turnLock} a model turn does.
- * Invariant 3 says the desktop never writes into a folder while a turn
- * streams, but the invariant's actual subject is *any* write racing the page
- * editors and the watcher — not specifically the engine. A `/run:<name>`
+ * A command takes the same per-agent {@link turnLock} a model turn does, and
+ * takes it the same way: **shared**. Invariant 3's actual subject is the
+ * desktop's *own* folder writes — the page editors, credential files, the
+ * watcher's rescan — racing whatever runs in the folder. A `/run:<name>`
  * script is free to write anywhere under the folder (a status updater
  * touching `app-data/storage/STATUS.md` is the catalog's own worked example),
- * so it is exactly the kind of writer the lock exists to serialize against:
- * without it, an editor save or a concurrent model turn could land mid-script
- * and the folder would show a half-written file to whichever side lost the
- * race. Taking the lock also gets two more invariants for free, both already
- * proven generically for other owner pairs (`turnLock.test.ts`,
- * `localAgentService.test.ts:285-293`) and now proven for this exact pair
- * too: a second `/run:` for the same agent refuses immediately with the
- * existing "busy" message instead of racing (`commandService.test.ts`'s
- * "the turn lock" suite), an **editor write** is refused the same way while a
- * command is running (`turnLock.acquire(agentId, 'editor')` throws — same
- * suite, "blocks an editor write"; mutation-checked: removing the
- * `turnLock.withLock` wrapper fails that test), and the folder watcher defers
- * its rescan until the command's writes have settled (this is
- * `watcherService`'s own `turnLock.isLocked`/`whenFree` consumption,
- * unmodified by this file and covered by `watcherService.test.ts` — not
- * re-proven here for the 'command' owner specifically). Lock release is
- * proven after a clean exit, a spawn failure, an abort and a timeout, all in
- * the same suite.
+ * so it is exactly the kind of writer those must not land under: an **editor
+ * write** is refused while a command is running (`turnLock.acquire(agentId,
+ * 'editor')` throws — `commandService.test.ts`'s "the turn lock" suite,
+ * "blocks an editor write"), a command is refused with the existing "busy"
+ * message (or, scheduled, queued) while such an exclusive write holds the
+ * agent, and the folder watcher defers its rescan until every holder has
+ * left (`watcherService`'s own `turnLock.isLocked`/`whenFree` consumption,
+ * covered by `watcherService.test.ts`). Commands and model turns on the same
+ * agent run side by side, as turns of different chats do: what they do to
+ * the folder between them is the user's concern. Lock release is proven after
+ * a clean exit, a spawn failure, an abort and a timeout, all in the same suite.
  *
  * `turnLock.anyHeld()` — the engine-wide predicate — is deliberately NOT used
  * here: a command never touches the shared `opencode serve` process, so there
@@ -240,8 +233,9 @@ function execute(
 
 /**
  * Shared environment/lock lifetime; resolves only after the command lock is released.
- * Interactive callers are refused at once while the agent is busy (`busy`); a
- * scheduled run passes `queueSignal` and waits its turn instead, until aborted.
+ * Shared with turns and other commands; interactive callers are refused at once
+ * while an exclusive folder write holds the agent (`busy`), and a scheduled run
+ * passes `queueSignal` and waits it out instead, until aborted.
  */
 async function executeForAgent(agentId: string, agentDir: string, localCommand: string, signal?: AbortSignal,
   timeoutMs = COMMAND_TIMEOUT_MS, queueSignal?: AbortSignal, onStart?: () => void): Promise<SpawnOutcome> {
@@ -261,7 +255,7 @@ async function executeForAgent(agentId: string, agentDir: string, localCommand: 
     if (outcome.spawnError) outcome.spawnError = redactCredentialText(outcome.spawnError)
     return outcome
   }
-  return queueSignal ? turnLock.withQueuedLock(agentId, 'command', queueSignal, body) : turnLock.withLock(agentId, 'command', body)
+  return queueSignal ? turnLock.withQueuedSharedLock(agentId, 'command', queueSignal, body) : turnLock.withSharedLock(agentId, 'command', body)
 }
 
 export interface CommandRunOutcome {
@@ -280,8 +274,9 @@ export interface CommandRunOutcome {
    */
   aborted: boolean
   /**
-   * The per-agent turn lock refused this run — a model turn, an editor save or
-   * another command holds it. Always `ok: false`, but like {@link aborted} it
+   * The per-agent turn lock refused this run — an exclusive folder write (an
+   * editor save, credential files, a delete) holds it; turns and other
+   * commands do not. Always `ok: false`, but like {@link aborted} it
    * is not a failure *of the command*: nothing ran, and the same call a moment
    * later may well succeed. Without this flag the refusal is structurally
    * indistinguishable from a script that exited non-zero, because
@@ -367,7 +362,9 @@ export const commandService = {
     agentId: string,
     name: string,
     signal?: AbortSignal,
-    timeoutMs: number = COMMAND_TIMEOUT_MS
+    timeoutMs: number = COMMAND_TIMEOUT_MS,
+    /** Wait for a busy agent instead of refusing — a scheduled turn's `/run:`. */
+    queueWhenBusy = false
   ): Promise<CommandRunOutcome> {
     let located: ReturnType<typeof localAgentService.locate>
     try {
@@ -424,7 +421,8 @@ export const commandService = {
     }
 
     try {
-      const outcome = await executeForAgent(agentId, agentDir, localCommand, signal, timeoutMs)
+      const outcome = await executeForAgent(agentId, agentDir, localCommand, signal, timeoutMs,
+        queueWhenBusy ? signal ?? new AbortController().signal : undefined)
 
       if (outcome.spawnError) {
         return {
@@ -513,9 +511,10 @@ export const commandService = {
     userId: string,
     agentId: string,
     name: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    queueWhenBusy = false
   ): Promise<RunAgentTurnResult> {
-    const outcome = await this.run(userId, agentId, name, signal)
+    const outcome = await this.run(userId, agentId, name, signal, COMMAND_TIMEOUT_MS, queueWhenBusy)
     const invocation = `/run:${name}`
     if (!outcome.ok) {
       return fail(outcome.error ?? `"${invocation}" failed.`, outcome.output || outcome.error)
@@ -547,10 +546,11 @@ export function resolveCommandRunner(
   wireContent: string,
   agentOwnerId: string,
   agentId: string,
-  fallback: TurnRun
+  fallback: TurnRun,
+  queueWhenBusy = false
 ): TurnRun {
   if (commands !== 'catalog') return fallback
   const name = commandService.matchRunCommand(wireContent)
   if (!name) return fallback
-  return (io) => commandService.runForTurn(agentOwnerId, agentId, name, io.signal)
+  return (io) => commandService.runForTurn(agentOwnerId, agentId, name, io.signal, queueWhenBusy)
 }

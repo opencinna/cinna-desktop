@@ -131,4 +131,99 @@ describe('turnLock', () => {
     expect(turnLock.isLocked('a')).toBe(false)
   })
 
+
+  describe('shared holds', () => {
+    it('lets any number of shared holders coexist and frees the agent only at zero', () => {
+      const one = turnLock.acquireShared('a', 'turn')
+      const two = turnLock.acquireShared('a', 'command')
+      const ran = vi.fn()
+      turnLock.whenFree('a', ran)
+      expect(turnLock.isLocked('a')).toBe(true)
+      expect(turnLock.isExclusivelyLocked('a')).toBe(false)
+      one.release()
+      expect(turnLock.isLocked('a')).toBe(true)
+      expect(ran).not.toHaveBeenCalled()
+      two.release()
+      expect(turnLock.isLocked('a')).toBe(false)
+      expect(ran).toHaveBeenCalledOnce()
+    })
+
+    it('refuses an exclusive holder while a shared one holds, and a shared one while an exclusive one holds', () => {
+      const turn = turnLock.acquireShared('a', 'turn')
+      expect(() => turnLock.acquire('a', 'editor')).toThrow(/busy/i)
+      turn.release()
+      const editor = turnLock.acquire('a', 'editor')
+      expect(turnLock.isExclusivelyLocked('a')).toBe(true)
+      expect(() => turnLock.acquireShared('a', 'turn')).toThrow(/busy/i)
+      editor.release()
+      expect(() => turnLock.acquireShared('a', 'turn')).not.toThrow()
+    })
+
+    it('a stale shared handle cannot release a sibling’s hold', () => {
+      const one = turnLock.acquireShared('a', 'turn')
+      const two = turnLock.acquireShared('a', 'turn')
+      one.release()
+      one.release()
+      expect(turnLock.isLocked('a')).toBe(true)
+      expect(() => turnLock.acquire('a', 'editor')).toThrow(/busy/i)
+      two.release()
+      expect(turnLock.isLocked('a')).toBe(false)
+    })
+
+    it('releases through withSharedLock however the body ends, while siblings run', async () => {
+      let inside = 0
+      let peak = 0
+      const body = async (): Promise<void> => { inside++; peak = Math.max(peak, inside); await Promise.resolve(); inside-- }
+      await Promise.all([turnLock.withSharedLock('a', 'turn', body), turnLock.withSharedLock('a', 'turn', body)])
+      expect(peak).toBe(2)
+      await expect(turnLock.withSharedLock('a', 'turn', () => { throw new Error('boom') })).rejects.toThrow('boom')
+      expect(turnLock.isLocked('a')).toBe(false)
+    })
+
+    it('queues a shared holder only behind an exclusive one, and admits queued shared holders together', async () => {
+      const signal = new AbortController().signal
+      const free: string[] = []
+      await turnLock.withQueuedSharedLock('a', 'turn', signal, () => { free.push('immediate') })
+      expect(free).toEqual(['immediate'])
+
+      const editor = turnLock.acquire('a', 'editor')
+      let inside = 0
+      let peak = 0
+      const body = async (): Promise<void> => { inside++; peak = Math.max(peak, inside); await new Promise((r) => setTimeout(r, 5)); inside-- }
+      const first = turnLock.withQueuedSharedLock('a', 'turn', signal, body)
+      const second = turnLock.withQueuedSharedLock('a', 'command', signal, body)
+      await Promise.resolve()
+      expect(inside).toBe(0)
+      editor.release()
+      await Promise.all([first, second])
+      expect(peak).toBe(2)
+      expect(turnLock.isLocked('a')).toBe(false)
+    })
+
+    it('queues an exclusive holder until every shared holder has left', async () => {
+      const one = turnLock.acquireShared('a', 'turn')
+      const two = turnLock.acquireShared('a', 'turn')
+      const entered = vi.fn()
+      const queued = turnLock.withQueuedLock('a', 'credentials', new AbortController().signal, entered)
+      one.release()
+      await Promise.resolve()
+      expect(entered).not.toHaveBeenCalled()
+      two.release()
+      await queued
+      expect(entered).toHaveBeenCalledOnce()
+      expect(turnLock.isLocked('a')).toBe(false)
+    })
+
+    it('removes a cancelled queued shared holder and never runs its callback', async () => {
+      const held = turnLock.acquire('a', 'editor')
+      const controller = new AbortController()
+      const callback = vi.fn()
+      const queued = turnLock.withQueuedSharedLock('a', 'turn', controller.signal, callback)
+      controller.abort()
+      await expect(queued).rejects.toThrow('stopped')
+      held.release()
+      expect(callback).not.toHaveBeenCalled()
+      expect(turnLock.isLocked('a')).toBe(false)
+    })
+  })
 })

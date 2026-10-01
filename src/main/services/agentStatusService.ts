@@ -19,10 +19,9 @@ const logger = createLogger('agent-status')
  * This is the batch path: polled every 45 s by `useAgentStatus` and fanned out
  * by "Refresh all". It reads `app-data/storage/STATUS.md` and stops there, for
  * the same reason the remote batch route is cache-only — and for one more that
- * is local-only. `commandService.run()` takes the per-agent turn lock as owner
- * `'command'`, so a periodic tick that ran `status_refresh_command` would make
- * an editor save, and the user's next message, refuse *on a timer*, for work
- * nobody asked for. Running the command belongs to the folder status source
+ * is local-only. `commandService.run()` takes the per-agent turn lock (shared)
+ * as owner `'command'`, so a periodic tick that ran `status_refresh_command`
+ * would make an editor save refuse *on a timer*, for work nobody asked for. Running the command belongs to the folder status source
  * handling an explicit manual refresh.
  *
  * Never throws, and one bad folder never costs another its row: an agent whose

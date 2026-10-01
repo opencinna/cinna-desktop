@@ -14,7 +14,8 @@ import { readHandbackNote } from './handback'
  * ```
  * read the folder → which launcher does it name now
  *   → plan the launch (or refuse, in a sentence)
- *     → withLock(agentId, 'turn')
+ *     → withLock(agentId, 'turn') — a shared hold: other chats' turns on the
+ *       same agent run beside it, in the same process
  *       → acquire the agent's process (started lazily, reaped when idle)
  *         → session/load(remembered) or session/new
  *           → set the mode / config options the launcher asked for
@@ -186,7 +187,11 @@ export interface AcpDriverDeps {
    * one. Absent means the historical default, which is what those suites assert.
    */
   defaultEngine?(): AgentEngine
-  /** Take the per-agent lock for the streaming part of the turn. */
+  /**
+   * Take the agent's turn lock **shared** for the streaming part of the turn:
+   * sibling turns of the same agent (other chats) run beside it, and only an
+   * exclusive holder (the desktop's own folder write) refuses or queues it.
+   */
   withLock<T>(agentId: string, owner: string, fn: () => Promise<T>, queuedSignal?: AbortSignal): Promise<T>
   /**
    * Where a session's traffic goes between turns (see `acpSessionObserver.ts`).
@@ -619,8 +624,8 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
       // **Planned before the lock is taken.** "There is no Claude Code on this
       // machine" and "this agent's credential is unavailable" are answerable
       // without spawning anything, and answering them here means a user reads a
-      // sentence naming the remedy instead of queueing behind another chat's
-      // turn to be told.
+      // sentence naming the remedy instead of queueing behind a folder write to
+      // be told.
       const plan = await beforeStart(input.signal, () => launcher
         .plan({ userId, agentId: agent.id, ...(runtime.type === 'folder' ? { folder: runtime.folder } : { custom: runtime.config, binding: runtime.binding, accessToken: runtime.accessToken }) }))
         .catch((err: unknown) => {
@@ -921,6 +926,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   let offered = false
   /** Set once the turn stopped waiting for steers: its result no longer takes one. */
   let steeringSettled = false
+  /**
+   * Whether this turn still holds its process. Not `pool.held`: another chat's
+   * turn on the same agent holds the same process concurrently.
+   */
+  let holdingProcess = false
   const steering = new Set<Promise<'injected' | 'late' | 'unavailable'>>()
   const steerable = (): boolean => steerWindow === 'open' && toolsInFlight.size === 0 && !conductor?.hasCalls()
   /** Closed for good, from whichever state; only a window that was open had anything to withdraw. */
@@ -993,11 +1003,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         chatId
       })
       void to.cancel(session).catch(() => {})
-      if (!steeringSettled || !deps.pool.held(agent.id)) {
+      if (holdingProcess || !deps.pool.held(agent.id)) {
         // Retired too, as an unacknowledged cancel retires it: nothing confirms
         // the orphan has stopped, and the next prompt on this session would run
-        // beside it. While this turn still waits, the retire waits for this
-        // turn's hold, so the next turn starts clean.
+        // beside it. While this turn still holds the process, the retire waits
+        // for its hold (and any sibling turn's), so the next turn starts clean.
         deps.pool.retire(agent.id)
       } else {
         // This turn has let go, so the hold is someone else's — the next turn,
@@ -1097,9 +1107,15 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     if (sessionId) void connection?.cancel(sessionId).catch(() => {})
     startupController.abort()
     if (startingSession) {
-      const shared = deps.pool.hasOtherOwners?.(agent.id)
-      deps.pool.retire(agent.id)
-      if (!shared) void connection?.dispose()
+      // This turn's own hold is not another owner; a sibling turn's is.
+      // A process other turns are using is left as it is: at worst it keeps a
+      // session nobody resumes. Retiring it would make every new turn on this
+      // agent wait for those other turns to drain (see the pool's `acquire`).
+      const shared = deps.pool.hasOtherOwners?.(agent.id, holdingProcess ? 1 : 0)
+      if (!shared) {
+        deps.pool.retire(agent.id)
+        void connection?.dispose()
+      }
     }
     requestCancel()
   }
@@ -1117,7 +1133,12 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   // The rejection is also observed when a completed turn never needed it.
   void startCanceled.catch(() => {})
   const duringStart = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, startCanceled])
-  const release = deps.pool.hold(agent.id)
+  const releaseHold = deps.pool.hold(agent.id)
+  holdingProcess = true
+  const release = (): void => {
+    holdingProcess = false
+    releaseHold()
+  }
   const onAbort = (): void => askAgentToStop()
   input.signal.addEventListener('abort', onAbort, { once: true })
   let unbind: (() => void) | undefined

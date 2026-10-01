@@ -11,6 +11,68 @@ const input = (controller = new AbortController()): RunInput & { nested: { toolC
 const driver = (run: AgentDriver['run']): AgentDriver => ({ run } as AgentDriver)
 
 describe('nested agent turn', () => {
+  it('runs one agent\'s delegations in one chat one at a time, and other chats beside them', async () => {
+    let active = 0, peak = 0
+    const gates: Array<() => void> = []
+    const run: AgentDriver['run'] = async () => {
+      active++; peak = Math.max(peak, active)
+      await new Promise<void>((resolve) => gates.push(resolve))
+      active--
+      return result
+    }
+    const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+    const first = runNestedAgentTurn(driver(run), 'owner', agent, input())
+    const second = runNestedAgentTurn(driver(run), 'owner', agent, { ...input(), nested: { toolCallId: 'call-2' } })
+    await tick()
+    expect(active).toBe(1)
+    const elsewhere = runNestedAgentTurn(driver(run), 'owner', agent, { ...input(), chatId: 'other' })
+    await tick()
+    expect(active).toBe(2)
+    gates.shift()!(); gates.shift()!()
+    await tick()
+    expect(active).toBe(1)
+    gates.shift()!()
+    await Promise.all([first, second, elsewhere])
+    expect(peak).toBe(2)
+  })
+
+  it('a delegation stopped while waiting leaves the queue in order', async () => {
+    const gates: Array<() => void> = []
+    let started = 0
+    const run: AgentDriver['run'] = async () => { started++; await new Promise<void>((resolve) => gates.push(resolve)); return result }
+    const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+    const first = runNestedAgentTurn(driver(run), 'owner', agent, input())
+    const stopped = new AbortController()
+    const second = runNestedAgentTurn(driver(run), 'owner', agent, { ...input(stopped), nested: { toolCallId: 'call-2' } })
+    const third = runNestedAgentTurn(driver(run), 'owner', agent, { ...input(), nested: { toolCallId: 'call-3' } })
+    await tick()
+    stopped.abort()
+    expect(await second).toMatchObject({ stopReason: 'canceled', taskState: 'canceled' })
+    expect(started).toBe(1)
+    gates.shift()!()
+    await first
+    await tick()
+    expect(started).toBe(2)
+    gates.shift()!()
+    await third
+  })
+
+  it('a Stop reaches a delegation still waiting its place', async () => {
+    const gates: Array<() => void> = []
+    let started = 0
+    const run: AgentDriver['run'] = async () => { started++; await new Promise<void>((resolve) => gates.push(resolve)); return result }
+    const first = runNestedAgentTurn(driver(run), 'owner', agent, input())
+    const queued = runNestedAgentTurn(driver(run), 'owner', agent, { ...input(), nested: { toolCallId: 'call-2' } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(nestedAgentTurns.chatFor('nested:["chat","call-2"]')).toBe('chat')
+    nestedAgentTurns.cancel('nested:["chat","call-2"]')
+    expect(await queued).toMatchObject({ stopReason: 'canceled' })
+    expect(nestedAgentTurns.chatFor('nested:["chat","call-2"]')).toBeUndefined()
+    gates.shift()!()
+    await first
+    expect(started).toBe(1)
+  })
+
   it('publishes a durable question before aborting the live park and suppresses its cancellation', async () => {
     const events: RunEvent[] = []
     const parent = new AbortController()
@@ -57,7 +119,9 @@ describe('nested agent turn', () => {
       return { ...result, stopReason: 'canceled' }
     })
     const one = runNestedAgentTurn(turnDriver, 'owner', agent, input(parent))
-    const two = runNestedAgentTurn(turnDriver, 'owner', agent, { ...input(parent), nested: { toolCallId: 'second' } })
+    // A different specialist: one agent's delegations in one chat take turns.
+    const two = runNestedAgentTurn(turnDriver, 'owner', { id: 'sibling' } as AgentRow, { ...input(parent), nested: { toolCallId: 'second' } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
     nestedAgentTurns.cancel('nested:["chat","call"]')
     expect(signals.map((signal) => signal.aborted)).toEqual([true, false])
     expect(parent.signal.aborted).toBe(false)

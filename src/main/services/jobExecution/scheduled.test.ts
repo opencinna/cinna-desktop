@@ -124,20 +124,18 @@ describe('main-owned scheduled Job execution', () => {
     expect(driverRun).not.toHaveBeenCalled()
   })
 
-  it('does not start an ordinary Job on an agent still in a turn, and leaves it for review', async () => {
+  it.each(['turn', 'credentials'])('starts an ordinary Job on an agent held by %s, queued behind the lock', async (owner) => {
     const job = jobFor('ordinary')
     const factory = await prepareScheduledJob(scope, job, () => true)
     const prepared = state.database!.db.transaction(() => factory())
-    const held = turnLock.acquire('worker', 'earlier turn')
+    const held = turnLock.acquire('worker', owner)
     try {
-      expect(() => prepared.launch()).toThrow('still busy')
+      expect(() => prepared.launch()).not.toThrow()
     } finally {
       held.release()
     }
-    expect(driverRun).not.toHaveBeenCalled()
-    prepared.interrupt('The agent was still busy')
-    expect(taskRepo.getById(USER, prepared.taskId)).toMatchObject({ status: 'blocked', errorMessage: 'The agent was still busy' })
-    expect(jobRunsRepo.getById(USER, prepared.runId)?.status).not.toBe('failed')
+    await vi.waitFor(() => expect(taskRepo.getById(USER, prepared.taskId)?.status).toBe('completed'))
+    expect(driverRun.mock.calls[0][2].queueWhenBusy).toBe(true)
   })
 
   it('refuses a profile switch during asynchronous coordinator preflight before creating rows', async () => {

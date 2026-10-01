@@ -49,7 +49,8 @@ function register(id: string, extra: Record<string, unknown> = {}) {
 function key(id: string) { return createHash('sha256').update('http://localhost:8000\n' + id.replace('new-', '')).digest('hex').slice(0, 16) }
 function metadata() { return { id: 'cloud-fixture', name: 'Cloud', type: 'api_token', notes: null, service_uri: 'api', status: 'complete', is_placeholder: false, relation: 'shared', owner_email: 'owner@example.test', local_use_allowed: true, revision: 'r1' } }
 async function login(user: string) { register(user); world.user = user; await service.activate(user); await service.sync(); await sleep() }
-async function prepare(id: string) { return turnLock.withQueuedLock(id, 'test-turn', new AbortController().signal, () => service.prepare(id)) }
+/** As a turn prepares: under a shared hold, so turns of one agent may prepare side by side. */
+async function prepare(id: string) { return turnLock.withQueuedSharedLock(id, 'test-turn', new AbortController().signal, () => service.prepare(id)) }
 describe('credential delivery integration', () => {
   it('encrypts local values, writes cloud arrays, supports script reads, and preserves authored docs', async () => {
     const a = addAgent('kit'); mkdirSync(join(a.path, 'credentials')); writeFileSync(join(a.path, 'credentials', 'README.md'), 'authored docs')
@@ -204,6 +205,24 @@ it('queues detachment until the running turn releases its credentials', async ()
   expect(service.attachments(a.id)).toHaveLength(1)
   lock.release(); await detach
   expect(existsSync(p.path!)).toBe(false); expect(service.attachments(a.id)).toEqual([])
+})
+
+it('regenerates after a turn that was queued first, instead of failing the regeneration', async () => {
+  const a = addAgent('bare')
+  const c = service.save({ name: 'Token', type: 'api_token', values: { api_token: 'fixture-queued-secret' } }); await sleep()
+  await service.setAttachments(a.id, 'local', [c.id]); await prepare(a.id)
+  const editor = turnLock.acquire(a.id, 'editor')
+  // A turn queued behind the editor, before the regeneration is.
+  let finishTurn!: () => void
+  const turn = turnLock.withQueuedSharedLock(a.id, 'queued-turn', new AbortController().signal, () => new Promise<void>((resolve) => { finishTurn = resolve }))
+  service.save({ name: 'Other', type: 'api_token', values: { api_token: 'fixture-other-secret' } })
+  editor.release(); await sleep()
+  // The turn won the release; the regeneration waits for it rather than failing.
+  expect(turnLock.isLocked(a.id)).toBe(true)
+  expect(service.status().error).toBeNull()
+  finishTurn(); await turn; await sleep()
+  expect(service.status().error).toBeNull()
+  expect(turnLock.isLocked(a.id)).toBe(false)
 })
 
 it('rejects a queued attachment change if its account becomes ineligible while waiting, not on a profile switch', async () => {
@@ -446,4 +465,23 @@ describe('multiple eligible accounts', () => {
     await sleep()
     expect(service.attachments(a.id)[0].state).toBe('account_unavailable')
   })
+})
+
+it('serializes concurrent preparations of one agent, so neither acts on a stale read', async () => {
+  const a = addAgent('kit'); world.metadata = [metadata()]; await login('account-a')
+  await service.setAttachments(a.id, key('account-a'), ['cloud-fixture'])
+  // Stale cache: each preparation that reads it before the other has written refetches.
+  for (const row of world.rows.values()) if (row.cloud_id === 'cloud-fixture') row.payload_fetched_at = 0
+  let inFlight = 0, peak = 0
+  const deliver = world.fetch.getMockImplementation()!
+  world.fetch.mockImplementation(async (...args: unknown[]) => {
+    inFlight++; peak = Math.max(peak, inFlight)
+    try { await sleep(); return await deliver(...args) } finally { inFlight-- }
+  })
+  world.fetch.mockClear()
+  const [one, two] = await Promise.all([prepare(a.id), prepare(a.id)])
+  expect(peak).toBe(1)
+  expect(world.fetch).toHaveBeenCalledTimes(1)
+  expect(two.generation).toBe(one.generation)
+  expect(readFileSync(one.path!, 'utf8')).toContain(world.token)
 })

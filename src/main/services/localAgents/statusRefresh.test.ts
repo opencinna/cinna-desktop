@@ -312,10 +312,11 @@ describe('runStatusRefresh — the manifest’s status_refresh_command', () => {
     writeCatalog(
       'commands:\n  - name: status\n    description: x\n    command: echo refreshed\n'
     )
-    // A model turn holds the per-agent lock; `commandService.run` takes it as
-    // owner 'command' and is refused. The user asked for a status, not for a
-    // report that their agent is busy — this must read as "nothing to do".
-    const handle = turnLock.acquire(AGENT_ID, 'turn')
+    // An exclusive folder write holds the per-agent lock; `commandService.run`
+    // takes it shared as owner 'command' and is refused. The user asked for a
+    // status, not for a report that their agent is busy — this must read as
+    // "nothing to do".
+    const handle = turnLock.acquire(AGENT_ID, 'editor')
     try {
       const outcome = await runStatusRefresh(USER, AGENT_ID, '/run:status')
       expect(outcome.error).toBeNull()

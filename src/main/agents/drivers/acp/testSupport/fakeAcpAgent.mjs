@@ -107,6 +107,7 @@ function awaitCancel(sessionId) {
 }
 
 let lastSessionId = script.newSession?.sessionId ?? 'ses_fake'
+let sessionsCreated = 0
 
 const DEFAULT_PERMISSION_OPTIONS = [
   { optionId: 'once', kind: 'allow_once', name: 'Allow once' },
@@ -251,7 +252,9 @@ const app = agent({ name: 'fake-acp' })
   .onRequest(
     'session/new',
     handler('newSession', 'session/new', () => {
-      lastSessionId = script.newSession?.sessionId ?? lastSessionId
+      lastSessionId = script.newSession?.uniqueIds
+        ? `ses_fake_${++sessionsCreated}`
+        : script.newSession?.sessionId ?? lastSessionId
       return { sessionId: lastSessionId }
     })
   )

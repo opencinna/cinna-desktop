@@ -143,6 +143,18 @@ describe('resolveCommandRunner — the actual dispatch point `agent_a2a.ipc.ts` 
     expect(turn.parts[0]?.commandInvocation).toBe('/run:greet')
     expect(turn.parts[0]?.text).toContain('dispatched')
   })
+
+  it('a scheduled /run:<name> waits for a busy agent; an interactive one is refused', async () => {
+    writeCatalog('commands:\n  - name: greet\n    description: x\n    command: echo dispatched\n')
+    const held = turnLock.acquire(AGENT_ID, 'credentials')
+    const refused = await resolveCommandRunner('catalog', '/run:greet', USER, AGENT_ID, fallback)({ signal: new AbortController().signal, onEvent: () => {} })
+    expect(refused.error?.message).toMatch(/busy/i)
+    const queued = resolveCommandRunner('catalog', '/run:greet', USER, AGENT_ID, fallback, true)({ signal: new AbortController().signal, onEvent: () => {} })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    held.release()
+    const turn = await queued
+    expect(turn.parts[0]?.text).toContain('dispatched')
+  })
 })
 
 describe('matchRunCommand', () => {
@@ -326,16 +338,40 @@ describe('the turn lock', () => {
     expect(turnLock.isLocked(AGENT_ID)).toBe(false)
   })
 
-  it('refuses a second command for the same agent while the first is still running', async () => {
+  it('runs a second command for the same agent beside the first, not after it', async () => {
     writeCatalog(
-      'commands:\n  - name: slow\n    description: x\n    command: sleep 0.2\n  - name: quick\n    description: x\n    command: echo hi\n'
+      'commands:\n  - name: slow\n    description: x\n    command: sleep 0.3\n  - name: quick\n    description: x\n    command: echo hi\n'
     )
+    const started = Date.now()
     const first = commandService.run(USER, AGENT_ID, 'slow')
     const second = commandService.run(USER, AGENT_ID, 'quick')
-    const [firstResult, secondResult] = await Promise.all([first, second])
-    expect(secondResult.ok).toBe(false)
-    expect(secondResult.error).toMatch(/busy/i)
-    expect(firstResult.ok).toBe(true)
+    const secondResult = await second
+    expect(secondResult.ok).toBe(true)
+    expect(secondResult.busy).toBe(false)
+    // The quick one finished while the slow one still held its share.
+    expect(turnLock.isLocked(AGENT_ID)).toBe(true)
+    expect(Date.now() - started).toBeLessThan(300)
+    expect((await first).ok).toBe(true)
+    expect(turnLock.isLocked(AGENT_ID)).toBe(false)
+  })
+
+  it('runs beside a model turn on the same agent', async () => {
+    writeCatalog('commands:\n  - name: quick\n    description: x\n    command: echo hi\n')
+    const turn = turnLock.acquireShared(AGENT_ID, 'turn')
+    try {
+      const result = await commandService.run(USER, AGENT_ID, 'quick')
+      expect(result).toMatchObject({ ok: true, busy: false })
+    } finally { turn.release() }
+  })
+
+  it('is refused as busy while an exclusive folder write holds the agent', async () => {
+    writeCatalog('commands:\n  - name: quick\n    description: x\n    command: echo hi\n')
+    const editor = turnLock.acquire(AGENT_ID, 'editor')
+    try {
+      const result = await commandService.run(USER, AGENT_ID, 'quick')
+      expect(result).toMatchObject({ ok: false, busy: true })
+      expect(result.error).toMatch(/busy/i)
+    } finally { editor.release() }
   })
 
   it('blocks an editor write while a command is running, not just another command', async () => {
@@ -485,22 +521,31 @@ describe('scheduled command execution', () => {
     expect(outcome.stdout).toBe('reviewed')
   })
 
-  it('queues behind a busy agent instead of failing, then runs serially', async () => {
-    const chat = turnLock.acquire(AGENT_ID, 'turn')
-    const first = commandService.runScheduled(USER, AGENT_ID, 'sleep 0.1; printf first', new AbortController().signal)
+  it('queues behind an exclusive folder write instead of failing, then runs side by side', async () => {
+    const editor = turnLock.acquire(AGENT_ID, 'editor')
+    const first = commandService.runScheduled(USER, AGENT_ID, 'sleep 0.2; printf first', new AbortController().signal)
     const second = commandService.runScheduled(USER, AGENT_ID, 'printf second', new AbortController().signal)
     await new Promise(resolve => setTimeout(resolve, 30))
-    chat.release()
+    editor.release()
     const [a, b] = await Promise.all([first, second])
     expect(a).toMatchObject({ stdout: 'first', exitCode: 0, aborted: false })
     expect(b).toMatchObject({ stdout: 'second', exitCode: 0, aborted: false })
     expect([a.spawnError, b.spawnError]).toEqual([undefined, undefined])
-    expect(b.startedAt).toBeGreaterThanOrEqual(a.finishedAt)
+    // Both admitted together once the write left: the second did not wait for the first.
+    expect(b.startedAt).toBeLessThan(a.finishedAt)
     expect(turnLock.isLocked(AGENT_ID)).toBe(false)
   })
 
+  it('does not queue behind a model turn on the same agent', async () => {
+    const chat = turnLock.acquireShared(AGENT_ID, 'turn')
+    try {
+      const outcome = await commandService.runScheduled(USER, AGENT_ID, 'printf beside', new AbortController().signal)
+      expect(outcome).toMatchObject({ stdout: 'beside', exitCode: 0, started: true })
+    } finally { chat.release() }
+  })
+
   it('reports an abort while queued as aborted, not as a failure', async () => {
-    const chat = turnLock.acquire(AGENT_ID, 'turn')
+    const chat = turnLock.acquire(AGENT_ID, 'editor')
     const controller = new AbortController()
     const pending = commandService.runScheduled(USER, AGENT_ID, 'printf must-not-run', controller.signal)
     await new Promise(resolve => setTimeout(resolve, 10))
