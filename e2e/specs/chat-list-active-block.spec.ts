@@ -51,7 +51,8 @@ async function seedUnreadResult(cinna: CinnaApp, chatId: string, runId: string):
 
 const activeGroup = (cinna: CinnaApp) => cinna.page.getByRole('group', { name: 'Active', exact: true })
 const rowOf = (cinna: CinnaApp, id: string) => cinna.page.locator(`[data-chat-row="${id}"]`)
-const header = (cinna: CinnaApp, name: string) => cinna.page.getByRole('button', { name, exact: true })
+const header = (cinna: CinnaApp, name: string) =>
+  cinna.page.locator('button[data-chat-group]').and(cinna.page.getByRole('button', { name, exact: true }))
 /** A group header's whole group: header button → header row → the group's container. */
 const groupOf = (cinna: CinnaApp, name: string) => header(cinna, name).locator('xpath=../..')
 const rowIds = (scope: ReturnType<CinnaApp['page']['locator']>) =>

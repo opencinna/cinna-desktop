@@ -254,6 +254,10 @@ test('a bare agent’s Open-in menu has no Open credentials/.env item', async ({
     { path: pick.path, relPaths: pick.found.map((entry) => entry.relPath) }
   )
   if (!added.ok) throw new Error(`folder-add refused: ${added.message}`)
+  // Added over raw IPC, so no mutation invalidated the renderer's cached
+  // folder-agent list; a reload starts a fresh cache.
+  await page.reload()
+  await page.getByRole('button', { name: 'Chats', exact: true }).waitFor()
 
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
   await page.getByRole('button', { name: 'Ledger Notes', exact: true }).click()

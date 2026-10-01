@@ -52,7 +52,8 @@ async function backdate(cinna: CinnaApp, stamps: Record<string, number>): Promis
 }
 
 /** A group header's toggle, named `<label>, <n> chat(s)`. */
-const header = (cinna: CinnaApp, name: string) => cinna.page.getByRole('button', { name, exact: true })
+const header = (cinna: CinnaApp, name: string) =>
+  cinna.page.locator('button[data-chat-group]').and(cinna.page.getByRole('button', { name, exact: true }))
 
 /** Every group header's name, top to bottom. */
 const headerNames = (cinna: CinnaApp) =>
