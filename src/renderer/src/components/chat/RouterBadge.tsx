@@ -23,7 +23,6 @@ export interface RouterBadgeInfo {
   modelName?: string
   conductorName?: string
   conductorId?: string | null
-  coordinateAction?: { conductorName: string; pending?: boolean; onCoordinate(): void }
   /**
    * The chat whose session the popover also describes (context fill, spend,
    * cache, prices), once it has telemetry. Absent outside a chat.
@@ -83,7 +82,6 @@ function RouterBadgeView({
   answererName,
   modelName,
   conductorName,
-  coordinateAction,
   telemetry
 }: Omit<RouterBadgeInfo, 'chatId'> & { telemetry: SessionTelemetryBlockModel | null }): React.JSX.Element {
   const [hovered, setHovered] = useState(false)
@@ -142,21 +140,14 @@ function RouterBadgeView({
       {open && (
         <div
           id={tooltipId}
-          // A dialog whenever it holds a control: the telemetry row is one.
-          role={hasTelemetry || coordinateAction || router === 'coordinator' || router === 'human' ? "dialog" : "tooltip"}
+          // A dialog whenever it holds a control: the telemetry row is the only one.
+          role={hasTelemetry ? 'dialog' : 'tooltip'}
           aria-label="Chat routing"
           style={hasTelemetry ? { maxHeight: popoverMaxHeight(anchorTop) } : undefined}
           className={`absolute bottom-full right-0 z-50 ${hasTelemetry ? 'w-80 flex flex-col' : 'w-72'} rounded-lg border
             border-[var(--color-border)] bg-[var(--color-overlay-panel)] backdrop-blur-xl
             shadow-xl px-3 py-2.5 text-[11px] leading-relaxed text-[var(--color-text-secondary)]`}
         >
-          {coordinateAction && router !== 'coordinator' && (
-            <button type="button" aria-disabled={coordinateAction.pending || undefined}
-              onClick={() => { if (!coordinateAction.pending) coordinateAction.onCoordinate() }}
-              className="mb-2 w-full rounded-md border border-[var(--color-border)] px-2 py-1.5 text-left font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">
-              Coordinate by {coordinateAction.conductorName}
-            </button>
-          )}
           {router === 'script'  && (
             <>
               <p className="text-[var(--color-text)] font-semibold mb-1">Script routes this job</p>

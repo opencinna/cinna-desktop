@@ -1,7 +1,10 @@
 import { useMemo } from 'react'
-import { Bot, X } from 'lucide-react'
 import { useAgents, useChatOnDemandAgents, useRemoveOnDemandAgent } from '../../hooks/useAgents'
 import { presetForAgentId } from '../../utils/agentColors'
+import { canConduct } from '../../../../shared/chatRouting'
+import { ACCENT_CHIP, AgentChip, type ChipCoordinatorAction } from './AgentChip'
+
+type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 
 /**
  * Turns the chips into the chat's address book: clicking one says who the next
@@ -15,21 +18,28 @@ export interface ChipAddressing {
   onAddress: (agentId: string) => void
 }
 
-/**
- * The width range of a chip under the composer (agent and MCP chips alike).
- * At most 12rem, a longer name truncated and whole in its `title`; when the
- * row is short of room the chips shrink, down to 4.5rem — the icon, a few
- * characters and the remove button — and past that the chip strip scrolls
- * (`ChatInput`). The composer's chip row never wraps.
- */
-export const agentChipClass = 'shrink min-w-[4.5rem] max-w-[12rem]'
-/** A chip that also carries its role: the floor leaves the name room beside the label, and the row scrolls for the rest. */
-const roleChipClass = 'shrink min-w-[9.5rem] max-w-[14rem]'
+/** "Set as Coordinator" on the chips: who conducts now, and what holds the change back. */
+export interface ChipCoordinatorMenu {
+  /** The current conductor; its chip offers no "Set as Coordinator". Null when nobody conducts yet. */
+  conductorId: string | null
+  /** Why no chip can take the role right now (a turn runs); null when one can. */
+  blockedReason: string | null
+  /** Rejects with a user-readable reason, which the chip's menu shows in place. */
+  onSet: (agentId: string) => unknown
+}
+
+/** The disabled reason for an agent that cannot conduct at all. */
+export const CANNOT_CONDUCT_REASON = 'Only a local agent can coordinate'
 
 type OnDemandAgentChipsProps = (
   | { chatId: string; pendingIds?: never; onRemovePending?: never }
   | { chatId?: null; pendingIds: string[]; onRemovePending: (id: string) => void }
-) & { addressing?: ChipAddressing; coordination?: { conductorId: string | null; conductorName: string } }
+) & {
+  addressing?: ChipAddressing
+  /** New chat that will be coordinated: who conducts, a null id being the hidden Default runtime. */
+  coordination?: { conductorId: string | null; conductorName: string }
+  coordinatorMenu?: ChipCoordinatorMenu
+}
 
 /**
  * Renders the attached agent set as a strip of removable chips next to the
@@ -56,15 +66,17 @@ export function OnDemandAgentChips(
     return props.pendingIds ?? []
   }, [props.chatId, props.pendingIds, dbOnDemand.data])
 
+  // The new chat's chosen conductor leads the row, where the chat's bound chip
+  // will stand after the first send: the chips do not reorder when it is sent.
+  const leadId = props.coordination?.conductorId ?? null
   const rows = useMemo(() => {
     const byId = new Map((agents ?? []).map((a) => [a.id, a]))
-    return ids
-      .map((id) => {
-        const agent = byId.get(id)
-        return agent ? { id: agent.id, name: agent.name } : null
-      })
-      .filter((x): x is { id: string; name: string } => x !== null)
-  }, [ids, agents])
+    const found = ids
+      .map((id) => byId.get(id) ?? null)
+      .filter((x): x is AgentData => x !== null)
+    const lead = found.filter((a) => a.id === leadId)
+    return [...lead, ...found.filter((a) => a.id !== leadId)]
+  }, [ids, agents, leadId])
 
   if (rows.length === 0) return null
 
@@ -76,20 +88,27 @@ export function OnDemandAgentChips(
     }
   }
 
+  const menuFor = props.coordinatorMenu
+  const coordinatorAction = (agent: AgentData): ChipCoordinatorAction | undefined =>
+    menuFor && agent.id !== menuFor.conductorId
+      ? {
+          disabledReason: !canConduct(agent) ? CANNOT_CONDUCT_REASON : menuFor.blockedReason,
+          onSet: () => menuFor.onSet(agent.id)
+        }
+      : undefined
+
   return (
     <>
       {props.coordination && !props.coordination.conductorId && (
-        <div className={`flex items-center gap-1 px-1.5 py-1 rounded-lg border ring-2 ring-[var(--color-text)] text-[var(--color-accent)] border-[var(--color-accent)] bg-[var(--color-accent)]/10 ${roleChipClass}`} title={`${props.coordination.conductorName} — Coordinator`}>
-          <Bot size={12} className="shrink-0" />
-          <span className="min-w-0 truncate text-[11px] font-medium">{props.coordination.conductorName}</span>
-          <span className="text-[9px] shrink-0">Coordinator</span>
-        </div>
+        // The hidden runtime: no page, no folder, nothing to hand the role to.
+        <AgentChip
+          name={props.coordination.conductorName}
+          colors={ACCENT_CHIP}
+          coordinator
+          label={`${props.coordination.conductorName} — Coordinator`}
+        />
       )}
       {rows.map((a) => {
-        // Per-agent hash color — the same identity color the agent uses in the
-        // chat window (sub-thread header, bubbles), so the footer chip and the
-        // in-transcript rendering match.
-        const color = presetForAgentId(a.id)
         const coordinator = props.coordination?.conductorId === a.id
         const addressed = props.addressing?.addressedId === a.id
         const label = props.addressing
@@ -98,58 +117,20 @@ export function OnDemandAgentChips(
             : `Address your next message to “${a.name}”`
           : props.coordination ? `${a.name} — ${coordinator ? 'Coordinator' : 'Participant'}` : `Agent "${a.name}" attached as a participant`
         return (
-          <div
+          <AgentChip
             key={a.id}
-            // A ring, not a border or a weight change: the addressed chip has to
-            // read differently without occupying a different amount of space, or
-            // every chip beside it would slide when the user picks another one.
-            //
-            // **The ring is the foreground colour, not the agent's.** Two agents
-            // can hash to the same preset — measured, twice in one screen — and
-            // a ring in the chip's own colour then reads as nothing but a
-            // slightly thicker border. The theme's text colour is the one colour
-            // guaranteed to contrast with every chip.
-            className={`flex items-center gap-1 pl-1.5 pr-1 py-1 rounded-lg border ${props.coordination ? roleChipClass : agentChipClass} transition-shadow${
-              addressed || coordinator ? ' ring-2 ring-[var(--color-text)]' : ''
-            }`}
-            style={{
-              color: color.border,
-              borderColor: color.border,
-              backgroundColor: color.bg
-            }}
-            title={label}
-          >
-            {props.addressing ? (
-              <button
-                type="button"
-                onClick={() => props.addressing?.onAddress(a.id)}
-                aria-pressed={addressed}
-                aria-label={label}
-                // `cursor-pointer` explicitly: preflight gives every `button` a
-                // default cursor, so a chip that is a control looked exactly as
-                // inert as one that is not.
-                className="flex items-center gap-1 min-w-0 rounded cursor-pointer
-                  hover:bg-black/10 [[data-theme=light]_&]:hover:bg-black/5 transition-colors"
-              >
-                <Bot size={12} className="shrink-0" />
-                <span className="min-w-0 truncate text-[11px] font-medium whitespace-nowrap" title={a.name}>{a.name}</span>
-              </button>
-            ) : (
-              <>
-                <Bot size={12} className="shrink-0" />
-                <span className="min-w-0 truncate text-[11px] font-medium whitespace-nowrap" title={a.name}>{a.name}</span>
-              </>
-            )}
-            {props.coordination && <span className="text-[9px] shrink-0">{coordinator ? 'Coordinator' : 'Participant'}</span>}
-            <button
-              type="button"
-              onClick={() => handleRemove(a.id)}
-              className="shrink-0 ml-0.5 p-0.5 rounded hover:bg-black/10 [[data-theme=light]_&]:hover:bg-black/5 transition-colors"
-              aria-label={`Remove agent ${a.name}`}
-            >
-              <X size={11} />
-            </button>
-          </div>
+            name={a.name}
+            // Per-agent hash color — the same identity color the agent uses in
+            // the chat window (sub-thread header, bubbles), so the footer chip
+            // and the in-transcript rendering match.
+            colors={presetForAgentId(a.id)}
+            coordinator={coordinator}
+            addressed={addressed}
+            label={label}
+            onAddress={props.addressing ? () => props.addressing?.onAddress(a.id) : undefined}
+            onRemove={() => handleRemove(a.id)}
+            menu={{ agent: a, setCoordinator: coordinatorAction(a) }}
+          />
         )
       })}
     </>

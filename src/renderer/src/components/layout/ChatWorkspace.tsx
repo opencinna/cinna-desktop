@@ -68,6 +68,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   // exist yet, so picks are held here until `useNewChatFlow.startNewChat`
   // flushes them onto the created chat.
   const [coordinate, setCoordinate] = useComposerDraftField(newChatDraftKey, 'coordinate')
+  const [conductorPick, setConductorPick] = useComposerDraftField(newChatDraftKey, 'conductorId')
   const [pendingMcpIds, setPendingMcpIds] = useComposerDraftField(newChatDraftKey, 'pendingMcpIds')
   // The new-chat agent set — a single ordered list. Both the `[+]` capability
   // picker and the `@` popup toggle into it; the "primary" agent (first picked)
@@ -150,7 +151,25 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   // coordinated with no control on screen that says why or undoes it.
   useEffect(() => {
     if (coordinate && combinedAgentIds.length === 0) setCoordinate(false)
-  }, [coordinate, combinedAgentIds.length, setCoordinate])
+    if (conductorPick && combinedAgentIds.length === 0) setConductorPick(null)
+  }, [coordinate, conductorPick, combinedAgentIds.length, setCoordinate, setConductorPick])
+
+  // Who conducts if this chat is coordinated: the agent the user set as
+  // coordinator on its chip while it is still picked, else the first agent
+  // picked when it can conduct, else the hidden Default runtime (null).
+  const conductorAgent = useMemo(() => {
+    const picked = conductorPick && combinedAgentIds.includes(conductorPick)
+      ? (agentList ?? []).find((a) => a.id === conductorPick) ?? null
+      : null
+    if (picked && canConduct(picked)) return picked
+    return selectedAgent && canConduct(selectedAgent) ? selectedAgent : null
+  }, [conductorPick, combinedAgentIds, agentList, selectedAgent])
+
+  /** A pending chip's "Set as Coordinator": coordinate, with that agent conducting. */
+  const setPendingCoordinator = useCallback((agentId: string) => {
+    setConductorPick(agentId)
+    setCoordinate(true)
+  }, [setConductorPick, setCoordinate])
 
   // The router this selection would create — the same call `startNewChat`
   // makes, so the badge cannot promise a shape the send does not build.
@@ -169,15 +188,16 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       : undefined
     return {
       router: newRouter,
-      coordinateAction: newRouter !== 'coordinator' && combinedAgentIds.length > 0 ? { conductorName: selectedAgent && canConduct(selectedAgent) ? selectedAgent.name : 'Default runtime', onCoordinate: () => setCoordinate(true) } : undefined,
-      conductorId: selectedAgent && canConduct(selectedAgent) ? selectedAgent.id : null,
-      conductorName: selectedAgent && canConduct(selectedAgent) ? selectedAgent.name : 'Default runtime',
+      coordinateAction: newRouter !== 'coordinator' && combinedAgentIds.length > 0 ? { conductorName: conductorAgent?.name ?? 'Default runtime', onCoordinate: () => setCoordinate(true) } : undefined,
+      onSetCoordinator: combinedAgentIds.length > 0 ? setPendingCoordinator : undefined,
+      conductorId: conductorAgent?.id ?? null,
+      conductorName: conductorAgent?.name ?? 'Default runtime',
       agentName: nameOf(combinedAgentIds[0]),
       // The first agent picked is who `startNewChat` sends the first message to.
       answererName: nameOf(combinedAgentIds[0]),
       modelName
     }
-  }, [newRouter, setCoordinate, selectedAgent, combinedAgentIds, pendingMcpIds, agentList, activeMode, effectiveProviderId, providers, allModels])
+  }, [newRouter, setCoordinate, setPendingCoordinator, conductorAgent, combinedAgentIds, pendingMcpIds, agentList, activeMode, effectiveProviderId, providers, allModels])
 
   // The refusal an example prompt would meet: the same rule the composer
   // applies to the agent a message goes straight to. Example prompts are never
@@ -271,6 +291,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
         agentIds: combinedAgentIds,
         defaultMultiAgentRouting: appSettings?.defaultMultiAgentRouting,
         coordinate,
+        conductorId: conductorAgent?.id ?? null,
         mode: activeMode,
         providerId: effectiveProviderId,
         providers,
@@ -289,6 +310,7 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       // selections that have not been edited while preparation was in flight.
       useComposerDraftStore.getState().update(newChatDraftKey, (draft) => ({
         ...(draft.coordinate === coordinate ? { coordinate: false } : {}),
+        ...(draft.conductorId === conductorPick ? { conductorId: null } : {}),
         ...(draft.modeSelection === modeSelection ? { modeSelection: 'auto' as const } : {}),
         ...(draft.pendingMcpIds === pendingMcpIds ? { pendingMcpIds: [] } : {}),
         ...(draft.pendingAgentIds === storedPendingAgentIds ? { pendingAgentIds: null } : {})
@@ -301,6 +323,8 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
       combinedAgentIds,
       appSettings?.defaultMultiAgentRouting,
       coordinate,
+      conductorAgent,
+      conductorPick,
       activeMode,
       effectiveProviderId,
       providers,

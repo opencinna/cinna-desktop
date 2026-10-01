@@ -133,19 +133,15 @@ describe('agent connection badge', () => {
 })
 
 describe('coordination popover', () => {
-  it('keeps the action keyboard reachable inside the badge and takes it only once', () => {
-    const onCoordinate = vi.fn()
-    const view = render(<RouterBadge router="human" coordinateAction={{ conductorName: 'Claude', onCoordinate }} />)
-    const badge = screen.getByRole('status')
-    fireEvent.focus(badge)
-    const action = screen.getByRole('button', { name: 'Coordinate by Claude' })
-    fireEvent.blur(badge, { relatedTarget: action })
-    fireEvent.focus(action)
-    expect(screen.getByRole('dialog', { name: 'Chat routing' })).toBeTruthy()
-    fireEvent.click(action)
-    expect(onCoordinate).toHaveBeenCalledOnce()
-    view.rerender(<RouterBadge router="coordinator" conductorName="Claude" coordinateAction={{ conductorName: 'Claude', onCoordinate }} />)
+  it('offers no coordinate action and is a tooltip when it holds no control', () => {
+    const view = render(<RouterBadge router="human" />)
+    fireEvent.focus(screen.getByRole('status'))
+    expect(screen.getByRole('tooltip', { name: 'Chat routing' })).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Coordinate by/ })).toBeNull()
+    view.rerender(<RouterBadge router="coordinator" conductorName="Claude" />)
     expect(screen.getByRole('status').textContent).toBe('Claude routes')
-    expect(screen.queryByRole('button', { name: 'Coordinate by Claude' })).toBeNull()
+    expect(screen.getByRole('tooltip', { name: 'Chat routing' }).textContent).toContain('Coordinated by Claude')
+    expect(screen.queryByRole('button')).toBeNull()
   })
 })

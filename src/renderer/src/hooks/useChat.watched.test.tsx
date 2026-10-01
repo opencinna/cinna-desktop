@@ -53,3 +53,25 @@ it('polls detached runs through completion, but leaves attached streamed history
   expect(get).not.toHaveBeenCalled()
   client.clear()
 })
+
+it('keeps reading a chat a task holds until the task lets go, even with its own stream attached', async () => {
+  vi.useFakeTimers()
+  const get = vi.fn().mockResolvedValue({ id: 'held', activeRunId: null, taskHeld: true, messages: [] })
+  ;(window as unknown as { api: unknown }).api = { chat: { get } }
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element =>
+    createElement(QueryClientProvider, { client }, children)
+  useChatStore.setState({ activeChatId: 'held', isStreaming: true })
+  const view = renderHook(() => useChatDetail('held'), { wrapper })
+  await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+  expect(view.result.current.data?.taskHeld).toBe(true)
+
+  // The runner releases the chat after the last turn's own refetch.
+  get.mockResolvedValue({ id: 'held', activeRunId: null, taskHeld: false, messages: [] })
+  await act(async () => { await vi.advanceTimersByTimeAsync(3_100) })
+  expect(view.result.current.data?.taskHeld).toBe(false)
+  get.mockClear()
+  await act(async () => { await vi.advanceTimersByTimeAsync(6_000) })
+  expect(get).not.toHaveBeenCalled()
+  client.clear()
+})

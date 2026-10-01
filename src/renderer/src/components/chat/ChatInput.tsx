@@ -2,10 +2,10 @@ import { PendingHandoffControl } from '../tasks/PendingHandoffControl'
 import { AmbientGrid } from '../ui/AmbientGrid'
 import { AutonomousTaskDialog } from '../tasks/AutonomousTaskDialog'
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef } from 'react'
-import { SendHorizontal, Square, Bot, Check } from 'lucide-react'
+import { SendHorizontal, Square, Check } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { RunQueueView } from '../../../../shared/ipcPayloads'
-import { useChatDetail, useSetChatRouter } from '../../hooks/useChat'
+import { useChatDetail, useSetChatCoordinator, useSetChatRouter } from '../../hooks/useChat'
 import { useModels } from '../../hooks/useModels'
 import { useChatStream } from '../../hooks/useChatStream'
 import { useChatStore } from '../../stores/chat.store'
@@ -31,7 +31,9 @@ import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
 import { MentionPopup } from './MentionPopup'
 import { useChatComposer } from '../../hooks/useChatComposer'
 import { ActiveMcpChips } from './ActiveMcpChips'
-import { OnDemandAgentChips, agentChipClass } from './OnDemandAgentChips'
+import { CANNOT_CONDUCT_REASON, OnDemandAgentChips, type ChipCoordinatorMenu } from './OnDemandAgentChips'
+import { ACCENT_CHIP, AgentChip, AgentChipMenuHost } from './AgentChip'
+import { presetForAgentId } from '../../utils/agentColors'
 import { RouterBadge, type RouterBadgeInfo } from './RouterBadge'
 import { SessionMetaBadges } from './SessionMetaBadges'
 import { canConduct, routingOf } from '../../../../shared/chatRouting'
@@ -59,6 +61,21 @@ import { useRunQueue } from '../../hooks/useRunQueue'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type TriggerChar = '@' | '#' | '/' | '?'
+
+/**
+ * The new-chat screen's routing: the badge's facts, plus the two ways the user
+ * turns coordination on before the chat exists.
+ */
+export interface NewChatRouterInfo extends RouterBadgeInfo {
+  /** The `[+]` menu's "Coordinate by …": the default conductor, named. */
+  coordinateAction?: { conductorName: string; onCoordinate(): void }
+  /** A pending chip's "Set as Coordinator": coordinate, with that agent conducting. */
+  onSetCoordinator?: (agentId: string) => void
+}
+
+/** Why "Set as Coordinator" waits — main's own refusals, word for word. */
+const COORDINATOR_RUN_REASON = 'Interrupt the session before changing who answers.'
+const COORDINATOR_TASK_REASON = 'Stop the autonomous task before changing who coordinates it.'
 
 interface ChatInputProps {
   chatId: string | null
@@ -115,7 +132,7 @@ interface ChatInputProps {
    * of Send. Absent ⇒ no badge (nothing selected yet). An active chat needs no
    * prop: the composer reads its router off the chat row itself.
    */
-  routerInfo?: RouterBadgeInfo
+  routerInfo?: NewChatRouterInfo
   /** Fired when the user presses ESC twice in quick succession with no popup open. */
   onDoubleEscape?: () => void
   /**
@@ -688,7 +705,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [chatId, chatRouting.router, answerTarget, setAddressedAgent]
   )
 
-  /** The one-way coordination action shared by the badge and [+] menu. */
+  /** The one-way coordination action behind the [+] menu's "Coordinate by …". */
   const setChatRouter = useSetChatRouter()
   const coordinateToggle = useMemo(() => {
     if (!chatId) return routerInfo?.coordinateAction ? { coordinating: false, conductorName: routerInfo.coordinateAction.conductorName, pending: false, onToggle: (next: boolean) => { if (next) routerInfo.coordinateAction?.onCoordinate() } } : undefined
@@ -716,6 +733,29 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       }
     }
   }, [chatId, routerInfo, chatRouting.router, chatRouting.rootAgentId, attachedAgentIds, boundAgent, agents, setChatRouter, setSendError])
+
+  /**
+   * "Set as Coordinator" on the chips. In a chat: main makes the agent the
+   * root of a coordinated chat (optimistic, see `useSetChatCoordinator`), and
+   * a refusal comes back to the chip's menu, which stays open with it. On the
+   * new-chat screen: the draft coordinates, with that agent conducting.
+   */
+  const setChatCoordinator = useSetChatCoordinator()
+  const chipCoordinatorMenu: ChipCoordinatorMenu | undefined = useMemo(() => {
+    if (!chatId) {
+      const onSet = routerInfo?.onSetCoordinator
+      return onSet
+        ? { conductorId: routerInfo?.router === 'coordinator' ? routerInfo.conductorId ?? null : null, blockedReason: null, onSet }
+        : undefined
+    }
+    return {
+      conductorId: chatRouting.router === 'coordinator' ? chatRouting.rootAgentId : null,
+      blockedReason: chatData?.taskHeld
+        ? COORDINATOR_TASK_REASON
+        : isStreaming || !!chatData?.activeRunId || setChatCoordinator.isPending ? COORDINATOR_RUN_REASON : null,
+      onSet: (agentId: string) => setChatCoordinator.mutateAsync({ chatId, agentId })
+    }
+  }, [chatId, routerInfo, chatRouting.router, chatRouting.rootAgentId, isStreaming, chatData?.activeRunId, chatData?.taskHeld, setChatCoordinator])
 
   const badgeInfo: RouterBadgeInfo | null = useMemo(() => {
     if (!chatId) return routerInfo ?? null
@@ -1827,26 +1867,33 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             // A chip reached with Tab may sit past the visible edge.
             onFocus={(event) => event.target.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })}
           >
+            <AgentChipMenuHost>
             {chatId && boundAgent && (
-              // The text stays whole in the DOM, so its accessible name does too.
-              <div
-                className={`flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border ${agentChipClass}
-                  text-[var(--color-accent)] border-[var(--color-accent)] bg-[var(--color-accent)]/10`}
-                title={boundAgent.name}
-              >
-                <Bot size={14} className="shrink-0" />
-                <span className="min-w-0 truncate text-[11px] font-medium whitespace-nowrap">
-                  {boundAgent.name}
-                </span>
-              </div>
+              <AgentChip
+                name={boundAgent.name}
+                // The hidden runtime has no identity to colour by; an agent the
+                // user picked keeps its own colour as coordinator too.
+                colors={boundAgent.conductor ? ACCENT_CHIP : presetForAgentId(boundAgent.id)}
+                coordinator={chatRouting.router === 'coordinator'}
+                label={chatRouting.router === 'coordinator' ? `${boundAgent.name} — Coordinator` : boundAgent.name}
+                // A hidden runtime conductor has no page, no folder and no role to hand over.
+                menu={boundAgent.conductor ? undefined : {
+                  agent: boundAgent,
+                  setCoordinator: chatRouting.router === 'coordinator' || !chipCoordinatorMenu ? undefined : {
+                    disabledReason: !canConduct(boundAgent) ? CANNOT_CONDUCT_REASON : chipCoordinatorMenu.blockedReason,
+                    onSet: () => chipCoordinatorMenu.onSet(boundAgent.id)
+                  }
+                }}
+              />
             )}
             {chatId ? (
-              <OnDemandAgentChips chatId={chatId} addressing={chipAddressing} />
+              <OnDemandAgentChips chatId={chatId} addressing={chipAddressing} coordinatorMenu={chipCoordinatorMenu} />
             ) : pendingAgentIds && onRemovePendingAgent ? (
               <OnDemandAgentChips
                 pendingIds={pendingAgentIds}
                 onRemovePending={onRemovePendingAgent}
                 coordination={routerInfo?.router === 'coordinator' ? { conductorId: routerInfo.conductorId ?? null, conductorName: routerInfo.conductorName ?? 'Default runtime' } : undefined}
+                coordinatorMenu={chipCoordinatorMenu}
               />
             ) : null}
             {chatId ? (
@@ -1858,6 +1905,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 baselineIds={baselineIds}
               />
             ) : null}
+            </AgentChipMenuHost>
           </div>
         </div>
 
@@ -1884,7 +1932,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               answererName={badgeInfo.answererName}
               modelName={badgeInfo.modelName}
               conductorName={badgeInfo.conductorName}
-              coordinateAction={coordinateToggle ? { conductorName: coordinateToggle.conductorName, pending: coordinateToggle.pending, onCoordinate: () => coordinateToggle.onToggle(true) } : undefined}
             />
           )}
           {/* One button, always the rightmost, the same size in every state, so

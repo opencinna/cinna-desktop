@@ -15,13 +15,15 @@ export interface ComposerDraft {
   pendingAgentIds: string[] | null
   pendingMcpIds: string[]
   coordinate: boolean
+  /** The agent picked to conduct with "Set as Coordinator"; null for the default conductor. */
+  conductorId: string | null
 }
 
 export const EMPTY_COMPOSER_DRAFT: ComposerDraft = {
   sending: false,
   text: '', notes: [],
   files: { attachments: [], uploading: false, error: null, token: null },
-  modeSelection: 'auto', pendingAgentIds: null, pendingMcpIds: [], coordinate: false
+  modeSelection: 'auto', pendingAgentIds: null, pendingMcpIds: [], coordinate: false, conductorId: null
 }
 
 /**

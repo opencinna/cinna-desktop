@@ -246,7 +246,10 @@ describe('agent chip width', () => {
       const button = chip(agentName)
       const text = within(button).getByText(agentName)
       expect(text.className).toContain('truncate')
-      expect(text.getAttribute('title')).toBe(agentName)
+      // The full name is in the chip's own title, beside the role; the name
+      // carries none of its own, which would hide that one on hover.
+      expect(text.getAttribute('title')).toBeNull()
+      expect(text.closest('[title]')!.getAttribute('title')).toContain(`“${agentName}”`)
       expect(button.closest('div')!.className).toContain('max-w-[12rem]')
       expect(button.getAttribute('aria-label')).toContain(`“${agentName}”`)
     }

@@ -170,6 +170,21 @@ describe('startNewChat — the router it creates the chat on', () => {
     await start({ agentIds: ['a-1'], onDemandMcpIds: ['mcp-1'] })
     expect(writtenRouter()).toBe('coordinator')
   })
+
+  it('binds the agent set as coordinator on its chip as root, and attaches the others', async () => {
+    await start({ agentIds: ['a-1', 'a-2'], coordinate: true, conductorId: 'a-2' })
+    expect(writtenRouter()).toBe('coordinator')
+    expect((spies.updateChat.mock.calls.at(-1) as never as [string, { agentId?: string }])[1].agentId).toBe('a-2')
+    expect(spies.addOnDemandAgent.mock.calls).toEqual([['chat-1', 'a-1']])
+    const extras = spies.runSend.mock.calls[0][0] as { addressedAgentId?: string | null }
+    expect(extras.addressedAgentId).toBe('a-2')
+  })
+
+  it('ignores a picked conductor that is no longer among the agents', async () => {
+    await start({ agentIds: ['a-1', 'a-2'], coordinate: true, conductorId: 'gone' })
+    expect((spies.updateChat.mock.calls.at(-1) as never as [string, { agentId?: string }])[1].agentId).toBe('a-1')
+    expect(spies.addOnDemandAgent.mock.calls).toEqual([['chat-1', 'a-2']])
+  })
 })
 
 describe('startNewChat — where the attachments go', () => {

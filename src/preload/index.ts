@@ -176,6 +176,8 @@ export interface ChatData {
   id: string
   /** Ephemeral main-owned turn; present on list and detail reads. */
   activeRunId?: string | null
+  /** An autonomous task runner holds this chat (main's `taskRunnersByChat`); present on list and detail reads. */
+  taskHeld?: boolean
   lastRunResult?: import('../shared/chatRunResult').ChatRunResult | null
   title: string
   modelId: string | null
@@ -548,6 +550,15 @@ const api = {
      */
     setRouter: (chatId: string, router: ChatRouter): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('chat:set-router', chatId, router),
+    /**
+     * Make `agentId` (already in the chat as root or attached) the chat's
+     * coordinator. Moves a `direct`/`human` chat onto `coordinator`, or swaps
+     * the conductor of a `coordinator` chat. Rejects with a user-readable
+     * message when the agent is not in the chat, cannot conduct, a turn runs,
+     * or an autonomous task holds the chat.
+     */
+    setCoordinator: (chatId: string, agentId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chat:set-coordinator', chatId, agentId),
     /**
      * Subscribe to background chat-title autogeneration completions. Fires
      * once per chat (when the auto-title feature is enabled and a first

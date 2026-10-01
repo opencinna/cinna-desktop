@@ -47,7 +47,11 @@ export function useChatDetail(chatId: string | null) {
     enabled: !!chatId,
     // A detached or replay-overflow view reads saved output until main closes
     // the run. A full live projection arrives through useLiveRunWatch.
-    refetchInterval: (query) => !hasAttachedStream && query.state.data?.activeRunId ? 1_000 : false
+    // A task holding the chat is released by main with no event to the
+    // renderer (often just after its last turn's refetch): poll until it lets
+    // go, or what it disables stays disabled.
+    refetchInterval: (query) =>
+      !hasAttachedStream && query.state.data?.activeRunId ? 1_000 : query.state.data?.taskHeld ? 3_000 : false
   })
 }
 
@@ -284,6 +288,60 @@ export function useSetChatRouter() {
     },
     onError: (_err, { chatId }, ctx) => {
       if (ctx?.prev) queryClient.setQueryData(['chat', chatId], ctx.prev)
+    },
+    onSettled: (_data, _err, { chatId }) => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
+      queryClient.invalidateQueries({ queryKey: ['chat-on-demand-agent', chatId] })
+      queryClient.invalidateQueries({ queryKey: ['chats'] })
+    }
+  })
+}
+
+/**
+ * Make an agent already in the chat its coordinator — the agent chip's "Set
+ * as Coordinator". Main moves a `direct`/`human` chat onto `coordinator` with
+ * this agent as root, or swaps the conductor of a `coordinator` chat.
+ *
+ * Optimistic like {@link useSetChatRouter}, so the chips show the new
+ * coordinator at once: the chat row gets the router and root, and the attached
+ * set loses the new conductor and gains the old root — unless the old root is
+ * a hidden runtime conductor, which main only detaches. Rolled back on error.
+ */
+export function useSetChatCoordinator() {
+  const queryClient = useQueryClient()
+  type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
+  type Attached = Awaited<ReturnType<typeof window.api.chat.listOnDemandAgents>>
+  return useMutation({
+    mutationFn: ({ chatId, agentId }: { chatId: string; agentId: string }) =>
+      window.api.chat.setCoordinator(chatId, agentId),
+    onMutate: async ({ chatId, agentId }) => {
+      await queryClient.cancelQueries({ queryKey: ['chat', chatId] })
+      await queryClient.cancelQueries({ queryKey: ['chat-on-demand-agent', chatId] })
+      const prev = queryClient.getQueryData<CachedChat>(['chat', chatId])
+      const prevAttached = queryClient.getQueryData<Attached>(['chat-on-demand-agent', chatId])
+      const oldRoot = prev?.agentId ?? null
+      if (prev) queryClient.setQueryData<CachedChat>(['chat', chatId], { ...prev, router: 'coordinator', agentId })
+      if (prevAttached) {
+        // The old root rejoins as a participant only when it is known to be an
+        // agent the user picked. The hidden runtime never does, and an agent
+        // missing from the cache might be it: leave that to the refetch below
+        // rather than show the runtime as an attached chip until it lands.
+        const oldRootAgent = oldRoot
+          ? queryClient.getQueryData<{ id: string; conductor?: boolean }[]>(['agents'])?.find((agent) => agent.id === oldRoot)
+          : undefined
+        const next = prevAttached.filter((row) => row.agentId !== agentId)
+        if (oldRootAgent && !oldRootAgent.conductor && oldRoot !== agentId && !next.some((row) => row.agentId === oldRoot)) {
+          // As main writes it: the moved agent is announced to the new conductor.
+          next.push({ agentId: oldRootAgent.id, pendingAnnounce: true })
+        }
+        queryClient.setQueryData<Attached>(['chat-on-demand-agent', chatId], next)
+      }
+      return { prev, prevAttached }
+    },
+    onError: (_err, { chatId }, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['chat', chatId], ctx.prev)
+      if (ctx?.prevAttached) queryClient.setQueryData(['chat-on-demand-agent', chatId], ctx.prevAttached)
     },
     onSettled: (_data, _err, { chatId }) => {
       queryClient.invalidateQueries({ queryKey: ['agents'] })

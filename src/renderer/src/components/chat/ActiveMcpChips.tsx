@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Plug, X } from 'lucide-react'
-import { agentChipClass } from './OnDemandAgentChips'
+import { agentChipClass } from './AgentChip'
 import {
   useChatOnDemandMcps,
   useMcpProviders,

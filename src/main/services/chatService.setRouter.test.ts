@@ -133,6 +133,19 @@ it('keeps a working autonomous session interruptible between turns', () => {
     expect(() => chatService.delete(USER, chat.id)).not.toThrow()
   } finally { taskRunnersByChat.delete(chat.id) }
 })
+it('reports an autonomous task holding the chat on list and detail reads, working or idle', () => {
+  const chat = chatService.create(USER)
+  expect(chatService.list(USER)[0].taskHeld).toBe(false)
+  expect(chatService.get(USER, chat.id)?.taskHeld).toBe(false)
+  taskRunnersByChat.set(chat.id, { userId: USER, taskId: 'task-1', id: 'attempt-1', working: false, cancel: vi.fn() })
+  try {
+    expect(chatService.list(USER)[0].taskHeld).toBe(true)
+    expect(chatService.get(USER, chat.id)?.taskHeld).toBe(true)
+    expect(chatService.list(USER)[0].activeRunId).toBeNull()
+  } finally { taskRunnersByChat.delete(chat.id) }
+  expect(chatService.list(USER)[0].taskHeld).toBe(false)
+  expect(chatService.get(USER, chat.id)?.taskHeld).toBe(false)
+})
 const { chatRepo } = await import('../db/chats')
 const { chatOnDemandAgentRepo } = await import('../db/chatOnDemandAgent')
 const { agentSessionRepo } = await import('../db/agents')
@@ -144,6 +157,11 @@ function seedAgent(id: string): void {
        VALUES (?, '__default__', ?, 'a2a', 1, 'local', ?)`
     )
     .run(id, id, Date.now())
+}
+
+/** Make a seeded agent a local ACP agent — one that can coordinate. */
+function makeLocal(id: string): void {
+  holder.current!.raw.prepare("UPDATE agents SET protocol='acp', driver='acp', driver_config=? WHERE id=?").run(JSON.stringify({ launcher: 'claude' }), id)
 }
 
 /** A chat rooted on `a-1`, the shape `direct` means. */
@@ -284,15 +302,58 @@ describe('a chat that stops answering to an agent', () => {
   })
   afterEach(() => uninstall())
 
-  it('stops hearing its old sessions and writes their activity off when the router changes', async () => {
+  it('keeps a direct root’s sessions when a second agent makes the chat human — it is still in the chat', async () => {
+    // The incident: releasing every agent here disposed the running root's
+    // `cinna` endpoint mid-turn and its tools vanished.
     const { sessionActivityHub } = await import('./sessionActivityHub')
+    makeLocal('a-1')
     const chatId = directChat()
     sessionActivityHub.report(chatId, 'a-1', start)
 
     chatService.setRouter(USER, chatId, 'human')
 
-    expect(forgotten).toEqual([[chatId, undefined]])
-    expect(sessionActivityHub.snapshot(chatId).items.map((item) => item.state)).toEqual(['lost'])
+    expect(forgotten).toEqual([])
+    expect(sessionActivityHub.snapshot(chatId).items.map((item) => item.state)).toEqual(['running'])
+  })
+
+  it('releases nothing when the agent that answered keeps coordinating', () => {
+    makeLocal('a-1')
+    const direct = directChat()
+    chatService.setRouter(USER, direct, 'coordinator')
+    const human = directChat()
+    chatService.setRouter(USER, human, 'human')
+    chatOnDemandAgentRepo.add(human, 'a-2')
+    forgotten.length = 0
+
+    chatService.setRouter(USER, human, 'coordinator')
+
+    expect(chatRepo.getOwned(USER, human)?.agentId).toBe('a-1')
+    expect(forgotten).toEqual([])
+  })
+
+  it('releases only the old root when the hidden runtime takes over coordinating', () => {
+    const chatId = directChat()
+    chatService.setRouter(USER, chatId, 'coordinator')
+    expect(forgotten).toEqual([[chatId, 'a-1']])
+  })
+
+  it('refuses to change who answers while a turn runs, and still lets an agent join a coordinated turn', () => {
+    makeLocal('a-1')
+    const chatId = directChat()
+    const coordinated = directChat()
+    chatService.setRouter(USER, coordinated, 'coordinator')
+    activeRunsByChat.set(chatId, { id: 'turn-1' } as never)
+    activeRunsByChat.set(coordinated, { id: 'turn-2' } as never)
+    try {
+      expect(() => chatService.setRouter(USER, chatId, 'human')).toThrow('Interrupt the session before changing who answers.')
+      expect(chatRepo.getOwned(USER, chatId)).toMatchObject({ router: 'direct', agentId: 'a-1' })
+      expect(() => chatService.setRouter(USER, coordinated, 'coordinator')).not.toThrow()
+      expect(() => chatService.addOnDemandAgent(USER, coordinated, 'a-2')).not.toThrow()
+      expect(chatOnDemandAgentRepo.listAgentIds(coordinated)).toEqual(['a-2'])
+    } finally {
+      activeRunsByChat.delete(chatId)
+      activeRunsByChat.delete(coordinated)
+    }
   })
 
   it('does the same, for the old agent only, when the chat is rebound to another agent', async () => {
@@ -331,6 +392,146 @@ describe('a chat that stops answering to an agent', () => {
     chatService.permanentDelete(USER, removed.id)
 
     expect(forgotten).toEqual([[trashed.id, undefined], [removed.id, undefined]])
+  })
+})
+
+describe('chatService.setCoordinator', () => {
+  const forgotten: [string, string | undefined][] = []
+  let uninstall: () => void = () => {}
+
+  beforeEach(async () => {
+    forgotten.length = 0
+    const { installChatSessionForgetter } = await import('./chatSessionRelease')
+    uninstall = installChatSessionForgetter((chatId, agentId) => { forgotten.push([chatId, agentId]) })
+  })
+  afterEach(() => uninstall())
+
+  function snapshot(chatId: string): unknown {
+    const chat = chatRepo.getOwned(USER, chatId)!
+    return { router: chat.router, agentId: chat.agentId, attached: chatOnDemandAgentRepo.listAgentIds(chatId) }
+  }
+
+  it('moves a direct chat to coordinator with its agent conducting, releasing nothing', () => {
+    makeLocal('a-1')
+    const chatId = directChat()
+    chatService.setCoordinator(USER, chatId, 'a-1')
+    expect(snapshot(chatId)).toEqual({ router: 'coordinator', agentId: 'a-1', attached: [] })
+    expect(forgotten).toEqual([])
+  })
+
+  it('makes the chosen agent of a human chat the conductor, not the first attached', () => {
+    makeLocal('a-1')
+    makeLocal('a-2')
+    const chatId = directChat()
+    chatService.setRouter(USER, chatId, 'human')
+    chatOnDemandAgentRepo.add(chatId, 'a-2')
+    forgotten.length = 0
+
+    chatService.setCoordinator(USER, chatId, 'a-2')
+
+    expect(snapshot(chatId)).toEqual({ router: 'coordinator', agentId: 'a-2', attached: ['a-1'] })
+    expect(forgotten).toEqual([])
+  })
+
+  it('gives a new conductor a fresh engine session, even one that saved a digest answering as a participant', async () => {
+    const { conductorSessionRepo } = await import('../db/conductorSessions')
+    makeLocal('a-1')
+    makeLocal('a-2')
+    const chatId = directChat()
+    chatService.setRouter(USER, chatId, 'human')
+    chatOnDemandAgentRepo.add(chatId, 'a-2')
+    // Both answered here directly: each saved the digest of its endpoint.
+    conductorSessionRepo.save(chatId, 'a-1', 'participant-digest-1')
+    conductorSessionRepo.save(chatId, 'a-2', 'participant-digest-2')
+
+    chatService.setCoordinator(USER, chatId, 'a-2')
+
+    // No digest matches '', so the bridge's next lease is `freshSession`.
+    expect(conductorSessionRepo.get(chatId, 'a-2')).toBe('')
+    expect(conductorSessionRepo.get(chatId, 'a-1')).toBe('participant-digest-1')
+  })
+
+  it('keeps the session of a direct root that goes on conducting', async () => {
+    const { conductorSessionRepo } = await import('../db/conductorSessions')
+    makeLocal('a-1')
+    const chatId = directChat()
+    conductorSessionRepo.save(chatId, 'a-1', 'root-digest')
+    chatService.setCoordinator(USER, chatId, 'a-1')
+    expect(conductorSessionRepo.get(chatId, 'a-1')).toBe('root-digest')
+  })
+
+  it('swaps the conductor: the old one becomes a participant and only its sessions are released', () => {
+    makeLocal('a-1')
+    makeLocal('a-2')
+    seedAgent('a-3')
+    const chatId = directChat()
+    chatService.setRouter(USER, chatId, 'coordinator')
+    chatOnDemandAgentRepo.add(chatId, 'a-2')
+    chatOnDemandAgentRepo.add(chatId, 'a-3')
+    forgotten.length = 0
+
+    chatService.setCoordinator(USER, chatId, 'a-2')
+
+    expect(snapshot(chatId)).toMatchObject({ router: 'coordinator', agentId: 'a-2' })
+    expect(chatOnDemandAgentRepo.listAgentIds(chatId).sort()).toEqual(['a-1', 'a-3'])
+    // It rejoins announced, so the new conductor is told about it.
+    expect(chatOnDemandAgentRepo.list(chatId).find((row) => row.agentId === 'a-1')?.pendingAnnounce).toBe(true)
+    expect(forgotten).toEqual([[chatId, 'a-1']])
+    // Its context survives; only what the chat listened to is dropped.
+    expect(agentSessionRepo.getByChatAndAgent(chatId, 'a-1')?.contextId).toBe('ctx-1')
+  })
+
+  it('only detaches the chat’s hidden runtime, never offering it as a participant', () => {
+    makeLocal('a-2')
+    const chatId = directChat()
+    chatService.setRouter(USER, chatId, 'coordinator')
+    const hidden = chatRepo.getOwned(USER, chatId)!.agentId!
+    chatOnDemandAgentRepo.add(chatId, 'a-2')
+    forgotten.length = 0
+
+    chatService.setCoordinator(USER, chatId, 'a-2')
+
+    expect(snapshot(chatId)).toEqual({ router: 'coordinator', agentId: 'a-2', attached: ['a-1'] })
+    expect(forgotten).toEqual([[chatId, hidden]])
+  })
+
+  it('is a no-op for the agent already coordinating', () => {
+    makeLocal('a-1')
+    const chatId = directChat()
+    chatService.setCoordinator(USER, chatId, 'a-1')
+    activeRunsByChat.set(chatId, { id: 'turn' } as never)
+    try {
+      expect(() => chatService.setCoordinator(USER, chatId, 'a-1')).not.toThrow()
+    } finally { activeRunsByChat.delete(chatId) }
+    expect(forgotten).toEqual([])
+  })
+
+  it('refuses an agent that is not in the chat, or cannot conduct, with a message that stands alone', () => {
+    makeLocal('a-2')
+    const chatId = directChat()
+    expect(() => chatService.setCoordinator(USER, chatId, 'a-2')).toThrow('That agent is not in this chat. Add it to the chat first.')
+    expect(() => chatService.setCoordinator(USER, chatId, 'a-1')).toThrow('Only a local agent can coordinate.')
+    expect(snapshot(chatId)).toEqual({ router: 'direct', agentId: 'a-1', attached: [] })
+    expect(forgotten).toEqual([])
+  })
+
+  it('refuses while a turn runs or an autonomous task holds the chat', () => {
+    makeLocal('a-1')
+    makeLocal('a-2')
+    const chatId = directChat()
+    chatService.setRouter(USER, chatId, 'coordinator')
+    chatOnDemandAgentRepo.add(chatId, 'a-2')
+    forgotten.length = 0
+    activeRunsByChat.set(chatId, { id: 'turn' } as never)
+    try {
+      expect(() => chatService.setCoordinator(USER, chatId, 'a-2')).toThrow('Interrupt the session before changing who answers.')
+    } finally { activeRunsByChat.delete(chatId) }
+    taskRunnersByChat.set(chatId, { userId: USER, taskId: 't', id: 'r', working: false, cancel: vi.fn() })
+    try {
+      expect(() => chatService.setCoordinator(USER, chatId, 'a-2')).toThrow('Stop the autonomous task before changing who coordinates it.')
+    } finally { taskRunnersByChat.delete(chatId) }
+    expect(snapshot(chatId)).toEqual({ router: 'coordinator', agentId: 'a-1', attached: ['a-2'] })
+    expect(forgotten).toEqual([])
   })
 })
 

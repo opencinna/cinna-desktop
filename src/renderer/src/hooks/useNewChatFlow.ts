@@ -36,6 +36,12 @@ export interface NewChatOptions {
   agentIds: string[]
   defaultMultiAgentRouting?: DefaultMultiAgentRouting
   coordinate?: boolean
+  /**
+   * The agent a coordinated chat is created with as root (a pending chip's
+   * "Set as Coordinator"). Absent: the first agent picked, as before — main
+   * swaps in the hidden runtime when that one cannot conduct.
+   */
+  conductorId?: string | null
   mode: ChatModeData | null
   providerId: string | null
   providers: ProviderData[] | undefined
@@ -206,7 +212,12 @@ export function useNewChatFlow(): {
       })
       // A `direct` chat with an agent is the only shape that binds a root; a
       // `human` chat's agents are all attached, none of them the root.
-      const rootAgentId = router !== 'human' ? (agentSnapshot[0] ?? null) : null
+      // A coordinated chat takes the conductor the user picked, when it is
+      // still among the agents; every other agent is attached below.
+      const pickedConductor = router === 'coordinator' && opts.conductorId && agentSnapshot.includes(opts.conductorId)
+        ? opts.conductorId
+        : null
+      const rootAgentId = router !== 'human' ? (pickedConductor ?? agentSnapshot[0] ?? null) : null
       // Asked of the helper, not re-derived: `router !== 'coordinator'` is not
       // the same question. A chat with **no agent at all** is `direct` — to the
       // local model — and its files belong in the local store, which is where

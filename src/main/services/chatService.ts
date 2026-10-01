@@ -22,6 +22,7 @@ import { activeChatRunId as activeRunId, chatHardDeleted } from './chatRemoval'
 import { sessionActivityHub } from './sessionActivityHub'
 import { sessionTelemetryService } from '../agents/telemetry/sessionTelemetryService'
 import { forgetChatSessions, releaseChatSessions } from './chatSessionRelease'
+import { conductorSessionRepo } from '../db/conductorSessions'
 import { chatRunResultRepo } from '../db/chatRunResults'
 import type { ChatRunResult } from '../../shared/chatRunResult'
 import type { ChatListSummary } from '../../shared/chatListSummary'
@@ -117,10 +118,15 @@ function settleNewChatOwner(profileUserId: string, chat: ChatRow, next: Pick<Cha
 }
 
 export const chatService = {
-  list(userId: string): (ChatRow & { activeRunId: string | null; lastRunResult: ChatRunResult | null })[] {
+  list(userId: string): (ChatRow & { activeRunId: string | null; taskHeld: boolean; lastRunResult: ChatRunResult | null })[] {
     const owners = listOwners(userId)
     const results = chatRunResultRepo.list(owners)
-    return chatRepo.list(owners).map((chat) => ({ ...chat, activeRunId: activeRunId(chat.id), lastRunResult: results.get(chat.id) ?? null }))
+    return chatRepo.list(owners).map((chat) => ({
+      ...chat,
+      activeRunId: activeRunId(chat.id),
+      taskHeld: taskRunnersByChat.has(chat.id),
+      lastRunResult: results.get(chat.id) ?? null
+    }))
   },
 
   /**
@@ -137,11 +143,17 @@ export const chatService = {
     chatRunResultRepo.markRead(chatId, runId)
   },
 
-  get(userId: string, chatId: string): (ChatRow & { messages: MessageRow[]; activeRunId: string | null; lastRunResult: ChatRunResult | null }) | null {
+  get(userId: string, chatId: string): (ChatRow & { messages: MessageRow[]; activeRunId: string | null; taskHeld: boolean; lastRunResult: ChatRunResult | null }) | null {
     const chat = visibleChat(userId, chatId)
     if (!chat) return null
     const messages = chatRepo.listMessages(chatId)
-    return { ...chat, messages, activeRunId: activeRunId(chatId), lastRunResult: chatRunResultRepo.get(chat.userId, chatId) }
+    return {
+      ...chat,
+      messages,
+      activeRunId: activeRunId(chatId),
+      taskHeld: taskRunnersByChat.has(chatId),
+      lastRunResult: chatRunResultRepo.get(chat.userId, chatId)
+    }
   },
 
   create(userId: string): ChatRow {
@@ -382,54 +394,32 @@ export const chatService = {
    * rather than silently dropping the rest.
    */
   setRouter(userId: string, chatId: string, router: ChatRouter): void {
+    applyRouter(userId, requireOwnedChat(userId, chatId), router)
+  },
+
+  /**
+   * Make `agentId`, already in the chat as its root or one of its attached
+   * agents, the chat's coordinator (the agent chip's "Set as Coordinator").
+   *
+   *  - **`direct` / `human` → `coordinator`** with this agent bound as root,
+   *    rather than the one `setRouter` would pick.
+   *  - **`coordinator` → `coordinator`**, another agent: the old root becomes
+   *    an attached participant — unless it is the chat's own hidden runtime,
+   *    which is only detached, never offered as a participant — and the new
+   *    one leaves the attached set to become root.
+   *
+   * Only the old conductor's sessions are released (its role changed); nobody
+   * else's. The messages are the whole error the renderer sees.
+   */
+  setCoordinator(userId: string, chatId: string, agentId: string): void {
     const chat = requireOwnedChat(userId, chatId)
-    const current = routerOf(chat)
-    if (current === router) return
-    if (taskRunnersByChat.has(chatId)) throw new ChatError('not_configured', 'Stop the autonomous task before changing who coordinates it.')
-
-    if (current === 'coordinator') throw new ChatError('not_configured', 'AI routing cannot be turned off for this chat.')
-
-    // A plain chat's root is its own hidden runtime, never an agent the user
-    // picked: it cannot become a participant they address. It keeps answering
-    // and the arriving agent becomes its tool, whatever the caller assumed.
-    const root = chat.agentId ? agentService.findAgent(getSettingsScopeUserId(), userId, chat.agentId) : null
-    if (router === 'human' && current === 'direct' && root && isChatConductor(root.row)) router = 'coordinator'
-
-    const attached = chatOnDemandAgentRepo.listAgentIds(chatId)
-    let bindRoot: string | null = null
-    if (router === 'coordinator') {
-      const candidateId = chat.agentId ?? attached[0]
-      const candidate = candidateId ? agentService.findAgent(getSettingsScopeUserId(), userId, candidateId) : null
-      bindRoot = candidate && canConduct(candidate.row) ? candidate.row.id : chatConductorService.ensure(chat.userId, { ...chat, agentId: null }).id
-    } else if (router === 'direct') {
-      if (attached.length > 1) {
-        throw new ChatError(
-          'not_configured',
-          'A direct chat has one counterparty. Remove the other agents first.'
-        )
-      }
-      bindRoot = attached[0] ?? null
+    if (chat.agentId !== agentId && !chatOnDemandAgentRepo.listAgentIds(chatId).includes(agentId)) {
+      throw new ChatError('not_found', 'That agent is not in this chat. Add it to the chat first.')
     }
-
-    chatRepo.setRouter(chat.userId, chatId, router, {
-      // The root is only ever detached on the way *out* of `direct`; the other
-      // routers never have one.
-      detachRoot: current === 'direct' ? chat.agentId : null,
-      bindRoot,
-    })
-    // Who answers here changed. The old sessions keep their context in the
-    // database, but what they say between turns and what they were running
-    // are no longer shown in this chat.
-    if (bindRoot !== chat.agentId) releaseChatSessions(chatId)
-    refreshConductor(chatId)
-    logger.info('chat router changed', {
-      chatId,
-      from: current,
-      to: router,
-      hadRootAgent: !!chat.agentId,
-      attached: attached.length,
-      conductor: bindRoot
-    })
+    const located = agentService.findAgent(getSettingsScopeUserId(), userId, agentId)
+    if (!located) throw new AgentError('not_found', 'That agent no longer exists.')
+    if (!canConduct(located.row)) throw new ChatError('not_configured', 'Only a local agent can coordinate.')
+    applyRouter(userId, chat, 'coordinator', located.row.id)
   },
 
   removeOnDemandAgent(userId: string, chatId: string, agentId: string): void {
@@ -463,6 +453,91 @@ export const chatService = {
     requireOwnedChat(userId, chatId)
     return chatMcpRepo.list(chatId)
   }
+}
+
+/**
+ * The agents a chat answers to: its root and its attached agents. What a
+ * router change may release is the difference between two of these.
+ */
+function chatMembers(rootId: string | null, attached: readonly string[]): Set<string> {
+  return new Set([...(rootId ? [rootId] : []), ...attached])
+}
+
+/**
+ * Move a chat onto `router`, binding `conductorId` as the root when given
+ * (`setCoordinator`) — the one code path both `setRouter` and
+ * `setCoordinator` take. See `chatService.setRouter` for the transitions.
+ */
+function applyRouter(userId: string, chat: ChatRow, router: ChatRouter, conductorId?: string): void {
+  const chatId = chat.id
+  const current = routerOf(chat)
+  if (current === router && (!conductorId || chat.agentId === conductorId)) return
+  if (taskRunnersByChat.has(chatId)) throw new ChatError('not_configured', 'Stop the autonomous task before changing who coordinates it.')
+  // A turn holds the root's session and tool endpoint; swapping who answers
+  // under it would cut its tools off mid-call.
+  if (activeRunId(chatId)) throw new ChatError('run_active', 'Interrupt the session before changing who answers.')
+
+  if (current === 'coordinator' && router !== 'coordinator') throw new ChatError('not_configured', 'AI routing cannot be turned off for this chat.')
+
+  // A plain chat's root is its own hidden runtime, never an agent the user
+  // picked: it cannot become a participant they address. It keeps answering
+  // and the arriving agent becomes its tool, whatever the caller assumed.
+  const root = chat.agentId ? agentService.findAgent(getSettingsScopeUserId(), userId, chat.agentId) : null
+  if (router === 'human' && current === 'direct' && root && isChatConductor(root.row)) router = 'coordinator'
+
+  const attached = chatOnDemandAgentRepo.listAgentIds(chatId)
+  let bindRoot: string | null = null
+  let detachRoot: string | null = null
+  if (router === 'coordinator') {
+    if (conductorId) {
+      bindRoot = conductorId
+    } else {
+      const candidateId = chat.agentId ?? attached[0]
+      const candidate = candidateId ? agentService.findAgent(getSettingsScopeUserId(), userId, candidateId) : null
+      bindRoot = candidate && canConduct(candidate.row) ? candidate.row.id : chatConductorService.ensure(chat.userId, { ...chat, agentId: null }).id
+    }
+  } else if (router === 'direct') {
+    if (attached.length > 1) {
+      throw new ChatError(
+        'not_configured',
+        'A direct chat has one counterparty. Remove the other agents first.'
+      )
+    }
+    bindRoot = attached[0] ?? null
+  }
+  // The old root stays in the chat as an attached agent when it stops being
+  // root — on the way out of `direct`, or when another agent takes over
+  // coordinating — except the chat's own hidden runtime, which is no
+  // participant anyone can address.
+  if (chat.agentId && chat.agentId !== bindRoot && (current === 'direct' || current === 'coordinator')) {
+    detachRoot = root && isChatConductor(root.row) ? null : chat.agentId
+  }
+
+  chatRepo.setRouter(chat.userId, chatId, router, { detachRoot, bindRoot })
+  // A new conductor starts a fresh engine session and has the transcript
+  // replayed to it. A digest it saved while answering here as a participant
+  // would match its unchanged endpoint and reload that session instead.
+  if (router === 'coordinator' && bindRoot && bindRoot !== chat.agentId) conductorSessionRepo.save(chatId, bindRoot, '')
+
+  // Release only what changed. Everyone still in the chat keeps their
+  // session — in particular a turn's root moved to the attached set by
+  // `direct → human` keeps answering — except the old root when another agent
+  // now coordinates: its role changed, and it rejoins as a participant.
+  const before = chatMembers(chat.agentId, attached)
+  const after = chatMembers(bindRoot, chatOnDemandAgentRepo.listAgentIds(chatId))
+  const released = [...before].filter((id) => !after.has(id))
+  if (chat.agentId && bindRoot !== chat.agentId && router === 'coordinator' && after.has(chat.agentId)) released.push(chat.agentId)
+  for (const agentId of released) releaseChatSessions(chatId, agentId)
+  refreshConductor(chatId)
+  logger.info('chat router changed', {
+    chatId,
+    from: current,
+    to: router,
+    hadRootAgent: !!chat.agentId,
+    attached: attached.length,
+    conductor: bindRoot,
+    released: released.length
+  })
 }
 
 function refreshConductor(chatId: string): void {

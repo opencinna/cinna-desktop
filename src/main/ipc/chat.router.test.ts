@@ -27,10 +27,11 @@ vi.mock('../auth/activation', () => ({
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => 'profile-user' }))
 
 const setRouter = vi.fn()
+const setCoordinator = vi.fn()
 const update = vi.fn()
 vi.mock('../services/chatService', () => ({
   chatService: new Proxy(
-    { setRouter, update },
+    { setRouter, setCoordinator, update },
     { get: (target: Record<string, unknown>, key: string) => target[key] ?? (() => undefined) }
   )
 }))
@@ -59,6 +60,18 @@ describe('chat:set-router', () => {
       expect(setRouter).not.toHaveBeenCalled()
     }
   )
+})
+
+describe('chat:set-coordinator', () => {
+  it('hands the agent to the service for the active profile', async () => {
+    await expect(call('chat:set-coordinator', 'chat-1', 'agent-1')).resolves.toEqual({ success: true })
+    expect(setCoordinator).toHaveBeenCalledWith('profile-user', 'chat-1', 'agent-1')
+  })
+
+  it.each(['', null, 7, undefined])('refuses agent id %s without writing anything', async (agentId) => {
+    await expect(call('chat:set-coordinator', 'chat-1', agentId)).rejects.toThrow(/Choose an agent/)
+    expect(setCoordinator).not.toHaveBeenCalled()
+  })
 })
 
 describe('chat:update', () => {

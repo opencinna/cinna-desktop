@@ -206,4 +206,18 @@ export function registerChatHandlers(): void {
     chatService.setRouter(getProfileScopeUserId(), chatId, router)
     return { success: true }
   })
+
+  /**
+   * Make an agent already in the chat its coordinator (the agent chip's
+   * "Set as Coordinator"). Validation lives in `chatService.setCoordinator`;
+   * its messages stand alone because only the message reaches the renderer.
+   */
+  ipcHandle('chat:set-coordinator', async (_event, chatId: string, agentId: string) => {
+    userActivation.requireActivated()
+    if (typeof agentId !== 'string' || !agentId) {
+      throw new ChatError('not_found', 'Choose an agent to coordinate this chat.')
+    }
+    chatService.setCoordinator(getProfileScopeUserId(), chatId, agentId)
+    return { success: true }
+  })
 }
