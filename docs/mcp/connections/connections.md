@@ -35,6 +35,12 @@ Manage connections to MCP (Model Context Protocol) servers — local stdio proce
 
 The provider card's expanded edit form lets the user switch `sse`/`streamable-http` servers between OAuth and Bearer Token, or rotate a bearer token. The token input is always blank (write-only — the stored value never round-trips to the renderer); leaving it blank on Save keeps the currently stored token. The header Shield icon indicates which auth mode is active (`hasAuth` is true for either).
 
+### Deleting a connector
+1. The trash button on a provider card opens **Delete MCP connector**; nothing is deleted on the click itself
+2. The dialog says what goes: chats and chat modes using it lose it, its saved sign-in is removed, and this cannot be undone. Where folder agents have it attached as an [addon](../../agents/local_agents/addons.md), a second line names them ("Used by *A*, *B* — it will be removed from them"), because an addon is configured on a page the user is not looking at. If the lookup of those agents failed, the line says only that any agent it is attached to loses it too
+3. The dialog appears only once that lookup has settled, so the agent line never arrives under the pointer after the buttons have drawn, and focus starts on **Cancel**. While **Deleting…** shows it cannot be dismissed
+4. Every link goes with the row — `chat_mcp_providers`, `chat_on_demand_mcps` and `agent_mcp_providers` cascade, and chat modes have the id stripped. Adding the same server again creates a different connector that nothing is linked to, which is why the copy says "cannot be undone"
+
 ### Browsing a registry
 See [MCP Registries](../registries/registries.md). The Connect button in the picker reuses the same `mcp:upsert` → `mcpManager.connect` path documented below.
 
@@ -48,6 +54,9 @@ See [MCP Registries](../registries/registries.md). The Connect button in the pic
 ## Business Rules
 
 - Connection statuses: `connected`, `disconnected`, `error`, `awaiting-auth`
+- **A card shows a problem without being expanded.** Beside the name, a warning glyph appears when the connector is switched off, not connected, waiting for the browser, or in error; its tooltip and accessible name are the one sentence saying which ("Turned off — nothing gets its tools", "Waiting for authorization in your browser", the error, "Not connected"). The status dot is colour alone, and the error used to be readable only with the card open. The same sentence is used wherever a connector is listed — Settings, an agent's Addons tab, the attach dialog
+- **A connect nobody is watching never opens a browser.** A connect can be marked non-interactive — the ones an agent's turn starts for its [addons](../../agents/local_agents/addons.md). Stored OAuth tokens are still used and refreshed, but where the server wants the user to authorize, the attempt ends as `error` ("MCP authorization needs the user. Connect it in Settings.") instead of `awaiting-auth`, and the manager records that it *needs the user*, so the caller can stop retrying. A browser page appearing because an agent started a turn in the background would be an authorization prompt with no visible cause
+- **A connect already running can be waited on without being restarted.** Every `connect` replaces the attempt before it, so a caller that only wants the connector up — again, an addon's turn — waits for one in flight (from Settings, say) rather than starting its own, which would cancel the user's
 - All enabled MCP providers are auto-connected when a user session activates — not eagerly at process launch (see [Resource Activation](../../core/resource_activation/resource_activation.md)). Persisted OAuth tokens or the bearer token are restored as part of that connect
 - The active auth mode is resolved from the provider's persisted config on **every** connect, including the automatic one at activation. A bearer-token server therefore never opens a browser at any point in its lifecycle — if one appears, the auth mode was lost on the way to the connection layer
 - On app quit, all connections are cleanly disconnected
@@ -143,6 +152,7 @@ The flow is abandoned — with the connection left untouched — if the user dis
 
 ## Integration Points
 
+- [Agent Addons](../../agents/local_agents/addons.md) — connectors attached to a folder agent and offered to all its sessions; the reason for the non-interactive connect, the card's Detach variant and the delete dialog's agent line
 - [MCP Registries](../registries/registries.md) — Discovery layer; the picker creates providers through `mcp:upsert` and reuses the connection flow above
 - [Chat Messaging](../../chat/messaging/messaging.md) — Tool calls during streaming are routed through MCPManager
 - [LLM Adapters](../../llm/adapters/adapters.md) — MCP tools are converted to each provider's tool schema format
