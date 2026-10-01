@@ -3,6 +3,7 @@ import { useModels } from '../../hooks/useModels'
 import { isCredentialActive } from '../../../../shared/credentials'
 import { useAiFunctionsBackend, useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import type { AiFunctionsBackendStatus } from '../../../../shared/aiFunctions'
+import { AI_SPENDING_LEVELS, AI_SPENDING_LEVEL_LABEL } from '../../../../shared/aiSpendingLevel'
 import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
 import { useUIStore, type SidebarDocking, type ThemePreference } from '../../stores/ui.store'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -116,6 +117,19 @@ export function FeaturesSettingsSection(): React.JSX.Element {
                   onClick={() => { if (settings && !disabled) setSetting.mutate({ key: 'defaultMultiAgentRouting', value }) }}
                   className={`rounded px-2.5 py-1 text-[13px] transition-colors disabled:opacity-50 ${(settings?.defaultMultiAgentRouting ?? 'human') === value ? 'app-nav-active text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
                   {value === 'human' ? 'You route' : 'AI routes'}
+                </button>
+              ))}
+            </div>
+          </SettingsRow>
+          <SettingsRow className="flex items-center justify-between gap-3">
+            <SettingsLabel info="The context a chat may fill before Cinna suggests a new chat or compacting: Eco 250K, Mid 350K, Greedy the full window. Lower on models with smaller windows.">AI spending level</SettingsLabel>
+            <div role="group" aria-label="AI spending level" className="flex shrink-0 rounded-md border border-[var(--color-border)] p-0.5">
+              {AI_SPENDING_LEVELS.map((value) => (
+                <button key={value} type="button" disabled={disabled}
+                  aria-pressed={(settings?.aiSpendingLevel ?? 'mid') === value}
+                  onClick={() => { if (settings && !disabled) setSetting.mutate({ key: 'aiSpendingLevel', value }) }}
+                  className={`rounded px-2.5 py-1 text-[13px] transition-colors disabled:opacity-50 ${(settings?.aiSpendingLevel ?? 'mid') === value ? 'app-nav-active text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
+                  {AI_SPENDING_LEVEL_LABEL[value]}
                 </button>
               ))}
             </div>

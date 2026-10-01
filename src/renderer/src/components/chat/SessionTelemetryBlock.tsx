@@ -15,6 +15,8 @@ import {
   currentPrices,
   nextMessageEstimate
 } from '../../../../shared/sessionTelemetryDerived'
+import { AI_SPENDING_LEVEL_LABEL, contextHealth } from '../../../../shared/aiSpendingLevel'
+import { useAppSettings } from '../../hooks/useAppSettings'
 import { useSessionTelemetry } from '../../hooks/useSessionTelemetry'
 import { useUIStore } from '../../stores/ui.store'
 import {
@@ -75,6 +77,8 @@ export function contextRowLabel(t: SessionTelemetry): string {
 export interface SessionTelemetryBlockModel {
   chatId: string
   telemetry: SessionTelemetry
+  /** A `get` is in flight: `telemetry` may be a cached reading from before this view mounted. */
+  fetching: boolean
   measureContext: () => Promise<SessionTelemetryMeasureResult>
   expanded: boolean
   toggle: () => void
@@ -106,6 +110,7 @@ export function useSessionTelemetryBlock(chatId: string): SessionTelemetryBlockM
   return {
     chatId,
     telemetry,
+    fetching: query.isFetching,
     measureContext,
     expanded: expanded && expandedFor === chatId,
     toggle: () => setExpanded((value) => !value),
@@ -336,6 +341,8 @@ function ContextSection({
 }): React.JSX.Element {
   const { used, size, sizeAuthoritative, categories, categoriesMeasuredAt, breakdown } = t.context
   const percent = formatContextPercent(used, size)
+  const level = useAppSettings().data?.aiSpendingLevel ?? 'mid'
+  const health = contextHealth(level, t.context)
   const measurable = CONTEXT_CATEGORIES_KNOWN[t.engine] && !unsupported
   // What is in the window: its free room and the compaction reserve are not (the CLI's own `/context`).
   const rows = categories
@@ -360,6 +367,12 @@ function ContextSection({
           qualifier={percent !== undefined && !sizeAuthoritative ? 'size not confirmed yet' : undefined}
         />
       </p>
+      {health && (
+        <Row label={`${AI_SPENDING_LEVEL_LABEL[level]} budget`}>
+          {/* A value, then one muted qualifier (§13): no ` · `-joined prose. */}
+          <Qualified value={formatTokens(health.budget)} qualifier={`${formatContextPercent(used, health.budget)} used`} />
+        </Row>
+      )}
       {categories ? (
         <>
           {rows.map((c) => (

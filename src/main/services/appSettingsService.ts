@@ -10,6 +10,7 @@ import { assertUsableRoot } from './localAgents/pathRules'
 import { isLocalToolId } from '../../shared/localTools'
 import { isAgentEngine } from '../../shared/engine'
 import { isWorkComplexity } from '../../shared/modelFamilies'
+import { isAiSpendingLevel } from '../../shared/aiSpendingLevel'
 
 const logger = createLogger('app-settings')
 
@@ -76,6 +77,9 @@ const VALUE_CHECKS: {
     if (value !== 'human' && value !== 'coordinator') {
       throw new AppSettingsError('invalid_value', 'Choose You route or AI routes.')
     }
+  },
+  aiSpendingLevel: (value) => {
+    if (!isAiSpendingLevel(value)) throw new AppSettingsError('invalid_value', 'Choose Eco, Mid or Greedy.')
   },
   taskRunnerConcurrency: (value) => {
     if (!Number.isSafeInteger(value) || value < 1 || value > 8) throw new AppSettingsError('invalid_value', 'Concurrent task limit must be an integer from 1 to 8.')

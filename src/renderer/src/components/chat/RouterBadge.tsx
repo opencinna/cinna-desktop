@@ -9,6 +9,16 @@ import {
   type SessionTelemetryBlockModel
 } from './SessionTelemetryBlock'
 import type { ChatRouter } from '../../../../shared/chatRouting'
+import {
+  AI_SPENDING_LEVEL_LABEL,
+  contextHealth,
+  type AiSpendingLevel,
+  type ContextHealth
+} from '../../../../shared/aiSpendingLevel'
+import { useAppSettings } from '../../hooks/useAppSettings'
+import { useToastStore } from '../../stores/toast.store'
+import { useUIStore } from '../../stores/ui.store'
+import { formatTokens } from '../../utils/telemetryFormat'
 
 type DisplayRouter = ChatRouter | 'script'
 
@@ -72,7 +82,53 @@ export function RouterBadge({ chatId, ...info }: RouterBadgeInfo): React.JSX.Ele
 
 function ChatRouterBadge({ chatId, ...info }: RouterBadgeInfo & { chatId: string }): React.JSX.Element {
   const telemetry = useSessionTelemetryBlock(chatId)
-  return <RouterBadgeView {...info} telemetry={telemetry} />
+  const level = useAppSettings().data?.aiSpendingLevel ?? 'mid'
+  const health = telemetry ? contextHealth(level, telemetry.telemetry.context) : null
+  // A reading the badge did not hear live — the cached one on coming back to a
+  // chat, and the refetch that replaces it — is not a crossing: its rise
+  // happened while nobody was listening. Only pushes after the fetch settles count.
+  useBudgetCrossingToast(chatId, level, telemetry && !telemetry.fetching ? health : null)
+  return <RouterBadgeView {...info} telemetry={telemetry} budgetLine={health ? { key: chatId, fill: health.fill } : null} />
+}
+
+/**
+ * Tells the user, once, when the context in the chat on screen crosses their
+ * spending level's budget — a reading below it followed by one at or above it,
+ * both in this chat at this level. Anything else only records the reading: the
+ * first one for a chat (opening it, or switching back to one already over),
+ * a changed level, and a reading with no budget (size unconfirmed), which
+ * also forgets the last one, since "below" was a guess from then on. A reading
+ * back under the budget (compaction, a new session) re-arms it.
+ */
+function useBudgetCrossingToast(chatId: string, level: AiSpendingLevel, health: ContextHealth | null): void {
+  const last = useRef<{ chatId: string; level: AiSpendingLevel; over: boolean | null } | null>(null)
+  const over = health ? health.over : null
+  const budget = health?.budget
+  useEffect(() => {
+    const previous = last.current
+    last.current = { chatId, level, over }
+    if (!previous || previous.chatId !== chatId || previous.level !== level) return
+    if (previous.over === false && over === true && budget !== undefined) {
+      useToastStore.getState().show(
+        `Context in this chat reached your ${AI_SPENDING_LEVEL_LABEL[level]} budget (${formatTokens(budget)}). Consider starting a new chat or compacting the conversation to avoid excessive token spending.`,
+        { link: { label: 'Settings → Features', settingsMenu: 'features' } }
+      )
+    }
+  }, [chatId, level, over, budget])
+}
+
+/**
+ * The line's colour along its fill: green to half, amber by 80%, red at the
+ * budget — mixed continuously, from theme colours only.
+ */
+export function budgetLineColor(fill: number): string {
+  if (fill <= 0.5) return 'var(--color-success)'
+  if (fill <= 0.8) {
+    const towardWarning = Math.round(((fill - 0.5) / 0.3) * 100)
+    return `color-mix(in oklab, var(--color-success), var(--color-warning) ${towardWarning}%)`
+  }
+  const towardDanger = Math.round((Math.min(1, fill) - 0.8) / 0.2 * 100)
+  return `color-mix(in oklab, var(--color-warning), var(--color-danger) ${towardDanger}%)`
 }
 
 function RouterBadgeView({
@@ -82,8 +138,14 @@ function RouterBadgeView({
   answererName,
   modelName,
   conductorName,
-  telemetry
-}: Omit<RouterBadgeInfo, 'chatId'> & { telemetry: SessionTelemetryBlockModel | null }): React.JSX.Element {
+  telemetry,
+  budgetLine = null
+}: Omit<RouterBadgeInfo, 'chatId'> & {
+  telemetry: SessionTelemetryBlockModel | null
+  /** The context health line; `key` is the chat, so a chat switch shows its value without replaying the width. */
+  budgetLine?: { key: string; fill: number } | null
+}): React.JSX.Element {
+  const animate = useUIStore((s) => s.extraUIAnimation)
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
   const [dismissed, setDismissed] = useState(false)
@@ -124,7 +186,7 @@ function RouterBadgeView({
       onKeyDown={(event) => { if (event.key === 'Escape') setDismissed(true) }}
     >
       <div
-        className={`flex items-center gap-1 px-1.5 py-1 rounded-lg border
+        className={`relative overflow-hidden flex items-center gap-1 px-1.5 py-1 rounded-lg border
           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${face.tone}`}
         role="status"
         tabIndex={0}
@@ -135,6 +197,15 @@ function RouterBadgeView({
         <span className="text-[11px] font-semibold tracking-wide whitespace-nowrap max-w-[10rem] truncate" title={face.label}>
           {face.label}
         </span>
+        {budgetLine && (
+          <span
+            key={budgetLine.key}
+            aria-hidden="true"
+            data-testid="context-budget-line"
+            className={`pointer-events-none absolute bottom-0 left-0 h-[2px] ${animate ? 'transition-[width,background-color] duration-500 ease-out motion-reduce:transition-none' : ''}`}
+            style={{ width: `${budgetLine.fill * 100}%`, backgroundColor: budgetLineColor(budgetLine.fill) }}
+          />
+        )}
       </div>
 
       {open && (

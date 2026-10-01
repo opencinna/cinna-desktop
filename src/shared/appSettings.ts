@@ -4,6 +4,8 @@
  * source of truth. Add a key here, then mirror it in the main-side
  * `appSettingsRepo` defaults.
  */
+import type { AiSpendingLevel } from './aiSpendingLevel'
+
 export interface AppSettingsSchema {
   /** Concurrent autonomous tasks and agent calls on this device. */
   taskRunnerConcurrency: number
@@ -17,6 +19,11 @@ export interface AppSettingsSchema {
   aiFunctionsCredentialId: string
   aiFunctionsModelId: string
   defaultMultiAgentRouting: 'human' | 'coordinator'
+  /**
+   * How much context a chat may use before Cinna nudges the user (the badge's
+   * health line and a one-time toast). See `shared/aiSpendingLevel.ts`.
+   */
+  aiSpendingLevel: AiSpendingLevel
   /**
    * When true, the macOS menu-bar (status-bar) tray icon is created alongside
    * the main window. Toggling at runtime creates or destroys the tray live.

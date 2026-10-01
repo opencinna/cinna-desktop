@@ -187,6 +187,16 @@ it('defaults build complexity to Complex and persists only supported tiers', () 
   expect(() => appSettingsService.set('localDevelopmentComplexity', '')).toThrow()
 })
 
+it('defaults the AI spending level to Mid and rejects anything but the three levels', () => {
+  expect(appSettingsService.getAll().aiSpendingLevel).toBe('mid')
+  appSettingsService.set('aiSpendingLevel', 'eco')
+  expect(appSettingsService.getAll().aiSpendingLevel).toBe('eco')
+  expect(() => appSettingsService.set('aiSpendingLevel', 'max')).toThrow(/Eco, Mid or Greedy/)
+  expect(() => appSettingsService.set('aiSpendingLevel', '')).toThrow(/Eco, Mid or Greedy/)
+  expect(() => appSettingsService.set('aiSpendingLevel', 1)).toThrow()
+  expect(appSettingsService.getAll().aiSpendingLevel).toBe('eco')
+})
+
 it('validates the routing preference and keeps AI Functions independent', () => {
   expect(appSettingsService.getAll().defaultMultiAgentRouting).toBe('human')
   appSettingsService.set('defaultMultiAgentRouting', 'coordinator')

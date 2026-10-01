@@ -17,6 +17,7 @@ export const DEFAULTS: AppSettingsSchema = {
   taskRunnerConcurrency: 2,
   autoChatTitles: false,
   defaultMultiAgentRouting: 'human',
+  aiSpendingLevel: 'mid',
   aiFunctionsCredentialId: '',
   aiFunctionsModelId: '',
   enableTrayIcon: true,

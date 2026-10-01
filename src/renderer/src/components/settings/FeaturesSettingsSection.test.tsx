@@ -179,6 +179,22 @@ it('saves the default routing independently from existing chats', () => {
   expect(setSetting).toHaveBeenCalledWith({ key: 'defaultMultiAgentRouting', value: 'coordinator' })
 })
 
+it('shows Mid as the default AI spending level and saves another level', () => {
+  render(<FeaturesSettingsSection />)
+  const group = screen.getByRole('group', { name: 'AI spending level' })
+  const pressed = Array.from(group.querySelectorAll('button')).filter((b) => b.getAttribute('aria-pressed') === 'true')
+  expect(pressed.map((b) => b.textContent)).toEqual(['Mid'])
+  fireEvent.click(screen.getByRole('button', { name: 'Eco' }))
+  expect(setSetting).toHaveBeenCalledWith({ key: 'aiSpendingLevel', value: 'eco' })
+})
+
+it('marks the saved AI spending level', () => {
+  settings = { ...HEALTHY, aiSpendingLevel: 'greedy' }
+  render(<FeaturesSettingsSection />)
+  expect(screen.getByRole('button', { name: 'Greedy' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Mid' }).getAttribute('aria-pressed')).toBe('false')
+})
+
 it('says a missing AI Functions credential runs on the Default runtime', () => {
   settings = { ...HEALTHY, aiFunctionsCredentialId: 'deleted-credential', aiFunctionsModelId: '' }
   functionsBackend = { runsOn: 'runtime', reason: 'missing' }
