@@ -31,10 +31,30 @@ interface Entry {
   binding: Binding | null
   wake(): boolean
   waiters: Set<{resolve(): void; reject(error: Error): void}>
+  /**
+   * Released while a turn was bound to it: out of `entries`, so the next
+   * prepare builds a fresh endpoint, but still serving the running turn until
+   * its lease closes, which disposes it.
+   */
+  retiring?: boolean
 }
 const logger = createLogger('conductor-bridge')
 const server = new ConductorMcpServer((error) => logger.warn('Conductor MCP listener error', { error: String(error) }))
 const entries = new Map<string, Entry>()
+/**
+ * Entries released mid-turn, still answering that turn. Kept reachable by
+ * `refresh` and the other chat-wide fan-outs: a chat change during the turn
+ * (an agent attached) must still reach the engine's live connection.
+ */
+const retiring = new Set<Entry>()
+/**
+ * How many times an entry under this key retired. The MCP server reuses a
+ * session by key, so a fresh entry must ask under a key the retiring one does
+ * not hold, or it would be handed the endpoint about to be disposed.
+ */
+const generations = new Map<string, number>()
+const serverKey = (key: string): string => { const generation = generations.get(key); return generation ? `${key}#${generation}` : key }
+const live = (chatId?: string): Entry[] => [...entries.values(), ...retiring].filter((entry) => chatId === undefined || entry.chatId === chatId)
 const MAX_CALLS = 100
 
 export interface ConductorLease {
@@ -152,7 +172,12 @@ export const conductorBridge = {
         }
       }
     }
-    const session = await server.ensureSession(key, options)
+    let asked = serverKey(key)
+    let session = await server.ensureSession(asked, options)
+    // Retired while the server started: that endpoint is the old turn's.
+    while (serverKey(key) !== asked) session = await server.ensureSession(asked = serverKey(key), options)
+    // Re-read: the entry seen before the awaits may have been released since.
+    entry = entries.get(key)
     if (!entry) {
       entry = { chatId: input.chatId, agent, ownerId, scope: input.runScope, session, binding, wake, waiters: new Set(), correlation: new ConductorToolCorrelation() }
       entries.set(key, entry)
@@ -179,11 +204,16 @@ export const conductorBridge = {
         // The engine ending/crashing cannot leave a child parked indefinitely.
         if (binding.pending > 0) abort()
         if (entry!.binding === binding) entry!.binding = null
+        // Released during this turn: nothing else can bind it, so it goes now.
+        if (entry!.retiring && !entry!.binding) {
+          retiring.delete(entry!)
+          void entry!.session.dispose()
+        }
       }
     }
   },
   async refresh(chatId: string): Promise<void> {
-    await Promise.all([...entries.values()].filter((entry) => entry.chatId === chatId).map((entry) => entry.session.refreshTools()))
+    await Promise.all(live(chatId).map((entry) => entry.session.refreshTools()))
   },
   /** The follow-up a between-turn call was waiting for will not open. */
   abandonWaiters(chatId: string, agentId: string, reason: string): void {
@@ -191,17 +221,18 @@ export const conductorBridge = {
     if (entry && !entry.binding) for (const waiter of entry.waiters) waiter.reject(new Error(`The conductor could not open a turn for this call: ${reason}.`))
   },
   abortAgent(agentId: string): void {
-    for (const entry of entries.values()) if (entry.agent.id === agentId) { entry.session.abortCalls('The conductor process exited'); for (const waiter of entry.waiters) waiter.reject(new Error('The conductor session ended.')) }
+    for (const entry of live()) if (entry.agent.id === agentId) { entry.session.abortCalls('The conductor process exited'); for (const waiter of entry.waiters) waiter.reject(new Error('The conductor session ended.')) }
   },
   async shutdown(): Promise<void> {
-    for (const entry of entries.values()) for (const waiter of entry.waiters) waiter.reject(new Error('The app is closing.'))
+    for (const entry of live()) for (const waiter of entry.waiters) waiter.reject(new Error('The app is closing.'))
     entries.clear()
+    retiring.clear()
     await server.dispose()
   }
 }
 
 onMcpToolsChanged((providerId) => {
-  for (const entry of entries.values()) {
+  for (const entry of live()) {
     const ids = [...chatMcpRepo.listProviderIds(entry.chatId), ...chatOnDemandMcpRepo.listProviderIds(entry.chatId)]
     if (ids.includes(providerId)) void entry.session.refreshTools().catch((error) => logger.warn('Could not refresh conductor tools', { error: String(error) }))
   }
@@ -210,7 +241,16 @@ onMcpToolsChanged((providerId) => {
 installChatSessionForgetter((chatId, agentId) => {
   for (const [key, entry] of entries) if (entry.chatId === chatId && (!agentId || agentId === entry.agent.id)) {
     entries.delete(key)
+    // Waiters only park while no turn is bound (a binding resolves them), so
+    // for a retiring entry this is empty; none can join while it stays bound.
     for (const waiter of entry.waiters) waiter.reject(new Error('The conductor session ended.'))
-    void entry.session.dispose()
+    if (entry.binding) {
+      // A turn is running on this endpoint: disposing it now drops the
+      // engine's tools mid-turn (ENDPOINT_NOT_FOUND on its next reconnect).
+      // The lease's close() disposes it instead.
+      entry.retiring = true
+      retiring.add(entry)
+      generations.set(key, (generations.get(key) ?? 0) + 1)
+    } else void entry.session.dispose()
   }
 })
