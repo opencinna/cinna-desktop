@@ -165,6 +165,22 @@ function RouterBadgeView({
     window.addEventListener('resize', measure)
     return () => window.removeEventListener('resize', measure)
   }, [open, hasTelemetry])
+  // A focused control that unmounts — the Context row when telemetry drops,
+  // Measure once a runtime refuses it — sends focus to <body> with no blur
+  // React sees, and `focused` would hold the popover open past mouse-away and
+  // click-away. So mouse-away, a press anywhere and focus landing elsewhere ask
+  // the document where focus is rather than trust the flag.
+  const focusLeft = (): boolean => !anchorRef.current?.contains(document.activeElement)
+  useEffect(() => {
+    if (!focused) return
+    const check = (): void => { if (focusLeft()) setFocused(false) }
+    document.addEventListener('pointerdown', check)
+    document.addEventListener('focusin', check)
+    return () => {
+      document.removeEventListener('pointerdown', check)
+      document.removeEventListener('focusin', check)
+    }
+  }, [focused])
   const location = router === 'direct' && connectionAgent ? agentLocation(connectionAgent) : null
   const face = location ? { ...FACE.direct, label: location, icon: location === 'Local' ? SquareTerminal : Waypoints } : router === 'coordinator' && conductorName ? { ...FACE.coordinator, label: `${conductorName} routes` } : FACE[router]
   const Icon = face.icon
@@ -177,7 +193,7 @@ function RouterBadgeView({
       ref={anchorRef}
       className="relative"
       onMouseEnter={() => { setHovered(true); setDismissed(false) }}
-      onMouseLeave={() => setHovered(false)}
+      onMouseLeave={() => { setHovered(false); if (focusLeft()) setFocused(false) }}
       // The tooltip is the only place the three routers are explained, and a
       // hover is not a gesture a keyboard has. Focus opens it too — on the
       // wrapper, so the badge stays one stop rather than two.

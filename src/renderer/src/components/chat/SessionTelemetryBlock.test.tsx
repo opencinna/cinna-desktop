@@ -215,17 +215,46 @@ describe('the Context row', () => {
 
   it('keeps the popover open while focus is inside it', async () => {
     await mount(claude())
-    fireEvent.focus(pill())
+    act(() => pill().focus())
     const row = toggle()!
-    fireEvent.blur(pill(), { relatedTarget: row })
-    fireEvent.focus(row)
+    act(() => row.focus())
     fireEvent.click(row)
     expect(dialog()).not.toBeNull()
     const measure = within(section('Context')).getByRole('button', { name: 'Measure' })
-    fireEvent.blur(row, { relatedTarget: measure })
-    fireEvent.focus(measure)
+    act(() => measure.focus())
     fireEvent.click(measure)
     expect(dialog()).not.toBeNull()
+  })
+
+  // A focused node that unmounts sends focus to <body> with no blur React
+  // sees; the popover then stayed open past mouse-away and click-away.
+  it('closes on mouse-away and on a press elsewhere once its focused row unmounts', async () => {
+    const { client } = await mount(claude())
+    // The popover's role turns from dialog to tooltip without telemetry; the
+    // pill's description is there exactly while either is open.
+    const isOpen = (): boolean => pill().hasAttribute('aria-describedby')
+    const anchor = hover().parentElement!
+    act(() => toggle()!.focus())
+    // TanStack notifies on a later tick.
+    const drop = (): Promise<void> => {
+      act(() => client.setQueryData(['sessionTelemetry', 'chat-1'], null))
+      return waitFor(() => expect(document.activeElement).toBe(document.body))
+    }
+    await drop()
+    expect(isOpen()).toBe(true)
+    fireEvent.mouseLeave(anchor)
+    expect(isOpen()).toBe(false)
+
+    act(() => client.setQueryData(['sessionTelemetry', 'chat-1'], claude()))
+    fireEvent.mouseEnter(anchor)
+    await waitFor(() => expect(toggle()).not.toBeNull())
+    act(() => toggle()!.focus())
+    fireEvent.mouseLeave(anchor)
+    expect(isOpen()).toBe(true)
+    await drop()
+    expect(isOpen()).toBe(true)
+    fireEvent.pointerDown(document.body)
+    expect(isOpen()).toBe(false)
   })
 
   it('stays expanded across a close and reopen, and resets when the chat changes', async () => {
