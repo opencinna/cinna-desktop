@@ -20,7 +20,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **Guarded location**: `~/Documents`, `~/Desktop`, `~/Downloads` or iCloud Drive (`~/Library/Mobile Documents`). macOS asks the user before an app touches any of them. See [The Agents Folder Question](../../agents/local_agents/home_access.md).
 - **Open strategy**: how **Open** hands a file to the operating system, which never involves executing it.
 - **Reference menu**: the transcript's right-click menu when it lands on a reference. It replaces **Copy text** / **Save to Notes** of the span text with **Open in browser** (HTML files only), **Copy contents**, **Save to Notes** (of the file), **Copy full path** and **Reference in a new chat**.
-- **Whole-file read**: the file's complete text, for Copy contents and Save to Notes. Unlike a preview it is never truncated: a file over 4 MB is refused.
+- **Whole-file read**: the file's complete text, for Copy contents and Save to Notes. Unlike a preview it is never truncated: a file over the cap is refused. Copy contents reads up to 25 MB, the same as a preview; Save to Notes up to 4 MB.
 
 ## User Stories / Flows
 
@@ -73,7 +73,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 5. **Open in browser** opens the file in the user's default web browser and closes the menu. For a file outside the agent folder it first asks to *show* it, as a click does; **Cancel** closes the menu and opens nothing. "No browser could open this file." is said inside the menu.
 6. **Reference in a new chat** opens the new-chat screen with the reference's agent selected, the composer focused, and "The file \`<path>\` " already typed, ready for the rest of the sentence. A folder reads "The folder \`<path>\` ". Text already in the new-chat composer stays, and the reference goes on a line under it.
 7. For a file outside the agent folder, the two content items first ask to read it: "Let Cinna read a file outside <agent>'s folder?", **Read file** or **Cancel**. The menu stays open while the dialog is up. **Cancel** closes the menu and reads nothing. The running item shows a spinner and the others dim until it ends.
-8. A failure is said inside the menu, which stays open for a retry with focus back on the item that failed: "This file is over 4 MB.", "This isn't a text file.", "That file is no longer there.". An agent that has been switched off shows the toast "*Name* is disabled", one that is gone "That agent is no longer available".
+8. A failure is said inside the menu, which stays open for a retry with focus back on the item that failed: "This file is over 25 MB." (Copy contents) or "This file is over 4 MB." (Save to Notes), "This isn't a text file.", "That file is no longer there.". An agent that has been switched off shows the toast "*Name* is disabled", one that is gone "That agent is no longer available".
 9. A selection inside a path still wins: selecting part of it and right-clicking gives the ordinary **Copy text** / **Save to Notes** of the selection.
 
 ## Business Rules
@@ -191,9 +191,9 @@ A folder agent works inside its folder and names files all the time: `data/refor
 
 ### Previews
 - **What previews:** every type an attachment previews, plus code and config shown as text (`py`, `sh`, `ts`, `sql`, `toml`, …). This is a separate rule from the attachment one, so attachment behaviour is unchanged.
-- **Read in main**, capped at 512 KB, with the same truncation-safe decode as attachments. A truncated preview says "Preview truncated — open the file to see the full content."
+- **Read in main**, capped at 25 MB, with the same truncation-safe decode as attachments. A truncated preview says "Preview truncated — open the file to see the full content."
 - **A type with no preview is never read.**
-- **An HTML file renders with the files beside it.** Its page asks for `style.css` or `img/chart.png`, and main serves them only from the page's own folder and below, never a dotfile or dot-folder, never a credential file, never over 20 MB, and only when that path is inside the agent folder or under an approval already given. A page never raises the consent dialog: an outside page approved as a single file renders without its assets. See [File Preview — Security](../file_preview/file_preview_tech.md#html-preview-frame).
+- **An HTML file renders with the files beside it.** Its page asks for `style.css` or `img/chart.png`, and main serves them only from the page's own folder and below, never a dotfile or dot-folder, never a credential file, never over 25 MB, and only when that path is inside the agent folder or under an approval already given. A page never raises the consent dialog: an outside page approved as a single file renders without its assets. See [File Preview — Security](../file_preview/file_preview_tech.md#html-preview-frame).
 
 ### What a reference looks like
 - **It looks pressable.** It keeps the inline code box, tints its fill slightly towards the accent (orange in the dark theme, blue in the light one), and adds a 1px edge. The edge deepens on hover, and the cursor is a pointer. See [UX rule 11](../../development/ui_guidelines/ux_rules.md): a control must not look like the text beside it.
@@ -228,10 +228,11 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **The items are decided once, when the menu opens**, from the reference as the transcript resolved it. Nothing appears or disappears while the menu is open, so the item under the pointer is the one clicked.
 - **Contents are offered unless they plainly cannot be text.** A folder, a known binary type or a credential name gets the path items only. A known text type (every previewable type, `.log`, `.out`, `.err`, rotated logs such as `app.log.1`, and conventional names such as `Makefile`, `Dockerfile`, `.gitignore`, `LICENSE`) is offered. So is an unknown type (`.gz`, an extensionless `NOTES`): main reads it and decides from the bytes.
 - **The whole file or nothing.** The read goes through the same checks as a preview — containment or approval, files only, never a credential file, the device and inode re-checked once open — and is never truncated:
-  - over 4 MB, it is refused as "This file is over 4 MB." (the figure is computed from the cap) A file that grows past the cap after the size check is caught by the read, not cut short;
+  - over the cap, it is refused, and the sentence names that cap: "This file is over 25 MB." for Copy contents, "This file is over 4 MB." for Save to Notes. A file that grows past the cap after the size check is caught by the read, not cut short;
   - a known binary type, a NUL byte or bytes that are not valid UTF-8 are refused as "This isn't a text file."
 
-  A note or a clipboard holding the first 512 KB of a file would pass for the whole of it.
+  A note or a clipboard holding only the start of a file, as a preview may, would pass for the whole of it.
+- **Each use has its own cap.** Copy contents goes as far as a preview does, 25 MB, so a file the user can preview is a file they can copy; the clipboard takes it and nothing is edited. Save to Notes stays at 4 MB, because a note is opened and edited in place, not just held. The menu says which use it is; any other value gets the note cap.
 - **The menu survives the consent dialog, and only that.** A native dialog takes the window's focus, and a window blur normally closes the menu. A blur is ignored only while the consent call is pending; once it has answered, switching away closes the menu again even if the read or the note is still running. Declining closes the menu silently, as a declined click opens nothing.
 - **Copy contents writes the clipboard from main.** The renderer's clipboard refuses a write from a document without focus, and after a consent dialog the document may not have it back. Copy full path, which asks nothing, uses the renderer's clipboard as Copy text does.
 - **Reference in a new chat uses the reference's own agent**: the agent whose folder the span resolved in, which in a routed chat can be a different agent from the chat's. It lands where every "chat with this agent" action lands — the new-chat screen, that agent preselected, the Chats list beside it — as [New Chat with This Agent](../../ui/keyboard_shortcuts/keyboard_shortcuts.md) does. The path is written into the new-chat screen's draft before the screen mounts, so it is in the input with the caret after it; a line break separates it from text the user had already typed there, which is kept.
@@ -270,7 +271,7 @@ Right-click
   useMessageContextMenu → fileRefTargetOf(code) → { agentId, ref } → messageMenuItems (decided once)
     Copy contents / Save to Notes
       → readAgentFileText: agent-files:authorize (dialog if outside) → agent-files:read-text
-         (containment/consent → file → credential → binary name → dev/inode → 4 MB → NUL / UTF-8)
+         (containment/consent → file → credential → binary name → dev/inode → 25 MB copy | 4 MB note → NUL / UTF-8)
       Copy contents → clipboard:write-text (main's clipboard)
       Save to Notes → fileNoteFromContents → note:create → Notes tab, note opens
     Open in browser (html)  → agent-files:authorize (dialog if outside) → agent-files:open-in-browser

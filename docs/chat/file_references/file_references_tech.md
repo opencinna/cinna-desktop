@@ -14,6 +14,7 @@
   - `isCredentialFilePath(path, agentDir)`: the credential-name rule — dotenv names, `*.pem`/`*.key`, `SSH_PRIVATE_KEY_PREFIXES` (not `*.pub`), `CREDENTIAL_FILE_NAMES`, and `CREDENTIAL_PATH_SUFFIXES` matched on the lower-cased path. Passing `agentDir` enables the `credentials/` clause.
   - `isCredentialFileRef(ref)`: that rule for a resolved reference, without the agent folder. An inside ref is judged by `/<displayPath>` against a `/` root, so the `credentials/` clause still applies; an outside ref by its realpath. Used by the preview store and the right-click menu; main refuses regardless.
   - `agentFileContentKind(name)`: `text`, `binary` or `unknown`, from the name alone. `text` covers every preview kind, `TEXT_DOCUMENT_EXTENSIONS`, `log`/`out`/`err`, rotated logs (`.log.<n>`) and the conventional names in `TEXT_FILE_NAMES` (`Makefile`, `Dockerfile`, `.gitignore`, `LICENSE`, `.env.example`…); `binary` is `BINARY_DOCUMENT_EXTENSIONS`; anything else is `unknown`.
+  - `AgentFileTextUse` (`'copy' | 'note'`) and `ReadAgentFileTextInput` (`AgentFilePathInput` plus optional `use`): what a whole-file read is for, which picks its cap.
   - `agentFileExtension` and `agentFileName`.
   - `BINARY_DOCUMENT_EXTENSIONS`, `TEXT_DOCUMENT_EXTENSIONS`, and `DEFAULT_APP_EXTENSIONS` (the union of the two).
   - `AgentFileConsentPurpose` (`'show' | 'read'`) and `AuthorizeAgentFileInput` (`AgentFilePathInput` plus an optional `purpose`).
@@ -30,7 +31,7 @@
 - `src/main/services/agentFiles/canonicalPath.ts`: `createPathCanonicalizer` and `DARWIN_DATA_VOLUME`.
 - `src/main/services/agentFiles/openStrategy.ts`: `chooseOpenStrategy` and `findDefaultEditor`.
 - `src/main/host/desktop/agentFiles.ts`: the production wiring (`agentFileService`, `openInBrowser`) and `nativeConsentPrompt(win)`.
-- `src/main/host/desktop/clipboard.ts`: `writeClipboardText(text, write?)`, the main-side clipboard bridge behind `clipboard:write-text`. Refuses a non-string or anything over `MAX_CLIPBOARD_TEXT_LENGTH` (8M characters, above what a 4 MB UTF-8 file can decode to), and returns a thrown write as `{ success: false }`.
+- `src/main/host/desktop/clipboard.ts`: `writeClipboardText(text, write?)`, the main-side clipboard bridge behind `clipboard:write-text`. Refuses a non-string or anything over `MAX_CLIPBOARD_TEXT_LENGTH` (equal to `MAX_AGENT_FILE_COPY_BYTES`: a UTF-8 file decodes to at most as many characters as it has bytes, so whatever Copy contents read fits), and returns a thrown write as `{ success: false }`.
 
 ### Main process — reused from Local Agents
 - `src/main/services/localAgents/localAgentService.ts`:
@@ -62,7 +63,7 @@
 - `src/renderer/src/components/chat/MessageStream.tsx`: collects the sources, mounts the resolver, and provides each bubble's scope.
 - `src/renderer/src/components/chat/MessageBubble.tsx`: renders with `chatMarkdownComponents`, and provides a null scope while streaming.
 - `src/renderer/src/stores/filePreview.store.ts`: `openAgentFile`, `openAgentFileExternally`, `revealAgentFile`, and the error-copy helpers.
-- `src/renderer/src/utils/agentFileAccess.ts`: `authorizeAgentFile(input)` (shared by the preview store and the menu) and `readAgentFileText(agentId, ref, { onAuthorize? })`.
+- `src/renderer/src/utils/agentFileAccess.ts`: `authorizeAgentFile(input)` (shared by the preview store and the menu) and `readAgentFileText(agentId, ref, use, { onAuthorize? })`.
 - `src/renderer/src/components/chat/MessageContextMenu.tsx`: the reference items (`messageMenuItems`, `referenceDraft` and the file actions). `messageMenuItems` puts `open-in-browser` in a group of its own, first, when `previewKindFor(ref.path) === 'html'` and the file is not path-only; its action runs `authorizeAgentFile` under `consentPending` (so the dialog's blur keeps the menu), closes on a decline, then `window.api.agentFiles.openInBrowser`. Its text half belongs to [Conversation UI tech](../conversation_ui/conversation_ui_tech.md#message-context-actions).
 - `src/renderer/src/utils/fileNote.ts`: `fileNoteFromContents(path, text)` and `fenceLanguageFor(fileName)`.
 - `src/renderer/src/utils/startAgentChat.ts`: `startAgentChat(agentId, { draft? })` and `unavailableAgentMessage(agents, agentId, missing)`, shared with the chat-starting shortcuts.
@@ -86,7 +87,7 @@
   - a file swapped between the check and the read;
   - one shared dialog per path;
   - `authorize` asking in `read` words only for exactly `'read'`;
-  - `readText`: whole and untruncated, outside only after approval, credential files, binary types and folders refused unread, the cap exact and one byte over, NUL and invalid UTF-8, a swap between check and read;
+  - `readText`: whole and untruncated, outside only after approval, credential files, binary types and folders refused unread, the cap exact and one byte over, a copy reading past the note cap up to its own and naming the shipped 25 MB figure when refused, NUL and invalid UTF-8, a swap between check and read;
   - open and reveal;
   - Open in browser (html only, outside only after approval, a failed launch), and the HTML frame's document and asset gate (see [File Preview — Technical Details](../file_preview/file_preview_tech.md#tests)).
 - `src/main/services/agentFiles/openInBrowser.test.ts`: the per-platform launch plan and its fallback.
@@ -114,7 +115,7 @@ None.
 | `agent-files:resolve` | `{ agentId, candidates: string[] }` | `{ success: true, refs: AgentFileRef[] }` or `AgentFileFailure` |
 | `agent-files:authorize` | `{ agentId, path, purpose? }` (`'show'` default, or `'read'`) | `{ success: true, approved: boolean }` or `AgentFileFailure`. May show the native dialog, worded by `purpose` |
 | `agent-files:read-preview` | `{ agentId, path }` | `{ success: true, text, truncated }` or `AgentFileFailure` |
-| `agent-files:read-text` | `{ agentId, path }` | `{ success: true, text }` (the whole file) or `AgentFileFailure` |
+| `agent-files:read-text` | `ReadAgentFileTextInput`: `{ agentId, path, use? }` (`'note'` default, or `'copy'`) | `{ success: true, text }` (the whole file) or `AgentFileFailure`. `use` picks the cap |
 | `agent-files:open` | `{ agentId, path }` | `{ success: true }` or `AgentFileFailure` |
 | `agent-files:open-in-browser` | `{ agentId, path }` | `{ success: true }` or `AgentFileFailure`. HTML only; never asks |
 | `agent-files:reveal` | `{ agentId, path }` | `{ success: true }` or `AgentFileFailure` |
@@ -139,7 +140,7 @@ None.
 | `not_previewable` | A type the modal cannot render, or a non-HTML file given to the HTML frame or Open in browser | "No preview for this file type." |
 | `not_a_file` | A folder where a file was needed | "That is a folder, not a file." |
 | `read_failed` | The read threw | "Could not read the file." |
-| `too_large` | A whole-file read over `MAX_AGENT_FILE_TEXT_BYTES`, or an HTML frame document or asset over `MAX_HTML_PREVIEW_BYTES`, at the stat or at the read | "This file is over 4 MB.", the figure computed from the cap; "This file is too large to show." for the frame (served as 413) |
+| `too_large` | A whole-file read over its cap (`MAX_AGENT_FILE_COPY_BYTES` for `use: 'copy'`, else `MAX_AGENT_FILE_TEXT_BYTES`), or an HTML frame document or asset over `MAX_HTML_PREVIEW_BYTES`, at the stat or at the read | "This file is over 25 MB." (copy) or "This file is over 4 MB." (note), built by `tooLarge(copy)` from the shipped constant, not an injected cap; "This file is too large to show." for the frame (served as 413) |
 | `not_text` | A whole-file read of a `binary` content kind (refused unread), or bytes with a NUL or invalid UTF-8 | "This isn't a text file." |
 | `launch_failed` | The launch threw, or the path moved before launch | "Could not open the file." `shell.openPath` refusing gives "No app could open this file.", a failed reveal "Could not show the file in its folder.", and a failed Open in browser "No browser could open this file." |
 
@@ -149,7 +150,7 @@ None.
 - `createAgentFileService(deps)`: every external dependency is injected:
   - agent lookup: `locateAgent`, `agentName`;
   - consent: `getConsentUserId`, `consent`;
-  - platform and paths: `platform`, `isGuardedLocation`, `paths`, `home`, `maxPreviewBytes`, `maxTextBytes`. `isGuardedLocation` is required, so no wiring can forget it.
+  - platform and paths: `platform`, `isGuardedLocation`, `paths`, `home`, `maxPreviewBytes`, `maxTextBytes` (the note cap), `maxCopyBytes` (the copy cap). `isGuardedLocation` is required, so no wiring can forget it.
   - launching: `getDefaultEditor`, `launchEditor`, `openPath`, `openInTextEditor`, `showItemInFolder`, `openInBrowser`.
 - `target(input)` (private):
   1. validates the input;
@@ -173,8 +174,8 @@ None.
 - `readText(input)`: the whole file, for Copy contents and Save to Notes.
   1. checks, in order, `permitted`, `not_a_file`, `credential_file` and, by `agentFileContentKind` of the realpath's name, `not_text` for a `binary` kind;
   2. opens the file and compares dev/ino, as `readPreview` does;
-  3. refuses `too_large` when the opened size is over `maxTextBytes` (default `MAX_AGENT_FILE_TEXT_BYTES`);
-  4. reads into a buffer one byte past the cap, so a file that grew since the stat is refused rather than cut short;
+  3. picks the cap from the untrusted input: exactly `use: 'copy'` is `maxCopyBytes` (default `MAX_AGENT_FILE_COPY_BYTES`), anything else `maxTextBytes` (default `MAX_AGENT_FILE_TEXT_BYTES`), and refuses `too_large` when the opened size is over it;
+  4. reads into a `Buffer.allocUnsafe(min(size, cap) + 1)` buffer, one byte past the opened size, so a small file does not hold the 25 MB copy cap. A file that grew since the stat fills that byte and is refused rather than cut short: `too_large` past the cap, `read_failed` under it. Only the bytes read are kept;
   5. refuses `not_text` for a NUL byte, or when a `fatal` `TextDecoder('utf-8')` throws.
 
   Logs the byte count and `inside`, never the path.
@@ -301,17 +302,17 @@ None.
 - `messageMenuItems(file)`: the groups, decided once per opening. No file → `[copy-text, save-text]`. A `dir`, `isCredentialFileRef`, or a `binary` `agentFileContentKind` of `ref.path` → `[copy-path, reference]` only; otherwise `[copy-contents, save-contents]` then `[copy-path, reference]`, with a `role="separator"` between groups, which the arrow keys skip. The menu widens from `w-48` to `w-56` for a file.
 - `referenceDraft(ref)`: "The file \`<path>\` " or "The folder \`<path>\` ", with a trailing space.
 - Actions all go through `run(item, action, fallback)`: the single in-flight guard (`acting` ref), `busyItem` state for the running item, and a `fail(reason)` callback; a throw becomes `unwrapIpcError(err, fallback)`. After a failure, focus returns to the item's `[data-menu-item]` button. The running item shows a `Loader2` spinner (`aria-busy`); the others dim. Items take `aria-disabled` while anything runs, not `disabled`, so focus never falls out of the menu and the arrow keys still move:
-  - `copy-contents`: `readAgentFileText`, then `window.api.clipboard.writeText`; `success: false` → "Could not copy the file.";
-  - `save-contents`: `readAgentFileText`, `fileNoteFromContents`, then the shared `saveNote(body, title)` (`useSaveMessageNote` plus the Notes navigation);
+  - `copy-contents`: `readAgentFileText` with `'copy'`, then `window.api.clipboard.writeText`; `success: false` → "Could not copy the file.";
+  - `save-contents`: `readAgentFileText` with `'note'`, `fileNoteFromContents`, then the shared `saveNote(body, title)` (`useSaveMessageNote` plus the Notes navigation);
   - `copy-path`: `navigator.clipboard.writeText(ref.path)`, no authorize;
   - `reference`: `fetchQuery(['agents'])`, `startableAgent`, then `startAgentChat(agent.id, { draft: referenceDraft(ref) })`; otherwise a toast from `unavailableAgentMessage(..., 'That agent is no longer available')`. Closes the menu either way.
-- `fileText(target, fail)`: a `denied` outcome closes the menu; a `failed` one reports main's sentence through `fail`. It passes `onAuthorize` to set the `consentPending` ref.
+- `fileText(target, use, fail)`: passes `use` through to `readAgentFileText`; a `denied` outcome closes the menu; a `failed` one reports main's sentence through `fail`. It passes `onAuthorize` to set the `consentPending` ref.
 - The window `blur` listener closes the menu only while `consentPending` is false — the authorize call, not the whole action — so the consent dialog does not dismiss it, and a real switch away during the read or the note still does.
 - Placement is decided once, at open, in a layout effect: when the menu plus `ERROR_ROW_RESERVE` (48 px) and an 8 px margin fits below the pointer, it is top-anchored with the error row under the items; otherwise it is bottom-anchored (`MenuPosition.bottom`) with the error row above them. An error then grows the menu away from the pointer, and no item moves under it.
 
 ### `src/renderer/src/utils/agentFileAccess.ts`
 - `authorizeAgentFile(input)`: always main's answer, inside refs included (see the business rule on re-checking inside references).
-- `readAgentFileText(agentId, ref, { onAuthorize })`: authorize with `purpose: 'read'`, then `readText`. `onAuthorize(true)` before the authorize call and `onAuthorize(false)` after it, in a `finally`, bracket the only time main may be showing a dialog. Never throws; returns `{status: 'text', text}`, `{status: 'denied'}`, or `{status: 'failed', code, error}` (`code` null when a call threw).
+- `readAgentFileText(agentId, ref, use, { onAuthorize })`: authorize with `purpose: 'read'`, then `readText` with `use` (`AgentFileTextUse`, `'copy' | 'note'`). `onAuthorize(true)` before the authorize call and `onAuthorize(false)` after it, in a `finally`, bracket the only time main may be showing a dialog. Never throws; returns `{status: 'text', text}`, `{status: 'denied'}`, or `{status: 'failed', code, error}` (`code` null when a call threw).
 
 ### `src/renderer/src/utils/fileNote.ts`
 - `fileNoteFromContents(path, text)`: title from `markdownTitle` for `md`/`markdown` — frontmatter `title:` (via `splitFrontmatter`, text values only), else the first level-1 heading, else the first heading; ATX and setext, fenced blocks skipped; cut to 80 characters — else the file name. `md`, `markdown` and `txt` bodies are raw; anything else is fenced with a run of backticks longer than any inside (at least three) and `fenceLanguageFor`'s tag.
@@ -339,9 +340,10 @@ None.
 - `MAX_FILE_REF_BASES` = 200 (`src/shared/agentFiles.ts`).
 - `MAX_RAW_CANDIDATES` = 2000 (`agentFileService.ts`): a longer list from the renderer is cut before it is walked.
 - Span length 2–512 characters (`MIN_SPAN_LENGTH`, `MAX_SPAN_LENGTH`).
-- `MAX_PREVIEW_BYTES` = 512 KB (`src/shared/filePreview.ts`).
-- `MAX_AGENT_FILE_TEXT_BYTES` = 4 MB (`src/shared/agentFiles.ts`): the whole-file read cap; the `too_large` message is built from it.
-- `MAX_CLIPBOARD_TEXT_LENGTH` = 8M characters (`src/main/host/desktop/clipboard.ts`); keep it above the text cap.
+- `MAX_PREVIEW_BYTES` = 25 MB (`src/shared/filePreview.ts`).
+- `MAX_AGENT_FILE_COPY_BYTES` = 25 MB (`src/shared/agentFiles.ts`): the Copy contents whole-file read cap, matching `MAX_PREVIEW_BYTES`; its `too_large` message is built from it.
+- `MAX_AGENT_FILE_TEXT_BYTES` = 4 MB (`src/shared/agentFiles.ts`): the Save to Notes whole-file read cap, and the default for a read with no `use`; its `too_large` message is built from it.
+- `MAX_CLIPBOARD_TEXT_LENGTH` (`src/main/host/desktop/clipboard.ts`) is defined as `MAX_AGENT_FILE_COPY_BYTES`, so raising the copy cap raises the clipboard limit with it; set it below the copy cap and a file that read cleanly fails at the clipboard.
 - Resolve `staleTime` = 30 s (`useAgentFileRefs.ts`).
 - `localAgentsDefaultTool`: the Default Tool setting **Open** consults.
 - `DARWIN_DATA_VOLUME` and `VOLUME_ROOT_DEPTH`: the data-volume prefix, and mount depths for volume roots.
@@ -365,7 +367,7 @@ None.
   - `openInTextEditor` is `execFile('open', ['-t', file])`.
   - `shell.openPath` is used by **Open** only for `DEFAULT_APP_EXTENSIONS`. Open in browser also ends with it, on an `.html` file only, after the browser launch (`open -a <browser> <file>`, the browser executable, `xdg-open <file>`, the file its own argv element) failed.
   - `shell.openExternal` is never used on an agent file. (The HTML preview frame's link guard uses it for `http(s)` URLs; see [File Preview — Technical Details](../file_preview/file_preview_tech.md#html-preview-frame).)
-- **The HTML frame's assets** go through `permitted` without asking, stay inside the document's folder on the lexical path and the realpath, refuse dot segments and credential files, and are capped at 20 MB. See [File Preview — Technical Details](../file_preview/file_preview_tech.md#html-preview-frame).
+- **The HTML frame's assets** go through `permitted` without asking, stay inside the document's folder on the lexical path and the realpath, refuse dot segments and credential files, and are capped at 25 MB. See [File Preview — Technical Details](../file_preview/file_preview_tech.md#html-preview-frame).
 - **The preview body** renders through the same escaped React and `react-markdown` stack as attachments.
 
 ## Observability

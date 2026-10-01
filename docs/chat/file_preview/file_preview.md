@@ -30,9 +30,9 @@ One read-only modal for looking at a file **in place**, reached three ways.
   - Agent files use `agentFilePreviewKindFor`, which adds other code and config as `text`, drops `image` (agent files are read as text), and leaves attachment behaviour unchanged. A `.py` file resolves to `python` through `previewKindFor` first, so it is highlighted in both places.
 - **Preview read path**: the IPC call that reads a file's bytes into memory and returns decoded UTF-8 plus a `truncated` flag.
   - Attachments use `files:read-preview`, and agent files use `agent-files:read-preview`.
-  - Both are **capped at `MAX_PREVIEW_BYTES` (512 KB)** in main and use the same truncation-safe decode.
+  - Both are **capped at `MAX_PREVIEW_BYTES` (25 MB)** in main and use the same truncation-safe decode.
   - The preview read is separate from `files:download`, which writes the *full* file to a path the user chooses.
-  - An image is read whole instead, as a `data:` URL: `files:read-image`, refused above 20 MB rather than cut. The thumbnails use `files:read-thumbnail`, a scaled-down copy.
+  - An image is read whole instead, as a `data:` URL: `files:read-image`, refused above 25 MB rather than cut. The thumbnails use `files:read-thumbnail`, a scaled-down copy.
   - A composer file not sent yet is read by path: `files:read-preview-path` for text, `files:read-image` with `{ path }` for an image, only for a path the user picked, dropped or pasted this session.
 - **Preview target**: what is open — an `attachment` (marked `composer` when opened from the composer), an `agentFile` (an agent id plus the resolved reference), or a `path` (a new chat's composer file).
 - **Single global modal**: one `FilePreviewModal` mounted at the app root, driven by `useFilePreviewStore`.
@@ -42,9 +42,10 @@ One read-only modal for looking at a file **in place**, reached three ways.
 - **Render kinds**:
   - `markdown` renders through the shared `react-markdown` stack, the same one used by chat bubbles and the note preview.
     A leading YAML frontmatter block is lifted out and shown as a key/value card above the body; see [Frontmatter](#frontmatter).
+    A body over the [highlight limit](#large-text) is shown as written instead, in a `<pre>`.
   - `json` is a collapsible tree, falling back to raw text if it does not parse; see [JSON tree](#json-tree).
   - `csv`/`tsv` renders as a table: quoted fields are honoured (loosely following RFC 4180) and the first 500 rows are shown.
-  - `python` is a wrapped `<pre>` highlighted by lowlight, the engine behind the chat's `rehype-highlight`, so a `.py` file is tokenised and coloured exactly like a fenced `python` block in a message (the same `.hljs-*` palette). If highlighting throws, it shows the plain text, so a file cut at the cap still previews.
+  - `python` is a wrapped `<pre>` highlighted by lowlight, the engine behind the chat's `rehype-highlight`, so a `.py` file is tokenised and coloured exactly like a fenced `python` block in a message (the same `.hljs-*` palette). If highlighting throws, it shows the plain text, so a file cut at the cap still previews. Over the [highlight limit](#large-text) it is plain from the start.
   - `xml` is a collapsible tree, falling back to highlighted source when it does not parse; see [XML tree](#xml-tree).
   - `html` is the page rendered in a sandboxed frame, or its highlighted source; see [HTML pages](#html-pages).
   - `image` is the picture, fitted inside the card and centred; see [Images](#images).
@@ -81,11 +82,11 @@ One read-only modal for looking at a file **in place**, reached three ways.
 2. The store reads the whole image as a `data:` URL (`files:read-image`) and decodes it before the modal counts as loaded, so the card appears at its final size.
 3. The image sits centred, scaled down to fit the card and never enlarged. The title icon is an image.
 4. **Download** in the header saves the original file.
-5. An image over 20 MB is not shown: the body reads "Couldn't load preview: Image too large to preview." Bytes that are not an image the preview can show, or do not decode, say so the same way.
+5. An image over 25 MB is not shown: the body reads "Couldn't load preview: Image too large to preview." Bytes that are not an image the preview can show, or do not decode, say so the same way.
 
 ### Previewing a file still in the composer
 1. The user clicks a thumbnail or a previewable badge above the composer.
-2. The modal opens as it would for a sent file, without Download. A cut text file says "Preview truncated at 512 KB." rather than pointing at a download that is not there.
+2. The modal opens as it would for a sent file, without Download. A cut text file says "Preview truncated at 25 MB." rather than pointing at a download that is not there.
 3. On the new-chat screen the file is read from its path. An HTML file there shows its highlighted source only: there is no attachment for the preview frame to serve yet. Once a file is ingested into an open chat, it previews as the attachment it is, HTML rendered.
 4. A path the user surfaced more than an hour ago is no longer readable: "This file is no longer available to preview. Attach it again."
 
@@ -118,7 +119,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
 1. The user opens an `xml` (or `plist`, `rss`, `csproj`, …) badge or agent file. The modal shows a coloured tree of tags, attributes and text, with an element holding one short line of text shown on one row, `<title>Report</title>`.
 2. Clicking a chevron folds an element to `<tag …>…</tag>` with its size beside it ("3 children"). Alt-click folds or unfolds the whole branch.
 3. With several sections, the header shows **Contents**. Clicking an entry unfolds whatever hides that element and scrolls to it.
-4. A file that does not parse, or was cut at 512 KB, shows its highlighted source under a line saying which: "This XML could not be parsed, so it is shown as source." or "The preview is cut at 512 KB, so it is shown as source."
+4. A file that does not parse, or was cut at 25 MB, shows its highlighted source under a line saying which: "This XML could not be parsed, so it is shown as source." or "The preview is cut at 25 MB, so it is shown as source."
 
 ### Viewing an HTML page
 1. The user opens an `html` badge or agent file. The card opens wider and at a fixed height, and the page loads inside it as it would in a browser: its scripts run, remote images, fonts and styles load, and an agent file's relative `style.css` or `img/chart.png` beside it load too.
@@ -131,11 +132,11 @@ One read-only modal for looking at a file **in place**, reached three ways.
 2. `previewKindFor` returns `null`, so `useAttachmentOpen` falls through to `download(attachment)`: the existing save dialog, unchanged.
 
 ### Large or non-UTF-8 file
-1. **Large files:** a previewable file larger than 512 KB shows its first 512 KB, plus a notice under the content.
+1. **Large files:** a previewable file larger than 25 MB shows its first 25 MB, plus a notice under the content.
    - For an attachment: "Preview truncated — download the file to see the full content."
    - For an agent file: "…open the file to see the full content."
-   - For a composer file: "Preview truncated at 512 KB."
-   - An image is never cut: over 20 MB it is refused (see [Images](#images)).
+   - For a composer file: "Preview truncated at 25 MB."
+   - An image is never cut: over 25 MB it is refused (see [Images](#images)).
 2. **Invalid bytes:** invalid byte sequences decode to the replacement character instead of failing, so the modal always shows *something*. Download or Open still gets the exact bytes.
 
 ### Closing
@@ -226,6 +227,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
 
 ### The Contents panel
 - **A markdown file offers it only when it is long.** It must have more than one H1 or more than one H2. A short note gets no panel, because a list of one or two headings is not worth the width it takes. Frontmatter is not counted: the headings are read from exactly the body the preview renders.
+  - **A body over the highlight limit offers none.** It is shown as written, so there are no rendered headings to scroll to. A Python file over the limit keeps its panel: its outline is a line scan, and the plain text still carries the line markers.
 - **An XML file offers it with at least two sections.** A section is an element that holds other elements, from the root's children down to four levels below the root; the root itself is one per file and is not listed. A leaf such as `<title>`, `<price>` or an empty `<entry id="a"/>` is content, not a section, and listing it would turn the panel into a second copy of the tree.
   - **An entry is named by its tag and the first thing that identifies it**: an `id`, `name`, `key` or `title` attribute, else the short text of a `<name>` or `<title>` child, cut at 60 characters. Without one it is the bare tag.
   - **At most 50 entries per parent.** The rest become one note entry, "… N more", with the tag in mono when they all share one (`<item>`). A feed of ten thousand items would otherwise be a panel of ten thousand rows.
@@ -285,7 +287,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
 - **A huge object or array shows 200 members at a time**, with a "Show N more of M" row, so a file that is one enormous list stays usable. Anything nested deeper than 32 levels also starts folded, whatever the file's size.
 - **A large file opens with only the root unfolded.** Above 2,000 values every object and array below the top level starts folded: one row per top-level member. Fully expanded, a 500 KB export is tens of thousands of rows to scroll past. Folding from the second level instead is not enough, because a top-level array of records would still show every record unfolded.
 - **URLs in strings are links**, `http(s)` only, like frontmatter and markdown links.
-- **Text that does not parse shows as plain text.** That includes a file cut at the 512 KB cap, so a large JSON file previews as its raw first 512 KB rather than an error.
+- **Text that does not parse shows as plain text.** That includes a file cut at the 25 MB cap, so a large JSON file previews as its raw first 25 MB rather than an error.
 - **Another file starts from its own fold state.** Fold state is keyed by path; carried over, it would fold paths that mean something else in the new file.
 
 ### XML tree
@@ -294,7 +296,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
 - **Short text stays on the element's row.** An element whose only content is one line of text up to 80 characters reads `<title>Report</title>`, with no chevron. Anything longer gets its own rows.
 - **Everything in the file is shown**: the XML declaration, a doctype, comments, CDATA and processing instructions, namespace prefixes and declarations as written. A preview that dropped them would misreport the file.
 - **It uses the code-block palette**, as the JSON tree and a fenced `xml` block do: tag names, attribute names, values and comments each in their `.hljs-*` colour, punctuation secondary.
-- **What does not parse is shown as highlighted source, and says why.** A malformed file reads "This XML could not be parsed, so it is shown as source." A file cut at the 512 KB cap no longer parses either, but it is not broken, so it says the preview was cut instead of calling the file malformed.
+- **What does not parse is shown as highlighted source (plain over the [highlight limit](#large-text)), and says why.** A malformed file reads "This XML could not be parsed, so it is shown as source." A file cut at the 25 MB cap no longer parses either, but it is not broken, so it says the preview was cut instead of calling the file malformed.
 - **The parser fetches nothing.** Chromium's XML parser does not load external entities or DTDs, so a previewed file cannot reach the network or the disk through its doctype.
 
 ### HTML pages
@@ -302,8 +304,8 @@ One read-only modal for looking at a file **in place**, reached three ways.
 - **An agent file's relative assets load; an attachment's do not.** A page in the agent folder gets the files beside it, in its own folder and below: its `style.css`, `img/chart.png`, `data.json`. An attachment is one file with nothing beside it, so its relative references are not found.
 - **The page cannot reach the app.** It runs in a sandboxed frame with no origin of its own, gets no permission (camera, microphone, notifications, location, clipboard) and cannot download, open a window, or take the app window elsewhere. See [Security](file_preview_tech.md#html-preview-frame).
 - **A web link opens in the browser, on a click.** Clicking an `http(s)` link sends it to the user's browser; the page and the app stay where they were. A page cannot do this on its own: a script with no click behind it is stopped, and one click opens one tab. A link to a page beside the document, or to a `#section`, stays inside the frame, and still works on that page.
-- **Rendered first, every time.** Every open starts on **Rendered**. **Source** shows the markup highlighted (with its `<style>` and `<script>` in CSS and JavaScript colours), the first 512 KB like every other preview, with the truncation notice. The frame stays loaded while Source shows, so switching back does not reload the page.
-- **The whole page renders, up to 20 MB.** The frame is served the file whole, not the preview's first 512 KB, so the truncation notice shows on Source only. A page over 20 MB is refused, and the frame says "This file is too large to show."
+- **Rendered first, every time.** Every open starts on **Rendered**. **Source** shows the markup highlighted (with its `<style>` and `<script>` in CSS and JavaScript colours; plain over the [highlight limit](#large-text)), read under the same 25 MB cap as every other preview. The frame stays loaded while Source shows, so switching back does not reload the page.
+- **The whole page renders, up to 25 MB.** The frame is served the file whole, by its own request, and refuses rather than cuts: a page over 25 MB is refused, and the frame says "This file is too large to show." Source reads with the same 25 MB cap, so a page that renders is never shown cut on Source; only a refused page's Source carries the truncation notice.
 - **The card is wider and of a fixed height.** It opens up to 72 rem wide instead of 48, and at 80% of the window tall, whatever the page holds, so nothing resizes while the frame loads. The page sits on white in both themes, as a browser's default canvas does, so a page that sets no background reads as it would there.
 - **A page main refuses says so in the body**: "Couldn't render the page: …".
 - **Opening an `.html` attachment previews it.** It used to download. It now runs the page's scripts and loads its remote content; Download is still in the header.
@@ -318,15 +320,22 @@ One read-only modal for looking at a file **in place**, reached three ways.
 - **The formats are the ones Chromium draws everywhere**: PNG, JPEG, GIF (animated too), WebP, BMP and SVG. HEIC and TIFF are not previewable and download: Chromium has no decoder for either, and main's sniff does not recognise them.
 - **An SVG is a picture, not XML.** `.svg` and `image/svg+xml` resolve to `image`, and it renders through an `<img>`, where its scripts do not run and it loads nothing.
 - **The bytes decide the type.** Main sniffs the first bytes (and an SVG root element) and builds the `data:` URL from that, never from the name or the renderer; a `.png` that is not an image is refused, "This file is not an image the preview can show."
-- **Refused above 20 MB, never cut.** Half an image is not a preview. The refusal points at Download.
+- **Refused above 25 MB, never cut.** Half an image is not a preview. The refusal points at Download.
 - **The card settles after the decode.** The store decodes the image before it clears loading, and the `<img>` gets the natural width and height, so the entrance measures the final card and nothing grows under the pointer.
 - **It fits, it never enlarges.** The image is at most the body's width and the card's 80% height less its header, centred on both axes.
 - **Full images are cached too**, the last 20 in the session, so opening the same image twice reads it once.
 
+### Large text
+- **Over 1M characters (`MAX_HIGHLIGHT_CHARS`), code is shown plain, not highlighted.** That covers Python, an XML file shown as source (malformed or cut), an HTML file's Source view, and an HTML file previewed from the composer. A muted line above it says "This file is too large to highlight, so it is shown as plain text." An XML file shown as source already has its own line (cut, or could not be parsed), and shows only that one. Highlighting builds every token in one synchronous pass; once the read cap rose to 25 MB, a multi-MB file stalled the window for seconds and tens of MB ran it out of memory.
+- **A Python file over the limit keeps its Contents panel.** The plain text still gets a marker at the start of each listed definition's line, so a click lands where it did when highlighted.
+- **Markdown over the limit is shown as written.** Its frontmatter card stays on top, then "This file is too large to format, so it is shown as plain text.", then the raw body in a `<pre>`, with no Contents panel. Rendering markdown costs more than highlighting, so the limit is the same one, measured on the body after the frontmatter.
+- **A CSV stops parsing at the row cap.** The parser reads only as far as the 501st non-blank record, which is enough to know the table is clipped; a 25 MB file is not split into millions of cells to show 500 rows. Blank lines are skipped as they are read, so they never count towards the cap.
+- **JSON and an XML file that parses are not affected.** Their trees fold a large file down to its top level and page long lists instead; see [JSON tree](#json-tree) and [XML tree](#xml-tree).
+
 ### Known limits and accepted risks
 Allowing full remote content was a deliberate choice. These follow from it and are accepted, not open bugs:
 - **The page shares the app's cookie jar.** Its remote requests are made from the app's default session, so they carry whatever cookies that session holds for the sites they reach, and the page can reach services on `localhost`.
-- **A page's scripts can read the files beside it.** Any file in the page's folder and below, except dotfiles, credential files and anything over 20 MB, can be fetched by the page's own script and sent anywhere.
+- **A page's scripts can read the files beside it.** Any file in the page's folder and below, except dotfiles, credential files and anything over 25 MB, can be fetched by the page's own script and sent anywhere.
 - **An `.html` attachment runs when previewed.** It used to download.
 - **One click can still open one tab anywhere.** Chromium lets a page act on a click for about five seconds, so within that window a page's script can send the browser to any URL of its choosing, once, instead of the link the user clicked.
 - **A second link within five seconds is refused**, unless the user has left the app and come back in between (following the first link usually does that). The click does nothing; the user clicks again a moment later.
@@ -348,7 +357,7 @@ Badge or thumbnail click (MessageBubble user badge | AgentAttachment):
                               local : chatFileRepo.getOwned + readFile (capped)
                               cinna : cinnaFileService.readBytes (GET /files/{id}/download, capped)
                            → decodePreviewText → { text, truncated }
-                     image → imageDataCache.loadImage → files:read-image → data: URL (sniffed, ≤ 20 MB) → decode()
+                     image → imageDataCache.loadImage → files:read-image → data: URL (sniffed, ≤ 25 MB) → decode()
                      → FilePreviewModal renders by kind (markdown|json|csv|python|xml|html|image|text)
                         header Download → useFileDownloadStore.download (full file)
                         header Open in browser (html) → files:open-in-browser
@@ -368,6 +377,7 @@ File reference click (folder agent chat):
 
 Long markdown (either way in):
   markdownToc(body after frontmatter) → several H1s or H2s? → header Contents toggle
+                                       (skipped when the body is over MAX_HIGHLIGHT_CHARS)
   pythonOutline(text) → more than one def/class? → header Contents toggle (CodePreview marks each line)
   parseXml(text) → xmlOutline → two or more sections? → header Contents toggle (XmlTree rows carry the ids)
                  → null (malformed / cut) → highlighted source under a note
@@ -376,7 +386,7 @@ Long markdown (either way in):
 
 HTML page (either way in), Rendered:
   HtmlPreview → html-preview:open (same checks as the text read, never asks) → cinna-preview://<token>/<name>
-    → <iframe sandbox> → cinna-preview: handler: profile, gate and 20 MB re-checked per request
+    → <iframe sandbox> → cinna-preview: handler: profile, gate and 25 MB re-checked per request
        document (+ link helper) · agent file: assets in its folder subtree · attachment: nothing else
     link click → top navigation (user activation only) → will-navigate → browser, never the app window
   unmount (close / another file) → html-preview:release

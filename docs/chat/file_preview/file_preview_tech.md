@@ -5,8 +5,8 @@
 ### Shared (cross-process)
 - `src/shared/filePreview.ts`:
   - `previewKindFor(filename, mimeType)` → `PreviewRenderKind | null`, and `isPreviewable(filename, mimeType)`.
-  - The `PreviewRenderKind` type (`'markdown' | 'json' | 'csv' | 'python' | 'xml' | 'text' | 'html' | 'image'`) and `MAX_PREVIEW_BYTES` (512 KB).
-  - Images: `MAX_IMAGE_PREVIEW_BYTES` (20 MB), `IMAGE_TOO_LARGE_ERROR`, `THUMBNAIL_MAX_SIDE` (160) and `THUMBNAIL_ORIGINAL_MAX_BYTES` (256 KB).
+  - The `PreviewRenderKind` type (`'markdown' | 'json' | 'csv' | 'python' | 'xml' | 'text' | 'html' | 'image'`) and `MAX_PREVIEW_BYTES` (25 MB).
+  - Images: `MAX_IMAGE_PREVIEW_BYTES` (25 MB), `IMAGE_TOO_LARGE_ERROR`, `THUMBNAIL_MAX_SIDE` (160) and `THUMBNAIL_ORIGINAL_MAX_BYTES` (256 KB).
   - IPC types: `FilesReadImageInput` (`{ fileId, source? }` or `{ path }`), `FilesReadImageResult`, `FilesReadPreviewPathResult`, `FilesPasteFromClipboardResult`.
   - The extension table wins over the MIME table. The extension is parsed inline, without Node `path`, because the sandboxed renderer imports this file.
   - `decodePreviewText(bytes, truncated)` decodes UTF-8. When `truncated`, it decodes with `{ stream: true }` and skips the final flush, so a multi-byte sequence cut by the cap is dropped (no trailing `�`). Attachment reads and agent-file reads both use it.
@@ -27,7 +27,7 @@
   - `assertFileScope(value)`: reused to narrow the renderer-supplied `'cinna' | 'local'`.
   - `sniffPreviewImageMime(bytes)`: PNG, JPEG, GIF, WebP and BMP by magic bytes; SVG by an `<svg` in the first 4 KB with no `<html`; else `null`. Every image `data:` URL is typed from this, never from the name or the renderer.
   - `readImageAttachment({ userId, attachmentId, source })` → `{ dataUrl, mimeType }`: a `local` row is stat'ed and refused over `MAX_IMAGE_PREVIEW_BYTES` before any read; then `readBytes` with that cap, and a `truncated` result is `FileError('too_large', IMAGE_TOO_LARGE_ERROR)`; bytes that do not sniff are `not_previewable`.
-  - `pathPreview.readText(path, maxBytes)` / `pathPreview.readImage(path)`: a composer file by path. `assertSurfacedPath` (a string, absolute, `pathGuard.isAllowed`, else `not_allowed`), `stat` (`not_a_file` for a folder, `not_found` when gone), then a capped `open` + `read` decoded with `decodePreviewText`, or the image read under the 20 MB refusal.
+  - `pathPreview.readText(path, maxBytes)` / `pathPreview.readImage(path)`: a composer file by path. `assertSurfacedPath` (a string, absolute, `pathGuard.isAllowed`, else `not_allowed`), `stat` (`not_a_file` for a folder, `not_found` when gone), then a capped `open` + `read` decoded with `decodePreviewText`, or the image read under the 25 MB refusal.
   - `readThumbnail(input)`: the same gates as the two image reads, then `thumbnailOf` — `runtimeHost.images?.thumbnail(bytes, THUMBNAIL_MAX_SIDE)` for anything but SVG; with no scaled result, the original up to `THUMBNAIL_ORIGINAL_MAX_BYTES`, else `not_previewable` ("No thumbnail for this image."). An LRU of `THUMBNAIL_CACHE_ENTRIES` (200) keyed by user, source and attachment id, or by path, size and `mtimeMs`, so a changed file is read again. `_resetThumbnailCache()` for tests.
 - `src/main/services/cinnaFileService.ts`:
   - `readBytes(userId, fileId, maxBytes)`: `net.fetch GET /api/v1/files/{fileId}/download` with the OAuth bearer, aborted after `READ_TIMEOUT_MS` (60 s) so a hung backend cannot hold a preview, a thumbnail or the HTML frame forever; a network failure or timeout is `CinnaFileError('download_failed')`. Reads `arrayBuffer()` and returns `{ bytes: Buffer (capped), truncated }`.
@@ -135,7 +135,7 @@
   - **Action error row:** `role="alert"`, for attachments too now (Open in browser), rendered for an agent file unless `actionErrorRepeatsBody` says it would repeat the body.
   - **HTML view:** `htmlViewFor` (`{ openSeq, view }`) — a view chosen for another open reads as `rendered`, so every open starts Rendered. `htmlRendered` (html, Rendered, loaded, no error or notice) drops the body's padding and scroll (`overflow-hidden`) and hides the truncation notice. The card is `max-w-6xl h-[80vh]` for `html` in every state, `max-w-3xl` otherwise.
   - **XML:** the modal parses once, `parseXml(text)` memoised on `kind` and `text`, and hands the result to both `xmlOutline` (the `toc`) and `XmlPreview`. `xmlReveal` (a ref `XmlTree` fills) is passed to `FilePreviewContents` as `onBeforeGo` for `xml`.
-  - **Markdown split:** the modal, not `MarkdownPreview`, calls `useFrontmatter(kind === 'markdown' ? text : '')` and memoises `markdownToc(markdown.body)`, because the header's Contents button needs the verdict too. `MarkdownPreview({ card, body })` renders what it is handed; `PreviewBody` no longer handles `markdown`.
+  - **Markdown split:** the modal, not `MarkdownPreview`, calls `useFrontmatter(kind === 'markdown' ? text : '')` and memoises `markdownToc(markdown.body)`, because the header's Contents button needs the verdict too. A body longer than `MAX_HIGHLIGHT_CHARS` gets `toc = null` without the scan: `MarkdownPreview` shows it plain, so there are no headings to point at. `MarkdownPreview({ card, body })` renders what it is handed; `PreviewBody` no longer handles `markdown`.
   - **Body and panel:** the body sits in a `relative flex` row. While `showContents`, the body gets an explicit `width: closedWidth - CARD_BORDER_X` and `flex: none`, so it never reflows. `FilePreviewContents` (`key={targetKey}`, `overlay={!sideBySide}`, `left={closedWidth - CARD_BORDER_X}`) renders while `panelOpen`, or while a side-by-side close is animating (`closingFor === openSeq`, `animateWidth`, not reduced motion).
   - `contentsGeometry(windowWidth, rem)` → `{ closedWidth, sideBySide, shift }`, exported and pure.
     - `closedWidth` = `min(48rem, window − 2rem)`, the `max-w-3xl` card in the overlay's `px-4`.
@@ -149,7 +149,7 @@
     - `closingFor`: set to `openSeq` when a toggle closes the panel; cleared after `ENTRANCE.duration`.
     - `slowOpenFor`: set to `openSeq` when `isLoading` outlasts `ENTRANCE_WAIT_MS`. While it matches, `sideBySide` is forced false. `toggleContents` clears it.
     - `toggledAt`: a ref stamped by `toggleContents`, for the press guard.
-  - **Body:** loading, then an error (`agentFileErrorText`, or "Couldn't load preview: …" for an attachment or a path), then a notice, then `ImagePreview` for `image`, else `PreviewBody`. The truncation copy depends on the target: open it (agent file), download it (a downloadable attachment), or "Preview truncated at 512 KB." (a composer file). `imageShown` centres the body with flex.
+  - **Body:** loading, then an error (`agentFileErrorText`, or "Couldn't load preview: …" for an attachment or a path), then a notice, then `ImagePreview` for `image`, else `PreviewBody`. The truncation copy depends on the target: open it (agent file), download it (a downloadable attachment), or "Preview truncated at 25 MB." (a composer file). Both figures in the copy, here and in `XmlPreview`, come from `MAX_PREVIEW_MB`, so they follow `MAX_PREVIEW_BYTES`. `imageShown` centres the body with flex.
   - `ImagePreview({ image, alt })`: `data-testid="image-preview"`, the natural `width`/`height` attributes so the box is final on first paint, `max-w-full`, `object-contain`, `maxHeight: calc(80vh - IMAGE_CHROME_REM rem)` (6 rem of header and padding).
   - **Path targets:** `targetKey` is `path:<path>`; `html` is false for them, so an HTML composer file renders `PreviewBody`'s `CodePreview language="xml"` with no frame, no Rendered/Source toggle and no Open in browser.
   - `useCardEntrance({ cardRef, backdropRef, open, openSeq, settled })`:
@@ -190,8 +190,8 @@
       - Mouse leave or blur clears `hovered` and `suppressed`.
       - The hint shows while `result` is set, or while `hovered` and not `suppressed`.
     - The hint is a `role="status"`, `aria-live="polite"` span: `absolute left-0 top-full`, `pointer-events-none`, shown and hidden by opacity with a 200 ms transition. A `shownHint` ref keeps the last visible text, so the words do not change while it fades.
-  - `XmlPreview({ text, parsed, truncated, revealRef })`: `XmlTree` inside `JsonTreeBoundary` (fallback: the source) when `parsed`; otherwise a note — "The preview is cut at 512 KB, so it is shown as source." when `truncated`, else "This XML could not be parsed, so it is shown as source." — above `CodePreview language="xml"`.
-  - **Also in this file:** `PreviewBody`, `MarkdownPreview` (the modal's frontmatter card above the `file-preview-markdown markdown-body` wrapper, whose `react-markdown` gets only `body` and `previewMarkdownComponents`), `JsonPreview` (`useParsedJson(text)`, then `<JsonTreeBoundary key={text} fallback={raw}><JsonTree/></JsonTreeBoundary>`, or the raw text in a `<pre>` when it is `null`), `CsvPreview` (filter/sort), the `parseDelimited` / `compareCells` helpers, and the `MAX_PREVIEW_ROWS = 500` render cap.
+  - `XmlPreview({ text, parsed, truncated, revealRef })`: `XmlTree` inside `JsonTreeBoundary` (fallback: the source) when `parsed`; otherwise `CodePreview language="xml"` with that reason as its `note` — "The preview is cut at 25 MB, so it is shown as source." when `truncated`, else "This XML could not be parsed, so it is shown as source." — which replaces the too-large note, so a cut file (always over the limit) shows one line.
+  - **Also in this file:** `PreviewBody`, `MarkdownPreview` (the modal's frontmatter card above the `file-preview-markdown markdown-body` wrapper, whose `react-markdown` gets only `body` and `previewMarkdownComponents`; over `MAX_HIGHLIGHT_CHARS` the card, `PreviewNote` with `plainTextNote('format')` and the body in a plain `<pre>`, no `react-markdown`), `JsonPreview` (`useParsedJson(text)`, then `<JsonTreeBoundary key={text} fallback={raw}><JsonTree/></JsonTreeBoundary>`, or the raw text in a `<pre>` when it is `null`), `CsvPreview` (filter/sort), the `parseDelimited` / `compareCells` helpers, and the `MAX_PREVIEW_ROWS = 500` render cap.
 - `src/renderer/src/components/chat/FileActionsMenu.tsx`: `FileActionsMenu({ pendingAction, fileGone, onOpen, onReveal, dismissed })`, the ⋯ menu.
   - `usePopover('below-right')`; the menu is portaled to `document.body` with `role="menu"`, `aria-label="File actions"`, the shared `MENU_SURFACE` / `MENU_ITEM` classes from `agents/local/OpenInMenu.tsx`, and `PREVIEW_POPOVER_ATTR` (`data-file-preview-popover`), which the modal's outside-press handler treats as inside the card.
   - The trigger is named "More file actions", never disabled, and shows `Loader2` while `pendingAction` is set. Both `menuitem`s (Open, then Open folder) are disabled while `pendingAction !== null || fileGone`.
@@ -203,7 +203,7 @@
   - `CONTENTS_PANEL_WIDTH` (240), `CONTENTS_PANEL_ID`, `FULL_TITLE_DELAY_MS` (250).
   - `previewMarkdownComponents`: `markdownComponents` with `h1`–`h6` replaced by `anchoredHeading(tag)`, which renders the same tag with `data-heading-line` from the mdast node's `position.start.line`. Chat rendering keeps `markdownComponents`.
   - `FilePreviewContents({ entries, bodyRef, overlay, left })`: a `<nav id={CONTENTS_PANEL_ID} aria-label="Contents">`, absolutely positioned at full body height and scrolling on its own. Side by side it is placed at `left`, just right of the body, so the widening card uncovers it instead of sliding it over the body; as an overlay it is `right-0` with a left shadow.
-    - Entries are buttons with `data-toc-line`, `aria-current="location"` on the current one, and `paddingLeft` of 8 px plus 12 px per level below `minDepth`.
+    - Entries are buttons with `data-toc-line`, `aria-current="location"` on the current one, and `paddingLeft` of 8 px plus 12 px per level below `minDepth` (a `reduce` over the entries, never a `Math.min` spread, for the same argument limit as `plainWithAnchors`).
     - `compute()`: the last listed `[data-heading-line]` whose top is at or above the body's top + `ACTIVE_OFFSET` (16), else the first entry. Runs in a layout effect and, `requestAnimationFrame`-throttled, on the body's `scroll`. Skipped while `pinned` holds a clicked line; `wheel`, `touchstart`, `keydown` and `pointerdown` on the body clear `pinned`.
     - `onBeforeGo(line)`, when given, runs inside `flushSync` before the heading is looked up, so the XML tree's unfolding and paging are committed and the row exists.
     - An entry with `note` renders as a muted italic `<li>` (with `noteTag` in mono as ` <tag>`), not a button; notes are left out of the `listed` set `compute()` tracks.
@@ -213,7 +213,7 @@
 - `src/renderer/src/components/chat/JsonTree.tsx`:
   - `JsonTree({ value })`, a `data-testid="json-tree"` block of plain rows with disclosure buttons (`aria-expanded` on each chevron) — deliberately not an ARIA `tree`, which needs focusable items and arrow-key navigation, and whose rows here hold buttons and links of their own. Fold state is a `Set` of container paths (`""` is the root, then `/` + each URI-encoded key or index), seeded once by `defaultCollapsed`; `JsonPreview` keys it by the file text, so new text remounts it with a fresh default instead of reusing stale paths.
   - `defaultCollapsed`: `countValues` (capped walk) above `EXPAND_ALL_LIMIT` (2000) → every container path at depth ≥ `FOLDED_DEPTH` (1); otherwise only those at depth ≥ `MAX_OPEN_DEPTH` (32). `containerPaths` and `countValues` are iterative: `JSON.parse` accepts nesting (5000 levels) that overflowed the first, recursive walk.
-  - A container shows `CHILD_PAGE` (200) children, then a "Show N more of M" row; `shown` (`Map<path, count>`) grows it a page at a time. Folding alone cannot bound a huge root such as a 512 KB array of numbers.
+  - A container shows `CHILD_PAGE` (200) children, then a "Show N more of M" row; `shown` (`Map<path, count>`) grows it a page at a time. Folding alone cannot bound a huge root such as a 25 MB array of numbers.
   - `JsonTreeBoundary` (error boundary) shows the raw text if the tree throws — Alt-unfolding thousands of levels builds a component tree React's commit recurses through, and the renderer has no boundary of its own.
   - `JsonNode`: the chevron (and, when folded, the `{ … }` / `[ … ]` button) calls `toggle(path, node, e.altKey, row)`, where `row` is the node's `[data-json-row]` element (it survives the toggle; the `{ … }` button does not). Before the state change `JsonTree` records the row's top, the tree's height and the scroller's slack below the viewport; a `useLayoutEffect` on the fold state then sets the tree's `min-height` to `height − slack` when the folded tree would be shorter (so the scroller never clamps), and scrolls the nearest `overflow-y: auto` ancestor by any remaining shift of the row. The floor is recomputed on every toggle. Alt applies the fold or unfold to every container path in the branch (`containerPaths`). Folded rows show the `N keys` / `N items` count; empty containers get no chevron. The chevron is the only tab stop; the `{ … }` button is `tabIndex={-1}` + `aria-hidden`. Chevrons are named `Expand|Collapse <key>`, `… item <index>` for array items, `… root` for the root. Leaf rows use a `2ch` hanging indent.
   - Colours are the `main.css` classes: `hljs-name` keys, `hljs-string`, `hljs-number`, `hljs-literal`; punctuation and the fold count `--color-text-secondary` (muted read at about 2.6:1 in the light theme). Strings go through `linkifySegments` into `<a target="_blank" rel="noreferrer noopener">`.
@@ -229,10 +229,11 @@
   - The `<iframe data-testid="html-preview-frame" sandbox={HTML_PREVIEW_SANDBOX} referrerPolicy="no-referrer">` sits on `--color-html-page`.
 - `src/renderer/src/components/chat/CodePreview.tsx`:
   - `CodePreview({ text, language, anchorLines })`, a `data-testid="code-preview"` wrapped `<pre>`; `PreviewBody` renders it for `kind === 'python'`, with the modal's `toc.entries` lines. `language` is `'python' | 'xml'`: `XmlPreview`'s fallback and HTML Source use `xml`, highlight.js's grammar for HTML too.
+  - `MAX_HIGHLIGHT_CHARS` (1024 × 1024 characters, exported): over it `CodePreview` skips `lowlight` and renders `PreviewNote` with `plainTextNote('highlight')` ("This file is too large to highlight, so it is shown as plain text.") above the `<pre>`; a `note` prop, when given, is shown instead (and is shown even under the limit). `plainTextNote('format')` is markdown's wording. With `anchorLines`, `plainWithAnchors(text, anchorLines)` slices the text at each wanted line and puts the same empty `data-heading-line` span there, scanning only up to the last wanted line — the array's last element, never a spread, which throws past ~125k arguments; without, the text goes in as one string. Every `CodePreview` caller gets this: Python, `XmlPreview`'s source fallback, `PreviewBody`'s `html` for a path target, and `HtmlPreview`'s Source.
   - `insertLineAnchors(tree, lines)`: walks the hast in document order counting newlines, splitting text nodes where needed, and puts an empty `<span data-heading-line={n}>` at the start of each wanted line — the marker `FilePreviewContents` scrolls to and tracks, as markdown headings carry it.
 - `src/renderer/src/utils/pythonOutline.ts`: `pythonOutline(source)` → `MarkdownToc`. A line scan, not a parser: skips lines inside triple-quoted strings and comments; a column-0 `def`/`class` (optionally `async`) is depth 1, a `def` at a class's member indent is depth 2, and any other column-0 line ends the class. `line` is the keyword's line, not the decorator's. `show` when there is more than one entry.
   - A module-level `createLowlight` with `python`, `xml`, and `css` and `javascript` so an HTML file's `<style>` and `<script>` are coloured as such: the grammars the preview kinds need, not lowlight's `common` set. `lowlight.highlight` returns hast, which `toJsxRuntime` (`hast-util-to-jsx-runtime`) turns into React elements with `react/jsx-runtime`, so spans carry the `main.css` `hljs-*` classes. Both packages are direct dependencies; `rehype-highlight` uses the same engine but is not called here.
-  - Memoised on `text` and `language`; any throw falls back to the raw text.
+  - Memoised on `text`, `language`, `anchorLines` and the over-limit flag; any throw from `lowlight` falls back to the raw text.
 - `src/renderer/src/components/ui/FrontmatterTable.tsx`: shared with chat bubbles (`MarkdownContent` in `MessageBubble.tsx`) and notes (`NoteDetail.tsx`, `NotePreviewModal.tsx`).
   - `useFrontmatter(text, className?)` → `{ card, body }`: `splitFrontmatter` memoised on `text`; `card` is a `FrontmatterTable` or `null`, `body` is what to hand to `<Markdown>`. `className` sets the card's bottom margin (default `mb-5`; bubbles pass `mb-3`, notes `mb-4`), dropped when the body is empty so a frontmatter-only message has no trailing gap). The fill is `--color-text` at 5% so it tints the user bubble's colour instead of laying a grey slab on it; chips are outlined, not filled, so they do not read as clickable file-reference pills.
   - `FrontmatterTable({ frontmatter, className })`, the `data-testid="frontmatter"` card. Here it renders outside `.markdown-body` / `.file-preview-markdown`; in bubbles and notes it renders inside `.markdown-body`, so it is a `<dl>` grid (`grid-cols-[max-content_minmax(0,1fr)]`, each `dt`/`dd` pair in a `contents` wrapper), which no `.markdown-body` table, `pre` or `code` rule matches. `.markdown-body a` still colours its links there.
@@ -276,7 +277,8 @@
   - the press guard;
   - the agent-file header and error states, including Open and Open folder disabled inside the ⋯ menu when the file has gone.
   - markdown frontmatter: the card sits outside `.markdown-body`, a URL value is a `_blank` link, and the body renders without a stray rule or setext heading.
-  - python: highlighted tokens with the text intact, no Contents for a single definition, and a `data-heading-line` marker on each listed definition (not on a `def` inside a docstring).
+  - python: highlighted tokens with the text intact, no Contents for a single definition, and a `data-heading-line` marker on each listed definition (not on a `def` inside a docstring); over `MAX_HIGHLIGHT_CHARS`, no `hljs-` spans, the note, the markers and Contents kept.
+  - `a large markdown or csv file`: markdown over the limit as its raw text under the note, no rendered headings and no Contents; a cut XML source over the limit with only the cut note, never the too-large one; a CSV with blank lines between rows stopping at 500 rows, blank lines not counted.
 - `src/renderer/src/utils/pythonOutline.test.ts`: depth 1 and 2 entries, decorators, `async`, nested functions and classes left out, docstrings and comments skipped, no panel for one definition.
 - `FilePreviewModal.test.tsx`, `the Contents panel`: offered for long markdown and open by default, not for short markdown, non-markdown or an attachment csv, frontmatter not counted, the full-title hint after the delay and never for an entry that fits, a click scrolling the body and marking the entry current, the closed state persisted to `localStorage`, widening to the right with the body at the closed width, widening with a partial left shift when the right is short, the press guard after a toggle, the overlay after a slow load until a toggle, the root font size, a resize while no preview was open, and the overlay in a narrow window.
 - `FilePreviewModal.test.tsx`, `the ⋯ menu`: item order, running an action without closing the preview, an outside press and Escape taken by the menu first, arrow-key movement, the spinning trigger with disabled items, and no menu for an attachment. `contentsGeometry` is exported for these tests.
@@ -358,10 +360,10 @@ The `cinna-preview:` scheme is not IPC: the frame's requests reach `htmlPreviewS
 
 ## CSV Parsing & Sorting
 
-- `parseDelimited(text, delimiter)`: a single quote-aware pass.
+- `parseDelimited(text, delimiter, maxRows = Infinity)`: a single quote-aware pass. `CsvPreview` passes `MAX_PREVIEW_ROWS` and the parse returns as soon as it holds more than that many records, so a 25 MB file is read only as far as row 501.
   - A `""` escape becomes a quote, and a delimiter or `\n` inside quotes stays in the cell.
   - `\r\n` and `\r` are normalised.
-  - The trailing record is flushed, and the caller drops fully blank records.
+  - A blank physical line (a record of one empty cell) is dropped as it is read, so it neither shows as an empty row nor counts towards `maxRows`. The trailing record is flushed only when it holds something.
   - The delimiter is auto-detected: tab when the text has tabs and no commas, otherwise comma.
 - `compareCells(a, b)`: compares numerically when both cells are non-empty finite numbers, otherwise with `localeCompare`.
 - Each header click cycles the sort: none → asc → desc → none. Filtering runs before sorting, and both apply only while `filtersEnabled` is on.
@@ -370,11 +372,13 @@ The `cinna-preview:` scheme is not IPC: the frame's requests reach `htmlPreviewS
 
 ## Configuration
 
-- `MAX_PREVIEW_BYTES` = 512 KB (`src/shared/filePreview.ts`): the read cap in main, for attachments, agent files and composer paths.
+- `MAX_PREVIEW_BYTES` = 25 MB (`src/shared/filePreview.ts`): the read cap in main, for attachments, agent files and composer paths.
 - `READ_TIMEOUT_MS` = 60 s (`cinnaFileService.ts`): how long a Cinna `readBytes` may take.
-- `MAX_IMAGE_PREVIEW_BYTES` = 20 MB (`src/shared/filePreview.ts`): the largest image returned as a `data:` URL; above it the read is refused.
+- `MAX_IMAGE_PREVIEW_BYTES` = 25 MB (`src/shared/filePreview.ts`): the largest image returned as a `data:` URL; above it the read is refused.
+- `MAX_PREVIEW_MB` (`FilePreviewModal.tsx`): `MAX_PREVIEW_BYTES` in MB, the figure the truncation notices name ("Preview truncated at 25 MB.", "The preview is cut at 25 MB, …"), so a cap change cannot leave a notice naming the old figure.
 - `IMAGE_CHROME_REM` = 6 (`FilePreviewModal.tsx`): the header and padding subtracted from 80vh for an image's max height.
-- `MAX_PREVIEW_ROWS` = 500 (`FilePreviewModal.tsx`): the CSV table render cap.
+- `MAX_PREVIEW_ROWS` = 500 (`FilePreviewModal.tsx`): the CSV table render cap, and where `parseDelimited` stops.
+- `MAX_HIGHLIGHT_CHARS` = 1024 × 1024 characters (`CodePreview.tsx`): above it code is shown plain and markdown as its raw body, with no Contents for markdown.
 - `ENTRANCE_WAIT_MS` = 150 (`FilePreviewModal.tsx`): how long the card stays hidden waiting for a settled state.
 - `ENTRANCE` = 170 ms, `cubic-bezier(0.2, 0, 0, 1)`. The exit uses the same options, with `fill: 'forwards'`.
 - `COPIED_HINT_MS` = 1200 (`FilePreviewModal.tsx`): how long "Copied" or "Couldn't copy" stands before the hint fades.
@@ -384,7 +388,7 @@ The `cinna-preview:` scheme is not IPC: the frame's requests reach `htmlPreviewS
 - `FULL_TITLE_DELAY_MS` = 250 (`FilePreviewContents.tsx`): how long the pointer rests on a cut-off entry before its full text shows.
 - `cinna-preview-contents-open` (`localStorage`, `ui.store.ts`): the Contents panel's remembered state.
 - `POINTER_ORIGIN_MAX_AGE_MS` = 1000 (`filePreview.store.ts`): the oldest pointer-down an attachment open may grow from.
-- `MAX_HTML_PREVIEW_BYTES` = 20 MB (`htmlPreviewServer.ts`): the most a document or asset served to the frame may weigh; over it is 413, never a cut.
+- `MAX_HTML_PREVIEW_BYTES` = 25 MB (`htmlPreviewServer.ts`): the most a document or asset served to the frame may weigh; over it is 413, never a cut.
 - `MAX_HTML_PREVIEW_TOKENS` = 16 (`htmlPreviewServer.ts`): live tokens; past it the oldest is dropped.
 - `HTML_PREVIEW_SANDBOX` (`src/shared/htmlPreview.ts`): `allow-scripts allow-forms allow-modals allow-top-navigation-by-user-activation`.
 - `OUTLINE_PER_PARENT` = 50, `MAX_DEPTH` = 4 (`xmlOutline.ts`); `INLINE_TEXT_MAX` = 80 (`xmlDocument.ts`).
@@ -439,7 +443,7 @@ The page runs its own scripts and loads remote content, by the user's decision. 
   - no dot segments: every decoded segment is non-empty, starts with no `.` (so no `.`/`..`, and no dotfile or dot-folder: `.env*`, `.git`, `.ssh`, `.claude`), and has no `/`, `\`, `:` or NUL. The URL parser folds a literal `..` at the root; an encoded `%2F` stays inside one segment and is refused here;
   - no credential files, by the same rule as every agent-file read;
   - consent without a prompt: the asset must be inside the agent folder or under an approval already given. A page cannot raise the consent dialog. A single-file approval covers only that file, so an outside page approved that way renders without its assets;
-  - at most 20 MB, refused (413) rather than cut, as the document is.
+  - at most 25 MB, refused (413) rather than cut, as the document is.
 - **Response headers:** `Access-Control-Allow-Origin: *` for the opaque origin's own fetches (no credentials are involved), `Referrer-Policy: no-referrer` so the token never reaches a remote server in a Referer, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`.
 
 ### Open in browser
