@@ -49,7 +49,7 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 - The `[+]` button is hidden entirely when none of the rows apply.
 
 ### Choosing coordination
-- Coordinate by <conductor> is a menuitem action, and the only visible path to coordination: the routing badge no longer carries it. Choosing a *particular* conductor is the agent chip's right-click **Set as Coordinator** ([Chat Routing](../chat_routing/chat_routing.md)); this row is kept so a user who never right-clicks a chip can still coordinate.
+- Coordinate by <conductor> is a menuitem action, and the only visible path to coordination: the routing badge no longer carries it. Choosing a *particular* conductor is **Set as Coordinator** in the agent chip's menu ([Chat Routing](../chat_routing/chat_routing.md)); this row coordinates without an agent being picked first, by the rule below.
 - The name in the row is who would conduct: in a chat, the bound agent, else the first attached one, when it can conduct, else Default runtime; on the new-chat screen, the agent set as coordinator on its chip if it is still picked, else the same rule over the picks.
 - It moves the chat to coordinator and disappears after success. There is no uncheck/back-to-human action.
 - The candidate is an eligible Local root/participant or Default runtime; promotion does not require an API provider merely to choose a conductor.

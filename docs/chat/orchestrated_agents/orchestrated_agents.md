@@ -7,7 +7,7 @@ Let one Local runtime conduct a chat using attached agents and MCP servers as to
 ## Core Concepts
 
 - **Conductor** — the coordinator chat's Local root: a folder/stdio ACP agent or a hidden chat-owned Default runtime. A direct Local session receives the bridge from its first turn so later attachments need no connection rebuild.
-- **Coordinator chip** — the conductor's chip under the composer. It leads the chip row and is marked by one extra pixel on its left and right sides; its title and accessible name read "<name> — Coordinator". Any other agent chip's right-click menu offers **Set as Coordinator**.
+- **Coordinator chip** — the conductor's chip under the composer. It leads the chip row and is marked by one extra pixel on its left and right sides; its title and accessible name read "<name> — Coordinator". Any other agent chip's menu (a click on it, or a right-click) offers **Set as Coordinator**.
 - **Participant** — any attached agent, including remote drivers, exposed through the existing agent-as-tool descriptor. The conductor is excluded from its own tools and nested specialists receive no Cinna bridge, preventing self-locks and recursive delegation.
 - **Cinna MCP endpoint** — a main-owned, bearer-authenticated Streamable HTTP endpoint on loopback, injected via ACP session parameters. Real connector tools are proxied through the existing MCP manager so OAuth and connection state have one owner.
 - **Dual output** — compact specialist text returns to the runtime; rich parts persist and stream into an expandable agent sub-thread. The runtime is responsible for its own model/tool loop.
@@ -20,7 +20,7 @@ Let one Local runtime conduct a chat using attached agents and MCP servers as to
 4. A specialist's permission request stays live and can be answered in its sub-thread or the Inbox. A question becomes a durable Inbox request; the conductor ends its turn instead of repeatedly calling the waiting agent — but only once every call running in parallel with it has finished. Ending the turn cancels the session, and with it each sibling specialist still at work.
 5. Answer the question in the Inbox. The specialist resumes through its driver. Its completed result returns to the conductor as a new prompt naming the original tool call, rather than pretending the earlier MCP request is still open.
 6. Add/remove capabilities during the session: Cinna changes the tool list and emits `tools/list_changed`, preserving endpoint identity. Engine adoption is separate from server fixture coverage: OpenCode 1.18.27 adopted it in the real-adapter/local-fake-model probe; authenticated Claude/Codex behavior remains unverified.
-7. Hand the conductor role to another agent in the chat: right-click its chip (or focus it and press Shift+F10 / the ContextMenu key) → **Set as Coordinator**. The chip moves to the front of the row with the coordinator mark; the former conductor's chip joins the participants. The next turn goes to the new conductor, which starts a fresh session with the chat replayed to it and finds the former conductor among its tools.
+7. Hand the conductor role to another agent in the chat: click or right-click its chip (or focus it and press Enter, Space, Shift+F10 or the ContextMenu key) → **Set as Coordinator**. The chip moves to the front of the row with the coordinator mark; the former conductor's chip joins the participants. The next turn goes to the new conductor, which starts a fresh session with the chat replayed to it and finds the former conductor among its tools.
 
 ## Business Rules
 
