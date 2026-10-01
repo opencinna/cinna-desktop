@@ -116,11 +116,12 @@ test('chip coordination is one-way and a Local conductor preserves its ACP sessi
   await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
   const [chat] = await cinna.page.evaluate(() => window.api.chat.list())
   await expect(cinna.page.getByRole('status', { name: 'Local agent connection', exact: true })).toBeVisible()
-  // The badge no longer carries "Coordinate by …": the bound chip's menu does.
-  await cinna.page.getByRole('group', { name: LOCAL, exact: true }).click({ button: 'right' })
+  // The badge no longer carries "Coordinate by …": the bound chip's menu does,
+  // and a plain click on the chip opens it.
+  await cinna.page.getByRole('button', { name: LOCAL, exact: true }).click()
   await cinna.page.getByRole('menu', { name: `Agent ${LOCAL}`, exact: true }).getByRole('menuitem', { name: 'Set as Coordinator', exact: true }).click()
   await expect(cinna.page.getByRole('status', { name: `Coordinated by ${LOCAL}`, exact: true })).toBeVisible()
-  await expect(cinna.page.getByRole('group', { name: `${LOCAL} — Coordinator`, exact: true })).toBeVisible()
+  await expect(cinna.page.getByRole('button', { name: `${LOCAL} — Coordinator`, exact: true })).toBeVisible()
   await expect.poll(() => cinna.page.evaluate((id) => window.api.chat.get(id), chat.id)).toMatchObject({ router: 'coordinator', agentId: localId })
   await cinna.page.keyboard.press('Escape')
   await pick(cinna, REMOTE)
@@ -257,7 +258,7 @@ test('Set as Coordinator on a participant chip hands the chat to it, and the old
       const menu = cinna.page.getByRole('menu', { name: `Agent ${PARTNER}`, exact: true })
       await menu.getByRole('menuitem', { name: 'Set as Coordinator', exact: true }).click()
       await expect(menu).toHaveCount(0)
-      await expect(cinna.page.getByRole('group', { name: `${PARTNER} — Coordinator`, exact: true })).toBeVisible()
+      await expect(cinna.page.getByRole('button', { name: `${PARTNER} — Coordinator`, exact: true })).toBeVisible()
       expect(await chipTitles(cinna)).toEqual([`${PARTNER} — Coordinator`, PARTICIPANT(KEEPER)])
       await expect.poll(() => cinna.page.evaluate((id) => window.api.chat.get(id), chatId)).toMatchObject({ router: 'coordinator', agentId: partnerId })
       expect((await cinna.page.evaluate((id) => window.api.chat.listOnDemandAgents(id), chatId)).map((row) => row.agentId)).toEqual([keeperId])

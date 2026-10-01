@@ -44,8 +44,9 @@ import { test, expect, type CinnaApp } from '../fixtures/app'
  *   connection` to `You route this chat` — no model, no credential, no chat mode.
  * - The first message goes to the first agent picked, and its reply is labelled
  *   with that agent's name in the transcript.
- * - A chip is an address: clicking the other agent's chip flips `aria-pressed`
- *   and the next message goes there.
+ * - A chip is an address: picking Address Next Message from the other agent's
+ *   chip menu moves the "answers your next message" label, and the next message
+ *   goes there.
  * - The second agent's turn carries the catch-up packet, and it is the packet
  *   that makes the answer possible.
  * - The first agent's own first turn carries **no** packet — nothing was missed.
@@ -242,20 +243,27 @@ test('two agents in one chat, routed by the user, with no LLM provider configure
       const page = cinna.page
       // Sticky by default: the agent the last user message was addressed to.
       const ledgerChip = page.getByRole('button', {
-        name: `Agent “${LEDGER}” answers your next message`
+        name: `Agent “${LEDGER}” answers your next message`, exact: true
       })
-      await expect(ledgerChip).toHaveAttribute('aria-pressed', 'true')
-      const scribeChip = page.getByRole('button', {
-        name: `Address your next message to “${SCRIBE}”`
-      })
-      await expect(scribeChip).toHaveAttribute('aria-pressed', 'false')
-      await scribeChip.click()
+      await expect(ledgerChip).toBeVisible()
+      // The addressed agent's menu has nothing to address.
+      await ledgerChip.click()
+      const ledgerMenu = page.getByRole('menu', { name: `Agent ${LEDGER}`, exact: true })
+      await expect(ledgerMenu.getByRole('menuitem', { name: 'Go to Agent', exact: true })).toBeVisible()
+      await expect(ledgerMenu.getByRole('menuitem', { name: 'Address Next Message', exact: true })).toHaveCount(0)
+      await page.keyboard.press('Escape')
+      await expect(ledgerMenu).toHaveCount(0)
+      // Clicking the other chip opens its menu; the address moves on the pick.
+      await page.getByRole('button', { name: `Agent "${SCRIBE}" attached as a participant`, exact: true }).click()
+      const scribeMenu = page.getByRole('menu', { name: `Agent ${SCRIBE}`, exact: true })
+      await scribeMenu.getByRole('menuitem', { name: 'Address Next Message', exact: true }).click()
+      await expect(scribeMenu).toHaveCount(0)
       await expect(
-        page.getByRole('button', { name: `Agent “${SCRIBE}” answers your next message` })
-      ).toHaveAttribute('aria-pressed', 'true')
+        page.getByRole('button', { name: `Agent “${SCRIBE}” answers your next message`, exact: true })
+      ).toBeVisible()
       await expect(
-        page.getByRole('button', { name: `Address your next message to “${LEDGER}”` })
-      ).toHaveAttribute('aria-pressed', 'false')
+        page.getByRole('button', { name: `Agent "${LEDGER}" attached as a participant`, exact: true })
+      ).toBeVisible()
 
       await input(page).fill(MESSAGE_2)
       await input(page).press('Enter')
