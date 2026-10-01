@@ -60,7 +60,7 @@ A chat message is treated as a command invocation only when it is, after trimmin
 
 ### A command takes the same lock a model turn does
 
-A `/run:<name>` script can write anywhere under the agent's folder — the catalog's own worked example is a status updater touching `app-data/storage/STATUS.md` — so it is exactly the kind of writer Invariant 3 exists to serialize against. Running it under the per-agent turn lock (owner `'command'`) means: a second command for the same agent refuses immediately rather than racing it, a page-editor save refuses while the command runs rather than landing mid-script, and the folder watcher defers its rescan until the command's writes have settled. A command never touches `turnLock.anyHeld()` — the engine-wide restart guard — because it never touches the shared engine process; there is nothing engine-level to serialize against here, only this one agent's folder.
+A `/run:<name>` script can write anywhere under the agent's folder — the catalog's own worked example is a status updater touching `app-data/storage/STATUS.md` — so it is exactly the kind of writer the desktop's own writes must not land under. It holds the per-agent turn lock **shared**, as a model turn does (owner `'command'`). That means: a page-editor save refuses while the command runs rather than landing mid-script, a command refuses while such a save holds the agent (a scheduled command waits it out instead), and the folder watcher defers its rescan until the command's writes have settled. It does **not** serialize against model turns or other commands on the same agent — they run side by side, as turns in different chats do, and what they do to the folder between them is the user's concern. The lock guards the desktop's writes, not the agent's. A command never touches `turnLock.anyHeld()` — the engine-wide restart guard — because it never touches the shared engine process; there is nothing engine-level to serialize against here, only this one agent's folder.
 
 ### The whole subprocess tree is killed, not just the shell
 
@@ -98,7 +98,7 @@ Renderer ── window.api ──▶ run:start → runExecutionService
                         commandService.run()
                               │ readCommandCatalog(agentDir)  → entry, or "no such command"
                               │ layout.localizeCommand(entry.command)
-                              │ turnLock.withLock(agentId, 'command', …)
+                              │ turnLock.withSharedLock(agentId, 'command', …)
                               │   spawn(localCommand, {cwd: agentDir, shell:true, detached})
                               │   captured stdout+stderr, capped, killed as a tree on abort/timeout
                               ▼

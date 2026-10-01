@@ -39,7 +39,7 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 - **Folder Index** — The `agents` rows derived from a scan, plus the `agent_roots` rows saying where to look
 - **Readiness** — How ready a folder is to run: `ok`, `credentials_needed`, `invalid`, `contract_too_new`. A *state*, never an exception
 - **Scan** — One walk of `Local/*/` in a root: parse each manifest, validate, derive readiness, fold in `app-data/storage/STATUS.md` and `app-data/desktop.json`, rebuild that root's slice of the index in one transaction
-- **Turn Lock** — A per-agent, in-process lock. The runner holds it for the length of a turn; editors refuse to save while it is held; the watcher defers its rescan until it is released
+- **Turn Lock** — A per-agent, in-process readers-writer lock. Turns and commands hold it shared for their length, so several chats can run the same agent at once; the desktop's own writes hold it exclusive, so editors refuse to save while any turn runs; the watcher defers its rescan until the last holder has left
 - **Stamp** — `{mtimeMs, size, hash}` for a file the page can edit, round-tripped through a save so a write over a file that changed underneath is refused
 - **Desktop State** — The per-machine state of one agent: `app-data/desktop.json`, the one file in a *kit* agent folder the desktop owns, and a file under `<userData>/external-agents/` for a bare one, whose folder gains nothing the user did not type there themselves — which is why a bare agent's name, its membership of the list and its runtime are in there too
 - **Counterparty** — An agent the user can pick and then expect an answer from. A folder agent is one, on the same terms as every other source: the pickers filter on `enabled` and nothing else. See [Folder Agents as Counterparties](counterparty.md)
@@ -234,7 +234,7 @@ So a rescan can be triggered by a watcher's own recovery, with no user action an
 ### Writes into an agent folder
 
 - The desktop writes only through the page editors and the scaffolder, never anywhere else
-- Every write takes the **turn lock**, which never queues: a save arriving mid-turn tells the user the agent is running rather than landing silently seconds later
+- Every write takes the **turn lock** exclusively, which never queues: a save arriving mid-turn tells the user the agent is running rather than landing silently seconds later. An exclusive hold is refused while any turn holds the lock shared, and a turn is kept out while the write holds it
 - Every write is guarded by the **stamp the caller read**, not one taken at write time — a stamp taken microseconds before the write would guard nothing. Metadata is only a pre-check; the SHA-256 of the bytes decides, because a second writer that replaces a file at equal size with preserved timestamps (`cp -p`, `rsync -t`, `git checkout`, a backup restore) passes an mtime+size comparison
 - A refused write carries a **stale-write code** of its own (`file_modified` for a prompt document, `manifest_modified` for the manifest), distinct from "you typed something unusable", so the page can show a reload prompt. It must never be retried with a fresh stamp — that retry is exactly the clobber the guard exists to prevent
 - The lock coordinates this process with itself only. A coding assistant editing from a terminal is covered by the stamp instead — the two guards are complementary, and both are needed

@@ -49,7 +49,7 @@ The Inbox screen is one page with one scrollbar: the asks, then the work they be
 
 | State | Top-bar badge (visible / accessible name) | Inbox view | Blocked task page |
 |---|---|---|---|
-| Complete read | count, blank at zero / `Inbox — <n> waiting` or `Inbox` | the list, or **Nothing is waiting on you.** | an ask, or nothing waiting → re-run |
+| Complete read | count, blank at zero / `Inbox — <n> waiting` or `Inbox` | the list, or **Nothing is waiting on you.** | an ask, or nothing waiting → re-run, under the task's recorded reason (the expired-request sentence only when it recorded none) |
 | Partial read | count in the warning tint, **`!`** when the count is zero / `Inbox — <n> waiting, one service could not be read` (or `<n> services`) | rows, then **One service could not be read — some requests may be missing.** with `Try again`; with no rows, **Part of the inbox could not be read.** instead of the empty state | a bound task with no ask found: **This task is blocked. What it is waiting on could not be read.** with `Try again`; an unbound task is unaffected |
 | Rejected read | `!` / `Inbox — could not be read` | the last rows plus **Showing the last read — the inbox could not be refreshed.**; cold, **The inbox could not be read.** | the same could-not-be-read line, bound or not |
 

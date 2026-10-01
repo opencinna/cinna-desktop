@@ -284,10 +284,13 @@ the on/off state. The UI is the Job page's **Schedules** tab (`JobSchedules.tsx`
 Each occurrence prepares a task/run linked to the source Job before post-commit
 main dispatch, including ordinary Jobs whose manual execution still uses
 `renderer_turn`. Coordinator and script Jobs retain their established runtimes.
-No occurrence is gated on earlier runs of the source Job. The ordinary-Job launch
-in `jobExecution/scheduled.ts` checks `turnLock.isLocked(agentId)` and throws
-instead of starting a turn the lock would refuse as a failure; the admission's
-interrupt path then blocks the task with that reason and marks the occurrence
+No occurrence is gated on earlier runs of the source Job, nor on its agent
+being in a turn: turns on one agent run side by side. The ordinary-Job launch in
+`jobExecution/scheduled.ts` passes `queueWhenBusy: true`, so the turn waits out
+an exclusive desktop folder write (an editor save, a credential rewrite)
+instead of being refused by it. An occurrence that never started — the profile
+changed, or the turn was refused before acceptance — takes the admission's
+interrupt path, which blocks the task with that reason and marks the occurrence
 `interrupted`. `jobService.reportRunCompletion` settles any occurrence linked to
 the run through `localScheduleRepo.settleByRun`, best-effort, so a re-run's
 outcome reaches schedule history.

@@ -45,8 +45,8 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 1. The user opens a chat bound to a folder agent and sends a message
 2. The message is persisted exactly as it is for a remote agent — one shared path, no local branch
 3. The **folder is read**: it must still exist on disk, must be switched on, and must not be in a readiness state it cannot run from. The engine comes from what the folder says now, not from the row
-4. That engine's launcher **plans** the turn, or refuses it in a sentence. Planning may resolve (and download) the `opencode` binary, generate this agent's config, or probe whether Claude Code/Codex is logged in — all of it before the turn lock is taken, so a user reads the reason instead of queueing behind another chat to be told
-5. The per-agent turn lock is taken, the agent's process is acquired — started if this is the first turn — and a session is loaded or created
+4. That engine's launcher **plans** the turn, or refuses it in a sentence. Planning may resolve (and download) the `opencode` binary, generate this agent's config, or probe whether Claude Code/Codex is logged in — all of it before the turn lock is taken, so a user reads the reason instead of waiting out a folder write to be told
+5. The per-agent turn lock is taken **shared**, the agent's process is acquired — started if this is the first turn — and a session is loaded or created. The same agent can be answering in other chats at the same moment: they share its one process, each in its own session
 6. The launcher's setup is applied to the session: the agent definition on OpenCode, the approval mode on Claude and Codex
 7. The prompt is sent. Text, thinking, tool calls and their results stream into the transcript as `session/update` notifications arrive; the turn ends on a stop reason and the assistant message is persisted
 
@@ -72,8 +72,9 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 ### Cancelling
 1. The user presses Stop mid-answer
 2. Anything parked is answered **first**, so an agent blocked inside a permission request can unwind and read the cancel at all
-3. `session/cancel` goes out and the pending `session/prompt` is expected to come back `cancelled`. It gets three seconds; an agent that never acknowledges has its **process retired**, because a turn is still running inside it and the next prompt on that session would interleave with work the user stopped
+3. `session/cancel` goes out and the pending `session/prompt` is expected to come back `cancelled`. It gets three seconds; an agent that never acknowledges has its **process retired**, because a turn is still running inside it and the next prompt on that session would interleave with work the user stopped. The retire waits for every turn holding the process, so another chat answering on the same agent finishes first and the process goes after the last one lets go
 4. Whatever streamed before the cancel is kept, and the stop is not reported as an error
+5. A Stop while the agent's process is still starting leaves only this chat's turn. Other chats waiting on the same start keep it; the start is canceled only when every turn waiting on it has stopped, and a session start this turn abandons neither kills nor retires a process a sibling turn holds, so other chats keep starting turns on it
 
 ### Quitting the app mid-turn
 1. The user quits, force-quits, or the app crashes while a turn is streaming, parked on a question, or in the middle of its tool calls
@@ -108,15 +109,15 @@ Where the folder cannot answer at all — the row is gone, the folder has moved,
 
 A failed turn is a *result carrying an error*, not an exception. Both call sites have to render a failure either way, and an exception crossing the IPC boundary loses its code — `ipcMain.handle` serialises a rejection to message and stack, and `contextBridge` re-clones it, so a renderer guard testing `err.code` silently never fires.
 
-Enforced at both ends. The driver catches — including around `turnLock.acquire`, which *throws* when the same agent is opened in a second chat and whose message is already user-facing ("This agent is busy right now…") — and the direct-chat wrapper catches too, because that wrapper is what every future driver passes through and a driver that breaks the promise used to close the port having posted neither `done` nor `error`, leaving the renderer streaming for ever.
+Enforced at both ends. The driver catches — including around the lock, which *throws* when the desktop is in the middle of writing into the agent's folder and whose message is already user-facing ("This agent is busy right now…") — and the direct-chat wrapper catches too, because that wrapper is what every future driver passes through and a driver that breaks the promise used to close the port having posted neither `done` nor `error`, leaving the renderer streaming for ever.
 
 ### Refuse before the lock, stream inside it
 
 Everything that can be answered without spawning anything is answered first: the folder's own state, `enabled`, the engine this build cannot run, and the launcher's plan — no `opencode` binary, no usable credential, no model, no selected Claude/Codex CLI, not logged in. Only then is the lock taken.
 
-The ordering is about what the user reads. A refusal produced *inside* the lock would queue behind another chat's turn on the same agent before saying that this agent cannot run at all.
+The ordering is about what the user reads. A refusal produced *inside* the lock would first wait out (or be refused by) a desktop write into the folder before saying that this agent cannot run at all.
 
-The lock covers the streaming half: acquire the process, load or create the session, apply the setup, prompt, stream, settle. It is the same per-agent lock the page editors and the folder watcher respect — see [Invariant 3](#invariant-3--no-desktop-writes-while-a-turn-streams).
+The lock covers the streaming half: acquire the process, load or create the session, apply the setup, prompt, stream, settle. It is the same per-agent lock the page editors and the folder watcher respect — see [Invariant 3](#invariant-3--no-desktop-writes-while-a-turn-streams). A turn holds it shared, so it never waits for another turn.
 
 ### The load replay is dropped, not appended
 
@@ -252,6 +253,12 @@ The config generator does not consult `enabled`. The driver does, before it plan
 ### Invariant 3 — no desktop writes while a turn streams
 
 The turn holds the per-agent lock for its whole streaming life, which is what stops the folder being written to underneath a running agent. Assume a rescan can land at any moment, including mid-turn, and rely on the lock rather than on timing: macOS FSEvents replays a backlog of pre-arm changes on *every* watcher arm, so a rescan can fire from a watcher's own recovery with no user action at all.
+
+The invariant is about the **desktop's own** writes, not about turns against each other. The lock is readers-writer: turns and `/run:` commands hold it shared, so one agent answers in several chats, scheduled jobs, task runs and script steps at once; the page editors, credential materialization, the credential helper and Delete hold it exclusive. An exclusive write is refused (or, for a credential attachment edit, queued) while any turn runs, and an interactive turn is refused while such a write holds the agent — a scheduled or runner-owned turn waits it out instead. What concurrent turns do to the same folder between them is the user's concern, as it would be for two terminals open in it. The watcher still defers its rescan until **every** holder has left.
+
+**A waiting exclusive write can wait indefinitely.** It is admitted only when no holder at all remains, so turns that keep overlapping keep it out. Accepted: those writes are short desktop housekeeping, and every turn is bounded by its ceiling.
+
+**Delegations to one agent from one chat still take turns.** A conversation has one session per agent, so two nested calls to the same agent from the same chat would prompt one session twice; `nestedAgentTurn.ts` chains them per (chat, agent), and one stopped while it waits ends with *"The agent was stopped while waiting for its earlier delegation in this chat."* Delegations from different chats run in parallel.
 
 What is **no longer** part of this invariant: the engine. There is no shared process to be restarted underneath anyone, so `turnLock.anyHeld()` has no engine-level caller left, and a config change is not deferred behind anybody's turn.
 

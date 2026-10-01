@@ -33,7 +33,7 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 - `desktopStateService.ts` — typed, total read/write of one agent's state, at whichever of its two locations the caller's `LocalAgentKind` names; `forgetAt(path)` deletes one by path, resolved before the folder moves
 - `gitService.ts` — the update check on a root that is a git working tree ([Agents Folder Updates](folder_updates.md))
 - `watcherService.ts` — one debounced watcher per root; `classifyEvent()` and `classifyExternalEvent()`
-- `turnLock.ts` — the per-agent lock the runner, the editors and the watcher share
+- `turnLock.ts` — the per-agent readers-writer lock: turns and commands shared, the desktop's writes exclusive, the watcher waits for it to be free
 - `pathRules.ts` — `assertUsableRoot()` and `resolveWithinRoot()`
 - `localAgentService.ts` — the composition root, and the operations IPC calls
 - Tests: `agentsHomeService.test.ts`, `homeAccessService.test.ts`, `scannerService.test.ts`, `localAgentService.test.ts`, `watcherService.test.ts`, `turnLock.test.ts`, `pathRules.test.ts`, and `openInService.test.ts` (Phase 2's merge condition — the open-in allow path only became reachable once this slice registered the real roots provider)
@@ -180,9 +180,12 @@ Duplicate manifest ids: the first folder alphabetically wins the row; later clai
 - Deferral: the per-agent branch uses `turnLock.whenFree(agentId, …)`; `runWholeRootRescan()` waits on the first held lock in the root and re-invokes itself on release
 
 ### `src/main/services/localAgents/turnLock.ts`
-- `acquire(agentId, owner)` → handle with an idempotent `release()` carrying a monotonic token, so a stale handle cannot free a lock someone else has since taken. Throws `turn_in_progress` rather than queueing
-- `withLock(agentId, owner, fn)` — releases in a `finally`
-- `isLocked(agentId)`, `whenFree(agentId, fn)`, `releaseAll()` (shutdown and tests only)
+A readers-writer lock: per agent, a map of holders keyed by monotonic token, each `shared` or `exclusive`.
+- `acquireShared(agentId, owner)` / `withSharedLock` — what a turn and a `/run:` command take. Refused (`turn_in_progress`) only while an exclusive holder exists; any number coexist
+- `acquire(agentId, owner)` / `withLock` — exclusive, for the desktop's own folder writes (owners `'editor'`, `'credentials'`, `'credential-helper'`, `'delete'`). Refused while any holder, shared or exclusive, exists. Never queues
+- `withQueuedSharedLock` / `withQueuedLock(agentId, owner, signal, fn)` — wait instead of refusing, until the signal aborts. A queued exclusive waiter is admitted only when no holder at all remains (reader preference), so overlapping turns can keep it waiting indefinitely; accepted because exclusive owners are short housekeeping and turns have a ceiling
+- Every handle's `release()` is idempotent and removes only its own token, so a double release cannot free a hold someone else has since taken
+- `isLocked(agentId)` (any holder — the watcher's and editors' question), `isExclusivelyLocked(agentId)` (task-runner admission's question), `whenFree(agentId, fn)` (fires when the last holder leaves), `anyHeld()`, `releaseAll()` (shutdown and tests only)
 
 ### `src/main/services/localAgents/localAgentService.ts`
 - `configure(getUserId)` — registers the open-in roots provider and the watcher deps. Runs once, from the IPC registrar

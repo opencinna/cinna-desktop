@@ -40,18 +40,27 @@ A due occurrence always starts its own attempt, whatever earlier runs of the
 Job are doing: an unfinished manual or scheduled run, a waiting question, or a
 task that needs review never skips it. Whether to hold the Job back is the
 user's call, made from the work that needs attention, not a rule the scheduler
-applies across tasks. The one thing that stops an occurrence is its agent still
-being in a turn when it launches (below). Disable or delete a schedule to
+applies across tasks. Disable or delete a schedule to
 prevent future admission; existing attempts keep their normal Stop and recovery
 controls. Deleting the source Job also prevents its schedules from starting new
 work.
 
-If an ordinary Job's agent is busy with another turn at launch, the occurrence
-does not start and does not fail (script and coordinator Jobs run through their
-own runtimes instead): its task is set **blocked** with "The agent was still
-busy with an earlier turn, so this scheduled run did not start. Re-run it from
-the task, or dismiss it.", and the history shows it as **Needs review**. It
-stays that way across restarts until the user re-runs or dismisses it.
+An ordinary Job's occurrence starts even while its agent is answering in
+another chat or running a command: turns on one agent run side by side, each
+in its own conversation (script and coordinator Jobs run through their own
+runtimes instead). The one thing it waits for is the desktop's own brief write
+into the agent's folder — an editor save, a credential file rewrite — and it
+starts as soon as that finishes. It is never refused or left for review for
+being busy: the user scheduled the work, and a run lost to a save that happened
+at the wrong second is a run they have to notice and redo by hand. The wait has
+no time limit; Stop on the occurrence or in its conversation ends it before the
+turn begins.
+
+An occurrence interrupted before its turn started — the profile changed before
+launch, or the turn was refused before it was accepted — sets its task
+**blocked** with the reason, the task page shows that reason above its re-run
+button, and the history shows it as **Needs review**. It stays that way across
+restarts until the user re-runs or dismisses it.
 *Re-run from the last message* on that task — or on a failed task from a Job
 schedule — reopens the task and its run together, so the re-run's outcome finishes the
 run, the task, and the occurrence in the history.
@@ -97,7 +106,7 @@ Lists have no Refresh button. They re-read whenever the tab is opened, and every
 
 A prompt occurrence becomes an ordinary one-step script Job attempt, with twenty agent turns and sixty minutes as defaults. Each occurrence starts new work. Open its task from schedule history, answer questions in the Inbox, and use the usual Stop or explicit recovery controls.
 
-A script runs with the agent's command environment and folder lock, with a five-minute timeout and bounded output collection. If the agent is busy when the occurrence is due (a chat turn, an editor save, or another command), the script waits for the agent to become free instead of failing. The five-minute limit starts only when the command itself starts. A later due time while a script is still waiting admits its own occurrence, which waits in the same way. History retains its exit code, stdout, stderr, intended due time, and actual execution times.
+A script runs with the agent's command environment and folder lock, with a five-minute timeout and bounded output collection. A script runs beside the agent's chat turns and other commands. If the desktop is writing into the agent's folder when the occurrence is due (an editor save, a credential file rewrite), the script waits for that write to finish instead of failing. The five-minute limit starts only when the command itself starts. A later due time while a script is still waiting admits its own occurrence, which waits in the same way. History retains its exit code, stdout, stderr, intended due time, and actual execution times.
 
 | Script result | What happens |
 | --- | --- |

@@ -43,4 +43,4 @@ The broad Electron selection was not rerun in full after those fixes. Live model
 
 ## Unreproduced observations
 
-The review's script step left waiting after all requests disappear still has no demonstrated reachable path. The ACP pool's joined acquisition inheriting its first caller's abort signal remains unreachable under the existing per-agent turn lock. Neither speculative path was changed. These observations are separate from the twenty resolved high/medium findings.
+The review's script step left waiting after all requests disappear still has no demonstrated reachable path. The ACP pool's joined acquisition inheriting its first caller's abort signal was unreachable under the then-exclusive per-agent turn lock; once turns on one agent ran in parallel it became reachable, and joined starts now cancel only when every waiting caller has left. Neither speculative path was changed. These observations are separate from the twenty resolved high/medium findings.

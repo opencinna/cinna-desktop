@@ -95,7 +95,7 @@ Every admitted failure consumes the occurrence. Turning a schedule on, or saving
 
 The shared command executor returns separate bounded stdout/stderr, exit code, start/finish times, timeout/abort/spawn errors, and truncation flags. The existing interactive `/run:` behavior is an adapter over this executor. Both use the established shell environment, localized catalog resolution, credential preparation, owning folder, folder turn lock, five-minute timeout, abort handling, and process-tree termination.
 
-The two differ in lock acquisition (`commandService.ts` `executeForAgent`). An interactive `/run:` takes `turnLock.withLock` and is refused with `turn_in_progress` while the agent is busy. `runScheduled` passes a queue signal and waits in `turnLock.withQueuedLock` behind a chat turn, an editor save, or another command. A due occurrence that failed just because a chat happened to be streaming would count as a lost run. The five-minute ceiling starts only inside the lock body, so time spent waiting does not count against it. While a run waits, its receipt is `dispatched`; a later due time admits another receipt, which queues behind it on the same lock.
+Both take the lock **shared** (`commandService.ts` `executeForAgent`), so a command runs beside chat turns and other commands on the same agent; only an exclusive holder — an editor save, a credential file rewrite, a delete — keeps it out. They differ in what happens then. An interactive `/run:` takes `turnLock.withSharedLock` and is refused with `turn_in_progress`. `runScheduled` passes a queue signal and waits in `turnLock.withQueuedSharedLock` until the exclusive holder leaves. A due occurrence that failed just because the user happened to be saving a prompt would count as a lost run. The five-minute ceiling starts only inside the lock body, so time spent waiting does not count against it. While a run waits, its receipt is `dispatched`; a later due time admits another receipt, which waits on the same exclusive holder and then runs beside it.
 
 `runScheduled` reports `started`, which is set by the first statement inside the lock body and is never inferred from an error message. When the tracked controller aborts before that point (Stop, sleep/suspend, profile switch, or scheduler stop), `executeScheduledCommand` records the receipt as `cancelled` with "Stopped before the command started; it will not be replayed". Once the command has started, the existing rules apply: a user Stop is `cancelled`, while suspend, a profile change, or shutdown is `interrupted` and needs review. An `interrupted` command receipt, like one whose process ended without an exit code, is never replayed and does not hold later occurrences.
 
@@ -107,7 +107,7 @@ A script holds the schedule's reservation through its command and any follow-up.
 
 ## Known limitations
 
-- The queued lock wait has no cap. A scheduled command held behind a long chat turn runs late, and nothing marks the receipt as late apart from the gap between its due time and actual start time.
+- The queued lock wait has no cap. Exclusive holders are short desktop writes, so in practice a scheduled command waits milliseconds; nothing would mark a late one apart from the gap between its due time and actual start time.
 - In `turnLock.fireWaiters`, queued acquirers and deferred `whenFree` callbacks, such as the watcher rescan and credential regeneration, share one waiter list and run in order. A queued scheduled command that was registered earlier can take the lock before a deferred rescan or regeneration runs, and that callback then runs while the command holds the lock.
 
 ## Cron and clocks
@@ -164,17 +164,30 @@ ordinary task attempt, and dispatches once from main. Explicit coordinator and
 script definitions reuse their existing preparation/execution seams. This does
 not alter the manual Run button's dispatch contract.
 
-No occurrence is gated on earlier runs of the source Job, manual or scheduled.
-The ordinary launch refuses one case itself: `launch()` checks
-`turnLock.isLocked(agentId)` before `runExecutionService.start` and throws "The
-agent was still busy with an earlier turn, so this scheduled run did not start.
-Re-run it from the task, or dismiss it." A turn started into a held lock would
-be refused as a failure; the throw takes `admit`'s interrupt path instead, where
-`interruptScheduledOrdinaryJob` sets the task `blocked` with the reason and the
-receipt becomes `interrupted` ("Needs review"). The boot orphan-run sweep skips
-a run whose task is `blocked`, so this survives restarts (see
+No occurrence is gated on earlier runs of the source Job, manual or scheduled,
+nor on the agent being in a turn: turns hold the agent's lock shared, so the
+occurrence's turn runs beside any other chat's. The ordinary `launch()` passes
+`queueWhenBusy: true` to `runExecutionService.start`, which forwards it to the
+driver (the same flag a task runner's turns set), so the ACP turn takes the lock
+through `turnLock.withQueuedSharedLock` and waits only while an exclusive holder
+— an editor save, a credential file rewrite, a delete — has the agent. Without
+it the driver takes `withSharedLock`, which throws "This agent is busy right
+now…" in that moment, and the occurrence would end as a failure for work the
+user scheduled. The wait has no ceiling; aborting the run's controller
+(`cancelChat`, which the history Stop reaches while the chat is running)
+removes the waiter, and the turn ends canceled without starting. Script
+schedules wait the same way through their own command path.
+
+`launch()` still has an interrupt path for an occurrence that never started:
+`admit` throws before launch when the profile changed, and `handle.accepted`
+rejecting (for example `onAccepted`'s scope check) calls the same `interrupt`.
+`interruptScheduledOrdinaryJob` sets the task `blocked` with the reason as its
+`errorMessage` and the receipt becomes `interrupted` ("Needs review"). The task
+page's blocked banner shows that `errorMessage` above *Re-run from the last
+message*, rather than the generic expired-request sentence it uses for a
+blocked task that recorded no reason. The boot orphan-run sweep skips a run
+whose task is `blocked`, so this survives restarts (see
 [Interrupted Turn Recovery](../../agents/turn_recovery/turn_recovery_tech.md)).
-Script schedules do not take this path: their commands queue on the lock.
 
 `jobService.reportRunCompletion` settles every receipt whose `runId` is the
 finished run (`localScheduleRepo.settleByRun`: succeeded → `completed`, else the

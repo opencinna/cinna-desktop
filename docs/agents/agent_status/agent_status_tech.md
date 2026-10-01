@@ -131,7 +131,7 @@ Bearer token resolved per request via `getCinnaAccessToken(userId)`. The folder 
 2. **`get`: resolve the data owner before entering a source.** Folder reads do not depend on a Cinna account or a remote target. Transport capabilities cannot imply a status source.
 3. **`folderStatus`: run the command, *then* read.** Reading first would show the status the refresh was about to replace.
 4. **`listFolderSnapshots` skips a folder it cannot locate; `folderStatus` throws for the same condition.** Two answers to one question — *who asked* — not an inconsistency: a poll nobody aimed at that agent should lose one row rather than the panel, and a Refresh aimed at exactly that agent owes a reason. Both sides say so in the code.
-5. **The batch path runs no command.** `commandService.run()` takes the per-agent turn lock as owner `'command'`, so a 45-second tick that ran a refresh would make editor saves and the user's next message refuse on a timer.
+5. **The batch path runs no command.** `commandService.run()` holds the per-agent turn lock (shared) as owner `'command'`, so a 45-second tick that ran a refresh would make editor saves refuse on a timer.
 
 ### Scoping: two user ids, one object
 
@@ -151,7 +151,7 @@ Three states, and the middle one exists so the caller can stay silent:
 | State | Meaning | Caller behaviour |
 |-------|---------|------------------|
 | `ran` | Command exited clean; STATUS.md may have changed | Read and return |
-| `skipped` | No command configured, agent **busy** (turn lock held), or **aborted** | Read and return; report nothing |
+| `skipped` | No command configured, agent **busy** (an exclusive folder write — an editor save, credential files — holds the turn lock; a streaming turn does not), or **aborted** | Read and return; report nothing |
 | `error` | Non-zero exit, `/run:` name not in the catalog, folder gone, binary missing, ceiling fired, or an unsupported command form | Throw; the UI names the reason |
 
 `busy` is what makes a turn-lock refusal structurally distinguishable from a script exiting non-zero — before it, `commandService` reported both the same way.
