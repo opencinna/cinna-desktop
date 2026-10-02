@@ -1,7 +1,7 @@
 import { useContext, useEffect, useState } from 'react'
 import { Bot, ChevronRight, Loader2, X } from 'lucide-react'
 import type { MessagePart } from '../../../../shared/messageParts'
-import { presetForAgentId } from '../../utils/agentColors'
+import { useAgentColor } from '../../utils/agentColors'
 import { AgentContribution, AskLine } from './AgentContribution'
 import { isPermissionRequestTool } from '../../../../shared/localAgentRequests'
 import { isAskUserQuestionTool } from '../../utils/askUserQuestion'
@@ -77,6 +77,7 @@ export function AgentToolSubThread({
   const expanded = userExpanded || !!holdOpen
   // The body stays mounted while closed, so blocks inside must know it is hidden.
   const visible = useContext(TranscriptVisibleContext)
+  const colorOf = useAgentColor()
 
   // Live → persisted transition: collapse once the agent sub-turn finishes
   // (unless verbose mode keeps everything open). Auto-open again if it goes
@@ -99,7 +100,7 @@ export function AgentToolSubThread({
   // Color by stable agent id when known so a given agent shows the same color
   // whether the model called it (here) or the user addressed it directly
   // (switchboard); fall back to the display name for legacy rows.
-  const color = presetForAgentId(agentId ?? agentName)
+  const color = colorOf(agentId ?? agentName)
   const steps = countSteps(parts)
   const statusLabel =
     status === 'pending' ? 'running' : status === 'error' ? 'error' : 'done'

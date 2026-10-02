@@ -9,7 +9,7 @@ import { useUpdateJob, useSetJobMcps, useSetJobAgents } from '../../hooks/useJob
 import { useCinnaAgents } from '../../hooks/useCinna'
 import { AgentPickerModal, type AgentPickerItem } from '../agents/AgentPickerModal'
 import { RouterBadge } from '../chat/RouterBadge'
-import { presetForAgentId } from '../../utils/agentColors'
+import { useAgentColor } from '../../utils/agentColors'
 import { getPreset, type ColorPreset } from '../../constants/chatModeColors'
 import { unwrapIpcError } from '../../utils/ipcError'
 
@@ -56,6 +56,7 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
   const updateJob = useUpdateJob()
   const setJobMcps = useSetJobMcps()
   const setJobAgents = useSetJobAgents()
+  const colorOf = useAgentColor()
 
   // Type is set once at creation (via the JobsList type-picker) and is
   // read-only afterwards — render-time branching keys off `job.type` directly.
@@ -340,7 +341,7 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
             <div className="flex flex-wrap items-center gap-1.5">
               {Array.from(agentIds).map((id) => {
                 const name = (agents ?? []).find((a) => a.id === id)?.name ?? 'Unknown agent'
-                const color = presetForAgentId(id)
+                const color = colorOf(id)
                 return (
                   <div
                     key={id}

@@ -109,6 +109,31 @@ export function registerAgentHandlers(): void {
     }
   )
 
+  // Color presets belong to the active profile too.
+  ipcHandle('agent:list-colors', async () => {
+    userActivation.requireActivated()
+    return agentService.listColors(getProfileScopeUserId())
+  })
+
+  ipcHandle(
+    'agent:set-color',
+    async (_event, data: { agentId: string; preset: string | null }) => {
+      userActivation.requireActivated()
+      try {
+        agentService.setColor(
+          getSettingsScopeUserId(),
+          getProfileScopeUserId(),
+          data.agentId,
+          data.preset
+        )
+        return { success: true as const }
+      } catch (err) {
+        const e = ipcErrorShape(err)
+        return { success: false as const, error: e.message }
+      }
+    }
+  )
+
   ipcHandle('agent:delete', async (_event, agentId: string) => {
     userActivation.requireActivated()
     try {

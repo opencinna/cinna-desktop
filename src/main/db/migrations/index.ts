@@ -17,6 +17,7 @@ import { migrateAgentRoots } from './agent-roots'
 import { migrateA2aSessions } from './a2a-sessions'
 import { migrateAgentOverrides } from './agent-overrides'
 import { migrateAgentShortcuts } from './agent-shortcuts'
+import { migrateAgentColors } from './agent-colors'
 import { migrateAgentMcpProviders } from './agent-mcp-providers'
 import { migrateAccountConfig } from './account-config'
 import { migrateUsers, migrateUserIdColumns } from './users'
@@ -83,6 +84,7 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateAccountConfig(sqlite)
   migrateAgentOverrides(sqlite)
   migrateAgentShortcuts(sqlite)
+  migrateAgentColors(sqlite)
   // Folder-agent MCP addons reference `agents` and `mcp_providers`; creation only.
   migrateAgentMcpProviders(sqlite)
   migrateA2aSessions(sqlite)

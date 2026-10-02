@@ -75,6 +75,8 @@ export type AgentErrorCode =
   | 'update_failed'
   /** A keyboard shortcut slot outside ⌘1–⌘9. */
   | 'invalid_shortcut'
+  /** A color preset id that is not in `AGENT_COLOR_PRESETS`. */
+  | 'invalid_color'
 
 export type AgentStatusErrorCode =
   | 'not_found'

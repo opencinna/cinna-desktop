@@ -14,6 +14,7 @@ import { MENU_ITEM } from '../agents/local/OpenInMenu'
 import { ChatItem } from './ChatItem'
 import { ChatGroupHeader } from './ChatGroupHeader'
 import { unwrapIpcError } from '../../utils/ipcError'
+import { useChosenAgentColor } from '../../utils/agentColors'
 import {
   canStartChat, chatGroupCollapsedByDefault, dayRank, dropRank, groupChats, groupKeysOf, isActiveChat, listRank, pinnedChats,
   pinnedRank, PINNED_GROUP, settleActiveIds, type DateBucket, type DateGroup
@@ -197,11 +198,17 @@ export function ChatList(): React.JSX.Element {
     const id = summaries?.[chat.id]?.with.agentId ?? chat.agentId
     return id && folderAgentIds.has(id) ? id : undefined
   }
+  // The dot before a row's title: the chosen color of the chat's main agent.
+  // Not under a "who" group header, which already says who the chat is with.
+  const chosenColor = useChosenAgentColor('fill')
+  const agentColorOf = (chat: ChatRow): string | undefined =>
+    chosenColor(summaries?.[chat.id]?.with.agentId ?? chat.agentId) ?? undefined
 
   // Each row's place in the list as drawn: it moves when a group above it
   // opens or closes, which is when an open tooltip must close.
   let position = 0
-  const rows = (group: string, list: ChatRow[], onDrop: ReturnType<typeof dropInto>): React.JSX.Element[] =>
+  // `underWho`: the rows sit under a "who" group header, so they take no dot.
+  const rows = (group: string, list: ChatRow[], onDrop: ReturnType<typeof dropInto>, underWho = false): React.JSX.Element[] =>
     list.map((chat) => (
       <ChatItem
         key={chat.id}
@@ -209,12 +216,14 @@ export function ChatList(): React.JSX.Element {
         summary={summaries?.[chat.id]}
         index={position++}
         folderAgentId={folderAgentOf(chat)}
+        agentColor={underWho ? undefined : agentColorOf(chat)}
         dragGroup={group}
         onDropChat={onDrop}
       />
     ))
-  const byList = (group: string, list: ChatRow[]): React.JSX.Element[] => rows(group, list, dropInto('chats', list, listRank))
-  const days = (groups: DateGroup<ChatRow>[]): React.JSX.Element[] =>
+  const byList = (group: string, list: ChatRow[], underWho = false): React.JSX.Element[] =>
+    rows(group, list, dropInto('chats', list, listRank), underWho)
+  const days = (groups: DateGroup<ChatRow>[], underWho = false): React.JSX.Element[] =>
     groups.map((group) => {
       const closed = isCollapsed(group, groups.length)
       return (
@@ -226,7 +235,7 @@ export function ChatList(): React.JSX.Element {
           />
           {!closed && (
             <div className="pl-3 space-y-px">
-              {rows(group.key, group.chats, dropInto('chats', group.chats, (chat) => dayRank(chat, summaries?.[chat.id])))}
+              {rows(group.key, group.chats, dropInto('chats', group.chats, (chat) => dayRank(chat, summaries?.[chat.id])), underWho)}
             </div>
           )}
         </div>
@@ -289,6 +298,7 @@ export function ChatList(): React.JSX.Element {
                       summary={summaries?.[chat.id]}
                       index={position++}
                       folderAgentId={folderAgentOf(chat)}
+                      agentColor={agentColorOf(chat)}
                       onOpen={() => { openedFromActive.current = chat.id }}
                     />
                   ))}
@@ -323,7 +333,7 @@ export function ChatList(): React.JSX.Element {
                     />
                     {!closed && (
                       <div className="pl-3 space-y-px">
-                        {group.dates ? days(group.dates) : byList(group.key, group.chats)}
+                        {group.dates ? days(group.dates, true) : byList(group.key, group.chats, true)}
                       </div>
                     )}
                   </div>

@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useAgents, useChatOnDemandAgents, useRemoveOnDemandAgent } from '../../hooks/useAgents'
-import { presetForAgentId } from '../../utils/agentColors'
+import { useAgentColor } from '../../utils/agentColors'
 import { canConduct } from '../../../../shared/chatRouting'
 import { ACCENT_CHIP, AgentChip, type ChipCoordinatorAction } from './AgentChip'
 
@@ -60,6 +60,7 @@ export function OnDemandAgentChips(
   const { data: agents } = useAgents()
   const dbOnDemand = useChatOnDemandAgents(props.chatId ?? null)
   const removeFromChat = useRemoveOnDemandAgent()
+  const colorOf = useAgentColor()
 
   const ids = useMemo(() => {
     if (props.chatId) return (dbOnDemand.data ?? []).map((r) => r.agentId)
@@ -121,7 +122,7 @@ export function OnDemandAgentChips(
             // Per-agent hash color — the same identity color the agent uses in
             // the chat window (sub-thread header, bubbles), so the footer chip
             // and the in-transcript rendering match.
-            colors={presetForAgentId(a.id)}
+            colors={colorOf(a.id)}
             coordinator={coordinator}
             addressed={addressed}
             label={label}

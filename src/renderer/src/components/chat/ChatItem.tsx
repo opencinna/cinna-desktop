@@ -50,9 +50,15 @@ interface ChatItemProps {
   onDropChat?: (draggedId: string, targetId: string, place: 'before' | 'after') => void
   /** The user opened this chat from this row (a click, not a remote open). */
   onOpen?: () => void
+  /**
+   * The chosen color of the chat's main agent, drawn as a dot before the
+   * title. Only for a row not under that agent's group header, which carries
+   * the color itself.
+   */
+  agentColor?: string
 }
 
-export function ChatItem({ chat, summary: loaded, index, folderAgentId, dragGroup, onDropChat, onOpen }: ChatItemProps): React.JSX.Element {
+export function ChatItem({ chat, summary: loaded, index, folderAgentId, dragGroup, onDropChat, onOpen, agentColor }: ChatItemProps): React.JSX.Element {
   const activeChatId = useChatStore((s) => s.activeChatId)
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
   const setActiveView = useUIStore((s) => s.setActiveView)
@@ -271,6 +277,15 @@ export function ChatItem({ chat, summary: loaded, index, folderAgentId, dragGrou
           aria-hidden="true"
           data-drop-indicator={dropPlace}
           className={`pointer-events-none absolute inset-x-1 h-0.5 rounded-full bg-[var(--color-accent)] ${dropPlace === 'before' ? '-top-px' : '-bottom-px'}`}
+        />
+      )}
+      {/* In the row's left padding, so a dot arriving or going never moves the title. */}
+      {agentColor && (
+        <span
+          aria-hidden="true"
+          data-agent-color-dot
+          className="pointer-events-none absolute left-[3px] top-1/2 -translate-y-1/2 w-1 h-1 rounded-full"
+          style={{ backgroundColor: agentColor }}
         />
       )}
       {renaming ? (

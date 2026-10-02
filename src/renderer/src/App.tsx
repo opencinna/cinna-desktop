@@ -15,6 +15,7 @@ import { AgentsHomeModal } from './components/agents/local/AgentsHomeModal'
 import { SyncSetupModal } from './components/sync/SyncSetupModal'
 import { LogsOverlay } from './components/logger/LogsOverlay'
 import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
+import { AgentColorsProvider } from './components/agents/AgentColorsProvider'
 import { FilePreviewModal } from './components/chat/FilePreviewModal'
 import { useAuthStore } from './stores/auth.store'
 import { flagReauthFromError } from './stores/reauth.store'
@@ -208,6 +209,7 @@ function App(): React.JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthGate>
+        <AgentColorsProvider>
         <OnboardingGate>
           <Shell />
           {/* Inside the gate on purpose: its children render only once first
@@ -230,6 +232,7 @@ function App(): React.JSX.Element {
         <CatalogSetupHost />
         <SyncSetupModal />
         <FilePreviewModal />
+        </AgentColorsProvider>
       </AuthGate>
     </QueryClientProvider>
   )

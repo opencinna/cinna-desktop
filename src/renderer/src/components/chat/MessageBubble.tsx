@@ -51,7 +51,7 @@ const MarkdownContent = memo(function MarkdownContent({
     </>
   )
 })
-import { presetForAgentId } from '../../utils/agentColors'
+import { useAgentColor } from '../../utils/agentColors'
 import { AttachmentList, type AttachmentBadgeData } from './AttachmentBadge'
 import { useFileDownload } from '../../hooks/useFileDownload'
 import { useAttachmentOpen } from '../../hooks/useAttachmentOpen'
@@ -97,8 +97,9 @@ export function MessageBubble({
   const isUser = role === 'user'
   const [showMeta, setShowMeta] = useState(false)
   const hasMeta = meta && Object.keys(meta).length > 0
-  const agentColor = agentId ? presetForAgentId(agentId) : null
-  const addressedColor = addressedAgentId ? presetForAgentId(addressedAgentId) : null
+  const colorOf = useAgentColor()
+  const agentColor = agentId ? colorOf(agentId) : null
+  const addressedColor = addressedAgentId ? colorOf(addressedAgentId) : null
   // Download state is store-backed (see fileDownload.store) — every bubble
   // reads from the same source so the spinner and error stay consistent
   // across the whole message stream. Each bubble only renders the error

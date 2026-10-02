@@ -7,6 +7,7 @@ import {
   a2aSessions,
   agentOverrides,
   agentShortcuts,
+  agentColors,
   chatOnDemandAgents,
   chats,
   jobAgents,
@@ -38,6 +39,7 @@ export type AgentRow = typeof agents.$inferSelect
 export type A2ASessionRow = typeof a2aSessions.$inferSelect
 export type AgentOverrideRow = typeof agentOverrides.$inferSelect
 export type AgentShortcutRow = typeof agentShortcuts.$inferSelect
+export type AgentColorRow = typeof agentColors.$inferSelect
 
 export interface CreateAgentInput {
   id?: string
@@ -685,6 +687,15 @@ export const agentRepo = {
           .where(eq(agentShortcuts.agentId, oldId))
           .run().changes
       )
+      // Same for the color: keyed by the profile that chose it.
+      count(
+        'agent_colors',
+        tx
+          .update(agentColors)
+          .set({ agentId: newId })
+          .where(eq(agentColors.agentId, oldId))
+          .run().changes
+      )
       // Message-level attributions: which agent a turn was addressed to, which
       // produced it, which backs an orchestrated tool call. They drive the
       // per-agent colour and the sub-thread grouping, so a stale id here is a
@@ -862,6 +873,44 @@ export const agentShortcutRepo = {
    */
   deleteForAgent(agentId: string): void {
     getDb().delete(agentShortcuts).where(eq(agentShortcuts.agentId, agentId)).run()
+  }
+}
+
+/**
+ * Per-profile color preset of an agent. One row per agent and profile; no row
+ * means None. Callers validate the preset id.
+ */
+export const agentColorRepo = {
+  listForUser(userId: string): AgentColorRow[] {
+    return getDb().select().from(agentColors).where(eq(agentColors.userId, userId)).all()
+  },
+
+  /** Choose `preset` for `agentId`, or clear it back to None with `null`. */
+  set(userId: string, agentId: string, preset: string | null): void {
+    if (preset === null) {
+      getDb()
+        .delete(agentColors)
+        .where(and(eq(agentColors.userId, userId), eq(agentColors.agentId, agentId)))
+        .run()
+      return
+    }
+    const updatedAt = new Date()
+    getDb()
+      .insert(agentColors)
+      .values({ userId, agentId, preset, updatedAt })
+      .onConflictDoUpdate({
+        target: [agentColors.userId, agentColors.agentId],
+        set: { preset, updatedAt }
+      })
+      .run()
+  },
+
+  /**
+   * Drop a deleted agent's color in every profile. Only for agents that are
+   * really gone: a remote row sync drops may come back with the same id.
+   */
+  deleteForAgent(agentId: string): void {
+    getDb().delete(agentColors).where(eq(agentColors.agentId, agentId)).run()
   }
 }
 

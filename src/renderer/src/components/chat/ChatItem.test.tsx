@@ -317,3 +317,16 @@ it('glows on some openings only, and never with Extra UI animation off', () => {
   expect(screen.getByRole('tooltip').hasAttribute('data-ambient-glow')).toBe(false)
   chance.mockRestore()
 })
+
+it('draws the main agent\'s color as a dot before the title only when it is given one', () => {
+  const view = render(<QueryClientProvider client={client}><ChatItem chat={chat} /></QueryClientProvider>)
+  const rowEl = view.container.querySelector(`[data-chat-row="${chat.id}"]`)!
+  expect(rowEl.querySelector('[data-agent-color-dot]')).toBeNull()
+
+  view.rerender(<QueryClientProvider client={client}><ChatItem chat={chat} agentColor="#44AFB0" /></QueryClientProvider>)
+  const dot = rowEl.querySelector<HTMLElement>('[data-agent-color-dot]')!
+  expect(dot.getAttribute('aria-hidden')).toBe('true')
+  expect(dot.style.backgroundColor).toBe('rgb(68, 175, 176)')
+  // Immediately left of the title.
+  expect(dot.nextElementSibling?.textContent).toBe(chat.title)
+})

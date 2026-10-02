@@ -16,7 +16,7 @@ function AgentVisibilityRow({ agent }: { agent: RemoteAgent }): React.JSX.Elemen
   const [error, setError] = useState<string | null>(null)
   return <div className="px-4 py-3">
     <div className="flex items-center gap-3">
-      <AgentTypeIcon agent={agent} size={16} />
+      <AgentTypeIcon agent={agent} agentId={agent.id} size={16} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-xs font-medium">{agent.name}</div>
         <p className="mt-0.5 truncate text-[11px] text-[var(--color-text-muted)]">{agent.enabled ? agent.description || 'Shown in Desktop' : 'Hidden from Desktop'}</p>

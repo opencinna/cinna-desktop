@@ -235,7 +235,7 @@ export function LocalAgentPage(): React.JSX.Element {
         <header className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <h1 className="flex items-center gap-2 text-xl font-semibold text-[var(--color-text)]">
-              <AgentTypeIcon agent={{ source: 'folder' }} size={18} />
+              <AgentTypeIcon agent={{ source: 'folder' }} agentId={agent.id} size={18} />
               <span className="truncate">{agent.name}</span>
             </h1>
             {hasDescription ? (

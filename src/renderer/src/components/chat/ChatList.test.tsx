@@ -39,6 +39,7 @@ vi.mock('../../hooks/useLocalAgents', () => ({
 }))
 
 const { ChatList } = await import('./ChatList')
+const { AgentColorsContext } = await import('../../utils/agentColors')
 const { listRank } = await import('./chatGroups')
 const { useUIStore } = await import('../../stores/ui.store')
 const { useChatStore } = await import('../../stores/chat.store')
@@ -613,5 +614,56 @@ describe('the Active block', () => {
 
     fireEvent.keyDown(input, { key: 'Escape' })
     await waitFor(() => expect(activeTitles()).toEqual(['Pinned busy']))
+  })
+})
+
+describe('the main agent\'s color dot', () => {
+  const minute = 60_000
+  const base = Date.now()
+  const rows = [
+    { id: 'd-1', title: 'Pinned writer', agentId: 'a-writer', modeId: null, pinnedRank: 1, sortKey: null, updatedAt: new Date(base), createdAt: new Date() },
+    { id: 'd-2', title: 'Writer chat', agentId: 'a-writer', modeId: null, pinnedRank: null, sortKey: null, updatedAt: new Date(base - minute), createdAt: new Date() },
+    { id: 'd-3', title: 'Notes chat', agentId: 'folder:notes', modeId: null, pinnedRank: null, sortKey: null, updatedAt: new Date(base - 2 * minute), createdAt: new Date() },
+    // The row's own agent is not the main one: the summary's is.
+    { id: 'd-4', title: 'Handed to writer', agentId: 'folder:notes', modeId: null, pinnedRank: null, sortKey: null, updatedAt: new Date(base - 3 * minute), createdAt: new Date() }
+  ]
+  beforeEach(() => {
+    list.mockResolvedValue(rows)
+    listSummaries.mockResolvedValue({
+      // Today, so date grouping draws it in the open Today group.
+      'd-4': { ...summary, firstMessageAt: new Date(), lastMessageAt: new Date(), with: { kind: 'agent', name: 'Writer', color: null, agentId: 'a-writer' } }
+    })
+  })
+  const dotted = (): string[] =>
+    [...document.querySelectorAll('[data-chat-row]')]
+      .filter((row) => row.querySelector('[data-agent-color-dot]'))
+      .map((row) => row.textContent ?? '')
+      .sort()
+
+  async function shown() {
+    render(
+      <AgentColorsContext.Provider value={new Map([['a-writer', '#44AFB0']])}>
+        {view()}
+      </AgentColorsContext.Provider>
+    )
+    await waitFor(() => expect(client.getQueryData(['chats', 'summaries'])).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Handed to writer')).toBeTruthy())
+  }
+
+  it('marks rows of an agent with a chosen color, ungrouped and grouped by date, and none of an agent without one', async () => {
+    await shown()
+    await waitFor(() => expect(dotted()).toEqual(['Handed to writer', 'Pinned writer', 'Writer chat']))
+    act(() => useUIStore.setState({ chatGroupByDate: true }))
+    expect(screen.getByRole('button', { name: 'Today', expanded: true })).toBeTruthy()
+    expect(dotted()).toEqual(['Handed to writer', 'Pinned writer', 'Writer chat'])
+  })
+
+  it('leaves rows under a group header undotted — the header carries the color — but not Pinned', async () => {
+    await shown()
+    act(() => useUIStore.setState({ chatGroupByAgent: true }))
+    expect(screen.getByText('Writer chat')).toBeTruthy()
+    expect(dotted()).toEqual(['Pinned writer'])
+    act(() => useUIStore.setState({ chatGroupByAgent: true, chatGroupByDate: true }))
+    expect(dotted()).toEqual(['Pinned writer'])
   })
 })

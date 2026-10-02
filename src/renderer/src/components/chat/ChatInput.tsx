@@ -33,7 +33,7 @@ import { useChatComposer } from '../../hooks/useChatComposer'
 import { ActiveMcpChips } from './ActiveMcpChips'
 import { CANNOT_CONDUCT_REASON, OnDemandAgentChips, type ChipCoordinatorMenu } from './OnDemandAgentChips'
 import { ACCENT_CHIP, AgentChip, AgentChipMenuHost } from './AgentChip'
-import { presetForAgentId } from '../../utils/agentColors'
+import { useAgentColor } from '../../utils/agentColors'
 import { RouterBadge, type RouterBadgeInfo } from './RouterBadge'
 import { SessionMetaBadges } from './SessionMetaBadges'
 import { canConduct, routingOf } from '../../../../shared/chatRouting'
@@ -255,6 +255,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // second Enter fired during the `attachNotesAsync` await — this ref does.
   const { data: chatData } = useChatDetail(chatId)
   const { data: agents } = useAgents()
+  const colorOf = useAgentColor()
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   // Hint bar telemetry. Every call is "the user just did X" — the store decides
   // whether that retires a hint, fires a contextual one, or neither. Emitting
@@ -1883,7 +1884,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 name={boundAgent.name}
                 // The hidden runtime has no identity to colour by; an agent the
                 // user picked keeps its own colour as coordinator too.
-                colors={boundAgent.conductor ? ACCENT_CHIP : presetForAgentId(boundAgent.id)}
+                colors={boundAgent.conductor ? ACCENT_CHIP : colorOf(boundAgent.id)}
                 coordinator={chatRouting.router === 'coordinator'}
                 label={chatRouting.router === 'coordinator' ? `${boundAgent.name} — Coordinator` : boundAgent.name}
                 // A hidden runtime conductor has no page, no folder and no role to hand over.

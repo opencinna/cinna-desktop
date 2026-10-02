@@ -17,6 +17,7 @@ import { useAgents } from '../../../hooks/useAgents'
 import { A2AAgentForm } from '../../settings/A2AAgentForm'
 import { serverLabel } from '../../../utils/agentNavigation'
 import { AgentTypeIcon } from '../AgentTypeIcon'
+import { useChosenAgentColor } from '../../../utils/agentColors'
 import { useAuthStore } from '../../../stores/auth.store'
 import { CatalogBrowserModal } from '../CatalogBrowserModal'
 import { useCatalogInstall } from '../../../hooks/useCatalogInstall'
@@ -53,7 +54,7 @@ function AgentChatShortcut({ agentId, name, available = true }: {
   )
 }
 
-function AgentRow({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+function AgentRow({ agent, color }: { agent: LocalAgentDto; color: string | null }): React.JSX.Element {
   const activeLocalAgentId = useUIStore((s) => s.activeLocalAgentId)
   const setAgentPageMode = useUIStore((s) => s.setAgentPageMode)
   const activeView = useUIStore((s) => s.activeView)
@@ -97,7 +98,7 @@ function AgentRow({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
         type="button"
         className="min-w-0 flex-1 text-left flex items-start gap-1.5 pl-2.5 py-1.5 rounded-md"
       >
-        <AgentTypeIcon agent={{ source: 'folder' }} className="mt-0.5" />
+        <AgentTypeIcon agent={{ source: 'folder' }} color={color} className="mt-0.5" />
         <span className="min-w-0 flex-1 truncate text-xs">{agent.name}</span>
       </button>
       {/*
@@ -111,8 +112,9 @@ function AgentRow({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
   )
 }
 
-function ExternalAgentRow({ agent, active, onClick }: {
+function ExternalAgentRow({ agent, color, active, onClick }: {
   agent: Awaited<ReturnType<typeof window.api.agents.list>>[number]
+  color: string | null
   active: boolean
   onClick: () => void
 }): React.JSX.Element {
@@ -124,7 +126,7 @@ function ExternalAgentRow({ agent, active, onClick }: {
           : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'
       }`}>
       <button type="button" className="flex min-w-0 flex-1 items-start gap-1.5 rounded-md pl-2.5 py-1.5 text-left">
-        <AgentTypeIcon agent={agent} className="mt-0.5" />
+        <AgentTypeIcon agent={agent} color={color} className="mt-0.5" />
         <span className="min-w-0 flex-1 truncate text-xs">{agent.name}</span>
       </button>
       <AgentChatShortcut agentId={agent.id} name={agent.name} available={agent.enabled} />
@@ -146,6 +148,8 @@ export function LocalAgentsList(): React.JSX.Element {
   const activeView = useUIStore((s) => s.activeView)
   const setActiveExternalAgentId = useUIStore((s) => s.setActiveExternalAgentId)
   const setActiveView = useUIStore((s) => s.setActiveView)
+  // The color the user chose for an agent tints its icon; None leaves it muted.
+  const colorOf = useChosenAgentColor()
   const [addingA2A, setAddingA2A] = useState(false)
   const [creating, setCreating] = useState(false)
   const [managed, setManaged] = useState<string | true | null>(null)
@@ -230,6 +234,7 @@ export function LocalAgentsList(): React.JSX.Element {
                       <AgentRow
                         key={agent.id}
                         agent={agent}
+                        color={colorOf(agent.id)}
                       />
                     ))}
                   </div>
@@ -240,7 +245,7 @@ export function LocalAgentsList(): React.JSX.Element {
   const renderExternalGroup = (label: string, agents: typeof remoteAgents): React.JSX.Element => (
     <div className={showSections ? 'px-1.5 py-1 space-y-px' : 'px-1.5'}>
       {showSections && <div className="px-2.5 pb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] truncate">{label}</div>}
-      {agents.map((agent) => <ExternalAgentRow key={agent.id} agent={agent}
+      {agents.map((agent) => <ExternalAgentRow key={agent.id} agent={agent} color={colorOf(agent.id)}
         active={activeView === 'external-agent' && activeExternalAgentId === agent.id}
         onClick={() => openExternalAgent(agent.id)}
       />)}

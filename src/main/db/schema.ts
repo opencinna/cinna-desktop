@@ -442,6 +442,25 @@ export const agentShortcuts = sqliteTable(
 )
 
 /**
+ * Per-profile color preset of an agent (ids in `src/shared/agentColors.ts`).
+ * Kept out of {@link agentOverrides} for the reason {@link agentShortcuts} is:
+ * an override row carries `enabled`. No row means None — see
+ * `migrations/agent-colors.ts`.
+ */
+export const agentColors = sqliteTable(
+  'agent_colors',
+  {
+    userId: text('user_id').notNull(),
+    agentId: text('agent_id').notNull(),
+    preset: text('preset').notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date())
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.agentId] })]
+)
+
+/**
  * Per-profile enable/disable preference for sync-managed LLM providers and
  * chat modes (materialized from the Cinna account-config endpoint). The synced
  * rows in `llm_providers` / `chat_modes` are owned by account-config sync, so

@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Bot, CornerDownRight } from 'lucide-react'
 import type { MessagePart } from '../../../../shared/messageParts'
-import { presetForAgentId } from '../../utils/agentColors'
+import { useAgentColor } from '../../utils/agentColors'
 import { MessageBubble } from './MessageBubble'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolNarrationBlock } from './ToolNarrationBlock'
@@ -107,7 +107,8 @@ export function AgentContribution({
   renderRequest,
   renderNested
 }: AgentContributionProps): React.JSX.Element {
-  const color = agentName || agentId ? presetForAgentId(agentId ?? agentName ?? '') : null
+  const colorOf = useAgentColor()
+  const color = agentName || agentId ? colorOf(agentId ?? agentName ?? '') : null
   const lastIdx = parts.length - 1
 
   const renderNodes: RenderNode[] = []

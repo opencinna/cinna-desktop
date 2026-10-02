@@ -57,7 +57,7 @@ export function ExternalAgentPage(): React.JSX.Element {
         {agent ? <>
           <header className="flex items-start gap-3">
             <div className="min-w-0 flex-1">
-              <h1 className="flex items-center gap-2 text-xl font-semibold"><AgentTypeIcon agent={agent} size={18} /><span className="truncate">{agent.name}</span></h1>
+              <h1 className="flex items-center gap-2 text-xl font-semibold"><AgentTypeIcon agent={agent} agentId={agent.id} size={18} /><span className="truncate">{agent.name}</span></h1>
               {agent.description && <p className="mt-1 text-xs text-[var(--color-text-secondary)] line-clamp-2">{agent.description}</p>}
               <p className="mt-1 text-[11px] text-[var(--color-text-muted)]">{agent.source === 'remote' && profile?.cinnaServerUrl
                 ? <a href={profile.cinnaServerUrl} onClick={(event) => {

@@ -1,8 +1,16 @@
 import { runtimeHost } from '../host/runtimeHost'
 import { isDevelopmentAgent } from '../../shared/developmentSession'
 import { isAgentEngine, type AgentEngine } from '../../shared/engine'
-import { agentRepo, agentOverrideRepo, agentShortcutRepo, AgentRow, RemoteTarget } from '../db/agents'
+import {
+  agentRepo,
+  agentOverrideRepo,
+  agentShortcutRepo,
+  agentColorRepo,
+  AgentRow,
+  RemoteTarget
+} from '../db/agents'
 import { isAgentShortcutSlot, type AgentShortcutDto } from '../../shared/appShortcuts'
+import { isAgentColorPreset, type AgentColorDto } from '../../shared/agentColors'
 import { userRepo } from '../db/users'
 import { encryptApiKey } from '../security/keystore'
 import { fetchAgentCard, resolveProtocol, type ProtocolResolution } from '../agents/a2a-client'
@@ -294,6 +302,37 @@ export const agentService = {
     logger.info('agent shortcut set', { agentId, slot })
   },
 
+  /** The active profile's chosen agent colors; agents left at None are absent. */
+  listColors(profileUserId: string): AgentColorDto[] {
+    return agentColorRepo
+      .listForUser(profileUserId)
+      .map((row) => ({ agentId: row.agentId, preset: row.preset }))
+  },
+
+  /**
+   * Give an agent a color preset for the active profile, or clear it back to
+   * None with `null`. Choosing needs the agent to exist in this profile's view;
+   * clearing does not, so a color whose agent is gone can still be removed.
+   */
+  setColor(
+    defaultUserId: string,
+    profileUserId: string,
+    agentId: string,
+    preset: string | null
+  ): void {
+    if (typeof agentId !== 'string' || agentId === '') {
+      throw new AgentError('invalid_id', 'Agent id is required')
+    }
+    if (preset !== null && !isAgentColorPreset(preset)) {
+      throw new AgentError('invalid_color', 'Choose one of the listed colors')
+    }
+    if (preset !== null && !this.findAgent(defaultUserId, profileUserId, agentId)) {
+      throw new AgentError('not_found', 'Agent not found')
+    }
+    agentColorRepo.set(profileUserId, agentId, preset)
+    logger.info('agent color set', { agentId, preset })
+  },
+
   /**
    * Toggle the enabled flag for an agent. Default-scope agents — hand-added A2A
    * and folder agents — update the row directly; remote (sync-managed) agents
@@ -413,6 +452,7 @@ export const agentService = {
     }
     agentRepo.delete(userId, agentId)
     agentShortcutRepo.deleteForAgent(agentId)
+    agentColorRepo.deleteForAgent(agentId)
     agentReadinessService.forget(agentId)
     logger.info('agent deleted', { agentId })
   },

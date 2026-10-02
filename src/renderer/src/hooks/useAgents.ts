@@ -78,6 +78,34 @@ export function useSetAgentShortcut() {
 }
 
 /**
+ * The active profile's chosen agent colors. Under the `['agents']` prefix for
+ * the reason {@link AGENT_SHORTCUTS_KEY} is: agents invalidations and a profile
+ * switch re-read it.
+ */
+export const AGENT_COLORS_KEY = ['agents', 'colors'] as const
+
+export function useAgentColors() {
+  return useQuery({
+    queryKey: AGENT_COLORS_KEY,
+    queryFn: () => window.api.agents.listColors()
+  })
+}
+
+/** Give an agent a color preset, or clear it with `null`; errors come back as data. */
+export function useSetAgentColor() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ agentId, preset }: { agentId: string; preset: string | null }) => {
+      const res = await window.api.agents.setColor(agentId, preset)
+      if (!res.success) throw new Error(res.error ?? 'Could not save the color.')
+      return res
+    },
+    // Returned, so the swatches keep the choice until the list has re-read.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: AGENT_COLORS_KEY })
+  })
+}
+
+/**
  * Ask one agent's driver again whether it can take a turn — "Check again" in
  * the composer, and the Settings card's Test.
  *

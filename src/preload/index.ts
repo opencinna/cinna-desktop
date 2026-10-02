@@ -708,6 +708,15 @@ const api = {
       slot: number | null
     ): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('agent:set-shortcut', { agentId, slot }),
+    /** The active profile's chosen agent color presets. */
+    listColors: (): Promise<import('../shared/agentColors').AgentColorDto[]> =>
+      ipcRenderer.invoke('agent:list-colors'),
+    /** Give an agent a color preset, or clear it back to None with `null`. */
+    setColor: (
+      agentId: string,
+      preset: string | null
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('agent:set-color', { agentId, preset }),
     syncRemote: (): Promise<{
       success: boolean
       synced?: number

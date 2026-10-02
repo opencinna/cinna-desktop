@@ -4,6 +4,7 @@ import { MessageSquare } from 'lucide-react'
 import type { ChatListSummary } from '../../../../shared/chatListSummary'
 import { getPreset } from '../../constants/chatModeColors'
 import { AgentTypeIcon } from '../agents/AgentTypeIcon'
+import { useChosenAgentColor } from '../../utils/agentColors'
 import { useUIStore } from '../../stores/ui.store'
 import { formatChatLasted, formatChatOthers, formatChatStarted } from '../../utils/chatSummaryFormat'
 
@@ -23,12 +24,15 @@ interface ChatItemTooltipProps {
 }
 
 /**
- * An agent's type icon, as the Agents list shows it; a chat otherwise, in its
- * mode's colour. Also the Chats list's group headers.
+ * An agent's type icon, as the Agents list shows it — in the agent's chosen
+ * color, if it has one; a chat otherwise, in its mode's colour. Also the Chats
+ * list's group headers.
  */
 export function WhoIcon({ who, className = 'mt-0.5' }: { who: ChatListSummary['with']; className?: string }): React.JSX.Element {
+  const chosenColor = useChosenAgentColor()
   if (who.kind === 'agent') {
-    return <AgentTypeIcon agent={{ source: who.source ?? '', driver: who.driver, protocol: who.protocol, acpTransport: who.acpTransport }} size={12} className={`${className} pointer-events-none`} />
+    return <AgentTypeIcon agent={{ source: who.source ?? '', driver: who.driver, protocol: who.protocol, acpTransport: who.acpTransport }} size={12}
+      color={chosenColor(who.agentId)} className={`${className} pointer-events-none`} />
   }
   const color = who.kind === 'mode' && who.color ? getPreset(who.color).border : 'var(--color-text-muted)'
   return <MessageSquare size={12} aria-hidden="true" className={`${className} shrink-0`} style={{ color }} />
