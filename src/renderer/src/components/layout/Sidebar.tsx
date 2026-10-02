@@ -132,7 +132,7 @@ export function Sidebar(): React.JSX.Element {
               </button>
             </div>
 
-            <div className="flex-1 px-2 overflow-y-auto">
+            <div className="app-scroll-fade flex-1 px-2 overflow-y-auto">
               <div className="px-2 pt-1 pb-2">
                 <h2 className="text-sm font-semibold text-[var(--color-text)]">Default</h2>
               </div>

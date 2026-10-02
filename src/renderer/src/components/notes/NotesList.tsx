@@ -150,7 +150,7 @@ export function NotesList(): React.JSX.Element {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="app-scroll-fade flex-1 overflow-y-auto">
           {isLoading ? (
             <div className="px-2.5 py-2 text-xs text-[var(--color-text-muted)]">Loading...</div>
           ) : !notes || (notes.length === 0 && (folders ?? []).length === 0) ? (

@@ -261,7 +261,7 @@ export function ChatList(): React.JSX.Element {
         </div>
       )}
       <div
-        className="flex-1 overflow-y-auto"
+        className="app-scroll-fade flex-1 overflow-y-auto"
         onMouseMove={pointerIn.onMouseMove}
       >
         {isLoading ? (

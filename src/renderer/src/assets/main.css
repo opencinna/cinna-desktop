@@ -187,6 +187,14 @@
     border-radius: 14px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
   }
+  /* Sidebar list scrollers fade into the header above and the footer below,
+     like the transcript under the top bar, instead of a hard cut. The padding
+     keeps the first and last row clear of the fade at rest. */
+  .app-scroll-fade {
+    padding-block: 6px;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 10px, black calc(100% - 10px), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, black 10px, black calc(100% - 10px), transparent 100%);
+  }
   [data-theme="dark"] .app-sidebar {
     background-color: rgba(0, 0, 0, 0.82);
     -webkit-backdrop-filter: blur(10px);
