@@ -24,7 +24,7 @@
 | `src/renderer/src/components/layout/ChatWorkspace.tsx` | Wires `onDoubleEscape={() => setPendingAgentIds([])}` on the new-chat `ChatInput` instance only. The active-chat instance omits the prop; there the chord reaches `ChatInput`'s own stop branch instead, and only while a turn runs. |
 | `src/renderer/src/components/logger/LogsOverlay.tsx` | `useEffect` attaches a `window` `keydown` listener gated on `logsOpen`; `Escape` closes the overlay via `setLogsOpen(false)`. |
 | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` | `useEffect` attaches a `window` `keydown` listener gated on `agentStatusOpen`; `Escape` back-navigates if `detailAgentId` is set, otherwise closes the overlay. |
-| `src/renderer/src/components/agents/AgentInterfaceTab.tsx` | The agent page's Interface tab. A `SettingsSection` "Keyboard shortcut" with one `select` (None, `⌘1`–`⌘9`); an option held by another agent is labelled `agentShortcutLabel(slot) · truncateName(name)`. While the mutation is pending the select shows `setShortcut.variables.slot`, not the saved value, so it never snaps back before the list re-reads. Errors render as `role="alert"` under the select through `unwrapIpcError`. Mounted with `key={agent.id}` by `ExternalAgentPage` (`tab === 'interface'`) and `LocalAgentPage` (`activeTab === 'interface'`, last `TABS` entry, also on bare agents). |
+| `src/renderer/src/components/agents/AgentInterfaceTab.tsx` | The agent page's Interface tab. Its first section, a `SettingsSection` "Keyboard shortcut" with one `select` (None, `⌘1`–`⌘9`); an option held by another agent is labelled `agentShortcutLabel(slot) · truncateName(name)`. While the mutation is pending the select shows `setShortcut.variables.slot`, not the saved value, so it never snaps back before the list re-reads. Errors render as `role="alert"` under the select through `unwrapIpcError`. Mounted with `key={agent.id}` by `ExternalAgentPage` (`tab === 'interface'`) and `LocalAgentPage` (`activeTab === 'interface'`, last `TABS` entry, also on bare agents). The second section, "Color" (`AgentColorSection`), is documented in [Agent Colors — Technical Details](../../agents/agents/agent_colors_tech.md). |
 | `src/renderer/src/components/settings/ChatModeCard.tsx` | Inline `onKeyDown` on the mode-name input: `Enter` calls `e.currentTarget.blur()` to commit the edit. |
 | `src/renderer/src/components/chat/AgentMentionPopup.tsx` / `ExamplePromptPopup.tsx` | Render-only — they own no key handling. All navigation keys are processed by `ChatInput.handleKeyDown` and the popups receive `selectedIndex` / `onSelect` / `onClose` as props. |
 
@@ -65,6 +65,8 @@
 | `app:shortcut` | main → renderer | `AppShortcut` payload from the File menu's chat-starting items. |
 | `agent:list-shortcuts` | renderer → main | `() → AgentShortcutDto[]` for the active profile (`getProfileScopeUserId()`), ordered by slot. Requires an activated user. |
 | `agent:set-shortcut` | renderer → main | `({agentId, slot: number \| null}) → {success, error?}`. Validates the id (`invalid_id`), the slot (`invalid_shortcut`) and — only when binding — that `findAgent(default, profile, agentId)` resolves (`not_found`). Clearing needs no agent, so a binding whose agent is gone can still be removed. Errors are returned as data, not thrown. |
+
+The Interface tab's other pair, `agent:list-colors` / `agent:set-color`, follows the same shape over the `agent_colors` table — see [Agent Colors — Technical Details](../../agents/agents/agent_colors_tech.md#ipc-channels).
 
 ## Key Flows
 

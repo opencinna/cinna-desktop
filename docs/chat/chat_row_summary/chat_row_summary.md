@@ -8,7 +8,7 @@ Hovering a conversation in the sidebar's Chats list shows, beside the row, who t
 
 - **Summary** — per listed chat: who it is with, which other agents took part, when it started, and how long it lasted over how many messages. Resolved in the main process and fixed for a given state of the chat; nothing arrives after the tooltip opens.
 - **Who line** — the first line. One of three things, or absent:
-  - an **agent** — its type icon (the same one the Agents list draws) and its name;
+  - an **agent** — its type icon (the same one the Agents list draws, in the agent's chosen [color](../../agents/agents/agent_colors.md) if it has one) and its name;
   - a **chat mode** — a chat icon tinted with the mode's colour, the mode's name, and a small "chat mode" tag;
   - a **model id** — for a chat with neither, with an untinted chat icon;
   - nothing, when the chat has no model either.

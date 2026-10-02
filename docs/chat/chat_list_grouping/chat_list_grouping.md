@@ -8,7 +8,7 @@ The sidebar's Chats list can be grouped by who each chat is with, by the day of 
 
 - **Chats list options menu** — the list-icon button beside **+** in the Chats header, shown only while the pointer is on the header, the button has keyboard focus, or its menu is open (opacity only, so nothing shifts). Two independent switches, **Group by Agent** and **Group by Date**, each checked while on. Either, both or neither; neither is one flat list. Both off is the default. Below a separator, a third switch, **Show Active group**, off by default, draws running and unread chats in their own block above everything — see [the Active block](active_block.md).
 - **Who group** — one per counterpart, the same counterpart the [row summary](../chat_row_summary/chat_row_summary.md)'s who line names:
-  - an **agent** — its type icon and name;
+  - an **agent** — its type icon and name, the icon in the agent's [color](../../agents/agents/agent_colors.md) when the user chose one;
   - a **chat mode** — a chat icon in the mode's colour and the mode's name;
   - **Chat** — every chat with neither: plain chats with no mode, and chats whose agent or mode no longer exists. It is one group, not one per model.
 - **Day group** — **Today**, **Yesterday**, **Last Week** (two to seven days ago) and **Previous chats**, always in that order, empty days omitted. Placed by the chat's **last message**, not by when the row was last touched.
@@ -53,6 +53,7 @@ The sidebar's Chats list can be grouped by who each chat is with, by the day of 
 - **Nothing shifts under the pointer.** The start button has a fixed slot of its own; it is always rendered (invisible until hover or focus), so it is reachable by Tab and showing it moves nothing.
 - **Revealing only opens.** A reveal expands the groups it needs — only the Pinned block for a pinned chat, none for a chat in the [Active block](active_block.md) — and never collapses others; a chat that is not listed yet is found when the list is next read.
 - **An open row summary closes when a group above it opens or closes**, because the row has moved; it is positioned once, on opening.
+- **A row says who it is with by a dot only where no header does.** A chat whose main agent has a chosen [color](../../agents/agents/agent_colors.md) shows a small dot of that color before its title — in the flat list, under date groups alone, in Pinned and in the Active block. Under a who group, nested days included, the rows have no dot: the header's tinted icon already names the agent, and a dot on every row beneath it would only repeat it. An agent left at None gives no dot anywhere. The dot sits in the row's left padding, so a title never moves when a dot arrives or goes, and dotted and plain rows keep their titles aligned.
 - **Preferences are per machine, not per profile.** The three switches and the open/closed choices live in the renderer's local storage. Group keys carry agent and mode ids, so a key from another profile simply matches nothing. Keys of groups that no longer exist are not pruned.
 
 ### What it does not do

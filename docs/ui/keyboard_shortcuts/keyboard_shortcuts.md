@@ -106,7 +106,7 @@ A resolved file reference in a folder agent's chat is a focusable `code` with `r
 
 ### Agent page — Interface tab (`AgentInterfaceTab`)
 
-The last tab of an agent page's Settings mode, on folder agent pages and on every other agent page (A2A, Cinna, ACP, Managed). Development agents have none: their Settings opens Local Development instead. One **Shortcut** select: **None**, then `⌘1`–`⌘9`. A digit another agent holds names that agent beside it ("⌘3 · Research"), so choosing it reads as moving it — which is what it does. Saves on change; a failure shows beneath the select and leaves the saved binding as it was.
+The last tab of an agent page's Settings mode, on folder agent pages and on every other agent page (A2A, Cinna, ACP, Managed). Development agents have none: their Settings opens Local Development instead. One **Shortcut** select: **None**, then `⌘1`–`⌘9`. A digit another agent holds names that agent beside it ("⌘3 · Research"), so choosing it reads as moving it — which is what it does. Saves on change; a failure shows beneath the select and leaves the saved binding as it was. The tab's second section, **Color**, is not a shortcut — see [Agent Colors](../../agents/agents/agent_colors.md).
 
 ### Settings — Chat Mode card (`ChatModeCard`)
 

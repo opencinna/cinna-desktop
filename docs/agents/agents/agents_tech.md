@@ -51,9 +51,9 @@
 | UI store | `src/renderer/src/stores/ui.store.ts` — external-agent selection, chat/settings page mode, and settings routing |
 
 - `src/renderer/src/components/agents/ExternalAgentPage.tsx` — chat/settings landing and Overview/Connection/Interface tabs.
-- `src/renderer/src/components/agents/AgentInterfaceTab.tsx` — the Interface tab body (keyboard shortcut select), shared with `LocalAgentPage`. See [Keyboard Shortcuts — Technical Details](../../ui/keyboard_shortcuts/keyboard_shortcuts_tech.md).
+- `src/renderer/src/components/agents/AgentInterfaceTab.tsx` — the Interface tab body (keyboard shortcut select, then the color preset swatches), shared with `LocalAgentPage`. See [Keyboard Shortcuts — Technical Details](../../ui/keyboard_shortcuts/keyboard_shortcuts_tech.md) and [Agent Colors — Technical Details](agent_colors_tech.md).
 - `src/renderer/src/components/agents/ExternalAgentActionsMenu.tsx` — Open on the server, Desktop visibility, and the delete confirmation for non-remote connections only; nothing server-hosted is destroyed here.
-- `src/renderer/src/components/agents/AgentTypeIcon.tsx` — shared agent identity icon.
+- `src/renderer/src/components/agents/AgentTypeIcon.tsx` — shared agent identity icon; an optional `color`, or an `agentId` it looks the chosen color up by, replaces the muted default with the agent's [color preset](agent_colors_tech.md). The page header passes `agentId`.
 
 ## Database Schema
 
