@@ -16,7 +16,9 @@ Tell the user when a chat's context has grown past what they are willing to spen
 ### The user sees how close a chat is
 1. In a chat whose local Claude or Codex agent has reported a confirmed window size, a 2 px line runs along the bottom edge inside the mode badge under the composer (`Local`, `Direct`, `You route`, …). Its width is the fill
 2. Its colour is green up to half the budget, mixes to amber by 80% and to red at the budget, continuously and from theme colours only
-3. Expanding the badge popover's Context row shows, after the context reading, a **`{Level} budget`** row: the budget in tokens and, as its muted qualifier, the share of it used (`350K`, `42% used`)
+3. The badge popover's collapsed Context row leads with the same share: `46K | 15% Mid budget | 6% total` — used tokens, the share of the budget, the share of the whole window. The budget share is not clamped (`150% Eco budget` past it, while the line stops full)
+4. Expanding the row shows, after the context reading, a **`{Level} budget`** row: the budget in tokens and, as its muted qualifier, the share of it used (`350K`, `42% used`)
+5. At **Greedy** the budget is the window, so the row drops its budget part (`46K | 6% total`) and the expanded section has no budget row; the line still draws
 
 ### The chat crosses the budget
 1. The context grows past the budget during a turn, while the chat is on screen
@@ -24,7 +26,7 @@ Tell the user when a chat's context has grown past what they are willing to spen
 3. It is said once. Only a reading back under the budget (a compaction, a new session) re-arms it
 
 ### The user changes the level
-1. Settings → Features → AI Functions → **AI spending level**. The line, the popover row and the next crossing follow the new budget at once; the change itself never raises the toast
+1. Settings → Features → AI Functions → **AI spending level**. The line, the Context row's budget share, the budget row and the next crossing follow the new budget at once; the change itself never raises the toast
 
 ## Business Rules
 
@@ -34,6 +36,7 @@ Tell the user when a chat's context has grown past what they are willing to spen
   - **Changing the level** under a chat already past the new budget: the user just chose that budget and needs no telling
   - **The size becoming authoritative** with usage already over: a reading with no budget also forgets the last one, since "below" was a guess from then on
 - **The line never replays on a chat switch.** It is keyed by chat, so another chat's reading appears on a fresh element at its own width instead of animating from the previous chat's. Width and colour animate only with **Extra UI animation** on, and never under reduced motion
+- **The Context row and the line say the same thing.** The row's first share is the budget's, the figure the line draws. When the row showed only the window share, a `42%` row sat over a line more than half full and read as a contradiction. The window share stays after it as `total`
 - **The line sits inside the pill** (the pill clips it) so the badge's size and the strip beside it do not move ([UX rule 1](../../development/ui_guidelines/ux_rules.md))
 - **The setting is validated in main**: anything but `eco`, `mid` or `greedy` is refused (*Choose Eco, Mid or Greedy.*). A renderer with no settings yet reads Mid
 - **What it does not do**: it does not cap, stop or compact a chat; it does not toast for a chat not on screen; it says nothing for engines without session telemetry, for job pages (whose badge has no chat), or before a confirmed window size. It does not price anything — cost lives in session telemetry's popover
@@ -46,7 +49,8 @@ session-telemetry:changed ──► useSessionTelemetryBlock ──► ChatRoute
                                     │  contextHealth(level, context)
                                     ├──► health line in RouterBadgeView
                                     ├──► useBudgetCrossingToast ──► toast.store (link: Settings → Features)
-                                    └──► ContextSection "{Level} budget" row
+                                    ├──► Context row budget share (contextRowFigures; not at Greedy)
+                                    └──► ContextSection "{Level} budget" row (not at Greedy)
 ```
 
 ## Integration Points
@@ -57,4 +61,4 @@ session-telemetry:changed ──► useSessionTelemetryBlock ──► ChatRoute
 
 ## Technical Reference
 
-`src/shared/aiSpendingLevel.ts` holds the levels, labels, `isAiSpendingLevel`, `contextBudget` and `contextHealth`; the key is in `AppSettingsSchema` (`src/shared/appSettings.ts`), its default in `DEFAULTS` (`src/main/db/appSettings.ts`) and its check in `VALUE_CHECKS` (`src/main/services/appSettingsService.ts`). In `src/renderer/src/components/chat/RouterBadge.tsx`, `ChatRouterBadge` computes health and passes `budgetLine` (`{key: chatId, fill}`) to `RouterBadgeView`, and `useBudgetCrossingToast` keeps the last reading (`chatId`, `level`, `over`) in a ref — so it also starts over when the badge remounts; it is given `null` while `SessionTelemetryBlockModel.fetching` (TanStack's `isFetching`). `budgetLineColor(fill)` is exported for its test. The popover row is in `SessionTelemetryBlock.tsx:ContextSection`. The control is in `FeaturesSettingsSection.tsx`. Tests: `src/shared/aiSpendingLevel.test.ts`, `src/renderer/src/components/chat/RouterBadge.budget.test.tsx` (line, popover row, colours, every toast case), `appSettingsService.test.ts`, `FeaturesSettingsSection.test.tsx`.
+`src/shared/aiSpendingLevel.ts` holds the levels, labels, `isAiSpendingLevel`, `contextBudget` and `contextHealth`; the key is in `AppSettingsSchema` (`src/shared/appSettings.ts`), its default in `DEFAULTS` (`src/main/db/appSettings.ts`) and its check in `VALUE_CHECKS` (`src/main/services/appSettingsService.ts`). In `src/renderer/src/components/chat/RouterBadge.tsx`, `ChatRouterBadge` computes health and passes `budgetLine` (`{key: chatId, fill}`) to `RouterBadgeView`, and `useBudgetCrossingToast` keeps the last reading (`chatId`, `level`, `over`) in a ref — so it also starts over when the badge remounts; it is given `null` while `SessionTelemetryBlockModel.fetching` (TanStack's `isFetching`). `budgetLineColor(fill)` is exported for its test. In `SessionTelemetryBlock.tsx`, `contextRowFigures(t, level)` builds the Context row's budget share and `ContextSection` the budget row; both skip Greedy. The control is in `FeaturesSettingsSection.tsx`. Tests: `src/shared/aiSpendingLevel.test.ts`, `src/renderer/src/components/chat/RouterBadge.budget.test.tsx` (line, Context row and budget row incl. Greedy and over 100%, colours, every toast case), `SessionTelemetryBlock.test.tsx` (the row's figures and its unconfirmed-size case), `appSettingsService.test.ts`, `FeaturesSettingsSection.test.tsx`.
