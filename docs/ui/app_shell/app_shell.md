@@ -6,7 +6,7 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 
 ## Core Concepts
 
-- **Top Bar** — A persistent ~36 px strip across the window top. Holds the macOS traffic-light gutter plus the **Collapse/Expand Sidebar**, **Agent Status**, **Inbox** and **New Chat** icon buttons, in that order. Its position and contents never change with sidebar state.
+- **Top Bar** — A persistent ~36 px strip across the window top. Holds the macOS traffic-light gutter plus the **Collapse/Expand Sidebar**, **Agent Status**, **Inbox** and **New Chat** icon buttons, in that order. Its position and those buttons never change with sidebar state. The one addition is the update-ready badge, which appears at the right edge of the bar (before a chat's "From job" pill) while the sidebar is out of view, because its usual home in the sidebar footer is hidden then (see [Auto-Update](../../development/auto_update/auto_update.md)).
 - **Floating Sidebar** — A rounded, slightly inset panel on the left. Always slot-reserves its position; expanding/collapsing only animates its visibility (slide + fade), not the surrounding layout.
 - **Sidebar Docking** — How the sidebar sits beside the chat. **Fixed** (the default) keeps it in the layout, opened and closed by the top-bar button. **On Hover** hides it and floats it over the chat while the pointer is at the window's left edge or on the sidebar — a **peek**. Chosen in Settings → Features → Interface or from a right-click on the top-bar sidebar button.
 - **Sidebar Footer** — Bottom row of the sidebar with the profile menu on the left and local-development status, update status and Interface controls on the right.
@@ -85,7 +85,7 @@ A reveal made by the app — **Show in the Chats list** on a task page — peeks
 - **Agent rows show stable identity.** Name plus type icon replaces description/credential sublines and readiness dots. Folder agents use a terminal, A2A/Cinna/WebSocket ACP a network icon, and other ACP/Managed agents a bot. Readiness remains in agent details and the separate status surface.
 - **Agent grouping is optional.** Settings → Features → Interface → **Show sections in Agents sidebar** is installation-wide and on by default. Turning it off removes headings and section spacing without changing order: default Local folder root, active Cinna server, other folder roots, direct A2A, ACP connections, Managed agents. Hidden Cinna agents remain in Settings → Profile → Agents.
 - **Appearance decoration follows one preference.** Default-on Extra UI animation adds a quick stationary-text curtain between main chat layouts, the new-chat logo's draw and sweep, sidebar grid/border bursts, a left-to-right header background wave and occasional secondary-button glows. Composer interaction quiets its own artwork, reduced motion suppresses all extra effects, and collapsing the sidebar disables its decoration. See [Appearance](../appearance/appearance.md) for scope and lifecycle.
-- **Top bar is always present.** Buttons do not shift when the sidebar toggles — they share a row with the macOS traffic lights via a fixed left gutter.
+- **Top bar is always present.** Buttons do not shift when the sidebar toggles — they share a row with the macOS traffic lights via a fixed left gutter. The update-ready badge that joins the bar while the sidebar is hidden sits in the right-aligned group, left of the job pill, so it moves neither the left-hand buttons nor the pill.
 - **Sidebar reserves its slot — in Fixed docking.** Collapse animates the inner panel away (translate + fade) and shrinks the wrapper width, but it does not unmount; the main area reflows in step.
 - **Sidebar always renders.** Even when collapsed the wrapper exists in the flex layout (width 0); the inner panel uses `pointer-events: none` when invisible.
 - **On Hover never reflows the chat.** The sidebar keeps no width in that mode and floats above the main area (below the top bar and every dialog), because a chat that narrows and widens each time the pointer brushes the edge is unreadable. Switching into On Hover from an open fixed sidebar is the ordinary collapse, width included, played once.
@@ -126,7 +126,10 @@ App
     │     │                    right-click → Sidebar docking menu → setSidebarDocking()
     │     ├── Agent Status button   → ui.store.setAgentStatusOpen()
     │     ├── Inbox button          → ui.store.setActiveView('inbox')
-    │     └── New Chat button       → useStartNewChat()
+    │     ├── New Chat button       → useStartNewChat()
+    │     └── right-aligned group
+    │           ├── Update-ready badge → only while the sidebar is hidden and an update is downloaded
+    │           └── JobOriginBanner    → "From job" pill
     └── flex row
         ├── Sidebar (animated wrapper; On Hover: floating, plus the left-edge band → peek)
         │     ├── Settings menu OR Chats / Jobs / Notes / Agents tab content

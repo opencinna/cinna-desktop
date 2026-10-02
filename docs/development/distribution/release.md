@@ -368,7 +368,7 @@ The draft is invisible to `electron-updater`, so existing installs won't try to 
 2. Launch a previous-version install of Cinna Desktop.
 3. Open the in-app logs overlay (`Cmd+\``) → filter for scope `updater`.
 4. Watch for: `checking for update` → `update available: ${version}` → `download X%` → `update downloaded`.
-5. Confirm the "Update ready" dialog and the relaunch.
+5. Confirm the relaunch. An install at 0.5.3 or earlier opens the "Update ready" dialog by itself; later ones open nothing when the download finishes and only show the ready badge (sidebar footer, or the top bar with the sidebar hidden), so click it and choose **Restart now** — see [Auto-Update](../auto_update/auto_update.md).
 
 If something's wrong, immediately flip back to draft (`--draft=true`) — installed clients that already saw the public release will continue, but new ones won't.
 
