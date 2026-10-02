@@ -1,10 +1,13 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { Copy, Globe, Link, Loader2, MessageSquarePlus, NotebookPen, type LucideIcon } from 'lucide-react'
+import { Copy, FolderOpen, Globe, Link, Loader2, MessageSquarePlus, NotebookPen, type LucideIcon } from 'lucide-react'
 import {
   agentFileContentKind,
   isCredentialFileRef,
+  type AgentFileActionResult,
+  type AgentFileConsentPurpose,
+  type AgentFilePathInput,
   type AgentFileRef,
   type AgentFileTextUse
 } from '../../../../shared/agentFiles'
@@ -44,20 +47,22 @@ export type MessageMenuItem =
   | 'copy-contents'
   | 'save-contents'
   | 'copy-path'
+  | 'reveal'
   | 'reference'
 
 /**
  * The menu's items, in groups separated by a divider. Decided once, from the
  * reference as the transcript resolved it, so nothing appears or disappears
  * while the menu is open: a file whose contents cannot be text — a folder, a
- * known binary type, a credential file — offers its path only. An HTML file
+ * known binary type, a credential file — offers its path only: copied, shown
+ * in its folder, referenced in a new chat. An HTML file
  * (`.html`, `.htm`, `.xhtml`) also offers Open in browser, first.
  */
 export function messageMenuItems(file: FileRefTarget | undefined): MessageMenuItem[][] {
   if (!file) return [['copy-text', 'save-text']]
   const { ref } = file
   const pathOnly = ref.kind === 'dir' || isCredentialFileRef(ref) || agentFileContentKind(ref.path) === 'binary'
-  const pathGroup: MessageMenuItem[] = ['copy-path', 'reference']
+  const pathGroup: MessageMenuItem[] = ['copy-path', 'reveal', 'reference']
   if (pathOnly) return [pathGroup]
   const contents: MessageMenuItem[] = ['copy-contents', 'save-contents']
   return previewKindFor(ref.path) === 'html' ? [['open-in-browser'], contents, pathGroup] : [contents, pathGroup]
@@ -294,6 +299,28 @@ function MessageContextMenu({ x, y, text, highlight, file, onClose }: MenuState 
     return null
   }
 
+  /** Main asks first for a path outside the agent folder, as a preview would; a decline closes quietly. */
+  const launch = async (
+    fail: (reason: string) => void,
+    purpose: AgentFileConsentPurpose,
+    call: (input: AgentFilePathInput) => Promise<AgentFileActionResult>
+  ): Promise<void> => {
+    if (!file) return
+    const input = { agentId: file.agentId, path: file.ref.path }
+    consentPending.current = true
+    let access: Awaited<ReturnType<typeof authorizeAgentFile>>
+    try {
+      access = await authorizeAgentFile({ ...input, purpose })
+    } finally {
+      consentPending.current = false
+    }
+    if (!access.success) return fail(access.error)
+    if (!access.approved) return onClose()
+    const result = await call(input)
+    if (result.success) onClose()
+    else fail(result.error)
+  }
+
   const actions: Record<MessageMenuItem, () => Promise<void>> = {
     'copy-text': () => run('copy-text', async () => {
       await navigator.clipboard.writeText(payload())
@@ -317,28 +344,15 @@ function MessageContextMenu({ x, y, text, highlight, file, onClose }: MenuState 
       const note = fileNoteFromContents(file.ref.path, contents)
       await saveNote(note.body, note.title)
     }, 'Could not save to Notes.'),
-    // Main asks first for a file outside the agent folder, as a preview would.
-    'open-in-browser': () => run('open-in-browser', async (fail) => {
-      if (!file) return
-      const input = { agentId: file.agentId, path: file.ref.path }
-      consentPending.current = true
-      let access: Awaited<ReturnType<typeof authorizeAgentFile>>
-      try {
-        access = await authorizeAgentFile(input)
-      } finally {
-        consentPending.current = false
-      }
-      if (!access.success) return fail(access.error)
-      if (!access.approved) return onClose()
-      const result = await window.api.agentFiles.openInBrowser(input)
-      if (result.success) onClose()
-      else fail(result.error)
-    }, 'Could not open the file in the browser.'),
+    'open-in-browser': () => run('open-in-browser', (fail) =>
+      launch(fail, 'browser', (input) => window.api.agentFiles.openInBrowser(input)), 'Could not open the file in the browser.'),
     'copy-path': () => run('copy-path', async () => {
       if (!file) return
       await navigator.clipboard.writeText(file.ref.path)
       onClose()
     }, 'Could not copy the path.'),
+    'reveal': () => run('reveal', (fail) =>
+      launch(fail, 'reveal', (input) => window.api.agentFiles.reveal(input)), 'Could not show it in its folder.'),
     'reference': () => run('reference', async () => {
       if (!file) return
       const agents = await queryClient.fetchQuery({ queryKey: ['agents'], queryFn: () => window.api.agents.list() })
@@ -360,6 +374,7 @@ function MessageContextMenu({ x, y, text, highlight, file, onClose }: MenuState 
     'copy-contents': ['Copy contents', Copy],
     'save-contents': ['Save to Notes', NotebookPen],
     'copy-path': ['Copy full path', Link],
+    'reveal': ['Show in the folder', FolderOpen],
     'reference': ['Reference in a new chat', MessageSquarePlus]
   }
   const groups = messageMenuItems(file)

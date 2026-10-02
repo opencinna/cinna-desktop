@@ -47,6 +47,7 @@ const bridge = vi.fn()
 const authorize = vi.fn()
 const readText = vi.fn()
 const openInBrowser = vi.fn()
+const reveal = vi.fn()
 const create = vi.fn()
 const agentsList = vi.fn()
 const DRAFT = composerDraftKey('alice', 'dashboard')
@@ -58,6 +59,7 @@ beforeEach(() => {
   authorize.mockReset().mockResolvedValue({ success: true, approved: true })
   readText.mockReset().mockResolvedValue({ success: true, text: 'print(1)\n' })
   openInBrowser.mockReset().mockResolvedValue({ success: true })
+  reveal.mockReset().mockResolvedValue({ success: true })
   create.mockReset().mockResolvedValue({ id: 'note-1' })
   agentsList.mockReset().mockResolvedValue([{ id: 'folder:a', name: 'GFCA', enabled: true }])
   vi.stubGlobal('navigator', { clipboard: { writeText: clipboardText } })
@@ -65,7 +67,7 @@ beforeEach(() => {
     app: { setTheme: async () => {} },
     notes: { create },
     clipboard: { writeText: bridge },
-    agentFiles: { authorize, readText, openInBrowser },
+    agentFiles: { authorize, readText, openInBrowser, reveal },
     agents: { list: agentsList }
   } as never
   useAuthStore.setState({ currentUser: { id: 'alice' } as never })
@@ -107,21 +109,21 @@ const itemNames = () => screen.getAllByRole('menuitem').map((item) => item.textC
 describe('the items offered', () => {
   it.each([
     ['npm test', ['Copy text', 'Save to Notes'], 0],
-    ['docs/plan.md', ['Copy contents', 'Save to Notes', 'Copy full path', 'Reference in a new chat'], 1],
-    ['src/main.py', ['Copy contents', 'Save to Notes', 'Copy full path', 'Reference in a new chat'], 1],
+    ['docs/plan.md', ['Copy contents', 'Save to Notes', 'Copy full path', 'Show in the folder', 'Reference in a new chat'], 1],
+    ['src/main.py', ['Copy contents', 'Save to Notes', 'Copy full path', 'Show in the folder', 'Reference in a new chat'], 1],
     // An unknown type is offered: main decides from the bytes.
-    ['dump.gz', ['Copy contents', 'Save to Notes', 'Copy full path', 'Reference in a new chat'], 1],
-    ['report.pdf', ['Copy full path', 'Reference in a new chat'], 0],
-    ['.env', ['Copy full path', 'Reference in a new chat'], 0],
-    ['credentials/key.json', ['Copy full path', 'Reference in a new chat'], 0],
-    ['pulled', ['Copy full path', 'Reference in a new chat'], 0],
+    ['dump.gz', ['Copy contents', 'Save to Notes', 'Copy full path', 'Show in the folder', 'Reference in a new chat'], 1],
+    ['report.pdf', ['Copy full path', 'Show in the folder', 'Reference in a new chat'], 0],
+    ['.env', ['Copy full path', 'Show in the folder', 'Reference in a new chat'], 0],
+    ['credentials/key.json', ['Copy full path', 'Show in the folder', 'Reference in a new chat'], 0],
+    ['pulled', ['Copy full path', 'Show in the folder', 'Reference in a new chat'], 0],
     [
       'out/report.html',
-      ['Open in browser', 'Copy contents', 'Save to Notes', 'Copy full path', 'Reference in a new chat'],
+      ['Open in browser', 'Copy contents', 'Save to Notes', 'Copy full path', 'Show in the folder', 'Reference in a new chat'],
       2
     ],
     // A credential name offers its path only, html or not.
-    ['.env.html', ['Copy full path', 'Reference in a new chat'], 0]
+    ['.env.html', ['Copy full path', 'Show in the folder', 'Reference in a new chat'], 0]
   ])('over %s: %j', (text, items, separators) => {
     mount()
     openOn(text)
@@ -146,12 +148,12 @@ describe('the items offered', () => {
     openOn('docs/plan.md')
     const items = screen.getAllByRole('menuitem')
     expect(document.activeElement).toBe(items[0])
-    for (const expected of [1, 2, 3, 0]) {
+    for (const expected of [1, 2, 3, 4, 0]) {
       fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
       expect(document.activeElement).toBe(items[expected])
     }
     fireEvent.keyDown(document.activeElement!, { key: 'End' })
-    expect(document.activeElement).toBe(items[3])
+    expect(document.activeElement).toBe(items[4])
   })
 })
 
@@ -161,7 +163,7 @@ describe('the file actions', () => {
     openOn('out/report.html')
     fireEvent.click(screen.getByRole('menuitem', { name: 'Open in browser' }))
     await waitFor(() => expect(openInBrowser).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/out/report.html' }))
-    expect(authorize).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/out/report.html' })
+    expect(authorize).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/out/report.html', purpose: 'browser' })
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
   })
 
@@ -285,6 +287,38 @@ describe('the file actions', () => {
     await waitFor(() => expect(clipboardText).toHaveBeenCalledWith('/agent/report.pdf'))
     expect(authorize).not.toHaveBeenCalled()
     expect(readText).not.toHaveBeenCalled()
+  })
+})
+
+describe('Show in the folder', () => {
+  it.each([
+    ['report.pdf', '/agent/report.pdf'],
+    ['pulled', '/agent/pulled']
+  ])('asks main to authorize, then reveals %s, and closes', async (text, path) => {
+    mount()
+    openOn(text)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Show in the folder' }))
+    await waitFor(() => expect(reveal).toHaveBeenCalledWith({ agentId: 'folder:a', path }))
+    expect(authorize).toHaveBeenCalledWith({ agentId: 'folder:a', path, purpose: 'reveal' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  })
+
+  it('reveals nothing and says nothing when the user declines', async () => {
+    authorize.mockResolvedValueOnce({ success: true, approved: false })
+    mount()
+    openOn('report.pdf')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Show in the folder' }))
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    expect(reveal).not.toHaveBeenCalled()
+  })
+
+  it("says main's reason in the menu and stays open when the reveal fails", async () => {
+    reveal.mockResolvedValueOnce({ success: false, code: 'not_found', error: 'The file is no longer there.' })
+    mount()
+    openOn('report.pdf')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Show in the folder' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('The file is no longer there.')
+    expect(screen.getByRole('menu')).toBeTruthy()
   })
 })
 

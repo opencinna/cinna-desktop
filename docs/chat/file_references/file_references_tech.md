@@ -17,7 +17,7 @@
   - `AgentFileTextUse` (`'copy' | 'note'`) and `ReadAgentFileTextInput` (`AgentFilePathInput` plus optional `use`): what a whole-file read is for, which picks its cap.
   - `agentFileExtension` and `agentFileName`.
   - `BINARY_DOCUMENT_EXTENSIONS`, `TEXT_DOCUMENT_EXTENSIONS`, and `DEFAULT_APP_EXTENSIONS` (the union of the two).
-  - `AgentFileConsentPurpose` (`'show' | 'read'`) and `AuthorizeAgentFileInput` (`AgentFilePathInput` plus an optional `purpose`).
+  - `AgentFileConsentPurpose` (`'show' | 'read' | 'reveal' | 'browser'`), the list `AGENT_FILE_CONSENT_PURPOSES`, and `AuthorizeAgentFileInput` (`AgentFilePathInput` plus an optional `purpose`).
   - Types: `AgentFileRef`, `AgentFileRefKind`, `AgentFileOpenStrategy`, `AgentFileErrorCode`, `AgentFileFailure`, and the IPC input and result types.
 - `src/shared/filePreview.ts`: `decodePreviewText(bytes, truncated)`, the truncation-safe decode shared with attachment previews.
 
@@ -64,7 +64,7 @@
 - `src/renderer/src/components/chat/MessageBubble.tsx`: renders with `chatMarkdownComponents`, and provides a null scope while streaming.
 - `src/renderer/src/stores/filePreview.store.ts`: `openAgentFile`, `openAgentFileExternally`, `revealAgentFile`, and the error-copy helpers.
 - `src/renderer/src/utils/agentFileAccess.ts`: `authorizeAgentFile(input)` (shared by the preview store and the menu) and `readAgentFileText(agentId, ref, use, { onAuthorize? })`.
-- `src/renderer/src/components/chat/MessageContextMenu.tsx`: the reference items (`messageMenuItems`, `referenceDraft` and the file actions). `messageMenuItems` puts `open-in-browser` in a group of its own, first, when `previewKindFor(ref.path) === 'html'` and the file is not path-only; its action runs `authorizeAgentFile` under `consentPending` (so the dialog's blur keeps the menu), closes on a decline, then `window.api.agentFiles.openInBrowser`. Its text half belongs to [Conversation UI tech](../conversation_ui/conversation_ui_tech.md#message-context-actions).
+- `src/renderer/src/components/chat/MessageContextMenu.tsx`: the reference items (`messageMenuItems`, `referenceDraft` and the file actions). `messageMenuItems` puts `open-in-browser` in a group of its own, first, when `previewKindFor(ref.path) === 'html'` and the file is not path-only; its action and `reveal`'s share `launch(fail, purpose, call)`, which runs `authorizeAgentFile` with that purpose (`'browser'` or `'reveal'`) under `consentPending` (so the dialog's blur keeps the menu), closes on a decline, then calls `window.api.agentFiles.openInBrowser` or `window.api.agentFiles.reveal` and closes on success. Its text half belongs to [Conversation UI tech](../conversation_ui/conversation_ui_tech.md#message-context-actions).
 - `src/renderer/src/utils/fileNote.ts`: `fileNoteFromContents(path, text)` and `fenceLanguageFor(fileName)`.
 - `src/renderer/src/utils/startAgentChat.ts`: `startAgentChat(agentId, { draft? })` and `unavailableAgentMessage(agents, agentId, missing)`, shared with the chat-starting shortcuts.
 - `src/renderer/src/components/chat/FilePreviewModal.tsx`: the agent-file header and states. See [File Preview — Technical Details](../file_preview/file_preview_tech.md).
@@ -78,7 +78,7 @@
   - caps;
   - guarded folders, including the real guard with mixed-case spellings;
   - data-volume spellings.
-- `src/main/services/agentFiles/consent.test.ts`: the registry, refused folders and the dialog copy, `show` and `read`.
+- `src/main/services/agentFiles/consent.test.ts`: the registry, refused folders and the dialog copy for `show`, `read`, `reveal` (per platform) and `browser`, and a folder worded the same whatever the purpose.
 - `src/main/services/agentFiles/openStrategy.test.ts`: the strategy table.
 - `src/main/services/agentFiles/canonicalPath.test.ts`: canonicalisation against an injected data volume.
 - `src/main/services/agentFiles/agentFileService.test.ts`:
@@ -86,13 +86,13 @@
   - credential files;
   - a file swapped between the check and the read;
   - one shared dialog per path;
-  - `authorize` asking in `read` words only for exactly `'read'`;
+  - `authorize` asking in the words of a known purpose, and in `show` words for anything else;
   - `readText`: whole and untruncated, outside only after approval, credential files, binary types and folders refused unread, the cap exact and one byte over, a copy reading past the note cap up to its own and naming the shipped 25 MB figure when refused, NUL and invalid UTF-8, a swap between check and read;
   - open and reveal;
   - Open in browser (html only, outside only after approval, a failed launch), and the HTML frame's document and asset gate (see [File Preview — Technical Details](../file_preview/file_preview_tech.md#tests)).
 - `src/main/services/agentFiles/openInBrowser.test.ts`: the per-platform launch plan and its fallback.
 - `src/main/host/desktop/clipboard.test.ts`: the write, and refusal of a non-string, an oversized payload and a throwing write.
-- `src/renderer/src/components/chat/MessageContextMenu.fileRefs.test.tsx`: the items per reference kind, a selection inside a path, keyboard across the divider; copy through main's clipboard after authorizing, main's reason kept in the open menu, the menu surviving the consent dialog, a decline reading nothing, and a blur after the consent call closing it; the running item's spinner, `aria-disabled` items and focus back on a failed item; top- versus bottom-anchored placement with the error row reserved; notes titled by heading or name and fenced code; the path copied without asking; the new-chat landing, a draft appended on a new line, and a disabled agent; Open in browser first for an HTML file, after authorizing, with main's failure in the menu and nothing opened on a decline.
+- `src/renderer/src/components/chat/MessageContextMenu.fileRefs.test.tsx`: the items per reference kind, a selection inside a path, keyboard across the divider; copy through main's clipboard after authorizing, main's reason kept in the open menu, the menu surviving the consent dialog, a decline reading nothing, and a blur after the consent call closing it; the running item's spinner, `aria-disabled` items and focus back on a failed item; top- versus bottom-anchored placement with the error row reserved; notes titled by heading or name and fenced code; the path copied without asking; the new-chat landing, a draft appended on a new line, and a disabled agent; Open in browser first for an HTML file, after authorizing with purpose `browser`, with main's failure in the menu and nothing opened on a decline; Show in the folder for a binary file and a folder, after authorizing with purpose `reveal`, with nothing revealed on a decline and main's failure in the open menu.
 - `src/renderer/src/utils/fileNote.test.ts`: title order (frontmatter, H1, any heading, name; headings in fences ignored), raw versus fenced bodies, fence length and `fenceLanguageFor`.
 - `src/main/services/localAgents/homeAccessService.test.ts`: guarded folders spelled in another case.
 - `src/renderer/src/components/chat/fileRefs.test.tsx`: the `code` override and `collectFileRefSources`.
@@ -113,7 +113,7 @@ None.
 | Channel | Payload | Returns |
 |---------|---------|---------|
 | `agent-files:resolve` | `{ agentId, candidates: string[] }` | `{ success: true, refs: AgentFileRef[] }` or `AgentFileFailure` |
-| `agent-files:authorize` | `{ agentId, path, purpose? }` (`'show'` default, or `'read'`) | `{ success: true, approved: boolean }` or `AgentFileFailure`. May show the native dialog, worded by `purpose` |
+| `agent-files:authorize` | `{ agentId, path, purpose? }` (`'show'` default, `'read'`, `'reveal'` or `'browser'`) | `{ success: true, approved: boolean }` or `AgentFileFailure`. May show the native dialog, worded by `purpose` |
 | `agent-files:read-preview` | `{ agentId, path }` | `{ success: true, text, truncated }` or `AgentFileFailure` |
 | `agent-files:read-text` | `ReadAgentFileTextInput`: `{ agentId, path, use? }` (`'note'` default, or `'copy'`) | `{ success: true, text }` (the whole file) or `AgentFileFailure`. `use` picks the cap |
 | `agent-files:open` | `{ agentId, path }` | `{ success: true }` or `AgentFileFailure` |
@@ -165,7 +165,7 @@ None.
 - `authorize(input, prompt)`:
   - An inside or already approved path returns `approved: true` with no dialog.
   - Otherwise there is one in-flight promise per `userId\0realpath` in the `asking` map, so an overlapping call shares the first dialog, that dialog's window and its wording. The key has no purpose in it, because an approval does not either.
-  - `purpose` is read off the untrusted input: exactly `'read'` is `read`, anything else `show`.
+  - `purpose` is read off the untrusted input: a value in `AGENT_FILE_CONSENT_PURPOSES` is kept, anything else is `show`.
   - On approval it records the file, and also the folder when the checkbox was ticked and `canApproveDirectory` allows it.
 - `readPreview(input)`:
   1. checks, in order, `permitted`, `not_a_file`, `credential_file` and `not_previewable`;
@@ -206,9 +206,13 @@ None.
   - is a filesystem root;
   - is at or above a volume root, per `VOLUME_ROOT_DEPTH`.
 - `consentDialogOptions(request, platform)`: builds `MessageBoxOptions`.
-  - Button 0 shows (or reads) and button 1 cancels.
-  - The message and button text depend on the kind and on `purpose`: `read` on a file gives "Let Cinna read a file outside <agent>'s folder?" and **Read file**.
-  - Detail lines: the display path; for `read`, "Cinna reads it to copy it or save it to Notes.", otherwise the preview notice for a previewable file that is not a credential file; `Folder: <dir>` when it differs from the path.
+  - Button 0 acts and button 1 cancels.
+  - A folder is treated as `reveal` whatever `purpose` says. For a file, `purpose` (default `show`) picks the message and button:
+    - `show`: "Show a file outside <agent>'s folder?", **Show file**;
+    - `reveal`: the same message, **Show in Finder** on darwin, **Show in folder** elsewhere (a folder's message says "folder");
+    - `browser`: "Open a file outside <agent>'s folder in your browser?", **Open in browser**;
+    - `read`: "Let Cinna read a file outside <agent>'s folder?", **Read file**.
+  - Detail lines: the display path; for `read`, "Cinna reads it to copy it or save it to Notes."; for `show` only, the preview notice for a previewable file that is not a credential file; `Folder: <dir>` when it differs from the path.
   - The checkbox appears only when `offerDir` is set.
 
 ### `src/main/services/agentFiles/canonicalPath.ts`
@@ -290,21 +294,22 @@ None.
      - either shows a notice without reading, or calls `readPreview` under the `requestId` guard.
 
      `credential_file` and `not_previewable` map to notices; any other failure becomes a `preview`-step error.
-- `openAgentFileExternally()` and `revealAgentFile()` both call `runAction(action)`:
+- `openAgentFileExternally()`, `revealAgentFile()` and, for an agent file, `openInBrowser()` call `runAction(action)`:
   - files only, and one action at a time (`pendingAction`);
-  - authorize again, then `open` or `reveal`;
+  - authorize again, with purpose `show` for `open`, `reveal` for `reveal` and `browser` for `browser`, then the action's call;
   - a failure sets `actionError {action, code, reason}`;
   - a result for a target no longer shown is dropped.
 - `agentFileErrorText(ref, step, code, reason)`, `actionErrorText(actionError)` and `actionErrorRepeatsBody(state)`: the body and action-row copy.
 
 ### `src/renderer/src/components/chat/MessageContextMenu.tsx` (reference half)
 - `useMessageContextMenu`: when no selection is under the pointer and the code target is a `CODE` element, `fileRefTargetOf` supplies `MenuState.file`. A block (`pre`) never has one.
-- `messageMenuItems(file)`: the groups, decided once per opening. No file → `[copy-text, save-text]`. A `dir`, `isCredentialFileRef`, or a `binary` `agentFileContentKind` of `ref.path` → `[copy-path, reference]` only; otherwise `[copy-contents, save-contents]` then `[copy-path, reference]`, with a `role="separator"` between groups, which the arrow keys skip. The menu widens from `w-48` to `w-56` for a file.
+- `messageMenuItems(file)`: the groups, decided once per opening. No file → `[copy-text, save-text]`. A `dir`, `isCredentialFileRef`, or a `binary` `agentFileContentKind` of `ref.path` → `[copy-path, reveal, reference]` only; otherwise `[copy-contents, save-contents]` then `[copy-path, reveal, reference]`, with a `role="separator"` between groups, which the arrow keys skip. The menu widens from `w-48` to `w-56` for a file.
 - `referenceDraft(ref)`: "The file \`<path>\` " or "The folder \`<path>\` ", with a trailing space.
 - Actions all go through `run(item, action, fallback)`: the single in-flight guard (`acting` ref), `busyItem` state for the running item, and a `fail(reason)` callback; a throw becomes `unwrapIpcError(err, fallback)`. After a failure, focus returns to the item's `[data-menu-item]` button. The running item shows a `Loader2` spinner (`aria-busy`); the others dim. Items take `aria-disabled` while anything runs, not `disabled`, so focus never falls out of the menu and the arrow keys still move:
   - `copy-contents`: `readAgentFileText` with `'copy'`, then `window.api.clipboard.writeText`; `success: false` → "Could not copy the file.";
   - `save-contents`: `readAgentFileText` with `'note'`, `fileNoteFromContents`, then the shared `saveNote(body, title)` (`useSaveMessageNote` plus the Notes navigation);
   - `copy-path`: `navigator.clipboard.writeText(ref.path)`, no authorize;
+  - `reveal` ("Show in the folder", `FolderOpen`): `launch` with `window.api.agentFiles.reveal`; fallback "Could not show it in its folder.";
   - `reference`: `fetchQuery(['agents'])`, `startableAgent`, then `startAgentChat(agent.id, { draft: referenceDraft(ref) })`; otherwise a toast from `unavailableAgentMessage(..., 'That agent is no longer available')`. Closes the menu either way.
 - `fileText(target, use, fail)`: passes `use` through to `readAgentFileText`; a `denied` outcome closes the menu; a `failed` one reports main's sentence through `fail`. It passes `onAuthorize` to set the `consentPending` ref.
 - The window `blur` listener closes the menu only while `consentPending` is false — the authorize call, not the whole action — so the consent dialog does not dismiss it, and a real switch away during the read or the note still does.

@@ -25,8 +25,8 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  *
  * ## What it proves
  *
- * - A markdown reference offers Copy contents, Save to Notes, Copy full path
- *   and Reference in a new chat, in that order; Copy contents puts the whole
+ * - A markdown reference offers Copy contents, Save to Notes, Copy full path,
+ *   Show in the folder and Reference in a new chat, in that order; Copy contents puts the whole
  *   file on the clipboard.
  * - Save to Notes on it opens a note titled by the file's H1 whose body is the
  *   file as written; on a `.json` the body is the file in a `json` fence and the
@@ -217,6 +217,7 @@ test('right-clicking a file reference copies, saves, copies the path and starts 
         'Copy contents',
         'Save to Notes',
         'Copy full path',
+        'Show in the folder',
         'Reference in a new chat'
       ])
       await expect(menu.getByRole('separator')).toHaveCount(1)
@@ -242,6 +243,7 @@ test('right-clicking a file reference copies, saves, copies the path and starts 
         'Copy contents',
         'Save to Notes',
         'Copy full path',
+        'Show in the folder',
         'Reference in a new chat'
       ])
       await menu.getByRole('menuitem', { name: 'Save to Notes', exact: true }).click()
@@ -254,7 +256,7 @@ test('right-clicking a file reference copies, saves, copies the path and starts 
       await backToChat(page)
       await writeClipboard(cinna, 'e2e clipboard sentinel')
       const menu = await openMenuOn(page, ENV)
-      await expect(menu.getByRole('menuitem')).toHaveText(['Copy full path', 'Reference in a new chat'])
+      await expect(menu.getByRole('menuitem')).toHaveText(['Copy full path', 'Show in the folder', 'Reference in a new chat'])
       await expect(menu.getByRole('separator')).toHaveCount(0)
       await menu.getByRole('menuitem', { name: 'Copy full path', exact: true }).click()
       await expect(menu).toHaveCount(0)

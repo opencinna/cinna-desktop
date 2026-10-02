@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A folder agent works inside its folder and names files all the time: `data/reforecast/pulled/omp.csv`, `scripts/pull.py:42`. In that agent's chat, an inline code span that names a real file or folder is clickable. A file opens in the shared [preview modal](../file_preview/file_preview.md), which expands from the click point and has **Open** and **Open folder** in its header's **⋯** menu. A folder opens in Finder / Explorer. A right-click offers what a user does with a named file next: copy its contents or save them to Notes, copy its full path, or start a new chat that points at it. The user never has to go looking for a file the agent has just named.
+A folder agent works inside its folder and names files all the time: `data/reforecast/pulled/omp.csv`, `scripts/pull.py:42`. In that agent's chat, an inline code span that names a real file or folder is clickable. A file opens in the shared [preview modal](../file_preview/file_preview.md), which expands from the click point and has **Open** and **Open folder** in its header's **⋯** menu. A folder opens in Finder / Explorer. A right-click offers what a user does with a named file next: copy its contents or save them to Notes, copy its full path, show it in its folder, or start a new chat that points at it. The user never has to go looking for a file the agent has just named.
 
 ## Core Concepts
 
@@ -19,7 +19,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **Credential file**: a file whose name says it holds secrets. It is never read into the renderer.
 - **Guarded location**: `~/Documents`, `~/Desktop`, `~/Downloads` or iCloud Drive (`~/Library/Mobile Documents`). macOS asks the user before an app touches any of them. See [The Agents Folder Question](../../agents/local_agents/home_access.md).
 - **Open strategy**: how **Open** hands a file to the operating system, which never involves executing it.
-- **Reference menu**: the transcript's right-click menu when it lands on a reference. It replaces **Copy text** / **Save to Notes** of the span text with **Open in browser** (HTML files only), **Copy contents**, **Save to Notes** (of the file), **Copy full path** and **Reference in a new chat**.
+- **Reference menu**: the transcript's right-click menu when it lands on a reference. It replaces **Copy text** / **Save to Notes** of the span text with **Open in browser** (HTML files only), **Copy contents**, **Save to Notes** (of the file), **Copy full path**, **Show in the folder** and **Reference in a new chat**.
 - **Whole-file read**: the file's complete text, for Copy contents and Save to Notes. Unlike a preview it is never truncated: a file over the cap is refused. Copy contents reads up to 25 MB, the same as a preview; Save to Notes up to 4 MB.
 
 ## User Stories / Flows
@@ -41,7 +41,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 1. The agent names `~/shared-data/exports/q3.csv`. It links like any other reference, because detection only checks that the path exists.
 2. On click, main shows a native dialog attached to the window. It reads "Show a file outside <agent>'s folder?", shows the `~/…` path, and has **Show file** and **Cancel** buttons.
    - When Cinna would read the file, the dialog adds "Cinna reads it to preview it here."
-   - For a folder it reads "Show a folder outside…", and its button is **Show in Finder**.
+   - For a folder it reads "Show a folder outside…", and its button is **Show in Finder** (**Show in folder** off macOS).
 3. The dialog may offer a checkbox: "Don't ask again for anything inside “exports” until Cinna restarts".
 4. **Show file** opens the preview. **Cancel** opens nothing and shows nothing, because the user chose it.
 
@@ -58,7 +58,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 ### Right-clicking a reference
 1. The user right-clicks a linked span with nothing selected in it. The reference is outlined, and the menu opens with two groups separated by a divider:
    - **Copy contents** and **Save to Notes**;
-   - **Copy full path** and **Reference in a new chat**.
+   - **Copy full path**, **Show in the folder** and **Reference in a new chat**.
 
    Near the bottom of the window the menu opens upwards from the pointer instead.
 
@@ -70,7 +70,9 @@ A folder agent works inside its folder and names files all the time: `data/refor
 
    A markdown or `.txt` file is saved as written. Any other file is saved inside a fenced code block tagged with its language (`py`, `ts`, `json`, `makefile`…), so a script reads as code in the note.
 4. **Copy full path** copies the absolute path. Nothing is read and nothing is asked.
-5. **Open in browser** opens the file in the user's default web browser and closes the menu. For a file outside the agent folder it first asks to *show* it, as a click does; **Cancel** closes the menu and opens nothing. "No browser could open this file." is said inside the menu.
+
+   **Show in the folder** selects the file or folder in Finder / the file manager and closes the menu. It is offered wherever Copy full path is, folders, binary types and credential files included, since nothing is read. For a path outside the agent folder it first asks "Show a file outside <agent>'s folder?", with a **Show in Finder** button (**Show in folder** off macOS); **Cancel** closes the menu and shows nothing. A failure — main's reason, such as "Could not show the file in its folder." — is said inside the menu.
+5. **Open in browser** opens the file in the user's default web browser and closes the menu. For a file outside the agent folder it first asks "Open a file outside <agent>'s folder in your browser?", with an **Open in browser** button; **Cancel** closes the menu and opens nothing. "No browser could open this file." is said inside the menu.
 6. **Reference in a new chat** opens the new-chat screen with the reference's agent selected, the composer focused, and "The file \`<path>\` " already typed, ready for the rest of the sentence. A folder reads "The folder \`<path>\` ". Text already in the new-chat composer stays, and the reference goes on a line under it.
 7. For a file outside the agent folder, the two content items first ask to read it: "Let Cinna read a file outside <agent>'s folder?", **Read file** or **Cancel**. The menu stays open while the dialog is up. **Cancel** closes the menu and reads nothing. The running item shows a spinner and the others dim until it ends.
 8. A failure is said inside the menu, which stays open for a retry with focus back on the item that failed: "This file is over 25 MB." (Copy contents) or "This file is over 4 MB." (Save to Notes), "This isn't a text file.", "That file is no longer there.". An agent that has been switched off shows the toast "*Name* is disabled", one that is gone "That agent is no longer available".
@@ -130,9 +132,16 @@ A folder agent works inside its folder and names files all the time: `data/refor
 ### Outside-folder consent
 - **Linked, but checked at the click.** The native dialog is shown by main and attached to the window.
   - It shows `~/…` paths and calls a folder a folder.
-  - It says "Cinna reads it to preview it here." only when the file is a previewable type and not a credential file.
-- **It says what Cinna is about to do.** A click, Open and Open folder ask to *show* the path. Copy contents and Save to Notes ask to *read* it: "Let Cinna read a file outside <agent>'s folder?", with a **Read file** button and "Cinna reads it to copy it or save it to Notes." A dialog that promised a preview would not be consent to putting the file on the clipboard.
-- **One approval, whichever words asked for it.** An approval given to read covers a later click, and the other way round. While a dialog for a path is open, a second request for the same path waits for that dialog's answer, in whatever words it was asked.
+  - It says "Cinna reads it to preview it here." only when it is asking to *show* a file — a click or **Open** — and the file is a previewable type and not a credential file.
+- **It says what Cinna is about to do.**
+  - A click and **Open** ask to *show* the file: **Show file**.
+  - **Open folder** and **Show in the folder** ask to show it in the file manager: "Show a file outside <agent>'s folder?", **Show in Finder** (**Show in folder** off macOS), and no preview line, since nothing is read.
+  - **Open in browser** asks "Open a file outside <agent>'s folder in your browser?", with an **Open in browser** button and no preview line.
+  - Copy contents and Save to Notes ask to *read* it: "Let Cinna read a file outside <agent>'s folder?", with a **Read file** button and "Cinna reads it to copy it or save it to Notes."
+  - A folder is always asked about as a folder to show in the file manager, whatever the action.
+
+  A dialog that promised a preview would not be consent to putting the file on the clipboard, and one that promised to read a file Cinna only hands to Finder or a browser would ask for more than it takes.
+- **One approval, whichever words asked for it.** An approval given for any one action covers every other: one given to read covers a later click, and the other way round. While a dialog for a path is open, a second request for the same path waits for that dialog's answer, in whatever words it was asked.
 - **Approvals live in memory only.**
   - They end when Cinna quits.
   - They are kept per profile, so switching profile never carries one person's approvals over to another.
@@ -153,7 +162,7 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **Names are compared without case**, erring towards refusing.
 - **Main checks two spellings**: the realpath and the path as the renderer spelled it. Neither a symlink nor a data-volume spelling gets past it.
 - **The renderer checks the name first** as well, only so that `.env` shows the credential message rather than "No preview for this file type", and so its right-click menu does not offer contents main would refuse.
-- **Only reading is refused**: the preview and the whole-file read ("Cinna does not read credential files."). Open, Open folder and Copy full path still work.
+- **Only reading is refused**: the preview and the whole-file read ("Cinna does not read credential files."). Open, Open folder, Copy full path and Show in the folder still work.
 
 ### macOS spellings
 - **The data volume.** `/System/Volumes/Data/Users/me` is the same folder as `/Users/me`, and `realpath` keeps whichever spelling it was given. That spelling used to get around the containment, credential and home-folder rules.
@@ -276,6 +285,7 @@ Right-click
       Save to Notes → fileNoteFromContents → note:create → Notes tab, note opens
     Open in browser (html)  → agent-files:authorize (dialog if outside) → agent-files:open-in-browser
     Copy full path          → navigator.clipboard (no IPC, no dialog)
+    Show in the folder      → agent-files:authorize (dialog if outside) → agent-files:reveal
     Reference in a new chat → startAgentChat(agent, draft) → new-chat screen, path in the composer
 ```
 

@@ -430,6 +430,7 @@ test('Open in browser, from the right-click menu and the preview menu, hands the
       'Copy contents',
       'Save to Notes',
       'Copy full path',
+      'Show in the folder',
       'Reference in a new chat'
     ])
     await page.keyboard.press('Escape')
@@ -443,6 +444,7 @@ test('Open in browser, from the right-click menu and the preview menu, hands the
       'Copy contents',
       'Save to Notes',
       'Copy full path',
+      'Show in the folder',
       'Reference in a new chat'
     ])
     await expect(messageMenu.getByRole('separator')).toHaveCount(2)
