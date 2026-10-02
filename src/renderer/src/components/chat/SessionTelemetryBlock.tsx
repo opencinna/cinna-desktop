@@ -15,7 +15,7 @@ import {
   currentPrices,
   nextMessageEstimate
 } from '../../../../shared/sessionTelemetryDerived'
-import { AI_SPENDING_LEVEL_LABEL, contextHealth } from '../../../../shared/aiSpendingLevel'
+import { AI_SPENDING_LEVEL_LABEL, contextHealth, type AiSpendingLevel } from '../../../../shared/aiSpendingLevel'
 import { useAppSettings } from '../../hooks/useAppSettings'
 import { useSessionTelemetry } from '../../hooks/useSessionTelemetry'
 import { useUIStore } from '../../stores/ui.store'
@@ -60,18 +60,57 @@ export function popoverMaxHeight(anchorTop: number | undefined): string | undefi
   return `${anchorTop - WINDOW_EDGE_PX}px`
 }
 
-/** The row's value: used tokens, then the fill — `27K – 3%`; just `27K` with no window size. */
-export function contextRowValue(t: SessionTelemetry): string {
-  const used = formatTokens(t.context.used)
-  const percent = formatContextPercent(t.context.used, t.context.size)
-  return percent ? `${used} – ${percent}` : used
+/**
+ * The row's figures: used tokens, the share of the spending level's budget,
+ * then the share of the whole window — `46K | 15% Mid budget | 6% total`.
+ * No budget part at Greedy (the budget is the window) or while the window size
+ * is unconfirmed (no budget at all); just the used tokens with no window size.
+ */
+export interface ContextRowFigures {
+  used: string
+  budget?: { percent: string; label: string }
+  total?: string
 }
 
-/** The row's accessible name: what it shows, said as words (§10). */
-export function contextRowLabel(t: SessionTelemetry): string {
-  const used = formatTokens(t.context.used)
-  const percent = formatContextPercent(t.context.used, t.context.size)
-  return percent ? `Context ${used}, ${percent} full` : `Context ${used}`
+export function contextRowFigures(t: SessionTelemetry, level: AiSpendingLevel): ContextRowFigures {
+  const { used, size } = t.context
+  const health = level === 'greedy' ? null : contextHealth(level, t.context)
+  const budgetPercent = health ? formatContextPercent(used, health.budget) : undefined
+  return {
+    used: formatTokens(used),
+    budget: budgetPercent ? { percent: budgetPercent, label: `${AI_SPENDING_LEVEL_LABEL[level]} budget` } : undefined,
+    total: formatContextPercent(used, size)
+  }
+}
+
+/** The row's accessible name: the words it shows (§10), `|` read as a pause. */
+export function contextRowLabel(f: ContextRowFigures): string {
+  const parts = [f.used]
+  if (f.budget) parts.push(`${f.budget.percent} ${f.budget.label}`)
+  if (f.total) parts.push(`${f.total} total`)
+  return `Context ${parts.join(', ')}`
+}
+
+/** The figures, with the words and separators muted so the numbers lead. */
+function ContextRowValue({ f }: { f: ContextRowFigures }): React.JSX.Element {
+  const muted = 'text-[var(--color-text-muted)]'
+  return (
+    <span className="ml-auto whitespace-nowrap tabular-nums text-[var(--color-text)]">
+      {f.used}
+      {f.budget && (
+        <>
+          <span className={muted}> | </span>
+          {f.budget.percent} <span className={muted}>{f.budget.label}</span>
+        </>
+      )}
+      {f.total && (
+        <>
+          <span className={muted}> | </span>
+          {f.total} <span className={muted}>total</span>
+        </>
+      )}
+    </span>
+  )
 }
 
 export interface SessionTelemetryBlockModel {
@@ -126,6 +165,8 @@ export function useSessionTelemetryBlock(chatId: string): SessionTelemetryBlockM
 export function SessionTelemetryBlock({ model }: { model: SessionTelemetryBlockModel }): React.JSX.Element {
   const { chatId, telemetry, expanded } = model
   const detailsId = useId()
+  const level = useAppSettings().data?.aiSpendingLevel ?? 'mid'
+  const figures = contextRowFigures(telemetry, level)
   const Chevron = expanded ? ChevronDown : ChevronUp
   return (
     <div className="mt-2 pt-1.5 border-t border-[var(--color-border)] min-h-0 flex flex-col leading-4">
@@ -144,14 +185,14 @@ export function SessionTelemetryBlock({ model }: { model: SessionTelemetryBlockM
         type="button"
         aria-expanded={expanded}
         aria-controls={expanded ? detailsId : undefined}
-        aria-label={contextRowLabel(telemetry)}
+        aria-label={contextRowLabel(figures)}
         onClick={model.toggle}
         className={`shrink-0 w-full flex items-center gap-1.5 rounded py-0.5 text-left
           hover:text-[var(--color-text)] transition-colors
           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]`}
       >
         <span className="font-medium text-[var(--color-text)]">Context</span>
-        <span className="ml-auto tabular-nums text-[var(--color-text)]">{contextRowValue(telemetry)}</span>
+        <ContextRowValue f={figures} />
         <Chevron size={12} aria-hidden className="shrink-0 text-[var(--color-text-muted)]" />
       </button>
     </div>
@@ -342,7 +383,8 @@ function ContextSection({
   const { used, size, sizeAuthoritative, categories, categoriesMeasuredAt, breakdown } = t.context
   const percent = formatContextPercent(used, size)
   const level = useAppSettings().data?.aiSpendingLevel ?? 'mid'
-  const health = contextHealth(level, t.context)
+  // Greedy's budget is the window, already the line above: no row repeating it.
+  const health = level === 'greedy' ? null : contextHealth(level, t.context)
   const measurable = CONTEXT_CATEGORIES_KNOWN[t.engine] && !unsupported
   // What is in the window: its free room and the compaction reserve are not (the CLI's own `/context`).
   const rows = categories

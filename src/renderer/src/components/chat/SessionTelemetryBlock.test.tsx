@@ -24,6 +24,7 @@ vi.mock('../../hooks/useRelativeNow', () => ({ useRelativeNow: () => new Date(NO
 
 ;(window as unknown as { api: unknown }).api = {
   app: { setTheme: async () => undefined },
+  settings: { getAll: async () => ({ aiSpendingLevel: 'mid' }) },
   sessionTelemetry: {
     get: (chatId: string) => spies.get(chatId),
     measureContext: (chatId: string) => spies.measure(chatId),
@@ -84,6 +85,7 @@ async function mount(telemetry: SessionTelemetry | null): Promise<{ client: Quer
   const view = render(createElement(RouterBadge, { router: 'direct', chatId: 'chat-1' }), { wrapper })
   await waitFor(() => {
     expect(client.getQueryState(['sessionTelemetry', 'chat-1'])?.status).toBe('success')
+    expect(client.getQueryState(['app-settings'])?.status).toBe('success')
     expect(push.listener).not.toBeNull()
   })
   return { client, switchTo: (chatId) => view.rerender(createElement(RouterBadge, { router: 'direct', chatId })) }
@@ -168,19 +170,27 @@ describe('the Context row', () => {
     expect(hover().getAttribute('role')).toBe('dialog')
   })
 
-  it('is collapsed by default: used tokens and fill, named in words', async () => {
+  it('is collapsed by default: used tokens, budget and window fill, named in words', async () => {
+    // Mid on a 200K window: a 160K budget.
     await mount(claude())
     hover()
     const row = toggle()!
     expect(row.getAttribute('aria-expanded')).toBe('false')
-    expect(row.textContent).toBe('Context84.2K – 42%')
-    expect(row.getAttribute('aria-label')).toBe('Context 84.2K, 42% full')
+    expect(row.textContent).toBe('Context84.2K | 53% Mid budget | 42% total')
+    expect(row.getAttribute('aria-label')).toBe('Context 84.2K, 53% Mid budget, 42% total')
     expect(details()).toBeNull()
     expect(within(dialog()!).queryByRole('region')).toBeNull()
 
     await send(claude({ context: { used: 100, size: 1_000_000, sizeAuthoritative: true } }))
-    expect(toggle()!.textContent).toBe('Context100 – <1%')
-    expect(toggle()!.getAttribute('aria-label')).toBe('Context 100, <1% full')
+    expect(toggle()!.textContent).toBe('Context100 | <1% Mid budget | <1% total')
+    expect(toggle()!.getAttribute('aria-label')).toBe('Context 100, <1% Mid budget, <1% total')
+  })
+
+  it('has no budget part while the window size is unconfirmed', async () => {
+    await mount(claude({ context: { used: 84_200, size: 200_000, sizeAuthoritative: false } }))
+    hover()
+    expect(toggle()!.textContent).toBe('Context84.2K | 42% total')
+    expect(toggle()!.getAttribute('aria-label')).toBe('Context 84.2K, 42% total')
   })
 
   it('shows the used tokens alone without a window size', async () => {

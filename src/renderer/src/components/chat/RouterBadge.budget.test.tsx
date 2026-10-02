@@ -143,8 +143,30 @@ describe('context health line', () => {
     fireEvent.mouseEnter(screen.getByRole('status', { name: 'Direct agent connection' }))
     const dialog = screen.getByRole('dialog', { name: 'Chat routing' })
     fireEvent.click(within(dialog).getByRole('button', { name: /^Context / }))
-    const label = within(dialog).getByText('Eco budget', { exact: true })
+    const toggle = within(dialog).getByRole('button', { name: /^Context / })
+    expect(toggle.textContent).toBe('Context60K | 50% Eco budget | 30% total')
+    const label = within(within(dialog).getByRole('region', { name: 'Context' })).getByText('Eco budget', { exact: true })
     expect(label.nextElementSibling?.textContent).toBe('120K 50% used')
+  })
+
+  it('says over 100% past the budget, while the line stops full', async () => {
+    await mount(telemetry('chat-1', 180_000))
+    fireEvent.mouseEnter(screen.getByRole('status', { name: 'Direct agent connection' }))
+    const dialog = screen.getByRole('dialog', { name: 'Chat routing' })
+    expect(within(dialog).getByRole('button', { name: /^Context / }).textContent).toBe('Context180K | 150% Eco budget | 90% total')
+    expect(line()!.style.width).toBe('100%')
+  })
+
+  it('shows no budget at Greedy: its budget is the window', async () => {
+    await mount(telemetry('chat-1', 60_000), { level: 'greedy' })
+    fireEvent.mouseEnter(screen.getByRole('status', { name: 'Direct agent connection' }))
+    const dialog = screen.getByRole('dialog', { name: 'Chat routing' })
+    const toggle = within(dialog).getByRole('button', { name: /^Context / })
+    expect(toggle.textContent).toBe('Context60K | 30% total')
+    expect(toggle.getAttribute('aria-label')).toBe('Context 60K, 30% total')
+    fireEvent.click(toggle)
+    expect(within(dialog).getByText('60K of 200K (30%)')).toBeTruthy()
+    expect(within(dialog).queryByText(/budget/)).toBeNull()
   })
 
   it('colours from theme variables, green to amber to red', () => {
