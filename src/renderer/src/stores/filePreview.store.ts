@@ -283,7 +283,8 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
     }
     set({ pendingAction: action, actionError: null })
     try {
-      const access = await authorize(input)
+      const purpose = action === 'browser' ? 'browser' : action === 'reveal' ? 'reveal' : 'show'
+      const access = await authorize({ ...input, purpose })
       if (get().target !== target) return
       if (!access.success) return fail(access.code, access.error)
       // Denied: nothing launches and nothing is said — the user chose it.

@@ -142,6 +142,27 @@ describe('consentDialogOptions', () => {
     ['darwin', 'Show in Finder'],
     ['linux', 'Show in folder'],
     ['win32', 'Show in folder']
+  ] as const)('asks to reveal a file on %s with %j, without claiming to read it', (platform, button) => {
+    expect(consentDialogOptions({ ...file, purpose: 'reveal' }, platform)).toMatchObject({
+      buttons: [button, 'Cancel'],
+      message: "Show a file outside GFCA's folder?",
+      detail: '~/work/pulled/a.md\n\nFolder: ~/work/pulled',
+      checkboxLabel: "Don't ask again for anything inside “pulled” until Cinna restarts"
+    })
+  })
+
+  it('asks to open a file in the browser, without claiming to read it', () => {
+    expect(consentDialogOptions({ ...file, purpose: 'browser' }, 'darwin')).toMatchObject({
+      buttons: ['Open in browser', 'Cancel'],
+      message: "Open a file outside GFCA's folder in your browser?",
+      detail: '~/work/pulled/a.md\n\nFolder: ~/work/pulled'
+    })
+  })
+
+  it.each([
+    ['darwin', 'Show in Finder'],
+    ['linux', 'Show in folder'],
+    ['win32', 'Show in folder']
   ] as const)('asks about a folder on %s with %j, naming it once', (platform, button) => {
     const folder = {
       ...file,
@@ -158,5 +179,9 @@ describe('consentDialogOptions', () => {
       checkboxLabel: "Don't ask again for anything inside “pulled” until Cinna restarts"
     })
     expect(consentDialogOptions({ ...folder, offerDir: false }, platform).detail).toBe('~/work/pulled')
+    // A folder is only ever shown, whatever the click asked for.
+    for (const purpose of ['show', 'read', 'reveal', 'browser'] as const) {
+      expect(consentDialogOptions({ ...folder, purpose }, platform)).toEqual(consentDialogOptions(folder, platform))
+    }
   })
 })

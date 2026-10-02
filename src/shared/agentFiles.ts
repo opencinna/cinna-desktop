@@ -416,10 +416,13 @@ export interface AgentFilePathInput {
 
 /**
  * What the consent dialog says Cinna will do with an outside file: `show` it
- * (preview, open, reveal — the default) or `read` it whole (copy its
- * contents, save it to Notes). An approval covers both.
+ * (preview, open — the default), `read` it whole (copy its contents, save it
+ * to Notes), `reveal` it in Finder / the file manager, or open it in the
+ * `browser`. An approval covers them all.
  */
-export type AgentFileConsentPurpose = 'show' | 'read'
+export type AgentFileConsentPurpose = 'show' | 'read' | 'reveal' | 'browser'
+
+export const AGENT_FILE_CONSENT_PURPOSES: readonly AgentFileConsentPurpose[] = ['show', 'read', 'reveal', 'browser']
 
 export interface AuthorizeAgentFileInput extends AgentFilePathInput {
   purpose?: AgentFileConsentPurpose

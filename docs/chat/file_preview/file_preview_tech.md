@@ -307,7 +307,7 @@
 |---------|-----------|---------|---------|
 | `files:read-preview` | renderer → main | `{ fileId: string, source?: 'cinna' \| 'local' }` | `{ success: true, text: string, truncated: boolean }` / `{ success: false, error, code? }` |
 | `files:download` | renderer → main | `{ fileId, filename, source? }` | Reused for the modal Download button. See [File Attachments](../file_attachments/file_attachments_tech.md) |
-| `agent-files:read-preview`, `agent-files:authorize`, `agent-files:open`, `agent-files:open-in-browser`, `agent-files:reveal` | renderer → main | `{ agentId, path }` | See [File References — Technical Details](../file_references/file_references_tech.md#ipc-channels) |
+| `agent-files:read-preview`, `agent-files:authorize`, `agent-files:open`, `agent-files:open-in-browser`, `agent-files:reveal` | renderer → main | `{ agentId, path }` (`authorize` adds an optional `purpose`) | See [File References — Technical Details](../file_references/file_references_tech.md#ipc-channels) |
 | `files:read-image` | renderer → main | `{ fileId, source? }` or `{ path }` | `{ success: true, dataUrl, mimeType }` / `{ success: false, error, code? }` (`too_large`, `not_previewable`, `not_allowed`, `not_a_file`, `not_found`, `invalid_input`, …) |
 | `files:read-thumbnail` | renderer → main | `{ fileId, source? }` or `{ path }` | Same shape; a scaled-down `data:` URL |
 | `files:read-preview-path` | renderer → main | `{ path }` | `{ success: true, text, truncated }` / `{ success: false, error, code? }` |

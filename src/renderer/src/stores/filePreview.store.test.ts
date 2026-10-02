@@ -220,7 +220,7 @@ describe('header actions', () => {
     api.agentFiles.authorize.mockReset()
     api.agentFiles.authorize.mockResolvedValue({ success: false, code: 'not_found', error: 'That file is no longer there.' })
     await store().revealAgentFile()
-    expect(api.agentFiles.authorize).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/data/omp.csv' })
+    expect(api.agentFiles.authorize).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/data/omp.csv', purpose: 'reveal' })
     expect(api.agentFiles.reveal).not.toHaveBeenCalled()
     expect(store()).toMatchObject({
       actionError: { action: 'reveal', code: 'not_found', reason: 'That file is no longer there.' },
@@ -246,7 +246,7 @@ describe('header actions', () => {
     api.agentFiles.authorize.mockClear()
     api.agentFiles.openInBrowser.mockResolvedValue({ success: false, code: 'launch_failed', error: 'No browser could open this file.' })
     await store().openInBrowser()
-    expect(api.agentFiles.authorize).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/out/report.html' })
+    expect(api.agentFiles.authorize).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/out/report.html', purpose: 'browser' })
     expect(api.agentFiles.openInBrowser).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/out/report.html' })
     expect(store()).toMatchObject({
       actionError: { action: 'browser', code: 'launch_failed', reason: 'No browser could open this file.' },

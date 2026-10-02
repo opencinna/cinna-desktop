@@ -143,20 +143,27 @@ export type ConsentRegistry = ReturnType<typeof createConsentRegistry>
  * The native dialog for a {@link ConsentRequest}: button 0 shows, 1 cancels.
  * Worded for what a click does — a folder is only shown in the file manager,
  * a file is shown, and read only when it can be previewed — unless it is
- * asked for to be read whole (`purpose: 'read'`), which is what it then says.
+ * asked for to be read whole (`purpose: 'read'`), selected in the file manager
+ * (`'reveal'`) or opened in the browser (`'browser'`), which is what it then
+ * says. Only `show` mentions the preview: the others never preview it.
  */
 export function consentDialogOptions(
   request: ConsentRequest,
   platform: NodeJS.Platform = process.platform
 ): ConsentDialogOptions {
   const folder = request.kind === 'dir'
-  const read = !folder && request.purpose === 'read'
+  // A folder is only ever shown in the file manager, whatever it was asked for.
+  const purpose = folder ? 'reveal' : request.purpose ?? 'show'
+  const read = purpose === 'read'
+  const browser = purpose === 'browser'
   const showButton = read
     ? 'Read file'
-    : folder ? (platform === 'darwin' ? 'Show in Finder' : 'Show in folder') : 'Show file'
+    : browser
+      ? 'Open in browser'
+      : purpose === 'reveal' ? (platform === 'darwin' ? 'Show in Finder' : 'Show in folder') : 'Show file'
   const detail = [request.displayPath]
   if (read) detail.push('', 'Cinna reads it to copy it or save it to Notes.')
-  else if (!folder && request.previewable) detail.push('', 'Cinna reads it to preview it here.')
+  else if (purpose === 'show' && request.previewable) detail.push('', 'Cinna reads it to preview it here.')
   // For a folder the covered folder is the path already shown: say it once.
   if (request.offerDir && request.displayDir !== request.displayPath) {
     detail.push('', `Folder: ${request.displayDir}`)
@@ -168,7 +175,9 @@ export function consentDialogOptions(
     cancelId: 1,
     message: read
       ? `Let Cinna read a file outside ${request.agentName}'s folder?`
-      : `Show a ${folder ? 'folder' : 'file'} outside ${request.agentName}'s folder?`,
+      : browser
+        ? `Open a file outside ${request.agentName}'s folder in your browser?`
+        : `Show a ${folder ? 'folder' : 'file'} outside ${request.agentName}'s folder?`,
     detail: detail.join('\n'),
     ...(request.offerDir
       ? {

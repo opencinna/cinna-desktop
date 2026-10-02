@@ -13,6 +13,7 @@ import {
   agentFilePreviewKindFor,
   isCredentialFilePath,
   type AgentFileActionResult,
+  AGENT_FILE_CONSENT_PURPOSES,
   type AgentFileConsentPurpose,
   type AgentFileErrorCode,
   type AgentFileFailure,
@@ -312,8 +313,8 @@ export function createAgentFileService(deps: AgentFileServiceDeps) {
       if (!pending) {
         // Approvals are shared across purposes: a dialog already open for the
         // same path answers this call too, in whichever words it was asked.
-        const purpose: AgentFileConsentPurpose =
-          (input as { purpose?: unknown }).purpose === 'read' ? 'read' : 'show'
+        const asked = (input as { purpose?: unknown }).purpose
+        const purpose: AgentFileConsentPurpose = AGENT_FILE_CONSENT_PURPOSES.find((p) => p === asked) ?? 'show'
         pending = ask(found, prompt, purpose).finally(() => asking.delete(key))
         asking.set(key, pending)
       }

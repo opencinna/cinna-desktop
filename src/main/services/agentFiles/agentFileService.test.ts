@@ -288,12 +288,13 @@ describe('readText', () => {
     expect(await service.readText(at(path))).toEqual({ success: true, text: '# outside' })
   })
 
-  it("asks in 'read' words only when told to; anything else is the default 'show'", async () => {
+  it("asks in the words it was told to; anything unknown is the default 'show'", async () => {
     const service = makeService()
-    await service.authorize({ ...at(join(outside, 'notes.md')), purpose: 'read' }, deny)
-    await service.authorize({ ...at(join(outside, 'notes.md')), purpose: 'sudo' }, deny)
+    for (const purpose of ['read', 'reveal', 'browser', 'sudo']) {
+      await service.authorize({ ...at(join(outside, 'notes.md')), purpose }, deny)
+    }
     await service.authorize(at(join(outside, 'notes.md')), deny)
-    expect(prompts.map((p) => p.purpose)).toEqual(['read', 'show', 'show'])
+    expect(prompts.map((p) => p.purpose)).toEqual(['read', 'reveal', 'browser', 'show', 'show'])
   })
 
   it('never reads a credential file, inside or approved outside', async () => {
