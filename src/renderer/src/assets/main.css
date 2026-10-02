@@ -247,22 +247,22 @@
     stroke-linejoin: round;
     stroke-linecap: square;
     opacity: 0;
-    --edge-opacity: 0.24;
+    --edge-opacity: 0.2;
     animation: ambient-grid-edge-glow 1600ms ease-in-out var(--edge-delay) both;
   }
   .ambient-grid-edge-halo {
     stroke-width: 4;
     filter: blur(2px);
-    --edge-opacity: 0.13;
+    --edge-opacity: 0.11;
   }
   [data-theme="light"] .ambient-grid-lines {
     opacity: 0.08;
   }
   [data-theme="light"] .ambient-grid-edge {
-    --edge-opacity: 0.3;
+    --edge-opacity: 0.25;
   }
   [data-theme="light"] .ambient-grid-edge-halo {
-    --edge-opacity: 0.15;
+    --edge-opacity: 0.12;
   }
   @keyframes ambient-grid-breathe {
     0%, 100% { opacity: 0; }
