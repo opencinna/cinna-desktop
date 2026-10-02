@@ -277,6 +277,9 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Agent status"
       className={`fixed inset-0 z-50 flex items-stretch justify-stretch bg-[var(--color-overlay-backdrop)] backdrop-blur-sm transition-opacity ease-out ${
         visible ? 'opacity-100' : 'opacity-0'
       }`}

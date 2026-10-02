@@ -306,3 +306,20 @@ describe('AgentStatusOverlay — the per-card Refresh', () => {
     expect(screen.queryByText(/Could not refresh/)).toBeNull()
   })
 })
+
+describe('AgentStatusOverlay — over a hover-docked sidebar', () => {
+  it('holds the sidebar peek off while it is open', async () => {
+    // The overlay covers the window's left edge band. Without a dialog role
+    // the hover dock did not count it as a blocker: the band peeked the
+    // sidebar behind the overlay, the overlay under the pointer closed it,
+    // and the band peeked it again — a flicker for as long as the pointer
+    // stayed on the left.
+    const { sidebarCloseBlocked } = await import('../../hooks/useSidebarHoverDock')
+    setApi({ success: true, items: [folderRow], remoteError: null })
+
+    render(createElement(AgentStatusOverlay), { wrapper })
+
+    expect(await screen.findByText('Alpha')).toBeTruthy()
+    expect(sidebarCloseBlocked(null)).toBe(true)
+  })
+})

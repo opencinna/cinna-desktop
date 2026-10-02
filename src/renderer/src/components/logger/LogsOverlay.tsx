@@ -293,6 +293,9 @@ export function LogsOverlay(): React.JSX.Element | null {
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Logs"
       className="fixed inset-0 z-50 flex items-stretch justify-stretch bg-black/40 backdrop-blur-sm"
       style={{ padding: '5vmin' }}
       onClick={() => setLogsOpen(false)}
