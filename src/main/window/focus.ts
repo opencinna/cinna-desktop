@@ -43,6 +43,51 @@ export function installWindowResolver(resolver: () => BrowserWindow | null): voi
   getWindow = resolver
 }
 
+let createWindow: (() => void) | null = null
+
+/** Called once from `index.ts`, which owns window creation. */
+export function installWindowCreator(creator: () => void): void {
+  createWindow = creator
+}
+
+/** The main window, or null before it exists and after it was destroyed. */
+export function resolveMainWindow(): BrowserWindow | null {
+  const win = getWindow?.() ?? null
+  return win && !win.isDestroyed() ? win : null
+}
+
+/** How long {@link ensureMainWindow} waits for a new window to be shown. */
+const SHOW_TIMEOUT_MS = 10_000
+
+/**
+ * The main window, reopened first if the user closed it.
+ *
+ * On macOS closing the window leaves the app running in the Dock with no
+ * window at all, and a menu action can still ask for a dialog then. A dialog
+ * needs a visible window to attach to, so this one waits until the new window
+ * has actually been shown (`index.ts` shows it on `ready-to-show`), giving up
+ * after {@link SHOW_TIMEOUT_MS} with whatever exists.
+ */
+export async function ensureMainWindow(): Promise<BrowserWindow | null> {
+  const existing = resolveMainWindow()
+  if (existing || !createWindow) return existing
+  createWindow()
+  const win = resolveMainWindow()
+  if (!win || win.isVisible()) return win
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(done, SHOW_TIMEOUT_MS)
+    function done(): void {
+      clearTimeout(timer)
+      win!.removeListener('show', done)
+      win!.removeListener('closed', done)
+      resolve()
+    }
+    win.once('show', done)
+    win.once('closed', done)
+  })
+  return resolveMainWindow()
+}
+
 /**
  * Restore, show and raise the main window, and bring the app forward.
  *

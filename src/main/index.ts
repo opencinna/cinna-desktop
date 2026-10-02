@@ -41,7 +41,7 @@ import {
   registerHtmlPreviewScheme
 } from './host/desktop/htmlPreview'
 import { clearPastedFilesAtStart } from './host/desktop/clipboard'
-import { BACKGROUND_WINDOW, focusMainWindow, installWindowResolver } from './window/focus'
+import { BACKGROUND_WINDOW, focusMainWindow, installWindowCreator, installWindowResolver } from './window/focus'
 import { AGENT_SHORTCUT_SLOTS, type AppShortcut } from '../shared/appShortcuts'
 import {
   loadWindowState,
@@ -82,6 +82,7 @@ installDesktopFeatures({
 installEventPublisher(desktopEventPublisher(getMainWindow))
 installLogBroadcast(getMainWindow)
 installWindowResolver(getMainWindow)
+installWindowCreator(createWindow)
 connectIntentService.install(getMainWindow)
 
 // ── The `cinna://` deep link ────────────────────────────────────────────────

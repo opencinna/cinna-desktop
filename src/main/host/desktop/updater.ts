@@ -1,7 +1,14 @@
-import { app, BrowserWindow, dialog } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  type MessageBoxOptions,
+  type MessageBoxReturnValue
+} from 'electron'
 import electronUpdater from 'electron-updater'
 import { is } from '@electron-toolkit/utils'
 import { createLogger } from '../../logger/logger'
+import { ensureMainWindow, focusMainWindow } from '../../window/focus'
 import {
   UPDATER_BROADCAST_CHANNEL,
   type UpdaterState
@@ -29,8 +36,27 @@ export function getUpdaterState(): UpdaterState {
   return currentState
 }
 
+/**
+ * Every updater dialog, attached to the main window as a sheet.
+ *
+ * Without a parent, Electron on macOS shows the box with `runModal`: an
+ * app-modal panel that blocks every window and even Quit. Opened from a
+ * background app — the download finishing right after the laptop wakes — it
+ * orders *beneath* the active app's windows, and Cinna then ignores every click
+ * with nothing on screen to say why. A sheet is drawn on the window itself and
+ * cannot end up behind it. Electron falls back to `runModal` for a hidden
+ * parent, so a hidden or minimized window is brought up first, and a closed
+ * one (macOS keeps the app alive without it) is reopened.
+ */
+async function showUpdaterDialog(options: MessageBoxOptions): Promise<MessageBoxReturnValue> {
+  const win = await ensureMainWindow()
+  if (!win) return dialog.showMessageBox(options)
+  if (!win.isVisible() || win.isMinimized()) focusMainWindow()
+  return dialog.showMessageBox(win, options)
+}
+
 async function promptInstall(version: string): Promise<void> {
-  const { response } = await dialog.showMessageBox({
+  const { response } = await showUpdaterDialog({
     type: 'info',
     buttons: ['Restart now', 'Later'],
     defaultId: 0,
@@ -46,7 +72,7 @@ async function promptInstall(version: string): Promise<void> {
 
 export async function promptInstallCurrent(): Promise<void> {
   if (currentState.phase !== 'downloaded') {
-    await dialog.showMessageBox({
+    await showUpdaterDialog({
       type: 'info',
       title: 'Updates',
       message: 'No update is ready to install yet.',
@@ -94,10 +120,12 @@ function configureUpdater(): void {
     setState({ phase: 'downloading', version, percent: p.percent })
   })
 
-  autoUpdater.on('update-downloaded', async (info) => {
-    log.info(`update downloaded: ${info.version} — prompting user`)
+  // No dialog here: the user did not ask for one, and a download usually
+  // finishes while they are doing something else. The renderer shows the
+  // ready badge, and `autoInstallOnAppQuit` installs on the next quit anyway.
+  autoUpdater.on('update-downloaded', (info) => {
+    log.info(`update downloaded: ${info.version}`)
     setState({ phase: 'downloaded', version: info.version })
-    await promptInstall(info.version)
   })
 }
 
@@ -125,7 +153,7 @@ export function initAutoUpdater(): void {
 export async function checkForUpdatesManual(): Promise<void> {
   try {
     if (is.dev) {
-      await dialog.showMessageBox({
+      await showUpdaterDialog({
         type: 'info',
         title: 'Updates',
         message: 'Auto-update is disabled in development builds.',
@@ -139,17 +167,17 @@ export async function checkForUpdatesManual(): Promise<void> {
     const result = await autoUpdater.checkForUpdates()
 
     if (result?.downloadPromise) {
-      await dialog.showMessageBox({
+      await showUpdaterDialog({
         type: 'info',
         title: 'Update available',
         message: `Cinna Desktop ${result.updateInfo.version} is downloading.`,
-        detail: `You'll be prompted to restart once the download completes.`,
+        detail: 'When it is ready, the download icon shows a green dot. Click it to restart and install.',
         buttons: ['OK']
       })
     } else if (currentState.phase === 'downloaded') {
       await promptInstall(currentState.version)
     } else {
-      await dialog.showMessageBox({
+      await showUpdaterDialog({
         type: 'info',
         title: 'You’re up to date',
         message: `Cinna Desktop ${app.getVersion()} is the latest version.`,
@@ -158,7 +186,7 @@ export async function checkForUpdatesManual(): Promise<void> {
     }
   } catch (err) {
     log.error(`manual check failed: ${(err as Error).message}`)
-    await dialog.showMessageBox({
+    await showUpdaterDialog({
       type: 'error',
       title: 'Updates',
       message: 'Could not check for updates.',

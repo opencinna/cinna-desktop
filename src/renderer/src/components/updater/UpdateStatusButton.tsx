@@ -9,7 +9,17 @@ const RING_STROKE = 2
 const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
 
-export function UpdateStatusButton(): React.JSX.Element | null {
+interface UpdateStatusButtonProps {
+  /** Render only once the update is ready to install — the top bar's variant. */
+  readyOnly?: boolean
+  /** Replaces the default button styling, so a host bar can match its own buttons. */
+  className?: string
+}
+
+export function UpdateStatusButton({
+  readyOnly = false,
+  className
+}: UpdateStatusButtonProps = {}): React.JSX.Element | null {
   const state = useUpdaterStore((s) => s.state)
   const subscribe = useUpdaterStore((s) => s.subscribe)
   const promptInstall = useUpdaterStore((s) => s.promptInstall)
@@ -19,6 +29,7 @@ export function UpdateStatusButton(): React.JSX.Element | null {
   }, [subscribe])
 
   if (state.phase === 'idle') return null
+  if (readyOnly && state.phase !== 'downloaded') return null
 
   if (state.phase === 'downloading') {
     const percent = Math.max(0, Math.min(100, state.percent))
@@ -68,8 +79,12 @@ export function UpdateStatusButton(): React.JSX.Element | null {
       onClick={() => {
         void promptInstall()
       }}
-      title={`Update ${state.version} ready — click to restart and install`}
-      className="relative p-1.5 rounded-md text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
+      title={`Update ${state.version} ready — restart to install…`}
+      className={
+        className
+          ? `relative ${className}`
+          : 'relative p-1.5 rounded-md text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors'
+      }
     >
       <Download size={ICON_SIZE} />
       <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />

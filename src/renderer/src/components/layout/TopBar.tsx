@@ -1,13 +1,14 @@
 import { Check, Plus, PanelLeft, PanelLeftClose } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useUIStore, type SidebarDocking } from '../../stores/ui.store'
+import { useUIStore, selectSidebarVisible, type SidebarDocking } from '../../stores/ui.store'
 import { usePopover } from '../ui/usePopover'
 import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
 import { useStartNewChat } from '../../hooks/useStartNewChat'
 import { JobOriginBanner } from '../chat/JobOriginBanner'
 import { InboxButton } from '../inbox/InboxButton'
 import { AgentStatusButton } from '../agents/AgentStatusButton'
+import { UpdateStatusButton } from '../updater/UpdateStatusButton'
 
 // macOS traffic lights at x=15, y=10 (~58 px cluster). 76 px clears them.
 const TRAFFIC_LIGHT_GUTTER = 'pl-[76px]'
@@ -94,6 +95,9 @@ function SidebarButton(): React.JSX.Element {
 export function TopBar(): React.JSX.Element {
   const startNewChat = useStartNewChat()
   const extraUIAnimation = useUIStore((s) => s.extraUIAnimation)
+  // The sidebar footer carries the update badge; with the sidebar out of view
+  // the ready badge moves here, so a downloaded update is never invisible.
+  const sidebarVisible = useUIStore(selectSidebarVisible)
   const [wave, setWave] = useState(false)
 
   useEffect(() => {
@@ -135,7 +139,12 @@ export function TopBar(): React.JSX.Element {
       <button onClick={startNewChat} title="New Chat" className={TOPBAR_BTN}>
         <Plus size={15} />
       </button>
-      <JobOriginBanner />
+      {/* Right-aligned on every view, whether or not the job pill is there;
+          the badge goes before the pill so its coming and going never moves it. */}
+      <div className="ml-auto flex items-center gap-1 min-w-0">
+        {!sidebarVisible && <UpdateStatusButton readyOnly className={TOPBAR_BTN} />}
+        <JobOriginBanner />
+      </div>
     </div>
   )
 }

@@ -7,6 +7,7 @@ vi.mock('../../hooks/useStartNewChat', () => ({ useStartNewChat: () => vi.fn() }
 vi.mock('../chat/JobOriginBanner', () => ({ JobOriginBanner: () => null }))
 vi.mock('../inbox/InboxButton', () => ({ InboxButton: () => null }))
 vi.mock('../agents/AgentStatusButton', () => ({ AgentStatusButton: () => null }))
+vi.mock('../updater/UpdateStatusButton', () => ({ UpdateStatusButton: () => null }))
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined }

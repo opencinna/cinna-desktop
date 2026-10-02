@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // header placement and opening's cache refresh are checked together.
 vi.mock('../../hooks/useStartNewChat', () => ({ useStartNewChat: () => vi.fn() }))
 vi.mock('../chat/JobOriginBanner', () => ({ JobOriginBanner: () => null }))
+vi.mock('../updater/UpdateStatusButton', () => ({ UpdateStatusButton: () => null }))
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined }

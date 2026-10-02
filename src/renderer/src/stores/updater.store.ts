@@ -21,12 +21,17 @@ export const useUpdaterStore = create<UpdaterStore>((set, get) => ({
   set: (state) => set({ state }),
 
   subscribe: async () => {
+    // Claimed before the await: the sidebar footer and the top bar both mount
+    // a status button, and both would otherwise get past this check.
     if (get().subscribed) return
-    const initial = await window.api.updater.getState()
+    set({ subscribed: true })
     const unsub = window.api.updater.onState((state) => {
       set({ state })
     })
-    set({ state: initial, subscribed: true, unsubscribe: unsub })
+    set({ unsubscribe: unsub })
+    const initial = await window.api.updater.getState()
+    // A broadcast that landed during the await is newer than the snapshot.
+    if (get().state.phase === 'idle') set({ state: initial })
   },
 
   promptInstall: async () => {
