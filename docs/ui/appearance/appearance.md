@@ -30,9 +30,10 @@ Let the user choose the app's color theme and whether chat switches and idle sur
 ### Working in a composer
 
 1. The expanded sidebar and shared chat inputs can show faint grid pulses with branching, lightning-like trails. The shared input covers new chats, existing chats and folder/external agent pages; the Agents Development entry composer participates too.
-2. Input and sidebar borders occasionally receive a traveling highlight. The actual border remains intact, including chat-mode, focus and drag-over colors.
+2. The sidebar and the Agents Development composer occasionally receive a traveling border highlight on their own timer. The main chat composer has no timer of its own: it takes its turn in the secondary-button rotation instead, so it never glows at the same moment as a button. Either way the highlight is drawn inside the actual border, which stays intact, including chat-mode, focus and drag-over colors.
 3. Pointer, keyboard, text-input or composition interaction with a textarea immediately starts a short fade of its grid and border artwork. It stays quiet until blur followed by a full quiet interval; autofocus alone does not silence it.
-4. Editing one composer does not silence the sidebar or other independent surfaces. Header controls can receive a left-to-right background wave, and at most one eligible secondary button receives its own border glow at a time.
+4. Editing one composer does not silence the sidebar or other independent surfaces. Header controls can receive a left-to-right background wave, and at most one eligible secondary button (or the chat composer) receives its own border glow at a time.
+5. While the user is typing in the chat composer it sits out its rotation turns — typing means a keystroke within the last four seconds with focus inside it — and a keystroke drops a glow already running on it. A focused composer nobody is typing in can still glow.
 
 ### Switching chats
 
@@ -56,7 +57,7 @@ Switching between chats in the main workspace (including its new-chat screen) sw
 - **The new-chat logo is hidden, not absent.** Its box is laid out whether or not it is shown, so revealing or hiding it never moves the heading, example prompts or composer. It is aria-hidden, unfocusable and has no keyboard path, because it conveys nothing a reader would miss.
 - **Logo visibility belongs to the screen.** It is saved nowhere, not even for the session; leaving the new-chat screen discards it, and every visit or launch starts with the space empty.
 - **Off and reduced motion make the logo instant, not unavailable.** With Extra UI animation off or reduced motion on, a click shows or hides the whole logo at once and no band sweeps. Hiding the logo, turning the preference off, hiding the document or switching to reduced motion ends a sweep in progress.
-- **Secondary buttons opt in explicitly.** Shared settings buttons, Local Development secondary actions, the neutral Settings action on agent pages and the job page's Edit are eligible. The job and task pages' **Details** panels opt in as cards and take their turn in the same one-at-a-time rotation. Selection excludes disabled, hidden, offscreen and center-occluded controls; primary sending actions do not opt in.
+- **Secondary buttons opt in explicitly.** Shared settings buttons, Local Development secondary actions, the neutral Settings action on agent pages and the job page's Edit are eligible. The job and task pages' **Details** panels and the main chat composer opt in as cards and take their turn in the same one-at-a-time rotation. A card the user is typing in is skipped and loses a running glow on the first keystroke, because a highlight circling the text being written competes with it. Selection excludes disabled, hidden, offscreen and center-occluded controls; primary sending actions do not opt in.
 - **Header waves affect backgrounds.** The four controls keep their existing glyphs and status indicators; hover or visible keyboard focus suppresses a control's wave layer.
 - **Extra animation is not a general motion switch.** Existing sidebar transitions, loading indicators, tray fades and other feature-owned animations keep their own behavior. Theme changes do not change the OS theme or authentication/runtime settings.
 

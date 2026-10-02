@@ -1,7 +1,7 @@
 import { PendingHandoffControl } from '../tasks/PendingHandoffControl'
 import { AmbientGrid } from '../ui/AmbientGrid'
 import { AutonomousTaskDialog } from '../tasks/AutonomousTaskDialog'
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef, type CSSProperties } from 'react'
 import { SendHorizontal, Square, Check } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { RunQueueView } from '../../../../shared/ipcPayloads'
@@ -1737,17 +1737,20 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       <ComposerReadinessWarning readiness={readiness} reasonId={readinessReasonId} />
 
       <div
-        className="ambient-grid-surface relative rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
+        // Takes its turn in the secondary buttons' border glow (useAmbientButtons).
+        data-ambient-card
+        className="ambient-grid-surface ambient-button relative rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         style={{
           borderColor: inputBorderColor,
-          backgroundColor: modeColor ? modeColor.bg : undefined
-        }}
+          backgroundColor: modeColor ? modeColor.bg : undefined,
+          '--ambient-input-tint': inputBorderColor
+        } as CSSProperties}
       >
-        <AmbientGrid inputRef={textareaRef} borderColor={inputBorderColor} />
+        <AmbientGrid inputRef={textareaRef} borderGlow={false} />
         <textarea
           ref={textareaRef}
           value={input}
@@ -1802,7 +1805,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           // Pointer-events off so the overlay never eats the underlying
           // drop event — the container's own handler does the work.
           <div
-            className="pointer-events-none absolute inset-0 flex items-center justify-center
+            className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center
               rounded-2xl bg-[var(--color-accent)]/10 border-2 border-dashed
               border-[var(--color-accent)] text-[var(--color-accent)] text-xs font-medium"
           >

@@ -28,7 +28,7 @@ Implementation companion to [Appearance](appearance.md).
 - `src/renderer/src/components/settings/FeaturesSettingsSection.tsx` — Theme choice group and Extra UI animation switch.
 - `src/renderer/src/components/layout/InterfaceMenu.tsx` — fixed-theme shortcut.
 - `src/renderer/src/components/layout/Sidebar.tsx` — grid surface with `active={sidebarOpen}` and explicit border glow.
-- `src/renderer/src/components/chat/ChatInput.tsx` — shared textarea grid and current border tint; `src/renderer/src/components/layout/ChatWorkspace.tsx` supplies new/existing and embedded agent composers.
+- `src/renderer/src/components/chat/ChatInput.tsx` — shared textarea grid (no border timer), the composer box as a `data-ambient-card`, and current border tint; `src/renderer/src/components/layout/ChatWorkspace.tsx` supplies new/existing and embedded agent composers.
 - `src/renderer/src/components/localdev/LocalDevelopmentPage.tsx` — active/ready-gated build composer, focus tint and secondary action opt-in.
 - `src/renderer/src/components/settings/SettingsLayout.tsx` — `SettingsButton` opt-in; `src/renderer/src/components/agents/local/LocalAgentPage.tsx` and `src/renderer/src/components/agents/ExternalAgentPage.tsx` opt in only their neutral Settings action.
 
@@ -56,7 +56,7 @@ System is resolved before IPC; main never receives `system`. The handler updates
 
 ### Grid and border scheduling
 
-- `AmbientGrid` takes `active` (default true), optional textarea `inputRef`, optional current `borderColor`, and `borderGlow` (defaults to whether an input ref exists). Effective enablement is `active && extraUIAnimation`.
+- `AmbientGrid` takes `active` (default true), optional textarea `inputRef`, optional current `borderColor`, and `borderGlow` (defaults to whether an input ref exists). Effective enablement is `active && extraUIAnimation`. `ChatInput` passes `borderGlow={false}`: it keeps the grid bursts but its border glow comes from `useAmbientButtons` (below), so the composer's border and a secondary button's never glow together. The sidebar (`borderGlow`) and the Local Development composer (input ref, default) keep this per-host border timer.
 - `makeTrails` uses a 24 px grid with 12 px offset. It favors the host's long axis and open space, builds a directed trunk of up to 12–17 steps and up to two 4–7-step forks, and shares visited nodes so paths cannot reconnect into boxes. Heading, continuation, outward distance and nearby trails weight each next edge. Bounds can shorten a path; forks begin after the pulse reaches their attachment.
 - Each burst measures its host before generating artwork. Grid hosts smaller than one cell and border hosts without dimensions retry after their normal quiet interval. Hidden embedded chat composers therefore need no new layout or chat-state mutation.
 - `quiet` listens on the textarea for pointerdown, keydown, beforeinput, input and compositionstart. It cancels grid/border timers, sets `data-fading`, retains artwork for the 350 ms opacity fade, then clears it. No focus listener is installed: autofocus remains idle. `resume` runs on blur after actual interaction and schedules normal quiet intervals.
@@ -65,8 +65,8 @@ System is resolved before IPC; main never receives `system`. The handler updates
 | Effect | Initial/restart delay | Active duration | Quiet interval after completion |
 |---|---|---|---|
 | Grid pulse | 1.5–4.5 s | 6.5–8.5 s | 12–24 s; also used after interaction ends |
-| Input/sidebar border | 18–35 s | 4.2–6 s | 35–70 s; also used after interaction ends |
-| Secondary-button border | 4–9 s | 4.2–5.6 s | 8–18 s; no eligible button retries in 8–16 s |
+| Sidebar / Local Development composer border | 18–35 s | 4.2–6 s | 35–70 s; also used after interaction ends |
+| Secondary-button border (incl. chat composer) | 4–9 s | 4.2–5.6 s | 8–18 s; no eligible button retries in 8–16 s; a keystroke dropping the composer's glow reschedules in 8–18 s |
 | Header wave | 8–18 s | 2 s scheduling window | 28–55 s |
 | New-chat logo sweep | 6–9 s after the logo is shown (5 s draw + 1–4 s); 4–9 s after a visibility/motion change, never before the draw has finished | 4.2–5.6 s | 8–18 s |
 
@@ -74,7 +74,8 @@ Grid/border state is per host; the secondary-button singleton, header scheduler 
 
 ### Secondary buttons and header wave
 
-- `useAmbientButtons` queries enabled `button.ambient-button` candidates, plus any `.ambient-button[data-ambient-card]` — the job and task pages' Details panels — at each selection, so a card and a button never glow together. `checkVisibility` checks opacity/CSS visibility; the center must be inside the viewport and `elementFromPoint` must resolve inside the candidate, excluding controls behind dialogs or clipped at that point. Visibility is checked at selection, not continuously throughout a glow.
+- `useAmbientButtons` queries enabled `button.ambient-button` candidates, plus any `.ambient-button[data-ambient-card]` — the job and task pages' Details panels and the `ChatInput` composer box — at each selection, so a card and a button never glow together. `checkVisibility` checks opacity/CSS visibility; the center must be inside the viewport and `elementFromPoint` must resolve inside the candidate, excluding controls behind dialogs or clipped at that point. Visibility is checked at selection, not continuously throughout a glow.
+- Typing exclusion: capture-phase `keydown`, `beforeinput` and `compositionstart` listeners on `document` record `typedAt`. A candidate containing `document.activeElement` is skipped while `performance.now() - typedAt < 4000` (`TYPING_MS`); focus alone, as after autofocus, does not exclude it. If the event target is inside the element currently glowing, the glow is cleared and the next selection is scheduled in 8–18 s. Typing anywhere else leaves a running glow alone. The listeners are removed on cleanup with the others.
 - One selected button receives `data-ambient-glow`, a random quarter-turn start angle and duration variables. `clear` removes those attributes/styles and the timer before another selection, on visibility/motion changes, when disabled or on unmount. No qualifying candidate means a delayed retry.
 - "One at a time" holds among the scheduler's candidates only. The glow CSS matches any `.ambient-button[data-ambient-glow]`, and `src/renderer/src/components/chat/ChatItemTooltip.tsx` puts both on its own `div`, with the same angle and duration variables, on some openings. The scheduler's selector never selects it (it is not a `button` and carries no `data-ambient-card`) and `clear` touches only the element it set, so the two are independent and may glow together. The tooltip reads `extraUIAnimation` itself and relies on the CSS reduced-motion rule; it has no `document.hidden` check, since it exists only under a hovering pointer. See [Chat Row Summary](../../chat/chat_row_summary/chat_row_summary_tech.md#chatitemtooltip).
 - `TopBar` sets `data-header-wave` for a two-second window. The four direct children share `ambient-header-button`; CSS gives their background layers a 1.2 s animation with 0/220/440/660 ms left-to-right delays. Hover/focus-visible suppresses the local layer. The effect resets when the preference changes and removes timers/listeners on cleanup.
@@ -101,7 +102,8 @@ Grid/border state is per host; the secondary-button singleton, header scheduler 
 - `.ambient-grid-surface` establishes relative positioning and an isolated stacking context. The absolute, negative-z-index `.ambient-grid` clips only decoration, inherits corner radius, ignores pointer events and selection, and is `aria-hidden`; SVG is nonfocusable. Hosts retain their existing input, clipping and popover rules.
 - SVG combines faint grid lines under a radial mask with delayed edge strokes and blurred halos. Theme-specific glow tokens and light-theme opacity overrides keep contrast appropriate to the resolved palette.
 - Traveling borders use a registered angle property, conic gradient, mask and 270-degree travel. `.ambient-surface-border` sits inside the actual border; its highlight mixes the glow token with `--ambient-input-tint`, falling back to the normal border token.
-- `ChatInput` shares `inputBorderColor` between the real border and decoration: drag-over accent takes precedence over chat-mode border and default border. Updating tint does not restart the animation effect. The development host inherits normal/focus-within tint through CSS; the sidebar uses the default tint.
+- `ChatInput` shares `inputBorderColor` between the real border and decoration by setting it as `--ambient-input-tint` on the composer box itself: drag-over accent takes precedence over chat-mode border and default border. Updating tint does not restart any scheduler. The development host inherits normal/focus-within tint through CSS; the sidebar uses the default tint.
+- The composer box clips its overflow, so the secondary buttons' outset `::after` (`inset: -1px`) would be cut off on it. `.ambient-grid-surface.ambient-button[data-ambient-glow]::after` redraws it at `inset: 0` with the same tinted conic gradient as `.ambient-surface-border` — an inner highlight that leaves the real chat-mode, focus and drag-over border untouched.
 - Features uses labeled System/Dark/Light buttons with `aria-pressed`, plus the existing accessible `SettingsToggleRow`. Both write directly to UI-store setters and remain usable independently of the app-settings query/mutation state.
 
 ## Configuration
@@ -124,6 +126,7 @@ Appearance storage contains presentation preferences only. Decoration performs n
 - `src/renderer/src/components/layout/ChatTransition.test.tsx` — immediate next-chat rendering, inert outgoing snapshots, scroll/focus preservation, rapid switches, preference/motion cancellation and stable child lifecycle.
 - `src/renderer/src/stores/ui.appearance.test.ts` — default-on animation persistence, live System resolution, fixed shortcut and cross-window storage propagation.
 - `src/renderer/src/components/settings/FeaturesSettingsSection.test.tsx` — accessible controls, immediate persistence and operation while service settings are unavailable.
+- `src/renderer/src/hooks/useAmbientButtons.test.ts` — a focused, idle composer card still glows; a keystroke drops its running glow, it is skipped while typed in, and is eligible again once typing has stopped for four seconds.
 - `src/renderer/src/components/ui/AmbientGrid.test.tsx` — autofocus versus actual interaction, fade/blur quiet intervals, unmount timer cleanup, live tint and independent sidebar border behavior.
 - `src/renderer/src/components/layout/TopBar.agentStatusButton.test.tsx` — four header controls and preference/reduced-motion cancellation. These focused contracts do not verify the visual rendering of randomized artwork or a full Electron workflow.
 - No unit or E2E test covers `CinnaLogoDraw`: its shown toggle, draw transitions and sweep scheduler are unverified by the suite.

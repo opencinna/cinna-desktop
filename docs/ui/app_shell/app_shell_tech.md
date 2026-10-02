@@ -182,7 +182,7 @@ Layout is unmeasurable in jsdom, so the horizontal behaviour is covered by an E2
 
 - `Shell` mounts `src/renderer/src/hooks/useAmbientButtons.ts` once. `TopBar` owns its independent header-wave timer and passes the shared decorative class to all four controls.
 - `Sidebar` marks its card as `ambient-grid-surface` and mounts `src/renderer/src/components/ui/AmbientGrid.tsx` with explicit border glow and `active={visible}` (`selectSidebarVisible`); collapse, or a peek ending, cancels decoration without unmounting the sidebar.
-- Every `ChatWorkspace` path reaches the shared decorated `ChatInput`; Local Development has its own active/ready-gated host. The neutral Settings button on folder/external agent pages opts into secondary glows; its accent Start chat state does not.
+- Every `ChatWorkspace` path reaches the shared decorated `ChatInput`, whose composer box is also a `data-ambient-card` in the `useAmbientButtons` rotation; Local Development has its own active/ready-gated host with its own border timer. The neutral Settings button on folder/external agent pages opts into secondary glows; its accent Start chat state does not.
 - Preference storage, System/cross-window propagation, scheduler timing and reduced-motion/interaction cleanup belong to [Appearance technical details](../appearance/appearance_tech.md). Draft lifetime belongs to [Conversation UI](../../chat/conversation_ui/conversation_ui_tech.md#draft-ownership); decoration and the curtain do not consume or persist drafts.
 
 ### Desktop visibility notification

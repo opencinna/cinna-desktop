@@ -296,6 +296,12 @@
     --input-highlight: color-mix(in srgb, var(--color-ambient-glow) 70%, var(--ambient-input-tint, var(--color-border)));
     background: conic-gradient(from var(--ambient-border-angle), transparent 0deg, var(--input-highlight) 35deg, transparent 95deg);
   }
+  /* The chat composer clips its overflow, so its turn in the rotation draws
+     the same inner highlight as .ambient-surface-border. */
+  .ambient-grid-surface.ambient-button[data-ambient-glow]::after {
+    inset: 0;
+    background: conic-gradient(from var(--ambient-border-angle), transparent 0deg, color-mix(in srgb, var(--color-ambient-glow) 70%, var(--ambient-input-tint, var(--color-border))) 35deg, transparent 95deg);
+  }
   @keyframes ambient-button-travel {
     from { --ambient-border-angle: var(--button-start-angle); }
     to { --ambient-border-angle: calc(var(--button-start-angle) + 270deg); }
