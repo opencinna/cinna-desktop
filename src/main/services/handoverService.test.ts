@@ -598,7 +598,8 @@ describe('intake', () => {
 
 describe('auto execution', () => {
   const matrix: {
-    execution: 'ask' | 'auto'
+    /** `null`: the brief has no `execution` line, and the setting decides. */
+    execution: 'ask' | 'auto' | null
     setting: 'ask' | 'auto' | null
     git: HandoverIgnoreCheck['result']
     state: string
@@ -611,16 +612,23 @@ describe('auto execution', () => {
     { execution: 'auto', setting: 'auto', git: 'unknown', state: 'gated', warning: 'auto_not_allowed:unknown' },
     { execution: 'auto', setting: 'ask', git: 'ignored', state: 'gated', warning: 'auto_not_allowed:setting_ask' },
     { execution: 'auto', setting: null, git: 'ignored', state: 'gated', warning: 'auto_not_allowed:setting_ask' },
-    { execution: 'ask', setting: 'auto', git: 'ignored', state: 'gated', warning: null }
+    { execution: 'ask', setting: 'auto', git: 'ignored', state: 'gated', warning: null },
+    { execution: null, setting: 'auto', git: 'ignored', state: 'running', warning: null },
+    { execution: null, setting: 'auto', git: 'not_a_repo', state: 'running', warning: null },
+    { execution: null, setting: 'auto', git: 'tracked', state: 'gated', warning: 'auto_not_allowed:tracked' },
+    { execution: null, setting: 'auto', git: 'unknown', state: 'gated', warning: 'auto_not_allowed:unknown' },
+    { execution: null, setting: 'ask', git: 'ignored', state: 'gated', warning: null },
+    { execution: null, setting: null, git: 'ignored', state: 'gated', warning: null }
   ]
 
   for (const item of matrix) {
     it(`brief ${item.execution} + setting ${item.setting} + git ${item.git} → ${item.state}`, async () => {
       h.handoversSetting = item.setting
       h.gitResult = { result: item.git }
-      h.write('20260917-1200-retry', 'brief.md', brief(`execution: ${item.execution}\n`))
+      h.write('20260917-1200-retry', 'brief.md', brief(item.execution ? `execution: ${item.execution}\n` : ''))
       await h.service.scanAgent(SCOPE, h.agent)
 
+      expect(h.row().execution).toBe(item.execution ?? 'receiver')
       expect(h.row().state).toBe(item.state)
       expect(h.row().warning).toBe(item.warning)
       expect(h.started.length).toBe(item.state === 'running' ? 1 : 0)
@@ -1277,6 +1285,65 @@ describe('a run the app lost', () => {
  * it must not appear in the sidebar before the user has decided anything, and
  * it must not be destroyed if the user went and used it.
  */
+describe('an executor waiting on its own delegations', () => {
+  // The bare executor delegated onward from its chat and ended its turn, as `handover_create` tells it to.
+  let outbound: 'open' | 'settled'
+  async function relaying(): Promise<void> {
+    outbound = 'open'
+    h.deps.awaitsOutbound = (_userId, row, chatId) =>
+      outbound === 'open' && row.taskId === h.task().id && chatId === h.task().chatId
+    h.deps.relayRowIds = (_userId, chatId) => (chatId === h.task().chatId && h.row().state === 'running' ? [h.row().id] : [])
+    h.handoversSetting = 'auto'
+    h.write('20260917-1200-retry', 'brief.md', brief('execution: auto\norigin:\n  agent: agent-known\n  chat: chat-known\n'))
+    await h.service.scanAgent(SCOPE, h.agent)
+    expect(h.row().state).toBe('running')
+  }
+  const tick = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  it('stays running when its turn ends, and settles on the turn the child’s packet resumes', async () => {
+    await relaying()
+    h.turns[0]({ state: 'completed', text: 'Delegated onward; waiting.' })
+    await tick()
+    expect(h.row().state).toBe('running')
+    expect(h.wakes).toEqual([])
+
+    outbound = 'settled'
+    h.service.watchRelay(SCOPE, h.task().chatId as string, Promise.resolve({ state: 'completed', text: 'The child says: done.' }))
+    await tick()
+    expect(h.row()).toMatchObject({ state: 'done', warning: 'report_missing' })
+    expect(h.wakes).toEqual([expect.objectContaining({ status: 'done', body: 'The child says: done.' })])
+  })
+
+  it('lets a report the relay writes win over its resumed turn', async () => {
+    await relaying()
+    h.turns[0]({ state: 'completed', text: 'Waiting.' })
+    await tick()
+    outbound = 'settled'
+    h.write('20260917-1200-retry', 'report.md', report('status: done\nsummary: Relayed the child’s answer\n', 'Relayed.'))
+    h.service.watchRelay(SCOPE, h.task().chatId as string, Promise.resolve({ state: 'completed', text: 'Reported.' }))
+    await tick()
+    expect(h.row()).toMatchObject({ state: 'done', reportStatus: 'done' })
+    expect(h.row().warning).toBeNull()
+    expect(h.wakes).toEqual([expect.objectContaining({ summary: 'Relayed the child’s answer' })])
+  })
+
+  it('is not swept as a lost run between its turns', async () => {
+    await relaying()
+    h.turns[0]({ state: 'completed', text: 'Waiting.' })
+    await tick()
+    h.liveChats.clear()
+    h.clockMs += 3 * 60_000
+    await h.service.scanAgent(SCOPE, h.agent)
+    expect(h.row().state).toBe('running')
+    outbound = 'settled'
+    await h.service.scanAgent(SCOPE, h.agent)
+    expect(h.row()).toMatchObject({ state: 'failed', warning: 'run_lost' })
+  })
+})
+
 describe('the chat the gate borrows', () => {
   async function gated(): Promise<string> {
     h.write('20260917-1200-retry', 'brief.md', brief(''))

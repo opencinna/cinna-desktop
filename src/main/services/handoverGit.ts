@@ -1,5 +1,5 @@
 import { execFile as execFileCb } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { HANDOVERS_DIR, type HandoverIgnoreCheck } from '../../shared/handovers'
@@ -23,7 +23,6 @@ export interface HandoverGitDeps {
   execFile: ExecFile
   /** The app's login shell PATH, so a `git` installed by brew is found. */
   env: () => Promise<NodeJS.ProcessEnv>
-  readFile: (path: string) => string
   /** Is the folder there at all? A path that is gone is never a permission. */
   exists: (path: string) => boolean
   /**
@@ -46,46 +45,31 @@ function errnoOf(error: unknown): string | null {
   return typeof code === 'string' ? code : null
 }
 
-/**
- * The static reading of `.gitignore`, for a machine with no `git` binary.
- *
- * Deliberately a short allowlist of *literal* lines rather than a gitignore
- * engine (`src/main/kit/validator.ts` made the same call for `credentials/.env`).
- * A pattern this does not recognise reads as `unknown`, which forbids `auto` —
- * the failure direction that costs the user a question, not a permission.
- */
-const IGNORED_LINES = new Set([
-  '.cinna',
-  '.cinna/',
-  '/.cinna',
-  '/.cinna/',
-  '**/.cinna',
-  '.cinna/handovers',
-  '.cinna/handovers/',
-  '/.cinna/handovers',
-  '/.cinna/handovers/'
-])
-
 export function createHandoverGit(deps: HandoverGitDeps) {
   /**
-   * Read `<dir>/.gitignore` and say whether it plainly excludes the handovers
-   * tree. Anything else, including an unreadable file, is `unknown`.
+   * The answer for a machine with no usable `git` binary (a bare Mac without
+   * the command line tools, say).
+   *
+   * **Only "no repository at all" is a permission here.** Without git nothing
+   * can tell whether `.cinna/handovers` is already committed, and a committed
+   * brief pulled by GitHub Desktop would then run unasked — so a `.gitignore`
+   * line proves nothing, and any `.git` entry in the folder or a parent up to
+   * the root is `unknown`. `.git` is a directory in a clone and a file in a
+   * worktree or submodule; both count. A folder that is gone is never a
+   * permission either.
    */
   function staticCheck(dir: string): HandoverIgnoreCheck {
-    let text: string
-    try {
-      text = deps.readFile(join(dir, '.gitignore'))
-    } catch {
-      return { result: 'unknown', detail: 'git is not available and this folder has no .gitignore.' }
-    }
-    for (const raw of text.split(/\r?\n/)) {
-      const line = raw.trim()
-      if (line === '' || line.startsWith('#')) continue
-      if (IGNORED_LINES.has(line)) {
-        return { result: 'ignored', detail: 'Read from .gitignore; git itself was not available.' }
+    if (!deps.exists(dir)) return { result: 'unknown', detail: 'That folder is no longer on this machine.' }
+    for (let parent = dir; ; parent = dirname(parent)) {
+      if (deps.exists(join(parent, '.git'))) {
+        return {
+          result: 'unknown',
+          detail: 'This folder is in a git repository, and git isn’t available to confirm its handovers are not committed.'
+        }
       }
+      if (dirname(parent) === parent) break
     }
-    return { result: 'unknown', detail: 'git is not available and .gitignore does not plainly exclude .cinna.' }
+    return { result: 'not_a_repo' }
   }
 
   return {
@@ -184,7 +168,6 @@ export type HandoverGit = ReturnType<typeof createHandoverGit>
 export const handoverGit = createHandoverGit({
   execFile: nodeExecFile,
   env: async () => ({ ...process.env, ...(await getShellEnv()) }),
-  readFile: (path) => readFileSync(path, 'utf8'),
   exists: (path) => existsSync(path),
   resolveGit: () => usableTool('git')
 })

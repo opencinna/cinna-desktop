@@ -97,14 +97,27 @@ export function isHandoverId(value: unknown): value is string {
 }
 
 /**
- * What the brief *asks for*. `auto` is a request, not a permission: it is
- * honoured only where the receiving agent's own setting allows it (§3.4), never
- * by the brief alone — anything that can write to the folder, including a
- * `git pull`, can plant one.
+ * What a brief or request *says* about running unattended, when it says
+ * anything. The receiving side's standing setting decides (§3.4): `ask` forces
+ * a gate whatever that setting is, while `auto` and saying nothing both follow
+ * it. Neither value is a permission — anything that can write to the folder,
+ * including a `git pull`, can plant a brief.
  */
 export type HandoverExecution = 'ask' | 'auto'
 
 export const HANDOVER_EXECUTIONS: readonly HandoverExecution[] = ['ask', 'auto']
+
+/**
+ * `execution` as a row records it. `receiver` is the stored form of a brief or
+ * request that said nothing — the column is `NOT NULL`, and a row written
+ * before the field became optional says `ask` and keeps meaning it.
+ */
+export type RecordedHandoverExecution = HandoverExecution | 'receiver'
+
+/** The recorded form of a parsed or requested `execution`, absent included. */
+export function recordedExecution(execution: HandoverExecution | null | undefined): RecordedHandoverExecution {
+  return execution ?? 'receiver'
+}
 
 /** Only `ready` is picked up; `draft` is a file someone is still writing. */
 export type HandoverBriefStatus = 'draft' | 'ready'
@@ -145,7 +158,8 @@ export interface HandoverOrigin {
 export interface HandoverBrief {
   title: string
   status: HandoverBriefStatus
-  execution: HandoverExecution
+  /** `null` when the brief does not say: the receiver's setting decides. */
+  execution: HandoverExecution | null
   origin: HandoverOrigin | null
   /** The requester's own depth + 1. Over {@link MAX_HANDOVER_DEPTH} is a refusal, not a parse failure. */
   depth: number
@@ -454,8 +468,9 @@ function readOrigin(fm: Frontmatter): { ok: true; origin: HandoverOrigin | null 
  *
  * `status` is required: there is no safe default between "pick this up" and
  * "somebody is still typing", so a brief without one is a parse failure the
- * user can see rather than a file that silently never runs. `execution`
- * defaults to `ask` and `depth` to 1 — both have an obviously safe value.
+ * user can see rather than a file that silently never runs. An absent
+ * `execution` stays `null` rather than defaulting — "follow the receiver" and
+ * "always ask" are different requests. `depth` defaults to 1.
  *
  * A depth over the cap parses fine. Refusing it is intake's decision (it wants
  * to record the row and show a reason), so ask {@link isDepthAllowed}.
@@ -473,9 +488,15 @@ export function parseHandoverBrief(text: string): HandoverBriefParseResult {
     return fail('bad_status', status ?? '')
   }
 
+  // A key that is `execution` in another case is refused rather than ignored:
+  // ignored, `Execution: ask` would read as "follow the receiver" and run a
+  // brief whose writer meant to force an approval.
+  for (const key of fm.scalars.keys()) {
+    if (key !== 'execution' && key.toLowerCase() === 'execution') return fail('bad_execution', key)
+  }
   const rawExecution = fm.scalars.get('execution')
-  const execution = rawExecution === undefined ? 'ask' : asText(rawExecution)
-  if (!execution || !(HANDOVER_EXECUTIONS as readonly string[]).includes(execution)) {
+  const execution = rawExecution === undefined ? null : asText(rawExecution)
+  if (rawExecution !== undefined && (!execution || !(HANDOVER_EXECUTIONS as readonly string[]).includes(execution))) {
     return fail('bad_execution', execution ?? '')
   }
 
@@ -501,7 +522,7 @@ export function parseHandoverBrief(text: string): HandoverBriefParseResult {
     brief: {
       title,
       status: status as HandoverBriefStatus,
-      execution: execution as HandoverExecution,
+      execution: execution as HandoverExecution | null,
       origin: origin.origin,
       depth,
       group,
@@ -742,8 +763,8 @@ export function parseHandoverGateRequestId(requestId: string): string | null {
 export const HANDOVER_HOW_TO_REPORT = [
   '## How to report',
   '',
-  `Write \`${HANDOVER_REPORT_FILE}\` beside this file, with frontmatter \`cinna_handover: ${HANDOVER_SCHEMA_VERSION}\`,`,
-  '`status: in_progress | blocked | done | failed`, a one-line `summary`, and the details below it.',
+  `Write \`${HANDOVER_REPORT_FILE}\` in the same folder as this brief (not your working folder), with frontmatter \`cinna_handover: ${HANDOVER_SCHEMA_VERSION}\`,`,
+  '`status: in_progress | blocked | done | failed` and a one-line `summary`, closed by a line holding only `---`, with the details below it.',
   'Write it with `status: in_progress` before you start, so nothing else picks this up.',
   '`done` and `failed` are final; `blocked` means you need an answer — put it in `question`.',
   'List any files you changed under `artifacts:` as a YAML list of paths relative to the',
@@ -775,12 +796,13 @@ export function handoverRequesterSection(agentId: string): string {
     '',
     'Write the file whole — a temp file, then a rename — and set `status: ready` only when everything else in it is final. A `ready` brief is never edited again; if you got it wrong, write a new one.',
     '',
+    "Leave `execution` out unless the person must approve this run: `execution: ask` forces an approval; otherwise the receiving project's own setting decides whether it runs without asking.",
+    '',
     '```yaml',
     '---',
     `cinna_handover: ${HANDOVER_SCHEMA_VERSION}`,
     'title: Add retry to the uploader',
     'status: ready',
-    'execution: ask          # `auto` is honoured only where that project allows it',
     'origin:',
     `  agent: ${agentId}`,
     "  chat: <the chat id from this turn's context>",
@@ -812,6 +834,7 @@ export function handoverRequesterSection(agentId: string): string {
   ].join('\n')
 }
 
+
 /**
  * The same protocol, for the task description when **Cinna** runs the executor.
  *
@@ -827,12 +850,19 @@ export function handoverRequesterSection(agentId: string): string {
  * recommendation, and an executor sent to look for a format that is not there
  * has been told something false about a file (`ux_rules.md` §9). So the format
  * is named here instead of pointed at.
+ *
+ * **Paths are relative to the project folder, the executor's working folder.**
+ * "Beside it" was read relative to the working folder and the report landed at
+ * the project root; the absolute path that replaced it carried the stored
+ * `/var/…` form of a symlinked folder, so a write there tripped the engine's
+ * outside-the-project permission ask, and a long temp path was miscopied.
  */
-export function handoverProtocolParagraph(input: { briefPath: string }): string {
+export function handoverProtocolParagraph(input: { handoverId: string }): string {
+  const dir = `${HANDOVERS_DIR}/${input.handoverId}`
   return [
-    `This is a file handover. Read the brief at \`${input.briefPath}\` first and do what it asks.`,
-    `Write \`${HANDOVER_REPORT_FILE}\` beside it, with frontmatter \`cinna_handover: 1\`,`,
-    '`status: in_progress | blocked | done | failed` and a one-line `summary`:',
+    `File handover: read \`${dir}/${HANDOVER_BRIEF_FILE}\` in your project folder and do what it asks.`,
+    `Write \`${dir}/${HANDOVER_REPORT_FILE}\` (that folder, not the project root) with frontmatter \`cinna_handover: 1\`,`,
+    '`status: in_progress | blocked | done | failed`, a one-line `summary` and a closing `---`:',
     '`in_progress` before you start, a final status when you stop.',
     'Do not edit the brief.'
   ].join(' ')
@@ -854,8 +884,9 @@ export function handoverProtocolParagraph(input: { briefPath: string }): string 
  *
  *  - `brief_edited` — a `ready` brief changed after intake. One brief, one
  *    task, forever (§4.3): the edit is *recorded*, never acted on.
- *  - `auto_not_allowed:<reason>` — the brief asked `execution: auto` and it was
- *    not honoured. The reason is the agent's own setting, or what git said.
+ *  - `auto_not_allowed:<reason>` — the brief did not force `ask`, and either
+ *    asked `execution: auto` or met an `auto` setting, and was gated anyway.
+ *    The reason is the agent's own setting, or what git said.
  *  - `origin_unresolved` — an `origin:` block naming an agent, chat or task
  *    this profile cannot see. The handover runs; it has nobody to wake (§3.5).
  *  - `origin_parent_nested` — the `origin:` task resolved and is itself a
@@ -932,7 +963,7 @@ export const HANDOVER_WARNING_KINDS: readonly string[] = [
   'revision_send_timed_out'
 ]
 
-/** Why `execution: auto` was not honoured. */
+/** Why a brief that did not force `ask` was gated anyway. */
 export type HandoverAutoRefusal = 'setting_ask' | 'not_ignored' | 'tracked' | 'unknown'
 
 /** The part of a warning before its `:<detail>`, for a surface that groups them. */
@@ -1008,7 +1039,7 @@ export interface HandoverDto {
   originTaskId: string | null
   depth: number
   groupId: string | null
-  execution: HandoverExecution
+  execution: RecordedHandoverExecution
   state: HandoverState
   refusalReason: string | null
   warning: string | null

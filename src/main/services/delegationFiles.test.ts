@@ -21,6 +21,23 @@ describe('main-authored handover files', () => {
     expect(readFileSync(result.briefPath, 'utf8')).toContain('report.md')
     expect(existsSync(result.reportPath)).toBe(false)
   })
+  it('writes no execution line when the requester said none, so the receiving folder decides', () => {
+    const input = { ...fixture(), execution: null }
+    const result = createDelegationBrief(input)
+    const text = readFileSync(result.briefPath, 'utf8')
+    expect(text).not.toMatch(/^execution:/m)
+    expect(parseHandoverBrief(text)).toMatchObject({ ok: true, brief: { execution: null } })
+    expect(createDelegationBrief(input)).toEqual(result)
+    expect(() => createDelegationBrief({ ...input, execution: 'ask' })).toThrow('different brief')
+  })
+  it('matches a retry that omits execution to a brief that states one, but not a different stated one', () => {
+    for (const execution of ['ask', 'auto'] as const) {
+      const input = { ...fixture(), execution }
+      const result = createDelegationBrief(input)
+      expect(createDelegationBrief({ ...input, execution: null })).toEqual(result)
+      expect(() => createDelegationBrief({ ...input, execution: execution === 'ask' ? 'auto' : 'ask' })).toThrow('different brief')
+    }
+  })
   it('retries idempotently but never overwrites a different ready brief', () => {
     const input = fixture()
     const result = createDelegationBrief(input)

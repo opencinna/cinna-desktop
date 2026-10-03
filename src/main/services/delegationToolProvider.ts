@@ -32,7 +32,11 @@ const schemas: Record<string, ToolSchema> = {
       id: string,
       title: string,
       brief: string,
-      execution: { enum: ['ask', 'auto'] },
+      execution: {
+        enum: ['ask', 'auto'],
+        description:
+          'Optional. `ask` forces the person to approve this run; otherwise the receiving side’s own setting decides whether it runs without asking. Leave it out unless approval is needed.'
+      },
       group: string,
       status: { enum: ['draft', 'ready'] }
     },

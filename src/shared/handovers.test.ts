@@ -86,11 +86,12 @@ describe('parseHandoverBrief — the happy path', () => {
     expect(isReadyBrief(result)).toBe(true)
   })
 
-  it('defaults execution to ask, depth to 1, and leaves origin and group null', () => {
+  it('keeps an absent execution absent, defaults depth to 1, and leaves origin and group null', () => {
+    // Absent means "follow the receiver" and `ask` means "always ask": a default would merge them.
     const result = parseHandoverBrief(brief(READY))
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.brief.execution).toBe('ask')
+    expect(result.brief.execution).toBeNull()
     expect(result.brief.depth).toBe(1)
     expect(result.brief.origin).toBeNull()
     expect(result.brief.group).toBeNull()
@@ -163,6 +164,9 @@ describe('parseHandoverBrief — the reject matrix', () => {
     ['an unknown status', brief('cinna_handover: 1\ntitle: x\nstatus: in_progress'), 'bad_status'],
     ['no status at all', brief('cinna_handover: 1\ntitle: x'), 'bad_status'],
     ['an unknown execution', brief(`${READY}\nexecution: always`), 'bad_execution'],
+    ['a capitalised execution key', brief(`${READY}\nExecution: ask`), 'bad_execution'],
+    ['an uppercase execution key', brief(`${READY}\nEXECUTION: auto`), 'bad_execution'],
+    ['a case-variant key beside a valid one', brief(`${READY}\nexecution: auto\nExecution: ask`), 'bad_execution'],
     ['a non-integer depth', brief(`${READY}\ndepth: two`), 'bad_depth'],
     ['a fractional depth', brief(`${READY}\ndepth: 1.5`), 'bad_depth'],
     ['a negative depth', brief(`${READY}\ndepth: -1`), 'bad_depth'],
@@ -440,16 +444,34 @@ describe('the words the protocol is taught in', () => {
       what is left here is the pointer and the one instruction about reporting.
       Mutation: restore the long paragraph and the word count fails.
     */
-    const paragraph = handoverProtocolParagraph({
-      briefPath: `${HANDOVERS_DIR}/20260917-2000-add-retry/brief.md`
-    })
+    const paragraph = handoverProtocolParagraph({ handoverId: '20260917-2000-add-retry' })
     expect(paragraph.split(/\s+/).length).toBeLessThanOrEqual(60)
     expect(paragraph).toContain('20260917-2000-add-retry/brief.md')
     // Once. The path is 90 characters of noise the second time it is read.
     expect(paragraph.split('20260917-2000-add-retry/brief.md')).toHaveLength(2)
-    expect(paragraph).toContain('report.md')
     expect(paragraph).toContain('before you start')
     expect(paragraph).not.toContain('\n')
+  })
+
+  it('names brief and report by project-relative paths', () => {
+    // "Beside it" was read relative to the working folder (report at the
+    // project root); the absolute path that replaced it carried a symlinked
+    // /var/… folder, so the write tripped the engine's outside-the-project
+    // permission ask. Mutation: go back to an absolute or "beside it" path.
+    const paragraph = handoverProtocolParagraph({ handoverId: '20260917-2000-add-retry' })
+    expect(paragraph).toContain(`\`${HANDOVERS_DIR}/20260917-2000-add-retry/brief.md\``)
+    expect(paragraph).toContain(`\`${HANDOVERS_DIR}/20260917-2000-add-retry/report.md\``)
+    expect(paragraph).not.toContain('beside')
+    expect(HANDOVER_HOW_TO_REPORT).toContain('same folder as this brief')
+  })
+
+  it('asks for the closing fence in words, not as a literal file', () => {
+    // A real executor left the frontmatter unclosed from the prose alone. A
+    // literal example fixed the wording and broke the writes: with a fenced
+    // `---` block in the brief, gpt-4.1-mini produced malformed write calls in
+    // four of six live runs. Mutation: put the example back and this fails.
+    expect(HANDOVER_HOW_TO_REPORT).toContain('closed by a line holding only `---`')
+    expect(HANDOVER_HOW_TO_REPORT).not.toContain('```')
   })
 
   it('names the report format instead of promising the brief ends with it', () => {
@@ -461,7 +483,7 @@ describe('the words the protocol is taught in', () => {
       file (`ux_rules.md` §9). Mutation: point at the brief again and the three
       field expectations fail.
     */
-    const paragraph = handoverProtocolParagraph({ briefPath: 'a/brief.md' })
+    const paragraph = handoverProtocolParagraph({ handoverId: 'a' })
     expect(paragraph).toContain('cinna_handover: 1')
     expect(paragraph).toContain('status: in_progress | blocked | done | failed')
     expect(paragraph).toContain('summary')
@@ -473,7 +495,7 @@ describe('the words the protocol is taught in', () => {
     // The placeholder *was* copied: `- path` arrived as a YAML key and the
     // artifact became "path: RETRY.md". The brief's footer is where the
     // `artifacts:` example lives now; neither text may say `- path`.
-    const paragraph = handoverProtocolParagraph({ briefPath: 'a/brief.md' })
+    const paragraph = handoverProtocolParagraph({ handoverId: 'a' })
     for (const text of [HANDOVER_HOW_TO_REPORT, paragraph]) expect(text).not.toContain('- path')
     expect(HANDOVER_HOW_TO_REPORT).toContain('- src/upload/retry.ts')
   })

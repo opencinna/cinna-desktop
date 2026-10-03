@@ -21,11 +21,12 @@
  *    and otherwise ignored, because edit-after-ready is the mistake that would
  *    otherwise silently change what an agent is already working on.
  * 3. *`auto` is the receiving agent's setting, never the brief's.* A brief
- *    asking for `execution: auto` is a request. It is honoured only when the
- *    agent's own `handovers` setting says `auto` **and** git says the handovers
- *    directory cannot arrive by `git pull` — a folder is writable by anything
- *    that can write to the folder (`probe_results.md` "Surprises" 2 and 3 are
- *    that risk, observed).
+ *    runs unattended only when the agent's own `handovers` setting says `auto`
+ *    **and** git says the handovers directory cannot arrive by `git pull` — a
+ *    folder is writable by anything that can write to the folder
+ *    (`probe_results.md` "Surprises" 2 and 3 are that risk, observed). The
+ *    brief can only take that away: `execution: ask` forces a gate, while
+ *    `auto` and saying nothing both follow the setting.
  *
  * Built as `createHandoverService(deps)` over injected collaborators so intake
  * can be tested against real folders and fake repositories, with the production
@@ -34,6 +35,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync, type Dirent } from 'node:fs'
 import { basename, join } from 'node:path'
+import { onReturnTurn } from './returnTurns'
 import {
   HANDOVERS_DIR,
   HANDOVER_BRIEF_FILE,
@@ -42,6 +44,7 @@ import {
   HANDOVER_REVISIONS_DIR,
   allowsAuto,
   autoRefusalFor,
+  recordedExecution,
   buildHandoverRevisionTurn,
   handoverGateQuestion,
   handoverGateRequestId,
@@ -127,6 +130,13 @@ export interface HandoverDeps {
   chainDepth?(userId: string, origin: { taskId: string | null; chatId: string | null }): number | null
   applyResult?(scope: RunScope, row: HandoverRow, report: HandoverReport): void
   checkDelegationGroup?(scope: RunScope, row: HandoverRow): void
+  /**
+   * Is this executor still waiting on delegations it made itself — from its task or its chat? Such a
+   * relay ended its turn on purpose and is not finished.
+   */
+  awaitsOutbound?(userId: string, row: { id: string; taskId: string }, chatId: string | null): boolean
+  /** Ids of the unsettled file rows whose executor task runs in this chat. */
+  relayRowIds?(userId: string, chatId: string): string[]
   repo: {
     insert(input: HandoverInsert): HandoverRow
     byAgentAndHandoverId(agentId: string, handoverId: string): HandoverRow | undefined
@@ -645,7 +655,6 @@ export function createHandoverService(deps: HandoverDeps) {
     const originProfile = deps.originProfile?.(brief)
     // A folder is visible to every profile. Only its validated origin may pay/run.
     if (originProfile && originProfile !== scope.profileUserId) return
-    const briefPath = join(found.dir, HANDOVER_BRIEF_FILE)
     const origin = resolveOrigin(scope.profileUserId, brief)
     const parentDepth = origin.taskId || origin.chatId ? deps.chainDepth?.(scope.profileUserId, origin) : null
     // The chain can only raise what the brief declares: an executor that leaves `origin.task`
@@ -670,7 +679,7 @@ export function createHandoverService(deps: HandoverDeps) {
           originTaskId: origin.taskId,
           depth,
           groupId: brief.group,
-          execution: brief.execution,
+          execution: recordedExecution(brief.execution),
           state: 'seen',
           warning: origin.warning,
           briefDigest: found.briefDigest,
@@ -685,7 +694,7 @@ export function createHandoverService(deps: HandoverDeps) {
           goal: brief.body,
           // One path, once: the paragraph names the brief and the trailing
           // `Brief:` line said it a second time (`ux_rules.md` §7).
-          description: handoverProtocolParagraph({ briefPath }),
+          description: handoverProtocolParagraph({ handoverId: found.handoverId }),
           status: 'new',
           assigneeAgentId: agent.id,
           assigneeName: agent.name,
@@ -726,17 +735,21 @@ export function createHandoverService(deps: HandoverDeps) {
       return
     }
 
-    const wantsAuto = brief.execution === 'auto'
+    // The receiver's setting decides; the brief can only force a gate. An
+    // absent `execution` follows the setting exactly as `auto` does: requiring
+    // the brief to ask for `auto` as well left an `auto` project gating every
+    // brief written from a template that said `ask`.
+    const forcesAsk = brief.execution === 'ask'
     const settingAuto = agent.handovers === 'auto'
-    if (wantsAuto && settingAuto && gitAllowsAuto) {
+    if (!forcesAsk && settingAuto && gitAllowsAuto) {
       await startExecutor(scope, row, brief.title, gitAllowsAuto)
       return
     }
 
     const gated = openGate(scope, row, brief.title, gitAllowsAuto)
-    if (wantsAuto && gated) {
-      // The brief asked to run unattended and did not get to. Saying *why* is
-      // the difference between a setting the user can fix and a silent demotion.
+    if (gated && !forcesAsk && (settingAuto || brief.execution === 'auto')) {
+      // It would have run unattended and did not get to. Saying *why* is the
+      // difference between a setting the user can fix and a silent demotion.
       const reason = !settingAuto ? 'setting_ask' : autoRefusalFor(check)
       deps.repo.update(scope.profileUserId, gated.id, { warning: `auto_not_allowed:${reason}` })
     }
@@ -1014,6 +1027,20 @@ export function createHandoverService(deps: HandoverDeps) {
       return
     }
     /*
+      **Nor while the executor waits on its own delegations.** An executor that delegated onward ended
+      its turn as `handover_create` tells it to; the child's packet resumes it in its chat, and that
+      turn's outcome (`watchRelay`) settles the row. Settling here woke the origin with a "no report"
+      packet before the child had answered — and a lost-run sweep would do the same to a relay that
+      is simply between turns.
+    */
+    if (awaitsOutbound(row, taskId)) {
+      deps.logger.info('a handover executor is waiting on its own delegations; it stays running', {
+        id: row.id,
+        state
+      })
+      return
+    }
+    /*
       `report_unparseable` is kept where it is already on the row: a `report.md`
       that exists and will not parse is a more specific — and more actionable —
       fact than "no report was written", and it is the one the executor has to
@@ -1051,6 +1078,23 @@ export function createHandoverService(deps: HandoverDeps) {
     // The origin asked for this work and is owed an answer whichever way it
     // ended. The turn's text is the body: it is all the executor left behind.
     wakeOnce(scope, row, { status: done ? 'done' : 'failed', summary, body: text })
+  }
+
+  function awaitsOutbound(row: HandoverRow, taskId: string): boolean {
+    if (!deps.awaitsOutbound) return false
+    let chatId: string | null = null
+    try {
+      chatId = deps.tasks.getById(row.userId, taskId).chatId
+    } catch {
+      chatId = null
+    }
+    try {
+      return deps.awaitsOutbound(row.userId, { id: row.id, taskId }, chatId)
+    } catch (error) {
+      // Same direction as `hasOpenAsk`: settling closes the task and wakes the origin.
+      deps.logger.warn('a handover could not check its own delegations', { id: row.id, error: String(error) })
+      return true
+    }
   }
 
   /**
@@ -1582,6 +1626,15 @@ export function createHandoverService(deps: HandoverDeps) {
     scanAgent,
 
     /**
+     * A return packet opened a turn in `chatId`. When that chat is a file executor's, the turn is a
+     * relay resuming after its own delegations came back, and its outcome settles the row by the
+     * same rules as the turn that ran the brief.
+     */
+    watchRelay(scope: RunScope, chatId: string, completed: Promise<HandoverTurnOutcome>): void {
+      for (const id of deps.relayRowIds?.(scope.profileUserId, chatId) ?? []) watchTurn(scope, id, completed)
+    },
+
+    /**
      * One folder, now — what a watch event under `.cinna/handovers/` asks for.
      *
      * Resolves the agent and the scope itself, and does nothing at all when no
@@ -1764,6 +1817,13 @@ function productionDeps(): HandoverDeps {
       const delegation = delegationRepo.getById(row.userId, row.id)
       if (delegation) delegationLifecycle.checkGroup(scope, delegation)
     },
+    awaitsOutbound: (userId, row, chatId) =>
+      delegationRepo.listAwaitedOutbound(userId, { taskId: row.taskId, chatId }).some((outbound) => outbound.id !== row.id),
+    relayRowIds: (userId, chatId) =>
+      delegationRepo
+        .listOpenForExecutorChat(userId, chatId)
+        .filter((row) => row.channel === 'file')
+        .map((row) => row.id),
     tasks: {
       create: (userId, input) => taskService.create(userId, input),
       getById: (userId, taskId) => taskService.getById(userId, taskId),
@@ -1833,6 +1893,7 @@ function productionDeps(): HandoverDeps {
 }
 
 export const handoverService = createHandoverService(productionDeps())
+onReturnTurn((scope, chatId, completed) => handoverService.watchRelay(scope, chatId, completed))
 
 /**
  * The gate's answer path. Registered like every runner's, at the module bottom,

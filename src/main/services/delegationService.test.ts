@@ -67,12 +67,54 @@ describe('delegation bus session authority and gates', () => {
     expect([...world.rows.values()][0]).toMatchObject({ originTaskId: 'origin-task', originAgentId: 'source', depth: 1, state: 'gated' })
     expect(world.start).not.toHaveBeenCalled()
   })
-  it('requires both requested auto and the target kit permission', async () => {
-    await delegationService.create(session, { ...input, execution: 'auto' })
+  it('lets the target kit Delegations setting decide, and asks whatever it says without it', async () => {
+    await delegationService.create(session, input)
+    await delegationService.create(session, { ...input, id: 'asked-auto', execution: 'auto' })
     expect(world.start).not.toHaveBeenCalled()
     world.targetAuto = true
-    await delegationService.create(session, { ...input, id: 'second-work', execution: 'auto' })
+    await delegationService.create(session, { ...input, id: 'absent-work' })
     expect(world.start).toHaveBeenCalledTimes(1)
+    await delegationService.create(session, { ...input, id: 'auto-work', execution: 'auto' })
+    expect(world.start).toHaveBeenCalledTimes(2)
+    const byKey = (key: string) => [...world.rows.values()].find((row) => row.requesterKey === key)
+    expect(byKey('absent-work')?.execution).toBe('receiver')
+    expect(byKey('auto-work')?.execution).toBe('auto')
+  })
+  it('matches a repeated request that omits execution to the stored row, whatever it recorded', async () => {
+    for (const [id, execution] of [['was-ask', 'ask'], ['was-auto', 'auto'], ['was-absent', undefined]] as const) {
+      const first = await delegationService.create(session, { ...input, id, ...(execution ? { execution } : {}) }) as { delegationId: string }
+      const again = await delegationService.create(session, { ...input, id }) as { delegationId: string }
+      expect(again.delegationId).toBe(first.delegationId)
+    }
+    expect(world.tasks.size).toBe(3)
+    // An explicit value is an opinion, and a different one is a different brief.
+    await expect(delegationService.create(session, { ...input, id: 'was-ask', execution: 'auto' })).rejects.toThrow('another brief')
+    await expect(delegationService.create(session, { ...input, id: 'was-absent', execution: 'ask' })).rejects.toThrow('another brief')
+    await expect(delegationService.create(session, { ...input, id: 'was-auto', execution: 'auto' })).resolves.toBeTruthy()
+  })
+  it('gates an explicit ask even where the kit target runs delegations automatically', async () => {
+    world.targetAuto = true
+    const created = await delegationService.create(session, { ...input, execution: 'ask' }) as { state: string; execution: string }
+    expect(world.start).not.toHaveBeenCalled()
+    expect(created).toMatchObject({ state: 'gated', execution: 'ask' })
+  })
+  it('sends a cloud request that says nothing about execution when the requester holds the grant', async () => {
+    world.sourceAuto = true
+    await delegationService.create(session, { ...input, target: { kind: 'cloud', agentId: 'cloud-agent', adapter: 'remote' } })
+    expect(world.cloud).toHaveBeenCalledTimes(1)
+  })
+  it('asks before an absent-execution cloud request from a chain started outside the app', async () => {
+    world.task = { id: 'parent-task' }; world.sourceAuto = true
+    world.parent = { id: 'outside', depth: 1, channel: 'file', originKind: 'external', rootDelegationId: 'outside' } as DelegationRow
+    const created = await delegationService.create(session, { ...input, target: { kind: 'cloud', agentId: 'cloud-agent', adapter: 'remote' } }) as { state: string }
+    expect(world.cloud).not.toHaveBeenCalled()
+    expect(created.state).toBe('gated')
+  })
+  it('writes no execution into a bare brief unless the requester said one', async () => {
+    await delegationService.create(session, { ...input, target: { kind: 'bare', agentId: 'bare' } })
+    expect(world.file).toHaveBeenLastCalledWith(expect.objectContaining({ execution: null }))
+    await delegationService.create(session, { ...input, id: 'asked-work', target: { kind: 'bare', agentId: 'bare' }, execution: 'ask' })
+    expect(world.file).toHaveBeenLastCalledWith(expect.objectContaining({ execution: 'ask' }))
   })
   it('takes cloud permission from the requester and dispatches only the new task', async () => {
     world.task = { id: 'parent-task' }; world.sourceAuto = true

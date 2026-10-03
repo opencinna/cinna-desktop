@@ -706,8 +706,8 @@ function DelegationPermissionSetting({ agent, field }: {
       <label htmlFor={`${field}-setting`} className={`${LABEL} !mb-0`}>{title}</label>
       <SettingsInfoTip label={`About ${title}`}>
         {field === 'delegations'
-          ? 'Let this agent run work requested by another local agent. This permission stays on this machine.'
-          : 'Let this agent send work to cloud agents. The brief leaves this machine and cloud execution may incur charges. This permission belongs to the requesting agent and stays on this machine.'}
+          ? 'Let this agent run work requested by another local agent. Run automatically starts it without asking, unless the request itself asks for approval. This permission stays on this machine.'
+          : 'Let this agent send work to cloud agents. The brief leaves this machine and cloud execution may incur charges. Send without asking sends it unless the request itself asks for approval. This permission belongs to the requesting agent and stays on this machine.'}
       </SettingsInfoTip>
     </div>
     <select id={`${field}-setting`} className={FIELD} value={current} disabled={save.isPending}

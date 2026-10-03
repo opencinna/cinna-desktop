@@ -103,56 +103,69 @@ describe('with no git binary on the machine', () => {
     throw error
   }
 
-  function noGit(dir: string) {
+  /** A git that is not there, over a filesystem holding exactly `paths`. */
+  function noGit(paths: string[]) {
+    const present = new Set(paths)
     return createHandoverGit({
       execFile: async () => enoent(),
       env: async () => ({}),
-      readFile: (path) => {
-        if (path !== join(dir, '.gitignore')) throw new Error('ENOENT')
-        return gitignoreOf(dir)
-      },
-      exists: () => true
+      exists: (path) => present.has(path)
     })
   }
 
-  let content = ''
-  const gitignoreOf = (_dir: string): string => content
+  const project = join('/', 'work', 'project')
 
-  it('reads a plain .gitignore line as ignored', async () => {
-    for (const line of ['.cinna', '.cinna/', '/.cinna', '**/.cinna', '.cinna/handovers/']) {
-      content = `node_modules\n# a comment\n${line}\n`
-      const check = await noGit('/p').check('/p')
-      expect([line, check.result]).toEqual([line, 'ignored'])
-      expect(allowsAuto(check)).toBe(true)
-    }
+  it('is unknown for a folder with a .git directory — the tracked state cannot be checked', async () => {
+    const check = await noGit([project, join(project, '.git')]).check(project)
+    expect(check.result).toBe('unknown')
+    expect(check.detail).toMatch(/git isn’t available to confirm/)
+    expect(allowsAuto(check)).toBe(false)
   })
 
-  it('is unknown — not ignored — for a pattern it cannot read', async () => {
-    // Deliberately a short allowlist of literal lines rather than a gitignore
-    // engine: an unrecognised pattern must cost a question, never a permission.
-    content = '.cinna*\n'
-    const check = await noGit('/p').check('/p')
+  it('is unknown for a folder inside a repository whose .git is in a parent', async () => {
+    const check = await noGit([project, join('/', 'work', '.git')]).check(project)
     expect(check.result).toBe('unknown')
     expect(allowsAuto(check)).toBe(false)
   })
 
-  it('never spawns a git the resolver calls unusable (a macOS stub), and reads .gitignore instead', async () => {
+  it('is unknown for a worktree, whose .git is a file', async () => {
+    // `exists` is the only question asked, so a file answers the same as a directory.
+    const check = await createHandoverGit({
+      execFile: async () => enoent(),
+      env: async () => ({}),
+      exists: (path) => path === project || path === join(project, '.git')
+    }).check(project)
+    expect(check.result).toBe('unknown')
+    expect(allowsAuto(check)).toBe(false)
+  })
+
+  it('allows a folder with no repository anywhere above it', async () => {
+    const check = await noGit([project]).check(project)
+    expect(check.result).toBe('not_a_repo')
+    expect(allowsAuto(check)).toBe(true)
+  })
+
+  it('never grants a permission for a folder that is not there', async () => {
+    const check = await noGit([]).check(project)
+    expect(check.result).toBe('unknown')
+  })
+
+  it('never spawns a git the resolver calls unusable (a macOS stub)', async () => {
     // Running `/usr/bin/git` on a Mac without the developer tools pops the
     // install dialog, so the stub must not even be tried.
     const execFile = vi.fn(async () => ({ stdout: 'true\n', stderr: '' }))
     const git = createHandoverGit({
       execFile,
       env: async () => ({}),
-      readFile: () => '.cinna/\n',
-      exists: () => true,
+      exists: (path) => path === project || path === join(project, '.git'),
       resolveGit: async () => null
     })
-    const check = await git.check('/p')
-    expect(check.result).toBe('ignored')
+    const check = await git.check(project)
+    expect(check.result).toBe('unknown')
     expect(execFile).not.toHaveBeenCalled()
 
-    // A credential path cannot be judged from .gitignore; still no spawn.
-    const credential = await git.check('/p', 'credentials/.env')
+    // A credential path cannot be judged without git either; still no spawn.
+    const credential = await git.check(project, 'credentials/.env')
     expect(credential.result).toBe('unknown')
     expect(execFile).not.toHaveBeenCalled()
   })
@@ -165,25 +178,11 @@ describe('with no git binary on the machine', () => {
     const check = await createHandoverGit({
       execFile,
       env: async () => ({}),
-      readFile: () => '',
       exists: () => true,
       resolveGit: async () => '/opt/homebrew/bin/git'
     }).check('/p')
     expect(check.result).toBe('not_a_repo')
     expect(execFile.mock.calls[0]?.[0]).toBe('/opt/homebrew/bin/git')
-  })
-
-  it('is unknown when there is no .gitignore either', async () => {
-    const check = await createHandoverGit({
-      execFile: async () => enoent(),
-      env: async () => ({}),
-      readFile: () => {
-        throw new Error('ENOENT')
-      },
-      exists: () => true
-    }).check('/p')
-    expect(check.result).toBe('unknown')
-    expect(allowsAuto(check)).toBe(false)
   })
 })
 
@@ -198,9 +197,6 @@ describe('when git answers something unexpected', () => {
         throw Object.assign(new Error('Command failed: git rev-parse'), { killed: true, signal: 'SIGTERM' })
       },
       env: async () => ({}),
-      readFile: () => {
-        throw new Error('ENOENT')
-      },
       exists: () => true
     }).check('/p')
     expect(check.result).toBe('unknown')
@@ -216,9 +212,6 @@ describe('when git answers something unexpected', () => {
         throw error
       },
       env: async () => ({}),
-      readFile: () => {
-        throw new Error('ENOENT')
-      },
       exists: () => true
     }).check('/p')
     expect(check.result).toBe('unknown')

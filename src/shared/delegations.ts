@@ -1,4 +1,4 @@
-import type { HandoverExecution, HandoverReportStatus, HandoverState } from './handovers'
+import type { RecordedHandoverExecution, HandoverReportStatus, HandoverState } from './handovers'
 
 export type DelegationOriginKind = 'local_chat' | 'local_task' | 'remote_task' | 'external'
 export type DelegationTargetKind = 'bare' | 'kit' | 'cloud'
@@ -30,7 +30,7 @@ export interface DelegationDto {
   taskId: string | null
   handoverId: string | null
   title: string
-  execution: HandoverExecution
+  execution: RecordedHandoverExecution
   state: DelegationState
   refusalReason: string | null
   warning: string | null

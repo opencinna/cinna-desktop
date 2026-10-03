@@ -63,7 +63,8 @@ export interface DelegationFileInput {
   id: string
   title: string
   brief: string
-  execution: 'ask' | 'auto'
+  /** `null`: the brief says nothing and the receiving folder's setting decides. */
+  execution: 'ask' | 'auto' | null
   status: 'draft' | 'ready'
   agentId: string
   chatId: string
@@ -86,7 +87,8 @@ export function createDelegationBrief(input: DelegationFileInput) {
       (parsed.brief.origin?.taskId ?? null) === input.taskId &&
       parsed.brief.title === input.title &&
       parsed.brief.body === body &&
-      parsed.brief.execution === input.execution &&
+      // An omitted `execution` has no opinion and matches whatever the brief says; a stated one must match.
+      (input.execution === null || parsed.brief.execution === input.execution) &&
       parsed.brief.group === (input.group ?? null)
     if (!parsed.ok || !sameBrief) {
       throw new Error('This handover id already belongs to a different brief. Choose a new id.')
@@ -101,7 +103,7 @@ export function createDelegationBrief(input: DelegationFileInput) {
     'cinna_handover: 1',
     `title: ${JSON.stringify(input.title)}`,
     `status: ${input.status}`,
-    `execution: ${input.execution}`,
+    ...(input.execution ? [`execution: ${input.execution}`] : []),
     'origin:',
     `  agent: ${JSON.stringify(input.agentId)}`,
     `  chat: ${JSON.stringify(input.chatId)}`,

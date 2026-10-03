@@ -9,7 +9,7 @@ import { agentOverrideRepo } from '../db/agents'
 import {
   delegationOriginKey, isOutsideOrigin, DELEGATION_TERMINAL_STATES, type DelegationResult
 } from '../../shared/delegations'
-import { isHandoverId, MAX_HANDOVER_DEPTH, allowsAuto, HANDOVER_GATE_OPTIONS } from '../../shared/handovers'
+import { isHandoverId, MAX_HANDOVER_DEPTH, allowsAuto, HANDOVER_GATE_OPTIONS, recordedExecution } from '../../shared/handovers'
 import type { InboxAnswerCode, InboxAnswerResult } from '../../shared/inbox'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
@@ -349,7 +349,9 @@ export const delegationService = {
           existing.brief !== brief ||
           (existing.remoteConnectionId ?? null) !== adapterId ||
           (existing.groupId ?? null) !== (input.group ?? null) ||
-          existing.execution !== (input.execution ?? 'ask')
+          // An omitted `execution` has no opinion, so it matches whatever the first call recorded
+          // (including a pre-upgrade `ask`); an explicit value still has to match.
+          (input.execution !== undefined && existing.execution !== input.execution)
         if (differs) throw new Error('This id already belongs to another brief.')
         return { delegationId: existing.id, ...delegationRepo.toDto(existing) }
       }
@@ -364,7 +366,9 @@ export const delegationService = {
         throw new Error('This session’s task changed. Try again.')
       }
       if (!targetEntry?.acceptsDelegations) throw new Error('That target is unavailable for delegation.')
-      const execution = input.execution === 'auto' ? 'auto' : 'ask'
+      // Absent stays absent: the receiver's setting (or, for cloud, the sender's grant) decides,
+      // and only an explicit `ask` forces a gate.
+      const execution = input.execution === 'ask' || input.execution === 'auto' ? input.execution : null
 
       if (target.kind === 'bare') {
         const file = createDelegationBrief({
@@ -408,7 +412,7 @@ export const delegationService = {
           ...(parent ? { rootDelegationId: parent.rootDelegationId } : {}),
           title,
           brief,
-          execution,
+          execution: recordedExecution(execution),
           groupId: group,
           remoteConnectionId: adapterId
         },
@@ -433,7 +437,7 @@ export const delegationService = {
         ? !outside && fresh.source.desktop.cloudDelegations === 'auto'
         : localAgentService.get(settingsUserId, target.agentId).desktop.delegations === 'auto'
 
-      if (execution === 'auto' && allowed) {
+      if (execution !== 'ask' && allowed) {
         try {
           await start(session.scope, row)
         } catch (error) {
