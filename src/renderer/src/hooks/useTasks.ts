@@ -5,7 +5,7 @@ import { useUIStore } from '../stores/ui.store'
 import { useChatStream } from './useChatStream'
 import { INBOX_QUERY_KEY } from './useInbox'
 import { unwrapIpcError } from '../utils/ipcError'
-import type { DesktopTaskTarget, TaskDeletePreview, TaskDeleteResult, TaskDto } from '../../../shared/tasks'
+import type { DesktopTaskTarget, TaskCreateInput, TaskDeletePreview, TaskDeleteResult, TaskDto, TaskUpdateInput } from '../../../shared/tasks'
 import type { TaskStatus } from '../../../shared/taskStatus'
 
 /**
@@ -53,16 +53,25 @@ export function useTask(taskId: string | null): UseQueryResult<TaskDto> {
   })
 }
 
-/** Open a task's page. The sidebar tab is deliberately left where it was. */
+/**
+ * Open a task's page. The sidebar tab is deliberately left where it was.
+ *
+ * Opened from the Tasks view — or from a task page that was itself reached
+ * from there (a parent, a subtask) — the page's back arrow returns to the
+ * Tasks view; from anywhere else it keeps its Inbox/parent/job rules.
+ */
 export function useOpenTask(): (taskId: string) => void {
   const setActiveTaskId = useUIStore((s) => s.setActiveTaskId)
   const setActiveView = useUIStore((s) => s.setActiveView)
+  const setTaskOpenedFromTasks = useUIStore((s) => s.setTaskOpenedFromTasks)
   return useCallback(
     (taskId: string) => {
+      const { activeView, taskOpenedFromTasks } = useUIStore.getState()
+      setTaskOpenedFromTasks(activeView === 'tasks' || (activeView === 'task' && taskOpenedFromTasks))
       setActiveTaskId(taskId)
       setActiveView('task')
     },
-    [setActiveTaskId, setActiveView]
+    [setActiveTaskId, setActiveView, setTaskOpenedFromTasks]
   )
 }
 
@@ -367,5 +376,48 @@ export function useTaskDeletePreview(options: { onReady?: (preview: TaskDeletePr
   return useMutation({
     mutationFn: (taskId: string) => window.api.tasks.deletePreview(taskId),
     onSuccess: (preview) => onReady?.(preview)
+  })
+}
+
+/**
+ * Create a task by hand (`task:create`). `onCreated` is hook-level, so it runs
+ * even when the dialog that called `mutate` has unmounted — the Tasks view
+ * owns this hook and the dialog does not (`ux_rules.md` §5).
+ */
+export function useCreateTask(options: { onCreated?: (task: TaskDto) => void } = {}) {
+  const queryClient = useQueryClient()
+  const { onCreated } = options
+  return useMutation({
+    mutationFn: (input: TaskCreateInput) => window.api.tasks.create(input),
+    onSuccess: (task) => {
+      queryClient.setQueryData(TASK_QUERY_KEY(task.id), task)
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      onCreated?.(task)
+    }
+  })
+}
+
+/** After a task write: the page's read and every task list. */
+function refreshTask(queryClient: ReturnType<typeof useQueryClient>, task: TaskDto): void {
+  queryClient.setQueryData(TASK_QUERY_KEY(task.id), task)
+  void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+  void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
+}
+
+/** Edit a task's fields (`task:update`); refusals reject with main's sentence. */
+export function useUpdateTask() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ taskId, patch }: { taskId: string; patch: TaskUpdateInput }) => window.api.tasks.update(taskId, patch),
+    onSuccess: (task) => refreshTask(queryClient, task)
+  })
+}
+
+/** Move a task to a status the user chose (`task:set-status`: transition table + claim). */
+export function useSetTaskStatus() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ taskId, status }: { taskId: string; status: TaskStatus }) => window.api.tasks.setStatus(taskId, status),
+    onSuccess: (task) => refreshTask(queryClient, task)
   })
 }

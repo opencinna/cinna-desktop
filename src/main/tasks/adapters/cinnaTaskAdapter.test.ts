@@ -43,6 +43,7 @@ function makeTask(overrides: Partial<TaskDto> = {}): TaskDto {
     artifacts: [],
     budget: null,
     errorMessage: null,
+    customFields: null,
     jobId: null,
     jobRunId: null,
     createdAt: now,

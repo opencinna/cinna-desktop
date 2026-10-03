@@ -2,7 +2,16 @@ import { describe, expect, it } from 'vitest'
 import type { RunState } from './runEvents'
 import {
   canTransition,
+  canMoveManually,
+  canTransitionManually,
+  manualTargets,
+  MANUAL_TARGET_STATUSES,
+  MANUAL_TRANSITIONS,
+  CATEGORY_DROP_STATUS,
   DEFAULT_TASK_STATUS,
+  TASK_STATUS_CATEGORIES,
+  TASK_STATUS_CATEGORY_LABEL,
+  taskStatusCategory,
   isTaskStatus,
   parseTaskStatus,
   REMOTE_WRITABLE_STATUSES,
@@ -202,5 +211,89 @@ describe('taskStatusForRunState', () => {
     for (const state of Object.keys(EVERY_RUN_STATE) as RunState[]) {
       expect(REMOTE_WRITABLE_STATUSES).toContain(taskStatusForRunState(state))
     }
+  })
+})
+
+describe('status categories', () => {
+  it('puts every status but archived in exactly one category', () => {
+    const expected: Record<TaskStatus, string | null> = {
+      new: 'backlog', refining: 'backlog', open: 'ready', in_progress: 'active', blocked: 'waiting',
+      completed: 'closed', error: 'closed', cancelled: 'closed', archived: null
+    }
+    for (const status of TASK_STATUSES) expect(taskStatusCategory(status)).toBe(expected[status])
+  })
+
+  it('orders the columns by lifecycle and names each in words', () => {
+    expect(TASK_STATUS_CATEGORIES).toEqual(['backlog', 'ready', 'active', 'waiting', 'closed'])
+    expect(TASK_STATUS_CATEGORIES.map((c) => TASK_STATUS_CATEGORY_LABEL[c])).toEqual(['Backlog', 'Ready', 'In progress', 'Waiting', 'Done'])
+  })
+
+  it('offers a drop status only for the user columns, each in its own category', () => {
+    expect(CATEGORY_DROP_STATUS).toEqual({ backlog: 'new', ready: 'open', closed: 'completed' })
+    for (const [category, status] of Object.entries(CATEGORY_DROP_STATUS)) {
+      expect(taskStatusCategory(status!)).toBe(category)
+    }
+  })
+})
+
+describe('manual transitions', () => {
+  it('adds exactly the four board moves the remote table lacks', () => {
+    expect(MANUAL_TRANSITIONS).toEqual({ new: ['open', 'completed'], open: ['new', 'completed'] })
+    // The pinned copy is untouched: none of the manual-only pairs is in it.
+    for (const [from, to] of [['open', 'new'], ['new', 'completed'], ['open', 'completed']] as const) {
+      expect(canTransition(from, to)).toBe(false)
+    }
+  })
+
+  it('allows them for an unbound task and refuses them for a bound one', () => {
+    for (const [from, to] of [['open', 'new'], ['new', 'completed'], ['open', 'completed']] as const) {
+      expect(canTransitionManually(from, to, { bound: false })).toBe(true)
+      expect(canTransitionManually(from, to, { bound: true })).toBe(false)
+    }
+  })
+
+  it('keeps every table move, bound or not, and refuses what neither allows', () => {
+    for (const from of TASK_STATUSES) for (const to of VALID_TRANSITIONS[from]) {
+      expect(canTransitionManually(from, to, { bound: true })).toBe(true)
+      expect(canTransitionManually(from, to, { bound: false })).toBe(true)
+    }
+    for (const [from, to] of [['completed', 'open'], ['completed', 'new'], ['cancelled', 'open'], ['archived', 'new'], ['blocked', 'new']] as const) {
+      expect(canTransitionManually(from, to, { bound: false })).toBe(false)
+    }
+  })
+})
+
+describe('manualTargets / canMoveManually', () => {
+  it('offers the user columns reachable from a user column, never the status itself', () => {
+    expect(manualTargets('new', { bound: false })).toEqual(['open', 'completed'])
+    expect(manualTargets('open', { bound: false })).toEqual(['new', 'completed'])
+    expect(manualTargets('refining', { bound: false })).toEqual(['new', 'open'])
+    expect(manualTargets('error', { bound: false })).toEqual(['new'])
+    expect(manualTargets('completed', { bound: false })).toEqual([])
+    expect(manualTargets('cancelled', { bound: false })).toEqual([])
+  })
+
+  it('keeps a bound task to the remote table', () => {
+    expect(manualTargets('new', { bound: true })).toEqual(['open'])
+    expect(manualTargets('open', { bound: true })).toEqual([])
+  })
+
+  it('offers nothing for a task a run or a question holds, or an archived one', () => {
+    for (const from of ['in_progress', 'blocked', 'archived'] as const) {
+      expect(manualTargets(from, { bound: false })).toEqual([])
+      for (const to of TASK_STATUSES) expect(canMoveManually(from, to, { bound: false })).toBe(false)
+    }
+  })
+
+  it('agrees with manualTargets, adding only a table step to cancelled', () => {
+    for (const bound of [false, true]) {
+      for (const from of TASK_STATUSES) {
+        const allowed = TASK_STATUSES.filter((to) => to !== from && canMoveManually(from, to, { bound }))
+        expect(allowed.filter((to) => to !== 'cancelled')).toEqual(manualTargets(from, { bound }))
+        for (const to of allowed) expect(MANUAL_TARGET_STATUSES.includes(to) || to === 'cancelled').toBe(true)
+      }
+    }
+    expect(canMoveManually('open', 'cancelled', { bound: true })).toBe(true)
+    expect(canMoveManually('in_progress', 'cancelled', { bound: false })).toBe(false)
   })
 })

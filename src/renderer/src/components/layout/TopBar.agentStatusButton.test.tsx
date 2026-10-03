@@ -25,7 +25,7 @@ function wrapper({ children }: { children: ReactNode }): React.JSX.Element {
 }
 
 beforeEach(() => {
-  useUIStore.setState({ activeView: 'chat', sidebarOpen: true, agentStatusOpen: false })
+  useUIStore.setState({ activeView: 'chat', sidebarOpen: true, agentStatusOpen: false, showTasksButton: true })
   list.mockReset().mockResolvedValue({
     success: true,
     remoteError: null,
@@ -40,7 +40,7 @@ beforeEach(() => {
 
 describe('TopBar — agent status', () => {
   it.each(['local_user', 'cinna_user'] as const)(
-    'sits between the sidebar toggle and Inbox for a %s account',
+    'sits between the Tasks button and Inbox for a %s account',
     async (type) => {
       useAuthStore.setState({
         currentUser: {
@@ -51,7 +51,7 @@ describe('TopBar — agent status', () => {
       render(createElement(TopBar), { wrapper })
 
       const status = await screen.findByRole('button', { name: 'Agent status — 1 agent · worst: error' })
-      expect(status.previousElementSibling).toBe(screen.getByTitle('Collapse sidebar'))
+      expect(status.previousElementSibling).toBe(screen.getByRole('button', { name: 'Tasks' }))
       expect(status.nextElementSibling).toBe(screen.getByRole('button', { name: 'Inbox' }))
       expect(status.querySelector('span')?.className).toContain('bg-[var(--color-severity-error)]')
     }
@@ -64,7 +64,7 @@ describe('TopBar — agent status', () => {
 
     fireEvent.click(screen.getByTitle('Collapse sidebar'))
     expect(useUIStore.getState().sidebarOpen).toBe(false)
-    expect(status.previousElementSibling).toBe(screen.getByTitle('Open sidebar'))
+    expect(status.previousElementSibling?.previousElementSibling).toBe(screen.getByTitle('Open sidebar'))
     fireEvent.click(status)
     expect(useUIStore.getState().agentStatusOpen).toBe(true)
     expect(status.getAttribute('aria-pressed')).toBe('true')
@@ -101,7 +101,7 @@ describe('TopBar — agent status', () => {
     try {
       await act(async () => vi.advanceTimersByTime(13000))
       expect(container.querySelector('[data-header-wave]')).not.toBeNull()
-      expect(container.querySelectorAll('.ambient-header-button')).toHaveLength(4)
+      expect(container.querySelectorAll('.ambient-header-button')).toHaveLength(5)
       act(() => useUIStore.getState().setExtraUIAnimation(false))
       expect(container.querySelector('[data-header-wave]')).toBeNull()
       await act(async () => vi.advanceTimersByTime(60000))
@@ -120,5 +120,30 @@ describe('TopBar — agent status', () => {
       vi.restoreAllMocks()
       vi.unstubAllGlobals()
     }
+  })
+})
+
+describe('TopBar — Tasks button', () => {
+  it('sits right of the sidebar toggle and left of Agent Status, and opens the Tasks view', async () => {
+    render(createElement(TopBar), { wrapper })
+    const tasks = screen.getByRole('button', { name: 'Tasks' })
+    expect(tasks.previousElementSibling).toBe(screen.getByTitle('Collapse sidebar'))
+    expect(tasks.nextElementSibling).toBe(await screen.findByRole('button', { name: /^Agent status/ }))
+    expect(tasks.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(tasks)
+    expect(useUIStore.getState().activeView).toBe('tasks')
+    expect(tasks.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('is absent while the preference is off, and turning it off leaves the open Tasks view', async () => {
+    useUIStore.setState({ activeView: 'tasks' })
+    render(createElement(TopBar), { wrapper })
+    expect(screen.getByRole('button', { name: 'Tasks' })).toBeTruthy()
+    act(() => useUIStore.getState().setShowTasksButton(false))
+    expect(screen.queryByRole('button', { name: 'Tasks' })).toBeNull()
+    expect(useUIStore.getState().activeView).toBe('chat')
+    expect(localStorage.getItem('cinna-show-tasks-button')).toBe('0')
+    await screen.findByRole('button', { name: /^Agent status/ })
+    expect(screen.getByTitle('Collapse sidebar').nextElementSibling).toBe(screen.getByRole('button', { name: /^Agent status/ }))
   })
 })

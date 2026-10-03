@@ -1,13 +1,14 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, Cloud, Loader2, MessageSquare, MoreHorizontal, Trash2 } from 'lucide-react'
+import { AlertTriangle, Cloud, Loader2, MessageSquare, MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
 import { usePopover } from '../ui/usePopover'
 import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
 import { HEADER_BUTTON } from './DetailParts'
 import { useUIStore } from '../../stores/ui.store'
 import { useChatDetail, useShowChatInList } from '../../hooks/useChat'
 import { useJobRuns } from '../../hooks/useJobs'
-import { useDeleteTask, useTaskDeletePreview } from '../../hooks/useTasks'
+import { useDeleteTask, useSetTaskStatus, useTaskDeletePreview, useUpdateTask } from '../../hooks/useTasks'
+import { EditTaskDialog } from './TaskFormDialog'
 import { unwrapIpcError } from '../../utils/ipcError'
 import type { TaskDeletePreview, TaskDto } from '../../../../shared/tasks'
 
@@ -46,6 +47,13 @@ export function TaskActionsMenu({ task, onDeleted, onError }: TaskActionsMenuPro
       setConfirming(answer)
     }
   })
+  /*
+    Edit task's two writes are owned here for the same reason as the delete:
+    this menu lives as long as the page, the dialog does not.
+  */
+  const [editing, setEditing] = useState(false)
+  const update = useUpdateTask()
+  const setStatus = useSetTaskStatus()
   const deleteErrorId = useId()
   const previewError = preview.error
     ? unwrapIpcError(preview.error, 'What goes with this task could not be read, so nothing was deleted.')
@@ -142,7 +150,22 @@ export function TaskActionsMenu({ task, onDeleted, onError }: TaskActionsMenuPro
             {task.chatId && (
               <ShowInChatsItem chatId={task.chatId} chat={chat} onShow={showInChats} />
             )}
-            {(task.chatId || serverRun) && <div className="my-1 border-t border-[var(--color-border)]" />}
+            <button
+              type="button"
+              role="menuitem"
+              className={MENU_ITEM}
+              onClick={() => {
+                menu.setOpen(false)
+                onError(null)
+                update.reset()
+                setStatus.reset()
+                setEditing(true)
+              }}
+            >
+              <Pencil size={12} />
+              Edit task…
+            </button>
+            <div className="my-1 border-t border-[var(--color-border)]" />
             {/*
               Stays open while main says what the delete would take, the icon
               turning into a spinner in place (§1: async state is inline), so
@@ -177,6 +200,9 @@ export function TaskActionsMenu({ task, onDeleted, onError }: TaskActionsMenuPro
           </div>,
           document.body
         )}
+      {editing && (
+        <EditTaskDialog task={task} update={update} setStatus={setStatus} onClose={() => setEditing(false)} />
+      )}
       {confirming && (
         <DeleteTaskDialog
           task={task}

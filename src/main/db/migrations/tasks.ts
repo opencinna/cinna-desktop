@@ -122,6 +122,9 @@ export function migrateTasks(sqlite: Database.Database): void {
   `)
 
   if (!hasColumn(sqlite, 'tasks', 'script')) sqlite.exec('ALTER TABLE tasks ADD COLUMN script TEXT')
+  // User-defined fields (`TaskDto.customFields`), JSON; null for every task
+  // that has none, which is every task written before this column.
+  if (!hasColumn(sqlite, 'tasks', 'custom_fields')) sqlite.exec('ALTER TABLE tasks ADD COLUMN custom_fields TEXT')
 
   // Legacy request rows remain unowned; new events carry exact root/invocation
   // identity so a late or parallel turn cannot settle a sibling's request.

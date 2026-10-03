@@ -46,7 +46,7 @@ describe('FeaturesSettingsSection', () => {
 
     expect(screen.getByRole('heading', { name: 'AI Functions' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Interface' })).toBeTruthy()
-    expect(screen.getAllByRole('switch')).toHaveLength(7)
+    expect(screen.getAllByRole('switch')).toHaveLength(8)
     // The label names the switch (rule 10), not the branching title.
     expect(screen.getByRole('switch', { name: 'Auto-generate chat titles' })).toBeTruthy()
     expect(screen.queryByText(/Couldn’t load settings/)).toBeNull()
@@ -58,6 +58,19 @@ describe('FeaturesSettingsSection', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'About Auto-generate chat titles' }))
     expect(screen.getByText(/Generates a short title from your first message/)).toBeTruthy()
+  })
+
+  it('has a Tasks button switch, on by default, kept in the UI store like the other appearance rows', () => {
+    useUIStore.setState({ showTasksButton: true })
+    render(<FeaturesSettingsSection />)
+    const tasks = screen.getByRole('switch', { name: 'Tasks button' })
+    expect(tasks.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(tasks)
+    expect(useUIStore.getState().showTasksButton).toBe(false)
+    expect(tasks.getAttribute('aria-checked')).toBe('false')
+    expect(setSetting).not.toHaveBeenCalled()
+    fireEvent.click(tasks)
+    expect(useUIStore.getState().showTasksButton).toBe(true)
   })
 
   it('keeps the title attribute on the switch and toggles the setting', () => {

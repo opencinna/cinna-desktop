@@ -10,6 +10,7 @@ import type {
   TaskArtifact,
   TaskAssignee,
   TaskBudget,
+  TaskCustomFields,
   TaskExecutor,
   TaskOrigin,
   TaskPriority,
@@ -59,6 +60,7 @@ export interface TaskCreateInput {
   handoffNote?: string | null
   artifacts?: TaskArtifact[] | null
   budget?: TaskBudget | null
+  customFields?: TaskCustomFields | null
 
   createdAt?: Date
   updatedAt?: Date
@@ -107,6 +109,7 @@ export type TaskPatch = Partial<
     | 'handoffNote'
     | 'artifacts'
     | 'budget'
+    | 'customFields'
     | 'errorMessage'
     | 'startedAt'
     | 'finishedAt'
@@ -176,6 +179,12 @@ export interface TaskSyncValues {
   handoffNote: string | null
   artifacts: TaskArtifact[] | null
   budget: TaskBudget | null
+  /**
+   * Undefined when the peer's payload did not carry the key at all — an older
+   * build that predates custom fields. The local value is then kept rather
+   * than wiped by a peer that never knew it existed; an explicit null clears.
+   */
+  customFields?: TaskCustomFields | null
   errorMessage: string | null
   createdAt: Date
   updatedAt: Date
@@ -318,6 +327,7 @@ const rawTaskRepo = {
       priority: input.priority ?? 'normal',
       router: input.router ?? 'direct',
       script: input.script ?? null,
+      customFields: input.customFields ?? null,
 
       origin: input.origin ?? 'local',
       executor: input.executor ?? 'desktop',
@@ -503,7 +513,8 @@ const rawTaskRepo = {
       // the device that made the call can make.
       chatId: null,
       remoteSyncedAt: null,
-      remoteDirty: null
+      remoteDirty: null,
+      customFields: values.customFields ?? null
     }
     db.insert(tasks)
       .values(row)
@@ -535,6 +546,8 @@ const rawTaskRepo = {
           handoffNote: values.handoffNote,
           artifacts: values.artifacts,
           budget: values.budget,
+          // Absent from an older peer's payload: keep what this device has.
+          ...(values.customFields !== undefined ? { customFields: values.customFields } : {}),
           errorMessage: values.errorMessage,
           createdAt: values.createdAt,
           updatedAt: values.updatedAt,

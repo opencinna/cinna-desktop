@@ -1340,11 +1340,13 @@ const api = {
     stopRuntime: (taskId: string): Promise<void> => ipcRenderer.invoke('task:stop-runtime', taskId),
     start: (taskId: string, target: import('../shared/tasks').DesktopTaskTarget): Promise<import('../shared/tasks').TaskStartResult> =>
       ipcRenderer.invoke('task:start', taskId, target),
-    update: (
-      taskId: string,
-      patch: { title?: string; description?: string | null; priority?: TaskDto['priority']; router?: TaskDto['router'] }
-    ): Promise<TaskDto> => ipcRenderer.invoke('task:update', taskId, patch),
-    /** Cancel, archive, or reopen. Refused when the task is running elsewhere. */
+    /** A task the user writes down by hand; main fills in everything but the title. */
+    create: (input: import('../shared/tasks').TaskCreateInput): Promise<TaskDto> =>
+      ipcRenderer.invoke('task:create', input),
+    /** Fields a person edits; the assignee is refused once a run could have started from it. */
+    update: (taskId: string, patch: import('../shared/tasks').TaskUpdateInput): Promise<TaskDto> =>
+      ipcRenderer.invoke('task:update', taskId, patch),
+    /** A person's move between Backlog, Ready and Done (`manualTargets`); main refuses anything else, and when the task runs elsewhere. */
     setStatus: (taskId: string, status: TaskStatus): Promise<TaskDto> =>
       ipcRenderer.invoke('task:set-status', taskId, status),
     /** Re-run from the last message: reopen the task, and the job run it belongs to. */

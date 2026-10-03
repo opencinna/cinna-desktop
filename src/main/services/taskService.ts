@@ -25,6 +25,12 @@ import { taskFileService } from './taskFileService'
 import { createLogger } from '../logger/logger'
 import {
   canTransition,
+  canMoveManually,
+  isManualOnlyTransition,
+  isManualSource,
+  MANUAL_TARGET_STATUSES,
+  TASK_STATUS_CATEGORY_LABEL,
+  taskStatusCategory,
   jobRunStatusForTask,
   parseTaskStatus,
   taskStatusForRunState,
@@ -39,7 +45,9 @@ import {
   parseTaskPriority,
   parseTaskRouter,
   taskRunsHere,
+  validateTaskCustomFields,
   type TaskAssignee,
+  type TaskCustomFields,
   type TaskDto,
   type TaskExecutor,
   type TaskPriority,
@@ -185,6 +193,55 @@ function statusPatch(task: TaskRow, status: TaskStatus, errorMessage?: string | 
   }
 }
 
+/** A status as the Tasks view names it: its category, else the status in words. */
+function statusLabel(status: TaskStatus): string {
+  const category = taskStatusCategory(status)
+  if (category) return TASK_STATUS_CATEGORY_LABEL[category]
+  const words = status.replace(/_/g, ' ')
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/**
+ * A refused manual move in the words the board shows, never raw statuses.
+ * Two statuses in one category (Done → Done) fall back to the status words,
+ * which then say something. The service is not named: which one a task is
+ * bound to is the adapters' business (the kind-branch ratchet).
+ */
+function manualRefusal(from: TaskStatus, to: TaskStatus, bound: boolean): string {
+  let fromLabel = statusLabel(from)
+  let toLabel = statusLabel(to)
+  if (fromLabel === toLabel) {
+    fromLabel = from.replace(/_/g, ' ')
+    toLabel = to.replace(/_/g, ' ')
+  }
+  return bound
+    ? `This task can’t move from ${fromLabel} to ${toLabel}: it is tracked on the connected service, which doesn’t allow that step.`
+    : `This task can’t move from ${fromLabel} to ${toLabel}.`
+}
+
+/**
+ * Why a person may not make this move by hand, or null when the status rule
+ * allows it. The status half is {@link canMoveManually} — the rule the renderer
+ * lists targets with — and is worded here; the runtime and live-run checks
+ * live in `setStatus`, because only main can see them.
+ */
+function manualStatusRefusal(from: TaskStatus, to: TaskStatus, bound: boolean): string | null {
+  if (canMoveManually(from, to, { bound })) return null
+  if (!isManualSource(from)) {
+    const category = taskStatusCategory(from)
+    if (category === 'active') return 'This task is in progress — let its run finish it, or stop the run.'
+    if (category === 'waiting') return 'This task is waiting on an answer — answer it in the Inbox, or stop the run.'
+    return `This task is ${statusLabel(from).toLowerCase()} and can’t be moved by hand.`
+  }
+  if (to !== 'cancelled' && !MANUAL_TARGET_STATUSES.includes(to)) {
+    const category = taskStatusCategory(to)
+    return category === 'active' || category === 'waiting'
+      ? `A run puts a task in ${TASK_STATUS_CATEGORY_LABEL[category]}; it can’t be moved there by hand.`
+      : `A task can’t be set to ${to.replace(/_/g, ' ')} by hand.`
+  }
+  return manualRefusal(from, to, bound)
+}
+
 function nonEmpty(value: string, field: string): string {
   const trimmed = value.trim()
   if (!trimmed) throw new TaskError('invalid_input', `${field} is required`)
@@ -279,6 +336,7 @@ export function toTaskDto(
     artifacts: row.artifacts ?? [],
     budget: row.budget ?? null,
     errorMessage: row.errorMessage,
+    customFields: row.customFields ?? null,
     jobId: row.jobId,
     jobRunId: row.jobRunId,
     createdAt: row.createdAt,
@@ -354,12 +412,57 @@ export interface RemoteSnapshotPatch {
   binding?: { key: string | null; url: string | null; state: Record<string, unknown> }
 }
 
-/** What a caller may change about a task regardless of who is running it. */
+/**
+ * What a person edits on a task. Title, description, priority, router and
+ * custom fields are writable regardless of who is running it; `assignee` is
+ * an execution field and is accepted only while nothing has started the task
+ * here or anywhere else (see {@link assigneeEditRefusal}).
+ */
 export interface TaskFieldPatch {
   title?: string
   description?: string | null
   priority?: TaskPriority
   router?: TaskRouter
+  /** Already resolved by the caller: an agent's id **and** name, or `model`. */
+  assignee?: TaskAssignee
+  /** Null (or an empty object) clears them. */
+  customFields?: TaskCustomFields | null
+}
+
+/**
+ * Custom fields, checked by the shared validator. An empty set is stored as
+ * null, so "has none" has one spelling.
+ */
+function checkedCustomFields(input: unknown): TaskCustomFields | null {
+  if (input === null || input === undefined) return null
+  const checked = validateTaskCustomFields(input)
+  if ('error' in checked) throw new TaskError('invalid_input', checked.error)
+  return Object.keys(checked.fields).length > 0 ? checked.fields : null
+}
+
+/**
+ * Why the assignee of this task may not be changed by hand, or null when it
+ * may. The renderer derives the same answer from the DTO to disable the
+ * control; this is the authority.
+ *
+ * The assignee is who a run starts with, so it is only open while no run has:
+ * no chat yet, this device holds the claim, no service is bound to it (the
+ * remote assigns its own), not a script (its steps name their agents), and no
+ * coordinator or script runtime owns its turns.
+ */
+function assigneeEditRefusal(userId: string, task: TaskRow): string | null {
+  if (task.chatId) return 'This task already has a conversation, so its assignee is fixed.'
+  if (!taskRunsHere(task, thisDeviceId(userId))) {
+    return task.executor === 'remote'
+      ? 'This task is running on a connected service, so its assignee is set there.'
+      : 'This task is claimed by another device. Take it over to change its assignee.'
+  }
+  if (task.remoteAdapter) return 'This task is connected to a service, which sets its assignee.'
+  if (task.router === 'script') return 'A script task’s steps name their own agents.'
+  if (taskRuntimeRepo.get(userId, task.id) || scriptRuntimeRepo.owner(userId, task.id)) {
+    return 'A runtime owns this task’s turns, so its assignee is fixed.'
+  }
+  return null
 }
 
 /**
@@ -438,6 +541,7 @@ export const taskService = {
   create(userId: string, input: TaskCreateInput): TaskDto {
     const title = nonEmpty(input.title, 'Title')
     const goal = nonEmpty(input.goal, 'Goal')
+    const customFields = input.customFields === undefined ? undefined : checkedCustomFields(input.customFields)
     const script = input.router === 'script' ? validateTaskScript(input.script) : null
     if (input.script != null && input.router !== 'script') throw new TaskError('invalid_input', 'A script definition requires the script router.')
     if (script && input.parentTaskId) throw new TaskError('nested_too_deep', 'A subtask cannot run a nested script.')
@@ -459,6 +563,7 @@ export const taskService = {
       script,
       title,
       goal,
+      ...(customFields !== undefined ? { customFields } : {}),
       // A task this device is about to run names the device, so a peer knows
       // not to. A profile with sync off writes null, which means "here".
       executorDevice:
@@ -480,7 +585,8 @@ export const taskService = {
   /**
    * Fields either side may write, whatever the executor is. No
    * {@link requireRunsHere} on purpose: fixing a title on the device you are
-   * looking at is not a claim on the run.
+   * looking at is not a claim on the run. The one exception is `assignee`,
+   * which {@link assigneeEditRefusal} gates — the claim check included.
    */
   update(userId: string, taskId: string, patch: TaskFieldPatch): TaskDto {
     const task = requireTask(userId, taskId)
@@ -504,6 +610,18 @@ export const taskService = {
       if (patch.router !== task.router && (patch.router === 'script' || task.router === 'script')) throw new TaskError('invalid_input', 'A task’s script router is fixed when the task is created.')
       next.router = patch.router
     }
+    // No remote field and no dirty marker: custom fields live on this desktop
+    // and its devices (app-sync), not on a bound service.
+    if (patch.customFields !== undefined) next.customFields = checkedCustomFields(patch.customFields)
+    if (patch.assignee !== undefined) {
+      const refusal = assigneeEditRefusal(userId, task)
+      if (refusal) throw new TaskError('invalid_input', refusal)
+      next.assigneeKind = patch.assignee.kind
+      next.assigneeAgentId = patch.assignee.agentId
+      next.assigneeName = patch.assignee.name
+      // A fresh local choice; the portable descriptor is derived from the row.
+      next.assigneeRef = null
+    }
     if (Object.keys(next).length === 0) return this.getById(userId, taskId)
 
     const row = taskRepo.update(userId, taskId, dirtied(task, next, dirty))
@@ -517,18 +635,51 @@ export const taskService = {
    * A refusal is a bug on this side, not a runtime condition: every caller
    * either knows the task's current status or is deriving one from a run state
    * that cannot produce an illegal step. It is loud for that reason.
+   *
+   * `manual` is a person's move (`task:set-status`): from a user column
+   * (Backlog, Ready, Done) to a user column or `cancelled`, along the table
+   * plus `MANUAL_TRANSITIONS` for a task bound to no service
+   * (`canMoveManually`, the rule the renderer's `manualTargets` lists from),
+   * refused in category words. Also refused while a coordinator or script
+   * runtime owns the task, or a turn is live in its chat. A manual-only close of a task whose job run is still pending or
+   * running is refused: settling that run as succeeded would record work that
+   * never happened, so the run has to finish it.
    */
   setStatus(
     userId: string,
     taskId: string,
     status: TaskStatus,
-    opts: { errorMessage?: string | null } = {}
+    opts: { errorMessage?: string | null; manual?: boolean } = {}
   ): TaskDto {
     const task = requireTask(userId, taskId)
     requireRunsHere(userId, task)
 
     const from = parseTaskStatus(task.status)
-    if (!canTransition(from, status)) {
+    if (opts.manual) {
+      const bound = !!task.remoteAdapter
+      const refusal = manualStatusRefusal(from, status, bound)
+      if (refusal) {
+        throw new TaskError('invalid_transition', refusal,
+          `Allowed from ${from}: ${VALID_TRANSITIONS[from].join(', ') || 'nothing'}`)
+      }
+      // A runtime ends the task itself, and keeps a checkpoint for it; a status
+      // written past it would leave that checkpoint pointing at nothing.
+      if (taskRuntimeRepo.get(userId, taskId) || scriptRuntimeRepo.owner(userId, taskId)) {
+        throw new TaskError('invalid_transition',
+          'This task is run by its runtime, which sets its status. Use the task controls to stop it.')
+      }
+      if (task.chatId && activeChatRunId(task.chatId)) {
+        throw new TaskError('invalid_transition',
+          'This task has a run going in its conversation — let the run finish it, or stop the run.')
+      }
+      if (isManualOnlyTransition(from, status) && isSettled(status) && task.jobRunId) {
+        const run = jobRunsRepo.getById(userId, task.jobRunId)
+        if (run && (run.status === 'pending' || run.status === 'running')) {
+          throw new TaskError('invalid_transition',
+            `This task can’t move to ${statusLabel(status)} while its job run is still going. Let the run finish it, or stop the run.`)
+        }
+      }
+    } else if (!canTransition(from, status)) {
       throw new TaskError(
         'invalid_transition',
         `A task cannot go from ${from} to ${status}`,
@@ -1075,7 +1226,12 @@ export const taskService = {
       next.remoteState = patch.binding.state
     }
     next.remoteSyncedAt = new Date()
-    if (patch.updatedAt !== undefined) next.updatedAt = patch.updatedAt
+    // The remote's time, never now — but never older than this row's own last
+    // write either. Device sync pushes by `updatedAt > watermark`, so moving it
+    // back would leave a local-only edit (custom fields, router) unpushed.
+    if (patch.updatedAt !== undefined) {
+      next.updatedAt = patch.updatedAt.getTime() >= task.updatedAt.getTime() ? patch.updatedAt : task.updatedAt
+    }
 
     const row = persistRemotePatch(userId, taskId, next)
     if (!row) throw new TaskError('not_found', 'Task not found')

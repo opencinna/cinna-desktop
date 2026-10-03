@@ -1,7 +1,8 @@
 import { taskRuntimeService } from '../services/taskRuntimeService'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
-import { taskService, type TaskFieldPatch } from '../services/taskService'
+import { taskService } from '../services/taskService'
+import { taskAuthoringService } from '../services/taskAuthoringService'
 import { inboxService } from '../services/inboxService'
 import { delegationQueryService } from '../services/delegationQueryService'
 import type { TaskDelegationsDto } from '../../shared/delegations'
@@ -17,7 +18,20 @@ import type { TaskHandoffTarget, TaskHandoffOutcome } from '../../shared/taskHan
 import { ipcHandle } from './_wrap'
 import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot } from '../../shared/inbox'
 import type { HandoverDto } from '../../shared/handovers'
-import type { DesktopTaskTarget, TaskDeletePreview, TaskDeleteResult, TaskDto, TaskListQuery } from '../../shared/tasks'
+import {
+  isTaskPriority,
+  TASK_ROUTERS,
+  type DesktopTaskTarget,
+  type TaskAssigneeInput,
+  type TaskCreateInput,
+  type TaskCustomFields,
+  type TaskDeletePreview,
+  type TaskDeleteResult,
+  type TaskDto,
+  type TaskListQuery,
+  type TaskRouter,
+  type TaskUpdateInput
+} from '../../shared/tasks'
 import type { TaskStatus } from '../../shared/taskStatus'
 
 /**
@@ -52,6 +66,80 @@ import type { TaskStatus } from '../../shared/taskStatus'
  * purpose is to tell another device it has lost the claim, and a minute of
  * silence there is a minute in which both devices believe they own the run.
  */
+function optionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw new Error(`${field} must be text.`)
+  return value
+}
+
+/** An assignee choice off the wire: an agent id, the model, or nobody (`null`). */
+function assigneeInput(value: unknown): TaskAssigneeInput {
+  if (value === null) return null
+  const raw = value as { kind?: unknown; agentId?: unknown } | undefined
+  if (raw?.kind === 'model') return { kind: 'model' }
+  if (raw?.kind === 'agent' && typeof raw.agentId === 'string' && raw.agentId.trim()) {
+    return { kind: 'agent', agentId: raw.agentId }
+  }
+  throw new Error('Choose an agent, the default chat model or nobody.')
+}
+
+/**
+ * Custom fields are forwarded as a plain object and rebuilt key by key by the
+ * shared validator in `taskService`; anything that is not an object is refused
+ * here rather than read as "none".
+ */
+function customFieldsInput(value: unknown): TaskCustomFields {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Custom fields must be a set of named values.')
+  }
+  return { ...(value as TaskCustomFields) }
+}
+
+/** `task:create`, rebuilt field by field — never a spread of what the renderer sent. */
+export function parseTaskCreatePayload(payload: unknown): TaskCreateInput {
+  const raw = (payload ?? {}) as Record<string, unknown>
+  if (typeof raw.title !== 'string') throw new Error('A task needs a title.')
+  const input: TaskCreateInput = { title: raw.title }
+  const goal = optionalString(raw.goal, 'Goal')
+  if (goal !== undefined) input.goal = goal
+  const description = optionalString(raw.description, 'Description')
+  if (description !== undefined) input.description = description
+  if (raw.priority !== undefined) {
+    if (!isTaskPriority(raw.priority)) throw new Error('Unknown priority.')
+    input.priority = raw.priority
+  }
+  if (raw.status !== undefined) {
+    if (raw.status !== 'new' && raw.status !== 'open') throw new Error('A new task starts in Backlog or Ready.')
+    input.status = raw.status
+  }
+  if (raw.assignee !== undefined) input.assignee = assigneeInput(raw.assignee)
+  if (raw.customFields !== undefined) input.customFields = customFieldsInput(raw.customFields)
+  return input
+}
+
+/** `task:update`, rebuilt field by field. */
+export function parseTaskUpdatePayload(payload: unknown): TaskUpdateInput {
+  const raw = (payload ?? {}) as Record<string, unknown>
+  const patch: TaskUpdateInput = {}
+  const title = optionalString(raw.title, 'Title')
+  if (title !== undefined) patch.title = title
+  if (raw.description !== undefined) {
+    if (raw.description !== null && typeof raw.description !== 'string') throw new Error('Description must be text.')
+    patch.description = raw.description
+  }
+  if (raw.priority !== undefined) {
+    if (!isTaskPriority(raw.priority)) throw new Error('Unknown priority.')
+    patch.priority = raw.priority
+  }
+  if (raw.router !== undefined) {
+    if (!(TASK_ROUTERS as readonly unknown[]).includes(raw.router)) throw new Error('Unknown router.')
+    patch.router = raw.router as TaskRouter
+  }
+  if (raw.assignee !== undefined) patch.assignee = assigneeInput(raw.assignee)
+  if (raw.customFields !== undefined) patch.customFields = raw.customFields === null ? null : customFieldsInput(raw.customFields)
+  return patch
+}
+
 export function registerTaskHandlers(): void {
   ipcHandle('task:run-autonomously', async (_event, input: AutonomousTaskStart) => {
     userActivation.requireActivated()
@@ -154,12 +242,31 @@ export function registerTaskHandlers(): void {
     return { task, chatId, runId }
   })
 
-  /** Title, description, priority, router — writable whoever is running the task. */
-  ipcHandle('task:update', async (_event, taskId: string, patch: TaskFieldPatch) => {
+  /**
+   * A task the user wrote down by hand (the Tasks view's New task). Main fills
+   * in everything but the title (`taskAuthoringService.create`); the handoff
+   * export follows through `taskService.create`.
+   */
+  ipcHandle('task:create', async (_event, payload: unknown): Promise<TaskDto> => {
     userActivation.requireActivated()
-    const userId = getProfileScopeUserId()
-    const task = taskService.update(userId, taskId, patch ?? {})
-    syncService.markDirty(userId)
+    const profileUserId = getProfileScopeUserId()
+    const task = taskAuthoringService.create(
+      { profileUserId, settingsUserId: getSettingsScopeUserId() }, parseTaskCreatePayload(payload))
+    syncService.markDirty(profileUserId)
+    return task
+  })
+
+  /**
+   * Title, description, priority, router and custom fields — writable whoever
+   * is running the task — and the assignee, which main refuses once a run
+   * could have started from it.
+   */
+  ipcHandle('task:update', async (_event, taskId: string, patch: unknown) => {
+    userActivation.requireActivated()
+    const profileUserId = getProfileScopeUserId()
+    const task = taskAuthoringService.update(
+      { profileUserId, settingsUserId: getSettingsScopeUserId() }, taskId, parseTaskUpdatePayload(patch))
+    syncService.markDirty(profileUserId)
     return task
   })
 
@@ -174,7 +281,8 @@ export function registerTaskHandlers(): void {
   ipcHandle('task:set-status', async (_event, taskId: string, status: TaskStatus) => {
     userActivation.requireActivated()
     const userId = getProfileScopeUserId()
-    const task = taskService.setStatus(userId, taskId, status)
+    // A person's move: the remote table plus the manual overlay for unbound tasks.
+    const task = taskService.setStatus(userId, taskId, status, { manual: true })
     syncService.markDirty(userId)
     return task
   })

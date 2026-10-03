@@ -56,6 +56,8 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const setSidebarDocking = useUIStore((s) => s.setSidebarDocking)
   const extraUIAnimation = useUIStore((s) => s.extraUIAnimation)
   const setExtraUIAnimation = useUIStore((s) => s.setExtraUIAnimation)
+  const showTasksButton = useUIStore((s) => s.showTasksButton)
+  const setShowTasksButton = useUIStore((s) => s.setShowTasksButton)
   const { data: settings, isLoading, isError } = useAppSettings()
   const setSetting = useSetAppSetting()
   const { data: providers } = useProviders()
@@ -226,6 +228,14 @@ export function FeaturesSettingsSection(): React.JSX.Element {
             checked={extraUIAnimation}
             onToggle={() => setExtraUIAnimation(!extraUIAnimation)}
             title={extraUIAnimation ? 'Extra UI animation is enabled' : 'Extra UI animation is disabled'}
+          />
+          <SettingsToggleRow
+            id="feature-tasks-button"
+            label="Tasks button"
+            description="Shows the Tasks button in the top bar, which opens every task as a list or a board."
+            checked={showTasksButton}
+            onToggle={() => setShowTasksButton(!showTasksButton)}
+            title={showTasksButton ? 'The Tasks button is in the top bar' : 'The Tasks button is hidden'}
           />
           <SettingsToggleRow
             id="feature-enable-tray-icon"

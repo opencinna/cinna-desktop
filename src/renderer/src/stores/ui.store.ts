@@ -9,6 +9,11 @@ export type ActiveView =
   /** The one list of asks waiting on a human — reachable from every tab. */
   | 'inbox'
   /**
+   * Every root task, as a list grouped by category or a board — opened from
+   * the top bar's Tasks button, so like the Inbox it belongs to no tab.
+   */
+  | 'tasks'
+  /**
    * One task: what the work is, where it stands, and the way back into it.
    * Reached from a job's run rows and from an inbox entry, so — like the inbox
    * — it belongs to no sidebar tab.
@@ -74,6 +79,16 @@ const CHAT_GROUP_BY_AGENT_KEY = 'cinna-chat-group-by-agent'
 const CHAT_GROUP_BY_DATE_KEY = 'cinna-chat-group-by-date'
 const CHAT_SHOW_ACTIVE_KEY = 'cinna-chat-show-active'
 const CHAT_GROUPS_COLLAPSED_KEY = 'cinna-chat-groups-collapsed'
+// The top bar's Tasks button (on unless turned off), and the Tasks view's
+// last List | Board choice.
+const TASKS_BUTTON_KEY = 'cinna-show-tasks-button'
+const TASKS_VIEW_MODE_KEY = 'cinna-tasks-view-mode'
+
+export type TasksViewMode = 'list' | 'board'
+
+function readTasksViewMode(): TasksViewMode {
+  return localStorage.getItem(TASKS_VIEW_MODE_KEY) === 'board' ? 'board' : 'list'
+}
 
 /** `pendingModeId` for a new chat with no chat mode at all. */
 export const NO_CHAT_MODE = '__none__'
@@ -115,6 +130,16 @@ interface UIStore {
   activeCinnaRunId: string | null
   /** The task whose page is open (when activeView === 'task'). */
   activeTaskId: string | null
+  /**
+   * The open task page was reached from the Tasks view (directly, or through
+   * its parent/subtask links), so its back arrow returns there rather than to
+   * the Inbox. Set by `useOpenTask` from the view it is called in.
+   */
+  taskOpenedFromTasks: boolean
+  /** The top bar's Tasks button; on by default (Settings → Features → Interface). */
+  showTasksButton: boolean
+  /** The Tasks view's last List | Board choice. */
+  tasksViewMode: TasksViewMode
   activeNoteId: string | null
   /**
    * A note whose sidebar row should scroll into view once, when it renders
@@ -186,6 +211,10 @@ interface UIStore {
   setActiveJobId: (id: string | null) => void
   setActiveCinnaRunId: (id: string | null) => void
   setActiveTaskId: (id: string | null) => void
+  setTaskOpenedFromTasks: (fromTasks: boolean) => void
+  /** Turning it off while the Tasks view is open leaves the view for the chats. */
+  setShowTasksButton: (show: boolean) => void
+  setTasksViewMode: (mode: TasksViewMode) => void
   setActiveNoteId: (id: string | null) => void
   setRevealNoteId: (id: string | null) => void
   setRevealChatId: (id: string | null) => void
@@ -224,6 +253,9 @@ export const useUIStore = create<UIStore>((set, get) => ({
   activeJobId: null,
   activeCinnaRunId: null,
   activeTaskId: null,
+  taskOpenedFromTasks: false,
+  showTasksButton: localStorage.getItem(TASKS_BUTTON_KEY) !== '0',
+  tasksViewMode: readTasksViewMode(),
   activeNoteId: null,
   revealNoteId: null,
   revealChatId: null,
@@ -255,6 +287,17 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setActiveJobId: (id) => set({ activeJobId: id }),
   setActiveCinnaRunId: (id) => set({ activeCinnaRunId: id }),
   setActiveTaskId: (id) => set({ activeTaskId: id }),
+  setTaskOpenedFromTasks: (taskOpenedFromTasks) => set({ taskOpenedFromTasks }),
+  setShowTasksButton: (showTasksButton) => {
+    localStorage.setItem(TASKS_BUTTON_KEY, showTasksButton ? '1' : '0')
+    set((state) => (!showTasksButton && state.activeView === 'tasks'
+      ? { showTasksButton, activeView: 'chat' }
+      : { showTasksButton }))
+  },
+  setTasksViewMode: (tasksViewMode) => {
+    localStorage.setItem(TASKS_VIEW_MODE_KEY, tasksViewMode)
+    set({ tasksViewMode })
+  },
   setActiveNoteId: (id) => set({ activeNoteId: id }),
   setRevealNoteId: (id) => set({ revealNoteId: id }),
   setRevealChatId: (id) => set({ revealChatId: id }),
@@ -378,6 +421,10 @@ const syncAppearance = (event: StorageEvent): void => {
     const theme = resolveTheme(themePreference)
     applyTheme(theme)
     useUIStore.setState({ themePreference, theme })
+  }
+  if (event.key === TASKS_BUTTON_KEY || event.key === null) {
+    const show = localStorage.getItem(TASKS_BUTTON_KEY) !== '0'
+    if (show !== useUIStore.getState().showTasksButton) useUIStore.getState().setShowTasksButton(show)
   }
   if (event.key === ANIMATION_KEY || event.key === null) {
     useUIStore.setState({ extraUIAnimation: localStorage.getItem(ANIMATION_KEY) !== '0' })

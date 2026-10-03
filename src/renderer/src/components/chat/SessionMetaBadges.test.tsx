@@ -596,7 +596,7 @@ describe('the tasks badge', () => {
     expect(within(dialog).queryByRole('button', { name: 'Open Inbox' })).toBeNull()
     expect(dialog.textContent).not.toContain('Showing')
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Task 2 — completed' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Task 2 — Done' }))
     expect(useUIStore.getState().activeTaskId).toBe('t2')
     expect(useUIStore.getState().activeView).toBe('task')
     expect(screen.queryByRole('dialog', { name: 'Tasks in this chat' })).toBeNull()
@@ -623,7 +623,7 @@ describe('the tasks badge', () => {
 
     badge.focus()
     fireEvent.keyDown(badge, { key: 'Enter' })
-    const first = await within(dialog()!).findByRole('button', { name: 'Task 1 — completed' })
+    const first = await within(dialog()!).findByRole('button', { name: 'Task 1 — Done' })
     await waitFor(() => expect(document.activeElement).toBe(first))
     fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })
     // Mutation: drop the Tab handling and focus is left in a closed popover's place.
@@ -631,7 +631,7 @@ describe('the tasks badge', () => {
     expect(document.activeElement).toBe(badge)
 
     fireEvent.keyDown(badge, { key: 'Enter' })
-    const last = await within(dialog()!).findByRole('button', { name: 'Task 2 — completed' })
+    const last = await within(dialog()!).findByRole('button', { name: 'Task 2 — Done' })
     last.focus()
     fireEvent.keyDown(last, { key: 'Tab' })
     expect(dialog()).toBeNull()

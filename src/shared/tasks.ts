@@ -207,6 +207,108 @@ export interface TaskRemoteRef {
   url: string | null
 }
 
+/**
+ * A user-defined fact about a task — `estimate: 3`, `area: billing`,
+ * `labels: [ui, docs]`. Scalars and flat lists only: the phase-2 task file
+ * keeps these in frontmatter, where a nested value would not survive a
+ * line-level patch.
+ */
+export type TaskCustomFieldValue = string | number | boolean | null | readonly (string | number | boolean)[]
+
+export type TaskCustomFields = Record<string, TaskCustomFieldValue>
+
+/** A custom field key: a letter, then letters, digits, `_` or `-`, at most 64 characters. */
+export const TASK_CUSTOM_FIELD_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
+export const TASK_CUSTOM_FIELDS_MAX = 50
+export const TASK_CUSTOM_FIELD_STRING_MAX = 2000
+
+/**
+ * Keys a custom field may not take, because the task file format (phase 2)
+ * owns them: a custom `status` would be read back as the task's status.
+ */
+export const TASK_RESERVED_FIELD_KEYS: readonly string[] = [
+  'cinna_task', 'id', 'title', 'status', 'priority', 'parent', 'blocked_by',
+  'origin', 'assignee', 'goal', 'description', 'created', 'updated'
+]
+
+function customScalar(value: unknown): value is string | number | boolean {
+  return typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
+}
+
+/**
+ * Custom fields off an untrusted boundary (IPC, a peer), rebuilt key by key.
+ *
+ * Returns the rebuilt object, or the first refusal as a sentence the user can
+ * read. Pure, so main enforces it and the renderer may ask the same question
+ * before sending. An empty object is returned as such; the caller decides
+ * whether that means "clear".
+ */
+export function validateTaskCustomFields(input: unknown): { fields: TaskCustomFields } | { error: string } {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+    return { error: 'Custom fields must be a set of named values.' }
+  }
+  const entries = Object.entries(input as Record<string, unknown>)
+  if (entries.length > TASK_CUSTOM_FIELDS_MAX) {
+    return { error: `A task can have at most ${TASK_CUSTOM_FIELDS_MAX} custom fields.` }
+  }
+  const fields: TaskCustomFields = {}
+  for (const [key, value] of entries) {
+    if (!TASK_CUSTOM_FIELD_KEY.test(key)) {
+      return { error: `“${key.slice(0, 64)}” is not a field name: start with a letter, then letters, digits, - or _.` }
+    }
+    if (TASK_RESERVED_FIELD_KEYS.includes(key)) {
+      return { error: `“${key}” is a built-in task field and cannot be a custom field.` }
+    }
+    const tooLong = (v: unknown): boolean => typeof v === 'string' && v.length > TASK_CUSTOM_FIELD_STRING_MAX
+    if (value === null || customScalar(value)) {
+      if (tooLong(value)) return { error: `“${key}” is longer than ${TASK_CUSTOM_FIELD_STRING_MAX} characters.` }
+      fields[key] = value
+    } else if (Array.isArray(value) && value.every(customScalar)) {
+      if (value.some(tooLong)) return { error: `“${key}” is longer than ${TASK_CUSTOM_FIELD_STRING_MAX} characters.` }
+      fields[key] = [...value]
+    } else {
+      return { error: `“${key}” must be text, a number, true/false or a list of those.` }
+    }
+  }
+  return { fields }
+}
+
+/**
+ * Who a user-created task is assigned to: an agent on this device, the default
+ * chat model, or nobody yet (`null`). Stored as `kind: 'model'` either way —
+ * the existing convention, where `model` means "the local LLM, or nobody in
+ * particular" (see {@link TaskAssignee}).
+ */
+export type TaskAssigneeInput = { kind: 'agent'; agentId: string } | { kind: 'model' } | null
+
+/** `task:create` — a task the user writes down by hand. */
+export interface TaskCreateInput {
+  title: string
+  /** Immutable once created; main fills it with the title when omitted. */
+  goal?: string
+  description?: string
+  priority?: TaskPriority
+  /** Backlog (`new`, the default) or Ready (`open`). */
+  status?: 'new' | 'open'
+  assignee?: TaskAssigneeInput
+  customFields?: TaskCustomFields
+}
+
+/**
+ * `task:update` — the fields a user edits. Title, description, priority and
+ * router are writable whoever runs the task; `assignee` is an execution field
+ * and main refuses it once the task has a chat, runs elsewhere, is bound to a
+ * service, is a script, or a runtime owns it. `customFields: null` clears them.
+ */
+export interface TaskUpdateInput {
+  title?: string
+  description?: string | null
+  priority?: TaskPriority
+  router?: TaskRouter
+  assignee?: TaskAssigneeInput
+  customFields?: TaskCustomFields | null
+}
+
 /** One task, as every surface sees it. */
 export interface TaskDto {
   /** Portable definition; execution checkpoints stay on the executing device. */
@@ -265,6 +367,8 @@ export interface TaskDto {
   artifacts: TaskArtifact[]
   budget: TaskBudget | null
   errorMessage: string | null
+  /** User-defined fields (`validateTaskCustomFields`); null when the task has none. */
+  customFields: TaskCustomFields | null
 
   /** Which job run created this task, when one did. Provenance only — the rows may be gone. */
   jobId: string | null

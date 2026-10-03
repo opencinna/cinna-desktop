@@ -14,7 +14,7 @@ it('opens a child from the scoped list and preserves it with a visible refresh f
   ;(window as unknown as { api: unknown }).api = { tasks: { children: list } }
   const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } })
   render(<QueryClientProvider client={client}><TaskList parentTaskId="parent" expected /></QueryClientProvider>)
-  const child = await screen.findByRole('button', { name: 'Verify result — completed' })
+  const child = await screen.findByRole('button', { name: 'Verify result — Done' })
   expect(list).toHaveBeenCalledWith('parent')
   fireEvent.click(child)
   expect(useUIStore.getState().activeTaskId).toBe('child')
@@ -22,7 +22,7 @@ it('opens a child from the scoped list and preserves it with a visible refresh f
   list.mockRejectedValue(new Error('offline'))
   await act(async () => { await client.invalidateQueries({ queryKey: ['tasks', 'parent'] }) })
   await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('could not be refreshed'))
-  expect(screen.getByRole('button', { name: 'Verify result — completed' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Verify result — Done' })).toBeTruthy()
   list.mockResolvedValue({ tasks: rows, refreshed: true })
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())

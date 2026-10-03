@@ -3,6 +3,8 @@ import { useOpenTask } from '../../hooks/useTasks'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { TaskStatusIcon } from './TaskStatusIcon'
+import { TaskAssigneeChip } from './TaskAssigneeChip'
+import { taskStatusLabel } from './tasksViewModel'
 
 /**
  * One task as a list row: where it stands, what it is, and when it last moved.
@@ -24,15 +26,22 @@ import { TaskStatusIcon } from './TaskStatusIcon'
 export function TaskRow({
   task,
   size = 'regular',
+  showAssignee = false,
   onOpened
 }: {
-  task: Pick<TaskDto, 'id' | 'title' | 'status' | 'updatedAt'>
+  task: Pick<TaskDto, 'id' | 'title' | 'status' | 'updatedAt'> & Partial<Pick<TaskDto, 'assignee'>>
   /**
    * The type scale of the surface the row renders into (`ux_rules.md` §12):
    * `regular` is the Inbox's 13/11, `compact` the composer chrome's 12/11
    * (the Tasks popover under the input). A size, not a behaviour.
    */
   size?: 'regular' | 'compact'
+  /**
+   * Whose task it is, before the time — for a list that mixes agents (the
+   * Tasks view with "All agents"). A fixed fact about the task, so the time
+   * stays the one part that changes width on its own.
+   */
+  showAssignee?: boolean
   /** After the task was opened — a popover around the row closes itself. */
   onOpened?: () => void
 }): React.JSX.Element {
@@ -56,7 +65,7 @@ export function TaskRow({
         minute is worse than one that omits a detail the user can
         reach by reading the row.
       */
-      aria-label={`${task.title} — ${task.status.replace(/_/g, ' ')}`}
+      aria-label={`${task.title} — ${taskStatusLabel(task.status)}`}
       onClick={() => {
         openTask(task.id)
         onOpened?.()
@@ -86,6 +95,7 @@ export function TaskRow({
       >
         {task.title}
       </span>
+      {showAssignee && task.assignee && <TaskAssigneeChip task={{ assignee: task.assignee }} className="max-w-[10rem] shrink-0" />}
       <span className="shrink-0 text-[11px] tabular-nums text-[var(--color-text-muted)]">
         {formatRelativeFromDate(task.updatedAt, now)}
       </span>

@@ -1,3 +1,5 @@
+import { taskStatusLabel } from './tasksViewModel'
+
 /**
  * Where a task stands, in one pill.
  *
@@ -12,6 +14,9 @@
  * an older server sends (`succeeded`, `failed`). An unknown value gets the
  * neutral "something is happening" tone and prints itself, which is the honest
  * answer; it is never dropped and never guessed at.
+ *
+ * The words are `taskStatusLabel`'s — the Tasks view's categories (Backlog,
+ * Ready, Done…) — so the page and the board name a status one way.
  */
 export function TaskStatusPill({ status }: { status: string }): React.JSX.Element {
   const lc = status.toLowerCase()
@@ -29,16 +34,7 @@ export function TaskStatusPill({ status }: { status: string }): React.JSX.Elemen
     <span
       className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide ${tone}`}
     >
-      {label(lc)}
+      {taskStatusLabel(lc)}
     </span>
   )
-}
-
-/**
- * `in_progress` is a column name, not a word. The pill is the one place a user
- * reads a status, so it reads as English; everything else — the transition
- * table, the wire — keeps the identifier.
- */
-function label(lc: string): string {
-  return lc.replace(/_/g, ' ')
 }

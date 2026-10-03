@@ -97,6 +97,7 @@ const BASE: TaskDto = {
   artifacts: [],
   budget: null,
   errorMessage: null,
+  customFields: null,
   jobId: 'j1',
   jobRunId: 'r1',
   createdAt: new Date('2026-09-11T09:00:00Z'),
@@ -1288,5 +1289,189 @@ describe('delegated work links', () => {
     const details = screen.getByRole('complementary', { name: 'Details' })
     fireEvent.click(await within(details).findByRole('button', { name: 'Review the patch' }))
     expect(useUIStore.getState().activeTaskId).toBe('worker-task')
+  })
+})
+
+describe('reached from the Tasks view, and edited in place', () => {
+  const updateTask = vi.fn<(taskId: string, patch: unknown) => Promise<TaskDto>>()
+  beforeEach(() => {
+    updateTask.mockReset()
+    ;(window as unknown as { api: { tasks: Record<string, unknown> } }).api.tasks.update =
+      (taskId: string, patch: unknown) => updateTask(taskId, patch)
+    useUIStore.setState({ taskOpenedFromTasks: false })
+  })
+
+  it('goes back to Tasks when opened from there', async () => {
+    useUIStore.setState({ taskOpenedFromTasks: true })
+    await renderTask({ jobId: null, jobRunId: null })
+    await act(async () => { screen.getByRole('button', { name: 'Back to Tasks' }).click() })
+    expect(useUIStore.getState().activeView).toBe('tasks')
+  })
+
+  it('goes back to Tasks rather than to the job when opened from Tasks; the job stays in Details', async () => {
+    useUIStore.setState({ taskOpenedFromTasks: true })
+    await renderTask({ jobId: 'j1' })
+    expect(screen.getByRole('button', { name: 'Back to Tasks' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back to Nightly check' })).toBeNull()
+    expect(await within(screen.getByRole('complementary', { name: 'Details' })).findByRole('button', { name: 'Nightly check' })).toBeTruthy()
+  })
+
+  it('goes back to the job when not opened from Tasks', async () => {
+    await renderTask({ jobId: 'j1' })
+    expect(await screen.findByRole('button', { name: 'Back to Nightly check' })).toBeTruthy()
+  })
+
+  it('keeps Parent task for a subtask opened from Tasks', async () => {
+    useUIStore.setState({ taskOpenedFromTasks: true })
+    await renderTask({ jobId: null, jobRunId: null, parentTaskId: 'p1' })
+    expect(screen.getByRole('button', { name: 'Parent task' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back to Tasks' })).toBeNull()
+  })
+
+  it('lists custom fields as Details rows after the built-in ones', async () => {
+    await renderTask({ customFields: { area: 'billing', estimate: 3, labels: ['ui', 'docs'], empty: null } })
+    expect(detail('area')).toBe('billing')
+    expect(detail('estimate')).toBe('3')
+    expect(detail('labels')).toBe('ui, docs')
+    expect(detail('empty')).toBeNull()
+    const labels = [...document.querySelectorAll('dt')].map((node) => node.textContent)
+    expect(labels.indexOf('area')).toBeGreaterThan(labels.indexOf('Created'))
+    // Under their own heading, keys as written: a field named Status is not the built-in row.
+    const fields = screen.getByRole('region', { name: 'Fields' })
+    expect(within(fields).getByRole('heading', { name: 'Fields' })).toBeTruthy()
+    expect(within(fields).getByText('area').className).not.toMatch(/uppercase/)
+    expect(within(fields).queryByText('empty')).toBeNull()
+  })
+
+  it('shows no Fields heading when every custom field is empty', async () => {
+    await renderTask({ customFields: { empty: null } })
+    expect(screen.queryByRole('region', { name: 'Fields' })).toBeNull()
+  })
+
+  it.each([
+    ['new', 'Backlog'], ['refining', 'Backlog'], ['open', 'Ready'], ['in_progress', 'In progress'], ['blocked', 'Waiting'],
+    ['completed', 'Done'], ['error', 'Failed'], ['cancelled', 'Cancelled'], ['archived', 'Archived']
+  ] as const)('names a %s task’s status %s, as the Tasks view does', async (status, label) => {
+    await renderTask({ status })
+    expect(detail('Status')).toBe(label)
+  })
+
+  it('calls a model task with no conversation Unassigned, and keeps the model wording once it has one', async () => {
+    await renderTask({ assignee: { kind: 'model', agentId: null, name: null }, chatId: null })
+    expect(detail('Assignee')).toBe('Unassigned')
+    fresh()
+    await renderTask({ assignee: { kind: 'model', agentId: null, name: null }, chatId: 'c1' })
+    expect(detail('Assignee')).toBe('The local model')
+  })
+
+  async function openEdit(task: Partial<TaskDto>): Promise<HTMLElement> {
+    await renderTask(task)
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    fireEvent.click(within(await screen.findByRole('menu', { name: 'Task actions' })).getByRole('menuitem', { name: 'Edit task…' }))
+    return screen.getByRole('dialog', { name: 'Edit task' })
+  }
+  /** A second render in one test: a fresh client, so the first task's cache cannot answer for it. */
+  function fresh(): void {
+    cleanup()
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchInterval: false } } })
+  }
+  function statusOptions(dialog: HTMLElement): (string | null)[] {
+    return within(within(dialog).getByLabelText('Status')).getAllByRole('option').map((o) => o.textContent)
+  }
+
+  it('writes the status first, and says what was kept when the other edits are refused', async () => {
+    const editable = { chatId: null, jobId: null, jobRunId: null, status: 'new' as const, customFields: { area: 'billing', estimate: 3 } }
+    setStatus.mockResolvedValue({ ...BASE, ...editable, status: 'open' })
+    updateTask.mockRejectedValueOnce(new Error("Error invoking remote method 'task:update': Error: Title is required"))
+    updateTask.mockResolvedValue({ ...BASE, ...editable, status: 'open' })
+    await renderTask(editable)
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    const menu = await screen.findByRole('menu', { name: 'Task actions' })
+    const items = within(menu).getAllByRole('menuitem').map((item) => item.textContent)
+    expect(items.indexOf('Edit task…')).toBeLessThan(items.indexOf('Delete task…'))
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Edit task…' }))
+    const dialog = screen.getByRole('dialog', { name: 'Edit task' })
+    expect(within(dialog).getByText(BASE.goal)).toBeTruthy()
+    expect(statusOptions(dialog)).toEqual(['Backlog', 'Ready', 'Done'])
+    fireEvent.change(within(dialog).getByLabelText('Title'), { target: { value: 'Renamed' } })
+    fireEvent.change(within(dialog).getByLabelText('Status'), { target: { value: 'open' } })
+    fireEvent.change(within(dialog).getByLabelText('Field 1 value'), { target: { value: 'ops' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    expect((await within(dialog).findByRole('alert')).textContent)
+      .toBe('Status changed; the other edits were not saved: Title is required')
+    expect(setStatus).toHaveBeenCalledTimes(1)
+    expect(setStatus.mock.invocationCallOrder[0]).toBeLessThan(updateTask.mock.invocationCallOrder[0])
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit task' })).toBeNull())
+    // The status is not written twice; the untouched number keeps its type and only the changed fields travel.
+    expect(setStatus).toHaveBeenCalledTimes(1)
+    expect(setStatus).toHaveBeenCalledWith('t1', 'open')
+    expect(updateTask).toHaveBeenLastCalledWith('t1', { title: 'Renamed', customFields: { area: 'ops', estimate: 3 } })
+  })
+
+  it('writes nothing else when the status is refused, and says only main’s sentence', async () => {
+    setStatus.mockRejectedValueOnce(new Error("Error invoking remote method 'task:set-status': Error: Another device holds this task."))
+    const dialog = await openEdit({ chatId: null, jobId: null, jobRunId: null, status: 'open' })
+    fireEvent.change(within(dialog).getByLabelText('Title'), { target: { value: 'Renamed' } })
+    fireEvent.change(within(dialog).getByLabelText('Status'), { target: { value: 'completed' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    expect((await within(dialog).findByRole('alert')).textContent).toBe('Another device holds this task.')
+    expect(updateTask).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Edit task' })).toBe(dialog)
+  })
+
+  it('offers only the moves this task can make', async () => {
+    const dialog = await openEdit({ chatId: null, jobId: null, jobRunId: null, status: 'open', remote: null })
+    expect(statusOptions(dialog)).toEqual(['Ready', 'Backlog', 'Done'])
+    fresh()
+    // A bound task keeps the remote table: Backlog → Ready only, and nothing by hand from Ready.
+    const remote = { adapter: 'cinna', id: 'r-1', key: 'T-1', url: null } as unknown as TaskDto['remote']
+    const bound = await openEdit({ chatId: null, jobId: null, jobRunId: null, status: 'new', remote })
+    expect(statusOptions(bound)).toEqual(['Backlog', 'Ready'])
+    fresh()
+    const boundReady = await openEdit({ chatId: null, jobId: null, jobRunId: null, status: 'open', remote })
+    expect((within(boundReady).getByLabelText('Status') as HTMLSelectElement).disabled).toBe(true)
+    expect(within(boundReady).getByText('Moved by the service this task is connected to.')).toBeTruthy()
+    fresh()
+    const failed = await openEdit({ chatId: null, jobId: null, jobRunId: null, status: 'error' })
+    expect(statusOptions(failed)).toEqual(['Failed', 'Backlog'])
+  })
+
+  it.each([
+    ['in_progress', {}, 'In progress', 'Set by the run working on it.'],
+    ['blocked', {}, 'Waiting', 'Set by the question waiting on you.'],
+    ['completed', {}, 'Done', 'A finished task stays where it is.'],
+    ['open', { runtime: { state: 'running', reason: null, ownerTurns: 1, elapsedMs: 0, budget: { maxRounds: 20, maxMinutes: 60 } } },
+      'Ready', 'Moved by the runtime that owns this task.']
+  ] as const)('locks the status of a %s task with one line saying why', async (status, extra, label, reason) => {
+    const dialog = await openEdit({ chatId: null, jobId: null, jobRunId: null, status, ...(extra as Partial<TaskDto>) })
+    const select = within(dialog).getByLabelText('Status') as HTMLSelectElement
+    expect(select.disabled).toBe(true)
+    expect(statusOptions(dialog)).toEqual([label])
+    expect(within(dialog).getByText(reason)).toBeTruthy()
+  })
+
+  it('disables the assignee with the reason main would give', async () => {
+    const dialog = await openEdit({ status: 'in_progress' })
+    expect((within(dialog).getByLabelText('Assignee') as HTMLSelectElement).disabled).toBe(true)
+    expect(within(dialog).getByText('Fixed once the task has a conversation.')).toBeTruthy()
+  })
+
+  it('closes on Escape or an outside click only while nothing was changed', async () => {
+    let dialog = await openEdit({ chatId: null, jobId: null, jobRunId: null, status: 'new' })
+    await act(async () => { fireEvent.keyDown(window, { key: 'Escape' }) })
+    expect(screen.queryByRole('dialog', { name: 'Edit task' })).toBeNull()
+    fresh()
+
+    dialog = await openEdit({ chatId: null, jobId: null, jobRunId: null, status: 'new' })
+    fireEvent.change(within(dialog).getByLabelText('Title'), { target: { value: 'Half typed' } })
+    await act(async () => { fireEvent.keyDown(window, { key: 'Escape' }) })
+    await act(async () => { fireEvent.mouseDown(document.body) })
+    expect(screen.getByRole('dialog', { name: 'Edit task' })).toBe(dialog)
+    expect((within(dialog).getByLabelText('Title') as HTMLInputElement).value).toBe('Half typed')
+    // Cancel still discards on purpose.
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' })) })
+    expect(screen.queryByRole('dialog', { name: 'Edit task' })).toBeNull()
+    expect(updateTask).not.toHaveBeenCalled()
   })
 })

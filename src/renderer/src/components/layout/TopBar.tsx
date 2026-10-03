@@ -7,6 +7,7 @@ import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
 import { useStartNewChat } from '../../hooks/useStartNewChat'
 import { JobOriginBanner } from '../chat/JobOriginBanner'
 import { InboxButton } from '../inbox/InboxButton'
+import { TasksButton } from '../tasks/TasksButton'
 import { AgentStatusButton } from '../agents/AgentStatusButton'
 import { UpdateStatusButton } from '../updater/UpdateStatusButton'
 
@@ -134,6 +135,7 @@ export function TopBar(): React.JSX.Element {
       className={`app-drag-strip absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30 flex items-center gap-1 ${TRAFFIC_LIGHT_GUTTER} pr-3`}
     >
       <SidebarButton />
+      <TasksButton className={TOPBAR_BTN} />
       <AgentStatusButton className={TOPBAR_BTN} />
       <InboxButton className={TOPBAR_BTN} />
       <button onClick={startNewChat} title="New Chat" className={TOPBAR_BTN}>

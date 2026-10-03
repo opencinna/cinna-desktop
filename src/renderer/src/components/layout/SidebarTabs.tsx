@@ -15,7 +15,7 @@ import { useChatList } from '../../hooks/useChat'
  * and the same trap; it is named here rather than left as the one exception
  * nobody wrote down.
  */
-const TABLESS_VIEWS: readonly ActiveView[] = ['inbox', 'task', 'cinna-task-run']
+const TABLESS_VIEWS: readonly ActiveView[] = ['inbox', 'tasks', 'task', 'cinna-task-run']
 
 /**
  * The center each tab owns, for the one case that only realigns it: returning

@@ -102,7 +102,7 @@ const SYNCED_TABS = new Set(['jobs', 'notes'])
  * a minute. The Jobs tab keeps its own arm above — it no longer shows tasks,
  * but jobs are a synced collection in their own right.
  */
-const SYNCED_VIEWS = new Set(['task', 'inbox'])
+const SYNCED_VIEWS = new Set(['task', 'tasks', 'inbox'])
 
 /**
  * Coalesce rapid tab toggles into at most one server ping per window — the

@@ -12,13 +12,14 @@ import type { ChatRouter } from '../../shared/chatRouting'
 import type { ChatRunResultStatus } from '../../shared/chatRunResult'
 import type { MessageTelemetry, SessionTelemetry } from '../../shared/sessionTelemetry'
 import type { InputRequest, InputResumeMode } from '../../shared/runEvents'
-import type { HandoverExecution, HandoverReportStatus, HandoverState } from '../../shared/handovers'
+import type { RecordedHandoverExecution, HandoverReportStatus, HandoverState } from '../../shared/handovers'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { TaskStatus } from '../../shared/taskStatus'
 import type { TaskHandoffReceipt } from '../../shared/taskHandoff'
 import type {
   TaskArtifact,
   TaskAssignee,
+  TaskCustomFields,
   TaskBudget,
   TaskExecutor,
   TaskInputRequestStatus,
@@ -792,6 +793,8 @@ export const tasks = sqliteTable('tasks', {
   /** Read by the headless task runner in phase 6; carried across sync from here. */
   budget: text('budget', { mode: 'json' }).$type<TaskBudget | null>(),
   script: text('script', { mode: 'json' }).$type<TaskScript>(),
+  /** User-defined fields; null when the task has none. Synced; absent on the wire keeps the local value. */
+  customFields: text('custom_fields', { mode: 'json' }).$type<TaskCustomFields | null>(),
   errorMessage: text('error_message'),
 
   createdAt: integer('created_at', { mode: 'timestamp' })
@@ -1023,7 +1026,7 @@ export const handovers = sqliteTable('handovers', {
   originTaskId: text('origin_task_id'),
   depth: integer('depth').notNull().default(1),
   groupId: text('group_id'),
-  execution: text('execution').$type<HandoverExecution>().notNull().default('ask'),
+  execution: text('execution').$type<RecordedHandoverExecution>().notNull().default('ask'),
   state: text('state').$type<HandoverState>().notNull().default('seen'),
   refusalReason: text('refusal_reason'),
   /** {@link HandoverWarning} — acted on anyway, with something to say about it. */
@@ -1103,7 +1106,7 @@ export const delegations = sqliteTable('delegations', {
   handoverId: text('handover_id').unique(),
   title: text('title').notNull().default(''),
   brief: text('brief').notNull().default(''),
-  execution: text('execution').$type<HandoverExecution>().notNull().default('ask'),
+  execution: text('execution').$type<RecordedHandoverExecution>().notNull().default('ask'),
   state: text('state').$type<DelegationState>().notNull().default('seen'),
   refusalReason: text('refusal_reason'),
   warning: text('warning'),

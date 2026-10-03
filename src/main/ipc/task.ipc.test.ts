@@ -67,6 +67,11 @@ vi.mock('./_wrap', () => ({
 }))
 vi.mock('../services/syncService', () => ({ syncService: { markDirty } }))
 vi.mock('../services/taskService', () => ({ taskService: service }))
+const authoring = vi.hoisted(() => ({
+  create: vi.fn(() => ({ id: 't-new' })),
+  update: vi.fn(() => ({ id: 't1' }))
+}))
+vi.mock('../services/taskAuthoringService', () => ({ taskAuthoringService: authoring }))
 vi.mock('../services/taskSyncService', () => ({ taskSyncService: sync }))
 vi.mock('../services/taskExecutionService', () => ({ taskExecutionService: { start: startTask } }))
 vi.mock('../services/inboxService', () => ({
@@ -103,6 +108,7 @@ describe('a task write a person made reaches the other devices without waiting a
     ['task:take-over', ['t1']],
     ['task:start', ['t1', { kind: 'model' }]],
     ['task:update', ['t1', { title: 'Renamed' }]],
+    ['task:create', [{ title: 'New' }]],
     ['task:set-status', ['t1', 'in_progress']],
     ['task:reopen-for-rerun', ['t1']],
     ['task:delete', ['t1']]
@@ -241,4 +247,48 @@ describe('delegation task links use the active profile', () => {
     await expect(invoke('delegation:for-task', { taskId: null })).resolves.toEqual({ from: null, to: [] })
     expect(delegationLinks).not.toHaveBeenCalled()
   })
+})
+
+describe('task:create and task:update payloads', () => {
+  it('rebuilds a create field by field, dropping what the renderer has no say in', async () => {
+    await expect(invoke('task:create', {
+      title: 'Write notes', goal: 'Release notes for 1.0', description: 'Short', priority: 'high', status: 'open',
+      assignee: { kind: 'agent', agentId: 'a1', name: 'Spoofed' }, customFields: { area: 'docs' },
+      origin: 'remote', executor: 'remote', executorDevice: 'other', router: 'script', chatId: 'c9', id: 'chosen'
+    })).resolves.toEqual({ id: 't-new' })
+    expect(authoring.create).toHaveBeenCalledWith({ profileUserId: 'profile-1', settingsUserId: 'settings-1' }, {
+      title: 'Write notes', goal: 'Release notes for 1.0', description: 'Short', priority: 'high', status: 'open',
+      assignee: { kind: 'agent', agentId: 'a1' }, customFields: { area: 'docs' }
+    })
+  })
+
+  it('passes a bare title and an explicit unassigned choice', async () => {
+    await invoke('task:create', { title: 'Only a title' })
+    expect(authoring.create).toHaveBeenLastCalledWith(expect.anything(), { title: 'Only a title' })
+    await invoke('task:create', { title: 'T', assignee: null })
+    expect(authoring.create).toHaveBeenLastCalledWith(expect.anything(), { title: 'T', assignee: null })
+  })
+
+  it.each([
+    [{ goal: 'no title' }, 'title'],
+    [{ title: 'T', status: 'in_progress' }, 'Backlog or Ready'],
+    [{ title: 'T', priority: 'max' }, 'priority'],
+    [{ title: 'T', assignee: { kind: 'remote_agent', agentId: 'x' } }, 'Choose an agent'],
+    [{ title: 'T', customFields: ['a'] }, 'named values']
+  ] as const)('refuses %j before it reaches the service', async (payload, message) => {
+    await expect(invoke('task:create', payload)).rejects.toThrow(message)
+    expect(authoring.create).not.toHaveBeenCalled()
+    expect(markDirty).not.toHaveBeenCalled()
+  })
+
+  it('rebuilds an update and forwards assignee and custom fields', async () => {
+    await invoke('task:update', 't1', { title: 'T', assignee: { kind: 'model', modeId: 'x' }, customFields: null, status: 'completed' })
+    expect(authoring.update).toHaveBeenCalledWith({ profileUserId: 'profile-1', settingsUserId: 'settings-1' }, 't1',
+      { title: 'T', assignee: { kind: 'model' }, customFields: null })
+  })
+})
+
+it('task:set-status is a person’s move: main asks for the manual overlay, the renderer sends no flag', async () => {
+  await invoke('task:set-status', 't1', 'completed', { bound: false })
+  expect(service.setStatus).toHaveBeenCalledWith('profile-1', 't1', 'completed', { manual: true })
 })

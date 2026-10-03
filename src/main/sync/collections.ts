@@ -22,11 +22,13 @@ import type {
   TaskArtifact,
   TaskAssignee,
   TaskBudget,
+  TaskCustomFields,
   TaskExecutor,
   TaskOrigin,
   TaskPriority,
   TaskRouter
 } from '../../shared/tasks'
+import { validateTaskCustomFields } from '../../shared/tasks'
 import { createLogger } from '../logger/logger'
 
 /**
@@ -408,6 +410,15 @@ const jobMapper: CollectionMapper = {
 
 // ---------------- task ----------------
 
+/** `customFields` off the wire: undefined = absent (keep local), null = clear. */
+function syncedCustomFields(plaintext: Record<string, unknown>): TaskCustomFields | null | undefined {
+  if (!Object.prototype.hasOwnProperty.call(plaintext, 'customFields')) return undefined
+  const raw = plaintext.customFields
+  if (raw === null) return null
+  const checked = validateTaskCustomFields(raw)
+  return 'fields' in checked ? (Object.keys(checked.fields).length > 0 ? checked.fields : null) : undefined
+}
+
 /**
  * The `kind: 'agent'` arm of a dependency descriptor, off the wire. Reuses
  * {@link parseDeps} so a task's assignee and a job's agent dependency are
@@ -476,6 +487,7 @@ const taskMapper: CollectionMapper = {
         handoffNote: r.handoffNote ?? null,
         artifacts: r.artifacts ?? null,
         budget: r.budget ?? null,
+        customFields: r.customFields ?? null,
         errorMessage: r.errorMessage ?? null,
         // `createdAt` travels, unlike a job's. A task page prints it ("Created
         // three days ago") and so do `startedAt` / `finishedAt`; a replica that
@@ -536,6 +548,11 @@ const taskMapper: CollectionMapper = {
       handoffNote: strOrNull(plaintext.handoffNote),
       artifacts: jsonArray<TaskArtifact>(plaintext.artifacts),
       budget: jsonObject(plaintext.budget) as TaskBudget | null,
+      // A payload without the key is from a build that predates custom fields:
+      // undefined keeps this device's value. An explicit null clears it, and a
+      // value is rebuilt by the shared validator — one this build refuses is
+      // left alone rather than half-applied.
+      customFields: syncedCustomFields(plaintext),
       errorMessage: strOrNull(plaintext.errorMessage),
       // A payload from a build that predates `createdAt` travelling would have
       // none; the peer's own modification time is the closest honest answer,

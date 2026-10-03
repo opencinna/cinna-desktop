@@ -284,8 +284,9 @@ describe('binding a task to a service', () => {
 })
 
 describe('applying what a pull brought back', () => {
-  function replica() {
+  function replica(fields: Partial<Parameters<typeof makeTask>[0]> = {}) {
     return makeTask({
+      ...fields,
       origin: 'remote',
       executor: 'remote',
       remoteAdapter: 'fake',
@@ -295,7 +296,9 @@ describe('applying what a pull brought back', () => {
   }
 
   it('takes the remote’s fields, and its modification time with them', () => {
-    const task = replica()
+    // A replica is created at the remote's time (`upsert`), so the next change
+    // there is newer than anything written here.
+    const task = replica({ updatedAt: new Date('2026-09-01T08:00:00.000Z') })
     const theirs = new Date('2026-09-11T08:00:00.000Z')
     const next = taskService.applyRemoteSnapshot(USER, task.id, {
       title: 'Renamed on the web',
@@ -308,6 +311,16 @@ describe('applying what a pull brought back', () => {
     // A mirror that always looked newer than the thing it mirrors would win
     // every per-field conflict it should lose.
     expect(next.updatedAt.toISOString()).toBe(theirs.toISOString())
+  })
+
+  it('keeps a newer local modification time, so device sync still pushes the local edit', () => {
+    const task = replica({ updatedAt: new Date('2026-09-20T08:00:00.000Z') })
+    const next = taskService.applyRemoteSnapshot(USER, task.id, {
+      title: 'Renamed on the web',
+      updatedAt: new Date('2026-09-11T08:00:00.000Z')
+    })
+    expect(next.title).toBe('Renamed on the web')
+    expect(next.updatedAt.toISOString()).toBe('2026-09-20T08:00:00.000Z')
   })
 
   it('takes a status the transition table calls unreachable', () => {

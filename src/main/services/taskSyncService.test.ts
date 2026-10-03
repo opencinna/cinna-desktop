@@ -135,6 +135,7 @@ function sampleTask(title: string): TaskDto {
     artifacts: [],
     budget: null,
     errorMessage: null,
+    customFields: null,
     jobId: null,
     jobRunId: null,
     createdAt: now,

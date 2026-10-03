@@ -46,6 +46,7 @@ import { TaskList } from './TaskList'
 import { TaskRuntimeControl } from './TaskRuntimeControl'
 import { TaskActionsMenu } from './TaskActionsMenu'
 import { Detail, HEADER_BUTTON, Prose, Section } from './DetailParts'
+import { customFieldText, isUnassigned, taskStatusLabel } from './tasksViewModel'
 import { hasAgentPage, useOpenAgentPage } from '../../hooks/useOpenAgentPage'
 import type { TaskArtifact, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
@@ -194,6 +195,7 @@ function TaskPage({
   const openTask = useOpenTask()
   const openExternal = useOpenExternal()
   const setActiveView = useUIStore((s) => s.setActiveView)
+  const openedFromTasks = useUIStore((s) => s.taskOpenedFromTasks)
   const setActiveJobId = useUIStore((s) => s.setActiveJobId)
   const now = useRelativeNow()
   /**
@@ -274,6 +276,7 @@ function TaskPage({
   const assignee = ((): string | null => {
     if (task.assignee.kind === 'script') return 'Defined script steps'
     if (task.assignee.kind === 'human') return 'You (via the Inbox)'
+    if (isUnassigned(task)) return 'Unassigned'
     if (task.assignee.kind === 'model') return 'The local model'
     if (task.assignee.agentId && !agentsPending) {
       const found = (agents ?? []).find((a) => a.id === task.assignee.agentId)
@@ -321,6 +324,9 @@ function TaskPage({
     ? (agents ?? []).find((a) => a.id === task.assignee.agentId && hasAgentPage(a)) ?? null
     : null
   const openAgentPage = useOpenAgentPage()
+  const customFieldEntries = Object.entries(task.customFields ?? {})
+    .map(([key, value]) => [key, customFieldText(value)] as const)
+    .filter(([, text]) => text !== '')
 
   const handleBackToJob = (): void => {
     if (!task.jobId) return
@@ -348,7 +354,8 @@ function TaskPage({
 
   /*
     The way back, as one arrow at the head of the title row: to the parent for
-    a subtask, else to the job, else to the Inbox — a task a conversation
+    a subtask, else to Tasks when the user came from there, else to the job,
+    else to the Inbox — a task a conversation
     minted at its first ask, or one that arrived over sync, has no other named
     route to a list of tasks. One arrow, never two: a subtask that also has a
     job reaches the job from Details, where it is a fact about the task rather
@@ -358,9 +365,12 @@ function TaskPage({
   */
   const back = task.parentTaskId
     ? { label: 'Parent task', go: () => openTask(task.parentTaskId!) }
-    : task.jobId && !jobGone
-      ? { label: job ? `Back to ${job.title}` : 'Back to the job', go: handleBackToJob }
-      : { label: 'Back to the Inbox', go: () => setActiveView('inbox') }
+    : openedFromTasks
+      // Where the user came from beats where the task came from: the job stays in Details.
+      ? { label: 'Back to Tasks', go: () => setActiveView('tasks') }
+      : task.jobId && !jobGone
+        ? { label: job ? `Back to ${job.title}` : 'Back to the job', go: handleBackToJob }
+        : { label: 'Back to the Inbox', go: () => setActiveView('inbox') }
 
   /*
     The page follows the local agent page: the title row with the actions level
@@ -396,7 +406,7 @@ function TaskPage({
               <ArrowLeft size={14} />
             </button>
             {/* The status as an icon, the way it leads a task row; the word is in Details. */}
-            <span className="flex shrink-0 items-center" title={task.status.replace(/_/g, ' ')}>
+            <span className="flex shrink-0 items-center" title={taskStatusLabel(task.status)}>
               <TaskStatusIcon status={task.status} size={18} />
             </span>
             <h1
@@ -662,6 +672,22 @@ function TaskPage({
                 <Detail label="Note">{handoverNoteText(handover)}</Detail>
               )}
             </dl>
+            {/*
+              The user's own fields, under their own heading and with their keys
+              as written: a key called "Status" in the built-in rows' small
+              capitals would read as the task's status. An empty value omits its
+              row, as every Detail does; no non-empty field, no heading.
+            */}
+            {customFieldEntries.length > 0 && (
+              <section aria-label="Fields" className="mt-3 border-t border-[var(--color-border)] pt-3">
+                <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Fields</h3>
+                <dl className="m-0 grid grid-cols-1 gap-x-6 gap-y-2 @md:grid-cols-2 @2xl:grid-cols-1">
+                  {customFieldEntries.map(([key, text]) => (
+                    <Detail key={key} label={key} asWritten>{text}</Detail>
+                  ))}
+                </dl>
+              </section>
+            )}
           </aside>
         </div>
 

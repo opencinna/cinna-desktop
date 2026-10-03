@@ -109,6 +109,34 @@ export const VALID_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
 }
 
 /**
+ * Moves a **person** may make by hand that the remote table does not have —
+ * the Tasks board's and Edit task's Backlog / Ready / Done.
+ *
+ * A person may reshuffle and close work that lives only on this desktop: no
+ * remote table has to agree, so `open → new` (back to Backlog) and closing a
+ * task that never started are just bookkeeping. A **bound** task keeps
+ * {@link VALID_TRANSITIONS} unchanged, because `taskStatusPath` must push the
+ * remote a sequence of legal steps and these pairs have none.
+ */
+export const MANUAL_TRANSITIONS: Readonly<Partial<Record<TaskStatus, readonly TaskStatus[]>>> = {
+  new: ['open', 'completed'],
+  open: ['new', 'completed']
+}
+
+/** Is this pair one only the manual overlay allows (not in the remote table)? */
+export function isManualOnlyTransition(from: TaskStatus, to: TaskStatus): boolean {
+  return !canTransition(from, to) && (MANUAL_TRANSITIONS[from]?.includes(to) ?? false)
+}
+
+/**
+ * May a person move a task from `from` to `to`? The remote table, plus
+ * {@link MANUAL_TRANSITIONS} for a task bound to no service.
+ */
+export function canTransitionManually(from: TaskStatus, to: TaskStatus, opts: { bound: boolean }): boolean {
+  return canTransition(from, to) || (!opts.bound && isManualOnlyTransition(from, to))
+}
+
+/**
  * The statuses a **user-authenticated** client may push to cinna-core through
  * `POST /api/v1/tasks/{id}/status` (`allowed_user_statuses` in
  * `input_task_service.update_task_status_from_user`).
@@ -210,4 +238,101 @@ export function jobRunStatusForTask(status: TaskStatus): JobRunStatus {
     default:
       return 'running'
   }
+}
+
+/**
+ * Where a task sits on the Tasks view — the coarse grouping Cinna reacts to,
+ * never the raw status word.
+ *
+ *  - `backlog` — new, refining: written down, nobody is expected to start it.
+ *  - `ready` — open: described and ready to be picked up.
+ *  - `active` — in_progress: a run is working on it.
+ *  - `waiting` — blocked: waiting on a human (the Inbox).
+ *  - `closed` — completed, error, cancelled.
+ *
+ * `archived` has no category: it is the filed-away pile, and the view leaves
+ * it out.
+ */
+export type TaskStatusCategory = 'backlog' | 'ready' | 'active' | 'waiting' | 'closed'
+
+/** Lifecycle order — the board's columns, left to right. */
+export const TASK_STATUS_CATEGORIES: readonly TaskStatusCategory[] = ['backlog', 'ready', 'active', 'waiting', 'closed']
+
+/** The words the user reads for each category. */
+export const TASK_STATUS_CATEGORY_LABEL: Record<TaskStatusCategory, string> = {
+  backlog: 'Backlog',
+  ready: 'Ready',
+  active: 'In progress',
+  waiting: 'Waiting',
+  closed: 'Done'
+}
+
+/** The category of a status; null for `archived`, which no view groups. */
+export function taskStatusCategory(status: TaskStatus): TaskStatusCategory | null {
+  switch (status) {
+    case 'new':
+    case 'refining':
+      return 'backlog'
+    case 'open':
+      return 'ready'
+    case 'in_progress':
+      return 'active'
+    case 'blocked':
+      return 'waiting'
+    case 'completed':
+    case 'error':
+    case 'cancelled':
+      return 'closed'
+    case 'archived':
+      return null
+  }
+}
+
+/**
+ * The status a drop on a **user** column writes. Active and Waiting are absent
+ * on purpose: a run or a question puts a task there, never a drag. The write
+ * still goes through `task:set-status`, so the transition table and the claim
+ * decide whether it is allowed.
+ */
+export const CATEGORY_DROP_STATUS: Partial<Record<TaskStatusCategory, TaskStatus>> = {
+  backlog: 'new',
+  ready: 'open',
+  closed: 'completed'
+}
+
+/**
+ * The statuses a person sets by hand — the board's user columns (Backlog,
+ * Ready, Done), the same set {@link CATEGORY_DROP_STATUS} writes.
+ */
+export const MANUAL_TARGET_STATUSES: readonly TaskStatus[] = ['new', 'open', 'completed']
+
+/**
+ * Can a person move a task **out of** this status at all? Only from a user
+ * column: Backlog, Ready or Done. In progress and Waiting belong to a run or a
+ * question, and closing one by hand would settle a run that is still working.
+ */
+export function isManualSource(from: TaskStatus): boolean {
+  const category = taskStatusCategory(from)
+  return category === 'backlog' || category === 'ready' || category === 'closed'
+}
+
+/**
+ * Is `from → to` a move a person may make — the status half of the rule
+ * `task:set-status` applies? From a user column, to a user column or
+ * `cancelled`, along {@link canTransitionManually}. Main adds what this cannot
+ * see: a runtime that owns the task and a run live in its chat.
+ */
+export function canMoveManually(from: TaskStatus, to: TaskStatus, opts: { bound: boolean }): boolean {
+  if (!isManualSource(from)) return false
+  if (to !== 'cancelled' && !MANUAL_TARGET_STATUSES.includes(to)) return false
+  return canTransitionManually(from, to, opts)
+}
+
+/**
+ * The user-column statuses a person may move a task to from `from`, `from`
+ * itself excluded — what the Edit dialog and the board offer. Empty for a task
+ * a run or a question holds.
+ */
+export function manualTargets(from: TaskStatus, opts: { bound: boolean }): TaskStatus[] {
+  return MANUAL_TARGET_STATUSES.filter((to) => to !== from && canMoveManually(from, to, opts))
 }

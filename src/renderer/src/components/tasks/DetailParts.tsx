@@ -60,17 +60,24 @@ export function Prose({ children }: { children: string }): React.JSX.Element {
 export function Detail({
   label,
   children,
-  wide = false
+  wide = false,
+  asWritten = false
 }: {
   label: string
   children: React.ReactNode
   /** The value takes the rest of the row, so a truncating child has a width to truncate against. */
   wide?: boolean
+  /** The label is the user's own text (a custom field key): no small capitals, case kept. */
+  asWritten?: boolean
 }): React.JSX.Element | null {
   if (children === null || children === undefined || children === '') return null
   return (
     <div className="flex min-w-0 items-baseline justify-between gap-3">
-      <dt className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">{label}</dt>
+      <dt className={asWritten
+        ? 'min-w-0 truncate text-[11px] text-[var(--color-text-muted)]'
+        : 'shrink-0 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]'} title={asWritten ? label : undefined}>
+        {label}
+      </dt>
       <dd className={`m-0 min-w-0 break-words text-right text-xs text-[var(--color-text-secondary)] ${wide ? 'flex-1' : ''}`}>
         {children}
       </dd>
