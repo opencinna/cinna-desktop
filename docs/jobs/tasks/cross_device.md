@@ -18,10 +18,12 @@ A task travels between the devices of one Cinna account as the fifth [app-sync](
 
 | Carried | Left behind |
 |---|---|
-| The work: title, goal, description, status, priority, router, origin, parent, handoff note, artifacts, budget, script definition, error message, and the `created`/`started`/`finished`/`deleted` timestamps — `createdAt` included, unlike a job's, because the page prints it and a replica stamping its own arrival would say every task in the user's history began the moment this device joined the account | **`chat_id`** — chats are not a synced collection, so an id from another device would name a row that does not exist here |
+| The work: title, goal, description, status, priority, router, origin, parent, handoff note, artifacts, budget, script definition, custom fields, error message, and the `created`/`started`/`finished`/`deleted` timestamps — `createdAt` included, unlike a job's, because the page prints it and a replica stamping its own arrival would say every task in the user's history began the moment this device joined the account | **`chat_id`** — chats are not a synced collection, so an id from another device would name a row that does not exist here |
 | The claim: `executor` and `executor_device` — which is the whole point of it, since it is how the other device knows not to run this | **`assignee_agent_id`** — an `agents` row id is device-local. A portable descriptor travels in `assignee_ref` instead and is resolved on the way in |
 | The **remote binding** (`remote_adapter`, `remote_id`, `remote_key`, `remote_url`, `remote_state`), so a peer opens the same [bound task](remote_sync.md) rather than creating a second one | **`remote_synced_at`** and **`remote_dirty`** — per-device bookkeeping. A device that has never spoken to that service must not inherit a watermark saying it has, nor a list of fields *this* device still owes it |
 | `job_id` / `job_run_id`, carried as-is and tolerated as dangling: jobs sync, job runs do not, so a peer can name the job a task came from but never the run | |
+
+**Custom fields** travel as one value, with two rules for a payload that disagrees with this build: a payload with no `customFields` key comes from a build that predates them and keeps this device's fields — a peer that never knew they existed must not wipe them — while an explicit null clears them; a value this build's validator refuses is left alone rather than half-applied. See [the Tasks view](../tasks_view/tasks_view.md#custom-fields).
 
 The assignee descriptor is the same `JobDepDescriptor` a job's dependencies use, and **nothing is auto-created from it**: a device that does not have the agent resolves it to null, keeps the descriptor verbatim, and re-emits it byte for byte — so the assignee re-attaches by itself the day that agent appears here. A job's manifest auto-creates a disabled shell on a miss; a task deliberately does not, because a profile syncs a great many tasks and the user's Agents list would fill with rows they never asked for, from work that already finished somewhere else.
 
@@ -29,7 +31,7 @@ The assignee descriptor is the same `JobDepDescriptor` a job's dependencies use,
 
 ### Only the holder writes the run
 
-`status`, `assignee` and `handoffNote` follow the run, so only the device the claim names may write them; `requireRunsHere` refuses the rest with *"This task is running on another device"*. `title`, `description`, `priority` and `router` are writable from any device whatever the claim says — fixing a title on the machine in front of you is not a claim on the run.
+`status`, `assignee` and `handoffNote` follow the run, so only the device the claim names may write them; `requireRunsHere` refuses the rest with *"This task is running on another device"*. `title`, `description`, `priority`, `router` and custom fields are writable from any device whatever the claim says — fixing a title on the machine in front of you is not a claim on the run.
 
 ### The claim is respected on the way **in** as well as on the way out
 

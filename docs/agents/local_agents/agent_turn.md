@@ -36,6 +36,7 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 - **Parked request** — a permission ask or a question the agent is blocked on, mid-turn, waiting for a human. Over ACP the agent is blocked on a JSON-RPC request, so the park **is** the unresolved response
 - **Cancel grace** — the bounded wait for an agent to acknowledge a `session/cancel`. Three seconds, after which its process is retired
 - **Turn ceiling** — the backstop that ends a turn which never settles for any reason, found or unfound. Eighty minutes: the sixty-minute park window plus twenty minutes of work, so a parked ask is not cut short by it
+- **Tool stall watchdog** — a much tighter bound on one known shape of silence: a tool call the agent opened and never filled in, with no update of any kind for ten minutes. OpenCode only. The turn is stopped the ceiling's way; a prompted turn whose cancel was acknowledged asks the agent once to continue, and otherwise the turn fails with its own reason
 - **Between-turn listening** — after a turn unbinds, the driver keeps an observer on the session it ended on, until the process goes, the session is replaced, or the chat stops answering to the agent
 - **Follow-up turn** — a turn the agent starts on its own after `session/prompt` has returned, with no user message. It is opened as a run of the chat and saved as an assistant turn
 
@@ -321,6 +322,7 @@ Engines talk between turns, and that traffic used to be dropped. Watched on the 
 - **The end marker:** a `usage_update` that carries `cost`. `claude-agent-acp` sends one at the end of every turn, including the ones it starts itself. Cost-less `usage_update`s arrive two to four times inside every turn and are not an end. No prompt is in flight during a follow-up, so the marker cannot belong to a prompted turn
 - **The process exiting.** The error row reads *"The agent's process ended before it finished this work."*
 - **The eighty-minute ceiling.** It sends `session/cancel`, and an agent that does not end the turn within the grace has its process retired, as in a prompted turn
+- **The tool stall watchdog** (OpenCode only), as in a prompted turn (see [A turn always settles](#a-turn-always-settles)). A stalled call keeps the quiet spell from ending the turn, because a tool call is open, so the watchdog is what ends it. One difference: if the agent does not answer the `session/cancel` within the grace, the turn still ends failed but **the process is left running**, as after a Stop. Other chats' background work runs in it, and one stalled tool call is not reason enough to take that down. A follow-up turn is never retried automatically
 - **Stop.** It releases the parks and sends `session/cancel`. If the agent does not end the turn within the grace, the turn ends canceled and **the process is left running**. Other chats' background work runs in it, and nothing here is blocked on the agent
 - **Ten seconds of quiet**, with no tool call open and no ask parked, but only for a launcher that sends no end marker (Codex, OpenCode, command-line agents). An engine with a marker is never ended by silence, because its model may think for minutes between two updates
 
@@ -330,9 +332,27 @@ Engines talk between turns, and that traffic used to be dropped. Watched on the 
 
 ### A turn always settles
 
-Only four things can end a turn: a stop reason, an abort, the connection dying, and the ceiling.
+Only five things can end a turn: a stop reason, an abort, the connection dying, the ceiling, and the tool stall watchdog.
 
 The ceiling is the backstop for every door that has not been found yet. It turns the worst outcome — a turn that never settles, holding its agent's lock for the life of the app — into "one turn failed with a readable message". It is generous on purpose: a real agent run doing real work can take minutes, and a ceiling that fires on a working turn is worse than no ceiling.
+
+**The tool stall watchdog** is the one door that has been found. Pinned OpenCode opened a `write` tool call with no input and then said nothing more, ever: no error, no finish, and `session/prompt` never came back. A task sat In progress for the full eighty minutes. So a turn that has **a tool call open that has never received anything** — no input on its `tool_call`, and no `tool_call_update` carrying a `rawInput` field (even an empty `{}`), content or a status — and has heard **no `session/update` of any kind for ten minutes** is stopped. Every update for the session starts the clock again. It applies to prompted and follow-up turns.
+
+**It runs on OpenCode only.** Each launcher decides whether its engine gets the watchdog. Codex never needs it, because its tool calls always arrive `in_progress` with their input. Claude must not have it: `claude-agent-acp` never sends `in_progress`, so a running Claude tool that takes no arguments (an MCP tool, say) looks exactly like a stalled one. Custom ACP agents do not get it either. On those engines the ceiling is the only bound.
+
+**Ten minutes, and the trade-off.** A slow local model, such as an Ollama provider writing a large file body, may stream a call's arguments in silence for minutes, so the window is generous. It is still far below the eighty-minute ceiling. The known cost is that a local model silent for more than ten minutes inside one tool call is stopped.
+
+It stops the turn the way the ceiling does: the parks are released, `session/cancel` is sent, and in a prompted turn an agent that does not end the turn within the grace has its process retired. In a follow-up turn the process is kept (see above). The turn **fails** with *"The agent stopped responding while preparing a tool call (no progress for 10 minutes), so it was stopped."* That error is the turn's error everywhere: it shows in the chat, a task becomes Failed, a delegation or handover takes its failed-turn path, and the sidebar shows the failed result.
+
+**One automatic retry, in a prompted turn.** The freeze is intermittent: in live runs, pinned OpenCode on gpt-4.1-mini froze this way in about one `report.md` write in seven to ten. So when the watchdog fires in a prompted turn **and the agent acknowledges the cancel** (its `session/prompt` comes back `cancelled` inside the grace, so the session and its process are still usable), the turn does not fail yet. It sends one more `session/prompt` on the same session: *"Your last tool call stopped before its input arrived, so it was cancelled. Continue the task from where you left off; redo that step if it is still needed."* This stays inside the same Cinna turn. Its output keeps streaming into the same reply, the transcript gets the notice *"The agent froze while preparing a tool call; Cinna asked it to continue."*, and the retry's outcome becomes the turn's: completed, failed, stopped by the user, or ended by the ceiling. The ceiling's clock keeps running from the turn's start, not from the retry. A second stall in the same turn is not retried. The turn fails with the same sentence, ending *"…so it was stopped (after one automatic retry)."*
+
+There is no retry when the cancel went unanswered (the process was retired), when the user pressed Stop, when the real ceiling fired, when a task control ended the turn, or in a follow-up turn. While the retry runs, mid-turn steering stays closed, as it does while a tool call is in flight. A message sent meanwhile is refused to steering and waits for the next turn. The retry's prompt carries only the retry sentence.
+
+What it leaves alone, on purpose:
+
+- **A tool call that has received input or any update.** It is really running, and a build or a test run may be silent for much longer; the ceiling covers it
+- **A parked permission or question ask, or a Cinna tool call in flight.** The wait is for somebody else, not the agent
+- **A turn with no tool call open.** A model may think for minutes in silence, and that is not this failure
 
 ## Architecture Overview
 

@@ -79,6 +79,8 @@ The markers mean "we know something it does not", so taking the service's value 
 
 Conflicts are reconciled per field on `updatedAt`, and a mirror that always looked newer than the thing it mirrors would win every conflict it should lose. The same rule is why clearing a marker does not bump `updatedAt` at all: `taskRepo.list` orders by it, so bookkeeping would float a task nobody touched to the top of the user's list every time a push succeeded.
 
+It is the remote's time, but **never older than the row's own**. Device sync pushes a task when its `updatedAt` passes the last sync watermark, and a pull that moved it back to the service's older time put a local-only edit — custom fields, the router, anything the service has no field for — below that watermark, where it was never pushed to the user's other devices. A pulled time is taken only when it is at least the row's current one (`taskService.applyRemoteSnapshot`).
+
 ### A pulled status is taken as fact
 
 No transition check. A service's own handlers may bypass its table, so a replica can arrive in a state the table calls unreachable — and arguing with the system doing the work is how the desktop would become the one corrupting state.

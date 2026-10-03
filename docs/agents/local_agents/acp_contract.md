@@ -185,6 +185,10 @@ These two numbers are the whole argument for the process model: nothing starts a
 process is reaped after two minutes — unless the agent still has background work running, in which
 case the reap waits, for up to 30 quiet minutes ([Session Activity](../session_activity/session_activity.md#the-process-is-not-reaped-while-its-work-runs)).
 
+### A tool call can open and never be filled in
+
+Watched live on pinned `opencode` 1.18.27 with `gpt-4.1-mini`: the agent opened a `write` call — a `tool_call` with no input — and then sent nothing more, ever. OpenCode's own database held the part as `pending` with `input: {}` and `raw: ""`, with no error and no finish, so `session/prompt` never returned and only the turn ceiling would have ended it; a task sat In progress for eighty minutes. It is intermittent, about one `report.md` write in seven to ten in those runs. The desktop bounds exactly that shape with the tool stall watchdog, set by the OpenCode launcher only (`toolStallMs`, ten minutes), and retries a prompted turn once on the same session — see [The Agent Turn](agent_turn.md#a-turn-always-settles). Claude is deliberately excluded: `claude-agent-acp` never sends `in_progress`, so a running Claude tool that takes no arguments looks the same on the wire.
+
 ## 4. Claude Code over `@agentclientprotocol/claude-agent-acp`
 
 The same binary, the same login and the same isolation as the in-process runner — moved into its own

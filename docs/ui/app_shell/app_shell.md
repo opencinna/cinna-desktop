@@ -2,11 +2,11 @@
 
 ## Purpose
 
-The window-level chrome that frames every view: a permanent top bar next to the macOS traffic lights, a floating left sidebar that slides in/out, and a main working area. Hosts global actions (sidebar toggle, Agent Status, Inbox, new chat), the profile/account menu, and an interface-preferences popover.
+The window-level chrome that frames every view: a permanent top bar next to the macOS traffic lights, a floating left sidebar that slides in/out, and a main working area. Hosts global actions (sidebar toggle, Tasks, Agent Status, Inbox, new chat), the profile/account menu, and an interface-preferences popover.
 
 ## Core Concepts
 
-- **Top Bar** — A persistent ~36 px strip across the window top. Holds the macOS traffic-light gutter plus the **Collapse/Expand Sidebar**, **Agent Status**, **Inbox** and **New Chat** icon buttons, in that order. Its position and those buttons never change with sidebar state. The one addition is the update-ready badge, which appears at the right edge of the bar (before a chat's "From job" pill) while the sidebar is out of view, because its usual home in the sidebar footer is hidden then (see [Auto-Update](../../development/auto_update/auto_update.md)).
+- **Top Bar** — A persistent ~36 px strip across the window top. Holds the macOS traffic-light gutter plus the **Collapse/Expand Sidebar**, **Tasks**, **Agent Status**, **Inbox** and **New Chat** icon buttons, in that order. Its position and those buttons never change with sidebar state. **Tasks** is the one optional button: Settings → Features → Interface → **Tasks button** (on by default) removes it, and the buttons after it close up. The one addition is the update-ready badge, which appears at the right edge of the bar (before a chat's "From job" pill) while the sidebar is out of view, because its usual home in the sidebar footer is hidden then (see [Auto-Update](../../development/auto_update/auto_update.md)).
 - **Floating Sidebar** — A rounded, slightly inset panel on the left. Always slot-reserves its position; expanding/collapsing only animates its visibility (slide + fade), not the surrounding layout.
 - **Sidebar Docking** — How the sidebar sits beside the chat. **Fixed** (the default) keeps it in the layout, opened and closed by the top-bar button. **On Hover** hides it and floats it over the chat while the pointer is at the window's left edge or on the sidebar — a **peek**. Chosen in Settings → Features → Interface or from a right-click on the top-bar sidebar button.
 - **Sidebar Footer** — Bottom row of the sidebar with the profile menu on the left and local-development status, update status and Interface controls on the right.
@@ -61,9 +61,14 @@ A reveal made by the app — **Show in the Chats list** on a task page — peeks
 2. Interface popover appears above the button with three small icon toggles: Console, Verbose, Theme.
 3. User clicks any toggle to flip the matching preference. Theme chooses the opposite of the currently displayed theme as a fixed Dark/Light preference, including when System was selected. Choose System in Settings → Features → Interface to follow the OS again. Popover stays open until the user clicks outside.
 
+### Opening Tasks
+
+1. User clicks the list icon right of the sidebar toggle. The [Tasks view](../../jobs/tasks_view/tasks_view.md) opens in the main area with no sidebar tab selected, like the Inbox, and the button stays pressed while it is open.
+2. Turning the button off in Settings while the view is open returns to the chats.
+
 ### Checking Agent Status
 
-1. User finds the activity icon between Collapse/Expand Sidebar and Inbox, including with the sidebar collapsed or Settings open. It is available to every profile because folder agents can report without a Cinna account.
+1. User finds the activity icon between Tasks (or Collapse/Expand Sidebar, with the Tasks button turned off) and Inbox, including with the sidebar collapsed or Settings open. It is available to every profile because folder agents can report without a Cinna account.
 2. The icon shows the worst reported severity as a colored dot, including OK; no non-null severity means no dot.
 3. User clicks the icon; the agent-status overlay opens and refreshes the status list. See [Agent Status](../../agents/agent_status/agent_status.md).
 
@@ -113,7 +118,7 @@ A reveal made by the app — **Show in the Chats list** on a task page — peeks
 - **Saved as it settles, and again on close.** A drag or resize is written once it has been still for half a second, so a crash keeps the last settled size; closing the window writes immediately, so a resize made just before closing is not lost. The size a maximized window returns to is only taken from a settled window, since the maximize animation passes through near-maximized sizes that must not be mistaken for it. So a resize followed by a maximize within that half second is forgotten, and the window un-maximizes to the size it had before.
 - **The sidebar's open state is remembered for the machine, not the profile.** Stored in renderer `localStorage` beside the theme, so every local profile shares it and nothing syncs it. It is read when the UI store is created, so the first paint already has the sidebar in its remembered state instead of rendering open and then collapsing. Only the toggle writes it; no stored value means open.
 - **The docking mode is remembered the same way, and shared between windows.** Stored beside the open state; a change made in one app window is applied in every other. A window that sees another switch to Fixed docks open too. A peek is never remembered — every launch in On Hover starts hidden. The open state belongs to Fixed only: switching to On Hover leaves it as it was, and switching back to Fixed always opens.
-- **Nothing else about the layout is remembered.** Active view, sidebar tab, settings tab, open chat and agent page all start fresh, so every launch lands on the new-chat screen. A remembered chat, task or agent page can have been deleted, hidden or belong to a different profile by the next launch, and the new-chat screen is valid in every one of those cases.
+- **Nothing else about the layout is remembered.** (The Tasks view's List | Board choice is the view's own preference and is remembered machine-wide the same way.) Active view, sidebar tab, settings tab, open chat and agent page all start fresh, so every launch lands on the new-chat screen. A remembered chat, task or agent page can have been deleted, hidden or belong to a different profile by the next launch, and the new-chat screen is valid in every one of those cases.
 - **Window state belongs to the main window only.** The menu-bar tray popover is positioned from its icon and is neither saved nor restored.
 
 ## Architecture Overview
@@ -124,6 +129,7 @@ App
     ├── TopBar (always visible, draggable, contains traffic-light gutter + icons)
     │     ├── Sidebar button → Fixed: ui.store.toggleSidebar(); On Hover: setSidebarDocking('fixed')
     │     │                    right-click → Sidebar docking menu → setSidebarDocking()
+    │     ├── Tasks button          → ui.store.setActiveView('tasks')  (only while showTasksButton)
     │     ├── Agent Status button   → ui.store.setAgentStatusOpen()
     │     ├── Inbox button          → ui.store.setActiveView('inbox')
     │     ├── New Chat button       → useStartNewChat()
@@ -160,6 +166,7 @@ Renderer boot
 - [Boot Resilience](../../core/boot_resilience/boot_resilience.md) — Window state is read inside `createWindow()`, within the startup boundary where a throw is fatal; it falls back to the defaults instead of throwing, so a bad state file can never become a ghost app.
 - [End-to-End Tests](../../development/e2e/e2e.md) — `window-state.spec.ts` covers size and sidebar state across a quit and across a window close.
 - [Inbox](../../jobs/tasks/inbox.md) — Global waiting asks, opened from the top bar.
+- [Tasks view](../../jobs/tasks_view/tasks_view.md) — Every root task as a list or board, opened from the top bar.
 - [Appearance](../appearance/appearance.md) — Theme preference/resolution, shared storage and decorative motion across shell and composers.
 - [Settings](../settings/settings.md) — The settings page rendered in the main area; entered via the profile dropdown. Features → Interface holds the Sidebar docking choice.
 - [Tasks](../../jobs/tasks/tasks.md) — **Show in the Chats list** reveals the sidebar: opens it in Fixed, peeks it in On Hover.

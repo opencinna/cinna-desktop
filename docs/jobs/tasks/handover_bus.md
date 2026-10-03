@@ -22,7 +22,7 @@ The [file protocol](file_handovers.md) remains usable by a terminal, script or p
 ### Request work and continue
 
 1. A folder agent calls `handover_targets` to discover exact target identifiers, locations and permission availability. No path or remote-assignee guessing is needed.
-2. It calls `handover_create` with a target, id, title and brief. Execution defaults to asking. The request returns before the executor finishes.
+2. It calls `handover_create` with a target, id, title and brief. It leaves `execution` out unless the user must approve this run: `ask` forces a gate, and otherwise the standing permission below decides. The request returns before the executor finishes.
 3. For a bare target, main writes the real brief, appends reporting instructions and requests an immediate file scan. The response includes its brief, report and revision paths. A requester that can already write the file directly may use the file protocol instead; engine sandbox rules still apply.
 4. For a kit target, main creates a task and starts a separate chat on that agent's runtime after admission. For cloud, main creates a separate child work item through the selected adapter, then dispatches it after admission.
 5. The requester ends its turn. A result later arrives as a desktop-authored system turn in the same requesting chat, waiting for that chat to become idle.
@@ -41,7 +41,7 @@ An answer is matched against the options stored on the open card, not against la
 | Kit agent | Receiving agent's **Delegations** | None beyond the agent being eligible and enabled |
 | Cloud assignee | Requesting agent's **Cloud delegations** | Connected adapter must support the required dispatch capabilities |
 
-All three default to asking. A standing grant only enables an explicit `execution: auto` request; it does not change an `ask` request into automatic execution. Cloud consent belongs to the agent sending the brief because that agent chooses the content leaving the machine and the work that may incur charges.
+All three default to asking. **The standing permission decides**: a request that says `execution: auto`, or says nothing, runs without a gate where the grant is set and asks where it is not. A requester can only force a gate — an explicit `execution: ask` always asks, grant or no grant. Requiring the request to name `auto` as well made auto-run look as if it worked only sometimes, because the protocol text agents copy said `ask`. Cloud consent belongs to the agent sending the brief because that agent chooses the content leaving the machine and the work that may incur charges.
 
 ### Report and answer
 
@@ -61,7 +61,7 @@ Tool callers cannot supply a profile, origin chat, task or depth. Each operation
 
 Delegations and Cloud delegations permissions live under `userData` for both bare and kit agents. A kit manifest, a pulled folder or a synced task cannot grant them. Removing the agent's local state removes these grants. Engine approvals remain a separate boundary: admitting a task does not waive permissions for the commands it runs.
 
-A chain started outside the app never uses the standing Cloud delegations grant. When the requesting executor's own delegation, or the root of its chain, has an `external` origin (a brief written from a terminal) or the reserved `remote_task` origin, a cloud request asks in the Inbox even with `execution: auto` and the grant set: nobody in the app chose what is about to leave the machine, and the grant was given for work the user's own agents start.
+A chain started outside the app never uses the standing Cloud delegations grant. When the requesting executor's own delegation, or the root of its chain, has an `external` origin (a brief written from a terminal) or the reserved `remote_task` origin, a cloud request asks in the Inbox with the grant set, whatever it says about `execution`: nobody in the app chose what is about to leave the machine, and the grant was given for work the user's own agents start.
 
 Depth is derived, and a brief can only raise it. A file brief that names no origin task has its chain looked up through the origin chat's task, and the recorded depth is the greater of the derived and the declared one. An executor that left `origin.task` out, or wrote `depth: 1`, would otherwise have been given a fresh chain and the cap would have stopped nothing. The chain's root comes from that same lookup, so a brief naming only `origin.chat` stays in its writer's chain, and the outside-origin rule above still reaches a cloud request made further down it.
 
@@ -83,6 +83,11 @@ A bare tool request may create a `draft`; it is not admitted until made `ready`.
 - The queue waits up to 30 minutes for a chat to become idle. A failed delivery remains visible and an unacknowledged result can be retried; persistence does not promise exactly-once turn admission across a crash.
 - Only an owed packet is retried: the row holds a result, was never acknowledged, and its delivery was not refused (`wake_refused:*`) and its report was not unparseable. A refusal is final, and a row with no result was never owed a packet; retrying either opened a paid turn in the origin chat on every minute tick.
 - A handover that settled before the delegation journal existed is recorded as already delivered when it is backfilled. It is not news, and left unacknowledged it would have woken its origin chat on the first tick after the upgrade.
+- An executor waiting on its own outbound delegations is not finished. One that delegated onward and ended its turn, as `handover_create` tells it to, is a relay: its row stays running, and no "without a report" packet reaches its requester while a child is still open or owes it a packet. Delegations made from the executor's chat count as well as those from its task, including ones unrelated to the work it was handed.
+- The turn a child's packet opens in the relay's chat is watched like the relay's first turn. A relay that answers with `handover_report` settles through it; one that answers in plain text settles `done` with the no-report warning, and its text is the body the requester receives.
+- A child's question to the relay stops counting once its packet has been delivered: the child now waits on the relay, and counting it too would leave each waiting on the other when the relay answers in plain text instead of `handover_reply`. A child waiting on the user still holds the relay; that wait is the user's.
+- A user Stop of a waiting relay's turn does not settle it while its children are running. The children are the live work, and they would come back to a relay already closed.
+- When a child finished but its packet was refused (its origin chat was deleted, say), the relay is no longer waiting, and the lost-run sweep fails it with "The work it handed on finished, but its result could not be delivered to this executor." rather than calling its run lost.
 - A single (ungrouped) local or cloud packet names the remote task (key and URL) when it has a URL, and carries the cloud warning as a note, so a requester reading a fallback result knows it is one and where the full work is.
 
 ### Recovery preserves uncertainty
@@ -103,7 +108,7 @@ When a cloud task carries no structured result, the result is read from the task
 
 A terminal status beats a stale structured result. A task that ended after its question was answered keeps `in_progress` as its last structured result, and one somebody finished or answered on the web keeps `blocked`; either is ignored once the task is completed, failed, cancelled or archived, and the outcome is settled from the status through the same fallback. A task that has ended is not waiting on a question. Otherwise the delegation stayed running, or blocked on a question nobody could still answer, and the requester was never woken.
 
-A kit executor with no live turn or open question is failed after the two-minute lost-run grace period; a pending local reply holds that off. The bus applies this test to the local channel only. File rows are swept by the [file channel](file_handovers.md), where a run between two queued revisions is not a lost one, and a cloud executor keeps running after this desktop closes, so an absent desktop run means nothing for it.
+A kit executor with no live turn or open question is failed after the two-minute lost-run grace period; a pending local reply holds that off, and so does a delegation of its own it is still waiting on. The bus applies this test to the local channel only. File rows are swept by the [file channel](file_handovers.md), where a run between two queued revisions is not a lost one, and a cloud executor keeps running after this desktop closes, so an absent desktop run means nothing for it.
 
 ### Deliberate limits
 
