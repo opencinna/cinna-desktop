@@ -157,7 +157,7 @@ function writeBrief(folder: string, b: Brief): number {
     ...(b.execution ? [`execution: ${b.execution}`] : []),
     '---',
     '',
-    `Create a file named \`${b.file}\` at the top of this project (next to README.md). Its entire content must be exactly the word ${b.word} and nothing else.`,
+    `Create a file named \`${b.file}\` in your working folder, next to README.md (a relative path, never one starting with /). Its entire content must be exactly the word ${b.word} and nothing else.`,
     '',
     HANDOVER_HOW_TO_REPORT,
     ''
