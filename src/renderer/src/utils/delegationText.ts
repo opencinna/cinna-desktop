@@ -40,6 +40,8 @@ export function delegationNoteText(
       return explainDetail('The run could not be started', detail)
     case 'run_lost':
       return 'The app closed while the run was in progress, so the run was lost.'
+    case 'relay_undelivered':
+      return 'The work this executor handed on finished, but its result could not be delivered back to it.'
     case 'task_removed':
       return 'The delegated task was removed.'
     case 'report_missing':

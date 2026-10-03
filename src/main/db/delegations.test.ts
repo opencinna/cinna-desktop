@@ -52,6 +52,49 @@ describe('delegation repository', () => {
     expect(delegationRepo.getById(USER, next.id)?.rootDelegationId).toBe(outside.id)
     expect(delegationRepo.parentOfOrigin(USER, { chatId: 'unknown-chat' })).toBeUndefined()
   })
+  it('finds what an executor still waits on, from its task or a chat-only origin, and the rows its chat executes', () => {
+    const chat = chatRepo.create(USER, { title: 'Middle', router: 'direct', agentId: null })
+    const task = taskRepo.create(USER, { title: 'Middle work', goal: 'Work', chatId: chat.id })
+    const middle = make('middle')
+    delegationRepo.update(USER, middle.id, { taskId: task.id, state: 'running' })
+    const child = (key: string, origin: { originChatId?: string; originTaskId?: string }) =>
+      delegationRepo.insert({ userId: USER, requesterKey: key, originKind: 'local_chat', originAgentId: 'middle', targetKind: 'kit', targetAgentId: 'last', channel: 'local', depth: 2, ...origin })
+    const byTask = child('by-task', { originTaskId: task.id })
+    const byChat = child('by-chat', { originChatId: chat.id })
+    const ids = () => delegationRepo.listAwaitedOutbound(USER, { taskId: task.id, chatId: chat.id }).map((row) => row.requesterKey).sort()
+    expect(ids()).toEqual(['by-chat', 'by-task'])
+    expect(delegationRepo.listAwaitedOutbound('another-profile', { taskId: task.id, chatId: chat.id })).toEqual([])
+    expect(delegationRepo.listAwaitedOutbound(USER, {})).toEqual([])
+    // Settled with its packet still owed: waited on. Delivered, or refused for good: not.
+    delegationRepo.update(USER, byTask.id, { state: 'done', resultDigest: 'digest' })
+    expect(ids()).toEqual(['by-chat', 'by-task'])
+    delegationRepo.update(USER, byTask.id, { wokeAt: new Date() })
+    delegationRepo.update(USER, byChat.id, { state: 'done', resultDigest: 'digest', warning: 'wake_refused:chat_gone' })
+    expect(ids()).toEqual([])
+
+    expect(delegationRepo.listOpenForExecutorChat(USER, chat.id).map((row) => row.id)).toEqual([middle.id])
+    expect(delegationRepo.listOpenForExecutorChat('another-profile', chat.id)).toEqual([])
+    delegationRepo.update(USER, middle.id, { state: 'done' })
+    expect(delegationRepo.listOpenForExecutorChat(USER, chat.id)).toEqual([])
+  })
+  it('stops waiting on a child whose question to its requester was delivered, but not on one waiting for the user', () => {
+    const asks = (key: string, values: Parameters<typeof delegationRepo.update>[2]) => {
+      const row = delegationRepo.insert({ userId: USER, requesterKey: key, originKind: 'local_chat', originChatId: 'middle-chat', originAgentId: 'middle', targetKind: 'kit', targetAgentId: 'last', channel: 'local', depth: 2 })
+      delegationRepo.update(USER, row.id, values)
+      return row
+    }
+    const ids = () => delegationRepo.listAwaitedOutbound(USER, { chatId: 'middle-chat' }).map((row) => row.requesterKey).sort()
+    const requester = asks('requester', { state: 'blocked', resultStatus: 'blocked', resultDigest: 'digest', questionAudience: 'requester' })
+    const user = asks('user', { state: 'waiting_user', resultStatus: 'blocked', resultDigest: 'digest', questionAudience: 'user' })
+    // Its question not yet delivered: still owed to the relay.
+    expect(ids()).toEqual(['requester', 'user'])
+    delegationRepo.update(USER, requester.id, { wokeAt: new Date() })
+    delegationRepo.update(USER, user.id, { wokeAt: new Date() })
+    expect(ids()).toEqual(['user'])
+    // Answered with handover_reply: running again, and waited on again.
+    delegationRepo.update(USER, requester.id, { state: 'running' })
+    expect(ids()).toEqual(['requester', 'user'])
+  })
   it('marks a cloud create as unbound only until its remote identity is stored', () => {
     const task = taskRepo.create(USER, { title: 'Cloud work', goal: 'Work' })
     const row = delegationRepo.insert({ userId: USER, requesterKey: 'cloud', originKind: 'external', targetKind: 'cloud', targetAgentId: 'agent-1', channel: 'cloud', depth: 1, remoteConnectionId: 'cinna' })

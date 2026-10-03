@@ -16,6 +16,7 @@ describe('delegation notes', () => {
     expect(delegationNoteText({ warning: 'reply_timed_out:reply', refusalReason: null })).toContain('still waiting to be delivered')
     expect(delegationNoteText({ warning: 'run_lost', refusalReason: null })).toContain('The app closed')
     expect(delegationNoteText({ warning: 'report_missing', refusalReason: null })).toBe('The executor ended its turn without reporting a result.')
+    expect(delegationNoteText({ warning: 'relay_undelivered', refusalReason: null })).toContain('could not be delivered back to it')
   })
 
   it('shows refusal reasons, preserves capability explanations and leaves absent notes empty', () => {

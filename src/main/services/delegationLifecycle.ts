@@ -9,6 +9,7 @@ import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
 import { createHandoverWake } from './handoverWake'
+import { onReturnTurn, returnTurnStarted } from './returnTurns'
 import { chatAnswersToAgent } from './chatRouting'
 import { inboxService } from './inboxService'
 import { runExecutionService, type RunScope } from './runExecutionService'
@@ -16,7 +17,17 @@ import { taskService } from './taskService'
 import type { HandoverTurnOutcome } from './handoverService'
 
 export interface DelegationLifecycleDeps {
-  repo: Pick<typeof delegationRepo, 'getById' | 'update' | 'list' | 'listForGroup'>
+  repo: Pick<
+    typeof delegationRepo,
+    | 'getById'
+    | 'update'
+    | 'list'
+    | 'listForGroup'
+    | 'listForOrigin'
+    | 'listForOriginTask'
+    | 'listAwaitedOutbound'
+    | 'listOpenForExecutorChat'
+  >
   tasks: Pick<typeof taskService, 'getById' | 'setStatus' | 'setHandoffNote' | 'setArtifacts' | 'acceptRemoteResult'>
   hasOpenAsk(taskId: string): boolean
   isRunning(chatId: string): boolean
@@ -154,12 +165,56 @@ export function createDelegationLifecycle(deps: DelegationLifecycleDeps) {
     if (result.status !== 'in_progress') wake(scope, updated)
   }
 
+  /**
+   * An executor that delegated onward and ended its turn — as `handover_create` tells it to — is a
+   * relay waiting on its own delegations, not finished. Their packets resume it in its chat, and that
+   * turn's outcome (`watchRelay`) settles it once nothing is owed any more.
+   */
+  function awaitsOutbound(row: DelegationRow, chatId?: string | null): boolean {
+    if (!row.taskId) return false
+    if (chatId === undefined) {
+      try {
+        chatId = deps.tasks.getById(row.userId, row.taskId).chatId
+      } catch {
+        chatId = null
+      }
+    }
+    try {
+      return deps.repo
+        .listAwaitedOutbound(row.userId, { taskId: row.taskId, chatId })
+        .some((outbound) => outbound.id !== row.id)
+    } catch (error) {
+      // Same direction as the file channel's: settling closes the task and wakes the origin, and a
+      // throw here would escape `watchTurn`'s catch as an unhandled rejection or stop the sweep.
+      deps.logger.warn('a delegation could not check its own delegations', { id: row.id, error: String(error) })
+      return true
+    }
+  }
+
+  /**
+   * Did work this executor handed on finish with a packet that could not reach it — its chat was
+   * deleted, say? It no longer waits on that child, but its run was not lost either.
+   */
+  function outboundRefused(row: DelegationRow, chatId: string | null): boolean {
+    if (!row.taskId) return false
+    try {
+      const outbound = chatId
+        ? deps.repo.listForOrigin(row.userId, chatId, row.taskId)
+        : deps.repo.listForOriginTask(row.userId, row.taskId)
+      return outbound.some((child) => child.id !== row.id && !!child.warning?.startsWith('wake_refused:'))
+    } catch (error) {
+      deps.logger.warn('a delegation could not read its own delegations', { id: row.id, error: String(error) })
+      return false
+    }
+  }
+
   function applyOutcome(scope: RunScope, rowId: string, outcome: HandoverTurnOutcome): void {
     const row = deps.repo.getById(scope.profileUserId, rowId)
     if (!row || !row.taskId) return
     if (DELEGATION_TERMINAL_STATES.has(row.state) || row.state === 'blocked' || row.state === 'waiting_user') return
     if (outcome.state === 'needs_input' || row.pendingReplies?.some((reply) => reply.state === 'pending')) return
     if (deps.hasOpenAsk(row.taskId)) return
+    if (awaitsOutbound(row)) return
 
     if (outcome.state === 'canceled') {
       advance(row, 'cancelled')
@@ -184,6 +239,15 @@ export function createDelegationLifecycle(deps: DelegationLifecycleDeps) {
     patch(row, { warning: 'report_missing' })
   }
 
+  function watchTurn(scope: RunScope, rowId: string, completed: Promise<HandoverTurnOutcome>): void {
+    void completed
+      .then((outcome) => applyOutcome(scope, rowId, outcome))
+      .catch((error) => {
+        deps.logger.warn('delegated turn outcome could not be applied', { rowId, error: String(error) })
+        applyOutcome(scope, rowId, { state: 'failed', text: String(error) })
+      })
+  }
+
   return {
     applyResult,
     applyOutcome,
@@ -198,13 +262,18 @@ export function createDelegationLifecycle(deps: DelegationLifecycleDeps) {
       wake(scope, row)
     },
 
-    watchTurn(scope: RunScope, rowId: string, completed: Promise<HandoverTurnOutcome>): void {
-      void completed
-        .then((outcome) => applyOutcome(scope, rowId, outcome))
-        .catch((error) => {
-          deps.logger.warn('delegated turn outcome could not be applied', { rowId, error: String(error) })
-          applyOutcome(scope, rowId, { state: 'failed', text: String(error) })
-        })
+    watchTurn,
+
+    /**
+     * A return packet opened a turn in `chatId`. When that chat is a local executor's, the turn is
+     * the relay resuming, and its outcome settles the row by the same rules as its first turn. A
+     * relay that reports through `handover_report` has already settled it, and `applyOutcome` stops
+     * at the terminal state.
+     */
+    watchRelay(scope: RunScope, chatId: string, completed: Promise<HandoverTurnOutcome>): void {
+      for (const row of deps.repo.listOpenForExecutorChat(scope.profileUserId, chatId)) {
+        if (row.channel === 'local') watchTurn(scope, row.id, completed)
+      }
     },
 
     sweepLostRuns(scope: RunScope): void {
@@ -239,6 +308,17 @@ export function createDelegationLifecycle(deps: DelegationLifecycleDeps) {
           continue
         }
         if (row.pendingReplies?.length || (task.chatId && deps.isRunning(task.chatId))) continue
+        // A relay between its turns: the child it delegated to is the live work.
+        if (awaitsOutbound(row, task.chatId)) continue
+
+        if (outboundRefused(row, task.chatId)) {
+          applyResult(scope, row, {
+            status: 'failed',
+            summary: 'The work it handed on finished, but its result could not be delivered to this executor.'
+          })
+          patch(row, { warning: 'relay_undelivered' })
+          continue
+        }
 
         applyResult(scope, row, { status: 'failed', summary: 'The executor’s run was lost when the app closed.' })
         patch(row, { warning: 'run_lost' })
@@ -305,6 +385,8 @@ function getWake() {
         { inputOrigin: 'handover', observe: (ctx, event) => inboxService.recordRunEvent(ctx, event) }
       )
       await handle.accepted
+      // A relay's own row is settled by the turn this packet resumes it in.
+      returnTurnStarted(scope, chatId, handle.completed)
       return { runId: handle.id }
     },
     record(userId, id, values, expectedDigest) {
@@ -368,3 +450,5 @@ export const delegationLifecycle = createDelegationLifecycle({
     })
   }
 })
+
+onReturnTurn((scope, chatId, completed) => delegationLifecycle.watchRelay(scope, chatId, completed))

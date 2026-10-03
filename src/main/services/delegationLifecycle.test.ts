@@ -30,7 +30,18 @@ beforeEach(() => {
       getById: (userId, id) => rows.get(id)?.userId === userId ? rows.get(id) : undefined,
       update: (userId, id, patch) => { const old = rows.get(id); if (!old || old.userId !== userId) return undefined; const next = { ...old, ...patch }; rows.set(id, next); return next },
       list: (userId) => [...rows.values()].filter((row) => row.userId === userId),
-      listForGroup: (userId, chatId, groupId) => [...rows.values()].filter((row) => row.userId === userId && row.originChatId === chatId && row.groupId === groupId)
+      listForGroup: (userId, chatId, groupId) => [...rows.values()].filter((row) => row.userId === userId && row.originChatId === chatId && row.groupId === groupId),
+      // In-memory twins of the SQL: open, or settled with a packet not yet delivered.
+      listAwaitedOutbound: (userId, origin) => [...rows.values()].filter((row) =>
+        row.userId === userId &&
+        ((origin.taskId && row.originTaskId === origin.taskId) || (origin.chatId && row.originChatId === origin.chatId)) &&
+        ((!['done', 'failed', 'skipped', 'refused'].includes(row.state) && !(row.state === 'blocked' && row.wokeAt && row.questionAudience !== 'user')) ||
+          (!row.wokeAt && !!row.resultDigest && !row.warning?.startsWith('wake_refused:')))),
+      listForOrigin: (userId, chatId, taskId) => [...rows.values()].filter((row) =>
+        row.userId === userId && (row.originChatId === chatId || (!!taskId && row.originTaskId === taskId))),
+      listForOriginTask: (userId, taskId) => [...rows.values()].filter((row) => row.userId === userId && row.originTaskId === taskId),
+      listOpenForExecutorChat: (userId, chatId) => [...rows.values()].filter((row) =>
+        row.userId === userId && `chat-${row.taskId}` === chatId && !['done', 'failed', 'skipped', 'refused'].includes(row.state))
     },
     tasks: {
       getById: vi.fn((_userId, taskId) => ({ id: taskId, chatId: `chat-${taskId}`, status: 'in_progress' }) as TaskDto),
@@ -188,4 +199,128 @@ it('clears historical blocked wake metadata when a revision is cancelled', () =>
   service.applyOutcome(scope, 'a', { state: 'canceled', text: '' })
   expect(rows.get('a')).toMatchObject({ state: 'skipped', resultStatus: null, resultDigest: null, wokeAt: null })
   expect(deps.wake).toHaveBeenCalledTimes(2)
+})
+
+describe('a relay waiting on its own delegations', () => {
+  // Lead → middle (executor chat `chat-task-middle`) → last.
+  const chain = () => {
+    row('middle', { originChatId: 'lead-chat' })
+    return row('last', { originChatId: 'chat-task-middle', originTaskId: 'task-middle', originAgentId: 'middle-agent' })
+  }
+  it('keeps the relay running when its turn ends with its own delegation still open', () => {
+    chain()
+    service.applyOutcome(scope, 'middle', { state: 'completed', text: 'Delegated to last; waiting.' })
+    expect(rows.get('middle')).toMatchObject({ state: 'running' })
+    expect(deps.wake).not.toHaveBeenCalled()
+  })
+  it('matches a chat-only origin too', () => {
+    row('middle', { originChatId: 'lead-chat' })
+    row('last', { originChatId: 'chat-task-middle', originTaskId: null })
+    service.applyOutcome(scope, 'middle', { state: 'failed', text: '' })
+    expect(rows.get('middle')?.state).toBe('running')
+  })
+  it('waits for the child’s packet, then settles on the turn that packet resumes', async () => {
+    const last = chain()
+    service.applyOutcome(scope, 'middle', { state: 'completed', text: 'Waiting.' })
+    service.applyResult(scope, last, { status: 'done', summary: 'Last finished' })
+    // The child is done but its packet has not reached the relay yet.
+    service.applyOutcome(scope, 'middle', { state: 'completed', text: 'Still waiting.' })
+    expect(rows.get('middle')?.state).toBe('running')
+    rows.get('last')!.wokeAt = new Date()
+    let finish!: (value: { state: 'completed'; text: string }) => void
+    service.watchRelay(scope, 'chat-task-middle', new Promise((resolve) => { finish = resolve }))
+    finish({ state: 'completed', text: 'Last says: finished.' })
+    await vi.waitFor(() => expect(rows.get('middle')).toMatchObject({ state: 'done', warning: 'report_missing', resultBody: 'Last says: finished.' }))
+    expect(vi.mocked(deps.wake).mock.calls.filter(([, woken]) => woken[0].id === 'middle')).toHaveLength(1)
+  })
+  it('keeps waiting on the resumed turn while another child is still open', async () => {
+    chain()
+    row('other', { originChatId: 'chat-task-middle', originTaskId: 'task-middle' })
+    rows.get('last')!.state = 'done'
+    service.watchRelay(scope, 'chat-task-middle', Promise.resolve({ state: 'completed' as const, text: 'One back.' }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(rows.get('middle')?.state).toBe('running')
+    expect(deps.wake).not.toHaveBeenCalled()
+  })
+  it('lets a relay’s own report win, with one packet to the lead', async () => {
+    const last = chain()
+    service.applyOutcome(scope, 'middle', { state: 'completed', text: 'Waiting.' })
+    service.applyResult(scope, last, { status: 'done', summary: 'Last finished' })
+    rows.get('last')!.wokeAt = new Date()
+    const turn = Promise.resolve({ state: 'completed' as const, text: 'Reported.' })
+    service.watchRelay(scope, 'chat-task-middle', turn)
+    service.applyResult(scope, rows.get('middle')!, { status: 'done', summary: 'Relayed: last finished' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(rows.get('middle')).toMatchObject({ state: 'done', summary: 'Relayed: last finished' })
+    expect(rows.get('middle')?.warning).toBeFalsy()
+    expect(vi.mocked(deps.wake).mock.calls.filter(([, woken]) => woken[0].id === 'middle')).toHaveLength(1)
+  })
+  it('does not watch a resumed turn in a chat that runs no local delegation', () => {
+    row('file', { channel: 'file' })
+    row('lead', { taskId: 'task-other' })
+    const watched = vi.spyOn(deps.repo, 'getById')
+    service.watchRelay(scope, 'chat-task-file', Promise.resolve({ state: 'completed' as const, text: '' }))
+    service.watchRelay(scope, 'lead-chat', Promise.resolve({ state: 'completed' as const, text: '' }))
+    return new Promise((resolve) => setTimeout(resolve, 0)).then(() => {
+      expect(watched).not.toHaveBeenCalled()
+      expect(rows.get('file')?.state).toBe('running')
+    })
+  })
+  it('settles on the resumed turn once its child’s question to it was delivered and answered in plain text', async () => {
+    const last = chain()
+    service.applyOutcome(scope, 'middle', { state: 'completed', text: 'Waiting.' })
+    service.applyResult(scope, last, { status: 'blocked', summary: 'Need a version', question: 'Which version?' })
+    expect(rows.get('last')?.state).toBe('blocked')
+    rows.get('last')!.wokeAt = new Date()
+    service.watchRelay(scope, 'chat-task-middle', Promise.resolve({ state: 'completed' as const, text: 'Use 2.0.' }))
+    await vi.waitFor(() => expect(rows.get('middle')).toMatchObject({ state: 'done', warning: 'report_missing' }))
+  })
+  it('keeps waiting while its child waits on the user', async () => {
+    const last = chain()
+    service.applyOutcome(scope, 'middle', { state: 'completed', text: 'Waiting.' })
+    service.applyResult(scope, last, { status: 'blocked', summary: 'Approval', question: 'May I deploy?', audience: 'user' })
+    expect(rows.get('last')?.state).toBe('waiting_user')
+    rows.get('last')!.wokeAt = new Date()
+    service.watchRelay(scope, 'chat-task-middle', Promise.resolve({ state: 'completed' as const, text: 'Waiting on the user.' }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(rows.get('middle')?.state).toBe('running')
+  })
+  it('stays running and logs when its own delegations cannot be read, and the sweep goes on', async () => {
+    const warn = vi.fn()
+    deps.logger = { warn }
+    deps.repo.listAwaitedOutbound = (_userId, origin) => {
+      if (origin.taskId === 'task-middle') throw new Error('database is locked')
+      return []
+    }
+    service = createDelegationLifecycle(deps)
+    row('middle', { originChatId: 'lead-chat' })
+    row('lost')
+    expect(() => service.applyOutcome(scope, 'middle', { state: 'completed', text: '' })).not.toThrow()
+    service.watchTurn(scope, 'middle', Promise.resolve({ state: 'completed' as const, text: '' }))
+    service.watchTurn(scope, 'middle', Promise.reject(new Error('turn failed')))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(() => service.sweepLostRuns(scope)).not.toThrow()
+    expect(rows.get('middle')?.state).toBe('running')
+    expect(rows.get('lost')).toMatchObject({ state: 'failed', warning: 'run_lost' })
+    expect(warn).toHaveBeenCalledWith('a delegation could not check its own delegations', expect.objectContaining({ id: 'middle' }))
+  })
+  it('tells a relay whose child’s packet was refused that the result never reached it, not that its run was lost', () => {
+    chain()
+    Object.assign(rows.get('last')!, { state: 'done', resultStatus: 'done', resultDigest: 'digest', warning: 'wake_refused:chat_gone' })
+    service.sweepLostRuns(scope)
+    expect(rows.get('middle')).toMatchObject({
+      state: 'failed',
+      warning: 'relay_undelivered',
+      summary: 'The work it handed on finished, but its result could not be delivered to this executor.'
+    })
+  })
+  it('does not sweep a relay between its turns as a lost run', () => {
+    chain()
+    rows.get('last')!.updatedAt = new Date(170_000)
+    service.sweepLostRuns(scope)
+    expect(rows.get('middle')?.state).toBe('running')
+    rows.get('last')!.state = 'done'
+    service.sweepLostRuns(scope)
+    expect(rows.get('middle')).toMatchObject({ state: 'failed', warning: 'run_lost' })
+  })
 })

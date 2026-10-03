@@ -1,7 +1,7 @@
 import { redactingRepository } from '../security/serviceCredentialRedaction'
-import { and, desc, eq, or, isNull } from 'drizzle-orm'
+import { and, desc, eq, or, isNull, isNotNull, notInArray, notLike, ne, type SQL } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
-import { delegationOriginKey, type DelegationDto, type DelegationReply } from '../../shared/delegations'
+import { delegationOriginKey, type DelegationDto, type DelegationReply, type DelegationState } from '../../shared/delegations'
 import { getDb } from './client'
 import { delegations, chats, tasks } from './schema'
 
@@ -13,7 +13,34 @@ export type DelegationInsert = Pick<
   Partial<Omit<DelegationRow, 'createdAt' | 'updatedAt'>>
 export type DelegationPatch = Partial<Omit<DelegationRow, 'id' | 'userId' | 'createdAt'>>
 
-const SETTLED_STATES = ['done', 'failed', 'skipped', 'refused']
+const SETTLED_STATES: DelegationState[] = ['done', 'failed', 'skipped', 'refused']
+
+/**
+ * Work the requester has not had back yet: the row is still open, or it settled with a result whose
+ * packet has not been delivered (and was not refused for good). An executor with any of these
+ * outbound is waiting on its own delegations, not finished.
+ *
+ * A child `blocked` on a question to its requester stops counting once that question has been
+ * delivered: the child now waits on the requester, and counting it here too would leave each
+ * waiting on the other when the requester answers in plain text. A child waiting on the user is
+ * `waiting_user` and still counts — that wait is the user's.
+ */
+function awaitedByOrigin(): SQL {
+  return or(
+    and(
+      notInArray(delegations.state, SETTLED_STATES),
+      or(ne(delegations.state, 'blocked'), isNull(delegations.wokeAt), eq(delegations.questionAudience, 'user'))
+    ),
+    and(
+      isNull(delegations.wokeAt),
+      isNotNull(delegations.resultDigest),
+      or(
+        isNull(delegations.warning),
+        and(notLike(delegations.warning, 'wake_refused:%'), ne(delegations.warning, 'report_unparseable'))
+      )
+    )
+  )!
+}
 
 function ownedBy(userId: string) {
   return eq(delegations.userId, userId)
@@ -164,6 +191,30 @@ const rawDelegationRepo = {
   listForOrigin(userId: string, chatId: string, taskId?: string | null): DelegationRow[] {
     const fromChat = eq(delegations.originChatId, chatId)
     return selectAll(ownedBy(userId), taskId ? or(fromChat, eq(delegations.originTaskId, taskId)) : fromChat)
+  },
+
+  /**
+   * The delegations an executor is still waiting on: requested from its task, or from its chat (a
+   * chat-only origin key records no task). Open, or settled with a packet not yet delivered.
+   */
+  listAwaitedOutbound(userId: string, origin: { taskId?: string | null; chatId?: string | null }): DelegationRow[] {
+    const from = [
+      ...(origin.taskId ? [eq(delegations.originTaskId, origin.taskId)] : []),
+      ...(origin.chatId ? [eq(delegations.originChatId, origin.chatId)] : [])
+    ]
+    if (!from.length) return []
+    return selectAll(ownedBy(userId), or(...from), awaitedByOrigin())
+  },
+
+  /** Unsettled delegations whose executor task runs in this chat — the turns a relay's packet resumes. */
+  listOpenForExecutorChat(userId: string, chatId: string): DelegationRow[] {
+    return getDb()
+      .select({ row: delegations })
+      .from(delegations)
+      .innerJoin(tasks, and(eq(tasks.id, delegations.taskId), eq(tasks.userId, userId)))
+      .where(and(ownedBy(userId), eq(tasks.chatId, chatId), notInArray(delegations.state, SETTLED_STATES)))
+      .all()
+      .map(({ row }) => row)
   },
 
   listForOriginTask(userId: string, taskId: string): DelegationRow[] {

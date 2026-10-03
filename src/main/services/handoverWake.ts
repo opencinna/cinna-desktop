@@ -35,6 +35,7 @@ import { getProfileScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
 import { chatAnswersToAgent } from './chatRouting'
 import { createChatTurnQueue } from './handoverChatQueue'
+import { returnTurnStarted } from './returnTurns'
 import { inboxService } from './inboxService'
 import { runExecutionService, type RunScope } from './runExecutionService'
 
@@ -310,6 +311,8 @@ export const handoverWake = createHandoverWake({
       inputOrigin: 'handover'
     })
     await handle.accepted
+    // A relay's own row is settled by the turn this packet resumes it in.
+    returnTurnStarted(scope, chatId, handle.completed)
     return { runId: handle.id }
   },
   record(userId, rowId, patch) {
