@@ -93,7 +93,7 @@ e2e-one: ## One spec file, optionally one test: make e2e-one SPEC=blocked-job GR
 	@test -n "$(SPEC)" || (echo "usage: make e2e-one SPEC=<spec name> [GREP=<test title fragment>]"; exit 2)
 	$(PW) $(SPEC) $(if $(GREP),-g "$(GREP)")
 
-e2e-live: ## Only the specs that talk to a real model (needs OPENAI_API_KEY in .env)
+e2e-live: ## Specs whose file name contains "live": the billed live-* specs plus task-live-attach (needs OPENAI_API_KEY in .env)
 	@grep -qE '^OPENAI_API_KEY=.+' .env 2>/dev/null || (echo "OPENAI_API_KEY is empty in .env (copy .env.example)"; exit 2)
 	$(PW) live
 

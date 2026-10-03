@@ -285,7 +285,7 @@ test('an existing desktop task hands off once and preserves its recipient and no
     // nowhere in its text — the name is the one place both the reader and this
     // assertion can find it.
     await expect(cinna.page.getByRole('region', { name: 'Recent tasks', exact: true })
-      .getByRole('button', { name: TITLE })).toHaveAccessibleName(`${TITLE} — completed`)
+      .getByRole('button', { name: TITLE })).toHaveAccessibleName(`${TITLE} — Done`)
     expect((await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId))[0])
       .toMatchObject({ status: 'succeeded', taskId: original.id, localChatId: original.chatId })
     expect((await cinna.page.evaluate(() => window.api.jobs.list())).find((job) => job.id === jobId)?.inProgressRunsCount).toBe(0)

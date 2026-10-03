@@ -209,7 +209,7 @@ test('the Tasks badge appears once the chat has a task, and its row opens the ta
   await badge.hover()
   const popover = cinna.page.getByLabel('Tasks in this chat', { exact: true })
   await expect(popover).toBeVisible()
-  await popover.getByRole('button', { name: `${TITLE} — completed`, exact: true }).click()
+  await popover.getByRole('button', { name: `${TITLE} — Done`, exact: true }).click()
   await expect(cinna.page.getByRole('heading', { level: 1, name: TITLE, exact: true })).toBeVisible()
   await expect(popover).toHaveCount(0)
 })

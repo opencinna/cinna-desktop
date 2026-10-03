@@ -1,7 +1,7 @@
-import { test, expect, type CinnaApp } from '../fixtures/app'
+import { test, expect } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import type { Page } from '@playwright/test'
-import { OPENAI_API_KEY, requireLiveKey } from '../fixtures/live'
+import { OPENAI_API_KEY, requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
 
 /**
  * @live — needs OPENAI_API_KEY in `.env`. Skipped otherwise.
@@ -52,30 +52,6 @@ test('@live onboarding accepts a real key through the API key screen', async ({ 
   const providers = await page.evaluate(() => window.api.providers.list())
   expect(providers.map((p) => [p.type, p.hasApiKey])).toEqual([['openai', true]])
 })
-
-/**
- * A provider with the real key and a default chat mode on one of the models
- * the app lists for it — the state onboarding leaves behind, seeded over IPC.
- */
-async function seedOpenAiDefaultMode(cinna: CinnaApp): Promise<string> {
-  return cinna.page.evaluate(async (apiKey) => {
-    const { id } = await window.api.providers.upsert({
-      type: 'openai',
-      name: 'OpenAI',
-      apiKey,
-      enabled: true
-    })
-    const tested = await window.api.providers.test(id)
-    if (!tested.success) throw new Error(`provider test failed: ${tested.error}`)
-    // The composer resolves a mode's model against the app's own list for the
-    // provider, so the mode must name one of those — not one from the live probe.
-    const listed = (await window.api.providers.listModels()).filter((m) => m.providerId === id)
-    const model = listed.find((m) => m.id.includes('mini')) ?? listed[0]
-    if (!model) throw new Error('the app lists no models for the provider')
-    await window.api.chatModes.upsert({ name: 'Default', providerId: id, modelId: model.id, isDefault: true })
-    return model.id
-  }, OPENAI_API_KEY)
-}
 
 test('@live a plain chat gets an answer from the model', async ({ cinna }) => {
   await cinna.skipOnboarding()

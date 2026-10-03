@@ -295,8 +295,8 @@ test.describe('file handovers', () => {
     await test.step('the task page reads the handover back', async () => {
       await card.getByRole('button', { name: 'Open the task', exact: true }).click()
       await expect(cinna.page.getByRole('heading', { level: 1 })).toHaveText(TITLE)
-      // Lower case in the DOM: the capitals on the pill are CSS.
-      await expect(detailValue(cinna, 'Status')).toHaveText('completed')
+      // The category word (`taskStatusLabel`); the capitals on the pill are CSS.
+      await expect(detailValue(cinna, 'Status')).toHaveText('Done')
       await expect(detailValue(cinna, 'Handover')).toHaveText('Done')
       await expect(detailValue(cinna, 'Requested by')).toHaveText('Outside the app')
       // One line, the handover id intact; the whole path is on hover.
@@ -346,7 +346,7 @@ test.describe('file handovers', () => {
 
     await card.getByRole('button', { name: 'Open the task', exact: true }).click()
     await expect(cinna.page.getByRole('heading', { level: 1 })).toHaveText(TITLE)
-    await expect(detailValue(cinna, 'Status')).toHaveText('cancelled')
+    await expect(detailValue(cinna, 'Status')).toHaveText('Cancelled')
     await expect(detailValue(cinna, 'Handover')).toHaveText('Skipped')
   })
 
@@ -391,7 +391,7 @@ test.describe('file handovers', () => {
       .getByRole('button', { name: TITLE })
       .click()
     await expect(cinna.page.getByRole('heading', { level: 1 })).toHaveText(TITLE)
-    await expect(detailValue(cinna, 'Status')).toHaveText('in progress')
+    await expect(detailValue(cinna, 'Status')).toHaveText('In progress')
     await expect(detailValue(cinna, 'Handover')).toHaveText('Outside the app')
     expect(taskId).toMatch(/.+/)
   })

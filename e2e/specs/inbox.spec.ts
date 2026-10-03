@@ -348,7 +348,7 @@ test('a job parks on a permission ask, the user answers it in the Inbox, and the
 
     const page = cinna.page
     await expect(page.getByRole('heading', { level: 1, name: JOB_TITLE })).toBeVisible()
-    await expect(page.getByText('completed', { exact: true })).toBeVisible()
+    await expect(page.getByRole('complementary', { name: 'Details', exact: true }).getByText('Done', { exact: true })).toBeVisible()
     await expect(page.getByText(JOB_PROMPT, { exact: true })).toBeVisible()
     // A finished task needs no banner (`ux_rules.md` §2).
     await expect(page.getByRole('status')).toHaveCount(0)

@@ -157,7 +157,7 @@ test('scheduled sync discovers a remote-only task and its ask, then the open tas
     service.detailTitle = null
     await row().getByRole('button', { name: 'Open the task', exact: true }).click()
     await expect(cinna.page.getByRole('heading', { level: 1, name: DELTA_TITLE, exact: true })).toBeVisible()
-    await expect(cinna.page.getByText('blocked', { exact: true })).toBeVisible()
+    await expect(cinna.page.getByRole('complementary', { name: 'Details', exact: true }).getByText('Waiting', { exact: true })).toBeVisible()
     await expect.poll(() => service.detailReads).toBeGreaterThan(0)
     const reads = service.detailReads
     // No list response can carry this change: task:get's background detail pull
@@ -166,7 +166,7 @@ test('scheduled sync discovers a remote-only task and its ask, then the open tas
     service.asksOpen = false
     service.task = { ...service.task, title: FINISHED_TITLE, status: 'completed', updated_at: new Date().toISOString() }
     await expect(cinna.page.getByRole('heading', { level: 1, name: FINISHED_TITLE, exact: true })).toBeVisible({ timeout: 20_000 })
-    await expect(cinna.page.getByText('completed', { exact: true })).toBeVisible()
+    await expect(cinna.page.getByRole('complementary', { name: 'Details', exact: true }).getByText('Done', { exact: true })).toBeVisible()
     expect(service.detailReads).toBeGreaterThan(reads)
     await expect(inbox()).toHaveAccessibleName('Inbox', { timeout: 20_000 })
     expect((await tasks())[0]).toMatchObject({ id: discovered.id, status: 'completed', title: FINISHED_TITLE })
@@ -175,7 +175,7 @@ test('scheduled sync discovers a remote-only task and its ask, then the open tas
   await test.step('a settled remote task remains current while its page is watched', async () => {
     service.task = { ...service.task, title: REVISED_TITLE, updated_at: new Date().toISOString() }
     await expect(cinna.page.getByRole('heading', { level: 1, name: REVISED_TITLE, exact: true })).toBeVisible({ timeout: 20_000 })
-    await expect(cinna.page.getByText('completed', { exact: true })).toBeVisible()
+    await expect(cinna.page.getByRole('complementary', { name: 'Details', exact: true }).getByText('Done', { exact: true })).toBeVisible()
     expect((await tasks())[0]).toMatchObject({ id: discovered.id, title: REVISED_TITLE, status: 'completed' })
     expect(service.authorized).toBe(true)
     expect(service.requests.every((request) => request.startsWith('GET '))).toBe(true)
