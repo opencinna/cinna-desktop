@@ -1171,6 +1171,13 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   })
   /** A fresh watch for the retry's prompt: a watch that fired never fires again. */
   let stallWatch = watchStalls()
+  /**
+   * The error of a turn the stall watch or the ceiling stopped, or none. **The
+   * user's Stop wins**: one pressed after either fired, while the agent still
+   * had its grace to answer the cancel, ends the turn canceled as any Stop does.
+   */
+  const stopError = (): string | undefined =>
+    input.signal.aborted || !hitCeiling ? undefined : ceilingMessage(stalled ? stallMs : null, retried)
 
   const startCanceled = cancelRequested.then(() => { throw new Error('The agent was stopped before its prompt started.') })
   // The rejection is also observed when a completed turn never needed it.
@@ -1460,7 +1467,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     } catch (err) {
       if (input.signal.aborted || hitCeiling) {
         unbind?.()
-        return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage(stalled ? stallMs : null, retried) : undefined)
+        return finish(ctx, accumulator, sessionId, stopError())
       }
       // **A refusal, not a warning.** The launcher's setup is what makes the
       // desktop's own choices true: OpenCode's `mode` selects the agent
@@ -1536,8 +1543,9 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       if (answer) conductor?.sessionReady?.()
       /**
        * **One automatic retry after a stall** (see `acpToolStall.ts`), only when
-       * the session ended its prompt `cancelled` inside the grace — so the
-       * session and its process are still good — and nothing else ended the
+       * the session ended its prompt inside the grace — so the session and its
+       * process are still good; `end_turn` after our cancel counts as the same
+       * acknowledgement as `cancelled` — and nothing else ended the
        * turn: not the user's Stop, not the real ceiling (whose clock keeps
        * running from the turn's start), not a trusted task control.
        *
@@ -1551,7 +1559,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
        * after the turn, as one sent while a call is in flight does. The retry's
        * prompt is only the retry sentence; nothing queued goes into it.
        */
-      if (answer && stalled && !retried && answer.stopReason === 'cancelled' && !ceilingReached &&
+      if (answer && stalled && !retried && (answer.stopReason === 'cancelled' || answer.stopReason === 'end_turn') && !ceilingReached &&
         !input.signal.aborted && !ctx.conductorOutcome) {
         retried = true
         logger.info('stalled tool call, retrying once', { agentId: agent.id, chatId, sessionId, toolCallId: stalledCall })
@@ -1581,7 +1589,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
           ceiling: hitCeiling
         })
         if (runtime.type === 'external') emit(stream.note('The local command was closed without confirmation that the remote agent stopped. Check its remote workspace before starting more work.').message)
-        return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage(stalled ? stallMs : null, retried) : undefined)
+        return finish(ctx, accumulator, sessionId, stopError())
       }
       noteModeFallback(plan, reportedMode, stream, emit)
       /**
@@ -1615,9 +1623,13 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         sessionId,
         stopReason: answer.stopReason
       })
-      if (input.signal.aborted || answer.stopReason === 'cancelled') {
-        return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage(stalled ? stallMs : null, retried) : undefined, undefined, false, !hitCeiling)
-      }
+      // In this order. The user's Stop first, even after a stall or the
+      // ceiling fired. Then a stall or the ceiling before the stop reason: an
+      // agent may answer our cancel `end_turn` rather than `cancelled`, and that
+      // turn was still stopped, not finished.
+      if (input.signal.aborted) return finish(ctx, accumulator, sessionId, undefined)
+      if (hitCeiling) return finish(ctx, accumulator, sessionId, stopError(), undefined, false, false)
+      if (answer.stopReason === 'cancelled') return finish(ctx, accumulator, sessionId, undefined, undefined, false, true)
       return finish(ctx, accumulator, sessionId, stopReasonError(answer.stopReason), undefined, answer.stopReason === 'end_turn')
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

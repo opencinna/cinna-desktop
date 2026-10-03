@@ -2961,6 +2961,100 @@ describe('a tool call the agent opened and never filled in', () => {
     expect(w.fake.received('session/prompt')).toHaveLength(2)
   })
 
+  // An agent may answer our cancel `end_turn` instead of `cancelled`; the turn was still stopped.
+  const stallsEndTurn: FakeAcpHandlerScript = { emit: [bareCall(), { kind: 'awaitCancel' }], response: { stopReason: 'end_turn' } }
+
+  it('takes an end_turn answer to the stall’s cancel as acknowledged, and retries once', async () => {
+    // Mutation: retry only on `cancelled` → the turn completes after one prompt, with no retry.
+    const w = world({
+      script: { prompt: { sequence: [stallsEndTurn, { emit: [chunk('Report written.')] }] } },
+      deps: STALL
+    })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(result.text).toContain('Report written.')
+    expect(w.fake.received('session/cancel')).toHaveLength(1)
+    const prompts = w.fake.received('session/prompt')
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1].params?.prompt).toEqual(retryPrompt)
+  })
+
+  it('fails a second stall answered end_turn with the retry’s reason', async () => {
+    // Mutation: map the stop reason before the stall → the turn ends as a success.
+    const w = world({ script: { prompt: stallsEndTurn }, deps: STALL })
+    const result = await w.run()
+    expect(result.error?.message).toBe(toolStallMessage(300, true))
+    expect(result.taskState).not.toBe('canceled')
+    expect(w.fake.received('session/cancel')).toHaveLength(2)
+    expect(w.fake.received('session/prompt')).toHaveLength(2)
+  })
+
+  it('fails a ceiling the agent answers end_turn with the ceiling’s reason', async () => {
+    const w = world({
+      script: { prompt: { emit: [chunk('Working.'), { kind: 'awaitCancel' }], response: { stopReason: 'end_turn' } } },
+      deps: { toolStallMs: 300, turnCeilingMs: 300 }
+    })
+    const result = await w.run()
+    expect(result.error?.message).toBe('The agent stopped responding and the turn was ended.')
+    expect(result.taskState).not.toBe('canceled')
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
+  })
+
+  /** The agent takes its time to answer the cancel, so a Stop can land inside the grace. */
+  const slowToStop = (stopReason: string): FakeAcpHandlerScript =>
+    ({ emit: [bareCall(), { kind: 'awaitCancel' }, { kind: 'delay', ms: 400 }], response: { stopReason } })
+
+  it('takes the user’s Stop during the stall’s grace as a stop: no retry and no stall error', async () => {
+    const w = world({
+      script: { prompt: { sequence: [slowToStop('cancelled'), { emit: [chunk('Report written.')] }] } },
+      deps: { ...STALL, cancelGraceMs: 2_000 }
+    })
+    const controller = new AbortController()
+    const running = w.run({ signal: controller.signal })
+    await waitFor(() => w.fake.received('session/cancel').length > 0 || undefined, 'the stall’s cancel')
+    controller.abort()
+    const result = await running
+    expect(result.taskState).toBe('canceled')
+    expect(result.error).toBeUndefined()
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
+    expect(JSON.stringify(result.notices)).not.toContain(TOOL_STALL_RETRY_NOTICE)
+  })
+
+  it('takes the user’s Stop during the ceiling’s grace as a stop', async () => {
+    const w = world({
+      script: { prompt: { emit: [chunk('Working.'), { kind: 'awaitCancel' }, { kind: 'delay', ms: 400 }], response: { stopReason: 'cancelled' } } },
+      deps: { toolStallMs: 300, turnCeilingMs: 300, cancelGraceMs: 2_000 }
+    })
+    const controller = new AbortController()
+    const running = w.run({ signal: controller.signal })
+    await waitFor(() => w.fake.received('session/cancel').length > 0 || undefined, 'the ceiling’s cancel')
+    controller.abort()
+    const result = await running
+    expect(result.taskState).toBe('canceled')
+    expect(result.error).toBeUndefined()
+  })
+
+  it('takes a Stop that lands as the stalled prompt answers as a stop, and sends no retry', async () => {
+    // The abort runs as the first answer resolves, before the retry is decided.
+    const controller = new AbortController()
+    const pool = createAcpProcessPool({
+      start: async (...args: Parameters<typeof startAcpConnection>) => {
+        const connection = await startAcpConnection(...args)
+        const prompt = connection.prompt.bind(connection)
+        connection.prompt = (params) => prompt(params).then((answer) => { controller.abort(); return answer })
+        return connection
+      }
+    })
+    const w = world({
+      script: { prompt: { sequence: [stalls, { emit: [chunk('Report written.')] }] } },
+      deps: { ...STALL, pool }
+    })
+    const result = await w.run({ signal: controller.signal })
+    expect(result.taskState).toBe('canceled')
+    expect(result.error).toBeUndefined()
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
+  })
+
   it('does not let the retry take a message sent meanwhile: it is refused and waits for the next turn', async () => {
     const w = world({
       script: {
