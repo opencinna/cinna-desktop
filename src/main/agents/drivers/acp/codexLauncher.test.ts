@@ -31,6 +31,10 @@ function deps(over: Partial<CodexLauncherDeps> = {}): CodexLauncherDeps {
 }
 
 describe('Codex ACP launcher', () => {
+  it('sets no stall watch: its tool calls always arrive in_progress with their input', () => {
+    expect(createCodexLauncher(deps()).toolStallMs).toBeUndefined()
+  })
+
   it('uses the detected CLI and assembled instructions with mandatory sandbox mode setup', async () => {
     const plan = await createCodexLauncher(deps()).plan(context)
     if (isRefusal(plan)) throw new Error(plan.error)

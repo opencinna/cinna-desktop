@@ -91,6 +91,7 @@ import {
 import { airClientMeta } from './acpActivity'
 import { RAW_SDK_MESSAGE_FILTER } from './acpSdkTelemetry'
 import type { CodexBinaryKnown } from './codexLauncher'
+import { ACP_TOOL_STALL_MS } from './acpToolStall'
 
 const logger = createLogger('acp-launcher')
 
@@ -177,6 +178,15 @@ export interface AcpLauncher {
    */
   readonly endsTurnsWithCostedUsage?: boolean
   /**
+   * How long a tool call the engine opened with no input may go with no
+   * `session/update` at all before the turn is stopped and failed (the stall
+   * watch, `acpToolStall.ts`). Absent: no watch — the turn ceiling is the only
+   * bound. Set for an engine known to open a call and then fall silent
+   * (OpenCode); left off where a running call can legitimately look bare
+   * (`claude-agent-acp` never sends `in_progress`) or never does (Codex).
+   */
+  readonly toolStallMs?: number
+  /**
    * Everything needed to start this agent, or the reason it cannot run.
    *
    * **Must not throw.** A launcher that cannot decide returns a sentence; the
@@ -233,6 +243,8 @@ export interface OpencodeLauncherDeps {
 export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher {
   return {
     id: 'opencode',
+    // Pinned OpenCode opened a `write` with `{}` and never said another word.
+    toolStallMs: ACP_TOOL_STALL_MS,
 
     async plan(ctx) {
       if (!ctx.folder) return { error: 'This launcher requires a local agent folder.' }

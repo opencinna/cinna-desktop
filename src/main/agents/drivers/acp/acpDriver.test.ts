@@ -30,10 +30,11 @@ import {
 import { goldenRow } from '../__golden__/driverWorld'
 import { ACP_FOLLOW_UP_EXITED, createAcpDriver, exitListenerCount, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
 import { createAcpProcessPool } from './acpProcessPool'
+import { ACP_TOOL_STALL_MS, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage } from './acpToolStall'
 import { turnLock } from '../../../services/localAgents/turnLock'
 import { startAcpConnection } from './acpConnection'
 import type { AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
-import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpScript, type FakeAcpStep } from './testSupport/fakeAcp'
+import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpHandlerScript, type FakeAcpScript, type FakeAcpStep } from './testSupport/fakeAcp'
 import { ACP_PROTOCOL_VERSION, type AcpConnection, type AcpLauncherId, type AcpProcessPool } from './types'
 import type { SessionTrafficScope, SessionTrafficSink } from './acpSessionObserver'
 import type { SessionTelemetry, SessionTelemetryChange, SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
@@ -149,6 +150,8 @@ function makeWorld(options: WorldOptions = {}): World {
   const launcher: AcpLauncher = {
     id: options.launcher ?? 'opencode',
     endsTurnsWithCostedUsage: options.costedEnd ?? options.launcher === 'claude',
+    // As the real ones: only OpenCode sets the stall watch.
+    ...((options.launcher ?? 'opencode') === 'opencode' ? { toolStallMs: ACP_TOOL_STALL_MS } : {}),
     plan: async (): Promise<AcpPlanResult> =>
       options.refusal
         ? { error: options.refusal }
@@ -2828,6 +2831,269 @@ describe('a stop', () => {
     const result = await w.run({ signal: controller.signal })
     expect(result.error).toBeUndefined()
     expect(w.fake.log()).toEqual([])
+  })
+})
+
+describe('a tool call the agent opened and never filled in', () => {
+  // Pinned OpenCode opened a `write` with no input and then said nothing, ever:
+  // `session/prompt` never came back, and a task sat In progress until the
+  // eighty-minute ceiling. The watchdog bounds that one shape of silence.
+  const bareCall = (toolCallId = 'call_w'): FakeAcpStep => ({
+    kind: 'update',
+    update: { sessionUpdate: 'tool_call', toolCallId, title: 'write', kind: 'edit', status: 'pending', rawInput: {} }
+  })
+  const STALL = { toolStallMs: 300, turnCeilingMs: 60_000 }
+  const STALLED = toolStallMessage(300)
+
+  it('arms nothing on Claude or Codex, whose launchers set no watch', async () => {
+    for (const launcher of ['claude', 'codex'] as const) {
+      const w = world({
+        launcher,
+        script: {
+          prompt: {
+            emit: [
+              bareCall(),
+              { kind: 'delay', ms: 700 },
+              { kind: 'update', update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_w', status: 'completed' } }
+            ]
+          }
+        },
+        deps: STALL
+      })
+      const result = await w.run()
+      expect(result.error).toBeUndefined()
+      expect(w.fake.received('session/cancel')).toHaveLength(0)
+    }
+  })
+
+  it('counts an update that carries rawInput, even an empty one, as the call filled in', async () => {
+    const w = world({
+      script: {
+        prompt: {
+          emit: [
+            bareCall(),
+            { kind: 'update', update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_w', rawInput: {} } },
+            { kind: 'delay', ms: 700 },
+            { kind: 'update', update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_w', status: 'completed' } }
+          ]
+        }
+      },
+      deps: STALL
+    })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(w.fake.received('session/cancel')).toHaveLength(0)
+  })
+
+  const stalls: FakeAcpHandlerScript = { emit: [bareCall(), { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' } }
+  const chunk = (text: string): FakeAcpStep => ({
+    kind: 'update',
+    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }
+  })
+  const retryPrompt = [{ type: 'text', text: TOOL_STALL_RETRY_PROMPT }]
+
+  it('cancels the stalled prompt, asks the same session once to continue, and the turn completes', async () => {
+    // Mutation: drop the retry → the turn fails with the stall message after one prompt.
+    const w = world({
+      script: { prompt: { sequence: [stalls, { emit: [chunk('Report written.')] }] } },
+      deps: STALL
+    })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(result.taskState).not.toBe('canceled')
+    expect(result.text).toContain('Report written.')
+    expect(w.fake.received('session/cancel')).toHaveLength(1)
+    const prompts = w.fake.received('session/prompt')
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1].params?.sessionId).toBe(prompts[0].params?.sessionId)
+    expect(prompts[1].params?.prompt).toEqual(retryPrompt)
+    // The transcript says it happened, in the turn's own notices.
+    expect(JSON.stringify(result.notices)).toContain(TOOL_STALL_RETRY_NOTICE)
+    expect(w.fake.received('session/new')).toHaveLength(1)
+  })
+
+  it('fails a second stall in the same turn with the reason, and retries no more', async () => {
+    const w = world({ script: { prompt: stalls }, deps: STALL })
+    const started = Date.now()
+    const result = await w.run()
+    expect(Date.now() - started).toBeGreaterThanOrEqual(590)
+    expect(result.error?.message).toBe(toolStallMessage(300, true))
+    expect(result.error?.message).toContain('(after one automatic retry)')
+    expect(result.taskState).not.toBe('canceled')
+    expect(w.fake.received('session/cancel')).toHaveLength(2)
+    expect(w.fake.received('session/prompt')).toHaveLength(2)
+  })
+
+  it('retires a process that does not answer the cancel, fails with the reason, and does not retry', async () => {
+    const w = world({ script: { prompt: { emit: [bareCall()], hang: true } }, deps: STALL })
+    const result = await w.run()
+    expect(result.error?.message).toBe(STALLED)
+    expect(w.pool.status(AGENT_ID).state).not.toBe('running')
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
+  })
+
+  it('keeps the ceiling’s clock running from the turn’s start through the retry', async () => {
+    const w = world({
+      script: { prompt: { sequence: [stalls, { emit: [chunk('Working.'), { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' } }] } },
+      deps: { toolStallMs: 300, turnCeilingMs: 800 }
+    })
+    const started = Date.now()
+    const result = await w.run()
+    // A clock restarted for the retry would end it at ~300 + 800 ms.
+    expect(Date.now() - started).toBeLessThan(1050)
+    expect(result.error?.message).toBe('The agent stopped responding and the turn was ended.')
+    expect(w.fake.received('session/prompt')).toHaveLength(2)
+  })
+
+  it('takes the user’s Stop during the retry as a stop', async () => {
+    const w = world({
+      script: { prompt: { sequence: [stalls, { emit: [chunk('Working.'), { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' } }] } },
+      deps: STALL
+    })
+    const controller = new AbortController()
+    const running = w.run({ signal: controller.signal })
+    await waitFor(() => w.events.some((event) => event.type === 'delta' && event.text === 'Working.'), 'the retry to stream')
+    controller.abort()
+    const result = await running
+    expect(result.taskState).toBe('canceled')
+    expect(result.error).toBeUndefined()
+    expect(w.fake.received('session/cancel')).toHaveLength(2)
+    expect(w.fake.received('session/prompt')).toHaveLength(2)
+  })
+
+  it('does not let the retry take a message sent meanwhile: it is refused and waits for the next turn', async () => {
+    const w = world({
+      script: {
+        initialize: { response: { _meta: { steering: { supported: true } } } },
+        prompt: { sequence: [
+          { emit: [chunk('Before. '), bareCall(), { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' } },
+          { emit: [chunk('Again. '), { kind: 'delay', ms: 300 }, chunk('Done.')] }
+        ] }
+      },
+      deps: STALL
+    })
+    const offered: SteerFn[] = []
+    const running = w.run({ registerSteer: (steer) => { if (steer) offered.push(steer) } })
+    await waitFor(() => w.events.some((event) => event.type === 'delta' && event.text === 'Again. '), 'the retry to stream')
+    expect(offered).toHaveLength(1)
+    expect(await offered[0]('queued for later')).toBe('unavailable')
+    const result = await running
+    expect(result.error).toBeUndefined()
+    expect(result.steers).toBeUndefined()
+    expect(w.fake.received('_session/steering')).toEqual([])
+    expect(w.fake.received('session/prompt')[1].params?.prompt).toEqual(retryPrompt)
+  })
+
+  it('starts the clock again on every update', async () => {
+    const w = world({
+      script: {
+        prompt: {
+          emit: [
+            bareCall(),
+            { kind: 'delay', ms: 200 },
+            { kind: 'update', update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'hm' } } },
+            { kind: 'delay', ms: 200 },
+            { kind: 'update', update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_w', status: 'completed' } }
+          ]
+        }
+      },
+      deps: STALL
+    })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(w.fake.received('session/cancel')).toHaveLength(0)
+  })
+
+  it('leaves a call that has its input alone, however long it runs', async () => {
+    const w = world({
+      script: {
+        prompt: {
+          emit: [
+            { kind: 'update', update: { sessionUpdate: 'tool_call', toolCallId: 'call_b', title: 'bash', kind: 'execute', status: 'pending', rawInput: { command: 'make' } } },
+            { kind: 'delay', ms: 600 },
+            { kind: 'update', update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_b', status: 'completed' } }
+          ]
+        }
+      },
+      deps: STALL
+    })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(w.fake.received('session/cancel')).toHaveLength(0)
+  })
+
+  it('leaves a call alone once an update gave it a status', async () => {
+    const w = world({
+      script: {
+        prompt: {
+          emit: [
+            bareCall(),
+            { kind: 'update', update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_w', status: 'in_progress' } },
+            { kind: 'delay', ms: 600 },
+            { kind: 'update', update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_w', status: 'completed' } }
+          ]
+        }
+      },
+      deps: STALL
+    })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(w.fake.received('session/cancel')).toHaveLength(0)
+  })
+
+  it('does not fire while an ask is parked', async () => {
+    const w = world({
+      script: {
+        prompt: {
+          emit: [
+            bareCall(),
+            { kind: 'permission', toolCall: { toolCallId: 'call_p', kind: 'edit', status: 'pending' } },
+            { kind: 'update', update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_w', status: 'completed' } }
+          ]
+        }
+      },
+      deps: STALL
+    })
+    const running = w.run()
+    const asked = await askedFor(w)
+    await settle(700)
+    expect(w.fake.received('session/cancel')).toHaveLength(0)
+    w.driver.respond(
+      { requestId: asked.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission' },
+      { kind: 'permission', reply: 'once' }
+    )
+    const result = await running
+    expect(result.error).toBeUndefined()
+    expect(w.fake.received('session/cancel')).toHaveLength(0)
+  })
+
+  it('covers a turn the agent starts on its own', async () => {
+    const w = followUpWorld({ script: thenOnItsOwn([bareCall('call_bg')]), deps: { ...STALL, followUpQuietMs: 100 } })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const started = Date.now()
+    const result = await request.run(followUpIo().io)
+    expect(Date.now() - started).toBeGreaterThanOrEqual(290)
+    expect(result.error?.message).toBe(STALLED)
+    expect(result.taskState).not.toBe('canceled')
+    expect(w.fake.received('session/cancel')).toHaveLength(1)
+    // No retry for a turn the agent started: only the first turn's prompt was ever sent.
+    await settle(400)
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
+  })
+
+  it('keeps the shared process when a stalled follow-up does not answer the cancel', async () => {
+    // Other chats' background work runs in that process; the ceiling retires
+    // it, a stalled tool call does not.
+    const w = followUpWorld({ script: thenOnItsOwn([bareCall('call_bg')]), deps: { ...STALL, followUpQuietMs: 100, cancelGraceMs: 200 } })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const retire = vi.spyOn(w.pool, 'retire')
+    const result = await request.run(followUpIo().io)
+    expect(result.error?.message).toBe(STALLED)
+    expect(w.fake.received('session/cancel')).toHaveLength(1)
+    expect(retire).not.toHaveBeenCalled()
+    expect(w.pool.status(AGENT_ID).state).toBe('running')
   })
 })
 

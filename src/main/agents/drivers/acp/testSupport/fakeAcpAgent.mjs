@@ -221,6 +221,9 @@ function handler(name, method, respond) {
     // A `sequence` scripts successive calls; the last entry repeats.
     const plan = base.sequence ? (base.sequence[count - 1] ?? base.sequence[base.sequence.length - 1]) : base
     const sessionId = ctx.params?.sessionId ?? lastSessionId
+    // A cancel ends the prompt it was sent for, not every later one: a second
+    // prompt on the same session (the stall retry) waits for a cancel of its own.
+    if (name === 'prompt') cancelled.delete(sessionId)
     await emit(ctx.client, plan.emit, sessionId)
     if (plan.hang) await new Promise(() => {})
     if (plan.delayMs) await delay(plan.delayMs)

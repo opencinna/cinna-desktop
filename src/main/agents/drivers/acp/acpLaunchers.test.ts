@@ -26,6 +26,7 @@ import {
   type AcpLaunchPlan,
   type AcpPlanResult
 } from './acpLaunchers'
+import { createCustomLauncher } from './customLauncher'
 
 const AGENT_ID = 'folder:pineapple'
 const FOLDER = {
@@ -94,6 +95,10 @@ describe('the OpenCode launcher', () => {
 
   it('does not claim a cost-bearing end marker, so its follow-ups end on a quiet spell', () => {
     expect(launcher().endsTurnsWithCostedUsage).toBeFalsy()
+  })
+
+  it('sets the ten-minute stall watch: it opened a call with no input and fell silent', () => {
+    expect(launcher().toolStallMs).toBe(10 * 60 * 1000)
   })
 
   it('spawns `opencode acp` in the agent’s folder', async () => {
@@ -333,6 +338,10 @@ describe('the Claude launcher', () => {
     expect(createClaudeLauncher(deps).endsTurnsWithCostedUsage).toBe(true)
   })
 
+  it('sets no stall watch: the adapter never sends in_progress, so a running no-argument tool looks bare', () => {
+    expect(createClaudeLauncher(deps).toolStallMs).toBeUndefined()
+  })
+
   it('runs the adapter through this build’s own Node, with the user’s claude named', async () => {
     const p = plan(await createClaudeLauncher(deps).plan(CTX))
     expect(p.spec.command).toBe('/Applications/Cinna.app/Contents/MacOS/Cinna')
@@ -546,5 +555,11 @@ describe('the Claude launcher', () => {
       await createClaudeLauncher({ ...deps, binary: async () => ({ path: '/usr/bin/claude' }) }).plan(CTX)
     )
     expect(otherBinary.spec.key).not.toBe(first.spec.key)
+  })
+})
+
+describe('a custom ACP agent', () => {
+  it('sets no stall watch: nothing is known about how its engine reports a running call', () => {
+    expect(createCustomLauncher({ childEnv: async () => ({}), defaultLocalCwd: () => '/tmp' }).toolStallMs).toBeUndefined()
   })
 })

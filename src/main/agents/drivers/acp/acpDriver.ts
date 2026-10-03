@@ -102,6 +102,7 @@ import { createSessionActivityRegistry, SubagentFrames, type SessionActivityRegi
 import type { SessionActivityReporter } from '../../../../shared/sessionActivity'
 import type { SessionActivityStopper } from '../../../services/sessionActivityStop'
 import { createAcpActivityStopper } from './acpActivityStop'
+import { createToolStallWatch, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage, type ToolStallWatch } from './acpToolStall'
 import { createFollowUpGate, deliverHeld, type FollowUpGate, type HeldHandover, type HeldTraffic } from './acpFollowUp'
 import {
   createSessionObservation,
@@ -229,6 +230,12 @@ export interface AcpDriverDeps {
   followUpQuietMs?: number
   /** Override the turn ceiling. Tests only. */
   turnCeilingMs?: number
+  /**
+   * Override how long an input-less open tool call may stay silent, for an
+   * engine whose launcher sets the watch (`AcpLauncher.toolStallMs`); it never
+   * turns the watch on for one that does not. Tests only.
+   */
+  toolStallMs?: number
   /** Override the wait for a `session/cancel` acknowledgement. Tests only. */
   cancelGraceMs?: number
   /** Override the wait for a context measurement ({@link ACP_CONTEXT_USAGE_TIMEOUT_MS}). Tests only. */
@@ -851,6 +858,12 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   let connection: AcpConnection | undefined
   let sessionId: string | null = null
   let hitCeiling = false
+  /** The stall watchdog stopped the turn (see `acpToolStall.ts`); `hitCeiling` is set with it. */
+  let stalled = false
+  /** The turn already spent its one automatic retry after a stall (see `acpToolStall.ts`). */
+  let retried = false
+  /** The real ceiling fired, not the stall watch: a turn out of time is never retried. */
+  let ceilingReached = false
   const telemetryEngine = telemetryEngineOf(ctx.launcherId)
   if (telemetryEngine) {
     ctx.telemetry = new TurnTelemetry({
@@ -961,6 +974,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     if (steerWindow === 'waiting') return
     const update = notification.update
     if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') return
+    stallWatch.track(update)
     if (update.status === 'completed' || update.status === 'failed') {
       toolsInFlight.delete(update.toolCallId)
       toolsDone.add(update.toolCallId)
@@ -1075,7 +1089,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   const startupController = new AbortController()
   let startingSession = true
   let requestCancel: () => void = () => {}
-  const cancelRequested = new Promise<void>((resolve) => {
+  /** Replaced, with its resolver, when a stall retry sends a second prompt: each prompt has its own grace. */
+  let cancelRequested = new Promise<void>((resolve) => {
     requestCancel = resolve
   })
   /**
@@ -1129,11 +1144,33 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   const ceiling = setTimeout(
     () => {
       hitCeiling = !input.signal.aborted
+      ceilingReached = hitCeiling
       askAgentToStop()
     },
     deps.turnCeilingMs ?? ACP_TURN_CEILING_MS
   )
   ceiling.unref?.()
+  // Stopped the ceiling's way, and failed with its own sentence. Only on an
+  // engine whose launcher asks for it (see `acpToolStall.ts`).
+  const stallMs = toolStallMsFor(deps, ctx.launcherId)
+  /** The call the watch fired on, for the retry's log line. */
+  let stalledCall: string | null = null
+  const watchStalls = (): ToolStallWatch => createToolStallWatch({
+    ms: stallMs,
+    waiting: () => turn.parked.size > 0 || conductor?.hasCalls() === true,
+    onStall: (call) => {
+      if (!turn.open || input.signal.aborted) return
+      logger.warn('an ACP agent stalled preparing a tool call; the turn was stopped', {
+        agentId: agent.id, chatId, sessionId, toolCallId: call.toolCallId, kind: call.kind, retried
+      })
+      stalled = true
+      stalledCall = call.toolCallId
+      hitCeiling = true
+      askAgentToStop()
+    }
+  })
+  /** A fresh watch for the retry's prompt: a watch that fired never fires again. */
+  let stallWatch = watchStalls()
 
   const startCanceled = cancelRequested.then(() => { throw new Error('The agent was stopped before its prompt started.') })
   // The rejection is also observed when a completed turn never needed it.
@@ -1245,6 +1282,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         // reading it here would only give the fallback notice a stale value to
         // compare against.
         if (turn.replaying) return
+        stallWatch.heard()
         observeActivity(ctx.activity, live, notification, { chatId, agentId: agent.id })
         ctx.titles?.observe(titleScope(), notification)
         // A subagent's call the agent no longer announces is written in first.
@@ -1266,10 +1304,14 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
           if (TURN_CONTENT.has(frame.update.sessionUpdate)) openSteering()
         }
       },
-      onPermission: (params: RequestPermissionRequest): Promise<RequestPermissionResponse> =>
-        answerPermission(deps, ctx, { stream, emit, turn }, params),
-      onElicitation: (params: CreateElicitationRequest): Promise<CreateElicitationResponse> =>
-        answerElicitation(deps, ctx, { stream, emit, turn }, params),
+      onPermission: (params: RequestPermissionRequest): Promise<RequestPermissionResponse> => {
+        stallWatch.heard()
+        return answerPermission(deps, ctx, { stream, emit, turn }, params).finally(stallWatch.heard)
+      },
+      onElicitation: (params: CreateElicitationRequest): Promise<CreateElicitationResponse> => {
+        stallWatch.heard()
+        return answerElicitation(deps, ctx, { stream, emit, turn }, params).finally(stallWatch.heard)
+      },
       onExtNotification: (method: string, params: Record<string, unknown>): void => {
         if (turn.replaying) return
         if (method === AUTH_STATUS_METHOD) noteConnectionAuth(live, params)
@@ -1418,7 +1460,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     } catch (err) {
       if (input.signal.aborted || hitCeiling) {
         unbind?.()
-        return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : undefined)
+        return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage(stalled ? stallMs : null, retried) : undefined)
       }
       // **A refusal, not a warning.** The launcher's setup is what makes the
       // desktop's own choices true: OpenCode's `mode` selects the agent
@@ -1472,7 +1514,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       }
       ctx.titles?.prompted(titleScope(), prompt)
       void reportLauncherAuth(deps, ctx)
-      const answer = await promptWithCancelGrace(
+      let answer = await promptWithCancelGrace(
         deps,
         connection,
         { sessionId, prompt },
@@ -1480,17 +1522,55 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         agent.id,
         () => { ctx.telemetry?.started(); armSteering() }
       ).finally(settleSteering)
-      if (answer) {
-        ctx.telemetry?.answered(answer, connection, sessionId)
-        noteSessionLive(connection, sessionId, fingerprint)
+      const answered = (reply: NonNullable<typeof answer>, on: AcpConnection, session: string): void => {
+        ctx.telemetry?.answered(reply, on, session)
+        noteSessionLive(on, session, fingerprint)
         ctx.measurable?.set(chatId, {
-          connection, sessionId, fingerprint, agentId: agent.id, launcherId: ctx.launcherId, specKey: plan.spec.key, runtime, answered: true
+          connection: on, sessionId: session, fingerprint, agentId: agent.id, launcherId: ctx.launcherId, specKey: plan.spec.key, runtime, answered: true
         })
       }
+      if (answer) answered(answer, connection, sessionId)
       // Only a session that took its prompt — the transcript replay with it —
       // is marked current. One that failed before that must be replaced and
       // replayed again, not loaded empty on the next turn.
       if (answer) conductor?.sessionReady?.()
+      /**
+       * **One automatic retry after a stall** (see `acpToolStall.ts`), only when
+       * the session ended its prompt `cancelled` inside the grace — so the
+       * session and its process are still good — and nothing else ended the
+       * turn: not the user's Stop, not the real ceiling (whose clock keeps
+       * running from the turn's start), not a trusted task control.
+       *
+       * The same Cinna turn, on the same session: its events keep streaming into
+       * this turn's message, and the retry's outcome is the turn's. What a
+       * stopped prompt changed is put back for the second one — the turn is open
+       * again for asks, the cancel and its grace are armed afresh, and a new
+       * stall watch runs (a watch that fired never fires again). **Steering is
+       * not reopened**: its window closed with the first prompt, `onSent` is not
+       * called again, and a message sent during the retry queues and drains
+       * after the turn, as one sent while a call is in flight does. The retry's
+       * prompt is only the retry sentence; nothing queued goes into it.
+       */
+      if (answer && stalled && !retried && answer.stopReason === 'cancelled' && !ceilingReached &&
+        !input.signal.aborted && !ctx.conductorOutcome) {
+        retried = true
+        logger.info('stalled tool call, retrying once', { agentId: agent.id, chatId, sessionId, toolCallId: stalledCall })
+        emit(stream.note(TOOL_STALL_RETRY_NOTICE).message)
+        stalled = false
+        hitCeiling = false
+        turn.open = true
+        turn.stopping = false
+        cancelRequested = new Promise<void>((resolve) => { requestCancel = resolve })
+        stallWatch = watchStalls()
+        answer = await promptWithCancelGrace(
+          deps,
+          connection,
+          { sessionId, prompt: [{ type: 'text', text: TOOL_STALL_RETRY_PROMPT }] },
+          cancelRequested,
+          agent.id
+        )
+        if (answer) answered(answer, connection, sessionId)
+      }
       if (!answer) {
         // The grace expired: the agent never acknowledged the cancel. What was
         // streamed is kept, and a stop the user asked for is not an error — but
@@ -1501,7 +1581,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
           ceiling: hitCeiling
         })
         if (runtime.type === 'external') emit(stream.note('The local command was closed without confirmation that the remote agent stopped. Check its remote workspace before starting more work.').message)
-        return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : undefined)
+        return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage(stalled ? stallMs : null, retried) : undefined)
       }
       noteModeFallback(plan, reportedMode, stream, emit)
       /**
@@ -1536,7 +1616,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         stopReason: answer.stopReason
       })
       if (input.signal.aborted || answer.stopReason === 'cancelled') {
-        return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : undefined, undefined, false, !hitCeiling)
+        return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage(stalled ? stallMs : null, retried) : undefined, undefined, false, !hitCeiling)
       }
       return finish(ctx, accumulator, sessionId, stopReasonError(answer.stopReason), undefined, answer.stopReason === 'end_turn')
     } catch (err) {
@@ -1550,7 +1630,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       }
       if (hitCeiling) {
         logger.error('an ACP turn hit the ceiling without ending', { agentId: agent.id, chatId })
-        return finish(ctx, accumulator, sessionId, ceilingMessage())
+        return finish(ctx, accumulator, sessionId, ceilingMessage(stalled ? stallMs : null, retried))
       }
       logger.warn('an ACP turn failed', { agentId: agent.id, chatId, error: message })
       const result = finish(ctx, accumulator, sessionId, message)
@@ -1566,10 +1646,11 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     }
   } catch (error) {
     if (input.signal.aborted) return finish(ctx, accumulator, sessionId, undefined)
-    return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : error instanceof Error ? error.message : 'The agent could not start.')
+    return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage(stalled ? stallMs : null, retried) : error instanceof Error ? error.message : 'The agent could not start.')
   } finally {
     conductor?.close()
     clearTimeout(ceiling)
+    stallWatch.stop()
     startupController.abort()
     input.signal.removeEventListener('abort', onAbort)
     try { runtime.validate(chatId) } catch { deps.pool.retire(agent.id) }
@@ -1764,6 +1845,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   // Set from the handlers; declared this way so the checks below are not narrowed away.
   let endedBy = 'marker' as EndedBy
   let hitCeiling = false as boolean
+  let stalled = false as boolean
   let unbind: (() => void) | undefined
   let signalEnd!: () => void
   const over = new Promise<void>((resolve) => { signalEnd = resolve })
@@ -1804,7 +1886,15 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     if (grace) return
     grace = setTimeout(() => {
       if (ended) return
-      if (hitCeiling) {
+      if (hitCeiling && stalled) {
+        // The stall watch: the turn fails here, but the process stays — other
+        // chats' background work runs in it, and one stalled tool call is not
+        // reason enough to take that down with it.
+        logger.warn('an ACP agent did not end a stalled follow-up turn; the turn failed, the process was left running', {
+          agentId: agent.id,
+          chatId
+        })
+      } else if (hitCeiling) {
         logger.warn('an ACP agent did not end a follow-up turn at the ceiling; its process was retired', {
           agentId: agent.id,
           chatId
@@ -1823,11 +1913,26 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     grace.unref?.()
   }
 
+  const stallMs = toolStallMsFor(deps, world.launcherId)
+  const stallWatch = createToolStallWatch({
+    ms: stallMs,
+    waiting: () => turn.parked.size > 0 || conductor?.hasCalls() === true,
+    onStall: (call) => {
+      if (ended || io.signal.aborted) return
+      logger.warn('an ACP agent stalled preparing a tool call in a follow-up turn; the turn was stopped', {
+        agentId: agent.id, chatId, sessionId, toolCallId: call.toolCallId, kind: call.kind
+      })
+      stalled = true
+      askAgentToStop(true)
+    }
+  })
+
   const frames = new SubagentFrames((id) => world.activity.lookup(connection, id))
   const handlers: AcpSessionHandlers = {
     onUpdate: (notification) => {
       if (ended) return
       armQuiet()
+      stallWatch.heard()
       conductor?.observe?.(notification)
       observeActivity(world.activity, connection, notification, { chatId, agentId: agent.id })
       ctx.titles?.observe({ launcherId: world.launcherId, chatId, agentId: agent.id, sessionId,
@@ -1837,6 +1942,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
         if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
           const id = update.toolCallId
           world.knownToolCalls.add(id)
+          stallWatch.track(update)
           if (update.status === 'completed' || update.status === 'failed') {
             toolsOpen.delete(id)
             toolsDone.add(id)
@@ -1856,12 +1962,14 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     onPermission: (params) => {
       if (ended) return Promise.resolve({ outcome: { outcome: 'cancelled' } })
       armQuiet()
-      return answerPermission(deps, ctx, askWorld, params).finally(armQuiet)
+      stallWatch.heard()
+      return answerPermission(deps, ctx, askWorld, params).finally(() => { armQuiet(); stallWatch.heard() })
     },
     onElicitation: (params) => {
       if (ended) return Promise.resolve({ action: 'cancel' })
       armQuiet()
-      return answerElicitation(deps, ctx, askWorld, params).finally(armQuiet)
+      stallWatch.heard()
+      return answerElicitation(deps, ctx, askWorld, params).finally(() => { armQuiet(); stallWatch.heard() })
     },
     onExtNotification: (method, params) => {
       if (ended) return
@@ -1916,6 +2024,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   } finally {
     conductor?.close()
     clearTimeout(ceiling)
+    stallWatch.stop()
     if (quiet) clearTimeout(quiet)
     if (grace) clearTimeout(grace)
     io.signal.removeEventListener('abort', onAbort)
@@ -1938,9 +2047,10 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     sessionId,
     endedBy,
     canceled,
-    ceiling: hitCeiling
+    ceiling: hitCeiling,
+    stalled
   })
-  const error = hitCeiling ? ceilingMessage() : endedBy === 'exited' && !canceled ? ACP_FOLLOW_UP_EXITED : undefined
+  const error = hitCeiling ? ceilingMessage(stalled ? stallMs : null) : endedBy === 'exited' && !canceled ? ACP_FOLLOW_UP_EXITED : undefined
   // No session to record: it is the one the chat already remembers. Its
   // telemetry is that session's, reported once, here.
   ctx.telemetry?.settle(sessionId)
@@ -2529,8 +2639,20 @@ function rememberSession(ctx: TurnContext, sessionId: string): void {
   }
 }
 
-function ceilingMessage(): string {
+/** The ceiling's sentence, or the stall watch's when it stopped the turn after `stalledAfterMs`. */
+function ceilingMessage(stalledAfterMs: number | null = null, retried = false): string {
+  if (stalledAfterMs !== null) return toolStallMessage(stalledAfterMs, retried)
   return 'The agent stopped responding and the turn was ended.'
+}
+
+/**
+ * The stall watch's silence for this engine, or null for none: the launcher
+ * decides (`AcpLauncher.toolStallMs`), and the test override only shortens a
+ * watch that is on.
+ */
+function toolStallMsFor(deps: AcpDriverDeps, launcherId: AcpLauncherId): number | null {
+  const ms = deps.launcher(launcherId)?.toolStallMs
+  return ms == null ? null : deps.toolStallMs ?? ms
 }
 
 /**
