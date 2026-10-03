@@ -15,6 +15,7 @@ import type { InputRequest, InputResumeMode } from '../../shared/runEvents'
 import type { RecordedHandoverExecution, HandoverReportStatus, HandoverState } from '../../shared/handovers'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { TaskStatus } from '../../shared/taskStatus'
+import type { TaskDispatchMode, TaskDispatchPauseReason } from '../../shared/taskDispatch'
 import type { TaskHandoffReceipt } from '../../shared/taskHandoff'
 import type {
   TaskArtifact,
@@ -813,6 +814,20 @@ export const tasks = sqliteTable('tasks', {
   createdByChatId: text('created_by_chat_id'),
   /** Depth in a chain of tool-created work (0 = not tool-created, or created outside any task). Never synced. */
   chainDepth: integer('chain_depth').notNull().default(0),
+  /**
+   * Why the task dispatcher left this task blocked (`TaskDto.dispatchNote`).
+   * Device-local, never synced; cleared by every status write that leaves
+   * `blocked` (`taskService.statusPatch`).
+   */
+  dispatchNote: text('dispatch_note'),
+  /**
+   * The folder agent whose task queue dispatched this task and still owns how
+   * it settles: set when a dispatched run is accepted, kept while the task
+   * waits on an ask (so the turn an answer resumes is settled by the report
+   * rule too), cleared once the dispatcher settles it or any status other than
+   * Active or Waiting is written. Device-local, never synced.
+   */
+  dispatchAgentId: text('dispatch_agent_id'),
   errorMessage: text('error_message'),
 
   createdAt: integer('created_at', { mode: 'timestamp' })
@@ -855,6 +870,53 @@ export const taskComments = sqliteTable('task_comments', {
   body: text('body').notNull(),
   remoteStatus: text('remote_status').$type<'pending' | 'sent' | 'failed' | null>(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+})
+
+/**
+ * How the task dispatcher works one folder agent's queue, per profile and on
+ * this device only (`services/taskDispatchService.ts`). No row means `manual`
+ * and not paused. A table of its own rather than columns on `agent_overrides`
+ * for the reason {@link agentColors} is: an override row carries `enabled`.
+ * No FK to `agents.id` (sync may re-create a row under the same id). Not a
+ * synced collection.
+ *
+ * `active_task_id` / `active_chat_id` are the dispatched run in flight, kept
+ * so that a run Cinna quit under is found at the next boot and flagged.
+ */
+export const agentTaskDispatch = sqliteTable(
+  'agent_task_dispatch',
+  {
+    userId: text('user_id').notNull(),
+    agentId: text('agent_id').notNull(),
+    mode: text('mode').$type<TaskDispatchMode>().notNull().default('manual'),
+    pausedReason: text('paused_reason').$type<TaskDispatchPauseReason | null>(),
+    pausedTaskId: text('paused_task_id'),
+    pausedAt: integer('paused_at', { mode: 'timestamp_ms' }),
+    activeTaskId: text('active_task_id'),
+    activeChatId: text('active_chat_id'),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.agentId] })]
+)
+
+/**
+ * The dispatcher's Inbox approval before it runs a task whose file content
+ * came from outside Cinna: one row per task and content digest. `body` is the
+ * prompt exactly as it would be sent. Device-local, never synced; removed with
+ * its task.
+ */
+export const taskDispatchGates = sqliteTable('task_dispatch_gates', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  taskId: text('task_id').notNull().references(() => tasks.id, { onDelete: 'cascade' }),
+  agentId: text('agent_id').notNull(),
+  digest: text('digest').notNull(),
+  title: text('title').notNull(),
+  filePath: text('file_path'),
+  body: text('body').notNull(),
+  status: text('status').$type<'open' | 'approved' | 'skipped' | 'superseded'>().notNull().default('open'),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  settledAt: integer('settled_at', { mode: 'timestamp_ms' })
 })
 
 // Local execution receipts deliberately survive task deletion and do not sync.

@@ -30,6 +30,7 @@ An agent asking for input in a conversation opened by hand must reach the same I
 - **Acceptance is not completion.** Once the message is accepted, the modal can close while main continues the turn. A later driver/network failure is the new turn’s outcome; it does not undo the accepted answer. See [the Inbox](inbox.md).
 - **Sibling asks survive.** A continued agent settles its own next-message requests. Its failure or cancellation must not expire another agent’s continuation. A coordinator tool refuses to call an agent while that agent still awaits a human answer.
 - **A chat-owned task has a finisher.** An explicitly runner-owned turn leaves the whole-task decision to its caller while retaining request cleanup. For an ordinary turn with no continuation remaining, normal done maps to completed, canceled to cancelled, and error/budget endings to error. Job-owned tasks wait for `jobService.reportRunCompletion`, which also defers while next-message requests remain. A [file handover's](file_handovers.md#the-report-wins-and-what-happens-when-there-is-none) task is finished by its report, not by the executor's turn ending: completing it there once turned a `blocked` report into `completed` and the requester's revision was refused. Likewise, when the agent itself set the chat's task to `completed`, `blocked` or `error` during that run ([`task_update`](agent_task_tools.md#who-may-change-what)), and the task has not gone back to `in_progress` since, the turn's end leaves it as the agent said.
+- **A dispatched turn is not settled here at all.** A turn the [task dispatcher](task_dispatcher.md) started is left to it, matched by chat and run id. So is any later turn in the chat of a task the dispatcher still owns (`dispatch_agent_id`), such as the one an Inbox answer resumes after a dispatched turn asked a question. The dispatcher settles both by whether the agent reported: a normal end with no report flags the task Waiting and pauses its queue. Completing it here would have marked unreported work as done. The ask bookkeeping above still runs for these turns. Only the whole-task decision is skipped. A user's own Start or message on the same task, in a run the dispatcher did not start and on a task it no longer owns, ends here as usual.
 - **Explicit endings do not leave idle jobs running.** Completed/error/cancelled/archived task writes expire next-message requests and settle a linked pending/running job attempt. Archive maps that active attempt to cancelled; a terminal attempt keeps its outcome. Manual job completion/cancellation updates a desktop-owned task through the claim-checked task service before writing the job.
 - **Inbox event observation never throws into the stream.** A deleted chat creates no task; an event-bookkeeping failure is logged. Acceptance bookkeeping is different: it may refuse inside the transaction so no unaccepted message survives.
 - **Pending remote handoff blocks local admission.** The shared executor checks both the active chat reservation and its durable unresolved receipt before starting a turn. Chat input offers receipt recovery even after the task is deleted; recovery cannot take over known-live remote work. See [remote handoff](remote_handoff.md).
@@ -43,7 +44,7 @@ Inbox answer or typed message → message transaction + resumeChat → same agen
 
 ## Where It Lives
 
-- `src/main/services/inboxService.ts` — lazy creation, request identity, resume/answer guards and completion.
+- `src/main/services/inboxService.ts` — lazy creation, request identity, resume/answer guards and completion; `endTurn` hands dispatched and dispatch-owned turns to the dispatcher (`src/main/tasks/dispatchedTurns.ts`).
 - `src/main/services/runExecutionService.ts` — shared main-owned turn lifetime with optional renderer port.
 - `src/main/db/messages.ts` and `src/main/services/messageRoutingService.ts` — transactional message acceptance.
 - `src/main/db/taskInputRequests.ts` — durable next-message rows and selective expiry.
@@ -53,6 +54,7 @@ Inbox answer or typed message → message transaction + resumeChat → same agen
 ## Integration Points
 
 - [Jobs](../jobs/jobs.md) — job tasks retain their existing completion hook and attempt.
+- [The Task Dispatcher](task_dispatcher.md) — the report rule that settles dispatched and dispatch-owned turns instead.
 - [Moving execution across the seam](remote_sync.md#moving-execution-across-the-seam) — handover and takeover controls.
 - [A Task on the User’s Other Devices](cross_device.md) — task rows travel; local conversations and continuation addresses do not.
 - [Tasks](tasks.md), [the Inbox](inbox.md) and [shared execution](../../chat/messaging/turn_completion.md#outcome-and-lifetime) — work records, answer routing and runtime boundaries.

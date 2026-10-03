@@ -7,6 +7,8 @@ import { useUIStore, type TasksViewMode } from '../../stores/ui.store'
 import { TasksList } from './TasksList'
 import { TasksBoard } from './TasksBoard'
 import { NewTaskDialog } from './TaskFormDialog'
+import { TasksRunNextControl } from './TasksDispatchControl'
+import { useDispatchControls, useTaskDispatchList } from '../../hooks/useTaskDispatch'
 import { ALL_AGENTS, UNASSIGNED, agentFilterOptions, matchesTaskFilters, type TaskAgentFilter } from './tasksViewModel'
 
 const MODES: readonly { value: TasksViewMode; label: string; Icon: typeof List }[] = [
@@ -41,6 +43,14 @@ const CONTROL =
  * The New task mutation is owned here, not by the dialog, so the hook-level
  * `onCreated` that closes the dialog and opens the task runs even though the
  * dialog unmounts on the way (§5).
+ *
+ * Filtered to one agent whose queue Cinna works (a folder agent), the row
+ * gains that queue's **Run next** with the run mode behind its chevron; a
+ * paused queue turns it into **Resume** in place, adding no row. It follows
+ * the filter and the queue, never the search, so typing moves nothing (§1). The queue's
+ * actions are owned here too, so a result outlives the menu that asked; a
+ * refusal shows under the control, in the same overlay slot as a refused
+ * move. A started task stays put: its row moves to In progress on its own.
  */
 export function TasksView(): React.JSX.Element {
   const mode = useUIStore((s) => s.tasksViewMode)
@@ -55,6 +65,12 @@ export function TasksView(): React.JSX.Element {
   const [search, setSearch] = useState('')
   const [creating, setCreating] = useState(false)
   const [moveError, setMoveError] = useState<string | null>(null)
+  const dispatchList = useTaskDispatchList()
+  const filteredAgentId = agent.startsWith('agent:') ? agent.slice('agent:'.length) : null
+  const dispatchState = filteredAgentId ? dispatchList.data?.find((entry) => entry.agentId === filteredAgentId) ?? null : null
+  const dispatch = useDispatchControls(dispatchState ? dispatchState.agentId : null)
+  /** A refused Run next, Resume or mode change. */
+  const dispatchError = dispatch.error ? dispatch.error.message : null
   const create = useCreateTask({
     onCreated: (task) => {
       setCreating(false)
@@ -81,7 +97,7 @@ export function TasksView(): React.JSX.Element {
           sidebar, the switch drops its words for its icons (the name stays,
           in aria-label and title) and the search shrinks first.
         */}
-        <header className="@container relative flex items-center gap-2">
+        <header className={`@container relative flex items-center ${dispatchState ? 'gap-1.5 @xl:gap-2' : 'gap-2'}`}>
           <h1 className="mr-1 shrink-0 text-base font-semibold text-[var(--color-text)]">Tasks</h1>
           <div role="group" aria-label="Tasks layout" className="flex shrink-0 rounded-md border border-[var(--color-border)] p-0.5">
             {MODES.map(({ value, label, Icon }) => (
@@ -94,7 +110,7 @@ export function TasksView(): React.JSX.Element {
             ))}
           </div>
           <select aria-label="Agent" value={agent} onChange={(event) => setAgent(event.target.value)}
-            className={`${CONTROL} w-28 shrink-0 px-2 @2xl:w-40`}>
+            className={`${CONTROL} ${dispatchState ? 'w-24 @xl:w-28' : 'w-28'} shrink-0 px-2 @2xl:w-40`}>
             <option value={ALL_AGENTS}>All agents</option>
             {agentOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             {agent !== ALL_AGENTS && agent !== UNASSIGNED && !agentOptions.some((option) => option.value === agent) && (
@@ -102,19 +118,39 @@ export function TasksView(): React.JSX.Element {
             )}
             <option value={UNASSIGNED}>No agent</option>
           </select>
-          {/* min-w-24: the placeholder whole at 800 px beside the sidebar, with the row still one line. */}
-          <label className="relative flex min-w-24 flex-1 items-center">
+          {/*
+            min-w-24: the placeholder whole at 800 px beside the sidebar, with the row still one line.
+            With the queue control in the row as well, the 800 px row has no room for it: the search
+            narrows to its glyph plus a few characters and drops a placeholder it could not show whole
+            (§7); its name stays in aria-label. Run next drops its word first (TasksRunNextControl).
+          */}
+          <label className={`relative flex flex-1 items-center ${dispatchState ? 'min-w-10 @xl:min-w-24' : 'min-w-24'}`}>
             <Search size={12} aria-hidden="true" className="pointer-events-none absolute left-2 text-[var(--color-text-muted)]" />
             <input type="search" aria-label="Search tasks" placeholder="Search" value={search}
               onChange={(event) => setSearch(event.target.value)}
-              className={`${CONTROL} w-full pl-7 pr-2 placeholder:text-[var(--color-text-muted)]`} />
+              className={`${CONTROL} w-full pl-7 pr-2 ${dispatchState
+                ? 'placeholder:text-transparent @xl:placeholder:text-[var(--color-text-muted)]'
+                : 'placeholder:text-[var(--color-text-muted)]'}`} />
           </label>
+          {dispatchState && (
+            <TasksRunNextControl
+              agentName={agentName(dispatchState.agentId) ?? 'This agent'}
+              state={dispatchState}
+              controls={{ ...dispatch, runNext: (taskId) => { setMoveError(null); return dispatch.runNext(taskId) } }}
+            />
+          )}
           <button type="button" onClick={() => { create.reset(); setCreating(true) }}
             className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 text-xs font-medium text-white transition-colors hover:bg-[var(--color-accent-hover)]">
             <Plus size={12} aria-hidden="true" />
             New task
           </button>
           {/* Over the gap under the row, not in the flow: it moves nothing when it comes or goes (§1). */}
+          {dispatchError && !moveError && (
+            <p role="alert" title={dispatchError}
+              className="absolute right-0 top-full max-w-full truncate text-right text-[11px] leading-4 text-[var(--color-danger)]">
+              {dispatchError}
+            </p>
+          )}
           {moveError && (
             <p role="alert" title={moveError}
               className="absolute inset-x-0 top-full truncate text-[11px] leading-4 text-[var(--color-danger)]">
@@ -133,7 +169,7 @@ export function TasksView(): React.JSX.Element {
         ) : noMatch ? (
           <p className="text-[13px] text-[var(--color-text-muted)]">No tasks match.</p>
         ) : mode === 'board' ? (
-          <TasksBoard tasks={visible} onError={setMoveError} folderColumns={folderBoard.data ?? null} />
+          <TasksBoard tasks={visible} onError={(message) => { if (message) dispatch.clearError(); setMoveError(message) }} folderColumns={folderBoard.data ?? null} />
         ) : (
           <TasksList tasks={visible} showAssignee={agent === ALL_AGENTS} />
         )}

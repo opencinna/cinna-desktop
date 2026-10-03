@@ -89,9 +89,11 @@ A bare folder agent's work queue is a set of markdown files in its own folder, `
 
 ## Trust: whose content is this
 
-- **Cinna knows its own writes, across restarts.** Each write records the digest of the bytes it published in the binding (`writtenDigest`); a later read whose bytes hash to it is Cinna's own content. Kept in the stored binding, not in memory, because a quit between a write and the next pull otherwise turned Cinna's own write into "changed outside" on relaunch.
-- **`trusted_digest`** holds the digest of content Cinna wrote; **`fromOutside`** on the task is true whenever the file's current digest is not it — a file an editor, a script or a `git pull` wrote or changed. The task page shows it as a small glyph on the File row.
-- **Recorded only.** Nothing gates on it: an outside file is indexed, shown and runnable like any other. There is no approval step that would make outside content trusted.
+- **Two digests, because "Cinna wrote this" and "Cinna vouches for this" are different.** The binding records `writtenDigest`, the bytes Cinna last published, and `trustedDigest`, the content Cinna vouches for. Both are kept in the stored binding, not in memory: a quit between a write and the next pull otherwise turned Cinna's own write into "changed outside" on relaunch.
+- **What is trusted**: a file Cinna created, a Cinna write onto content that was already trusted, and content the user approved in the Inbox. **A Cinna write does not launder.** A status, field, note or log entry Cinna pushes onto a file someone else changed leaves it untrusted, because the outside text is still in it, so the approval is still asked for. With one digest, the dispatcher's own status write when it started a task would have made any outside edit look like Cinna's.
+- **A binding stored before `trustedDigest` existed** trusts what it wrote, which is what `writtenDigest` meant then.
+- **`trusted_digest`** on the task mirrors the trusted content. **`fromOutside`** is true whenever the file's current digest is not it: a file an editor, a script, a `git pull` or the agent itself wrote or changed. The task page shows it as a small glyph on the File row.
+- **It gates running, not reading.** An outside file is indexed, shown and editable like any other. The [task dispatcher](task_dispatcher.md#the-outside-content-gate) will not run it until the user approves that exact content in the Inbox, one card per content hash. Approving stores the digest as trusted on the task and in its binding, so the next pull keeps it trusted. The file's next outside change asks again.
 
 ## Create and delete
 
@@ -114,8 +116,7 @@ A bare folder agent's work queue is a set of markdown files in its own folder, `
 ## What this deliberately does not do
 
 - **No asks, execution, artifacts or assignee directory** on the folder adapter, and no comment *stream*: comments live in Cinna and are only copied into the file's log. Execution of a folder task is the desktop's, like any local task.
-- **`blocked_by` is read-only.** It is shown (as links to the same agent's file tasks) and never written; nothing waits on it.
-- **No approval of outside content.** `fromOutside` is a fact on the page, not a gate.
+- **`blocked_by` is never written.** Main resolves each id against the task files in the same folder, whichever agent indexed them. The task page lists each blocker with its status, and an id that names nothing as "not found". The [dispatcher](task_dispatcher.md#which-task) starts a task only once every blocker is Done. A missing id blocks, so a typo cannot let work start early. A person may still start a blocked task by hand.
 - **No moving a task out of its folder** — not by Hand off, not by an assignee change.
 - **The app must be open.** Files changed while Cinna is closed are read on the next start.
 
@@ -144,4 +145,5 @@ Board -> task:folder-board -> taskSyncService.folderBoard -> localHome.board
 - [File Handovers](file_handovers.md) — the other `.cinna/` file contract, sharing the frontmatter reader, the watcher and the symlink and publish rules.
 - [A Task on the User's Other Devices](cross_device.md) — why device-local rows never travel.
 - [Bare Agents](../../agents/local_agents/bare_agents.md) — the folders that have a queue.
+- [The Task Dispatcher](task_dispatcher.md) — works the queue: `blocked_by`, the status word read again at a turn's end, and the approval of outside content.
 - [Technical details](folder_tasks_tech.md).

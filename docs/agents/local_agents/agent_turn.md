@@ -326,6 +326,15 @@ Engines talk between turns, and that traffic used to be dropped. Watched on the 
 - **Stop.** It releases the parks and sends `session/cancel`. If the agent does not end the turn within the grace, the turn ends canceled and **the process is left running**. Other chats' background work runs in it, and nothing here is blocked on the agent
 - **Ten seconds of quiet**, with no tool call open and no ask parked, but only for a launcher that sends no end marker (Codex, OpenCode, command-line agents). An engine with a marker is never ended by silence, because its model may think for minutes between two updates
 
+**How it ended is decided in the prompted turn's order**, by the same rule (see [A turn always settles](#a-turn-always-settles)):
+
+1. **A Stop wins.** Even after the watchdog or the ceiling fired, a Stop ends the turn stopped, with no error.
+2. **Then the watchdog or the ceiling.** The turn fails with that sentence, even when the agent then ended the turn cleanly. It was still stopped, not finished.
+3. **Then an acknowledged cancel.** The end marker or a quiet spell after Cinna asked the agent to stop is what `cancelled` is for a prompted turn, and the turn ends canceled.
+4. **Then how it ended.** A process that exited fails with the exit sentence; the end marker or quiet completes it.
+
+The follow-up used to decide this by itself, and a Stop pressed during the watchdog's or the ceiling's grace ended the turn canceled but still carrying that error. A stopped turn must read as a Stop everywhere, so one shared order now serves both kinds of turn.
+
 **It holds the process, not the turn lock.** The engine runs this turn whether the app listens or not, and another chat's prompt on the same agent must not be refused because of it. Traffic that arrived after the end marker goes back to the gate and may open the next follow-up.
 
 **What was watched.** Claude runs an unprompted turn after a background shell ends, with or without the AIR capabilities advertised. After a background task was stopped, Claude was not seen to run one in the 40 seconds watched. Codex was never seen to start a turn of its own; its between-turn traffic is all "dropped" or "not turn content" above.

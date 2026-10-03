@@ -4,7 +4,8 @@ import { taskRuntimeRepo } from '../db/taskRuntimes'
 import { taskRunnerBridge } from './taskRunnerBridge'
 import { activeChatRunId, chatHardDeleted } from './chatRemoval'
 import { runtimeBudget } from '../tasks/runtimeBudget'
-import type { TaskArtifact, TaskBudget, TaskDeletePreview, TaskDeleteResult } from '../../shared/tasks'
+import type { TaskArtifact, TaskBlocker, TaskBudget, TaskDeletePreview, TaskDeleteResult } from '../../shared/tasks'
+import { dirname } from 'node:path'
 import { getDb } from '../db/client'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
@@ -207,7 +208,12 @@ function statusPatch(task: TaskRow, status: TaskStatus, errorMessage?: string | 
     startedAt: task.startedAt ?? (status === 'in_progress' ? now : null),
     finishedAt: isSettled(status) ? (task.finishedAt ?? now) : reopening ? null : task.finishedAt,
     errorMessage:
-      errorMessage !== undefined ? errorMessage : reopening ? null : task.errorMessage
+      errorMessage !== undefined ? errorMessage : reopening ? null : task.errorMessage,
+    // The dispatcher's note explains a `blocked`; any other status ends it.
+    ...(status !== 'blocked' && task.dispatchNote ? { dispatchNote: null } : {}),
+    // The dispatcher owns a task only while it is Active or Waiting on an ask;
+    // any other status (a report, a person's move, a pull) ends that.
+    ...(status !== 'in_progress' && status !== 'blocked' && task.dispatchAgentId ? { dispatchAgentId: null } : {})
   }
 }
 
@@ -362,6 +368,8 @@ export function toTaskDto(
       ? { path: row.localFile.path, readOnlyFields: [...row.localFile.readOnlyFields], blockedBy: [...row.localFile.blockedBy] }
       : null,
     fromOutside: !!row.localFile && row.localFile.digest !== row.trustedDigest,
+    blockedBy: taskBlockers(row),
+    dispatchNote: row.dispatchNote ?? null,
     jobId: row.jobId,
     jobRunId: row.jobRunId,
     createdAt: row.createdAt,
@@ -369,6 +377,27 @@ export function toTaskDto(
     startedAt: row.startedAt,
     finishedAt: row.finishedAt
   }
+}
+
+/**
+ * A file task's `blocked_by` ids, resolved against the tasks kept in files of
+ * the **same folder** (the same directory as this task's file; other agents
+ * sharing the folder index the same files). An id that names no live task
+ * there resolves to `taskId: null` and is not done — the dispatcher treats a
+ * missing blocker as blocking. Only `completed` is done.
+ */
+export function taskBlockers(row: Pick<TaskRow, 'userId' | 'localFile'>): TaskBlocker[] {
+  const ids = row.localFile?.blockedBy ?? []
+  if (ids.length === 0 || !row.localFile) return []
+  const folder = dirname(row.localFile.path)
+  const candidates = taskRepo.listFileTasksByKey(row.userId, ids)
+    .filter((candidate) => candidate.localFile && dirname(candidate.localFile.path) === folder)
+  return ids.map((id) => {
+    const found = candidates.find((candidate) => candidate.remoteKey === id)
+    return found
+      ? { id, taskId: found.id, title: found.title, done: parseTaskStatus(found.status) === 'completed' }
+      : { id, taskId: null, title: null, done: false }
+  })
 }
 
 /**
@@ -701,6 +730,11 @@ export const taskService = {
        * module cannot ask without importing the adapters.
        */
       bound?: boolean
+      /**
+       * The task dispatcher's reason for a `blocked` it writes (`TaskDto.dispatchNote`).
+       * Ignored for any other status, which clears the note.
+       */
+      dispatchNote?: string
     } = {}
   ): TaskDto {
     const task = requireTask(userId, taskId)
@@ -741,6 +775,7 @@ export const taskService = {
 
     const patch = statusPatch(task, status, opts.errorMessage)
     if (opts.label !== undefined) patch.statusLabel = opts.label
+    if (status === 'blocked' && opts.dispatchNote !== undefined) patch.dispatchNote = opts.dispatchNote
     const row = taskRepo.update(userId, taskId, dirtied(task, patch, ['status']))
     if (!row) throw new TaskError('not_found', 'Task not found')
     if (isSettled(status) || status === 'archived') {
@@ -1033,7 +1068,10 @@ export const taskService = {
     const executor: TaskExecutor = 'desktop'
     const row = taskRepo.update(userId, taskId, {
       executor,
-      executorDevice: thisDeviceId(userId)
+      executorDevice: thisDeviceId(userId),
+      // A queue's hold on the task (after a dispatched ask) does not survive
+      // the task moving devices: the run here is a new one.
+      ...(task.dispatchAgentId ? { dispatchAgentId: null } : {})
     })
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task taken over', { taskId, from: task.executor, fromDevice: task.executorDevice })
@@ -1061,6 +1099,8 @@ export const taskService = {
     }
     const row = taskRepo.update(userId, taskId, {
       executor: 'remote', executorDevice: null,
+      // The remote runs it now, so no queue here settles its turns.
+      ...(task.dispatchAgentId ? { dispatchAgentId: null } : {}),
       ...(accepted && {
         ...(accepted.executed ? statusPatch(task, 'in_progress') : {}),
         ...(accepted.assignee && {

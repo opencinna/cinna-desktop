@@ -17,7 +17,9 @@ import {
   notes,
   noteFolders,
   tasks,
-  taskHandoffs
+  taskHandoffs,
+  agentTaskDispatch,
+  taskDispatchGates
 } from './schema'
 
 export type UserRow = typeof users.$inferSelect
@@ -164,6 +166,10 @@ export const userRepo = {
       // has no FK, so without this line everything a deleted profile was
       // working on stays in the database under a dead user id.
       tx.delete(taskHandoffs).where(eq(taskHandoffs.userId, id)).run()
+      // The dispatcher's device-local rows: gates would cascade with their
+      // tasks only while FK enforcement is on; the per-agent rows have no FK.
+      tx.delete(taskDispatchGates).where(eq(taskDispatchGates.userId, id)).run()
+      tx.delete(agentTaskDispatch).where(eq(agentTaskDispatch.userId, id)).run()
       tx.delete(tasks).where(eq(tasks.userId, id)).run()
       tx.delete(jobFolders).where(eq(jobFolders.userId, id)).run()
       tx.delete(notes).where(eq(notes.userId, id)).run()

@@ -52,6 +52,35 @@ export interface TaskStartOptions {
    * still has no chat of its own.
    */
   reuseChatId?: string
+  /**
+   * Continue a task that already has a conversation in that conversation —
+   * the task dispatcher's path for a Ready task that ran before. The chat must
+   * still be visible, bound to the same agent by `direct` routing, and idle;
+   * a deleted chat is replaced by a new one as for any start. Never with
+   * {@link reuseChatId}.
+   */
+  continueInChat?: boolean
+  /**
+   * Told the run's chat and id once the run is accepted, inside acceptance —
+   * before any event of the turn, so before its end. The task dispatcher marks
+   * its own run with it (`tasks/dispatchedTurns.ts`). Local bookkeeping only:
+   * it runs in the message transaction.
+   */
+  onRunAccepted?: (run: { chatId: string; runId: string }) => void
+}
+
+/** The task's own conversation, when it may take the continuation turn; null when it is gone. */
+function ownChat(scope: RunScope, task: TaskDto, agentId: string | null): ChatRow | null {
+  if (!task.chatId) return null
+  const chat = visibleChat(scope.profileUserId, task.chatId)
+  if (!chat || chat.deletedAt) return null
+  if (chat.router !== 'direct' || chat.agentId !== agentId) {
+    throw new TaskError('invalid_input', 'This task’s conversation belongs to another agent.')
+  }
+  if (runExecutionService.isRunning(chat.id)) {
+    throw new TaskError('invalid_input', 'This task already has a turn running. Stop it before starting another.')
+  }
+  return chat
 }
 
 /**
@@ -126,7 +155,7 @@ export const taskExecutionService = {
       if (task.chatId && runExecutionService.isRunning(task.chatId)) {
         throw new TaskError('invalid_input', 'This task already has a turn running. Stop it before starting another.')
       }
-      if (task.chatId && visibleChat(scope.profileUserId, task.chatId)?.deletedAt === null) {
+      if (!options.continueInChat && task.chatId && visibleChat(scope.profileUserId, task.chatId)?.deletedAt === null) {
         throw new TaskError('invalid_input', 'This task already has a conversation. Continue it there.')
       }
       if (taskInputRequestRepo.listOpen(scope.profileUserId).some(({ row }) => row.taskId === taskId)) {
@@ -167,7 +196,11 @@ export const taskExecutionService = {
       const task = assertTask()
       assertAgentCurrent()
       model?.assertCurrent()
-      const reused = options.reuseChatId ? adoptChat(scope, task, assignee.agentId, options.reuseChatId) : null
+      if (options.reuseChatId && options.continueInChat) {
+        throw new TaskError('invalid_input', 'A start either adopts a new chat or continues the task’s own.')
+      }
+      const reused = options.reuseChatId ? adoptChat(scope, task, assignee.agentId, options.reuseChatId)
+        : options.continueInChat ? ownChat(scope, task, assignee.agentId) : null
       const chat = reused ?? chatRepo.create(scope.profileUserId, {
         title: task.title, router: 'direct', agentId: assignee.agentId,
         modeId: model?.modeId, providerId: model?.providerId, modelId: model?.modelId
@@ -182,11 +215,12 @@ export const taskExecutionService = {
         { chatId: chat.id, content: taskContinuationPrompt(task) }, {
           preserveOnRefusal: true,
           observe: (ctx, event) => inboxService.recordRunEvent(ctx, event),
-          onAccepted: () => {
+          onAccepted: (ctx) => {
             assertTask()
             assertAgentCurrent()
             model?.assertCurrent()
             taskService.beginDesktopChat(scope.profileUserId, taskId, chat.id, assignee)
+            if (ctx.turnId) options.onRunAccepted?.({ chatId: chat.id, runId: ctx.turnId })
           }
         })
       await handle.accepted

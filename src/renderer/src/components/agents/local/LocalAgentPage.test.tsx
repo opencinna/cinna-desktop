@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { cleanup as cleanupPage, render, screen, fireEvent, within } from '@testing-library/react'
 import { createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
@@ -102,6 +102,12 @@ const addonsBadge = { count: 0, problems: 0 }
 vi.mock('./AgentAddonsTab', () => ({
   AgentAddonsTab: marker('addons-tab'),
   useAddonsBadge: () => addonsBadge
+}))
+
+const tasksBadge = { paused: false }
+vi.mock('./AgentTasksTab', () => ({
+  AgentTasksTab: marker('tasks-tab'),
+  useTasksTabBadge: () => tasksBadge
 }))
 
 const { LocalAgentPage } = await import('./LocalAgentPage')
@@ -247,6 +253,27 @@ describe('LocalAgentPage — layout', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: /addons/i }))
     expect(screen.getByText('addons-tab')).toBeTruthy()
+  })
+
+  it('gives kit and bare agents a Tasks tab, badged while the queue is paused', () => {
+    renderPage(agent())
+    let tab = screen.getByRole('tab', { name: /^tasks/i })
+    expect(tab.textContent).toBe('Tasks')
+    fireEvent.click(tab)
+    expect(screen.getByText('tasks-tab')).toBeTruthy()
+    cleanupPage()
+
+    tasksBadge.paused = true
+    renderPage(agent({ kind: 'bare' } as Partial<LocalAgentDto>))
+    tab = screen.getByRole('tab', { name: /^tasks/i })
+    // A warning dot named for what it means, out of the flow so the tab row does not reflow.
+    const badge = within(tab).getByRole('img', { name: 'Queue paused' })
+    expect(badge.title).toBe('Queue paused')
+    expect(badge.textContent).toBe('')
+    expect(badge.className).toContain('--color-warning')
+    expect(badge.className).toContain('absolute')
+    expect(tab.className).toContain('relative')
+    tasksBadge.paused = false
   })
 
   it('counts attached connectors on Addons, warning-toned when one is not connected', () => {

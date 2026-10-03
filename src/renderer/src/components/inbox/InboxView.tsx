@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Inbox as InboxIcon, Loader2 } from 'lucide-react'
 import { useAgents } from '../../hooks/useAgents'
-import { describeUnreadable, useAnswerAsk, useInboxList } from '../../hooks/useInbox'
+import { describeUnreadable, inboxWaitingCount, useAnswerAsk, useInboxList } from '../../hooks/useInbox'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
+import { useUIStore } from '../../stores/ui.store'
 import { useOpenTask } from '../../hooks/useTasks'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -10,9 +11,34 @@ import { AnswerDeliveryError } from '../../utils/answerError'
 import { PermissionRequestBlock } from '../chat/PermissionRequestBlock'
 import { AskUserQuestionBlock } from '../chat/AskUserQuestionBlock'
 import { RecentTasks } from '../tasks/RecentTasks'
+import { DispatchGateCard, DispatchPausedCard } from './InboxDispatchCards'
 import { ASK_NO_LONGER_WAITING } from '../../../../shared/inbox'
 import { describeQuestionAnswers } from '../../../../shared/localAgentRequests'
-import type { InboxAnswerCode, InboxEntry } from '../../../../shared/inbox'
+import type { InboxAnswerCode, InboxEntry, TaskDispatchInboxItem } from '../../../../shared/inbox'
+
+/**
+ * One row of the list: an ask, or one of the task dispatcher's cards (an
+ * approval of outside content, a paused queue). Both kinds share the order,
+ * the retention and the count.
+ */
+type InboxRowItem =
+  | { key: string; at: Date; ask: InboxEntry; dispatch?: undefined }
+  | { key: string; at: Date; ask?: undefined; dispatch: TaskDispatchInboxItem }
+
+function dispatchKey(item: TaskDispatchInboxItem): string {
+  return item.kind === 'dispatch_gate' ? `gate:${item.gateId}` : `paused:${item.agentId}:${item.pausedAt.getTime()}`
+}
+
+function rowsOf(entries: readonly InboxEntry[], dispatch: readonly TaskDispatchInboxItem[]): InboxRowItem[] {
+  return [
+    ...entries.map((ask): InboxRowItem => ({ key: ask.requestId, at: ask.createdAt, ask })),
+    ...dispatch.map((item): InboxRowItem => ({
+      key: dispatchKey(item),
+      at: item.kind === 'dispatch_gate' ? item.createdAt : item.pausedAt,
+      dispatch: item
+    }))
+  ]
+}
 
 /**
  * The inbox — one flat list of every ask waiting on a human, newest first.
@@ -73,10 +99,23 @@ const SETTLED_REFUSALS: readonly InboxAnswerCode[] = [
 ]
 
 export function InboxView(): React.JSX.Element {
-  const { data, isLoading, isError, isSuccess, refetch } = useInboxList()
+  const { data, isLoading, isError, isSuccess, isFetching, refetch } = useInboxList()
+  const revealGateId = useUIStore((s) => s.revealInboxGateId)
+  const setRevealGateId = useUIStore((s) => s.setRevealInboxGateId)
+  /*
+   * Run next asked to show an approval that a settled read does not hold (it
+   * was answered or replaced on the way): let the intent go, so it cannot
+   * mark a card that arrives much later. Only once no read is in flight, since
+   * Run next re-reads the Inbox as it opens it.
+   */
+  useEffect(() => {
+    if (!revealGateId || !isSuccess || isFetching) return
+    const present = (data?.dispatch ?? []).some((item) => item.kind === 'dispatch_gate' && item.gateId === revealGateId)
+    if (!present) setRevealGateId(null)
+  }, [revealGateId, isSuccess, isFetching, data, setRevealGateId])
   const { data: agents, isPending: agentsPending } = useAgents()
   const now = useRelativeNow()
-  const [retained, setRetained] = useState<InboxEntry[]>([])
+  const [retained, setRetained] = useState<InboxRowItem[]>([])
   /**
    * The render order, by request id, in the order each row was first seen.
    *
@@ -88,17 +127,17 @@ export function InboxView(): React.JSX.Element {
   const order = useRef<string[]>([])
 
   const entries = useMemo(() => {
-    const byId = new Map<string, InboxEntry>()
-    for (const entry of retained) byId.set(entry.requestId, entry)
-    for (const entry of data?.entries ?? []) byId.set(entry.requestId, entry)
+    const byId = new Map<string, InboxRowItem>()
+    for (const row of retained) byId.set(row.key, row)
+    for (const row of rowsOf(data?.entries ?? [], data?.dispatch ?? [])) byId.set(row.key, row)
     const known = new Set(order.current)
     const fresh = [...byId.values()]
-      .filter((entry) => !known.has(entry.requestId))
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-    if (fresh.length > 0) order.current = [...order.current, ...fresh.map((e) => e.requestId)]
+      .filter((row) => !known.has(row.key))
+      .sort((a, b) => b.at.getTime() - a.at.getTime())
+    if (fresh.length > 0) order.current = [...order.current, ...fresh.map((row) => row.key)]
     return order.current
       .map((id) => byId.get(id))
-      .filter((entry): entry is InboxEntry => entry !== undefined)
+      .filter((row): row is InboxRowItem => row !== undefined)
   }, [data, retained])
 
   /**
@@ -117,7 +156,7 @@ export function InboxView(): React.JSX.Element {
   }
 
   /** What is still waiting — the number the sidebar badge shows. */
-  const waiting = data?.entries.length ?? 0
+  const waiting = inboxWaitingCount(data)
   /**
    * What this read could not reach, in the one sentence both surfaces use.
    *
@@ -127,9 +166,9 @@ export function InboxView(): React.JSX.Element {
    */
   const unreadable = isError ? null : describeUnreadable(data?.unreadable ?? [])
 
-  const retain = (entry: InboxEntry): void => {
+  const retain = (row: InboxRowItem): void => {
     setRetained((prev) =>
-      prev.some((e) => e.requestId === entry.requestId) ? prev : [...prev, entry]
+      prev.some((e) => e.key === row.key) ? prev : [...prev, row]
     )
   }
 
@@ -241,15 +280,33 @@ export function InboxView(): React.JSX.Element {
             </div>
           ) : (
             <div className="space-y-3">
-              {entries.map((entry) => (
-                <InboxRow
-                  key={entry.requestId}
-                  entry={entry}
-                  agentLabel={agentLabel(entry.agentId)}
-                  now={now}
-                  onActed={retain}
-                />
-              ))}
+              {entries.map((row) =>
+                row.ask ? (
+                  <InboxRow
+                    key={row.key}
+                    entry={row.ask}
+                    agentLabel={agentLabel(row.ask.agentId)}
+                    now={now}
+                    onActed={() => retain(row)}
+                  />
+                ) : row.dispatch.kind === 'dispatch_gate' ? (
+                  <DispatchGateCard
+                    key={row.key}
+                    item={row.dispatch}
+                    agentLabel={agentLabel(row.dispatch.agentId)}
+                    now={now}
+                    onActed={() => retain(row)}
+                  />
+                ) : (
+                  <DispatchPausedCard
+                    key={row.key}
+                    item={row.dispatch}
+                    agentLabel={agentLabel(row.dispatch.agentId)}
+                    now={now}
+                    onActed={() => retain(row)}
+                  />
+                )
+              )}
               {/*
                 Under the list, never over it: a refresh can fail at any moment,
                 including while the pointer is on a row's buttons, and a line that

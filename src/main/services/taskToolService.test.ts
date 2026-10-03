@@ -396,17 +396,19 @@ describe('task_update', () => {
     expect(taskRepo.getById(USER, task.id)?.priority).toBe('normal')
   })
 
-  it('takes the agent’s report only on a task its turn end settles: never a job run’s or a runtime’s', async () => {
+  it('takes the agent’s report on a job run’s task too, but never on a runtime’s', async () => {
     const kit = session('kit-1', {})
     holder.live.add(kit.chatId)
     const task = taskRepo.getByChatId(USER, kit.chatId)!
     taskService.setStatus(USER, task.id, 'in_progress')
+    // A job run's task: the report wins, and the run's attempt is mapped from
+    // it when the run reports (`jobService.reportRunCompletion`).
     holder.current!.sqlite.prepare('UPDATE tasks SET job_run_id = ? WHERE id = ?').run('job-run-1', task.id)
-    await expect(taskToolService.taskUpdate(kit, { id: task.id, status: 'completed' })).rejects.toThrow('job run')
-    expect(taskRepo.getById(USER, task.id)?.status).toBe('in_progress')
-    expect(takeAgentStatusReport(task.id, 'run-1')).toBe(false)
+    await taskToolService.taskUpdate(kit, { id: task.id, status: 'blocked' })
+    expect(taskRepo.getById(USER, task.id)?.status).toBe('blocked')
+    expect(takeAgentStatusReport(task.id, 'run-1')).toBe(true)
 
-    holder.current!.sqlite.prepare('UPDATE tasks SET job_run_id = NULL WHERE id = ?').run(task.id)
+    holder.current!.sqlite.prepare("UPDATE tasks SET job_run_id = NULL, status = 'in_progress' WHERE id = ?").run(task.id)
     taskRunnersByChat.set(kit.chatId, { userId: USER, taskId: task.id, id: 'runner-1', working: true, cancel: () => {} })
     try {
       await expect(taskToolService.taskUpdate(kit, { id: task.id, status: 'blocked' })).rejects.toThrow('runtime')

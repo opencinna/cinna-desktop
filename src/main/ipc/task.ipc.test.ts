@@ -93,6 +93,9 @@ vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => 'profile-1', getS
 const comments = vi.hoisted(() => vi.fn(() => [] as unknown[]))
 vi.mock('../services/taskToolService', () => ({ taskToolService: { comments } }))
 
+const dispatchGate = vi.hoisted(() => vi.fn(async () => ({ ok: true, started: null })))
+vi.mock('../services/taskDispatchService', () => ({ taskDispatchService: { answerGate: dispatchGate } }))
+
 const { registerTaskHandlers } = await import('./task.ipc')
 
 const event = {} as IpcMainInvokeEvent
@@ -327,4 +330,16 @@ it('task:comments answers the comment fields and nothing else, in the active pro
   ])
   expect(comments).toHaveBeenCalledWith({ profileUserId: 'profile-1', settingsUserId: 'settings-1' }, 't1')
   await expect(invoke('task:comments', 42)).rejects.toThrow('task id')
+})
+
+describe('inbox:dispatch-gate', () => {
+  it('passes the answer through in the captured profile', async () => {
+    await expect(invoke('inbox:dispatch-gate', 'dgate_1', 'approve')).resolves.toEqual({ ok: true, started: null })
+    expect(dispatchGate).toHaveBeenCalledWith({ profileUserId: 'profile-1', settingsUserId: 'settings-1' }, 'dgate_1', 'approve')
+  })
+
+  it('answers an unknown action as data, without asking the dispatcher', async () => {
+    await expect(invoke('inbox:dispatch-gate', 'dgate_1', 'run-it-anyway')).resolves.toMatchObject({ ok: false, code: 'unavailable' })
+    expect(dispatchGate).not.toHaveBeenCalled()
+  })
 })

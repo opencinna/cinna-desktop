@@ -14,6 +14,11 @@ export const taskSlots = new ExecutionQueue(concurrency)
  */
 const agentSlots = new ExecutionQueue(concurrency)
 
+/** Whether a runner-agent slot is free right now (Run next refuses rather than queueing). */
+export function runtimeAgentSlotFree(): boolean {
+  return agentSlots.hasFree()
+}
+
 async function waitForLocalAgent(agentId: string, signal: AbortSignal): Promise<void> {
   while (turnLock.isExclusivelyLocked(agentId)) {
     await new Promise<void>((resolve, reject) => {

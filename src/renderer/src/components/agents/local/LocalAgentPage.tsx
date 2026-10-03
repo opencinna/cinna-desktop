@@ -29,8 +29,9 @@ import { FolderTab } from './FolderTab'
 import { SchedulesTab } from './SchedulesTab'
 import { AgentInterfaceTab } from '../AgentInterfaceTab'
 import { AgentAddonsTab, useAddonsBadge } from './AgentAddonsTab'
+import { AgentTasksTab, useTasksTabBadge } from './AgentTasksTab'
 
-export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 'permissions' | 'folder' | 'credentials' | 'interface'
+export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 'tasks' | 'permissions' | 'folder' | 'credentials' | 'interface'
 
 const TABS: { id: AgentPageTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -41,6 +42,9 @@ const TABS: { id: AgentPageTab; label: string }[] = [
   { id: 'credentials', label: 'Credentials' },
   { id: 'commands', label: 'Commands' },
   { id: 'schedules', label: 'Schedules' },
+  // The agent's task queue: how its Ready tasks start (Manual / One at a
+  // time) and Run next. Every folder agent has one, bare or kit.
+  { id: 'tasks', label: 'Tasks' },
   // Permissions is a tab and not a card on Overview: in the common case it is a
   // fixed paragraph identical for every folder agent plus "nothing remembered
   // yet" — knowledge, not a control (rule 2) — and the count badge is what
@@ -87,6 +91,7 @@ export function LocalAgentPage(): React.JSX.Element {
   const { data: agent, isLoading, error } = useLocalAgent(activeLocalAgentId)
   const { data: grants } = useLocalAgentGrants(activeLocalAgentId)
   const addons = useAddonsBadge(activeLocalAgentId)
+  const tasksBadge = useTasksTabBadge(activeLocalAgentId)
   const draft = useDraftLocalAgent()
   const rescan = useRescanLocalAgents()
   const openPath = useOpenAgentPath()
@@ -349,7 +354,7 @@ export function LocalAgentPage(): React.JSX.Element {
                 role="tab"
                 aria-selected={active}
                 onClick={() => setTab(entry.id)}
-                className={`border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
+                className={`relative border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
                   active
                     ? 'border-[var(--color-accent)] text-[var(--color-text)]'
                     : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
@@ -383,6 +388,21 @@ export function LocalAgentPage(): React.JSX.Element {
                     {addons.count}
                   </span>
                 )}
+                {/*
+                  The queue paused on a task: it needs the user, and the tab is
+                  hidden content (§2). A warning dot in the tab's own right
+                  padding, positioned out of the flow, so the tab row does not
+                  reflow when a poll brings it or takes it away (§1).
+                */}
+                {entry.id === 'tasks' && tasksBadge.paused && (
+                  <span
+                    role="img"
+                    aria-label="Queue paused"
+                    title="Queue paused"
+                    data-tab-paused-dot
+                    className="absolute right-1 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--color-warning)]"
+                  />
+                )}
                 {entry.id === 'commands' && agent.commands.length > 0 && (
                   <span className="ml-1.5 rounded bg-[var(--color-bg-tertiary)] px-1 text-[10px] text-[var(--color-text-muted)]">
                     {agent.commands.length}
@@ -409,6 +429,7 @@ export function LocalAgentPage(): React.JSX.Element {
         <div role="tabpanel" className="space-y-3">
           {activeTab === 'credentials' && <ServiceCredentialsTab key={agent.id} agent={agent} />}
           {activeTab === 'schedules' && <SchedulesTab agentId={agent.id} />}
+          {activeTab === 'tasks' && <AgentTasksTab key={agent.id} agent={agent} />}
           {activeTab === 'addons' && <AgentAddonsTab key={agent.id} agent={agent} />}
           {activeTab === 'overview' &&
             /* Three of the kit cards name a file only a kit folder has:

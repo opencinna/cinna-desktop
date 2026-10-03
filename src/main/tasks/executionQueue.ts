@@ -3,6 +3,10 @@ export class ExecutionQueue {
   private active = 0
   private waiting: { signal: AbortSignal; resolve: (release: () => void) => void; reject: (error: Error) => void; abort: () => void }[] = []
   constructor(private readonly limit: () => number) {}
+  /** Whether an `acquire` now would be admitted at once: a slot is free and nobody is queued ahead. */
+  hasFree(): boolean {
+    return this.waiting.length === 0 && this.active < Math.max(1, Math.floor(this.limit()))
+  }
   acquire(signal: AbortSignal): Promise<() => void> {
     if (signal.aborted) return Promise.reject(new Error('The task was stopped while queued.'))
     return new Promise((resolve, reject) => {

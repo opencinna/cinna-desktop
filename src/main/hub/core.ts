@@ -21,6 +21,7 @@ import { a2aStreamingService } from '../services/a2aStreamingService'
 import { localScheduleScheduler } from '../services/localScheduleScheduler'
 import { handoverScheduler } from '../services/handoverScheduler'
 import { taskSyncScheduler } from '../services/taskSyncScheduler'
+import { taskDispatchService } from '../services/taskDispatchService'
 import { toolInstallService } from '../services/localAgents/toolInstallService'
 import { watcherService } from '../services/localAgents/watcherService'
 import { conductorBridge } from '../services/conductorBridge'
@@ -37,6 +38,9 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   registerRecoverer('a2a', a2aTurnRecoverer)
   registerRecoverer('managed', managedTurnRecoverer)
   interruptedTurnService.finalizeLeftovers()
+  // A dispatched run Cinna quit under: flag its task and pause its queue,
+  // before any profile activates and the dispatcher starts waking.
+  taskDispatchService.recoverInterrupted()
   userActivation.onProfileReady((userId) => { void remoteTurnRecoveryService.resume(userId) })
   remoteTurnRecoveryService.onRetryDue((userId) => {
     if (userActivation.isActivated() && getCurrentUserId() === userId) void remoteTurnRecoveryService.resume(userId)
@@ -56,6 +60,9 @@ export { taskRuntimeService, userActivation }
  * closing their database. Detaching a viewer must never call this function.
  */
 export async function shutdownHubCore(reason = 'Execution stopped when the app closed. Review the conversation before resuming.'): Promise<void> {
+  // First: a dispatched turn ending under the shutdown must not be settled
+  // as a Stop; its in-flight row is the next boot's to flag.
+  taskDispatchService.shutdown()
   serviceCredentialService.retire()
   stopPeriodicSync()
   stopAccountConfigPeriodicSync()

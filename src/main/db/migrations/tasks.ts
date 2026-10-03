@@ -163,6 +163,43 @@ export function migrateTasks(sqlite: Database.Database): void {
     created_at INTEGER NOT NULL
   ); CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(user_id, task_id, created_at);`)
 
+  // The task dispatcher (phase 4 of unified tasks). `dispatch_note` says why
+  // the dispatcher left a task blocked; `agent_task_dispatch` is each folder
+  // agent's run mode, pause and in-flight run, per profile (no row = manual);
+  // `task_dispatch_gates` is the Inbox approval asked before running content
+  // that came from outside Cinna, one per task and digest. All device-local:
+  // none is a synced collection, and the note is not in the task sync payload.
+  if (!hasColumn(sqlite, 'tasks', 'dispatch_note')) sqlite.exec('ALTER TABLE tasks ADD COLUMN dispatch_note TEXT')
+  // The agent whose queue still owns a dispatched task across an ask (and a restart).
+  if (!hasColumn(sqlite, 'tasks', 'dispatch_agent_id')) sqlite.exec('ALTER TABLE tasks ADD COLUMN dispatch_agent_id TEXT')
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS agent_task_dispatch (
+    user_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'manual',
+    paused_reason TEXT,
+    paused_task_id TEXT,
+    paused_at INTEGER,
+    active_task_id TEXT,
+    active_chat_id TEXT,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, agent_id)
+  );
+  CREATE TABLE IF NOT EXISTS task_dispatch_gates (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    title TEXT NOT NULL,
+    file_path TEXT,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at INTEGER NOT NULL,
+    settled_at INTEGER
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_task_dispatch_gates_digest ON task_dispatch_gates(user_id, task_id, digest);
+  CREATE INDEX IF NOT EXISTS idx_task_dispatch_gates_open ON task_dispatch_gates(user_id, status);`)
+
   // Legacy request rows remain unowned; new events carry exact root/invocation
   // identity so a late or parallel turn cannot settle a sibling's request.
   for (const column of ['root_run_id', 'invocation_id']) {

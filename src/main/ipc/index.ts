@@ -17,6 +17,7 @@ import { registerFilesHandlers } from './files.ipc'
 import { registerJobHandlers } from './job.ipc'
 import { registerNoteHandlers } from './note.ipc'
 import { registerTaskHandlers } from './task.ipc'
+import { registerTaskDispatchHandlers } from './taskDispatch.ipc'
 import { registerLocalScheduleHandlers } from './localSchedule.ipc'
 import { registerCinnaHandlers } from './cinna.ipc'
 import { registerCatalogHandlers } from './catalog.ipc'
@@ -53,6 +54,8 @@ export function registerAllIpcHandlers(): void {
   registerNoteHandlers()
   // Tasks, and the inbox that is a view over them.
   registerTaskHandlers()
+  // An agent's task queue: run mode, pause, Run next.
+  registerTaskDispatchHandlers()
   registerLocalScheduleHandlers()
   registerCinnaHandlers()
   registerCatalogHandlers()

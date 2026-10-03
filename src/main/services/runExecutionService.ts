@@ -29,7 +29,7 @@ import { isDesktopAuthored, type TurnInputOrigin } from '../../shared/turnOrigin
 
 import type { RunEvent } from '../../shared/runEvents'
 import type { RunEventContext } from './inboxService'
-import { activeRunsByChat as activeChats } from './runExecutionState'
+import { activeRunsByChat as activeChats, runClosed } from './runExecutionState'
 import { forgetAgentStatusReports } from '../tasks/agentStatusReports'
 import { handingOffChats } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
@@ -244,7 +244,7 @@ export const runExecutionService = {
       if (closed) return
       if (!terminalPosted) post(terminalEventOf(outcome))
       closed = true
-      if (activeChats.get(chatId) === handle) activeChats.delete(chatId)
+      if (activeChats.get(chatId) === handle) { activeChats.delete(chatId); runClosed(chatId) }
       let inputRequestIds: string[] = []
       try {
         inputRequestIds = taskInputRequestRepo.listOpenForRun(chatId, runId)
@@ -412,7 +412,7 @@ export const runExecutionService = {
         steerFn = null
         steerableListeners.clear()
         if (!accepted) refuse(new Error(failure ?? 'The turn could not be started.'))
-        if (activeChats.get(payload.chatId) === handle) activeChats.delete(payload.chatId)
+        if (activeChats.get(payload.chatId) === handle) { activeChats.delete(payload.chatId); runClosed(payload.chatId) }
         try { for (const safe of subscriberRedactor.finish()) options.port?.postMessage(safe); options.port?.close() } catch { /* subscriber already disconnected */ }
         const { inputRequestIds, inputRequestReadError } = remainingRunRequests(payload.chatId, handle.id)
         const result = outcome!

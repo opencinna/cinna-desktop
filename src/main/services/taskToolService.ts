@@ -354,10 +354,11 @@ export const taskToolService = {
     if (target) {
       const reporting = isCurrent && (target.status === 'completed' || target.status === 'blocked' || target.status === 'error')
       if (reporting) {
-        // Only a task the turn's end settles itself (a hand-opened chat's) may
-        // take the agent's word for how the work ended: a job run is finished
-        // by its run, a runtime by its runner, delegated work by its report.
-        if (row.jobRunId) fail('A job run owns this task and reports its outcome when the run ends; finish your turn instead.')
+        // The agent's word for how the work ended wins over how the turn
+        // ended — for a hand-opened chat's task, a dispatched one and a job
+        // run's alike: `jobService.reportRunCompletion` maps the run's attempt
+        // from this report instead of overwriting it. A runtime is finished by
+        // its runner, delegated work by its report.
         if ([...taskRunnersByChat.values()].some((runner) => runner.taskId === row.id || runner.controllerTaskId === row.id)) {
           fail('A runtime owns this task and reports its outcome itself; finish your turn instead.')
         }

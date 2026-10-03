@@ -12,6 +12,7 @@
  */
 import type { PermissionReply } from './localAgentRequests'
 import type { InputRequest, InputResumeMode } from './runEvents'
+import type { TaskDispatchMode, TaskDispatchPauseReason } from './taskDispatch'
 
 /**
  * Where an entry came from.
@@ -81,7 +82,84 @@ export interface InboxUnreadableSource {
 export interface InboxSnapshot {
   entries: InboxEntry[]
   unreadable: InboxUnreadableSource[]
+  /**
+   * What the task dispatcher needs the user for: approvals of outside content
+   * before a task runs, and queues paused on a flagged task. Always filled by
+   * main; optional only so surfaces built before the dispatcher still type.
+   */
+  dispatch?: TaskDispatchInboxItem[]
 }
+
+/**
+ * An approval the dispatcher asks for before it runs a task whose file was
+ * written outside Cinna (`fromOutside`). One per task and content version:
+ * the file changing again replaces it. Answered through
+ * `inbox:dispatch-gate` with `approve` (trust this content and run it) or
+ * `skip` (leave it untrusted; no card for the same content again).
+ */
+export interface TaskDispatchGateItem {
+  kind: 'dispatch_gate'
+  gateId: string
+  taskId: string
+  taskTitle: string
+  agentId: string
+  /** Absolute path of the task file. */
+  filePath: string | null
+  /** The prompt exactly as the agent will receive it. */
+  body: string
+  createdAt: Date
+}
+
+/**
+ * An agent's queue paused on a task, so the flagged task has a card naming
+ * the queue. Resolved by `taskDispatch:resume` (or the task moving on).
+ */
+export interface TaskDispatchPausedItem {
+  kind: 'dispatch_paused'
+  agentId: string
+  reason: TaskDispatchPauseReason
+  taskId: string | null
+  taskTitle: string | null
+  /** The task's dispatch note, when it has one. */
+  note: string | null
+  pausedAt: Date
+}
+
+export type TaskDispatchInboxItem = TaskDispatchGateItem | TaskDispatchPausedItem
+
+/** `inbox:dispatch-gate` — the user's answer to a {@link TaskDispatchGateItem}. */
+export type TaskDispatchGateAction = 'approve' | 'skip'
+
+/**
+ * Why an approved task did not start at once. Its content is trusted either
+ * way: in `one` mode it starts when its turn comes, in `manual` it waits for
+ * Run next.
+ *
+ *  - `folder_busy` — another dispatched run (this agent's or one sharing the
+ *    folder) works there.
+ *  - `live_turn` — a conversation is running in the folder.
+ *  - `slot` — every task runner slot is busy.
+ *  - `not_eligible` — anything else: the task stopped qualifying, or the
+ *    agent cannot work a queue now.
+ */
+export type TaskDispatchGateDeferral = 'folder_busy' | 'live_turn' | 'slot' | 'not_eligible'
+
+/**
+ * What answering a gate produced. Approve starts the task the way Run next
+ * does, in any mode and while the queue is paused; `started` names the run
+ * when it did, else `reason` says why not. `mode` is the agent's run mode, so
+ * the card can say what happens next. `reason` and `mode` are always filled
+ * by main on an `ok` answer (`reason` only when Approve started nothing);
+ * optional only so older surfaces still type.
+ */
+export type TaskDispatchGateResult =
+  | {
+      ok: true
+      started: null | { taskId: string; chatId: string }
+      reason?: TaskDispatchGateDeferral
+      mode?: TaskDispatchMode
+    }
+  | { ok: false; code: 'no_longer_waiting' | 'already_answered' | 'changed' | 'unavailable'; reason: string }
 
 /**
  * What a surface sends to answer an ask.

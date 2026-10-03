@@ -65,6 +65,8 @@ function makeTask(overrides: Partial<TaskDto> = {}): TaskDto {
     statusLabel: null,
     file: null,
     fromOutside: false,
+    blockedBy: [],
+    dispatchNote: null,
     jobId: null,
     jobRunId: null,
     createdAt: now,

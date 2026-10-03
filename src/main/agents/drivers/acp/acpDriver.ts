@@ -1623,14 +1623,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         sessionId,
         stopReason: answer.stopReason
       })
-      // In this order. The user's Stop first, even after a stall or the
-      // ceiling fired. Then a stall or the ceiling before the stop reason: an
-      // agent may answer our cancel `end_turn` rather than `cancelled`, and that
-      // turn was still stopped, not finished.
-      if (input.signal.aborted) return finish(ctx, accumulator, sessionId, undefined)
-      if (hitCeiling) return finish(ctx, accumulator, sessionId, stopError(), undefined, false, false)
-      if (answer.stopReason === 'cancelled') return finish(ctx, accumulator, sessionId, undefined, undefined, false, true)
-      return finish(ctx, accumulator, sessionId, stopReasonError(answer.stopReason), undefined, answer.stopReason === 'end_turn')
+      const ending = turnEnding({ aborted: input.signal.aborted, hitCeiling, stopError, stopReason: answer.stopReason })
+      return finish(ctx, accumulator, sessionId, ending.error, undefined, ending.completed, ending.canceled)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       // Abort first, and the order is the point: a stop that lands mid-turn
@@ -2062,11 +2056,28 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
     ceiling: hitCeiling,
     stalled
   })
-  const error = hitCeiling ? ceilingMessage(stalled ? stallMs : null) : endedBy === 'exited' && !canceled ? ACP_FOLLOW_UP_EXITED : undefined
+  /*
+    The prompted turn's order (`turnEnding`), with no prompt answer to read:
+    the end marker or a quiet spell after we asked the agent to stop is its
+    acknowledgement — what `cancelled`, or `end_turn` answered to our cancel,
+    is for a prompted turn — and a process that exited is a stop reason of
+    its own. So a Stop wins over a stall or the ceiling that fired before it,
+    and a stall or the ceiling still fails a turn the agent ended cleanly.
+  */
+  const stopReason = endedBy === 'exited' ? 'exited' : turn.stopping ? 'cancelled' : 'end_turn'
+  const ending = turnEnding({
+    aborted: canceled,
+    hitCeiling,
+    stopError: () => ceilingMessage(stalled ? stallMs : null),
+    stopReason,
+    reasonError: (reason) => reason === 'exited' ? ACP_FOLLOW_UP_EXITED : undefined
+  })
   // No session to record: it is the one the chat already remembers. Its
   // telemetry is that session's, reported once, here.
   ctx.telemetry?.settle(sessionId)
-  return finish(ctx, accumulator, null, error, undefined, false, canceled)
+  // Never `completed`: that flag only reads a handback note, and a turn
+  // nobody prompted carries none.
+  return finish(ctx, accumulator, null, ending.error, undefined, false, ending.canceled)
 }
 
 /**
@@ -2675,6 +2686,44 @@ function toolStallMsFor(deps: AcpDriverDeps, launcherId: AcpLauncherId): number 
  * no explanation reads as a bug in this app. `refusal` is the model declining,
  * which it will usually also have said in the transcript.
  */
+/** How a turn ended, in the terms `finish` takes. */
+interface TurnEnding {
+  error: string | undefined
+  /** Ended by the agent finishing (`end_turn`); only this reads a handback note. */
+  completed: boolean
+  canceled: boolean
+}
+
+/**
+ * The end-of-turn order, shared by a prompted turn ({@link runTurn}) and one
+ * the agent started on its own ({@link runFollowUp}). **In this order:**
+ *
+ * 1. The user's Stop, even after a stall or the ceiling fired: the turn ends
+ *    canceled with no error, as any Stop does.
+ * 2. A stall or the ceiling, before the stop reason: an agent may answer our
+ *    cancel `end_turn` rather than `cancelled`, and that turn was still
+ *    stopped, not finished. `stopError` is read only here.
+ * 3. `cancelled`: an acknowledged cancel (ours, or a trusted task control's).
+ * 4. Anything else maps through the stop reason.
+ */
+function turnEnding(input: {
+  aborted: boolean
+  hitCeiling: boolean
+  stopError: () => string | undefined
+  stopReason: string
+  /** The sentence for a stop reason; {@link stopReasonError} when absent. */
+  reasonError?: (stopReason: string) => string | undefined
+}): TurnEnding {
+  if (input.aborted) return { error: undefined, completed: false, canceled: true }
+  if (input.hitCeiling) return { error: input.stopError(), completed: false, canceled: false }
+  if (input.stopReason === 'cancelled') return { error: undefined, completed: false, canceled: true }
+  return {
+    error: (input.reasonError ?? stopReasonError)(input.stopReason),
+    completed: input.stopReason === 'end_turn',
+    canceled: false
+  }
+}
+
 function stopReasonError(stopReason: string): string | undefined {
   switch (stopReason) {
     case 'max_tokens':

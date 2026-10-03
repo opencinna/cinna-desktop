@@ -124,6 +124,8 @@ export type TaskPatch = Partial<
     | 'statusLabel'
     | 'trustedDigest'
     | 'localFile'
+    | 'dispatchNote'
+    | 'dispatchAgentId'
     | 'errorMessage'
     | 'startedAt'
     | 'finishedAt'
@@ -342,6 +344,61 @@ const rawTaskRepo = {
       .run()
   },
 
+  /**
+   * Record content of a task file as trusted (the dispatcher's approval of
+   * outside content). Bookkeeping, like {@link setProvenance}: `updatedAt`
+   * stays, so the list does not reorder for it.
+   */
+  setTrustedDigest(userId: string, taskId: string, digest: string): void {
+    getDb()
+      .update(tasks)
+      .set({ trustedDigest: digest })
+      .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId), isNull(tasks.deletedAt)))
+      .run()
+  },
+
+  /**
+   * Mark (or clear) the folder agent whose dispatcher owns how this task
+   * settles (`dispatch_agent_id`). Bookkeeping like {@link setTrustedDigest}:
+   * `updatedAt` stays.
+   */
+  setDispatchAgent(userId: string, taskId: string, agentId: string | null): void {
+    getDb()
+      .update(tasks)
+      .set({ dispatchAgentId: agentId })
+      .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId)))
+      .run()
+  },
+
+  /**
+   * Every live task a dispatcher still owns (`dispatch_agent_id`), across
+   * profiles. Boot recovery: a resumed turn on one may have died with Cinna.
+   */
+  listDispatchOwned(): TaskRow[] {
+    return getDb()
+      .select()
+      .from(tasks)
+      .where(and(isNull(tasks.deletedAt), sql`${tasks.dispatchAgentId} IS NOT NULL`))
+      .orderBy(asc(tasks.id))
+      .all()
+  },
+
+  /**
+   * The live tasks that keep a file (`local_file`) and whose home key is one
+   * of `keys` — the candidates a file task's `blocked_by` ids may name. The
+   * caller narrows them to the same folder.
+   */
+  listFileTasksByKey(userId: string, keys: readonly string[]): TaskRow[] {
+    if (keys.length === 0) return []
+    return getDb()
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.userId, userId), isNull(tasks.deletedAt), inArray(tasks.remoteKey, [...keys]),
+        sql`${tasks.localFile} IS NOT NULL`))
+      .orderBy(asc(tasks.id))
+      .all()
+  },
+
   /** The task running in a chat, if one is. How a stream event finds its task. */
   getByChatId(userId: string, chatId: string): TaskRow | undefined {
     return getDb()
@@ -387,6 +444,8 @@ const rawTaskRepo = {
       createdByAgentId: input.createdByAgentId ?? null,
       createdByChatId: input.createdByChatId ?? null,
       chainDepth: input.chainDepth ?? 0,
+      dispatchNote: null,
+      dispatchAgentId: null,
 
       origin: input.origin ?? 'local',
       executor: input.executor ?? 'desktop',

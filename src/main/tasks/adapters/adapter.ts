@@ -370,6 +370,13 @@ export interface RemoteLocalHome {
    * changed outside Cinna stays untrusted (the entry does not launder it).
    */
   appendLog?(userId: string, binding: RemoteBinding, entry: string): Promise<RemoteBinding>
+  /**
+   * The user approved this exact content (`digest`) of a task written outside
+   * Cinna: the binding, returned to be stored, now trusts it, so a later pull
+   * keeps it trusted and a later Cinna write onto it stays trusted. Reads and
+   * writes nothing in the home.
+   */
+  trust?(userId: string, binding: RemoteBinding, digest: string): RemoteBinding
 }
 
 /** A task on a local home's board, as far as its columns care. */

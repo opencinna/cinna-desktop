@@ -39,6 +39,8 @@ import {
   useTaskComments
 } from '../../hooks/useTasks'
 import { useUIStore } from '../../stores/ui.store'
+import { useDispatchControls, useTaskDispatchList } from '../../hooks/useTaskDispatch'
+import { useChatStore } from '../../stores/chat.store'
 import { readinessBlocksTurn } from '../../../../shared/agentDrivers'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -51,7 +53,6 @@ import { TaskRuntimeControl } from './TaskRuntimeControl'
 import { TaskActionsMenu } from './TaskActionsMenu'
 import { DETAIL_LINK, Detail, HEADER_BUTTON, Prose, Section } from './DetailParts'
 import { customFieldText, isUnassigned, taskFileName, taskStatusText } from './tasksViewModel'
-import { useTaskList } from '../../hooks/useTaskList'
 import { hasAgentPage, useOpenAgentPage } from '../../hooks/useOpenAgentPage'
 import type { TaskArtifact, TaskCommentDto, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
@@ -184,6 +185,8 @@ function TaskPage({
   */
   const jobGone = !!task.jobId && !jobQuery.isPending && !job
   const { data: agents, isPending: agentsPending } = useAgents()
+  /** The queue that paused on this task, if one did: its line sits by the dispatch note. */
+  const pausedQueue = useTaskDispatchList().data?.find((state) => state.paused?.taskId === task.id) ?? null
   /**
    * The file handover this task was born of, if it was. `null` for every
    * ordinary task, which is nearly all of them — the three rows below are the
@@ -520,8 +523,20 @@ function TaskPage({
               when the panel sits below the work, one beside it.
             */}
             <dl className="m-0 grid grid-cols-1 gap-x-6 gap-y-2 @md:grid-cols-2 @2xl:grid-cols-1">
-              <Detail label="Status">
+              {/*
+                Why the dispatcher left it blocked ("Ended without reporting"),
+                one line under the pill, only while it is blocked: a fact about
+                the status, in the row of the status (§2).
+              */}
+              <Detail label="Status" wide={(task.status === 'blocked' && !!task.dispatchNote) || !!pausedQueue}>
                 <TaskStatusPill status={task.status} label={task.statusLabel} />
+                {task.status === 'blocked' && task.dispatchNote && (
+                  <span data-task-dispatch-note title={task.dispatchNote}
+                    className="mt-0.5 block truncate text-[10px] text-[var(--color-text-muted)]">
+                    {task.dispatchNote}
+                  </span>
+                )}
+                {pausedQueue && <DispatchPausedHere agentId={pausedQueue.agentId} />}
               </Detail>
               <Detail label="Assignee">
                 {assigneeAgent ? (
@@ -635,9 +650,9 @@ function TaskPage({
                   <TaskFileValue task={task} file={task.file} />
                 </Detail>
               )}
-              {task.file && task.file.blockedBy.length > 0 && (
+              {task.blockedBy.length > 0 && (
                 <Detail label="Blocked by" wide>
-                  <BlockedByValue task={task} ids={task.file.blockedBy} />
+                  <BlockedByValue blockers={task.blockedBy} />
                 </Detail>
               )}
               {task.jobId && !jobGone && (
@@ -790,7 +805,12 @@ interface AskState {
  */
 const CLAIM_MATTERS: readonly TaskStatus[] = ['in_progress', 'blocked', 'error']
 
-function StartTaskControls({ task }: { task: TaskDto }): React.JSX.Element {
+/**
+ * The Continue-with picker. `lead` replaces its opening sentence when the
+ * task came here from its agent's queue for a reason worth saying (the
+ * blockers it waits on, why the queue would not start it).
+ */
+function StartTaskControls({ task, lead }: { task: TaskDto; lead?: React.ReactNode }): React.JSX.Element {
   const { data: agents, isPending: agentsPending } = useAgents()
   const { start, isPending } = useStartTask()
   const [selected, setSelected] = useState('')
@@ -809,7 +829,7 @@ function StartTaskControls({ task }: { task: TaskDto }): React.JSX.Element {
   return (
     <section aria-label="Continue this task" className="rounded-md border border-[var(--color-border)] px-3 py-2">
       <div className="text-xs text-[var(--color-text-secondary)] mb-2">
-        Start a conversation with the task’s goal and handoff note.
+        {lead ?? 'Start a conversation with the task’s goal and handoff note.'}
       </div>
       <div className="flex items-center gap-2">
         <select aria-label="Continue with" value={selected} disabled={isPending}
@@ -828,6 +848,135 @@ function StartTaskControls({ task }: { task: TaskDto }): React.JSX.Element {
       </div>
       <div role={error ? 'alert' : undefined} className="min-h-8 pt-1 text-[11px] leading-4 text-[var(--color-danger)]">{error}</div>
     </section>
+  )
+}
+
+/**
+ * Which Start a task gets. A **Ready task assigned to an agent whose queue
+ * Cinna works** (main's list: enabled folder agents, bare and kit) starts
+ * through that queue (`taskDispatch.runNext` with this task), so the folder's
+ * one-at-a-time rule and the outside-content approval apply to a start from
+ * this page exactly as to one the queue makes.
+ *
+ * The Continue-with picker stays for every other task, and as the fallback
+ * for one the queue cannot take: blockers still open or missing ("Waits on
+ * …" says which), a `script` router, a queue that refused it as not
+ * eligible (its sentence replaces the picker's), or a failed queue read. The
+ * user may still start it by hand.
+ *
+ * While the queue read is in flight a Ready agent task shows the queue's
+ * shape with its button disabled, rather than the picker it would then
+ * replace (§1). The read is shared with the Tasks view and usually cached.
+ */
+function StartControls({ task }: { task: TaskDto }): React.JSX.Element {
+  const agentId = task.assignee.kind === 'agent' && task.status === 'open' ? task.assignee.agentId : null
+  if (!agentId) return <StartTaskControls task={task} />
+  return <QueueStartGate task={task} agentId={agentId} />
+}
+
+function QueueStartGate({ task, agentId }: { task: TaskDto; agentId: string }): React.JSX.Element {
+  const list = useTaskDispatchList()
+  const setActiveChatId = useChatStore((state) => state.setActiveChatId)
+  const setActiveView = useUIStore((s) => s.setActiveView)
+  // Owned here, above both shapes, so a not-eligible refusal survives the
+  // switch to the picker it causes (§5).
+  const controls = useDispatchControls(agentId, {
+    onStarted: ({ chatId }) => {
+      setActiveChatId(chatId)
+      setActiveView('chat')
+    }
+  })
+  const openBlockers = task.blockedBy.filter((blocker) => !blocker.done)
+  const refusal = controls.error?.action === 'run' && controls.error.code === 'not_eligible' ? controls.error.message : null
+  const noQueue = list.isError || (!!list.data && !list.data.some((state) => state.agentId === agentId))
+  if (openBlockers.length > 0) return <StartTaskControls task={task} lead={<WaitsOn blockers={openBlockers} />} />
+  if (refusal) return <StartTaskControls task={task} lead={<span role="status">{refusal}</span>} />
+  if (noQueue || task.router === 'script') return <StartTaskControls task={task} />
+  return <DispatchStartControls task={task} controls={controls} ready={!!list.data} />
+}
+
+/**
+ * "Waits on <task>, <task>": each open blocker a link to its task, a missing
+ * one its id. One line, cut at the end, the whole sentence in the tooltip.
+ */
+function WaitsOn({ blockers }: { blockers: TaskDto['blockedBy'] }): React.JSX.Element {
+  const openTask = useOpenTask()
+  return (
+    <span data-task-waits-on className="flex min-w-0 items-baseline whitespace-pre"
+      title={`Waits on ${blockers.map((blocker) => blocker.taskId ? blocker.title ?? blocker.id : `${blocker.id} (not found)`).join(', ')}`}>
+      <span className="shrink-0">Waits on </span>
+      {blockers.map((blocker, index) => (
+        <span key={blocker.id} className="flex min-w-0 items-baseline">
+          {blocker.taskId ? (
+            <button type="button" onClick={() => openTask(blocker.taskId!)}
+              className="min-w-0 truncate font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors">
+              {blocker.title ?? blocker.id}
+            </button>
+          ) : (
+            <span className="min-w-0 truncate font-mono text-[11px]">{blocker.id} (not found)</span>
+          )}
+          {index < blockers.length - 1 && <span className="shrink-0">, </span>}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+/**
+ * Start through the agent's queue. A started task opens its chat, as the
+ * picker's Continue does; a task whose file needs approval opens the Inbox on
+ * that card; a refusal (the folder is busy, a turn is running there, every
+ * runner slot is taken) is shown beside the button, and nothing closes (§6).
+ */
+function DispatchStartControls({ task, controls, ready }: {
+  task: TaskDto
+  controls: ReturnType<typeof useDispatchControls>
+  ready: boolean
+}): React.JSX.Element {
+  const pending = controls.pending === 'run'
+  const error = controls.error?.action === 'run' ? controls.error.message : null
+  return (
+    <section aria-label="Start this task" className="rounded-md border border-[var(--color-border)] px-3 py-2">
+      <button type="button" disabled={!ready} aria-disabled={pending} aria-busy={pending}
+        onClick={() => { if (!pending) void controls.runNext(task.id) }}
+        className="inline-flex w-24 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white disabled:opacity-50 aria-disabled:opacity-50">
+        {pending && <Loader2 size={11} className="animate-spin" />}
+        Start
+      </button>
+      {/* Only when there is one, last in the section: it moves nothing above it (§1). */}
+      {error && <div role="alert" className="pt-1 text-[11px] leading-4 text-[var(--color-danger)]">{error}</div>}
+    </section>
+  )
+}
+
+/**
+ * "Paused <agent>'s queue" with **Resume**, on the page of the task the queue
+ * paused on, beside the dispatch note that says why. Resume restarts the
+ * queue; this task stays where it is. A refusal shows under it, last (§1, §6).
+ */
+function DispatchPausedHere({ agentId }: { agentId: string }): React.JSX.Element {
+  const { data: agents } = useAgents()
+  const controls = useDispatchControls(agentId)
+  const resuming = controls.pending === 'resume'
+  const error = controls.error?.action === 'resume' ? controls.error.message : null
+  const name = (agents ?? []).find((agent) => agent.id === agentId)?.name ?? 'This agent'
+  return (
+    <span data-task-dispatch-paused className="mt-0.5 block text-[10px]">
+      <span className="flex min-w-0 items-center justify-end gap-1.5">
+        <AlertTriangle size={10} className="shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
+        <span className="min-w-0 truncate text-[var(--color-text-secondary)]" title={`Paused ${name}’s queue`}>
+          Paused {name}’s queue
+        </span>
+        <button type="button" aria-disabled={resuming} aria-busy={resuming}
+          title="Let the queue start tasks on its own again. This task stays where it is."
+          onClick={() => { if (!resuming) void controls.resume() }}
+          className="inline-flex shrink-0 items-center gap-1 font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors aria-disabled:opacity-60">
+          {resuming && <Loader2 size={10} className="animate-spin" aria-hidden="true" />}
+          Resume
+        </button>
+      </span>
+      {error && <span role="alert" className="mt-0.5 block text-[var(--color-danger)]">{error}</span>}
+    </span>
   )
 }
 
@@ -862,7 +1011,7 @@ function Attention({ task, asks }: { task: TaskDto; asks: AskState }): React.JSX
 
   if (!task.chatId && task.executor === 'desktop' && task.runsHere &&
     ['new', 'refining', 'open', 'in_progress', 'blocked', 'error'].includes(task.status)) {
-    return <StartTaskControls task={task} />
+    return <StartControls task={task} />
   }
 
   if (task.status === 'blocked' && asks.count > 0) {
@@ -1717,33 +1866,46 @@ function TaskFileValue({ task, file }: {
 }
 
 /**
- * What a task file says blocks it: each id as its task's title, a link to that
- * task, when it is one of the same agent's file tasks this window already
- * lists (a file id is the task's `remote.key`); else the id as written. Never
- * broken inside an item.
+ * What a task file says blocks it, as main resolved each id against the tasks
+ * in the same folder: one blocker per line, each with its task's status icon
+ * (as a list row has it) and its title, a link that truncates. An id that
+ * names nothing is said as such, with the warning glyph, and "— not found"
+ * stays whole outside the truncating id, because it blocks the task for ever
+ * until the file changes (`ux_rules.md` §13: glyph plus accessible name).
  */
-function BlockedByValue({ task, ids }: { task: TaskDto; ids: readonly string[] }): React.JSX.Element {
-  const roots = useTaskList({ rootOnly: true }).data?.tasks ?? []
-  const openTask = useOpenTask()
-  const agentId = task.assignee.agentId
-  const find = (id: string): TaskDto | undefined => roots.find((candidate) =>
-    candidate.file && candidate.id !== task.id && candidate.assignee.agentId === agentId && candidate.remote?.key === id)
+function BlockedByValue({ blockers }: { blockers: TaskDto['blockedBy'] }): React.JSX.Element {
   return (
-    <span data-task-blocked-by className="flex flex-wrap justify-end gap-x-2 gap-y-0.5">
-      {ids.map((id, index) => {
-        const blocker = find(id)
-        const comma = index < ids.length - 1 ? ',' : ''
-        return blocker ? (
-          <span key={id} className="flex min-w-0 max-w-full whitespace-nowrap">
-            <button type="button" onClick={() => openTask(blocker.id)} title={blocker.title}
-              className={`${DETAIL_LINK} min-w-0`}>
-              {blocker.title}
-            </button>{comma}
+    <span data-task-blocked-by className="flex flex-col items-end gap-y-0.5">
+      {blockers.map((blocker) => blocker.taskId
+        ? <BlockerRow key={blocker.id} blocker={blocker as TaskDto['blockedBy'][number] & { taskId: string }} />
+        : (
+          <span key={blocker.id} className="flex min-w-0 max-w-full items-center gap-1 whitespace-nowrap" title={`${blocker.id} — not found`}>
+            <span role="img" aria-label="Not found" className="flex shrink-0 text-[var(--color-warning)]">
+              <AlertTriangle size={12} aria-hidden="true" />
+            </span>
+            <span className="min-w-0 truncate font-mono text-[11px]">{blocker.id}</span>
+            <span className="shrink-0">— not found</span>
           </span>
-        ) : (
-          <span key={id} title={id} className="min-w-0 max-w-full truncate whitespace-nowrap font-mono text-[11px]">{id}{comma}</span>
-        )
-      })}
+        ))}
+    </span>
+  )
+}
+
+/**
+ * One blocker that names a task. Its status is read from the task itself
+ * (`['task', id]`, shared with that task's page); until it arrives, the
+ * resolved `done` stands in, so a finished blocker never shows as open.
+ */
+function BlockerRow({ blocker }: { blocker: TaskDto['blockedBy'][number] & { taskId: string } }): React.JSX.Element {
+  const openTask = useOpenTask()
+  const status = useTask(blocker.taskId).data?.status ?? (blocker.done ? 'completed' : 'open')
+  const title = blocker.title ?? blocker.id
+  return (
+    <span className="flex min-w-0 max-w-full items-center gap-1.5 whitespace-nowrap" data-blocker-status={status}>
+      <TaskStatusIcon status={status} size={12} />
+      <button type="button" onClick={() => openTask(blocker.taskId)} title={title} className={`${DETAIL_LINK} min-w-0`}>
+        {title}
+      </button>
     </span>
   )
 }

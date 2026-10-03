@@ -3176,6 +3176,77 @@ describe('a tool call the agent opened and never filled in', () => {
     expect(w.fake.received('session/prompt')).toHaveLength(1)
   })
 
+  // A turn the agent started follows the prompted turn's end-of-turn order:
+  // the user's Stop first, then a stall or the ceiling, then an acknowledged
+  // cancel, then how the turn ended.
+  it('takes the user’s Stop during a follow-up stall’s grace as a stop: no stall error', async () => {
+    // Mutation: read the stall before the Stop in runFollowUp → the turn fails with the stall's reason.
+    const w = followUpWorld({
+      script: thenOnItsOwn([bareCall('call_bg'), { kind: 'awaitCancel', sessionId: 'ses_fake' }, { kind: 'delay', ms: 400 }, COSTED_USAGE]),
+      deps: { ...STALL, followUpQuietMs: 100, cancelGraceMs: 2_000 }
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const f = followUpIo()
+    const running = request.run(f.io)
+    await waitFor(() => w.fake.received('session/cancel').length > 0 || undefined, 'the stall’s cancel')
+    f.controller.abort()
+    const result = await running
+    expect(result.taskState).toBe('canceled')
+    expect(result.error).toBeUndefined()
+  })
+
+  it('takes the user’s Stop during a follow-up ceiling’s grace as a stop', async () => {
+    const w = followUpWorld({
+      script: thenOnItsOwn([
+        { kind: 'update', sessionId: 'ses_fake', update: { sessionUpdate: 'tool_call', toolCallId: 'call_bg', title: 'Bash', status: 'in_progress' } },
+        { kind: 'awaitCancel', sessionId: 'ses_fake' },
+        { kind: 'delay', ms: 400 },
+        COSTED_USAGE
+      ]),
+      deps: { followUpQuietMs: 100, turnCeilingMs: 300, cancelGraceMs: 2_000 }
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const f = followUpIo()
+    const running = request.run(f.io)
+    await waitFor(() => w.fake.received('session/cancel').length > 0 || undefined, 'the ceiling’s cancel')
+    f.controller.abort()
+    const result = await running
+    expect(result.taskState).toBe('canceled')
+    expect(result.error).toBeUndefined()
+  })
+
+  it('fails a follow-up stall the agent ends cleanly after our cancel with the stall’s reason', async () => {
+    // The end marker answering our cancel is an acknowledged cancel, not a finished turn.
+    const w = followUpWorld({
+      script: thenOnItsOwn([bareCall('call_bg'), { kind: 'awaitCancel', sessionId: 'ses_fake' }, COSTED_USAGE]),
+      deps: { ...STALL, followUpQuietMs: 100 }
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const result = await request.run(followUpIo().io)
+    expect(result.error?.message).toBe(STALLED)
+    expect(result.taskState).not.toBe('canceled')
+    expect(w.fake.received('session/cancel')).toHaveLength(1)
+  })
+
+  it('fails a follow-up ceiling the agent ends cleanly with the ceiling’s reason', async () => {
+    const w = followUpWorld({
+      script: thenOnItsOwn([
+        { kind: 'update', sessionId: 'ses_fake', update: { sessionUpdate: 'tool_call', toolCallId: 'call_bg', title: 'Bash', status: 'in_progress' } },
+        { kind: 'awaitCancel', sessionId: 'ses_fake' },
+        COSTED_USAGE
+      ]),
+      deps: { followUpQuietMs: 100, turnCeilingMs: 300 }
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const result = await request.run(followUpIo().io)
+    expect(result.error?.message).toBe('The agent stopped responding and the turn was ended.')
+    expect(result.taskState).not.toBe('canceled')
+  })
+
   it('keeps the shared process when a stalled follow-up does not answer the cancel', async () => {
     // Other chats' background work runs in that process; the ceiling retires
     // it, a stalled tool call does not.

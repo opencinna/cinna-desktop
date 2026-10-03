@@ -1042,3 +1042,28 @@ describe('a device-local task (a folder task)', () => {
     })
   })
 })
+
+describe('a queue’s hold on a task (dispatch_agent_id)', () => {
+  it('ends when a peer’s copy changes the task’s status, as no status write through statusPatch would keep it', () => {
+    // Mutation: drop the clear after `applySyncedTask` in the task mapper → the hold survives the write.
+    const task = on(deviceA, () => taskService.create(USER, { title: 'Queued', goal: 'Queued work' }))
+    applyTo(deviceB, task.id, encode(deviceA, task.id))
+    on(deviceB, () => taskRepo.setDispatchAgent(USER, task.id, 'agent-a'))
+    on(deviceA, () => taskService.setStatus(USER, task.id, 'in_progress'))
+    applyTo(deviceB, task.id, encode(deviceA, task.id))
+    on(deviceB, () => {
+      expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'in_progress', dispatchAgentId: null })
+    })
+  })
+
+  it('survives a peer’s copy that changes neither the status nor who runs it', () => {
+    // Mutation: clear on every applied record → a title-only edit ends the hold.
+    const task = on(deviceA, () => taskService.create(USER, { title: 'Queued', goal: 'Queued work' }))
+    applyTo(deviceB, task.id, encode(deviceA, task.id))
+    on(deviceB, () => taskRepo.setDispatchAgent(USER, task.id, 'agent-a'))
+    applyTo(deviceB, task.id, encode(deviceA, task.id))
+    on(deviceB, () => {
+      expect(taskRepo.getById(USER, task.id)?.dispatchAgentId).toBe('agent-a')
+    })
+  })
+})

@@ -20,7 +20,7 @@ A folder agent can read and change the tasks that concern it from inside its own
 2. **An agent asks another agent for work.** It calls `handover_targets`, then `task_create` with that entry's `target` as `assignee`, an `id`, a title and the brief as `description`, and ends its turn. Everything after that — gate, run, report, return packet — is the [Handover Bus](handover_bus.md).
 3. **An agent checks what it has.** `tasks_list` answers the tasks assigned to it, created by it or delegated by it, newest first, at most 50, closed ones left out unless asked for. Each entry carries its status, the status word and category, relations, assignee, parent, the task file's path relative to the agent folder, and the delegation's id and state where there is one. The turn header also says `- ready tasks: N` when the agent has ready tasks assigned to it, so it knows to look without polling.
 4. **An agent moves or edits a task.** `task_update` changes title, description, priority, custom fields (the whole set; `{}` clears them) or status. A status may be a status or a status word: a folder task takes its folder's own words (`doing`, a `_board.yaml` word) and writes that word to the file.
-5. **An agent says how its work ended.** In a hand-opened chat working on a task, `task_update` on that task with `completed`, `blocked` or `error` records the outcome, and the turn's end does not overwrite it.
+5. **An agent says how its work ended.** In a chat working on a task (a hand-opened chat, a [dispatched](task_dispatcher.md) turn or a job run's), `task_update` on that task with `completed`, `blocked` or `error` records the outcome, and the turn's end does not overwrite it.
 6. **An agent leaves a comment.** `task_comment` stores the comment; the task page shows it under **Comments**. A folder task's file gains an entry in its comment log section; a task bound to a service that keeps comments (cinna-core) gets it as a note.
 
 ## Business Rules
@@ -41,7 +41,9 @@ A folder agent can read and change the tasks that concern it from inside its own
 - **Delegated work moves only through its own tools.** A task with a delegation or a file handover behind it is refused: its executor is pointed at `handover_report`, its requester at `handover_reply`. Changing it directly would bypass the lifecycle that wakes the requester.
 - **Work something else owns is refused**: a task a runtime or script runner owns, and a task with a turn running in another chat.
 - **Status moves are a person's manual moves**, by the same rules as the board: between Backlog, Ready and Done (and Cancelled), refused for work a run or a question holds. An agent gets no move a person does not have.
-- **A status report needs a task the turn's end would settle itself.** `completed`, `blocked` or `error` are accepted only on the chat's own task in a hand-opened chat. A job run's task is refused (its run reports the outcome when it ends), and so is a task a runtime owns (its runner does). Delegated tasks are already refused above and report through `handover_report`.
+- **A status report is accepted on the chat's own task**: `completed`, `blocked` or `error`, in a hand-opened chat, a dispatched turn or a job run. The agent knows how the work ended; the turn's end only knows how the turn ended. A task a runtime owns is refused, because its runner reports for it. Delegated tasks are already refused above and report through `handover_report`.
+- **On a job run's task, the report wins over the run's outcome.** `completed` or `error` maps the run's attempt to succeeded or failed instead of the run's end overwriting it. `blocked` leaves the attempt running and the task Waiting. Before this, a job run's task refused the report, and the run's end settled the task from how the turn ended.
+- **On a dispatched task, the report is what keeps the queue going.** The [dispatcher](task_dispatcher.md#the-report-rule) reads the task at the end of the turn. A task left In progress, Ready or Backlog was not reported on: it is flagged and the queue pauses.
 - **A report survives the end of its own turn, and only that turn.** Without it, the turn's end settled the task from how the turn ended and turned an agent's `blocked` or `error` into `completed` a moment later. The mark is keyed by the run that made the report: only that run's end reads it, any new turn in the chat drops a leftover, and a restart forgets it, in which case the turn's end settles the task as before. A task that went back to In progress since the report (an Inbox answer, say) is settled normally.
 
 ### Comments
@@ -65,7 +67,7 @@ A folder agent can read and change the tasks that concern it from inside its own
 - **No tools for a nested or remote-launched session** — the same sessions that never get the bus tools.
 - **No reading or writing other agents' queues**: `tasks_list` never lists a task that does not concern the caller.
 - **No deleting a task** from a tool. A wrong own task is moved to Cancelled or Done.
-- **No `task_update` on delegated work**, and no status report on a job run's or runtime's task — those have owners that report for them.
+- **No `task_update` on delegated work**, and no status report on a runtime's task — those have owners that report for them.
 - **No polling primitive.** The `ready tasks` header line exists so an agent does not call `tasks_list` in a loop.
 
 ## Architecture Overview
@@ -85,6 +87,8 @@ Turn start -> turn header `- ready tasks: N`
 - [Handover Bus](handover_bus.md) — delegation semantics, the shared depth cap and the `handover_report` / `handover_reply` tools delegated work moves through.
 - [Folder Tasks](folder_tasks.md) — where a bare agent's own queue lives, status words, and the comment log section.
 - [Tasks and the Inbox](tasks.md) — the task page that shows Comments, and how a hand-opened chat's turn end settles its task.
+- [The Task Dispatcher](task_dispatcher.md) — the queue that reads a report to decide whether to continue or pause.
+- [Jobs](../jobs/jobs.md) — a job run's attempt mapped from the agent's report.
 - [The Tasks View](../tasks_view/tasks_view.md) — the manual-move rules `task_update` follows.
 - [A Task on the User's Other Devices](cross_device.md) — why provenance and comments stay on this device.
 - [Technical details](agent_task_tools_tech.md).

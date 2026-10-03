@@ -583,9 +583,9 @@ test('@live 5 a real coordinator delegates without execution to an auto bare fol
       const page = cinna.page
       await page.getByRole('button', { name: 'Tasks', exact: true }).click()
       await page.getByRole('region', { name: 'Ready', exact: true }).getByRole('button', { name: `${TITLE} — Ready`, exact: true }).click()
-      const controls = page.getByRole('region', { name: 'Continue this task', exact: true })
-      await controls.getByRole('combobox', { name: 'Continue with', exact: true }).selectOption({ label: 'Auto Coordinator' })
-      await controls.getByRole('button', { name: 'Continue', exact: true }).click()
+      // A Ready task of a local folder agent starts through that agent's queue (the task dispatcher).
+      const controls = page.getByRole('region', { name: 'Start this task', exact: true })
+      await controls.getByRole('button', { name: 'Start', exact: true }).click()
       await expect(controls).toHaveCount(0, { timeout: 30_000 })
     })
 

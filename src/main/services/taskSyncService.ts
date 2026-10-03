@@ -1091,6 +1091,40 @@ export const taskSyncService = {
   },
 
   /**
+   * The user approved this exact content of a task kept in a local home (the
+   * dispatcher's outside-content gate): the task and its binding both trust
+   * `digest`, so the next pull keeps it trusted. Queued behind the task's
+   * pushes, and the revision bumped as for a push, so a pull that read the
+   * old binding cannot store it back over this one. A task with no local
+   * home only gets its trusted digest.
+   */
+  async trustLocalContent(userId: string, taskId: string, digest: string): Promise<void> {
+    const key = `${userId} ${taskId}`
+    const queued = (pushesInFlight.get(key) ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => {
+        const row = taskRepo.getById(userId, taskId)
+        if (!row || row.deletedAt) return
+        const binding = bindingOf(row)
+        const adapter = binding ? adapterFor(binding.adapter) : null
+        if (binding && adapter?.localHome?.trust) {
+          const revisionKey = bindingKey(userId, binding)
+          bump(revisionKey)
+          const trusted = adapter.localHome.trust(userId, binding, digest)
+          const owed = (row.remoteDirty ?? []).filter(isRemoteDirtyField)
+          taskService.markRemoteSynced(userId, taskId, owed, { binding: { key: trusted.key, url: trusted.url, state: trusted.state } })
+          bump(revisionKey)
+        }
+        taskRepo.setTrustedDigest(userId, taskId, digest)
+      })
+      .finally(() => {
+        if (pushesInFlight.get(key) === queued) pushesInFlight.delete(key)
+      })
+    pushesInFlight.set(key, queued)
+    return queued
+  },
+
+  /**
    * The status columns of the board of a local agent whose tasks live in its
    * folder, left to right; null when that agent's tasks are native.
    */
@@ -1347,6 +1381,31 @@ export const taskSyncService = {
     })
     readsInFlight.set(key, pending)
     return pending
+  },
+
+  /**
+   * {@link pullOne}, but a read that **starts now**: one already in flight
+   * began before the caller's moment and may miss what changed since, so it is
+   * waited out rather than shared. A read the revision check discards (another
+   * read or write landed meanwhile) is tried once more. The task dispatcher's
+   * re-read at a turn's end, which must see the status word the agent just
+   * wrote.
+   */
+  async pullFresh(userId: string, taskId: string): Promise<TaskDto | null> {
+    const key = cursorKey(userId, taskId)
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      // Loop: another caller may take the slot between the wait and our read.
+      for (let existing = readsInFlight.get(key); existing; existing = readsInFlight.get(key)) {
+        await existing.catch(() => null)
+      }
+      const pending = pullSingleTask(userId, taskId).finally(() => {
+        if (readsInFlight.get(key) === pending) readsInFlight.delete(key)
+      })
+      readsInFlight.set(key, pending)
+      const read = await pending
+      if (read) return read
+    }
+    return null
   },
 
   /**

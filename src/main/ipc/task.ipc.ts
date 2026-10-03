@@ -16,7 +16,8 @@ import { parseAnswerPayload } from '../services/askDelivery'
 import { TaskError } from '../errors'
 import type { TaskHandoffTarget, TaskHandoffOutcome } from '../../shared/taskHandoff'
 import { ipcHandle } from './_wrap'
-import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot } from '../../shared/inbox'
+import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot, TaskDispatchGateResult } from '../../shared/inbox'
+import { taskDispatchService } from '../services/taskDispatchService'
 import type { HandoverDto } from '../../shared/handovers'
 import {
   isTaskPriority,
@@ -456,5 +457,19 @@ export function registerTaskHandlers(): void {
     const parsed = parseAnswerPayload(data)
     if (!parsed) return { ok: false, reason: 'Malformed answer', code: 'malformed' }
     return inboxService.answer(getProfileScopeUserId(), data.requestId, parsed)
+  })
+
+  /**
+   * Answer the task dispatcher's approval of outside content
+   * (`TaskDispatchGateItem`): `approve` trusts that content and runs the task
+   * when its agent and folder are free, `skip` leaves it untrusted.
+   */
+  ipcHandle('inbox:dispatch-gate', async (_event, gateId: unknown, action: unknown): Promise<TaskDispatchGateResult> => {
+    userActivation.requireActivated()
+    if (action !== 'approve' && action !== 'skip') {
+      return { ok: false, code: 'unavailable', reason: 'Choose Approve and run or Skip.' }
+    }
+    return taskDispatchService.answerGate(
+      { profileUserId: getProfileScopeUserId(), settingsUserId: getSettingsScopeUserId() }, gateId, action)
   })
 }

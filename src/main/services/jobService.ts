@@ -28,6 +28,7 @@ import { visibleChat } from '../auth/chatScope'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { agentRepo } from '../db/agents'
 import { taskRepo } from '../db/tasks'
+import { takeAgentStatusReportInChat } from '../tasks/agentStatusReports'
 import { localScheduleRepo } from '../db/localSchedules'
 import { getSettingsScopeUserId, getAgentLookupScope } from '../auth/scope'
 import { JobError } from '../errors'
@@ -473,6 +474,28 @@ export const jobService = {
     if (run.status !== 'running' && run.status !== 'pending') return
     if (taskInputRequestRepo.listOpenForChat(chatId)
       .some((request) => request.resume === 'next_message')) return
+
+    // **The agent's report wins.** An agent that set this task to completed,
+    // blocked or error with `task_update` during the turn has said how the
+    // work ended; the attempt is mapped from that rather than the turn's
+    // outcome overwriting it. `completed` / `error` already settled the
+    // attempt in `taskService.setStatus` (so this is a fallback); `blocked`
+    // leaves the attempt running — the job vocabulary for an attempt waiting
+    // on someone (`jobRunStatusForTask`) — and the task blocked.
+    let reportWins = false
+    if (run.taskId && takeAgentStatusReportInChat(run.taskId, chatId)) {
+      const task = taskRepo.getById(run.userId, run.taskId)
+      const status = task && !task.deletedAt ? task.status : null
+      if (status === 'blocked') {
+        logger.info('job run left running: its agent reported the task blocked', { runId: run.id, taskId: run.taskId })
+        return
+      }
+      if (status === 'completed' || status === 'error') {
+        outcome = status === 'completed' ? 'succeeded' : 'failed'
+        errorMessage = status === 'error' ? (task?.errorMessage ?? errorMessage) : undefined
+        reportWins = true
+      }
+    }
     jobRunsRepo.updateStatus(run.id, outcome, { errorMessage: errorMessage ?? null })
 
     // A scheduled run's occurrence is settled from the same outcome, so a
@@ -503,7 +526,7 @@ export const jobService = {
     // recorded as finished even if the task write fails, or the sidebar counts
     // it as busy for the life of the app. Failing the whole hook to keep two
     // rows in step would trade a visible wrong status for an invisible one.
-    if (run.taskId) {
+    if (run.taskId && !reportWins) {
       try {
         taskService.applyRunState(run.userId, run.taskId, RUN_STATE_FOR_OUTCOME[outcome])
         if (outcome === 'failed' && errorMessage) {

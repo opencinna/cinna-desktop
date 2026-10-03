@@ -516,7 +516,8 @@ const taskMapper: CollectionMapper = {
     const ref = jsonObject(plaintext.assigneeRef)
     const parsed = parseAssigneeRef(plaintext.assigneeRef)
     const arrived = new Date(ctx.clientUpdatedAt)
-    taskService.applySyncedTask(userId, {
+    const before = taskRepo.getById(userId, id)
+    const applied = taskService.applySyncedTask(userId, {
       id,
       title: str(plaintext.title) || 'Untitled task',
       goal: str(plaintext.goal),
@@ -563,6 +564,13 @@ const taskMapper: CollectionMapper = {
       finishedAt: dateOrNull(plaintext.finishedAt),
       deletedAt: dateOrNull(plaintext.deletedAt)
     })
+    // A queue's hold on the task (`dispatch_agent_id`, after a dispatched ask)
+    // ends when a peer's copy changes the run — its status or which device
+    // runs it. This write skips `statusPatch`, which drops the hold otherwise.
+    // A title or description edit leaves the run, and so the hold, alone.
+    const after = applied?.id ? taskRepo.getById(userId, id) : undefined
+    if (after?.dispatchAgentId && (after.status !== before?.status || after.executor !== before?.executor ||
+      after.executorDevice !== before?.executorDevice)) taskRepo.setDispatchAgent(userId, id, null)
   }
 }
 

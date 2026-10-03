@@ -224,9 +224,11 @@ test('folder tasks: an outside file is indexed, an outside edit is followed, and
       .replace(`\ntitle: ${DOCS_TITLE}\n`, `\ntitle: ${DOCS_RENAMED}\n`)
       .replace('\nstatus: Inbox\n', '\nstatus: Up Next\n')
     await expect.poll(() => readFileSync(docsPath, 'utf8'), { timeout: 15_000 }).toBe(expected)
-    // Cinna wrote the bytes on disk now, so the page no longer says they came from outside.
+    // Cinna wrote these bytes, but over content that came from outside: a
+    // Cinna edit never vouches for what it did not write, so the mark stays
+    // until the user approves the content (the dispatcher's gate).
     await expect(details(cinna).locator('[data-task-file]')).toHaveText('write-docs.md')
-    await expect(details(cinna).locator('[data-task-from-outside]')).toHaveCount(0)
+    await expect(details(cinna).locator('[data-task-from-outside]')).toHaveCount(1)
     expect(taskFiles(tasksDir)).toEqual(['fix-login.md', 'write-docs.md'])
     await cinna.page.getByRole('button', { name: 'Back to Tasks', exact: true }).click()
   })

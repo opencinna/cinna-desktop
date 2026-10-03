@@ -1,6 +1,6 @@
 import { Inbox } from 'lucide-react'
 import { useUIStore } from '../../stores/ui.store'
-import { describeUnreadable, useInboxList } from '../../hooks/useInbox'
+import { describeUnreadable, inboxWaitingCount, useInboxList } from '../../hooks/useInbox'
 
 const MAX_SHOWN = 99
 
@@ -9,7 +9,7 @@ export function InboxButton({ className = '' }: { className?: string }): React.J
   const activeView = useUIStore((s) => s.activeView)
   const setActiveView = useUIStore((s) => s.setActiveView)
   const { data, isError } = useInboxList()
-  const count = data?.entries.length ?? 0
+  const count = inboxWaitingCount(data)
   const active = activeView === 'inbox'
   /**
    * A partly read inbox keeps its count and loses its confidence.

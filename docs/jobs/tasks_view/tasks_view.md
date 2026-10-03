@@ -23,8 +23,9 @@ One place to see every root task the profile has — whoever runs it, wherever i
 5. **Write a task down.** **New task** asks for a title and nothing else; Enter creates it and the user lands on its page. **More options** holds the goal (defaults to the title), priority, Backlog or Ready (Backlog by default — named in the assignee folder's own words when it keeps a task folder), the assignee (Unassigned or an enabled agent) and custom fields. A task for an enabled bare agent is written into that agent's `.cinna/tasks/` as a file; every other task is stored here only.
 6. **Move a task.** Drag a card to Backlog, Ready or Done, or use the card's **⋯ → Move to…** — the same moves, reachable by keyboard. The card moves at once; if main refuses, it goes back and the reason appears in one line under the controls.
 7. **Edit a task.** On the task page, **⋯ → Edit task…** opens every field: title, description, priority, status (the manual targets only — a folder task's in its folder's words), assignee and custom fields. A field that cannot change says why in one line under it. A folder task's nested or long custom fields are listed under **Read-only fields**, to be edited in the file.
-8. **Go back.** A task page opened from the Tasks view — or reached from such a page through its parent or a subtask — shows **Back to Tasks**.
-9. **Turn it off.** Settings → Features → Interface → **Tasks button** (on by default) removes the button; turning it off while the view is open returns to the chats.
+8. **Run the agent's queue.** Filtered to one folder agent whose queue Cinna works, the controls row gains a split button: **Run next** starts that agent's next Ready task, and the chevron opens the run mode (**Manual** / **One at a time**) with the current one checked. A started task stays where it is in the view: its row moves to In progress by itself. A task whose file needs approval opens the Inbox on its card. When the queue is paused, the left half becomes **Resume** in the warning tone, and its tooltip says what paused it. The menu then also offers the task it paused on and Run next. See [the task dispatcher](../tasks/task_dispatcher.md).
+9. **Go back.** A task page opened from the Tasks view — or reached from such a page through its parent or a subtask — shows **Back to Tasks**.
+10. **Turn it off.** Settings → Features → Interface → **Tasks button** (on by default) removes the button; turning it off while the view is open returns to the chats.
 
 ## Business Rules
 
@@ -66,6 +67,7 @@ One place to see every root task the profile has — whoever runs it, wherever i
 
 - **Nothing moves under the user.** Every list section and board column is always present; rows keep the order they were first seen for as long as the view is open, so a poll cannot move a row under the pointer; a refused move's sentence is laid over the gap under the controls rather than inserted above the board; the drop highlight is an outline, not a border, so a column never resizes.
 - **Controls first, in one row.** Title, List | Board, agent filter, search and New task stay on one line down to the 800 px minimum beside the sidebar; the layout switch drops its words for icons and the search shrinks first. List and board share one width, so switching between them moves no control.
+- **The queue control follows the filter, never the search.** It appears only when the agent filter names a folder agent with a queue, so typing in the search moves nothing. With it in the row, narrow widths shrink the search to its glyph and a few characters, with no placeholder it could not show whole, and Run next drops its word for its icon. A pause changes the control in place and adds no row above the list, so a poll that pauses the queue moves nothing; the Inbox card is what asks for attention. Its actions belong to the view, not to the menu, so a result outlives the menu closing. A refusal shows in the same overlay slot under the controls as a refused move. It is secondary-styled, so New task stays the row's one primary action.
 - **The view polls, like the Inbox.** The root list re-reads every five seconds, and opening the view nudges device sync as the Inbox and task page do — the rows read local SQLite, so without it a task another device finished would read In progress until the next sync cycle. A failed read keeps the rows and shows **Try again** below them.
 
 ## Architecture Overview
@@ -75,6 +77,7 @@ Top bar Tasks button → ui.store activeView 'tasks' → TasksView
 TasksView → useTaskList({rootOnly}) → task:list → taskService.list
 Board drop / ⋯ Move to / Edit task status → task:set-status (status, folder word?) → taskAuthoringService.setStatus → taskService.setStatus(…, {manual: true, bound, label})
 Folder board → task:folder-board → taskSyncService.folderBoard → folder adapter localHome.board
+Filtered to one folder agent → taskDispatch:list / run-next / set-mode / resume → taskDispatchService
 New task → task:create → taskAuthoringService.createRouted → taskService.create | taskSyncService.createInHome (bare agent: writes the file)
 Edit task fields → task:update → taskAuthoringService.update → taskService.update
 Task write → device sync (custom fields travel; folder tasks never do) / bound push (custom fields to a task file only)
@@ -87,6 +90,7 @@ Task write → device sync (custom fields travel; folder tasks never do) / bound
 - [Keeping a Bound Task in Step](../tasks/remote_sync.md) — why a bound task keeps the pinned transition table, and how a pulled timestamp never hides a local edit.
 - [A Task on the User's Other Devices](../tasks/cross_device.md) — the claim that gates moves and the assignee; how custom fields travel.
 - [Folder Tasks](../tasks/folder_tasks.md) — the status words, the folder board, and the File and Blocked by rows on the task page.
+- [The Task Dispatcher](../tasks/task_dispatcher.md) — the queue behind the filtered view's Run next / Resume control and the task page's Start.
 - [App Shell](../../ui/app_shell/app_shell.md) — the top bar and its button order.
 - [Settings](../../ui/settings/settings.md) — the Tasks button toggle in Features → Interface.
 - [UX rules](../../development/ui_guidelines/ux_rules.md) — no jumping, controls first, errors that close nothing.

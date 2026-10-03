@@ -95,6 +95,19 @@ describe('desktop task start', () => {
     expect(dispatch).toHaveBeenCalledTimes(1)
   })
 
+  it('names the accepted run to onRunAccepted inside its acceptance, by chat and turn id', async () => {
+    dispatch.mockImplementationOnce((scope, payload, options) => {
+      // As the real service: acceptance carries the run's own id as turnId.
+      const ctx = { userId: scope.profileUserId, chatId: payload.chatId, agentId: TARGET.agentId, turnId: 'turn-one', rootRunId: 'turn-one' }
+      messageRepo.saveUser({ chatId: payload.chatId, content: payload.content }, () => options.onAccepted(ctx))
+      return { id: 'turn-one', accepted: Promise.resolve(), completed: new Promise(() => {}) }
+    })
+    const seen: { chatId: string; runId: string }[] = []
+    const result = await taskExecutionService.start(SCOPE, makeTask().id, TARGET, { onRunAccepted: (run) => seen.push(run) })
+    expect(seen).toEqual([{ chatId: result.chatId, runId: 'turn-one' }])
+    expect(result.runId).toBe('turn-one')
+  })
+
   it('resolves the model in captured scopes without requiring an agent', async () => {
     const task = makeTask()
     const result = await taskExecutionService.start(SCOPE, task.id, { kind: 'model', modeId: 'mode-one' })
@@ -264,5 +277,48 @@ describe('starting in a chat somebody else created', () => {
     await expect(taskExecutionService.start(SCOPE, task.id, TARGET, { reuseChatId: chat.id }))
       .rejects.toThrow('That agent is unavailable')
     expect(chatRepo.getOwned('profile', chat.id)).toBeDefined()
+  })
+})
+
+describe('continuing a task in its own conversation', () => {
+  /** A Ready task that ran before in a chat with the agent. */
+  function readyWithChat(agentId = 'agent-one') {
+    const task = makeTask()
+    const chat = chatRepo.create('profile', { title: 'Earlier', router: 'direct', agentId })
+    messageRepo.saveUser({ chatId: chat.id, content: 'Earlier work' })
+    taskRepo.update('profile', task.id, { chatId: chat.id, status: 'open' })
+    return { task, chat }
+  }
+
+  it('sends the continuation prompt into the task’s chat instead of a new one', async () => {
+    const { task, chat } = readyWithChat()
+    const before = chatRepo.list('profile').length
+    const result = await taskExecutionService.start(SCOPE, task.id, TARGET, { continueInChat: true })
+    expect(result.chatId).toBe(chat.id)
+    expect(chatRepo.list('profile').length).toBe(before)
+    const messages = chatRepo.listMessages(chat.id)
+    expect(messages.at(-1)?.content).toBe(taskContinuationPrompt(task))
+    expect(taskService.getById('profile', task.id)).toMatchObject({ status: 'in_progress', chatId: chat.id })
+  })
+
+  it('still refuses without the option, and refuses a chat bound to another agent or running', async () => {
+    const { task } = readyWithChat()
+    await expect(taskExecutionService.start(SCOPE, task.id, TARGET)).rejects.toThrow('already has a conversation')
+    const other = readyWithChat('agent-two')
+    await expect(taskExecutionService.start(SCOPE, other.task.id, TARGET, { continueInChat: true })).rejects.toThrow('belongs to another agent')
+    isRunning.mockReturnValue(true)
+    try {
+      await expect(taskExecutionService.start(SCOPE, task.id, TARGET, { continueInChat: true })).rejects.toThrow('turn running')
+    } finally {
+      isRunning.mockReturnValue(false)
+    }
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('starts a new chat when the task’s chat was deleted', async () => {
+    const { task, chat } = readyWithChat()
+    chatRepo.softDelete('profile', chat.id)
+    const result = await taskExecutionService.start(SCOPE, task.id, TARGET, { continueInChat: true })
+    expect(result.chatId).not.toBe(chat.id)
   })
 })

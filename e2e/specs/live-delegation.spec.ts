@@ -79,16 +79,27 @@ async function createReadyTask(cinna: CinnaApp, title: string, goal: string, age
   return task.id
 }
 
-/** The user starts the task from its page: Tasks → the row → Continue with the agent → Continue. */
+/**
+ * The user starts the task from its page: Tasks → the row → Start. A Ready
+ * task assigned to a local folder agent starts through that agent's queue
+ * (the task dispatcher); any other task keeps the Continue-with picker.
+ */
 async function startTaskThroughUi(cinna: CinnaApp, title: string, agentName: string): Promise<void> {
   const page = cinna.page
   await page.getByRole('button', { name: 'Tasks', exact: true }).click()
   await page.getByRole('region', { name: 'Ready', exact: true }).getByRole('button', { name: `${title} — Ready`, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1, name: title, exact: true })).toBeVisible()
-  const controls = page.getByRole('region', { name: 'Continue this task', exact: true })
-  await controls.getByRole('combobox', { name: 'Continue with', exact: true }).selectOption({ label: agentName })
-  await controls.getByRole('button', { name: 'Continue', exact: true }).click()
-  await expect(controls).toHaveCount(0, { timeout: 30_000 })
+  const queued = page.getByRole('region', { name: 'Start this task', exact: true })
+  const picker = page.getByRole('region', { name: 'Continue this task', exact: true })
+  await expect(queued.or(picker)).toBeVisible()
+  if (await queued.isVisible()) {
+    await queued.getByRole('button', { name: 'Start', exact: true }).click()
+    await expect(queued).toHaveCount(0, { timeout: 30_000 })
+    return
+  }
+  await picker.getByRole('combobox', { name: 'Continue with', exact: true }).selectOption({ label: agentName })
+  await picker.getByRole('button', { name: 'Continue', exact: true }).click()
+  await expect(picker).toHaveCount(0, { timeout: 30_000 })
 }
 
 /** Answer the first open gate card in the Inbox with Run, through the real UI. */

@@ -288,6 +288,17 @@ export interface TaskFileRef {
   blockedBy: string[]
 }
 
+/** One `blocked_by` id of a file task, resolved (`TaskDto.blockedBy`). */
+export interface TaskBlocker {
+  /** The id as the file writes it. */
+  id: string
+  /** The task it names in the same folder, or null when it names none. */
+  taskId: string | null
+  title: string | null
+  /** That task is `completed`. */
+  done: boolean
+}
+
 /** What the index keeps about that file: the DTO's half plus the content digest. */
 export interface TaskLocalFile extends TaskFileRef {
   /** sha256 of the bytes last read. Compared with the trusted digest. */
@@ -404,6 +415,20 @@ export interface TaskDto {
    * for a task with no file.
    */
   fromOutside: boolean
+  /**
+   * The file's `blocked_by` ids, each resolved against the tasks in the same
+   * folder: `done` only when it names a task there whose status is
+   * `completed`. An id that names nothing (`taskId` null) blocks. Empty for a
+   * task with no file or no `blocked_by`. The dispatcher starts a task only
+   * when every entry is done.
+   */
+  blockedBy: TaskBlocker[]
+  /**
+   * Why the dispatcher left this task blocked (`Ended without reporting`,
+   * `Interrupted when Cinna quit`), or null. Device-local; cleared when the
+   * task leaves `blocked`.
+   */
+  dispatchNote: string | null
 
   /** Which job run created this task, when one did. Provenance only — the rows may be gone. */
   jobId: string | null

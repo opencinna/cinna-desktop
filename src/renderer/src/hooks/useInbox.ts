@@ -58,6 +58,15 @@ export function describeUnreadable(unreadable: InboxUnreadableSource[]): string 
     : `${unreadable.length} services could not be read`
 }
 
+/**
+ * What is waiting on the user: every ask, plus the task dispatcher's cards (an
+ * approval of outside content, a paused queue), each of which has a button
+ * only the user can press. The badge and the view's count both read this.
+ */
+export function inboxWaitingCount(snapshot: InboxSnapshot | undefined): number {
+  return (snapshot?.entries.length ?? 0) + (snapshot?.dispatch?.length ?? 0)
+}
+
 export function useInboxList(): UseQueryResult<InboxSnapshot> {
   const queryClient = useQueryClient()
   return useQuery({

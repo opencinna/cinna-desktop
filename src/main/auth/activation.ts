@@ -13,6 +13,7 @@ import { syncService } from '../services/syncService'
 import { taskSyncScheduler } from '../services/taskSyncScheduler'
 import { localScheduleScheduler } from '../services/localScheduleScheduler'
 import { handoverScheduler } from '../services/handoverScheduler'
+import { taskDispatchScheduler } from '../services/taskDispatchScheduler'
 import { getSettingsScopeUserId } from './scope'
 import { desktopFeatures } from '../host/desktopFeatures'
 import { userRepo } from '../db/users'
@@ -129,6 +130,7 @@ class UserActivation {
     taskSyncScheduler.stop()
     localScheduleScheduler.stop()
     handoverScheduler.stop()
+    taskDispatchScheduler.stop()
     const current = () => epoch === this._epoch
     // Provider teardown/reload must not overlap: a late disconnect for A
     // could otherwise remove B's newly registered connections.
@@ -144,6 +146,7 @@ class UserActivation {
       taskSyncScheduler.start(userId)
       localScheduleScheduler.start({ profileUserId: userId, settingsUserId: getSettingsScopeUserId() })
       handoverScheduler.start({ profileUserId: userId, settingsUserId: getSettingsScopeUserId() })
+      taskDispatchScheduler.start({ profileUserId: userId, settingsUserId: getSettingsScopeUserId() })
       this._startRemoteSync(userId)
       this._notifyReady(userId)
     })
@@ -183,6 +186,7 @@ class UserActivation {
     taskSyncScheduler.stop()
     localScheduleScheduler.stop()
     handoverScheduler.stop()
+    taskDispatchScheduler.stop()
     // The local-dev state names a host and a folder belonging to the profile
     // that is going away; leaving it up would show the next profile someone
     // else's workspace path.

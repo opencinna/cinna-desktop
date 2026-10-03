@@ -214,6 +214,50 @@ describe('a finished run finishes its task', () => {
     expect(taskService.getById(USER, taskId).status).toBe('completed')
   })
 
+  describe('the agent’s own report wins over the run’s outcome', () => {
+    /** What `task_update` does on a report: the status write, then the mark for this chat's run. */
+    async function agentReports(userTaskId: string, chatId: string, status: 'completed' | 'blocked' | 'error'): Promise<void> {
+      const { noteAgentStatusReport } = await import('../tasks/agentStatusReports')
+      taskService.setStatus(USER, userTaskId, status, status === 'error' ? { errorMessage: 'The build is red.' } : {})
+      noteAgentStatusReport(userTaskId, chatId, 'turn-1')
+    }
+
+    it('keeps a task the agent reported blocked blocked, and leaves its attempt running', async () => {
+      // Mutation: drop the report check → the success outcome completes the task.
+      const { chatId, taskId, runId } = startedRunWithTask()
+      await agentReports(taskId, chatId, 'blocked')
+      jobService.reportRunCompletion(chatId, 'succeeded')
+      expect(taskService.getById(USER, taskId).status).toBe('blocked')
+      expect(jobRunsRepo.getById(USER, runId)?.status).toBe('running')
+    })
+
+    it('maps the attempt from a completed report even when the turn failed', async () => {
+      const { chatId, taskId, runId } = startedRunWithTask()
+      await agentReports(taskId, chatId, 'completed')
+      jobService.reportRunCompletion(chatId, 'failed', 'The connection dropped.')
+      expect(taskService.getById(USER, taskId).status).toBe('completed')
+      expect(jobRunsRepo.getById(USER, runId)?.status).toBe('succeeded')
+    })
+
+    it('maps the attempt failed from an error report, with the agent’s reason', async () => {
+      const { chatId, taskId, runId } = startedRunWithTask()
+      await agentReports(taskId, chatId, 'error')
+      jobService.reportRunCompletion(chatId, 'succeeded')
+      expect(taskService.getById(USER, taskId).status).toBe('error')
+      const run = jobRunsRepo.getById(USER, runId)
+      expect(run?.status).toBe('failed')
+      expect(run?.errorMessage).toBe('The build is red.')
+    })
+
+    it('ignores a report made in another chat', async () => {
+      const { chatId, taskId } = startedRunWithTask()
+      const { noteAgentStatusReport } = await import('../tasks/agentStatusReports')
+      noteAgentStatusReport(taskId, 'some-other-chat', 'turn-1')
+      jobService.reportRunCompletion(chatId, 'succeeded')
+      expect(taskService.getById(USER, taskId).status).toBe('completed')
+    })
+  })
+
   it('errors the task and keeps the reason when the run fails', () => {
     const { chatId, taskId } = startedRunWithTask()
     jobService.reportRunCompletion(chatId, 'failed', 'Invalid OpenAI API key')

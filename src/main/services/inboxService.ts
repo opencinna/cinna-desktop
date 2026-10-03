@@ -1,4 +1,6 @@
 import { takeAgentStatusReport } from '../tasks/agentStatusReports'
+import { isDispatchedRun, settleDispatchOwnedTurn } from '../tasks/dispatchedTurns'
+import { taskDispatchInboxItems } from './taskDispatchInbox'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
 import { nanoid } from 'nanoid'
 import { taskInputRequestRepo, type TaskInputRequestRow } from '../db/taskInputRequests'
@@ -348,6 +350,35 @@ export const inboxService = {
       return
     }
 
+    // **A dispatched turn is settled by the dispatcher**, from whether the
+    // agent reported (`taskDispatchService.settle`), never from how the turn
+    // ended: a normal end with no report flags the task rather than completing
+    // it. Its asks were handled above like any turn's. Only that run: another
+    // turn on the same task (the user's own Start or chat) ends as any turn does.
+    if (isDispatchedRun(ctx.chatId, ctx.turnId)) {
+      if (expired > 0) markAfterAskChange(ctx.userId, task.id)
+      return
+    }
+    // **So is any turn on a task the dispatcher still owns**: a dispatched
+    // turn that stopped on a `next_message` ask leaves the task its queue's
+    // (`dispatch_agent_id`), and the turn an Inbox answer or a typed message
+    // resumes then ends by the same report rule. Ownership ends once the
+    // dispatcher settles it or the task leaves Active and Waiting.
+    if (task.dispatchAgentId && task.chatId === ctx.chatId) {
+      const state = endedAs(event)
+      if (settleDispatchOwnedTurn({
+        userId: ctx.userId,
+        chatId: ctx.chatId,
+        taskId: task.id,
+        agentId: task.dispatchAgentId,
+        state: state === 'failed' ? 'failed' : state === 'canceled' ? 'canceled' : 'completed',
+        ...(event.type === 'error' ? { error: { message: event.error } } : {})
+      })) {
+        if (expired > 0) markAfterAskChange(ctx.userId, task.id)
+        return
+      }
+    }
+
     // **A task a job run owns is finished by the job run**, and must be left in
     // `in_progress` for it to find: `jobService.reportRunCompletion` knows the
     // outcome this event cannot — a stop, a refusal, a budget ceiling — and
@@ -472,10 +503,13 @@ export const inboxService = {
         return task.executor === 'desktop' && task.runsHere && ['blocked', 'in_progress'].includes(task.status)
       })
       .map(({ row, taskTitle }) => toEntry(row, taskTitle))
+    const dispatchPending = taskDispatchInboxItems(userId)
     const remote = await pending
+    const dispatch = await dispatchPending
     return {
       entries: [...local, ...remote.entries].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
-      unreadable: remote.unreadable
+      unreadable: remote.unreadable,
+      dispatch
     }
   },
 

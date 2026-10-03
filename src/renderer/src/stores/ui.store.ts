@@ -159,6 +159,12 @@ interface UIStore {
    * Chats list"; the row clears it when it has shown itself.
    */
   revealChatId: string | null
+  /**
+   * A dispatcher approval (`dispatch_gate`) the Inbox should scroll to and
+   * mark once. One-shot intent from Run next answering `{ gate }`; the Inbox
+   * clears it when the card has shown itself.
+   */
+  revealInboxGateId: string | null
   activeExternalAgentId: string | null
   /** Folder agent whose page is open (when activeView === 'local-agent'). */
   activeLocalAgentId: string | null
@@ -225,6 +231,7 @@ interface UIStore {
   setActiveNoteId: (id: string | null) => void
   setRevealNoteId: (id: string | null) => void
   setRevealChatId: (id: string | null) => void
+  setRevealInboxGateId: (id: string | null) => void
   setActiveExternalAgentId: (id: string | null) => void
   setActiveLocalAgentId: (id: string | null) => void
   setPendingDraftAgentId: (id: string | null) => void
@@ -267,6 +274,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   activeNoteId: null,
   revealNoteId: null,
   revealChatId: null,
+  revealInboxGateId: null,
   activeExternalAgentId: null,
   activeLocalAgentId: null,
   pendingDraftAgentId: null,
@@ -310,6 +318,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setActiveNoteId: (id) => set({ activeNoteId: id }),
   setRevealNoteId: (id) => set({ revealNoteId: id }),
   setRevealChatId: (id) => set({ revealChatId: id }),
+  setRevealInboxGateId: (id) => set({ revealInboxGateId: id }),
   setActiveExternalAgentId: (id) => set({ activeExternalAgentId: id, activeLocalAgentId: null }),
   setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id, activeExternalAgentId: null }),
   setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),

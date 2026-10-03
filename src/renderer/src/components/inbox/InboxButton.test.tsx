@@ -180,3 +180,19 @@ describe('InboxButton', () => {
     expect(slotOf(button).className).toContain('w-5')
   })
 })
+
+describe('InboxButton — the task dispatcher’s cards', () => {
+  afterEach(cleanup)
+
+  it('counts an approval and a paused queue with the asks: each has a button only the user can press', async () => {
+    mountListing(async () => ({
+      entries: [entry(1)],
+      unreadable: [],
+      dispatch: [
+        { kind: 'dispatch_gate', gateId: 'g1', taskId: 't9', taskTitle: 'Fix login', agentId: 'folder:w', filePath: null, body: 'Fix it', createdAt: new Date() },
+        { kind: 'dispatch_paused', agentId: 'folder:w', reason: 'unreported', taskId: 't8', taskTitle: 'Ship', note: null, pausedAt: new Date() }
+      ]
+    }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Inbox — 3 waiting' })).toBeTruthy())
+  })
+})

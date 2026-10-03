@@ -93,7 +93,7 @@ function task(overrides: Partial<TaskDto> = {}): TaskDto {
     status: 'new', priority: 'normal', router: 'direct', origin: 'local', executor: 'desktop', executorDevice: null,
     runsHere: true, chatId: null, assignee: { kind: 'agent', agentId: agent.id, name: agent.name }, parentTaskId: null,
     subtaskCount: 0, subtaskCompletedCount: 0, remote: null, handoffNote: null, artifacts: [], budget: null,
-    errorMessage: null, customFields: null, statusLabel: null, file: null, fromOutside: false, jobId: null, jobRunId: null,
+    errorMessage: null, customFields: null, statusLabel: null, file: null, fromOutside: false, blockedBy: [], dispatchNote: null, jobId: null, jobRunId: null,
     createdAt: now, updatedAt: now, startedAt: null, finishedAt: null, ...overrides
   }
 }
@@ -293,10 +293,21 @@ describe('pull', () => {
 })
 
 describe('push', () => {
-  it('reads its own write back as ours, and an edit from outside as not', async () => {
+  it('does not launder outside content by writing to it, and trusts its write onto approved content', async () => {
     const path = put('a.md', NESTED)
     const binding = (await only()).binding
-    remember(await adapter.pushFields(USER, binding, { title: 'Fix login for good' }))
+    // Mutation: trust every write (the old rule) → the pushed file reads as ours.
+    remember(await adapter.pushFields(USER, binding, { title: 'Fix login now' }))
+    touchLater(path)
+    const read = await only()
+    expect(read.file?.ours).toBe(false)
+    // Still recognized as Cinna's own write, apart from trust.
+    expect((read.binding.state as { writtenDigest?: string }).writtenDigest).toBe(read.file?.digest)
+
+    // The user approves this content; a write onto it is then trusted too.
+    const trusted = remember(adapter.localHome!.trust!(USER, read.binding, read.file!.digest))
+    expect((trusted.state as { trustedDigest?: string }).trustedDigest).toBe(read.file?.digest)
+    remember(await adapter.pushFields(USER, trusted, { title: 'Fix login for good' }))
     touchLater(path)
     expect((await only()).file?.ours).toBe(true)
     writeFileSync(path, readFileSync(path, 'utf8').replace('Body.', 'Edited by hand.'))
@@ -304,21 +315,32 @@ describe('push', () => {
     expect((await only()).file?.ours).toBe(false)
   })
 
-  it('still knows its own write after a restart: the written digest lives in the stored binding', async () => {
+  it('still knows its trusted write after a restart: the digests live in the stored binding', async () => {
     const path = put('a.md', NESTED)
-    const binding = (await only()).binding
+    const first = await only()
+    const binding = remember(adapter.localHome!.trust!(USER, first.binding, first.file!.digest))
     const pushed = remember(await adapter.pushFields(USER, binding, { title: 'Written before quitting' }))
     remember((await adapter.putHandoffNote(USER, pushed, 'Half done.')) as RemoteBinding)
     // A new process: no cache, nothing in memory — only what the profile stored.
     adapter = makeAdapter()
     const pulled = await only()
     expect(pulled.file?.ours).toBe(true)
-    // The pull carries the written digest forward, so storing its state loses nothing.
-    expect((pulled.binding.state as { writtenDigest?: string }).writtenDigest).toBe(pulled.file?.digest)
+    // The pull carries both digests forward, so storing its state loses nothing.
+    expect(pulled.binding.state as { writtenDigest?: string; trustedDigest?: string })
+      .toMatchObject({ writtenDigest: pulled.file?.digest, trustedDigest: pulled.file?.digest })
     writeFileSync(path, readFileSync(path, 'utf8').replace('Half done.', 'Edited by hand.'))
     touchLater(path)
     adapter = makeAdapter()
     expect((await only()).file?.ours).toBe(false)
+  })
+
+  it('reads a binding stored before trust was kept apart as trusting what it wrote', async () => {
+    put('a.md', NESTED)
+    const read = await only()
+    const legacy = { ...read.binding, state: { ...(read.binding.state as Record<string, unknown>), writtenDigest: read.file!.digest } }
+    delete (legacy.state as { trustedDigest?: unknown }).trustedDigest
+    remember(legacy)
+    expect((await only()).file?.ours).toBe(true)
   })
 
   it('patches owned lines only, leaving nested custom YAML exactly as it was', async () => {

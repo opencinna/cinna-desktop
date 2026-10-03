@@ -8,6 +8,7 @@ import type { HandoverDto } from '../../../../shared/handovers'
 import type { TaskCommentDto, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
 import type { TaskBoardColumn } from '../../../../shared/folderTasks'
+import type { AgentDispatchState, TaskDispatchRunResult, TaskDispatchUpdateResult } from '../../../../shared/taskDispatch'
 
 /**
  * The task page, driven.
@@ -42,6 +43,9 @@ const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: 
 const delegationLinks = vi.fn<(taskId: string) => Promise<TaskDelegationsDto>>()
 const forTask = vi.fn<(taskId: string) => Promise<HandoverDto | null>>()
 const taskComments = vi.fn<(taskId: string) => Promise<TaskCommentDto[]>>()
+const dispatchList = vi.fn<() => Promise<AgentDispatchState[]>>()
+const runNext = vi.fn<(agentId: string, taskId?: string) => Promise<TaskDispatchRunResult>>()
+const resumeQueue = vi.fn<(agentId: string) => Promise<TaskDispatchUpdateResult>>()
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
@@ -75,7 +79,13 @@ const taskComments = vi.fn<(taskId: string) => Promise<TaskCommentDto[]>>()
     start: runSend
   },
   system: { openExternal: (url: string) => openExternal(url) },
-  agentFiles: { reveal: (input: { agentId: string; path: string }) => revealFile(input) }
+  agentFiles: { reveal: (input: { agentId: string; path: string }) => revealFile(input) },
+  taskDispatch: {
+    list: () => dispatchList(),
+    runNext: (agentId: string, taskId?: string) => runNext(agentId, taskId),
+    resume: (agentId: string) => resumeQueue(agentId),
+    onChanged: () => () => {}
+  }
 }
 
 const { TaskView } = await import('./TaskView')
@@ -108,6 +118,8 @@ const BASE: TaskDto = {
   statusLabel: null,
   file: null,
   fromOutside: false,
+  blockedBy: [],
+  dispatchNote: null,
   jobId: 'j1',
   jobRunId: 'r1',
   createdAt: new Date('2026-09-11T09:00:00Z'),
@@ -165,6 +177,7 @@ beforeEach(() => {
   forTask.mockResolvedValue(null)
   taskComments.mockResolvedValue([])
   delegationLinks.mockResolvedValue({ from: null, to: [] })
+  dispatchList.mockResolvedValue([])
   useUIStore.setState({ activeView: 'task', activeTaskId: 't1', activeJobId: null } as never)
   useChatStore.setState({ activeChatId: null } as never)
 })
@@ -1587,22 +1600,197 @@ describe('a task kept in its agent’s folder', () => {
     expect(glyph.closest('aside')).not.toBeNull()
   })
 
-  it('names each blocker by its task’s title, linked, and falls back to the id', async () => {
-    const blocker: TaskDto = {
-      ...BASE, ...FOLDER, id: 't9', title: 'Rotate the keys', statusLabel: 'Todo',
-      remote: { adapter: 'folder', id: 'folder:m1:t-2', key: 't-2', url: null } as unknown as TaskDto['remote'],
-      file: { path: '/Users/me/agents/ledger/.cinna/tasks/rotate.md', readOnlyFields: [], blockedBy: [] }
+  it('lists one blocker per line with its task’s status icon, and says which id names nothing', async () => {
+    const STATUSES: Record<string, TaskStatus> = { t9: 'completed', t7: 'in_progress' }
+    getTask.mockImplementation(async (id?: string): Promise<TaskDto> => id === 't1'
+      ? {
+        ...BASE, ...FOLDER,
+        file: { path: FILE_PATH, readOnlyFields: [], blockedBy: ['t-2', 't-4', 't-3'] },
+        blockedBy: [
+          { id: 't-2', taskId: 't9', title: 'Rotate the keys', done: true },
+          { id: 't-4', taskId: 't7', title: 'Draft the notice', done: false },
+          { id: 't-3', taskId: null, title: null, done: false }
+        ]
+      } as TaskDto
+      : { ...BASE, id: id ?? '', status: STATUSES[id ?? ''] ?? 'open' })
+    render(createElement(TaskView), { wrapper })
+    await screen.findByRole('heading', { level: 1 })
+    const row = document.querySelector('[data-task-blocked-by]') as HTMLElement
+    // One per line, no commas.
+    expect(row.className).toContain('flex-col')
+    expect(row.textContent).not.toContain(',')
+    const items = [...row.children] as HTMLElement[]
+    expect(items).toHaveLength(3)
+    // Each found blocker: its task's own status icon and a link to it.
+    await waitFor(() => expect(items[1].getAttribute('data-blocker-status')).toBe('in_progress'))
+    expect(items[0].getAttribute('data-blocker-status')).toBe('completed')
+    expect(items[0].querySelector('svg')).not.toBeNull()
+    expect(within(items[0]).getByRole('button', { name: 'Rotate the keys' })).toBeTruthy()
+    expect(within(items[1]).getByRole('button', { name: 'Draft the notice' }).className).toContain('truncate')
+    // Missing: the id truncates, "— not found" stays whole beside it, with the warning glyph.
+    expect(items[2].textContent).toBe('t-3— not found')
+    const notFound = [...items[2].children].find((child) => child.textContent === '— not found') as HTMLElement
+    expect(notFound.className).not.toContain('truncate')
+    expect(notFound.className).toContain('shrink-0')
+    expect(within(items[2]).getByRole('img', { name: 'Not found' })).toBeTruthy()
+    expect(within(items[2]).queryByRole('button')).toBeNull()
+    fireEvent.click(within(items[1]).getByRole('button', { name: 'Draft the notice' }))
+    expect(useUIStore.getState().activeTaskId).toBe('t7')
+  })
+
+  it('shows “Paused <agent>’s queue” with Resume on the task the queue paused on, and refreshes the page', async () => {
+    const PAUSED: AgentDispatchState = {
+      agentId: 'folder:m1', mode: 'one', running: null, next: null, waiting: null,
+      paused: { reason: 'unreported', taskId: 't1', taskTitle: 'Check the invoices', at: 1 }
     }
-    // Another agent's file with the same id is not this task's blocker.
-    const elsewhere: TaskDto = { ...blocker, id: 't8', title: 'Somebody else’s', assignee: { kind: 'agent', agentId: 'a1', name: 'Invoice Checker' } }
-    listTasks.mockResolvedValue([elsewhere, blocker])
-    await renderTask({ ...FOLDER, file: { path: FILE_PATH, readOnlyFields: [], blockedBy: ['t-2', 't-3'] } })
-    const link = await screen.findByRole('button', { name: 'Rotate the keys' })
-    expect(detail('Blocked by')).toBe('Rotate the keys,t-3')
-    const items = [...document.querySelector('[data-task-blocked-by]')!.children] as HTMLElement[]
-    expect(items.map((item) => item.className.includes('whitespace-nowrap'))).toEqual([true, true])
-    fireEvent.click(link)
-    await waitFor(() => expect(getTask).toHaveBeenCalledWith('t9'))
+    dispatchList.mockResolvedValue([PAUSED])
+    resumeQueue.mockResolvedValueOnce({ ok: false, code: 'not_dispatchable', message: 'This agent is disabled.' })
+    await renderTask({ ...FOLDER, status: 'blocked', statusLabel: null, dispatchNote: 'Ended without reporting' })
+    const line = await waitFor(() => {
+      const found = document.querySelector('[data-task-dispatch-paused]') as HTMLElement | null
+      expect(found).not.toBeNull()
+      return found!
+    })
+    // Beside the dispatch note, in the Status row.
+    expect(line.previousElementSibling?.hasAttribute('data-task-dispatch-note')).toBe(true)
+    expect(line.textContent).toContain('Paused Ledger Folder’s queue')
+    await act(async () => { fireEvent.click(within(line).getByRole('button', { name: 'Resume' })) })
+    expect(resumeQueue).toHaveBeenCalledWith('folder:m1')
+    expect(within(line).getByRole('alert').textContent).toBe('This agent is disabled.')
+
+    // A resume that lands re-reads this page at once (['task', id]), not on its poll.
+    resumeQueue.mockResolvedValueOnce({ ok: true, state: { ...PAUSED, paused: null } })
+    const reads = getTask.mock.calls.length
+    await act(async () => { fireEvent.click(within(line).getByRole('button', { name: 'Resume' })) })
+    await waitFor(() => expect(getTask.mock.calls.length).toBeGreaterThan(reads))
+  })
+
+  it('has no paused line on a task another queue paused on, or none did', async () => {
+    dispatchList.mockResolvedValue([{
+      agentId: 'folder:m1', mode: 'one', running: null, next: null, waiting: null,
+      paused: { reason: 'error', taskId: 'other', taskTitle: 'Other', at: 1 }
+    }])
+    await renderTask({ ...FOLDER, status: 'blocked', statusLabel: null })
+    await waitFor(() => expect(dispatchList).toHaveBeenCalled())
+    expect(document.querySelector('[data-task-dispatch-paused]')).toBeNull()
+  })
+
+  it('says why the dispatcher left a task blocked, under the status, only while blocked', async () => {
+    await renderTask({ ...FOLDER, status: 'blocked', statusLabel: null, dispatchNote: 'Ended without reporting' })
+    const note = document.querySelector('[data-task-dispatch-note]') as HTMLElement
+    expect(note.textContent).toBe('Ended without reporting')
+    expect(note.closest('dd')).toBe([...document.querySelectorAll('dt')].find((dt) => dt.textContent === 'Status')!.parentElement!.querySelector('dd'))
+    cleanup()
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchInterval: false } } })
+    await renderTask({ ...FOLDER, status: 'open', statusLabel: null, dispatchNote: 'Ended without reporting' })
+    expect(document.querySelector('[data-task-dispatch-note]')).toBeNull()
+  })
+
+  describe('Start on a Ready task of a folder agent whose queue Cinna works', () => {
+    const QUEUE: AgentDispatchState = { agentId: 'folder:m1', mode: 'manual', paused: null, running: null, next: null, waiting: null }
+    const READY: Partial<TaskDto> = { ...FOLDER, status: 'open', statusLabel: null }
+    /** The section once the queue read is in (it remounts from its loading shape). */
+    async function startSection(): Promise<HTMLElement> {
+      return waitFor(() => {
+        const section = screen.getByRole('region', { name: 'Start this task' })
+        expect((within(section).getByRole('button', { name: 'Start' }) as HTMLButtonElement).disabled).toBe(false)
+        return section
+      })
+    }
+
+    it('starts through the queue and opens the chat it started', async () => {
+      dispatchList.mockResolvedValue([QUEUE])
+      runNext.mockResolvedValue({ ok: true, taskId: 't1', chatId: 'c42' })
+      await renderTask(READY)
+      const section = await startSection()
+      expect(screen.queryByRole('combobox', { name: 'Continue with' })).toBeNull()
+      await act(async () => { fireEvent.click(within(section).getByRole('button', { name: 'Start' })) })
+      expect(runNext).toHaveBeenCalledWith('folder:m1', 't1')
+      expect(startTask).not.toHaveBeenCalled()
+      expect(useChatStore.getState().activeChatId).toBe('c42')
+      expect(useUIStore.getState().activeView).toBe('chat')
+    })
+
+    it('opens the Inbox on the approval its file needs', async () => {
+      dispatchList.mockResolvedValue([QUEUE])
+      runNext.mockResolvedValue({ ok: true, gate: 'g-9' })
+      await renderTask(READY)
+      const section = await startSection()
+      await act(async () => { fireEvent.click(within(section).getByRole('button', { name: 'Start' })) })
+      expect(useUIStore.getState().activeView).toBe('inbox')
+      expect(useUIStore.getState().revealInboxGateId).toBe('g-9')
+    })
+
+    it('shows a refusal beside the button and stays', async () => {
+      dispatchList.mockResolvedValue([QUEUE])
+      runNext.mockResolvedValue({ ok: false, code: 'folder_busy', message: 'Another task is running in this folder.' })
+      await renderTask(READY)
+      const section = await startSection()
+      await act(async () => { fireEvent.click(within(section).getByRole('button', { name: 'Start' })) })
+      expect(within(section).getByRole('alert').textContent).toBe('Another task is running in this folder.')
+      expect(useUIStore.getState().activeView).toBe('task')
+    })
+
+    it('says nothing standing beside Start', async () => {
+      dispatchList.mockResolvedValue([QUEUE])
+      await renderTask(READY)
+      const section = await startSection()
+      expect(section.textContent).toBe('Start')
+    })
+
+    it('keeps the picker when blockers are open, and says which it waits on', async () => {
+      dispatchList.mockResolvedValue([QUEUE])
+      await renderTask({
+        ...READY,
+        blockedBy: [
+          { id: 't-2', taskId: 't9', title: 'Rotate the keys', done: true },
+          { id: 't-4', taskId: 't7', title: 'Draft the notice', done: false },
+          { id: 't-3', taskId: null, title: null, done: false }
+        ]
+      })
+      const picker = await screen.findByRole('region', { name: 'Continue this task' })
+      expect(screen.queryByRole('region', { name: 'Start this task' })).toBeNull()
+      const waits = picker.querySelector('[data-task-waits-on]') as HTMLElement
+      // The done one is not named; the open one is a link; the missing one is its id.
+      expect(waits.textContent).toBe('Waits on Draft the notice, t-3 (not found)')
+      fireEvent.click(within(waits).getByRole('button', { name: 'Draft the notice' }))
+      expect(useUIStore.getState().activeTaskId).toBe('t7')
+    })
+
+    it('keeps the picker for a script-routed task', async () => {
+      dispatchList.mockResolvedValue([QUEUE])
+      await renderTask({ ...READY, router: 'script' })
+      expect(await screen.findByRole('combobox', { name: 'Continue with' })).toBeTruthy()
+      await waitFor(() => expect(dispatchList).toHaveBeenCalled())
+      expect(screen.queryByRole('region', { name: 'Start this task' })).toBeNull()
+    })
+
+    it('falls back to the picker, with the queue’s sentence, when the queue refuses the task as not eligible', async () => {
+      dispatchList.mockResolvedValue([QUEUE])
+      runNext.mockResolvedValue({ ok: false, code: 'not_eligible', message: 'This task is not ready to run.' })
+      await renderTask(READY)
+      const section = await startSection()
+      await act(async () => { fireEvent.click(within(section).getByRole('button', { name: 'Start' })) })
+      const picker = await screen.findByRole('region', { name: 'Continue this task' })
+      expect(within(picker).getByRole('status').textContent).toBe('This task is not ready to run.')
+      expect(within(picker).getByRole('combobox', { name: 'Continue with' })).toBeTruthy()
+      expect(screen.queryByRole('region', { name: 'Start this task' })).toBeNull()
+    })
+
+    it('keeps the Continue-with picker for a folder agent with no queue, and for a task that is not Ready', async () => {
+      dispatchList.mockResolvedValue([])
+      await renderTask(READY)
+      expect(await screen.findByRole('combobox', { name: 'Continue with' })).toBeTruthy()
+      expect(screen.queryByRole('region', { name: 'Start this task' })).toBeNull()
+      cleanup()
+      client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchInterval: false } } })
+      dispatchList.mockResolvedValue([QUEUE])
+      await renderTask({ ...FOLDER, status: 'new', statusLabel: null })
+      expect(await screen.findByRole('combobox', { name: 'Continue with' })).toBeTruthy()
+      // The page reads the queues (for a pause on this task), but a task that is not Ready never starts through one.
+      await waitFor(() => expect(dispatchList).toHaveBeenCalledTimes(2))
+      expect(screen.queryByRole('region', { name: 'Start this task' })).toBeNull()
+    })
   })
 
   it('has no File row for a task with no file', async () => {

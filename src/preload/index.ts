@@ -136,7 +136,15 @@ import type {
 import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
 import type { TaskDeletePreview, TaskDeleteResult, TaskDto, TaskListQuery } from '../shared/tasks'
 import type { TaskStatus } from '../shared/taskStatus'
-import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot } from '../shared/inbox'
+import type { AskAnswerPayload, InboxAnswerResult, InboxSnapshot, TaskDispatchGateAction, TaskDispatchGateResult } from '../shared/inbox'
+import {
+  TASK_DISPATCH_CHANGED_CHANNEL,
+  type AgentDispatchState,
+  type TaskDispatchChangedPayload,
+  type TaskDispatchMode,
+  type TaskDispatchRunResult,
+  type TaskDispatchUpdateResult
+} from '../shared/taskDispatch'
 import type { TaskDelegationsDto } from '../shared/delegations'
 import type { HandoverDto, HandoverIgnoreCheck, HandoverSetting } from '../shared/handovers'
 import type {
@@ -1400,7 +1408,30 @@ const api = {
   inbox: {
     list: (): Promise<InboxSnapshot> => ipcRenderer.invoke('inbox:list'),
     answer: (data: AskAnswerPayload): Promise<InboxAnswerResult> =>
-      ipcRenderer.invoke('inbox:answer', data)
+      ipcRenderer.invoke('inbox:answer', data),
+    /** Approve (trust and run) or skip a dispatcher approval of outside content (`snapshot.dispatch`). */
+    answerDispatchGate: (gateId: string, action: TaskDispatchGateAction): Promise<TaskDispatchGateResult> =>
+      ipcRenderer.invoke('inbox:dispatch-gate', gateId, action)
+  },
+
+  /**
+   * An agent's task queue (the task dispatcher): its run mode, its pause and
+   * Run next. Refusals come back as data with a `code`.
+   */
+  taskDispatch: {
+    list: (): Promise<AgentDispatchState[]> => ipcRenderer.invoke('taskDispatch:list'),
+    get: (agentId: string): Promise<AgentDispatchState | null> => ipcRenderer.invoke('taskDispatch:get', agentId),
+    setMode: (agentId: string, mode: TaskDispatchMode): Promise<TaskDispatchUpdateResult> =>
+      ipcRenderer.invoke('taskDispatch:set-mode', agentId, mode),
+    resume: (agentId: string): Promise<TaskDispatchUpdateResult> => ipcRenderer.invoke('taskDispatch:resume', agentId),
+    runNext: (agentId: string, taskId?: string): Promise<TaskDispatchRunResult> =>
+      ipcRenderer.invoke('taskDispatch:run-next', agentId, taskId),
+    /** Told whenever a queue's state may have changed; invalidate on it. Returns an unsubscribe function. */
+    onChanged: (handler: (payload: TaskDispatchChangedPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: TaskDispatchChangedPayload): void => handler(payload)
+      ipcRenderer.on(TASK_DISPATCH_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(TASK_DISPATCH_CHANGED_CHANNEL, listener)
+    }
   },
 
   /**

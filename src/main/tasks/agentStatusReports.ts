@@ -34,3 +34,16 @@ export function takeAgentStatusReport(taskId: string, runId: string | undefined)
 export function forgetAgentStatusReports(chatId: string): void {
   for (const [taskId, mark] of reported) if (mark.chatId === chatId) reported.delete(taskId)
 }
+
+/**
+ * Whether the agent reported this task's status during the latest run in this
+ * chat — the job-run path, which knows the chat but not the run id. A turn
+ * start in the chat drops older marks, so a mark for this chat is this turn's.
+ * Clears the mark when it answers true.
+ */
+export function takeAgentStatusReportInChat(taskId: string, chatId: string): boolean {
+  const mark = reported.get(taskId)
+  if (!mark || mark.chatId !== chatId) return false
+  reported.delete(taskId)
+  return true
+}

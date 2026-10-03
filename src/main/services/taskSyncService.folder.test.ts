@@ -657,3 +657,75 @@ describe('a comment appended to a folder task’s log', () => {
     expect(taskService.getById(USER, task.id).fromOutside).toBe(false)
   })
 })
+
+describe('trust in outside content', () => {
+  it('is not laundered by a Cinna push: a task dragged to Ready still asks, and once approved stays trusted across pulls', async () => {
+    const { createTaskDispatchService } = await import('./taskDispatchService')
+    const { chatRepo } = await import('../db/chats')
+    put('_board.yaml', 'Icebox: backlog\nUp Next: ready\nStuck: waiting\n')
+    const file = put('outside.md', '---\nid: t-out\ntitle: Outside job\nstatus: Icebox\n---\nDo the outside thing.\n')
+    await taskSyncService.pull(USER)
+    const task = only()
+    expect(task).toMatchObject({ status: 'new', fromOutside: true })
+
+    // The user drags it to Ready: Cinna writes the status word into the file.
+    // Mutation: trust every Cinna write (the old rule) → it reads as Cinna's own here.
+    await taskAuthoringService.setStatus(SCOPE, task.id, 'open')
+    await settle()
+    expect(readFileSync(file, 'utf8')).toContain('status: Up Next')
+    later(file)
+    await taskSyncService.pull(USER)
+    expect(taskService.getById(USER, task.id)).toMatchObject({ status: 'open', fromOutside: true })
+
+    const started: string[] = []
+    const dispatcher = createTaskDispatchService({
+      agents: async () => [{ id: 'bare-1', name: 'Uploader', path: holder.agentPath }],
+      async start(_scope, taskId, agentId) {
+        const chat = chatRepo.create(USER, { agentId })
+        taskService.beginDesktopChat(USER, taskId, chat.id, { kind: 'agent', agentId, name: 'Uploader' })
+        started.push(taskId)
+        return { chatId: chat.id, runId: 'run-1', completed: new Promise(() => {}) }
+      },
+      withSlot: (_agentId, _signal, run) => run(),
+      slotFree: () => true,
+      trust: (userId, taskId, digest) => taskSyncService.trustLocalContent(userId, taskId, digest),
+      refreshTask: async () => {},
+      liveAgentIds: () => [],
+      publish: () => {}
+    })
+    try {
+      // It still asks before running.
+      const asked = await dispatcher.runNext(SCOPE, 'bare-1', task.id)
+      expect(asked).toMatchObject({ ok: true, gate: expect.any(String) })
+      expect(started).toEqual([])
+
+      // Approved: it runs, and the binding trusts it too.
+      // Mutation: trust only the task row → the next pull untrusts it again.
+      const answer = await dispatcher.answerGate(SCOPE, (asked as { gate: string }).gate, 'approve')
+      expect(answer).toMatchObject({ ok: true, started: { taskId: task.id } })
+      expect(started).toEqual([task.id])
+      await settle()
+      later(file)
+      await taskSyncService.pull(USER)
+      expect(taskService.getById(USER, task.id).fromOutside).toBe(false)
+
+      // A Cinna write onto trusted content stays trusted, after a restart too.
+      taskService.setStatus(USER, task.id, 'blocked')
+      await settle()
+      expect(readFileSync(file, 'utf8')).toContain('status: Stuck')
+      holder.adapters = [folderAdapter()]
+      taskSyncService.resetCursors()
+      later(file)
+      await taskSyncService.pull(USER)
+      expect(taskService.getById(USER, task.id)).toMatchObject({ status: 'blocked', fromOutside: false })
+
+      // And an outside edit after that is outside again.
+      writeFileSync(file, readFileSync(file, 'utf8').replace('Do the outside thing.', 'Do something else.'))
+      later(file)
+      await taskSyncService.pull(USER)
+      expect(taskService.getById(USER, task.id).fromOutside).toBe(true)
+    } finally {
+      dispatcher.shutdown()
+    }
+  })
+})

@@ -4,6 +4,7 @@ import { createElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TaskDto } from '../../../../shared/tasks'
 import type { TaskBoardColumn } from '../../../../shared/folderTasks'
+import type { AgentDispatchState, TaskDispatchMode, TaskDispatchRunResult, TaskDispatchUpdateResult } from '../../../../shared/taskDispatch'
 
 /**
  * The Tasks view: the list grouped by category, the agent filter and search,
@@ -24,6 +25,12 @@ const listTasks = vi.fn<() => Promise<TaskDto[]>>()
 const setStatus = vi.fn<(id: string, status: string, label?: string | null) => Promise<TaskDto>>()
 const folderBoard = vi.fn<(agentId: string) => Promise<TaskBoardColumn[] | null>>()
 const createTask = vi.fn<(input: unknown) => Promise<TaskDto>>()
+const dispatchList = vi.fn<() => Promise<AgentDispatchState[]>>()
+const runNext = vi.fn<(agentId: string, taskId?: string) => Promise<TaskDispatchRunResult>>()
+const setMode = vi.fn<(agentId: string, mode: TaskDispatchMode) => Promise<TaskDispatchUpdateResult>>()
+const resume = vi.fn<(agentId: string) => Promise<TaskDispatchUpdateResult>>()
+/** The pushed `taskDispatch:changed`, captured so a test can fire it. */
+let dispatchChanged: (() => void) | null = null
 
 const { TasksView } = await import('./TasksView')
 const { useUIStore } = await import('../../stores/ui.store')
@@ -34,7 +41,7 @@ function task(id: string, overrides: Partial<TaskDto> = {}): TaskDto {
     origin: 'local', executor: 'desktop', executorDevice: null, runsHere: true, chatId: null,
     assignee: { kind: 'model', agentId: null, name: null }, parentTaskId: null, subtaskCount: 0,
     subtaskCompletedCount: 0, remote: null, handoffNote: null, artifacts: [], budget: null, errorMessage: null,
-    customFields: null, statusLabel: null, file: null, fromOutside: false, jobId: null, jobRunId: null, createdAt: new Date('2026-10-01T09:00:00Z'),
+    customFields: null, statusLabel: null, file: null, fromOutside: false, blockedBy: [], dispatchNote: null, jobId: null, jobRunId: null, createdAt: new Date('2026-10-01T09:00:00Z'),
     updatedAt: new Date('2026-10-01T09:00:00Z'), startedAt: null, finishedAt: null, ...overrides
   }
 }
@@ -70,6 +77,11 @@ beforeEach(() => {
   setStatus.mockReset()
   folderBoard.mockReset().mockResolvedValue(null)
   createTask.mockReset()
+  dispatchList.mockReset().mockResolvedValue([])
+  runNext.mockReset()
+  setMode.mockReset()
+  resume.mockReset()
+  dispatchChanged = null
   useUIStore.setState({ activeView: 'tasks', tasksViewMode: 'list', tasksAgentFilter: 'all', activeTaskId: null, taskOpenedFromTasks: false })
   ;(window as unknown as { api: Record<string, unknown> }).api = {
     app: { setTheme: async () => undefined },
@@ -79,7 +91,14 @@ beforeEach(() => {
       folderBoard: (agentId: string) => folderBoard(agentId),
       create: (input: unknown) => createTask(input)
     },
-    inbox: { list: async () => ({ entries: [], unreadable: [] }) }
+    inbox: { list: async () => ({ entries: [], unreadable: [] }) },
+    taskDispatch: {
+      list: () => dispatchList(),
+      runNext: (agentId: string, taskId?: string) => runNext(agentId, taskId),
+      setMode: (agentId: string, mode: TaskDispatchMode) => setMode(agentId, mode),
+      resume: (agentId: string) => resume(agentId),
+      onChanged: (handler: () => void) => { dispatchChanged = handler; return () => {} }
+    }
   }
 })
 afterEach(cleanup)
@@ -720,5 +739,145 @@ describe('empty', () => {
     expect(await screen.findByText('No tasks yet.')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'New task' })).toBeTruthy()
     expect(screen.queryByRole('region')).toBeNull()
+  })
+})
+
+describe('the queue control, filtered to one folder agent', () => {
+  function queue(overrides: Partial<AgentDispatchState> = {}): AgentDispatchState {
+    return { agentId: 'agent-w', mode: 'manual', paused: null, running: null, next: null, waiting: null, ...overrides }
+  }
+
+  it('appears only while the filter names one agent whose queue Cinna works', async () => {
+    dispatchList.mockResolvedValue([queue()])
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    expect(screen.queryByRole('button', { name: /Run next/ })).toBeNull()
+    // Reviewer has tasks but no queue (not in main's list): no control.
+    act(() => useUIStore.setState({ tasksAgentFilter: 'agent:agent-r' }))
+    await waitFor(() => expect(dispatchList).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: /Run next/ })).toBeNull()
+    act(() => useUIStore.setState({ tasksAgentFilter: 'agent:agent-w' }))
+    expect(await screen.findByRole('button', { name: /Run next/ })).toBeTruthy()
+    // Typing in search moves nothing in or out.
+    fireEvent.change(screen.getByLabelText('Search tasks'), { target: { value: 'zzz' } })
+    expect(screen.getByRole('button', { name: /Run next/ })).toBeTruthy()
+  })
+
+  it('switches the run mode from the chevron menu, the current one checked', async () => {
+    dispatchList.mockResolvedValue([queue()])
+    setMode.mockResolvedValue({ ok: true, state: queue({ mode: 'one' }) })
+    useUIStore.setState({ tasksAgentFilter: 'agent:agent-w' })
+    render(createElement(TasksView), { wrapper })
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose how the queue runs' }))
+    const menu = screen.getByRole('menu', { name: 'Run mode' })
+    const manual = within(menu).getByRole('menuitemradio', { name: /Manual/ })
+    expect(manual.getAttribute('aria-checked')).toBe('true')
+    expect(within(menu).getByRole('menuitemradio', { name: /One at a time/ }).getAttribute('aria-checked')).toBe('false')
+    // Healthy: the menu is the run mode alone.
+    expect(within(menu).queryByRole('menuitem')).toBeNull()
+    await act(async () => { fireEvent.click(within(menu).getByRole('menuitemradio', { name: /One at a time/ })) })
+    expect(setMode).toHaveBeenCalledWith('agent-w', 'one')
+    expect(screen.queryByRole('menu', { name: 'Run mode' })).toBeNull()
+  })
+
+  it('moves focus into the menu, walks it with the arrows, and Escape returns focus to the chevron', async () => {
+    dispatchList.mockResolvedValue([queue()])
+    useUIStore.setState({ tasksAgentFilter: 'agent:agent-w' })
+    render(createElement(TasksView), { wrapper })
+    const chevron = await screen.findByRole('button', { name: 'Choose how the queue runs' })
+    fireEvent.click(chevron)
+    const menu = screen.getByRole('menu', { name: 'Run mode' })
+    const [manual, one] = within(menu).getAllByRole('menuitemradio')
+    await waitFor(() => expect(document.activeElement).toBe(manual))
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(one)
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(manual)
+    fireEvent.keyDown(window, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(one)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('menu', { name: 'Run mode' })).toBeNull()
+    expect(document.activeElement).toBe(chevron)
+    expect(setMode).not.toHaveBeenCalled()
+  })
+
+  it('runs the next task and stays put; shows a refusal under the control without closing anything', async () => {
+    dispatchList.mockResolvedValue([queue()])
+    runNext.mockResolvedValueOnce({ ok: true, taskId: 'r1', chatId: 'c9' })
+    useUIStore.setState({ tasksAgentFilter: 'agent:agent-w' })
+    render(createElement(TasksView), { wrapper })
+    const button = await screen.findByRole('button', { name: /Run next/ })
+    await act(async () => { fireEvent.click(button) })
+    expect(runNext).toHaveBeenCalledWith('agent-w', undefined)
+    expect(useUIStore.getState().activeView).toBe('tasks')
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    runNext.mockResolvedValueOnce({ ok: false, code: 'folder_busy', message: 'Another task is running in this folder.' })
+    await act(async () => { fireEvent.click(button) })
+    expect(screen.getByRole('alert').textContent).toBe('Another task is running in this folder.')
+    expect(useUIStore.getState().activeView).toBe('tasks')
+    expect(screen.getByRole('button', { name: /Run next/ })).toBe(button)
+  })
+
+  it('opens the Inbox on the approval a gated task waits for', async () => {
+    dispatchList.mockResolvedValue([queue()])
+    runNext.mockResolvedValue({ ok: true, gate: 'gate-7' })
+    useUIStore.setState({ tasksAgentFilter: 'agent:agent-w' })
+    render(createElement(TasksView), { wrapper })
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /Run next/ })) })
+    expect(useUIStore.getState().activeView).toBe('inbox')
+    expect(useUIStore.getState().revealInboxGateId).toBe('gate-7')
+  })
+
+  it('turns Run next into Resume while paused, adding no row, with the task and Run next in the menu', async () => {
+    const paused = queue({ paused: { reason: 'unreported', taskId: 'r1', taskTitle: 'Write the changelog', at: 1 } })
+    dispatchList.mockResolvedValue([queue()])
+    useUIStore.setState({ tasksAgentFilter: 'agent:agent-w' })
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: 'Run next' })
+    const header = document.querySelector('header')!
+    const after = header.nextElementSibling
+
+    // A poll pauses the queue: the control changes in place, nothing is inserted under the row.
+    dispatchList.mockResolvedValue([paused])
+    await act(async () => { dispatchChanged?.() })
+    const resumeButton = await screen.findByRole('button', { name: 'Resume' })
+    expect(screen.queryByRole('button', { name: 'Run next' })).toBeNull()
+    expect(header.nextElementSibling).toBe(after)
+    expect(document.querySelector('[data-dispatch-paused]')!.closest('header')).toBe(header)
+    const glyph = within(resumeButton).getByRole('img', { name: 'Paused — Write the changelog ended without reporting' })
+    expect(glyph.getAttribute('title')).toBe('Paused — Write the changelog ended without reporting')
+    expect(resumeButton.className).toContain('--color-warning')
+
+    // The menu: the paused task, then Run next, then the run mode.
+    fireEvent.click(screen.getByRole('button', { name: 'Choose how the queue runs' }))
+    const menu = screen.getByRole('menu', { name: 'Run mode' })
+    const items = [...menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')]
+    expect(items.map((item) => item.textContent)).toEqual(['Open Write the changelog', 'Run next', 'Manual', 'One at a time'])
+    runNext.mockResolvedValueOnce({ ok: true, taskId: 'r2', chatId: 'c2' })
+    await act(async () => { fireEvent.click(items[1]) })
+    expect(runNext).toHaveBeenCalledWith('agent-w', undefined)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose how the queue runs' }))
+    fireEvent.click(within(screen.getByRole('menu', { name: 'Run mode' })).getByRole('menuitem', { name: 'Open Write the changelog' }))
+    expect(useUIStore.getState().activeTaskId).toBe('r1')
+  })
+
+  it('resumes from the control and shows a refusal under it', async () => {
+    const paused = queue({ paused: { reason: 'unreported', taskId: 'r1', taskTitle: 'Write the changelog', at: 1 } })
+    dispatchList.mockResolvedValue([paused])
+    resume.mockResolvedValueOnce({ ok: false, code: 'not_dispatchable', message: 'This agent is disabled.' })
+    useUIStore.setState({ tasksAgentFilter: 'agent:agent-w' })
+    render(createElement(TasksView), { wrapper })
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Resume' })) })
+    expect(resume).toHaveBeenCalledWith('agent-w')
+    expect(screen.getByRole('alert').textContent).toBe('This agent is disabled.')
+
+    // The queue resumes: the control goes back to Run next on the dispatch event, not on a keystroke.
+    dispatchList.mockResolvedValue([queue()])
+    fireEvent.change(screen.getByLabelText('Search tasks'), { target: { value: 'W' } })
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy()
+    await act(async () => { dispatchChanged?.() })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run next' })).toBeTruthy())
   })
 })

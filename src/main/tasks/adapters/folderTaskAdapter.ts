@@ -140,9 +140,26 @@ export const FOLDER_ABSENCE_GRACE_MS = 30_000
 interface FolderState {
   file: string
   readDigest: string
+  /**
+   * The digest of the bytes Cinna last wrote — recognizes Cinna's own write.
+   * Not a statement of trust: a push onto outside content writes too.
+   */
   writtenDigest?: string
+  /**
+   * The digest of content Cinna vouches for: its own creation, a write onto
+   * content that was already trusted, or the user's approval of outside
+   * content (`localHome.trust`). Null = nothing trusted. Absent on a binding
+   * stored before this field existed, where `writtenDigest` meant the same.
+   */
+  trustedDigest?: string | null
   stamp: string
   base: FolderBase
+}
+
+/** The two digests a binding carries forward. */
+interface FolderDigests {
+  written?: string
+  trusted?: string
 }
 
 /** The owned values as last read — the merge's "what did the file say before". */
@@ -253,9 +270,17 @@ function stateOf(binding: RemoteBinding): Partial<FolderState> {
   return binding.state as Partial<FolderState>
 }
 
-function writtenFor(known: Map<string, Record<string, unknown>>, bindingId: string): string | undefined {
-  const value = (known.get(bindingId) as Partial<FolderState> | undefined)?.writtenDigest
-  return typeof value === 'string' ? value : undefined
+/** A stored state's digests; an older binding without `trustedDigest` trusted what it wrote. */
+function digestsOf(state: Partial<FolderState> | undefined): FolderDigests {
+  const written = typeof state?.writtenDigest === 'string' ? state.writtenDigest : undefined
+  const trusted = state && 'trustedDigest' in state
+    ? (typeof state.trustedDigest === 'string' ? state.trustedDigest : undefined)
+    : written
+  return { written, trusted }
+}
+
+function digestsFor(known: Map<string, Record<string, unknown>>, bindingId: string): FolderDigests {
+  return digestsOf(known.get(bindingId) as Partial<FolderState> | undefined)
 }
 
 function stemOf(name: string): string {
@@ -407,13 +432,14 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
     return folder
   }
 
-  function bindingFor(folder: Folder, item: Item, writtenDigest?: string): RemoteBinding {
+  function bindingFor(folder: Folder, item: Item, digests: FolderDigests = {}): RemoteBinding {
     const state: FolderState = {
       file: item.name,
       readDigest: item.digest,
       stamp: cache.get(item.path)?.stamp ?? '',
       base: baseOf(item.parsed),
-      ...(writtenDigest ? { writtenDigest } : {})
+      ...(digests.written ? { writtenDigest: digests.written } : {}),
+      trustedDigest: digests.trusted ?? null
     }
     return {
       adapter: FOLDER_ADAPTER_ID,
@@ -425,12 +451,12 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
   }
 
   /**
-   * `written` is the digest the stored binding says Cinna last wrote. The
-   * file is Cinna's own exactly when its bytes still hash to that — held in
+   * `digests` are what the stored binding carries. The file is trusted
+   * (`ours`) exactly when its bytes still hash to the trusted digest — held in
    * the binding, so it survives a restart, and carried forward here so a pull
    * never erases it.
    */
-  function snapshotOf(folder: Folder, item: Item, written: string | undefined): RemoteTaskSnapshot {
+  function snapshotOf(folder: Folder, item: Item, digests: FolderDigests): RemoteTaskSnapshot {
     const { parsed } = item
     const { status } = folderStatusOf(parsed.status, folder.board)
     // From the listing of this same pass, so the counts cost no read.
@@ -442,7 +468,7 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
       if (folderStatusOf(child.parsed.status, folder.board).status === 'completed') subtaskCompletedCount += 1
     }
     return {
-      binding: bindingFor(folder, item, written),
+      binding: bindingFor(folder, item, digests),
       title: parsed.title ?? stemOf(item.name),
       description: parsed.description,
       goal: null,
@@ -459,7 +485,7 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
       file: {
         path: item.path,
         digest: item.digest,
-        ours: written !== undefined && written === item.digest,
+        ours: digests.trusted !== undefined && digests.trusted === item.digest,
         readOnlyFields: parsed.custom.filter((field) => !field.editable).map((field) => field.key),
         blockedBy: [...parsed.blockedBy]
       }
@@ -533,10 +559,16 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
 
   /**
    * Publish a patch to the bound file and describe the result as a binding.
-   * `prior` is the written digest the binding already carried, kept when
-   * nothing needed writing.
+   * `prior` is the digests the binding already carried, kept when nothing
+   * needed writing.
+   *
+   * **A write does not launder.** The new bytes are trusted only when the
+   * bytes they replace were: a status, field, note or log entry Cinna pushes
+   * onto content written outside Cinna leaves that content untrusted, so the
+   * dispatcher's approval gate still asks about it. The new digest is still
+   * recorded as Cinna's own write.
    */
-  function write(folder: Folder, item: Item, patch: FolderTaskPatch, prior: string | undefined): RemoteBinding {
+  function write(folder: Folder, item: Item, patch: FolderTaskPatch, prior: FolderDigests): RemoteBinding {
     const next = patchFolderTaskFile(item.text, patch)
     if (next === item.text) return bindingFor(folder, item, prior)
     let bytes: Buffer
@@ -547,11 +579,13 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
     }
     const digest = sha256(bytes)
     // The listing that follows sees a new stamp and reads the file again; the
-    // digest then matches the binding's `writtenDigest`, so it reads as ours.
+    // digest then matches `writtenDigest`, and `trustedDigest` when the
+    // content was trusted before this write.
     cache.delete(item.path)
     const text = bytes.toString('utf8')
     const parsed = parseFolderTaskFile(text, stemOf(item.name)) ?? item.parsed
-    return bindingFor(folder, { ...item, text, parsed, digest }, digest)
+    const trusted = prior.trusted !== undefined && prior.trusted === item.digest ? digest : prior.trusted
+    return bindingFor(folder, { ...item, text, parsed, digest }, { written: digest, trusted })
   }
 
   /** The word to write for a status, honouring a label a person chose when it fits. */
@@ -570,7 +604,7 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
     merge = false
   ): Promise<RemoteBinding> {
     const { folder, item } = await forWrite(binding)
-    const prior = stateOf(binding).writtenDigest
+    const prior = digestsOf(stateOf(binding))
     // The merge, as for the other owned fields: a status word the file changed
     // since the last read wins over the local move, which is dropped — the
     // binding's base now matches the file, and the next pull brings its word in.
@@ -695,7 +729,8 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
           name, path, digest, mtimeMs: Date.now(), text: bytes.toString('utf8'),
           parsed: parsed ?? (parseFolderTaskFile(content, stemOf(name)) as ParsedFolderTask)
         }
-        return bindingFor(folder, item, digest)
+        // Cinna wrote every byte of a file it created: trusted.
+        return bindingFor(folder, item, { written: digest, trusted: digest })
       }
       throw new RemoteTaskError('rejected', 'No free file name for this task.', `${slug}.md and 99 more are taken in ${dir}`)
     },
@@ -704,7 +739,7 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
       require('handoffNote', 'putHandoffNote')
       const { folder, item } = await forWrite(binding)
       // Returned, so the sync service stores the new written digest with it.
-      return write(folder, item, { handoffNote: note }, stateOf(binding).writtenDigest)
+      return write(folder, item, { handoffNote: note }, digestsOf(stateOf(binding)))
     },
 
     async pushFields(_userId, binding, fields: Partial<RemoteTaskFields>) {
@@ -734,7 +769,7 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
         const custom = customPatch(fields.customFields, item, base)
         if (custom) patch.custom = custom
       }
-      return write(folder, item, patch, stateOf(binding).writtenDigest)
+      return write(folder, item, patch, digestsOf(stateOf(binding)))
     },
 
     async pushStatus(_userId, binding, status, _reason, options) {
@@ -753,7 +788,7 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
 
     async fetch(_userId, binding) {
       const { folder, item } = await current(binding, true)
-      return snapshotOf(folder, item, stateOf(binding).writtenDigest)
+      return snapshotOf(folder, item, digestsOf(stateOf(binding)))
     },
 
     async liveSession() {
@@ -784,7 +819,7 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
           const folder = readFolder(agent)
           if (!folder) continue
           for (const item of folder.items.values()) {
-            snapshots.push(snapshotOf(folder, item, writtenFor(known, `${agent.id}:${item.parsed.id}`)))
+            snapshots.push(snapshotOf(folder, item, digestsFor(known, `${agent.id}:${item.parsed.id}`)))
           }
         } catch (err) {
           failures += 1
@@ -807,7 +842,7 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
       }
       return [...folder.items.values()]
         .filter((candidate) => candidate.parsed.parent === item.parsed.id)
-        .map((candidate) => snapshotOf(folder, candidate, writtenFor(known, `${folder.agent.id}:${candidate.parsed.id}`)))
+        .map((candidate) => snapshotOf(folder, candidate, digestsFor(known, `${folder.agent.id}:${candidate.parsed.id}`)))
     },
 
     async execute() {
@@ -877,15 +912,14 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
       },
       async appendLog(_userId, binding, entry) {
         const { folder, item } = await forWrite(binding)
-        const prior = stateOf(binding).writtenDigest
-        const written = write(folder, item, { appendLog: entry }, prior)
-        // Trusted only if it was: a file someone else changed since Cinna
-        // last wrote it is still theirs after Cinna adds a log entry.
-        if (prior !== undefined && prior === item.digest) return written
-        const state = { ...(written.state as unknown as FolderState) }
-        if (prior === undefined) delete state.writtenDigest
-        else state.writtenDigest = prior
-        return { ...written, state: state as unknown as Record<string, unknown> }
+        // Trusted only if it was (`write`): a file someone else changed since
+        // Cinna last trusted it is still theirs after Cinna adds a log entry.
+        return write(folder, item, { appendLog: entry }, digestsOf(stateOf(binding)))
+      },
+      trust(_userId, binding, digest) {
+        // The user approved exactly this content; nothing is read or written.
+        const state: FolderState = { ...(binding.state as unknown as FolderState), trustedDigest: digest }
+        return { ...binding, state: state as unknown as Record<string, unknown> }
       },
       statusWord(remoteId, status, current) {
         const agentId = [...lastRead.keys()].find((id) => remoteId.startsWith(`${id}:`))

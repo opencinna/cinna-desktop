@@ -139,6 +139,8 @@ function sampleTask(title: string): TaskDto {
     statusLabel: null,
     file: null,
     fromOutside: false,
+    blockedBy: [],
+    dispatchNote: null,
     jobId: null,
     jobRunId: null,
     createdAt: now,
@@ -1480,6 +1482,48 @@ describe('scheduled sync races', () => {
     gate.resolve({ ...snapshot, title: 'Older detail' })
     await read
     expect(taskService.getById(USER, id).title).toBe('Newer full pull')
+  })
+
+  it('reads again after a read already in flight when a fresh read is asked for', async () => {
+    // The dispatcher's re-read at a turn's end. Mutation: let pullFresh share
+    // the in-flight read (pullOne) → it answers with the content read before.
+    const id = await bound()
+    const adapter = holder.adapters[0]
+    const snapshot = await adapter.fetch(USER, {
+      adapter: 'cinna', id: remoteIdOf(id), key: null, url: null, state: {}
+    })
+    const gate = deferred<typeof snapshot>()
+    const entered = deferred<void>()
+    const fetch = vi.spyOn(adapter, 'fetch').mockImplementationOnce(() => { entered.resolve(); return gate.promise })
+    const early = taskSyncService.pullOne(USER, id)
+    await entered.promise
+    // The turn ends after the agent's write; the early read began before it.
+    cinna.touch(remoteIdOf(id), { title: 'Written by the agent' })
+    const fresh = taskSyncService.pullFresh(USER, id)
+    gate.resolve({ ...snapshot, title: 'Read before the turn ended' })
+    await early
+    expect((await fresh)?.title).toBe('Written by the agent')
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(taskService.getById(USER, id).title).toBe('Written by the agent')
+  })
+
+  it('tries a fresh read once more when the revision check discards it', async () => {
+    // Mutation: no retry → the discarded read answers null.
+    const id = await bound()
+    const adapter = holder.adapters[0]
+    const snapshot = await adapter.fetch(USER, {
+      adapter: 'cinna', id: remoteIdOf(id), key: null, url: null, state: {}
+    })
+    const gate = deferred<typeof snapshot>()
+    const entered = deferred<void>()
+    const fetch = vi.spyOn(adapter, 'fetch').mockImplementationOnce(() => { entered.resolve(); return gate.promise })
+    const fresh = taskSyncService.pullFresh(USER, id)
+    await entered.promise
+    cinna.touch(remoteIdOf(id), { title: 'Newer full pull' })
+    await taskSyncService.pull(USER)
+    gate.resolve({ ...snapshot, title: 'Discarded' })
+    expect((await fresh)?.title).toBe('Newer full pull')
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 
   it('does not overwrite a successfully pushed edit with an earlier detail response', async () => {
