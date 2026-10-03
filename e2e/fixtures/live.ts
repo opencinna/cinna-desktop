@@ -7,7 +7,15 @@ import { test, type CinnaApp } from './app'
  */
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim() ?? ''
 
+/**
+ * Billed specs run only when asked for: `make e2e-live`, or `make e2e-one` with
+ * a spec whose name contains `live`, sets `CINNA_E2E_LIVE=1`. A full `make e2e`
+ * with a key in `.env` would otherwise spend it on every run.
+ */
+export const LIVE_REQUESTED = process.env.CINNA_E2E_LIVE === '1'
+
 export function requireLiveKey(): void {
+  test.skip(!LIVE_REQUESTED, 'live specs run only through make e2e-live or make e2e-one SPEC=<live spec>')
   test.skip(OPENAI_API_KEY === '', 'OPENAI_API_KEY is not set in .env')
 }
 

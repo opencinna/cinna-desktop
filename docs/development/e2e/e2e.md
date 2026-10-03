@@ -23,7 +23,8 @@ Drive the *built* Electron app with Playwright so that user scenarios — the on
 3. `make e2e-integration` runs the one cross-repo spec against a **running cinna-core**, with the real cinna-cli it installs itself — see [Cross-repo integration runs](#cross-repo-integration-runs)
 4. `make e2e-engine` fills the per-machine engine cache once; `make e2e-ui` and `make e2e-trace TRACE=…` step through runs and failures
 5. A failed test keeps its sandbox (path in the test annotations) plus a trace, screenshots and the aria snapshot at failure under `e2e/test-results/`
-6. The suite is a manual, user-decided step — it is not wired into `npm test`. CI runs it on `macos-latest` (`.github/workflows/e2e.yml`)
+6. The suite is a manual, user-decided step — it is not wired into `npm test`, and no CI workflow runs it
+7. Billed live specs skip unless `CINNA_E2E_LIVE=1`: `make e2e-live` sets it, and so does `make e2e-one` when `SPEC` contains `live`. A full `make e2e` never spends the key, even with one in `.env`
 
 ### Adding a scenario
 1. Ask for it: `/cinna-desktop.e2e.write <the user scenario>` launches the `e2e-test-writer` agent (`.claude/agents/e2e-test-writer.md`), which follows [Writing E2E Tests](e2e_llm.md)
@@ -61,7 +62,7 @@ Four specs run a real model, every one of them on purpose: the fakes prove the p
 | `live-delegation.spec.ts` | Fan-out to a kit and a bare folder with one group packet; auto-run under standing grants with the third hop refused; a relay that is not reported done before its child answers, including one that answers in plain text; a cloud delegation returning its result | `OPENAI_API_KEY`, the engine cache; the cloud test also `CINNA_E2E_SERVER_URL` / `_EMAIL` / `_PASSWORD` and an agent named **Hello Testing Agent** on that cinna-core, and skips without them | About $0.10–0.30 of OpenAI plus one turn on the core's own model account; 3–3.5 min when green |
 | `live-autorun.spec.ts` | The receiver's setting decides: a brief with no `execution` auto-runs, `execution: ask` still gates, git's verdict in a repository, the gate's standing option, coordinator delegations to an auto bare folder and an auto kit agent, a brief written while the app was closed | `OPENAI_API_KEY`, the engine cache, the machine's `git` | About $0.10–0.20 |
 
-- **Every live spec skips without its key**, so `make e2e` stays green on a machine without one. The other side of that: on a machine whose `.env` has `OPENAI_API_KEY`, every `make e2e` runs and bills all four. Run the one you changed with `make e2e-one SPEC=<spec>`.
+- **Every live spec skips unless it was asked for and has its key.** `requireLiveKey()` skips without `CINNA_E2E_LIVE=1` (set by `make e2e-live`, and by `make e2e-one` when `SPEC` contains `live`) and without `OPENAI_API_KEY`, so a full `make e2e` never bills the key even with one in `.env`. Run the one you changed with `make e2e-one SPEC=<live spec>`; a raw `npx playwright test` needs `CINNA_E2E_LIVE=1` in front.
 - **The model is chosen, not defaulted.** `seedOpenAiDefaultMode` (`e2e/fixtures/live.ts`) adds the OpenAI credential over IPC and makes a default chat mode on the first of `PREFERRED_MODELS` (`gpt-4.1-mini`, `gpt-4o-mini`, `gpt-5-mini`) that the app lists for the key, falling back to the first listed `mini`. A fast model that calls tools dependably is what keeps these runs cheap and their failures meaningful. Each spec logs the model it got.
 - **Assertions are on outcomes, never on prose.** A file on disk, a task's status, a delegation row, an Inbox that stays empty, a core task. Where a spec checks that a requester learnt something, the word exists only in the executor's prompt, so it can have reached the requester only through the return packet.
 - **The cloud test links the profile without a browser.** `linkLiveCinnaProfile` (`e2e/fixtures/liveCinnaLink.ts`) signs in for an owner token and writes it, encrypted with the app's own `safeStorage`, into the sandbox's `users` row; `liveCoreSession()` turns a missing or unreachable core into a skip that names the reason. Every core task the run creates carries a run marker in its title and is deleted afterwards.
@@ -167,10 +168,9 @@ playwright test -> fixtures/app.ts -> electron.launch(repoRoot, HOME=sandbox, CI
 - `e2e/specs/task-sync.spec.ts` — task sync regression.
 - `e2e/specs/tasks-view.spec.ts` — the [Tasks view](../../jobs/tasks_view/tasks_view.md) through the UI with no model: the top bar's Tasks button, New task with and without More options, the list's category sections, a board drag and the ⋯ Move to… keyboard path read back from main, the search, the remembered List | Board choice, and the Settings → Features switch that hides the button.
 - `e2e/fixtures/seed.ts` — `addAgentRoot`, `createFolderAgent`
-- `e2e/fixtures/live.ts` — `OPENAI_API_KEY`, `requireLiveKey()`, `PREFERRED_MODELS` and `seedOpenAiDefaultMode()`
+- `e2e/fixtures/live.ts` — `OPENAI_API_KEY`, `LIVE_REQUESTED` (`CINNA_E2E_LIVE=1`), `requireLiveKey()`, `PREFERRED_MODELS` and `seedOpenAiDefaultMode()`
 - `e2e/fixtures/liveCinnaLink.ts` — `linkLiveCinnaProfile()`, `liveCoreSession()` and `coreApi()`: a sandbox profile linked to a real cinna-core without the browser, for the cloud live test
 - `e2e/fixtures/engine-cache.ts`, `e2e/global-setup.ts` — the engine cache and the one-time fill
-- `.github/workflows/e2e.yml` — typecheck, unit and E2E on `macos-latest`; the key reaches the E2E step only for pushes to `main`; the engine cache is restored by `actions/cache`
 - `Makefile` — the user-facing entry points (`make help`)
 - `.claude/agents/e2e-test-writer.md`, `.claude/commands/cinna-desktop.e2e.write.md` — the agent that writes and debugs specs, and the command that launches it
 - `src/main/index.ts` — the `CINNA_USER_DATA` seam, and the `accessory` activation policy plus `showInactive()` under a background run

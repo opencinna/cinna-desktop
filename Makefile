@@ -83,7 +83,7 @@ demo-localdev: ## Drive one-click onboarding by hand in a throwaway profile: mak
 demo-clean: ## Delete the demo profile, so the next demo-localdev is a cold run
 	@S="$${SANDBOX:-$${TMPDIR:-/tmp}cinna-demo-profile}"; rm -rf "$$S"; echo "removed: $$S"
 
-e2e: ## Build, then run every E2E spec (live specs skip without OPENAI_API_KEY in .env)
+e2e: ## Build, then run every E2E spec (billed live specs skip; run them with e2e-live)
 	npm run test:e2e
 
 e2e-only: ## Run every E2E spec against the existing out/ build
@@ -91,11 +91,11 @@ e2e-only: ## Run every E2E spec against the existing out/ build
 
 e2e-one: ## One spec file, optionally one test: make e2e-one SPEC=blocked-job GREP="C5"
 	@test -n "$(SPEC)" || (echo "usage: make e2e-one SPEC=<spec name> [GREP=<test title fragment>]"; exit 2)
-	$(PW) $(SPEC) $(if $(GREP),-g "$(GREP)")
+	$(if $(findstring live,$(SPEC)),CINNA_E2E_LIVE=1 )$(PW) $(SPEC) $(if $(GREP),-g "$(GREP)")
 
 e2e-live: ## Specs whose file name contains "live": the billed live-* specs plus task-live-attach (needs OPENAI_API_KEY in .env)
 	@grep -qE '^OPENAI_API_KEY=.+' .env 2>/dev/null || (echo "OPENAI_API_KEY is empty in .env (copy .env.example)"; exit 2)
-	$(PW) live
+	CINNA_E2E_LIVE=1 $(PW) live
 
 e2e-integration: ## Cross-repo: desktop + a running cinna-core + cinna-cli (needs CINNA_E2E_* in .env)
 	@grep -qE '^CINNA_E2E_SERVER_URL=.+' .env 2>/dev/null || (echo "CINNA_E2E_SERVER_URL is empty in .env (copy .env.example)"; exit 2)
