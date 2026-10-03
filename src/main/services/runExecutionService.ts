@@ -30,6 +30,7 @@ import { isDesktopAuthored, type TurnInputOrigin } from '../../shared/turnOrigin
 import type { RunEvent } from '../../shared/runEvents'
 import type { RunEventContext } from './inboxService'
 import { activeRunsByChat as activeChats } from './runExecutionState'
+import { forgetAgentStatusReports } from '../tasks/agentStatusReports'
 import { handingOffChats } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import { delegationRepo } from '../db/delegations'
@@ -194,6 +195,7 @@ export const runExecutionService = {
       steer: async () => 'unavailable'
     }
     activeChats.set(chatId, handle)
+    forgetAgentStatusReports(chatId)
     live.accepted()
     const post = (event: RunEvent): void => {
       if (closed) return
@@ -378,6 +380,8 @@ export const runExecutionService = {
     // The IPC caller need not await acceptance, but headless callers can.
     void handle.accepted.catch(() => {})
     activeChats.set(payload.chatId, handle)
+    // A new turn: an earlier run's unread status report must not outlive it.
+    forgetAgentStatusReports(payload.chatId)
     const finish: TurnCompletion = (result) => {
       if (outcome) return
       outcome = redactCredentialValues(result)
@@ -738,12 +742,14 @@ function turnHeaderFor(input: {
   let taskId: string | null = null
   let depth = 0
   let openDelegations: { total: number; running: number; waitingOnUser: number } | undefined
+  let readyTasks = 0
   try {
     const task = taskRepo.getByChatId(input.profileUserId, input.chatId)
     taskId = task?.id ?? null
     if (task) depth = delegationRepo.byTaskId(input.profileUserId, task.id)?.depth ?? 0
     const open = delegationRepo.listForOrigin(input.profileUserId, input.chatId, taskId).filter((row) => !DELEGATION_TERMINAL_STATES.has(row.state))
     if (open.length) openDelegations = { total: open.length, running: open.filter((row) => row.state === 'running').length, waitingOnUser: open.filter((row) => delegationRepo.toDto(row).waitingOnUser).length }
+    readyTasks = taskRepo.countReadyFor(input.profileUserId, input.agent.id)
   } catch (error) {
     // A header is context, never a precondition: a turn still runs without it.
     logger.warn('the turn header could not be built', {
@@ -751,7 +757,7 @@ function turnHeaderFor(input: {
       error: error instanceof Error ? error.message : String(error)
     })
   }
-  return buildTurnHeader({ chatId: input.chatId, taskId, depth, openDelegations })
+  return buildTurnHeader({ chatId: input.chatId, taskId, depth, openDelegations, readyTasks })
 }
 
 function bindTurn(input: {

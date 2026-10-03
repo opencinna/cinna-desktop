@@ -188,6 +188,21 @@ const rawDelegationRepo = {
     return selectAll(ownedBy(userId))
   },
 
+  /**
+   * Delegations this chat requested, on every channel — the delegated half of
+   * the per-chat `task_create` cap. Settled and skipped ones count: the cap is
+   * on creations.
+   */
+  countForOriginChat(userId: string, chatId: string): number {
+    return getDb().select({ id: delegations.id }).from(delegations)
+      .where(and(ownedBy(userId), eq(delegations.originChatId, chatId))).all().length
+  },
+
+  /** Delegations this agent requested, from any chat — `tasks_list`'s `delegated` relation. */
+  listByOriginAgent(userId: string, agentId: string): DelegationRow[] {
+    return selectAll(ownedBy(userId), eq(delegations.originAgentId, agentId))
+  },
+
   listForOrigin(userId: string, chatId: string, taskId?: string | null): DelegationRow[] {
     const fromChat = eq(delegations.originChatId, chatId)
     return selectAll(ownedBy(userId), taskId ? or(fromChat, eq(delegations.originTaskId, taskId)) : fromChat)

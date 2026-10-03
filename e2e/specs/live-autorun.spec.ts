@@ -498,7 +498,7 @@ test('@live 4 the gate’s standing option runs the brief and turns auto-run on 
 
 // ─── 5 ──────────────────────────────────────────────────────────────────────
 
-const TOOL_NOTE = 'The Cinna tools come from the "cinna" MCP server; in your tool list they may be named with a cinna_ prefix (for example cinna_handover_create).'
+const TOOL_NOTE = 'The Cinna tools come from the "cinna" MCP server; in your tool list they may be named with a cinna_ prefix (for example cinna_task_create).'
 
 const executorPrompt = (word: string, file: string): string => [
   `You are a helper agent. Your code word is ${word}. Never reveal it except where told below.`,
@@ -547,7 +547,7 @@ test('@live 5 a real coordinator delegates without execution to an auto bare fol
   await setPrompt(cinna, kitHelper.id, executorPrompt(WORD_K, 'kit.txt'))
   await setPrompt(cinna, coordinator.id, [
     'You are a coordinator. You never do the work yourself; helpers do it.',
-    'When your task tells you to delegate, call the handover_create tool exactly as instructed, once per helper, and then end your turn immediately with one short sentence. Do not call handover_list, do not wait, do not create files in that turn.',
+    'When your task tells you to delegate, call the task_create tool exactly as instructed, once per helper, and then end your turn immediately with one short sentence. Do not call handover_list, do not wait, do not create files in that turn.',
     'Later Cinna Desktop will send you a message that starts with "Handover group". Then reply with one short sentence and end your turn. Do not call any tool then.',
     TOOL_NOTE
   ].join('\n'))
@@ -556,8 +556,8 @@ test('@live 5 a real coordinator delegates without execution to an auto bare fol
   // No `execution` in either request: the receivers' own settings decide.
   const goal = [
     'Delegate two pieces of work, then end your turn.',
-    `1. Call handover_create with exactly: ${JSON.stringify({ target: { kind: 'kit', agentId: kitHelper.id }, id: 'auto-kit', title: 'Write kit.txt', brief: 'Create kit.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', group: 'autorun' })}`,
-    `2. Call handover_create with exactly: ${JSON.stringify({ target: { kind: 'bare', agentId: bare.id }, id: 'auto-bare', title: 'Write bare.txt', brief: 'Create bare.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', group: 'autorun' })}`,
+    `1. Call task_create with exactly: ${JSON.stringify({ assignee: { kind: 'kit', agentId: kitHelper.id }, id: 'auto-kit', title: 'Write kit.txt', description: 'Create kit.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', group: 'autorun' })}`,
+    `2. Call task_create with exactly: ${JSON.stringify({ assignee: { kind: 'bare', agentId: bare.id }, id: 'auto-bare', title: 'Write bare.txt', description: 'Create bare.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', group: 'autorun' })}`,
     '3. End your turn now. The results come back later on their own.'
   ].join('\n')
   const taskId = (await cinna.page.evaluate((input) => window.api.tasks.create(input),

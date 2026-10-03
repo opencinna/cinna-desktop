@@ -3,20 +3,22 @@ import { delegationRepo, type DelegationRow } from '../db/delegations'
 
 const world = vi.hoisted(() => ({
   rows: new Map<string, DelegationRow>(), tasks: new Map<string, any>(), requests: new Map<string, any>(), parent: null as DelegationRow | null,
-  task: null as { id: string } | null, active: 'profile', sourceAuto: false, targetAuto: false,
-  start: vi.fn(), cloud: vi.fn(), result: vi.fn(), scan: vi.fn(), file: vi.fn(), permission: vi.fn(), refusal: null as string | null
+  task: null as { id: string } | null, active: 'profile', ownCreated: 0, handover: undefined as { id: string; taskId: string } | undefined, sourceAuto: false, targetAuto: false,
+  briefs: new Set<string>(), start: vi.fn(), cloud: vi.fn(), result: vi.fn(), scan: vi.fn(), file: vi.fn(), permission: vi.fn(), refusal: null as string | null
 }))
 vi.mock('../db/delegations', () => ({ delegationRepo: {
   createWithTask: (input: any, createTask: () => { id: string }) => { const row = delegationRepo.insert(input); const task = createTask(); return delegationRepo.update(input.userId, row.id, { taskId: task.id }) },
   insert: (input: any) => { const row = { id: `d${world.rows.size}`, state: 'seen', taskId: null, remoteConnectionId: null, groupId: null, ...input }; world.rows.set(row.id, row); return row },
   update: (_user: string, id: string, patch: any) => { const row = world.rows.get(id); if (row) Object.assign(row, patch); return row },
   getById: (user: string, id: string) => { const row = world.rows.get(id); return row?.userId === user ? row : undefined },
+  byHandoverId: () => undefined,
   byTaskId: () => world.parent,
   byRequesterKey: (user: string, origin: string, kind: string, target: string, key: string) => [...world.rows.values()].find((r) => r.userId === user && r.originKey === origin && r.targetKind === kind && r.targetAgentId === target && r.requesterKey === key),
-  listForOrigin: () => [...world.rows.values()], toDto: (row: any) => row, list: () => [...world.rows.values()]
+  listForOrigin: () => [...world.rows.values()], toDto: (row: any) => row, list: () => [...world.rows.values()],
+  countForOriginChat: (user: string, chat: string) => [...world.rows.values()].filter((row) => row.userId === user && row.originChatId === chat).length
 } }))
-vi.mock('../db/handovers', () => ({ handoverRepo: { byAgentAndHandoverId: () => undefined } }))
-vi.mock('../db/tasks', () => ({ taskRepo: { getByChatId: () => world.task } }))
+vi.mock('../db/handovers', () => ({ handoverRepo: { byAgentAndHandoverId: () => world.handover } }))
+vi.mock('../db/tasks', () => ({ taskRepo: { getByChatId: () => world.task, countCreatedInChat: () => world.ownCreated, setProvenance: vi.fn() } }))
 vi.mock('../db/chats', () => ({ chatRepo: { create: () => ({ id: 'gate-chat' }), getOwned: () => ({ id: 'gate-chat' }), permanentDelete: vi.fn() } }))
 vi.mock('../db/agents', () => ({ agentOverrideRepo: { get: () => undefined } }))
 vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: {
@@ -33,7 +35,7 @@ vi.mock('./localAgents/localAgentService', () => ({ localAgentService: {
   setDelegationPermission: world.permission
 } }))
 vi.mock('./chatRouting', () => ({ chatAnswersToAgent: () => world.refusal }))
-vi.mock('./delegationFiles', () => ({ createDelegationBrief: world.file, createDelegationRevision: vi.fn() }))
+vi.mock('./delegationFiles', () => ({ createDelegationBrief: world.file, createDelegationRevision: vi.fn(), delegationBriefExists: (_folder: string, id: string) => world.briefs.has(id) }))
 vi.mock('./handoverService', () => ({ handoverService: { scanFolderNow: world.scan } }))
 vi.mock('./taskService', () => ({ taskService: {
   create: (userId: string, input: any) => { const row = { id: `task-${world.tasks.size}`, userId, ...input }; world.tasks.set(row.id, row); return row },
@@ -50,8 +52,10 @@ const { delegationService } = await import('./delegationService')
 const { DelegationToolProvider } = await import('./delegationToolProvider')
 const session = { scope: { profileUserId: 'profile', settingsUserId: 'settings' }, chatId: 'chat', agentId: 'source' }
 const input = { target: { kind: 'kit', agentId: 'kit' }, id: 'request-one', title: 'Work', brief: 'Implement the requested work.' }
+/** The same request as `task_create` arguments: `assignee` for `target`, `description` for `brief`. */
+const asTaskCreate = ({ target, brief, ...rest }: Record<string, unknown>) => ({ ...rest, assignee: target, description: brief })
 beforeEach(() => {
-  world.rows.clear(); world.tasks.clear(); world.requests.clear(); world.parent = null; world.task = null; world.active = 'profile'; world.sourceAuto = false; world.targetAuto = false; world.refusal = null
+  world.briefs.clear(); world.rows.clear(); world.tasks.clear(); world.requests.clear(); world.parent = null; world.task = null; world.active = 'profile'; world.ownCreated = 0; world.handover = undefined; world.sourceAuto = false; world.targetAuto = false; world.refusal = null
   vi.clearAllMocks()
   world.start.mockResolvedValue({ runId: 'run', completed: new Promise(() => {}) })
   world.file.mockReturnValue({ status: 'ready', briefPath: '/tmp/brief.md' })
@@ -66,6 +70,56 @@ describe('delegation bus session authority and gates', () => {
     expect([...world.tasks.values()][0].parentTaskId).toBeUndefined()
     expect([...world.rows.values()][0]).toMatchObject({ originTaskId: 'origin-task', originAgentId: 'source', depth: 1, state: 'gated' })
     expect(world.start).not.toHaveBeenCalled()
+  })
+  it('records the requesting agent and the delegation depth on the task it creates', async () => {
+    world.task = { id: 'parent-task' }; world.parent = { id: 'p', depth: 1, channel: 'local', rootDelegationId: 'p' } as DelegationRow
+    await delegationService.create(session, input)
+    expect([...world.tasks.values()][0]).toMatchObject({ createdByAgentId: 'source', chainDepth: 2 })
+  })
+  it('asks the new-request hook only for a new request, so a repeat is answered at the cap', async () => {
+    const beforeNew = vi.fn()
+    const first = await delegationService.create(session, input, undefined, { beforeNew }) as { delegationId: string }
+    expect(beforeNew).toHaveBeenCalledTimes(1)
+    const refusing = vi.fn(() => { throw new Error('at the cap') })
+    const again = await delegationService.create(session, input, undefined, { beforeNew: refusing }) as { delegationId: string }
+    expect(again.delegationId).toBe(first.delegationId)
+    expect(refusing).not.toHaveBeenCalled()
+    await expect(delegationService.create(session, { ...input, id: 'new-work' }, undefined, { beforeNew: refusing })).rejects.toThrow('at the cap')
+    expect(world.tasks.size).toBe(1)
+  })
+  it('answers a repeated bare brief at the cap: only a new request asks the hook', async () => {
+    const { delegationOriginKey } = await import('../../shared/delegations')
+    const originKey = delegationOriginKey({ originKind: 'local_chat', originChatId: 'chat', originTaskId: null, originAgentId: 'source' })
+    world.rows.set('bare-row', { id: 'bare-row', userId: 'profile', originKey, targetKind: 'bare', targetAgentId: 'bare', requesterKey: 'request-one' } as DelegationRow)
+    const refusing = vi.fn(() => { throw new Error('at the cap') })
+    await delegationService.create(session, { ...input, target: { kind: 'bare', agentId: 'bare' } }, undefined, { beforeNew: refusing })
+    expect(refusing).not.toHaveBeenCalled()
+    await expect(delegationService.create(session, { ...input, id: 'other-work', target: { kind: 'bare', agentId: 'bare' } }, undefined, { beforeNew: refusing })).rejects.toThrow('at the cap')
+    expect(world.file).toHaveBeenCalledTimes(1)
+  })
+  it('answers a repeated draft bare brief at the cap, as handover_create did: a draft has no delegation row yet', async () => {
+    world.file.mockReturnValue({ status: 'draft', briefPath: '/tmp/brief.md' })
+    const draft = { ...input, target: { kind: 'bare', agentId: 'bare' }, status: 'draft' }
+    world.briefs.add('request-one')
+    const refusing = vi.fn(() => { throw new Error('at the cap') })
+    await expect(delegationService.create(session, draft, undefined, { beforeNew: refusing })).resolves.toMatchObject({ state: 'draft' })
+    expect(refusing).not.toHaveBeenCalled()
+    expect(world.file).toHaveBeenCalledTimes(1)
+    await expect(delegationService.create(session, { ...draft, id: 'new-draft' }, undefined, { beforeNew: refusing })).rejects.toThrow('at the cap')
+  })
+  it('counts an own-queue chat task’s chain depth: a depth-2 own task cannot delegate', async () => {
+    world.task = { id: 'own-task', chainDepth: 2 } as { id: string }
+    await expect(delegationService.create(session, input)).rejects.toThrow('depth 2')
+    expect(world.tasks.size).toBe(0)
+    world.task = { id: 'own-task', chainDepth: 1 } as { id: string }
+    await delegationService.create(session, input)
+    expect([...world.tasks.values()][0]).toMatchObject({ chainDepth: 2 })
+  })
+  it('records provenance on the task a bare brief’s intake made', async () => {
+    const { taskRepo } = await import('../db/tasks')
+    world.handover = { id: 'h1', taskId: 'intake-task' }
+    await delegationService.create(session, { ...input, target: { kind: 'bare', agentId: 'bare' } })
+    expect(taskRepo.setProvenance).toHaveBeenCalledWith('profile', 'intake-task', { createdByAgentId: 'source', chainDepth: 1 })
   })
   it('lets the target kit Delegations setting decide, and asks whatever it says without it', async () => {
     await delegationService.create(session, input)
@@ -183,7 +237,7 @@ describe('delegation bus session authority and gates', () => {
       return []
     })
     const tools = new DelegationToolProvider(session, false)
-    await expect(tools.callTool('handover_create', input, { signal: controller.signal })).rejects.toThrow('Requester stopped')
+    await expect(tools.callTool('task_create', asTaskCreate(input), { signal: controller.signal })).rejects.toThrow('Requester stopped')
     expect(world.rows.size).toBe(0)
     expect(world.tasks.size).toBe(0)
     targets.mockRestore()
@@ -204,7 +258,7 @@ describe('delegation bus session authority and gates', () => {
     const tools = new DelegationToolProvider(session, false)
     expect(tools.getTools().some((tool) => tool.name === 'handover_report')).toBe(false)
     await expect(tools.callTool('handover_report', {})).rejects.toThrow('not offered')
-    await expect(tools.callTool('handover_create', { ...input, depth: 0 })).rejects.toThrow('unknown argument')
+    await expect(tools.callTool('task_create', { ...asTaskCreate(input), depth: 0 })).rejects.toThrow('unknown argument')
     await tools.callTool('handover_list', {})
     expect(await tools.callTool('handover_list', {})).toMatchObject({ content: { notice: expect.stringContaining('end your turn') } })
     expect(await new DelegationToolProvider(session, false).callTool('handover_list', {})).toEqual({ content: { delegations: [] } })

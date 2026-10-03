@@ -625,3 +625,35 @@ describe('the folder is a home, not a hand-off target', () => {
     await expect(taskSyncService.handOff(USER, task.id)).rejects.toThrow('can’t be handed off')
   })
 })
+
+describe('a comment appended to a folder task’s log', () => {
+  it('is not taken for an outside change when a pull read the file before the append and stored after it', async () => {
+    const task = await taskAuthoringService.createRouted(SCOPE, { title: 'Logged', assignee: { kind: 'agent', agentId: 'bare-1' } })
+    const file = join(tasksDir, 'logged.md')
+    await settle()
+    later(file)
+    await taskSyncService.pull(USER)
+    expect(taskService.getById(USER, task.id).fromOutside).toBe(false)
+
+    // The pull reads the file, then the append runs to the end before the pull stores what it read.
+    const adapter = holder.adapters[0]
+    const list = adapter.list.bind(adapter)
+    let appended = false
+    adapter.list = async (...args: Parameters<typeof list>) => {
+      const read = await list(...args)
+      if (!appended) {
+        appended = true
+        await taskSyncService.appendLog(USER, task.id, '**Uploader** · 2026-10-03 10:00 UTC\nStarted.')
+      }
+      return read
+    }
+    // Cinna's own edit is in the file, so the pull has a new digest to store.
+    taskAuthoringService.update(SCOPE, task.id, { title: 'Logged again' })
+    await settle()
+    await taskSyncService.pull(USER)
+    expect(appended).toBe(true)
+    expect(readFileSync(file, 'utf8')).toContain('Started.')
+    await taskSyncService.pull(USER)
+    expect(taskService.getById(USER, task.id).fromOutside).toBe(false)
+  })
+})

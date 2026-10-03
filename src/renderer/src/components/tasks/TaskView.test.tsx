@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InboxEntry, InboxSnapshot, InboxUnreadableSource } from '../../../../shared/inbox'
 import type { DelegationDto, TaskDelegationsDto } from '../../../../shared/delegations'
 import type { HandoverDto } from '../../../../shared/handovers'
-import type { TaskDto } from '../../../../shared/tasks'
+import type { TaskCommentDto, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
 import type { TaskBoardColumn } from '../../../../shared/folderTasks'
 
@@ -41,6 +41,7 @@ const startTask = vi.fn()
 const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: string }>>()
 const delegationLinks = vi.fn<(taskId: string) => Promise<TaskDelegationsDto>>()
 const forTask = vi.fn<(taskId: string) => Promise<HandoverDto | null>>()
+const taskComments = vi.fn<(taskId: string) => Promise<TaskCommentDto[]>>()
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
@@ -53,7 +54,8 @@ const forTask = vi.fn<(taskId: string) => Promise<HandoverDto | null>>()
     folderBoard: (agentId: string) => folderBoard(agentId),
     reopenForRerun: (taskId: string) => reopenForRerun(taskId),
     takeOver: (taskId: string, force?: boolean) => takeOver(taskId, force),
-    remoteLive: (taskId: string) => remoteLive(taskId)
+    remoteLive: (taskId: string) => remoteLive(taskId),
+    comments: (taskId: string) => taskComments(taskId)
   },
   inbox: { list: () => listInbox() },
   agents: {
@@ -161,6 +163,7 @@ beforeEach(() => {
   remoteLive.mockResolvedValue(false)
   openExternal.mockResolvedValue({ success: true })
   forTask.mockResolvedValue(null)
+  taskComments.mockResolvedValue([])
   delegationLinks.mockResolvedValue({ from: null, to: [] })
   useUIStore.setState({ activeView: 'task', activeTaskId: 't1', activeJobId: null } as never)
   useChatStore.setState({ activeChatId: null } as never)
@@ -1708,5 +1711,147 @@ describe('a task kept in its agent’s folder', () => {
     fireEvent.change(within(dialog).getByLabelText('Title'), { target: { value: 'Renamed' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(updateTask).toHaveBeenCalledWith('t1', { title: 'Renamed' }))
+  })
+})
+
+describe('comments', () => {
+  function comment(id: string, overrides: Partial<TaskCommentDto> = {}): TaskCommentDto {
+    return { id, authorKind: 'agent', authorAgentId: 'gone', authorName: null, body: `Body ${id}.`, createdAt: new Date(), remoteStatus: null, ...overrides }
+  }
+  async function commentsSection(timeout = 1000): Promise<HTMLElement> {
+    return (await screen.findByRole('heading', { name: 'Comments' }, { timeout })).closest('section')!
+  }
+
+  it('lists each comment with its author and body, oldest first, and shows nothing when there are none', async () => {
+    taskComments.mockResolvedValue([
+      { id: 'c1', authorKind: 'agent', authorAgentId: 'a1', authorName: 'Uploader', body: 'Started on the retry.', createdAt: new Date(Date.now() - 60_000), remoteStatus: 'sent' },
+      { id: 'c2', authorKind: 'agent', authorAgentId: 'gone', authorName: null, body: 'Line one\nline two', createdAt: new Date(), remoteStatus: null }
+    ])
+    await renderTask()
+    const heading = await screen.findByRole('heading', { name: 'Comments' })
+    const section = heading.closest('section')!
+    const items = within(section).getAllByRole('listitem')
+    expect(items.map((item) => item.textContent)).toEqual([
+      expect.stringMatching(/^Uploader.*Started on the retry\.$/),
+      expect.stringMatching(/^Agent.*Line one\nline two$/)
+    ])
+    expect(taskComments).toHaveBeenCalledWith('t1')
+  })
+
+  it('renders the body as markdown, with the agent or person glyph before the author', async () => {
+    taskComments.mockResolvedValue([
+      comment('c1', { body: 'Found **two** bad rows in `ledger.csv`.' }),
+      comment('c2', { authorKind: 'user', authorAgentId: null, body: 'Thanks.' })
+    ])
+    await renderTask()
+    const section = await commentsSection()
+    expect(within(section).getByText('two').tagName).toBe('STRONG')
+    expect(within(section).getByText('ledger.csv').tagName).toBe('CODE')
+    const [agentItem, userItem] = within(section).getAllByRole('listitem')
+    expect(agentItem.querySelector('.lucide-bot')).not.toBeNull()
+    expect(userItem.querySelector('.lucide-user')).not.toBeNull()
+    expect(userItem.textContent).toMatch(/^You/)
+  })
+
+  it('keeps the section when the read fails, says so, and reads again on Try again', async () => {
+    taskComments.mockRejectedValue(new Error('database is locked'))
+    await renderTask()
+    // One retry (`useTaskComments`), then the failure is shown.
+    const section = await commentsSection(4000)
+    expect(within(section).getByRole('alert').textContent).toBe('Could not read the comments.')
+    taskComments.mockResolvedValue([comment('c1', { body: 'Back again.' })])
+    fireEvent.click(within(section).getByRole('button', { name: 'Try again' }))
+    expect(await within(await commentsSection()).findByText('Back again.')).toBeTruthy()
+  })
+
+  it('comes last on the page, after the Details panel and the Subtasks list, so a polled comment moves nothing above it', async () => {
+    taskComments.mockResolvedValue([comment('c1')])
+    await renderTask({ subtaskCount: 2 })
+    const section = await commentsSection()
+    const details = screen.getByRole('complementary', { name: 'Details' })
+    const subtasks = await screen.findByRole('region', { name: 'Subtasks' })
+    expect(details.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(subtasks.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('shows the latest five, adds a polled one at the bottom without dropping any, and shows the rest in place', async () => {
+    taskComments.mockResolvedValue(Array.from({ length: 7 }, (_, i) => comment(`c${i + 1}`)))
+    await renderTask()
+    const section = await commentsSection()
+    const bodies = (): string[] => within(section).getAllByRole('listitem').map((item) => item.textContent!.match(/Body (c\d+)/)![1])
+    expect(bodies()).toEqual(['c3', 'c4', 'c5', 'c6', 'c7'])
+
+    taskComments.mockResolvedValue(Array.from({ length: 8 }, (_, i) => comment(`c${i + 1}`)))
+    await act(async () => { await client.refetchQueries({ queryKey: ['task', 't1', 'comments'] }) })
+    await waitFor(() => expect(bodies()).toEqual(['c3', 'c4', 'c5', 'c6', 'c7', 'c8']))
+
+    const earlier = within(section).getByRole('button', { name: 'Show earlier comments (2)' })
+    fireEvent.click(earlier)
+    expect(bodies()).toEqual(['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8'])
+    expect(within(section).queryByRole('button', { name: /Show earlier/ })).toBeNull()
+
+    // The same control in the same slot, so nothing lands under the pointer.
+    const fewer = within(section).getByRole('button', { name: 'Show fewer comments' })
+    expect(fewer).toBe(earlier)
+    expect(fewer.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(fewer)
+    expect(bodies()).toEqual(['c4', 'c5', 'c6', 'c7', 'c8'])
+    expect(within(section).getByRole('button', { name: 'Show earlier comments (3)' })).toBe(earlier)
+  })
+
+  it('clamps a long body behind Show more', async () => {
+    taskComments.mockResolvedValue([comment('c1', { body: Array.from({ length: 20 }, (_, i) => `Line ${i}.`).join('\n\n') }), comment('c2')])
+    await renderTask()
+    const section = await commentsSection()
+    const more = within(section).getByRole('button', { name: 'Show more' })
+    expect(more.getAttribute('aria-expanded')).toBe('false')
+    expect(more.previousElementSibling?.className).toContain('comment-clamp')
+    fireEvent.click(more)
+    expect(within(section).getByRole('button', { name: 'Show less' }).getAttribute('aria-expanded')).toBe('true')
+    expect(within(section).getAllByRole('button', { name: /Show (more|less)/ })).toHaveLength(1)
+  })
+
+  it('marks a comment that was not copied to the task’s file or connected service', async () => {
+    taskComments.mockResolvedValue([comment('c1', { remoteStatus: 'failed' }), comment('c2', { remoteStatus: 'sent' })])
+    await renderTask({ file: { path: '/x/.cinna/tasks/a.md', readOnlyFields: [], blockedBy: [] } })
+    const section = await commentsSection()
+    const mark = within(section).getByRole('img', { name: 'Not copied to the task’s file' })
+    expect(mark.getAttribute('title')).toBe('Not copied to the task’s file')
+    expect(within(section).getAllByRole('img')).toHaveLength(1)
+    cleanup()
+
+    await renderTask({ remote: { adapter: 'fake', id: 'x1', key: null, url: null } })
+    expect(within(await commentsSection()).getByRole('img', { name: 'Not copied to the connected service' })).toBeTruthy()
+    cleanup()
+
+    // No file and no service: no claim about where it should have gone (§9).
+    await renderTask()
+    const mark2 = within(await commentsSection()).getByRole('img', { name: 'Not copied' })
+    expect(mark2.getAttribute('title')).toBe('Not copied')
+  })
+
+  it('draws a comment’s markdown headings at body size, and Goal’s at full size', async () => {
+    taskComments.mockResolvedValue([comment('c1', { body: '## Findings\n\nTwo rows.' })])
+    await renderTask({ goal: '## Plan\n\nDo it.' })
+    const heading = within(await commentsSection()).getByRole('heading', { name: 'Findings' })
+    expect(heading.closest('.markdown-body')!.classList.contains('markdown-compact')).toBe(true)
+    expect(screen.getByRole('heading', { name: 'Plan' }).closest('.markdown-body')!.classList.contains('markdown-compact')).toBe(false)
+  })
+
+  it('opens the author’s agent page when the app lists that agent, and leaves anyone else as plain text', async () => {
+    taskComments.mockResolvedValue([comment('c1', { authorAgentId: 'a1', authorName: 'Invoice Checker' }), comment('c2', { authorAgentId: 'gone', authorName: 'Old Agent' })])
+    await renderTask({ assignee: { agentId: null, name: 'Someone', kind: 'human' } })
+    const section = await commentsSection()
+    const link = await within(section).findByRole('button', { name: 'Invoice Checker' })
+    expect(within(section).queryByRole('button', { name: 'Old Agent' })).toBeNull()
+    expect(within(section).getByText('Old Agent')).toBeTruthy()
+    fireEvent.click(link)
+    expect(useUIStore.getState().activeView).toBe('external-agent')
+  })
+
+  it('has no Comments heading for a task without comments', async () => {
+    await renderTask()
+    await waitFor(() => expect(taskComments).toHaveBeenCalled())
+    expect(screen.queryByRole('heading', { name: 'Comments' })).toBeNull()
   })
 })

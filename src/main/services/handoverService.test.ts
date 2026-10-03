@@ -1286,7 +1286,7 @@ describe('a run the app lost', () => {
  * it must not be destroyed if the user went and used it.
  */
 describe('an executor waiting on its own delegations', () => {
-  // The bare executor delegated onward from its chat and ended its turn, as `handover_create` tells it to.
+  // The bare executor delegated onward from its chat and ended its turn, as `task_create` tells it to.
   let outbound: 'open' | 'settled'
   async function relaying(): Promise<void> {
     outbound = 'open'

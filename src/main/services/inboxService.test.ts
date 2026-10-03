@@ -501,6 +501,38 @@ describe('a turn ending in a chat that owns its own task', () => {
     expect(taskService.getById(USER, task.id).status).toBe('completed')
   })
 
+  it.each(['blocked', 'error'] as const)('keeps a %s the agent reported with task_update, once', async (status) => {
+    const { noteAgentStatusReport } = await import('../tasks/agentStatusReports')
+    const task = makeChatTask()
+    taskService.setStatus(USER, task.id, status)
+    noteAgentStatusReport(task.id, CHAT, 'run-1')
+    inboxService.recordRunEvent(ctx({ turnId: 'run-1' }), { type: 'done', stopReason: 'end_turn' })
+    expect(taskService.getById(USER, task.id).status).toBe(status)
+    // The mark is spent: the next turn's ending settles the task as before.
+    if (status === 'blocked') {
+      taskService.setStatus(USER, task.id, 'in_progress')
+      inboxService.recordRunEvent(ctx({ turnId: 'run-2' }), { type: 'done', stopReason: 'end_turn' })
+      expect(taskService.getById(USER, task.id).status).toBe('completed')
+    }
+  })
+
+  it('never lets one run’s report skip a later run’s settlement, even when its own end did not read it', async () => {
+    const { noteAgentStatusReport, takeAgentStatusReport, forgetAgentStatusReports } = await import('../tasks/agentStatusReports')
+    const task = makeChatTask()
+    // Run 1 reported, and its end returned before reading the mark.
+    noteAgentStatusReport(task.id, CHAT, 'run-1')
+    taskService.setStatus(USER, task.id, 'blocked')
+    // Run 2 ends: its outcome settles the task; the leftover mark does not stop it.
+    inboxService.recordRunEvent(ctx({ turnId: 'run-2' }), { type: 'error', error: 'boom' })
+    expect(taskService.getById(USER, task.id).status).toBe('error')
+    // A turn start in the chat drops a leftover mark; another chat's is kept.
+    noteAgentStatusReport(task.id, CHAT, 'run-3')
+    noteAgentStatusReport('other-task', 'other-chat', 'run-9')
+    forgetAgentStatusReports(CHAT)
+    expect(takeAgentStatusReport(task.id, 'run-3')).toBe(false)
+    expect(takeAgentStatusReport('other-task', 'run-9')).toBe(true)
+  })
+
   it('is not ended by a nested agent finishing', () => {
     // A coordinator can have several agents in flight in one chat; one of them
     // finishing says nothing about whether the chat's work is done.

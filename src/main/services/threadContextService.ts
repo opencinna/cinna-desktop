@@ -185,12 +185,15 @@ export function buildTurnHeader(input: {
   taskId?: string | null
   depth?: number
   openDelegations?: { total: number; running: number; waitingOnUser: number }
+  /** Ready tasks assigned to this agent; the line is left out at 0. */
+  readyTasks?: number
 }): string {
   return [
     'Turn context from Cinna Desktop, not part of the conversation:',
     `- chat id: \`${input.chatId}\``,
     `- task id: ${input.taskId ? `\`${input.taskId}\`` : 'none'}`,
     `- handover depth: ${input.depth ?? 0}`,
-    ...(input.openDelegations?.total ? [`- open delegations: ${input.openDelegations.total} (${input.openDelegations.running} running, ${input.openDelegations.waitingOnUser} waiting on the user)`] : [])
+    ...(input.openDelegations?.total ? [`- open delegations: ${input.openDelegations.total} (${input.openDelegations.running} running, ${input.openDelegations.waitingOnUser} waiting on the user)`] : []),
+    ...(input.readyTasks ? [`- ready tasks: ${input.readyTasks}`] : [])
   ].join('\n')
 }

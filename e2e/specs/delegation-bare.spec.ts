@@ -98,9 +98,9 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
     const taskOf = (id: string): Promise<any> => cinna.page.evaluate((taskId) => window.api.tasks.get(taskId), id)
 
     let created: any
-    const createArgs = { id: HANDOVER_ID, title: TITLE, brief: BRIEF }
+    const createArgs = { id: HANDOVER_ID, title: TITLE, description: BRIEF }
 
-    await test.step('handover_targets lists the bare folder; handover_create publishes the brief', async () => {
+    await test.step('handover_targets lists the bare folder; task_create with it as assignee publishes the brief', async () => {
       await cinna.page.evaluate((id) => window.api.run.start({ chatId: id, content: 'Delegate the basalt work.' }), chatId)
       await expect.poll(() => fake.calls.length, { timeout: 60_000 }).toBe(1)
       fake.calls[0].release({ tools: [{ name: 'handover_targets' }] })
@@ -113,7 +113,7 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
 
       // The requester has written nothing: the folder holds no handover yet.
       expect(existsSync(join(folder, '.cinna'))).toBe(false)
-      fake.tools[0].release({ tools: [{ name: 'handover_create', args: { target: entry!.target, ...createArgs } }] })
+      fake.tools[0].release({ tools: [{ name: 'task_create', args: { assignee: entry!.target, ...createArgs } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(2)
       created = parsed(fake.tools[1])
       expect(created).toMatchObject({ handoverId: HANDOVER_ID })
@@ -132,9 +132,9 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
       expect(brief).toContain(HANDOVER_HOW_TO_REPORT)
     })
 
-    await test.step('a repeated handover_create is the same delegation, and rewrites nothing', async () => {
+    await test.step('a repeated task_create is the same delegation, and rewrites nothing', async () => {
       const before = { text: readFileSync(briefFile, 'utf8'), ino: statSync(briefFile).ino, mtimeMs: statSync(briefFile).mtimeMs }
-      fake.tools[1].release({ tools: [{ name: 'handover_create', args: { target: { kind: 'bare', agentId: executorId }, ...createArgs } }] })
+      fake.tools[1].release({ tools: [{ name: 'task_create', args: { assignee: { kind: 'bare', agentId: executorId }, ...createArgs } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(3)
       const again = parsed(fake.tools[2])
       expect(again).toMatchObject({ delegationId: created.delegationId, taskId: created.taskId, handoverId: HANDOVER_ID })

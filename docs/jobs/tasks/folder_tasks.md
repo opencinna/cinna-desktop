@@ -10,7 +10,8 @@ A bare folder agent's work queue is a set of markdown files in its own folder, `
 - **Task file** — any `.md` with frontmatter directly under `.cinna/tasks/`: not a dotfile, not in a subdirectory, not `_board.yaml`. A file without frontmatter is not a task, whatever folder it is in.
 - **Owned keys** — `cinna_task`, `id`, `title`, `status`, `priority`, `parent`, `blocked_by`, `origin`. The only keys Cinna reads as task fields, and the only ones it ever rewrites (`blocked_by` is read, never written).
 - **Custom fields** — every other top-level key. A one-line value (text, number, `true`/`false`, a flat `[a, b]` list) is an editable [custom field](../tasks_view/tasks_view.md#custom-fields). Anything spanning lines — a nested map, a block list, a block scalar, a `{…}` flow map — or a value over 2000 characters is **read-only**: shown as text, never written.
-- **Handoff section** — the [handoff note](tasks.md) lives at the end of the body between `<!-- cinna:handoff -->` and `<!-- /cinna:handoff -->`. The rest of the body is the description.
+- **Handoff section** — the [handoff note](tasks.md) lives at the end of the body between `<!-- cinna:handoff -->` and `<!-- /cinna:handoff -->`.
+- **Comment log** — the task's comments ([`task_comment`](agent_task_tools.md#comments)), appended between `<!-- cinna:log -->` and `<!-- /cinna:log -->` before the handoff section. The rest of the body, outside both sections, is the description.
 - **Status word** — the word a file writes in `status:` (`doing`, `Up Next`, `wontfix`). It maps to a **category**, and the category to the canonical status Cinna reacts to. The task keeps both: `status` for every rule, `statusLabel` for what the user reads.
 - **`_board.yaml`** — an optional file beside the tasks naming the folder's own words, one flat `word: category` per line, in board order.
 - **Folder board** — the Tasks board filtered to one such agent: one column per status word, not the five categories.
@@ -21,6 +22,7 @@ A bare folder agent's work queue is a set of markdown files in its own folder, `
 - **Two files claiming one id**: the first by name is the task and the other is skipped with a warning, so a copied file cannot make one task flicker between two contents.
 - **The frontmatter subset is the handover one** — flat `key: value`, quoted or bare scalars, a trailing ` # comment` on a bare one, BOM and CRLF accepted, the closing `---` the first later line that is exactly `---`. One reader for both file contracts, so a quoted title cannot mean one thing in a brief and another in a task. See [File Handovers](file_handovers.md#the-contract).
 - **A write is a line-level patch, never a re-serialization.** The reader is not YAML, so writing a file back from what it read would drop every nested value, comment and key order it cannot represent — a teammate's `meta:` block would vanish on the first status change. A write replaces exactly the lines of the keys it changes (and a scalar custom key when asked) and the handoff section; every other byte, line ending included, stays where it was.
+- **The comment log is an export, never read back.** Cinna appends one entry per comment (author, UTC time, the body) and never rewrites one; an edit made inside it changes no comment, and its text is never part of the description — otherwise every comment would have become a description edit that the next push wrote back. A file with no log gets one after the description, before the handoff section, and only lines are added. A body line that would read as a section marker is defused, so a comment cannot close the log or the handoff section early. Like the handoff section, the log is the last closing marker and the opening marker nearest before it, and a description write keeps it byte for byte. Appending an entry does not make a file someone else changed look like Cinna's own: it stays changed outside.
 - **The handoff section is the last closing marker and the opening marker nearest before it.** A stray opening marker earlier in the body (a quoted marker, a half-deleted section) is the user's text; paired with Cinna's closing marker instead, the next note write would have replaced everything between them. Text the user wrote after the section is part of the description and survives a note write byte for byte.
 - **A new file** is `<slug>.md` from the title (`-2`, `-3`… on a collision, never overwriting), with a fresh `t-xxxxxxxx` id and the keys in a fixed order: `cinna_task, id, title, status, priority, parent, origin: cinna`, then custom fields, then the description and the note.
 - Priority reads `low | normal | high | urgent`, plus `medium` as normal and `critical` as urgent; anything else reads as normal.
@@ -93,7 +95,7 @@ A bare folder agent's work queue is a set of markdown files in its own folder, `
 
 ## Create and delete
 
-- **New task for an enabled bare agent writes its file.** The row is created device-local first, the file is written, the row is bound to it, and the file is read back once so the task carries the folder's word, its path and the digest that makes it trusted. A file that cannot be written takes the row with it — the user sees the refusal, not a task that lives nowhere. A pull that lists the folder while the file is unbound does not index it as a second task.
+- **New task for an enabled bare agent writes its file**, whether a person made it or the agent's own [`task_create`](agent_task_tools.md) did. The row is created device-local first, the file is written, the row is bound to it, and the file is read back once so the task carries the folder's word, its path and the digest that makes it trusted. A file that cannot be written takes the row with it — the user sees the refusal, not a task that lives nowhere. A pull that lists the folder while the file is unbound does not index it as a second task.
 - **A subtask is written beside its parent** and must live in the parent's folder. A task file's subtasks are the files in the same folder whose `parent` is its id; one counts as completed when its word means `completed` (as in the cinna adapter, `error` and `cancelled` do not count).
 - **Every other assignee stays native**: a kit agent, a disabled agent, the default model, nobody.
 - **Delete task deletes the file.** The row is deleted first and stays deleted whatever the folder answers; the file is removed only if, read now, it still carries this task's id — one renamed over or rewritten as another task stays. One that cannot be removed is a warning, and the row's tombstone keeps the next pull from indexing it again. A push already in flight finishes before the delete.
@@ -111,7 +113,7 @@ A bare folder agent's work queue is a set of markdown files in its own folder, `
 
 ## What this deliberately does not do
 
-- **No comments, asks, execution, artifacts or assignee directory** on the folder adapter. Execution of a folder task is the desktop's, like any local task.
+- **No asks, execution, artifacts or assignee directory** on the folder adapter, and no comment *stream*: comments live in Cinna and are only copied into the file's log. Execution of a folder task is the desktop's, like any local task.
 - **`blocked_by` is read-only.** It is shown (as links to the same agent's file tasks) and never written; nothing waits on it.
 - **No approval of outside content.** `fromOutside` is a fact on the page, not a gate.
 - **No moving a task out of its folder** — not by Hand off, not by an assignee change.
@@ -130,6 +132,7 @@ User edit / run / drop -> taskService (row + remote_dirty) -> taskChanged hook
 
 task:create (bare agent) -> taskAuthoringService.createRouted -> localHomeFor -> createInHome
 task:delete -> taskSyncService.removeTask -> localHome.discard
+task_comment -> taskSyncService.copyComment -> appendLog (queued behind the push) -> localHome.appendLog
 Board -> task:folder-board -> taskSyncService.folderBoard -> localHome.board
 ```
 

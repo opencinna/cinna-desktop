@@ -30,7 +30,7 @@ test('a folder delegates to a kit through MCP, reports, and wakes its requester'
     const originTaskId = await seedChatTask(cinna, { chatId, title: 'Original task' })
     await cinna.page.evaluate((chatId) => window.api.run.start({ chatId, content: 'Delegate the implementation.' }), chatId)
     await expect.poll(() => fake.calls.length, { timeout: 60_000 }).toBe(1)
-    fake.calls[0].release({ tools: [{ name: 'handover_create', args: { target: { kind: 'kit', agentId: executor.id }, id: 'kit-feature-work', title: 'Implement quartz feature', brief: 'Implement quartz-9531.' } }] })
+    fake.calls[0].release({ tools: [{ name: 'task_create', args: { assignee: { kind: 'kit', agentId: executor.id }, id: 'kit-feature-work', title: 'Implement quartz feature', description: 'Implement quartz-9531.' } }] })
     await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(1)
     const created = result(fake.tools[0])
     expect(created).toMatchObject({ state: 'gated', depth: 1, originTaskId, targetAgentId: executor.id })

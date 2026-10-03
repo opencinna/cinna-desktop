@@ -269,6 +269,12 @@ describe('buildTurnHeader', () => {
     expect(header).toContain('- handover depth: 0')
   })
 
+  it('counts this agent’s ready tasks in its own line, and leaves the line out at zero', () => {
+    expect(buildTurnHeader({ chatId: 'chat-1', readyTasks: 3 }).split('\n').at(-1)).toBe('- ready tasks: 3')
+    expect(buildTurnHeader({ chatId: 'chat-1', readyTasks: 0 })).not.toContain('ready tasks')
+    expect(buildTurnHeader({ chatId: 'chat-1' })).not.toContain('ready tasks')
+  })
+
   it('reads as a block in front of the message, never as part of it', () => {
     const wire = withCatchUp(buildTurnHeader({ chatId: 'chat-1' }), 'do the thing')
     expect(wire.startsWith('Turn context from Cinna Desktop')).toBe(true)

@@ -212,8 +212,8 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   { file: 'src/main/services/serviceCredentials/service.ts', category: 'kind', count: 1, why: 'Kit attachment admission must check the authored git policy before writing intent.' },
   { file: 'src/main/services/serviceCredentials/helper.ts', category: 'kind', count: 2, why: 'Only kit folders own a portable helper that Desktop can offer to update.' },
   { file: 'src/renderer/src/components/agents/local/ServiceCredentialsTab.tsx', category: 'kind', count: 4, why: 'Presents actual credential location, kit-only helper/manifest slots and the kit-only note that attachments override .env fields.' },
-  { file: 'src/main/services/delegationService.ts', category: 'kind', count: 7,
-    why: 'the delegation bus owns target directory, file-versus-task carrier choice, bare-folder Git admission and source/target trust policy; engine execution remains behind taskExecutionService' },
+  { file: 'src/main/services/delegationService.ts', category: 'kind', count: 8,
+    why: 'the delegation bus owns target directory, file-versus-task carrier choice (including a repeated bare brief answered from its file at the task cap), bare-folder Git admission and source/target trust policy; engine execution remains behind taskExecutionService' },
   { file: 'src/main/services/conductorBridge.ts', category: 'source', count: 1,
     why: 'offers session-authenticated delegation tools only to adopted folder owners; synthetic conversational runtimes have no folder authority' },
   // Runtime conductor: these sites own saved runtime fields, presentation, or

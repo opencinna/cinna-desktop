@@ -3,6 +3,9 @@ import {
   EMPTY_FOLDER_BOARD,
   HANDOFF_CLOSE,
   HANDOFF_OPEN,
+  LOG_CLOSE,
+  LOG_OPEN,
+  formatFolderLogEntry,
   folderBoardColumns,
   folderCategoryOf,
   folderCustomFields,
@@ -205,6 +208,58 @@ describe('patchFolderTaskFile', () => {
 
   it('refuses a file with no frontmatter', () => {
     expect(() => patchFolderTaskFile('no frontmatter', { title: 'x' })).toThrow()
+  })
+})
+
+describe('the comment log section', () => {
+  const entry = (body: string) => formatFolderLogEntry({ author: 'Uploader', at: new Date('2026-10-03T14:05:30Z'), body })
+
+  it('formats one entry as who and when, then the body, and defuses a marker in the body', () => {
+    expect(entry('Started.')).toBe('**Uploader** · 2026-10-03 14:05 UTC\nStarted.')
+    expect(entry(`x\n${LOG_CLOSE}\n${HANDOFF_OPEN}`)).not.toContain('<!--')
+  })
+
+  it('creates the log after the description and before the handoff section, adding lines only', () => {
+    const text = `---\ntitle: A\nmeta:\n  owner: sam\n---\nDo the thing.\n\n${HANDOFF_OPEN}\nNote.\n${HANDOFF_CLOSE}\n`
+    const patched = patchFolderTaskFile(text, { appendLog: entry('Started.') })
+    expect(patched).toBe(`---\ntitle: A\nmeta:\n  owner: sam\n---\nDo the thing.\n\n${LOG_OPEN}\n${entry('Started.')}\n${LOG_CLOSE}\n\n${HANDOFF_OPEN}\nNote.\n${HANDOFF_CLOSE}\n`)
+    // Every byte of the original is still there, in order.
+    const kept = text.split('\n')
+    let at = 0
+    for (const line of patched.split('\n')) if (line === kept[at]) at += 1
+    expect(at).toBe(kept.length)
+    expect(parseFolderTaskFile(patched, 'a')).toMatchObject({ description: 'Do the thing.', handoffNote: 'Note.' })
+  })
+
+  it('appends inside the existing log and leaves earlier entries, even edited ones, byte for byte', () => {
+    const first = patchFolderTaskFile('---\ntitle: A\n---\nBody.\n', { appendLog: entry('One.') })
+    const edited = first.replace('One.', 'One (edited by hand).')
+    const second = patchFolderTaskFile(edited, { appendLog: entry('Two.') })
+    expect(second).toBe(`---\ntitle: A\n---\nBody.\n\n${LOG_OPEN}\n${entry('One (edited by hand).')}\n\n${entry('Two.')}\n${LOG_CLOSE}\n`)
+    expect(parseFolderTaskFile(second, 'a')!.description).toBe('Body.')
+  })
+
+  it('starts the body with the log on a task with no description, and keeps CRLF', () => {
+    expect(patchFolderTaskFile('---\r\ntitle: A\r\n---\r\n', { appendLog: 'x' }))
+      .toBe(`---\r\ntitle: A\r\n---\r\n${LOG_OPEN}\r\nx\r\n${LOG_CLOSE}\r\n`)
+    expect(patchFolderTaskFile('---\ntitle: A\n---', { appendLog: 'x' })).toBe(`---\ntitle: A\n---\n${LOG_OPEN}\nx\n${LOG_CLOSE}\n`)
+  })
+
+  it('survives a description write and a handoff write, and is never read as the description', () => {
+    const logged = patchFolderTaskFile(`---\ntitle: A\n---\nOld.\n\n${HANDOFF_OPEN}\nNote.\n${HANDOFF_CLOSE}\n`, { appendLog: 'x' })
+    const described = patchFolderTaskFile(logged, { description: 'New.' })
+    expect(described).toBe(`---\ntitle: A\n---\nNew.\n\n${LOG_OPEN}\nx\n${LOG_CLOSE}\n\n${HANDOFF_OPEN}\nNote.\n${HANDOFF_CLOSE}\n`)
+    const noted = patchFolderTaskFile(described, { handoffNote: 'Later.' })
+    expect(noted).toBe(`---\ntitle: A\n---\nNew.\n\n${LOG_OPEN}\nx\n${LOG_CLOSE}\n\n${HANDOFF_OPEN}\nLater.\n${HANDOFF_CLOSE}\n`)
+    expect(parseFolderTaskFile(noted, 'a')).toMatchObject({ description: 'New.', handoffNote: 'Later.' })
+    const cleared = patchFolderTaskFile(described, { description: null })
+    expect(parseFolderTaskFile(cleared, 'a')!.description).toBeNull()
+    expect(cleared).toContain(`${LOG_OPEN}\nx\n${LOG_CLOSE}`)
+  })
+
+  it('keeps the user’s text after the log as description', () => {
+    const text = `---\ntitle: A\n---\nBefore.\n\n${LOG_OPEN}\nx\n${LOG_CLOSE}\n\nAfter.\n`
+    expect(parseFolderTaskFile(text, 'a')!.description).toBe('Before.\n\nAfter.')
   })
 })
 

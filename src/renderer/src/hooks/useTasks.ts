@@ -5,7 +5,7 @@ import { useUIStore } from '../stores/ui.store'
 import { useChatStream } from './useChatStream'
 import { INBOX_QUERY_KEY } from './useInbox'
 import { unwrapIpcError } from '../utils/ipcError'
-import type { DesktopTaskTarget, TaskCreateInput, TaskDeletePreview, TaskDeleteResult, TaskDto, TaskUpdateInput } from '../../../shared/tasks'
+import type { DesktopTaskTarget, TaskCommentDto, TaskCreateInput, TaskDeletePreview, TaskDeleteResult, TaskDto, TaskUpdateInput } from '../../../shared/tasks'
 import type { TaskStatus } from '../../../shared/taskStatus'
 
 /**
@@ -49,6 +49,22 @@ export function useTask(taskId: string | null): UseQueryResult<TaskDto> {
     },
     // One retry, not three: the page polls anyway, and three silent retries
     // only delay the sentence that tells the user the read failed.
+    retry: 1
+  })
+}
+
+export const TASK_COMMENTS_KEY = (taskId: string): readonly unknown[] => ['task', taskId, 'comments']
+
+/**
+ * A task's comments, oldest first. Agents add them during a turn
+ * (`task_comment`) while the page is open, so the list is re-read on the
+ * page's own poll interval.
+ */
+export function useTaskComments(taskId: string): UseQueryResult<TaskCommentDto[]> {
+  return useQuery({
+    queryKey: TASK_COMMENTS_KEY(taskId),
+    queryFn: () => window.api.tasks.comments(taskId),
+    refetchInterval: POLL_MS,
     retry: 1
   })
 }

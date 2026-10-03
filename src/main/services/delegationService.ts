@@ -17,7 +17,7 @@ import { userActivation } from '../auth/activation'
 import { allAdapters } from '../tasks/adapters'
 import { localAgentService } from './localAgents/localAgentService'
 import { chatAnswersToAgent } from './chatRouting'
-import { createDelegationBrief, createDelegationRevision } from './delegationFiles'
+import { createDelegationBrief, createDelegationRevision, delegationBriefExists } from './delegationFiles'
 import { taskService } from './taskService'
 import { taskExecutionService } from './taskExecutionService'
 import type { RunScope } from './runExecutionService'
@@ -28,6 +28,16 @@ export interface DelegationSession {
   scope: RunScope
   chatId: string
   agentId: string
+}
+
+/** What `task_create` adds around a delegation; the delegation rules themselves are unchanged. */
+export interface DelegationCreateOptions {
+  /**
+   * Called once the request is known to be new — after the idempotency lookup,
+   * before anything is written — so a repeated id is answered even at a cap.
+   * Throws to refuse.
+   */
+  beforeNew?(): void
 }
 
 interface Target {
@@ -81,7 +91,13 @@ function requiredString(value: unknown, name: string, max = 100_000): string {
   return value.trim()
 }
 
-function validateSession(session: DelegationSession) {
+/**
+ * Who may act from this session: an activated app, the profile the session
+ * was opened under, a chat that answers to this agent, and an enabled agent.
+ * Shared by the task tools (`taskToolService`), which act from the same
+ * sessions.
+ */
+export function validateSession(session: DelegationSession) {
   const { profileUserId, settingsUserId } = session.scope
   userActivation.requireActivated()
   if (getProfileScopeUserId() !== profileUserId) throw new Error('The active profile changed.')
@@ -119,7 +135,7 @@ function owned(session: DelegationSession, id: string): DelegationRow {
   return row
 }
 
-/** The `target` argument of `handover_create`, exactly as `handover_targets` returned it. */
+/** The `target` argument of a delegation (`task_create`'s `assignee`), exactly as `handover_targets` returned it. */
 function requireTarget(value: unknown): Target {
   const target = value as Target | undefined
   if (
@@ -303,7 +319,12 @@ export const delegationService = {
       .map((row) => delegationRepo.toDto(row))
   },
 
-  async create(session: DelegationSession, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+  /**
+   * Delegate work: `task_create` with an `assignee`, its arguments mapped to
+   * this shape (`target`, `brief`) by `taskToolService`. The task it creates
+   * records the requesting agent and the delegation depth as its provenance.
+   */
+  async create(session: DelegationSession, input: Record<string, unknown>, signal?: AbortSignal, options: DelegationCreateOptions = {}): Promise<unknown> {
     signal?.throwIfAborted()
     const { task, parent } = validateSession(session)
     const { profileUserId, settingsUserId } = session.scope
@@ -356,7 +377,9 @@ export const delegationService = {
         return { delegationId: existing.id, ...delegationRepo.toDto(existing) }
       }
 
-      const depth = (parent?.depth ?? 0) + 1
+      // One chain for delegations and own-queue tasks: the chat's task may be
+      // an own-queue task deeper than any delegation above it.
+      const depth = Math.max(parent?.depth ?? 0, task?.chainDepth ?? 0) + 1
       if (depth > MAX_HANDOVER_DEPTH) throw new Error(`Delegations are limited to depth ${MAX_HANDOVER_DEPTH}.`)
 
       const targetEntry = (await this.targets(session, signal)).find((entry) => sameTarget(entry.target, target))
@@ -366,6 +389,10 @@ export const delegationService = {
         throw new Error('This session’s task changed. Try again.')
       }
       if (!targetEntry?.acceptsDelegations) throw new Error('That target is unavailable for delegation.')
+      // A repeat of a bare brief already written (a draft has no delegation
+      // row yet) is answered from its file below, not a new request.
+      const repeatedBrief = target.kind === 'bare' && !!targetEntry.folder && delegationBriefExists(targetEntry.folder, id)
+      if (!existing && !repeatedBrief) options.beforeNew?.()
       // Absent stays absent: the receiver's setting (or, for cloud, the sender's grant) decides,
       // and only an explicit `ask` forces a gate.
       const execution = input.execution === 'ask' || input.execution === 'auto' ? input.execution : null
@@ -389,6 +416,8 @@ export const delegationService = {
 
         const handover = handoverRepo.byAgentAndHandoverId(target.agentId, id)
         const delegation = handover ? delegationRepo.byHandoverId(profileUserId, handover.id) : undefined
+        // The intake made the task; the tool call that asked for it is its provenance.
+        if (handover?.taskId) taskRepo.setProvenance(profileUserId, handover.taskId, { createdByAgentId: session.agentId, chainDepth: depth })
         return {
           ...file,
           id: delegation?.id ?? null,
@@ -425,7 +454,9 @@ export const delegationService = {
             assigneeAgentId: target.agentId,
             assigneeName: targetEntry.name,
             executor: 'desktop',
-            origin: 'local'
+            origin: 'local',
+            createdByAgentId: session.agentId,
+            chainDepth: depth
           })
       )
 

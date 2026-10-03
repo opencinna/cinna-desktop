@@ -14,8 +14,10 @@
  * the field-level merge compares against: **an owned field the file changed
  * since Cinna last read it wins over the local edit on that field.**
  *
- * What it does not have: assignee (the folder is the assignee), comments,
- * asks, execution, artifacts. It is never a hand-off target and keeps no
+ * What it does not have: assignee (the folder is the assignee), comments
+ * (a comment is appended to the file's log section through
+ * `localHome.appendLog`, an export nothing reads back), asks, execution,
+ * artifacts. It is never a hand-off target and keeps no
  * transition table — a file's `status:` line takes whatever word it is given.
  *
  * Built over an injected {@link FolderTaskWorld} so the contract suite can run
@@ -872,6 +874,18 @@ export function createFolderTaskAdapter(world: FolderTaskWorld): RemoteTaskAdapt
         }
         cache.delete(listed.path)
         absentSince.delete(binding.id)
+      },
+      async appendLog(_userId, binding, entry) {
+        const { folder, item } = await forWrite(binding)
+        const prior = stateOf(binding).writtenDigest
+        const written = write(folder, item, { appendLog: entry }, prior)
+        // Trusted only if it was: a file someone else changed since Cinna
+        // last wrote it is still theirs after Cinna adds a log entry.
+        if (prior !== undefined && prior === item.digest) return written
+        const state = { ...(written.state as unknown as FolderState) }
+        if (prior === undefined) delete state.writtenDigest
+        else state.writtenDigest = prior
+        return { ...written, state: state as unknown as Record<string, unknown> }
       },
       statusWord(remoteId, status, current) {
         const agentId = [...lastRead.keys()].find((id) => remoteId.startsWith(`${id}:`))

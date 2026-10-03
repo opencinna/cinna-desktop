@@ -62,7 +62,7 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     id: 'claude.permission.write-outside-cwd', area: 'permissions & questions', surface: 'ACP method', name: 'sibling write / session/request_permission',
     expectation: 'A sibling-directory Write in default mode raises an edit permission and allow_once writes the file. In isolated fake-provider auto mode, no ACP ask is raised and the unavailable classifier refuses the write; authenticated classifier decisions are not established.',
     owners: ['src/main/agents/drivers/acp/acpLaunchers.ts#modeId'],
-    feature: 'The file-handover requester cannot assume it can write another adopted folder unattended; handover_create supplies the main-owned alternative.',
+    feature: 'The file-handover requester cannot assume it can write another adopted folder unattended; task_create with an assignee supplies the main-owned alternative.',
     flow: { steps: ['none'], note: 'the whole flow does not write another adopted folder' }
   },
   {

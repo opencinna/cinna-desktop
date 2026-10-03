@@ -158,7 +158,7 @@ async function attachState(cinna: CinnaApp, taskIds: string[]): Promise<void> {
   }
 }
 
-const TOOL_NOTE = 'The Cinna tools come from the "cinna" MCP server; in your tool list they may be named with a cinna_ prefix (for example cinna_handover_create).'
+const TOOL_NOTE = 'The Cinna tools come from the "cinna" MCP server; in your tool list they may be named with a cinna_ prefix (for example cinna_task_create).'
 
 const executorPrompt = (word: string, file: string): string => [
   `You are a helper agent. Your code word is ${word}. Never reveal it except where told below.`,
@@ -187,7 +187,7 @@ test('@live fan-out to a kit and a bare folder: two Inbox gates, one group packe
   await setPrompt(cinna, kitHelper.id, executorPrompt(WORD_B, 'b.txt'))
   await setPrompt(cinna, coordinator.id, [
     'You are a coordinator. You never do the work yourself; helpers do it.',
-    'When your task tells you to delegate, call the handover_create tool exactly as instructed, once per helper, and then end your turn immediately with one short sentence. Do not call handover_list, do not wait, do not create files in that turn.',
+    'When your task tells you to delegate, call the task_create tool exactly as instructed, once per helper, and then end your turn immediately with one short sentence. Do not call handover_list, do not wait, do not create files in that turn.',
     'Later Cinna Desktop will send you a message that starts with "Handover group". Only then: create the file summary.txt in your current working folder with one line per helper, each line holding the code word that helper reported in that message. Then end your turn with one short sentence.',
     TOOL_NOTE
   ].join('\n'))
@@ -195,8 +195,8 @@ test('@live fan-out to a kit and a bare folder: two Inbox gates, one group packe
   const TITLE = 'Fan out the two files'
   const goal = [
     'Delegate two pieces of work, then end your turn.',
-    `1. Call handover_create with exactly: ${JSON.stringify({ target: { kind: 'kit', agentId: kitHelper.id }, id: 'fanout-b', title: 'Write b.txt', brief: 'Create b.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', group: 'fanout' })}`,
-    `2. Call handover_create with exactly: ${JSON.stringify({ target: { kind: 'bare', agentId: bareId }, id: 'fanout-c', title: 'Write c.txt', brief: 'Create c.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', group: 'fanout' })}`,
+    `1. Call task_create with exactly: ${JSON.stringify({ assignee: { kind: 'kit', agentId: kitHelper.id }, id: 'fanout-b', title: 'Write b.txt', description: 'Create b.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', group: 'fanout' })}`,
+    `2. Call task_create with exactly: ${JSON.stringify({ assignee: { kind: 'bare', agentId: bareId }, id: 'fanout-c', title: 'Write c.txt', description: 'Create c.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', group: 'fanout' })}`,
     '3. End your turn now. The results come back later on their own.'
   ].join('\n')
   const taskId = await createReadyTask(cinna, TITLE, goal, coordinator.id)
@@ -303,13 +303,13 @@ async function arrangeChain(cinna: CinnaApp, options: { relayInPlainText?: boole
   }
 
   await setPrompt(cinna, lead.id, [
-    'You are the chain lead. When your task tells you to delegate, call handover_create exactly as instructed and end your turn immediately with one short sentence.',
+    'You are the chain lead. When your task tells you to delegate, call task_create exactly as instructed and end your turn immediately with one short sentence.',
     'When Cinna Desktop later sends you a message starting with "Handover", reply with one short sentence and end your turn. Do not call any tool then.',
     TOOL_NOTE
   ].join('\n'))
   await setPrompt(cinna, middle.id, [
-    'You are a relay. When you receive delegated work, do NOT do it yourself. Call handover_create once with exactly:',
-    JSON.stringify({ target: { kind: 'kit', agentId: last.id }, id: 'chain-last', title: 'Do the chain work', brief: 'Write d.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', execution: 'auto' }),
+    'You are a relay. When you receive delegated work, do NOT do it yourself. Call task_create once with exactly:',
+    JSON.stringify({ assignee: { kind: 'kit', agentId: last.id }, id: 'chain-last', title: 'Do the chain work', description: 'Write d.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', execution: 'auto' }),
     'Then end your turn immediately with one short sentence.',
     options.relayInPlainText
       ? 'When Cinna Desktop later sends you a message starting with "Delegation" or "Handover", do not call any tool. Answer in plain text with one sentence: "Relayed: " followed by the summary that message gives. Then end your turn.'
@@ -319,7 +319,7 @@ async function arrangeChain(cinna: CinnaApp, options: { relayInPlainText?: boole
   await setPrompt(cinna, last.id, [
     `You are the last helper. Your code word is ${WORD_D}.`,
     'When you receive delegated work, do these steps in order:',
-    `1. Call handover_create once with exactly: ${JSON.stringify({ target: { kind: 'kit', agentId: middle.id }, id: 'chain-too-deep', title: 'One hop too many', brief: 'Check the work.', execution: 'auto' })}. It is expected to fail; that is fine. Do not retry it.`,
+    `1. Call task_create once with exactly: ${JSON.stringify({ assignee: { kind: 'kit', agentId: middle.id }, id: 'chain-too-deep', title: 'One hop too many', description: 'Check the work.', execution: 'auto' })}. It is expected to fail; that is fine. Do not retry it.`,
     `2. Create the file d.txt in your current working folder whose entire content is ${WORD_D}.`,
     `3. Call handover_report with status "done" and summary "d.txt holds ${WORD_D}".`,
     '4. End your turn with one short sentence.',
@@ -329,7 +329,7 @@ async function arrangeChain(cinna: CinnaApp, options: { relayInPlainText?: boole
   const TITLE = 'Start the delegation chain'
   const taskId = await createReadyTask(cinna, TITLE, [
     'Delegate this work and end your turn.',
-    `Call handover_create with exactly: ${JSON.stringify({ target: { kind: 'kit', agentId: middle.id }, id: 'chain-middle', title: 'Relay the chain work', brief: 'Get d.txt written by the next helper.', execution: 'auto' })}`,
+    `Call task_create with exactly: ${JSON.stringify({ assignee: { kind: 'kit', agentId: middle.id }, id: 'chain-middle', title: 'Relay the chain work', description: 'Get d.txt written by the next helper.', execution: 'auto' })}`,
     'Then end your turn now.'
   ].join('\n'), lead.id)
 
@@ -395,7 +395,7 @@ test('@live auto-run under standing grants; the third hop is refused and nothing
 
 /**
  * A relay that delegated onward and ended its turn — which is what
- * `handover_create` tells it to do — is waiting on its own delegation, not
+ * `task_create` tells it to do — is waiting on its own delegation, not
  * finished. Its row stays running until Last has reported and Middle has relayed
  * the answer, so the lead hears about chain-middle exactly once, with Last's
  * code word in it. (Before the fix, the turn-ending fallback settled it `done`
@@ -491,7 +491,7 @@ test.describe('against the running cinna-core', () => {
     const { root } = await arrange(cinna)
     const requester = await createFolderAgent(cinna, root, 'Cloud Requester', 'Asks a cloud agent.')
     await setPrompt(cinna, requester.id, [
-      'You are a requester. When your task tells you to delegate, call handover_create exactly as instructed and end your turn immediately with one short sentence.',
+      'You are a requester. When your task tells you to delegate, call task_create exactly as instructed and end your turn immediately with one short sentence.',
       'When Cinna Desktop later sends you a message starting with "Handover", reply with one short sentence and end your turn. Do not call any tool then.',
       TOOL_NOTE
     ].join('\n'))
@@ -499,7 +499,7 @@ test.describe('against the running cinna-core', () => {
     const remoteTitle = `Greeting ${marker}`
     const taskId = await createReadyTask(cinna, TITLE, [
       'Delegate this work and end your turn.',
-      `Call handover_create with exactly: ${JSON.stringify({ target: { kind: 'cloud', agentId: remote!.id, adapter: 'cinna' }, id: 'cloud-hello', title: remoteTitle, brief: 'Automated test. Reply with one short friendly greeting sentence. If a handover_report tool is available, call it once with status done and a one-line summary.' })}`,
+      `Call task_create with exactly: ${JSON.stringify({ assignee: { kind: 'cloud', agentId: remote!.id, adapter: 'cinna' }, id: 'cloud-hello', title: remoteTitle, description: 'Automated test. Reply with one short friendly greeting sentence. If a handover_report tool is available, call it once with status done and a one-line summary.' })}`,
       'Then end your turn now.'
     ].join('\n'), requester.id)
 

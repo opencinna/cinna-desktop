@@ -37,9 +37,20 @@ export function Section({
   )
 }
 
-export function Prose({ children }: { children: string }): React.JSX.Element {
+export function Prose({
+  children,
+  compact = false
+}: {
+  children: string
+  /**
+   * Headings at body size, bold (`.markdown-compact`): for text inside a
+   * section, such as a task comment, whose `# Title` must not outrank the
+   * page's own section titles.
+   */
+  compact?: boolean
+}): React.JSX.Element {
   return (
-    <div className="text-xs text-[var(--color-text)] leading-relaxed markdown-body">
+    <div className={`text-xs text-[var(--color-text)] leading-relaxed markdown-body${compact ? ' markdown-compact' : ''}`}>
       <Markdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}

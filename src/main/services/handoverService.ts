@@ -1028,7 +1028,7 @@ export function createHandoverService(deps: HandoverDeps) {
     }
     /*
       **Nor while the executor waits on its own delegations.** An executor that delegated onward ended
-      its turn as `handover_create` tells it to; the child's packet resumes it in its chat, and that
+      its turn as `task_create` tells it to; the child's packet resumes it in its chat, and that
       turn's outcome (`watchRelay`) settles the row. Settling here woke the origin with a "no report"
       packet before the child had answered — and a lost-run sweep would do the same to a relay that
       is simply between turns.

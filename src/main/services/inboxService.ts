@@ -1,3 +1,4 @@
+import { takeAgentStatusReport } from '../tasks/agentStatusReports'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
 import { nanoid } from 'nanoid'
 import { taskInputRequestRepo, type TaskInputRequestRow } from '../db/taskInputRequests'
@@ -392,6 +393,12 @@ export const inboxService = {
     // device offered Take over on it for ever. One per hand-opened chat that
     // ever raises an ask.
     //
+    // The agent said how its work ended (`task_update` on this chat's task:
+    // completed, blocked or error) during this very run, and the task already
+    // says so: a normal ending must not overwrite a `blocked` or an `error`
+    // with `completed`.
+    if (takeAgentStatusReport(task.id, ctx.turnId) && task.status !== 'in_progress') return
+
     // The turn's own ending is the outcome here, because for this chat the turn
     // *is* the work. A child ending carries runner ownership, so it can clean up its
     // requests without finishing the coordinator's task.

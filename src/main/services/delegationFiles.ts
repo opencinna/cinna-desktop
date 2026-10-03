@@ -73,6 +73,16 @@ export interface DelegationFileInput {
   group?: string
 }
 
+/** Whether a brief is already written at this id (followed by `createDelegationBrief`'s own checks). */
+export function delegationBriefExists(folder: string, id: string): boolean {
+  try {
+    lstatSync(handoverPaths(folder, id).briefPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function createDelegationBrief(input: DelegationFileInput) {
   const paths = ensureTree(input.folder, input.id)
   const body = `${input.brief.trim()}\n\n${HANDOVER_HOW_TO_REPORT}`

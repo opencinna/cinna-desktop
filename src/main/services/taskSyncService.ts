@@ -1030,6 +1030,67 @@ export const taskSyncService = {
   },
 
   /**
+   * Copy a comment to the task's home: a local home's file gets `logEntry` in
+   * its log section ({@link taskSyncService.appendLog}); a bound service that
+   * keeps comments gets `remoteBody` as a note. False when the task has
+   * nowhere to copy it (native, or a home without comments); throws when the
+   * copy failed — best effort, so the caller keeps its own record either way.
+   */
+  async copyComment(userId: string, taskId: string, comment: { logEntry: string; remoteBody: string }): Promise<boolean> {
+    const row = taskRepo.getById(userId, taskId)
+    const binding = row && !row.deletedAt ? bindingOf(row) : null
+    if (!binding) return false
+    const adapter = adapterFor(binding.adapter)
+    if (adapter.localHome?.appendLog) {
+      await this.appendLog(userId, taskId, comment.logEntry)
+      return true
+    }
+    if (!adapter.capabilities().comments) return false
+    await adapter.addComment(userId, binding, { type: 'note', body: comment.remoteBody })
+    return true
+  },
+
+  /**
+   * Append a comment entry to the log section of a task kept in a local home
+   * (a bare agent's task file). Queued behind any push of the same task, so
+   * the two writes never interleave, and stored like a push's result: the new
+   * written digest keeps Cinna's own write trusted, and the base of every
+   * field still owed is kept (`stateWhileOwed`), so the pending push still
+   * lets a file's own change win. Throws when the file could not be written;
+   * the caller decides what that costs.
+   */
+  async appendLog(userId: string, taskId: string, entry: string): Promise<void> {
+    const key = `${userId} ${taskId}`
+    const queued = (pushesInFlight.get(key) ?? Promise.resolve())
+      .catch(() => {})
+      .then(async () => {
+        const row = taskRepo.getById(userId, taskId)
+        const binding = row && !row.deletedAt ? bindingOf(row) : null
+        const adapter = binding ? adapterFor(binding.adapter) : null
+        if (!binding || !adapter?.localHome?.appendLog) throw new TaskError('invalid_input', 'This task has no file to log comments in.')
+        // Bumped around the write as `push` does: a pull that read the file
+        // before the append must not store its pre-append digest afterwards,
+        // or Cinna's own entry reads as an outside change on the next pass.
+        const revisionKey = bindingKey(userId, binding)
+        bump(revisionKey)
+        let written: Awaited<ReturnType<NonNullable<typeof adapter.localHome.appendLog>>>
+        try { written = await adapter.localHome.appendLog(userId, binding, entry) } finally { bump(revisionKey) }
+        const current = taskRepo.getById(userId, taskId)
+        if (!current || current.deletedAt || bindingOf(current)?.id !== binding.id) return
+        const owed = (current.remoteDirty ?? []).filter(isRemoteDirtyField)
+        const state = adapter.stateWhileOwed && current.remoteState
+          ? adapter.stateWhileOwed(current.remoteState, written.state, owed)
+          : written.state
+        taskService.markRemoteSynced(userId, taskId, owed, { binding: { key: written.key, url: written.url, state }, contacted: true })
+      })
+      .finally(() => {
+        if (pushesInFlight.get(key) === queued) pushesInFlight.delete(key)
+      })
+    pushesInFlight.set(key, queued)
+    return queued
+  },
+
+  /**
    * The status columns of the board of a local agent whose tasks live in its
    * folder, left to right; null when that agent's tasks are native.
    */

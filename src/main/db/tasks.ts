@@ -68,6 +68,10 @@ export interface TaskCreateInput {
   deviceLocal?: boolean
   trustedDigest?: string | null
   localFile?: TaskLocalFile | null
+  /** Tool-created provenance (`task_create`). Device-local, never synced. */
+  createdByAgentId?: string | null
+  createdByChatId?: string | null
+  chainDepth?: number
 
   createdAt?: Date
   updatedAt?: Date
@@ -300,6 +304,44 @@ const rawTaskRepo = {
     })
   },
 
+  /**
+   * How many tasks an agent's `task_create` made in this chat for its own
+   * queue, deleted ones included: the per-chat cap counts creations, so
+   * deleting a task does not buy another. Delegated work is counted from the
+   * delegations table (`delegationRepo.countForOriginChat`).
+   */
+  countCreatedInChat(userId: string, chatId: string): number {
+    const row = getDb()
+      .select({ count: sql<number>`count(*)` })
+      .from(tasks)
+      .where(and(eq(tasks.userId, userId), eq(tasks.createdByChatId, chatId)))
+      .get()
+    return Number(row?.count ?? 0)
+  },
+
+  /** Ready (`open`) tasks assigned to this agent — the turn header's `ready tasks` line. */
+  countReadyFor(userId: string, agentId: string): number {
+    const row = getDb()
+      .select({ count: sql<number>`count(*)` })
+      .from(tasks)
+      .where(and(eq(tasks.userId, userId), eq(tasks.assigneeAgentId, agentId), eq(tasks.status, 'open'), isNull(tasks.deletedAt)))
+      .get()
+    return Number(row?.count ?? 0)
+  },
+
+  /**
+   * Record which agent's tool call made a task it did not create itself — the
+   * task a bare delegation's file intake produced. Bookkeeping: `updatedAt`
+   * stays, so the list does not reorder for it.
+   */
+  setProvenance(userId: string, taskId: string, values: { createdByAgentId: string; chainDepth: number }): void {
+    getDb()
+      .update(tasks)
+      .set(values)
+      .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId), isNull(tasks.createdByAgentId)))
+      .run()
+  },
+
   /** The task running in a chat, if one is. How a stream event finds its task. */
   getByChatId(userId: string, chatId: string): TaskRow | undefined {
     return getDb()
@@ -342,6 +384,9 @@ const rawTaskRepo = {
       deviceLocal: input.deviceLocal ?? false,
       trustedDigest: input.trustedDigest ?? null,
       localFile: input.localFile ?? null,
+      createdByAgentId: input.createdByAgentId ?? null,
+      createdByChatId: input.createdByChatId ?? null,
+      chainDepth: input.chainDepth ?? 0,
 
       origin: input.origin ?? 'local',
       executor: input.executor ?? 'desktop',

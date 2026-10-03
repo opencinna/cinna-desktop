@@ -58,7 +58,7 @@ test('an outbound cloud delegation preserves the requester and returns its struc
     const cloudTarget = targets.find((entry) => entry.target.kind === 'cloud')
     expect(cloudTarget).toBeTruthy()
     const target = cloudTarget!.target
-    fake.tools[0].release({ tools: [{ name: 'handover_create', args: { target, id: 'cloud-feature-work', title: 'Cloud quartz feature', brief: 'Build quartz-cloud-5031.' } }] })
+    fake.tools[0].release({ tools: [{ name: 'task_create', args: { assignee: target, id: 'cloud-feature-work', title: 'Cloud quartz feature', description: 'Build quartz-cloud-5031.' } }] })
     await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(2)
     const createdOutput = fake.tools[1].params.results as typeof outputs
     expect(createdOutput[0].result.isError).not.toBe(true)

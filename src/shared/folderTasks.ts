@@ -19,7 +19,10 @@
  * map, a block list, a block scalar) is shown as read-only text and **never
  * touched**. The body is the description; the handoff note lives in a section
  * the desktop owns at the end of it, between {@link HANDOFF_OPEN} and
- * {@link HANDOFF_CLOSE}.
+ * {@link HANDOFF_CLOSE}. Before that section, a second desktop-owned section
+ * between {@link LOG_OPEN} and {@link LOG_CLOSE} holds the task's comments as
+ * an append-only export: it is not part of the description, and nothing in it
+ * is ever read back.
  *
  * ## Why a patcher and not a serializer
  *
@@ -51,6 +54,14 @@ export const FOLDER_TASK_SCHEMA_VERSION = 1
 
 export const HANDOFF_OPEN = '<!-- cinna:handoff -->'
 export const HANDOFF_CLOSE = '<!-- /cinna:handoff -->'
+
+/**
+ * The comment log: Cinna appends one entry per comment (`task_comment`) and
+ * never rewrites one. Export only — an edit made inside it is not read back
+ * into the task's comments, and its text is never part of the description.
+ */
+export const LOG_OPEN = '<!-- cinna:log -->'
+export const LOG_CLOSE = '<!-- /cinna:log -->'
 
 /** The keys the desktop reads as task fields; nothing else is ever rewritten. */
 export const FOLDER_TASK_OWNED_KEYS = [
@@ -555,6 +566,25 @@ function bodyParts(doc: Document): { head: Line[]; section: Line[]; tail: Line[]
   return { head: body.slice(0, open), section: body.slice(open, closeAt + 1), tail: body.slice(closeAt + 1) }
 }
 
+/**
+ * The text before the handoff section, split at the comment log: `before` it,
+ * the `log` itself (both markers included) and the user's text `after` it.
+ * The log is the **last** closing marker and the opening marker nearest before
+ * it, for the same reason as the handoff section's pairing.
+ */
+function logParts(head: Line[]): { before: Line[]; log: Line[]; after: Line[] } {
+  let closeAt = -1
+  for (let i = head.length - 1; i >= 0; i -= 1) {
+    if (head[i].text.trim() === LOG_CLOSE) { closeAt = i; break }
+  }
+  let open = -1
+  for (let i = closeAt - 1; i >= 0; i -= 1) {
+    if (head[i].text.trim() === LOG_OPEN) { open = i; break }
+  }
+  if (closeAt === -1 || open === -1) return { before: head, log: [], after: [] }
+  return { before: head.slice(0, open), log: head.slice(open, closeAt + 1), after: head.slice(closeAt + 1) }
+}
+
 function joined(lines: Line[]): string {
   return lines.map((line) => line.text).join('\n').trim()
 }
@@ -623,8 +653,9 @@ export function parseFolderTaskFile(text: string, stem: string): ParsedFolderTas
 
   const { head, section, tail } = bodyParts(doc)
   // Text after the section is the user's description too, read as one with
-  // the text before it.
-  const description = [joined(head), joined(tail)].filter((part) => part !== '').join('\n\n')
+  // the text before it. The comment log is not: it is Cinna's export.
+  const { before, after } = logParts(head)
+  const description = [joined(before), joined(after), joined(tail)].filter((part) => part !== '').join('\n\n')
   const note = section.length === 0 ? '' : joined(section.slice(1, -1))
 
   return {
@@ -700,6 +731,12 @@ export interface FolderTaskPatch {
   description?: string | null
   handoffNote?: string | null
   custom?: Record<string, TaskCustomFieldValue | undefined>
+  /**
+   * One entry appended to the comment log (made by {@link formatFolderLogEntry}),
+   * creating the log before the handoff section when the file has none. Every
+   * other byte — earlier entries included — stays as it was.
+   */
+  appendLog?: string
 }
 
 /**
@@ -730,6 +767,7 @@ export function patchFolderTaskFile(text: string, patch: FolderTaskPatch): strin
 
   if (patch.description !== undefined) setDescription(doc, patch.description)
   if (patch.handoffNote !== undefined) setHandoff(doc, patch.handoffNote)
+  if (patch.appendLog !== undefined) appendLog(doc, patch.appendLog)
   return fromDocument(doc)
 }
 
@@ -764,13 +802,64 @@ function textLines(text: string, eol: string): Line[] {
  * section byte for byte, now at the end.
  */
 function setDescription(doc: Document, description: string | null): void {
-  const { section } = bodyParts(doc)
-  const head: Line[] = []
+  const { head, section } = bodyParts(doc)
+  const { log } = logParts(head)
   const text = description?.trim() ?? ''
-  if (text !== '') head.push(...textLines(text, doc.eol))
-  if (text !== '' && section.length > 0) head.push({ text: '', eol: doc.eol })
+  // The description, then the comment log and the handoff section byte for
+  // byte, one blank line between each.
+  const blocks = [text !== '' ? textLines(text, doc.eol) : [], log, section].filter((block) => block.length > 0)
+  const body: Line[] = []
+  blocks.forEach((block, index) => {
+    if (index > 0) body.push({ text: '', eol: doc.eol })
+    body.push(...block)
+  })
   ensureCloseTerminated(doc)
-  doc.lines.splice(doc.close + 1, doc.lines.length - doc.close - 1, ...head, ...section)
+  doc.lines.splice(doc.close + 1, doc.lines.length - doc.close - 1, ...body)
+}
+
+/**
+ * Append one entry to the comment log, inside its closing marker. A file with
+ * no log gets one at the end of the text before the handoff section (after
+ * the description, before any blank lines that separate it from the section).
+ * Only lines are added: every byte already in the file stays where it was.
+ */
+function appendLog(doc: Document, entry: string): void {
+  const { head, section, tail } = bodyParts(doc)
+  const { before, log, after } = logParts(head)
+  const blank = (): Line => ({ text: '', eol: doc.eol })
+  const entryLines = textLines(entry.trim(), doc.eol)
+  ensureCloseTerminated(doc)
+  let next: Line[]
+  if (log.length > 0) {
+    const inner = log.slice(0, -1)
+    const close = log[log.length - 1]
+    if (inner[inner.length - 1].eol === '') inner[inner.length - 1] = { ...inner[inner.length - 1], eol: doc.eol }
+    next = [...before, ...inner, ...(inner.length > 1 ? [blank()] : []), ...entryLines, close, ...after]
+  } else {
+    let cut = head.length
+    while (cut > 0 && head[cut - 1].text.trim() === '') cut -= 1
+    const content = head.slice(0, cut)
+    const trailing = head.slice(cut)
+    if (content.length > 0 && content[content.length - 1].eol === '') {
+      content[content.length - 1] = { ...content[content.length - 1], eol: doc.eol }
+    }
+    const block: Line[] = [{ text: LOG_OPEN, eol: doc.eol }, ...entryLines, { text: LOG_CLOSE, eol: doc.eol }]
+    const separator = trailing.length > 0 ? trailing : section.length > 0 ? [blank()] : []
+    next = [...content, ...(content.length > 0 ? [blank()] : []), ...block, ...separator]
+  }
+  doc.lines.splice(doc.close + 1, doc.lines.length - doc.close - 1, ...next, ...section, ...tail)
+}
+
+/**
+ * One comment-log entry: who and when on the first line, then the body. A
+ * body line that would read as one of the section markers is defused, so a
+ * comment can never close the log (or the handoff section) early.
+ */
+export function formatFolderLogEntry(entry: { author: string; at: Date; body: string }): string {
+  const author = entry.author.replace(/[\r\n]+/g, ' ').trim() || 'Agent'
+  const at = entry.at.toISOString().slice(0, 16).replace('T', ' ')
+  const body = entry.body.replace(/<!--/g, '&lt;!--').trim()
+  return `**${author}** · ${at} UTC\n${body}`
 }
 
 /**

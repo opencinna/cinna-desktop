@@ -166,7 +166,7 @@ export function createDelegationLifecycle(deps: DelegationLifecycleDeps) {
   }
 
   /**
-   * An executor that delegated onward and ended its turn — as `handover_create` tells it to — is a
+   * An executor that delegated onward and ended its turn — as `task_create` tells it to — is a
    * relay waiting on its own delegations, not finished. Their packets resume it in its chat, and that
    * turn's outcome (`watchRelay`) settles it once nothing is owed any more.
    */

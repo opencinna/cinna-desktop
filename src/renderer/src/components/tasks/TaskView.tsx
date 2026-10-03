@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
+  Bot,
   ExternalLink,
   FileText,
   Laptop,
@@ -10,7 +11,8 @@ import {
   MessageSquare,
   PenLine,
   RotateCcw,
-  Server
+  Server,
+  User
 } from 'lucide-react'
 import { useAgents } from '../../hooks/useAgents'
 import { useTaskDelegations } from '../../hooks/useDelegations'
@@ -33,7 +35,8 @@ import {
   useTakeOverTask,
   useStartTask,
   useOpenTask,
-  useTask
+  useTask,
+  useTaskComments
 } from '../../hooks/useTasks'
 import { useUIStore } from '../../stores/ui.store'
 import { readinessBlocksTurn } from '../../../../shared/agentDrivers'
@@ -50,7 +53,7 @@ import { DETAIL_LINK, Detail, HEADER_BUTTON, Prose, Section } from './DetailPart
 import { customFieldText, isUnassigned, taskFileName, taskStatusText } from './tasksViewModel'
 import { useTaskList } from '../../hooks/useTaskList'
 import { hasAgentPage, useOpenAgentPage } from '../../hooks/useOpenAgentPage'
-import type { TaskArtifact, TaskDto } from '../../../../shared/tasks'
+import type { TaskArtifact, TaskCommentDto, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
 
 /**
@@ -188,6 +191,7 @@ function TaskPage({
    * already exists rather than a banner (`ux_rules.md` §2).
    */
   const handover = useHandoverForTask(task.id).data ?? null
+  const commentsQuery = useTaskComments(task.id)
   const delegationQuery = useTaskDelegations(task.id)
   const delegatedFrom = delegationQuery.data?.from ?? null
   const delegatedTo = delegationQuery.data?.to ?? []
@@ -708,6 +712,13 @@ function TaskPage({
         {!task.parentTaskId && (
           <TaskList key={task.id} parentTaskId={task.id} expected={task.subtaskCount > 0} />
         )}
+
+        {/*
+          Last, under the subtasks: a comment arriving on the poll grows this
+          section, and only what is below it may move (§1). Renders nothing
+          while there are no comments.
+        */}
+        <TaskComments key={task.id} query={commentsQuery} home={task.file ? 'file' : task.remote ? 'service' : null} now={now} />
 
         {/*
           Under everything, never over it: a poll can fail at any moment,
@@ -1427,6 +1438,171 @@ function Timestamp({ at, now }: { at: Date; now: Date }): React.JSX.Element {
     >
       {exact ? at.toLocaleString() : formatRelativeFromDate(at, now)}
     </button>
+  )
+}
+
+/** How many of the latest comments the page shows behind "Show earlier comments". */
+export const COMMENTS_SHOWN = 5
+/**
+ * A body longer than this (characters or lines) is clamped behind "Show more",
+ * to whole lines with a fade (`.comment-clamp` in main.css).
+ */
+const COMMENT_CLAMP_CHARS = 600
+const COMMENT_CLAMP_LINES = 8
+
+/**
+ * The task's comments, oldest first: who, when, what. Read-only — agents write
+ * them (`task_comment`). Last on the page, under the subtasks, so a comment
+ * arriving on the poll lands under everything the user is reading.
+ *
+ * The latest {@link COMMENTS_SHOWN} are shown, the rest behind an in-place
+ * "Show earlier comments", which then becomes "Show fewer comments" in the same
+ * slot — a control that vanished on click would put whatever is below it under
+ * the pointer (`ux_rules.md` §1). The window is anchored at the first comment
+ * shown, so one arriving on the poll is added at the bottom and pushes no
+ * visible comment out of the top; "Show fewer" re-anchors it at the latest
+ * {@link COMMENTS_SHOWN}. Nothing at all while there are
+ * none or the first read has not answered; a failed first read says so, with
+ * a way to try again, rather than looking like a task without comments.
+ */
+function TaskComments({
+  query,
+  home,
+  now
+}: {
+  query: ReturnType<typeof useTaskComments>
+  /** Where a comment is copied to: the task's file, a connected service, or nowhere. */
+  home: 'file' | 'service' | null
+  now: Date
+}): React.JSX.Element | null {
+  const { data: agents, isPending: agentsPending } = useAgents()
+  const openAgentPage = useOpenAgentPage()
+  const [showAll, setShowAll] = useState(false)
+  const [firstShown, setFirstShown] = useState<string | null>(null)
+  const comments = query.data ?? []
+  // Anchored once, at the first answer: later arrivals extend the window.
+  if (firstShown === null && comments.length > 0) {
+    setFirstShown(comments[Math.max(0, comments.length - COMMENTS_SHOWN)].id)
+  }
+
+  if (query.errorUpdateCount > 0 && !query.data) {
+    return (
+      <Section title="Comments">
+        <p className="m-0 text-xs text-[var(--color-text-muted)]">
+          <span role="alert">Could not read the comments.</span>{' '}
+          <button
+            type="button"
+            disabled={query.isFetching}
+            onClick={() => void query.refetch()}
+            className="font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] disabled:opacity-50"
+          >
+            {query.isFetching ? 'Retrying…' : 'Try again'}
+          </button>
+        </p>
+      </Section>
+    )
+  }
+  if (comments.length === 0) return null
+
+  const anchor = firstShown === null ? -1 : comments.findIndex((comment) => comment.id === firstShown)
+  const windowStart = anchor >= 0 ? anchor : Math.max(0, comments.length - COMMENTS_SHOWN)
+  const start = showAll ? 0 : windowStart
+  const showFewer = (): void => {
+    setShowAll(false)
+    setFirstShown(comments[Math.max(0, comments.length - COMMENTS_SHOWN)].id)
+  }
+  const agentFor = (agentId: string | null): { id: string; name: string } | null =>
+    agentId && !agentsPending ? (agents ?? []).find((agent) => agent.id === agentId && hasAgentPage(agent)) ?? null : null
+  return (
+    <Section title="Comments">
+      {(showAll ? comments.length > COMMENTS_SHOWN : start > 0) && (
+        <button
+          type="button"
+          onClick={showAll ? showFewer : () => setShowAll(true)}
+          aria-expanded={showAll}
+          className="mb-3 text-[11px] font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
+        >
+          {showAll ? 'Show fewer comments' : `Show earlier comments (${start})`}
+        </button>
+      )}
+      <ul className="m-0 list-none space-y-3 p-0">
+        {comments.slice(start).map((comment) => (
+          <CommentItem
+            key={comment.id}
+            comment={comment}
+            agent={comment.authorKind === 'agent' ? agentFor(comment.authorAgentId) : null}
+            onOpenAgent={openAgentPage}
+            home={home}
+            now={now}
+          />
+        ))}
+      </ul>
+    </Section>
+  )
+}
+
+function CommentItem({
+  comment,
+  agent,
+  onOpenAgent,
+  home,
+  now
+}: {
+  comment: TaskCommentDto
+  /** The author's page, when the author is an agent this app still lists. */
+  agent: { id: string; name: string } | null
+  onOpenAgent: (agent: { id: string }) => void
+  home: 'file' | 'service' | null
+  now: Date
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const long = comment.body.length > COMMENT_CLAMP_CHARS || comment.body.split('\n').length > COMMENT_CLAMP_LINES
+  const name = comment.authorKind === 'user' ? 'You' : comment.authorName ?? 'Agent'
+  const notCopied = comment.remoteStatus === 'failed'
+    ? home === 'service' ? 'Not copied to the connected service' : home === 'file' ? 'Not copied to the task’s file' : 'Not copied'
+    : null
+  return (
+    <li className="min-w-0">
+      <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
+        {comment.authorKind === 'agent' ? (
+          <Bot size={12} aria-hidden className="shrink-0 text-[var(--color-accent)]" />
+        ) : (
+          <User size={12} aria-hidden className="shrink-0 text-[var(--color-text-muted)]" />
+        )}
+        {agent ? (
+          <button
+            type="button"
+            onClick={() => onOpenAgent(agent)}
+            title={agent.name}
+            className="min-w-0 truncate font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
+          >
+            {name}
+          </button>
+        ) : (
+          <span className="min-w-0 truncate font-medium text-[var(--color-text-secondary)]">{name}</span>
+        )}
+        <Timestamp at={new Date(comment.createdAt)} now={now} />
+        {notCopied && (
+          <span role="img" aria-label={notCopied} title={notCopied} className="inline-flex shrink-0 text-[var(--color-warning)]">
+            <AlertTriangle size={11} aria-hidden />
+          </span>
+        )}
+      </div>
+      {/* text-xs as Prose's own, so the clamp's em lines are the body's lines. */}
+      <div className={`mt-0.5 break-words text-xs ${long && !expanded ? 'comment-clamp' : ''}`}>
+        <Prose compact>{comment.body}</Prose>
+      </div>
+      {long && (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+          className="mt-1 text-[11px] font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </li>
   )
 }
 

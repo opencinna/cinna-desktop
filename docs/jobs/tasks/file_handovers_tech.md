@@ -90,7 +90,7 @@ Digests are sha256 of the file bytes, computed in main. They are the only reason
 | `local-agent:set-handovers` | `{ agentId, handovers }` → `LocalAgentOutcome<LocalAgentDto>` | **Async**, unlike the approval setters: `auto` is checked against git before it is granted, and a refusal returns `handovers_not_ignored` |
 | `local-agent:handovers-check` | `{ agentId }` → `LocalAgentOutcome<HandoverIgnoreCheck>` | The evidence behind the `auto` option, so a surface can explain the refusal *before* the click |
 
-There is no renderer IPC for creating a handover. The session-scoped `handover_create` tool may write a real brief and request the same file intake; it does not bypass the protocol with a renderer seed. Preload exposes `window.api.handovers.forTask` and the two `window.api.localAgents` methods.
+There is no renderer IPC for creating a handover. The session-scoped `task_create` tool, given a bare `assignee`, may write a real brief and request the same file intake; it does not bypass the protocol with a renderer seed. Preload exposes `window.api.handovers.forTask` and the two `window.api.localAgents` methods.
 
 ## Services & Key Methods
 

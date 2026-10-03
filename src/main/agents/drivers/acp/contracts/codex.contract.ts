@@ -124,7 +124,7 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     id: 'codex.sandbox.write-outside-workspace', area: 'permissions & questions', surface: 'ACP method', name: 'sibling write / session/request_permission',
     expectation: 'A sibling-directory exec_command outside the workspace and system temp roots is denied without an ACP ask in read-only and agent modes. Explicit require_escalated in read-only raises an execute permission and allow_once writes; the isolated fake-provider automatic reviewer refuses invalid reviewer output in agent mode.',
     owners: ['src/main/agents/drivers/acp/codexLauncher.ts#modeId'],
-    feature: 'The file-handover requester cannot assume it can write another adopted folder unattended; handover_create supplies the main-owned alternative.',
+    feature: 'The file-handover requester cannot assume it can write another adopted folder unattended; task_create with an assignee supplies the main-owned alternative.',
     flow: { steps: ['none'], note: 'the whole flow does not write another adopted folder' }
   },
   {

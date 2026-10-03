@@ -625,6 +625,25 @@
   .markdown-body h1 { font-size: 1.25em; }
   .markdown-body h2 { font-size: 1.15em; }
   .markdown-body h3 { font-size: 1.05em; }
+  /* Prose `compact` (task comments): a heading is a bold body line, never
+     larger than the page's own section titles, and keeps the body's line
+     height so a clamped comment still ends on a whole line. */
+  .markdown-body.markdown-compact h1, .markdown-body.markdown-compact h2,
+  .markdown-body.markdown-compact h3, .markdown-body.markdown-compact h4,
+  .markdown-body.markdown-compact h5, .markdown-body.markdown-compact h6 {
+    font-size: 1em;
+    line-height: inherit;
+    margin: 0.4em 0 0.2em;
+  }
+  /* A long task comment, clamped to six whole lines of its body (Prose is
+     text-xs leading-relaxed: 1.625em a line) with the last one fading out,
+     so the cut never halves a line and reads as "more below". */
+  .comment-clamp {
+    max-height: calc(1.625em * 6);
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 1.625em), transparent 100%);
+    mask-image: linear-gradient(to bottom, black calc(100% - 1.625em), transparent 100%);
+  }
   .markdown-body hr {
     margin: 0.6em 0;
     border: none;

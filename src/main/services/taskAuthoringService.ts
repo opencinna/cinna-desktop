@@ -63,8 +63,18 @@ export const taskAuthoringService = {
    * agent index, and writing the file is the adapter's. The sync stack is
    * imported on use: this module is also loaded where it must not pull it in.
    */
-  async createRouted(scope: TaskAuthoringScope, input: TaskCreateInput): Promise<TaskDto> {
-    const { create, assignee } = this.prepare(scope, input)
+  async createRouted(
+    scope: TaskAuthoringScope,
+    input: TaskCreateInput,
+    /**
+     * What an agent's `task_create` adds: the parent in its own queue, and
+     * the provenance (agent, chat, chain depth). Absent for a person's task.
+     */
+    extra: Pick<Parameters<typeof taskService.create>[1], 'parentTaskId' | 'createdByAgentId' | 'createdByChatId' | 'chainDepth'> = {}
+  ): Promise<TaskDto> {
+    const prepared = this.prepare(scope, input)
+    const { assignee } = prepared
+    const create = { ...prepared.create, ...extra }
     if (assignee.kind === 'agent' && assignee.agentId) {
       const { localHomeFor } = await import('../tasks/adapters')
       const home = await localHomeFor(assignee.agentId)

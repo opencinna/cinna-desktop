@@ -807,6 +807,12 @@ export const tasks = sqliteTable('tasks', {
   trustedDigest: text('trusted_digest'),
   /** The file a folder task lives in, as last read. Never synced. */
   localFile: text('local_file', { mode: 'json' }).$type<TaskLocalFile | null>(),
+  /** The agent whose `task_create` made this task. Device-local; never synced. */
+  createdByAgentId: text('created_by_agent_id'),
+  /** The chat that agent called `task_create` from. Device-local; never synced. */
+  createdByChatId: text('created_by_chat_id'),
+  /** Depth in a chain of tool-created work (0 = not tool-created, or created outside any task). Never synced. */
+  chainDepth: integer('chain_depth').notNull().default(0),
   errorMessage: text('error_message'),
 
   createdAt: integer('created_at', { mode: 'timestamp' })
@@ -835,6 +841,22 @@ export const tasks = sqliteTable('tasks', {
  * device would offer a button nothing could answer. A remote's open asks get no
  * row at all — the remote is the registry and the desktop is the view.
  */
+/**
+ * A comment on a task — an agent's `task_comment`, or a person's later. Device
+ * local: not a synced collection. `remoteStatus` records the best-effort copy
+ * to the task's home (a bound service's comments, a folder file's log section).
+ */
+export const taskComments = sqliteTable('task_comments', {
+  id: text('id').primaryKey(),
+  taskId: text('task_id').notNull().references(() => tasks.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull(),
+  authorKind: text('author_kind').$type<'agent' | 'user'>().notNull(),
+  authorAgentId: text('author_agent_id'),
+  body: text('body').notNull(),
+  remoteStatus: text('remote_status').$type<'pending' | 'sent' | 'failed' | null>(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+})
+
 // Local execution receipts deliberately survive task deletion and do not sync.
 export const taskHandoffs = sqliteTable('task_handoffs', {
   taskId: text('task_id').primaryKey(),

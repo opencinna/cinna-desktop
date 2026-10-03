@@ -90,6 +90,8 @@ vi.mock('../auth/activation', () => ({
   userActivation: { requireActivated: vi.fn() }
 }))
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => 'profile-1', getSettingsScopeUserId: () => 'settings-1' }))
+const comments = vi.hoisted(() => vi.fn(() => [] as unknown[]))
+vi.mock('../services/taskToolService', () => ({ taskToolService: { comments } }))
 
 const { registerTaskHandlers } = await import('./task.ipc')
 
@@ -315,4 +317,14 @@ it('task:folder-board answers the four column fields and nothing else, or null',
   expect(sync.folderBoard).toHaveBeenCalledWith('profile-1', 'agent-1')
   await expect(invoke('task:folder-board', 'agent-2')).resolves.toBeNull()
   await expect(invoke('task:folder-board', 42)).rejects.toThrow('agent id')
+})
+
+it('task:comments answers the comment fields and nothing else, in the active profile', async () => {
+  const at = new Date('2026-10-03T12:00:00Z')
+  comments.mockReturnValueOnce([{ id: 'c1', authorKind: 'agent', authorAgentId: 'a1', authorName: 'Uploader', body: 'Done.', createdAt: at, remoteStatus: 'sent', userId: 'profile-1' }])
+  await expect(invoke('task:comments', 't1')).resolves.toEqual([
+    { id: 'c1', authorKind: 'agent', authorAgentId: 'a1', authorName: 'Uploader', body: 'Done.', createdAt: at, remoteStatus: 'sent' }
+  ])
+  expect(comments).toHaveBeenCalledWith({ profileUserId: 'profile-1', settingsUserId: 'settings-1' }, 't1')
+  await expect(invoke('task:comments', 42)).rejects.toThrow('task id')
 })

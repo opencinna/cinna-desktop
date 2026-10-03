@@ -363,6 +363,13 @@ export interface RemoteLocalHome {
    * one that cannot be removed throws, and the task stays deleted anyway.
    */
   discard(userId: string, binding: RemoteBinding): Promise<void>
+  /**
+   * Append one entry (already formatted) to the task's comment log in its
+   * home — an export: nothing reads it back. Returns the binding as written,
+   * to be stored like a push's. A copy that was Cinna's own stays trusted; one
+   * changed outside Cinna stays untrusted (the entry does not launder it).
+   */
+  appendLog?(userId: string, binding: RemoteBinding, entry: string): Promise<RemoteBinding>
 }
 
 /** A task on a local home's board, as far as its columns care. */

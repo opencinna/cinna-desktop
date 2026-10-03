@@ -731,7 +731,7 @@ export function handoverRequesterSection(agentId: string): string {
   return [
     '## Handing work to another project',
     '',
-    'Use `handover_targets` to discover available agents and exact folders. For a bare folder, writing the brief directly is preferred. If a direct write is refused or needs permission, use `handover_create` with the target, id, title and brief; Cinna writes the same brief and returns its paths. For kit or cloud agents, use `handover_create`.',
+    'Use `handover_targets` to discover available agents and exact folders. For a bare folder, writing the brief directly is preferred. If a direct write is refused or needs permission, use `task_create` with that target as `assignee`, an id, a title and the brief as `description`; Cinna writes the same brief and returns its paths. For kit or cloud agents, use `task_create` with an `assignee`.',
     'After delegating, end your turn. Cinna wakes this conversation with the result. Do not poll or wait inside your turn. `handover_list` gives a status snapshot when the user asks; `handover_reply` answers a blocked executor or sends a follow-up. In an executor session, `handover_report` reports progress or completion without writing report.md.',
     '',
     `Any folder adopted in Cinna Desktop has a handover inbox. To ask one for work, create \`${HANDOVERS_DIR}/<id>/${HANDOVER_BRIEF_FILE}\` inside **that** project. The \`<id>\` is yours to choose: 3 to 64 characters, lower case, starting with a letter or digit, then dots, dashes and underscores — use \`YYYYMMDD-HHMM-<slug>\`, e.g. \`20260917-1430-add-retry\`.`,

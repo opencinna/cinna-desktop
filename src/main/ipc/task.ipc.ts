@@ -34,6 +34,7 @@ import {
 } from '../../shared/tasks'
 import type { TaskStatus } from '../../shared/taskStatus'
 import type { TaskBoardColumn } from '../../shared/folderTasks'
+import type { TaskCommentDto } from '../../shared/tasks'
 
 /**
  * `task:*` and `inbox:*` — one module, because the inbox is a view over tasks
@@ -296,6 +297,26 @@ export function registerTaskHandlers(): void {
       { profileUserId: userId, settingsUserId: getSettingsScopeUserId() }, taskId, status, statusLabelInput(label))
     syncService.markDirty(userId)
     return task
+  })
+
+  /**
+   * A task's comments, oldest first — the task page's read-only Comments list.
+   * Rebuilt field by field: nothing beyond the DTO's fields crosses.
+   */
+  ipcHandle('task:comments', async (_event, taskId: unknown): Promise<TaskCommentDto[]> => {
+    userActivation.requireActivated()
+    if (typeof taskId !== 'string' || !taskId) throw new Error('Comments need a task id.')
+    const { taskToolService } = await import('../services/taskToolService')
+    return taskToolService.comments({ profileUserId: getProfileScopeUserId(), settingsUserId: getSettingsScopeUserId() }, taskId)
+      .map((comment) => ({
+        id: comment.id,
+        authorKind: comment.authorKind,
+        authorAgentId: comment.authorAgentId,
+        authorName: comment.authorName,
+        body: comment.body,
+        createdAt: comment.createdAt,
+        remoteStatus: comment.remoteStatus
+      }))
   })
 
   /**

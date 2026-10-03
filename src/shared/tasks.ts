@@ -437,6 +437,30 @@ export interface TaskListQuery {
   includeArchived?: boolean
 }
 
+/**
+ * A comment on a task, as the task page lists it (`task:comments`). Written by
+ * an agent's `task_comment` (a person's own comments come later). The author's
+ * name is resolved in main: the agent's current name, or null for a person.
+ */
+export interface TaskCommentDto {
+  id: string
+  authorKind: 'agent' | 'user'
+  authorAgentId: string | null
+  /** The agent's name; null for a person ("You") or an agent this device no longer has. */
+  authorName: string | null
+  body: string
+  createdAt: Date
+  /**
+   * The best-effort copy to the task's home (its file, or the connected
+   * service): `failed` when it did not land there, null when the task has no
+   * home to copy to; `pending` while the copy is under way.
+   */
+  remoteStatus: 'pending' | 'sent' | 'failed' | null
+}
+
+/** The longest comment `task_comment` accepts. */
+export const TASK_COMMENT_MAX = 8000
+
 export interface TaskListSnapshot {
   tasks: TaskDto[]
   /** False until the first remote child refresh; saved rows are always present. */

@@ -9,7 +9,11 @@ const TURN_HEADER = new RegExp(
   '^Turn context from Cinna Desktop, not part of the conversation:\\n' +
     '- chat id: `([^`\\n]+)`\\n' +
     '- task id: (?:`([^`\\n]+)`|none)\\n' +
-    '- handover depth: (\\d+)\\n\\n'
+    '- handover depth: (\\d+)\\n' +
+    // Optional counts the header adds only while nonzero.
+    '(?:- open delegations: \\d+ \\(\\d+ running, \\d+ waiting on the user\\)\\n)?' +
+    '(?:- ready tasks: \\d+\\n)?' +
+    '\\n'
 )
 
 export interface TurnWire {
