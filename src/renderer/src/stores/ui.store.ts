@@ -140,6 +140,12 @@ interface UIStore {
   showTasksButton: boolean
   /** The Tasks view's last List | Board choice. */
   tasksViewMode: TasksViewMode
+  /**
+   * The Tasks view's Agent filter, kept while the window lives so a task opened
+   * from the view returns to the same list or folder board. Not persisted:
+   * an agent id is profile-scoped and may be gone by the next launch.
+   */
+  tasksAgentFilter: string
   activeNoteId: string | null
   /**
    * A note whose sidebar row should scroll into view once, when it renders
@@ -215,6 +221,7 @@ interface UIStore {
   /** Turning it off while the Tasks view is open leaves the view for the chats. */
   setShowTasksButton: (show: boolean) => void
   setTasksViewMode: (mode: TasksViewMode) => void
+  setTasksAgentFilter: (filter: string) => void
   setActiveNoteId: (id: string | null) => void
   setRevealNoteId: (id: string | null) => void
   setRevealChatId: (id: string | null) => void
@@ -256,6 +263,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   taskOpenedFromTasks: false,
   showTasksButton: localStorage.getItem(TASKS_BUTTON_KEY) !== '0',
   tasksViewMode: readTasksViewMode(),
+  tasksAgentFilter: 'all',
   activeNoteId: null,
   revealNoteId: null,
   revealChatId: null,
@@ -298,6 +306,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
     localStorage.setItem(TASKS_VIEW_MODE_KEY, tasksViewMode)
     set({ tasksViewMode })
   },
+  setTasksAgentFilter: (tasksAgentFilter) => set({ tasksAgentFilter }),
   setActiveNoteId: (id) => set({ activeNoteId: id }),
   setRevealNoteId: (id) => set({ revealNoteId: id }),
   setRevealChatId: (id) => set({ revealChatId: id }),

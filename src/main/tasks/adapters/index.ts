@@ -30,6 +30,8 @@
 
 import { createNullAdapter } from './nullAdapter'
 import { cinnaTaskAdapter } from './cinnaTaskAdapter.wiring'
+import { folderTaskAdapter } from './folderTaskAdapter.wiring'
+import { installStatusWordResolver } from './statusWords'
 import type { RemoteTaskAdapter } from './adapter'
 
 /** Every adapter this build has, by id. */
@@ -48,6 +50,8 @@ export function registerAdapter(adapter: RemoteTaskAdapter): void {
     throw new Error(`Two remote task adapters both claim the id \`${adapter.id}\``)
   }
   ADAPTERS.set(adapter.id, adapter)
+  const home = adapter.localHome
+  if (home) installStatusWordResolver(adapter.id, (remoteId, status, current) => home.statusWord(remoteId, status, current))
 }
 
 /**
@@ -85,7 +89,21 @@ export function allAdapters(): RemoteTaskAdapter[] {
   return [...ADAPTERS.values()]
 }
 
+/**
+ * The adapter that keeps this local agent's tasks in its own folder, or null
+ * when the agent's work stays native (a kit agent, a disabled one, a model).
+ * Asked by `task:create` and the folder board — by what an adapter *is home
+ * for*, never by its id.
+ */
+export async function localHomeFor(agentId: string): Promise<RemoteTaskAdapter | null> {
+  for (const adapter of ADAPTERS.values()) {
+    if (adapter.localHome && (await adapter.localHome.accepts(agentId))) return adapter
+  }
+  return null
+}
+
 export * from './adapter'
 
 // Implementations register themselves by being imported here, and nowhere else.
 registerAdapter(cinnaTaskAdapter)
+registerAdapter(folderTaskAdapter)

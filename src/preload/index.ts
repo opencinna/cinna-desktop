@@ -1346,9 +1346,17 @@ const api = {
     /** Fields a person edits; the assignee is refused once a run could have started from it. */
     update: (taskId: string, patch: import('../shared/tasks').TaskUpdateInput): Promise<TaskDto> =>
       ipcRenderer.invoke('task:update', taskId, patch),
-    /** A person's move between Backlog, Ready and Done (`manualTargets`); main refuses anything else, and when the task runs elsewhere. */
-    setStatus: (taskId: string, status: TaskStatus): Promise<TaskDto> =>
-      ipcRenderer.invoke('task:set-status', taskId, status),
+    /** A person's move to a user column (`manualTargets`; on a folder board also its Cancelled words, sent with `label`); main refuses anything else, and when the task runs elsewhere. */
+    setStatus: (taskId: string, status: TaskStatus, label?: string | null): Promise<TaskDto> =>
+      ipcRenderer.invoke('task:set-status', taskId, status, label ?? null),
+    /**
+     * A bare agent's folder board: its own status words as ordered columns
+     * (`_board.yaml`, then default words in use, then unmapped words). Null
+     * when the agent's tasks are not kept in its folder. A drop on a column
+     * sends that column's `status` and `label` to `setStatus`.
+     */
+    folderBoard: (agentId: string): Promise<import('../shared/folderTasks').TaskBoardColumn[] | null> =>
+      ipcRenderer.invoke('task:folder-board', agentId),
     /** Re-run from the last message: reopen the task, and the job run it belongs to. */
     reopenForRerun: (taskId: string): Promise<TaskDto> =>
       ipcRenderer.invoke('task:reopen-for-rerun', taskId),

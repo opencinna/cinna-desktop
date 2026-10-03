@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A task always lives in SQLite here. A task may *additionally* be bound to a system that also holds it — cinna-core, or a tracker like Linear or GitHub Issues, or a managed-agent service. Everything system-specific about that second copy lives behind one interface, `RemoteTaskAdapter`, so the rest of the app asks an adapter what it *can do* rather than which service it *is*. It is the same arrangement [Agent Drivers](../../agents/drivers/drivers.md) give agents, for the same reason: the next integration should add a file, not a value to five unions.
+A task always lives in SQLite here. A task may *additionally* be bound to a system that also holds it — cinna-core, a bare agent's own `.cinna/tasks/` folder, or a tracker like Linear or GitHub Issues, or a managed-agent service. Everything system-specific about that second copy lives behind one interface, `RemoteTaskAdapter`, so the rest of the app asks an adapter what it *can do* rather than which service it *is*. It is the same arrangement [Agent Drivers](../../agents/drivers/drivers.md) give agents, for the same reason: the next integration should add a file, not a value to five unions.
 
 ## Core Concepts
 
@@ -12,6 +12,7 @@ A task always lives in SQLite here. A task may *additionally* be bound to a syst
 - **Null adapter** — what an id this build does not implement resolves to. Every capability false, a `ready: false` availability naming the service, `liveSession: null`, and `UnsupportedRemoteOperation` from gated operations
 - **Registry** — `src/main/tasks/adapters/index.ts`. `adapterFor(id)` is **total**: it always returns something adapter-shaped, so no caller has a branch for "there is no adapter for that"
 - **Contract suite** — `adapterContract.ts`, the clauses every adapter must satisfy, run over each implementation and over six fakes
+- **Local home** — `RemoteLocalHome`, the optional `localHome` member of an adapter that is the *home* of a local agent's tasks rather than a service they were handed to: it says which agents it keeps (`accepts`), lays out their board (`board`), names the word a status will be written as (`statusWord`) and removes a deleted task's copy (`discard`). `localHomeFor(agentId)` finds it by what it is home for, never by id. The `folder` adapter is the one local home ([Folder Tasks](folder_tasks.md))
 
 ## The capability set
 
@@ -21,13 +22,16 @@ A task always lives in SQLite here. A task may *additionally* be bound to a syst
 | `create` | work can be *put* on this remote at all. A pull-only remote — a shared board, a read-scoped token — is bound by a pull, and says `false` here |
 | `writeStatus` | one status step may be pushed |
 | `archive` | the remote can file a task away, through `archive()` — its **own route**, not a status |
-| `writeFields` | which of `title` / `description` / `priority` / `assignee` a push may carry |
+| `writeFields` | which of `title` / `description` / `priority` / `assignee` / `customFields` a push may carry. A remote with no room for custom fields leaves `customFields` out and its marker is dropped |
 | `comments` | `addComment` / `listComments` |
 | `handoffNote` | the note has somewhere to go: `putHandoffNote` |
+| `clearHandoffNote` | optional; the note's place can be **emptied** — `putHandoffNote(…, null)` removes it (a file's handoff section). Absent on an append-only channel (cinna's comment stream), where a cleared note has nothing to unpost and is never sent |
 | `writeArtifactKinds` | which `TaskArtifact` kinds the remote stores — `file`, `link`, or neither |
 | `subtasks` | `listSubtasks` works, **and** `create` accepts a task that has a parent |
 | `execute` | the remote can be asked to start working on it |
 | `asks` | the remote parks on human input, and this adapter can list and answer those asks |
+| `handoffTarget` | work may be **handed** here: `preferredAdapter` may pick it and a hand-off may name it. False for a task's home by construction — a folder holds its own agent's tasks and is created into by `task:create`, never by Hand off |
+| `transitionTable` | the remote validates status **transitions**: a push walks `taskStatusPath` a step at a time, and a person's move keeps the remote table. False for a remote that stores whatever status it is given (a file's `status:` line): the destination is written directly and a manual move is judged as for an unbound task |
 
 Two of them are **lists rather than flags**, and both were flags first. A boolean `attachments` would have said "attachments work" and been wrong half the time: cinna stores files and only files, while Linear's attachments are a URL with a title — so an adapter would have been handed the one kind it cannot store and could pass only by rejecting or by quietly posting it as a comment, which is a different capability wearing this one's flag. An empty list is truthy, so the gate is a helper that asks whether a capability allows *anything*; `caps[capability]` would have read "stores no artifact kind at all" as permission to try.
 
@@ -40,7 +44,9 @@ Two of them are **lists rather than flags**, and both were flags first. A boolea
 - **Callers ask `capabilities()`, never the id.** An operation the capabilities deny is not a runtime condition to be caught — it is a bug at the call site, and calling it throws `UnsupportedRemoteOperation`. A quiet no-op would let a handover that cannot happen report success. This is what makes a poorer remote *expressible* rather than broken.
 - **Only `create` invents a binding.** Every other call takes one and returns it, possibly refreshed, never re-identified — *including* the bindings nested inside snapshots. A `fetch` that re-creates the task when the remote answers 404 would have its new id written back, and the original abandoned with the user's comments and attachments on it: from the user's side, a task that "resynced" and a second copy on the web.
 - **Ordinary sync follows a committed local write.** The adapter is called after SQLite is committed, so an adapter failure marks the binding stale and is retried — it never fails or rolls back the local write. That is what makes an unlinked profile, an offline laptop and a 500 the same code path. An adapter therefore **rejects rather than swallowing**: what a failure costs is the caller's decision.
-- **A status push is one step, not a destination.** The remote validates transitions, so a task that went `new → completed` locally goes up as two calls. Walking the path belongs to the reconciler; an adapter doing it here would be guessing at the remote's table.
+- **A status push is one step, not a destination — on a remote with a transition table.** Such a remote validates transitions, so a task that went `new → completed` locally goes up as two calls. Walking the path belongs to the reconciler; an adapter doing it here would be guessing at the remote's table. A remote with `transitionTable: false` takes the destination in one call, with the task's own word for it (`RemoteStatusOptions.label`) when it has one.
+- **A remote may carry more than the core fields.** A snapshot's optional `statusLabel` (the remote's own word for the status), `customFields` and `file` (`RemoteLocalFile` — the remote copy is a file on this machine) are filled only by an adapter that has them. A snapshot with `file` makes the replica **device-local**: run here and never carried by device sync, because its path exists on one machine.
+- **A write that changes the binding returns it.** `putHandoffNote` returns a refreshed binding when the write changed the binding's state (a file's digest) and nothing otherwise; `stateWhileOwed` lets an adapter whose push merges against what it last read keep that "last read" for a field a pull lands on while the field is still owed.
 - **`archived` never travels as a status.** It is absent from `REMOTE_WRITABLE_STATUSES` (`src/shared/taskStatus.ts`) and is `archive()`'s job — on cinna-core a different route entirely. Without a method of its own, "the user filed it away" could only be expressed by smuggling a status through `pushStatus`.
 - **A flat remote never gets a silent orphan.** `create` takes the **parent's binding**, not the local parent id — an adapter holds no mapping from one to the other, so a method that took only the task could be satisfied only by sending no parent at all: the top-level orphan the rule is against, created while reporting success. A parent offered to a `subtasks: false` adapter is `unsupported`; a task that *has* a parent offered with `parent: null` is `invalid_request` and the remote is never asked.
 - **A remote ask is a run event's `InputRequest`.** A cinna tool question and a parked local permission reach the inbox in the same shape, so one component renders both and there is no second union to drift. Answering an ask that is no longer open is `{delivered: false}` — the commonest thing that happens to an ask, and an answer rather than a failure; it is what `AgentDriver.respond` already returns for a local park.
@@ -84,6 +90,8 @@ Six of the subjects are fakes: a full service, Linear (status, no asks, no execu
 
 The seventh and eighth subjects are the answer to that caveat: [the cinna-core adapter](cinna_adapter.md) itself, on a linked profile and an unlinked one, driven over a fake *server* rather than a fake adapter. Everything below the transport there is production code — the routes, the payload field names, the status refusal, the ask translation, the error taxonomy — and the fake refuses the way the real service refuses. It passed the clauses on its first run with no `knownViolations` entry, so the seam did not have to move for its first real mapping; what moved was everything around it.
 
+The ninth subject is [the `folder` adapter](folder_tasks.md) over the **real filesystem** in a temp directory: a "request" is one call into its filesystem layer, and the world fails it with `EIO`, refuses writes with `EACCES`, or deletes the bound file. Its `denyOwnership` is async, because a missing file is only `not_ours` after two reads past the absence grace — the world takes the first read and advances the clock. It records one known violation, `status.narrow`: a task file has no allowed-status set (Backlog is a column a person drops onto, written in the folder's own word); only `archived` is refused, because `archive()` is its route.
+
 Clauses, by name: `id.stable`, `capabilities.stable`, `availability.answers`, `create.binds`, `create.only_inventor`, `handoffNote.lands`, `unsupported.refused`, `supported.works`, `status.narrow`, `subtasks.no_orphan`, `asks.run_vocabulary`, `failure.is_domain`, `not_ours.no_retry`, `rejected.keeps_binding`, `deepLink.openable`, `count.counts`.
 
 Two properties of the clauses are easy to lose and are held on purpose: a refused operation must **not touch the far side** (the world counts requests), and every binding a call hands back — nested in a snapshot included — must carry a `url` that is null or `http(s)`, because that is what the task page opens and `app:open-external` refuses every other scheme.
@@ -96,7 +104,7 @@ The category counts an **equality comparison against an adapter id**, not a read
 
 ## What this deliberately does not do
 
-- **It ships one adapter.** The registry holds `cinna`; a test asserts its registration so the null adapter cannot hide a missing import. Job handover, run refresh and take-over controls reach adapters through [the sync service](remote_sync.md). The active-profile scheduler also runs dirty push, pull and periodic reconciliation; the adapter does not own those timers.
+- **It ships two adapters.** The registry holds `cinna` and `folder`, in that order; a test asserts both registrations so the null adapter cannot hide a missing import. `registerAdapter` also installs a status-word resolver for an adapter with a `localHome` (`statusWords.ts`), so `taskService` can ask a home's word synchronously without importing the registry. Job handover, run refresh and take-over controls reach adapters through [the sync service](remote_sync.md). The active-profile scheduler also runs dirty push, pull and periodic reconciliation; the adapter does not own those timers.
 - **No read half for artifacts.** `putArtifact` is the seam's only write-only channel — comments and asks both have a `list*`, and a snapshot carries no artifacts — so a replica's remote attachments are invisible here. The capability is named `writeArtifactKinds` so the absence is a statement in the type rather than a gap in a docstring; a `listArtifacts` is additive when a surface needs one.
 - **No push subscription.** Every adapter is polled. A later adapter may expose a subscription and be preferred over polling; nothing here builds one.
 - **The renderer never sees which service a task is on beyond its display fields.** `TaskListQuery` has no `remoteAdapter` arm, and `TaskDto.remote` omits `state`.
@@ -111,18 +119,20 @@ taskService (SQLite write, committed)
         |
         v
  adapterFor(binding.adapter) -> RemoteTaskAdapter
-            |                          |
-     null adapter                 cinnaTaskAdapter
- (unknown id: refuses,          (create / fetch / push /
-  says so in words)              comments / asks / archive)
+            |                          |                          |
+     null adapter                 cinnaTaskAdapter           folderTaskAdapter
+ (unknown id: refuses,          (create / fetch / push /    (.cinna/tasks/*.md: list /
+  says so in words)              comments / asks / archive)  patch / localHome)
 ```
 
 ## Where it lives
 
 - `src/main/tasks/adapters/adapter.ts` — the interface, `RemoteTaskError`, `UnsupportedRemoteOperation`, the binding/snapshot/ask/comment shapes, and `RemoteDirtyField`, the names a pending change is recorded under
-- `src/main/tasks/adapters/index.ts` — `adapterFor()`, `registerAdapter()`, `hasAdapter()`, `allAdapters()`, and the import list implementations join
+- `src/main/tasks/adapters/index.ts` — `adapterFor()`, `registerAdapter()`, `hasAdapter()`, `allAdapters()`, `localHomeFor()`, and the import list implementations join
+- `src/main/tasks/adapters/statusWords.ts` — `installStatusWordResolver()`, `homeStatusWord()`: a local home's word for a status, asked by `taskService` without loading the registry
 - `src/main/tasks/adapters/nullAdapter.ts` — `createNullAdapter(id)`
-- `src/main/tasks/adapters/cinnaTaskAdapter.ts` + `.wiring.ts` — the one implementation this build ships ([its own doc](cinna_adapter.md))
+- `src/main/tasks/adapters/cinnaTaskAdapter.ts` + `.wiring.ts` — cinna-core ([its own doc](cinna_adapter.md))
+- `src/main/tasks/adapters/folderTaskAdapter.ts` + `.wiring.ts` + `folderTaskFs.ts` — a bare agent's `.cinna/tasks/` ([its own doc](folder_tasks.md))
 - `src/main/tasks/adapters/adapterContract.ts` — `describeAdapterContract(name, world, options?)`, `AdapterWorld`, the clause union
 - `src/main/tasks/adapters/testSupport/fakeRemote.ts` — the configurable fake and `CAPABILITY_SHAPES`, the worked services
 - `src/main/tasks/adapters/testSupport/fakeCinnaServer.ts` — cinna-core in memory, so the real adapter can be a contract subject
@@ -132,6 +142,7 @@ taskService (SQLite write, committed)
 ## Integration Points
 
 - [cinna-core as a Remote Task Adapter](cinna_adapter.md) — the first implementation, and where every cinna field name lives
+- [Folder Tasks](folder_tasks.md) — the second, and the one local home: a bare agent's task files
 - [Keeping a Bound Task in Step](remote_sync.md) — who calls an adapter, in what order, and what a failure costs
 - [The Handoff Note, Exported](handoff_note_export.md) — the local side of `putHandoffNote`
 - [Agent Drivers & Readiness](../../agents/drivers/drivers.md) — the same capability-not-kind arrangement, one layer down

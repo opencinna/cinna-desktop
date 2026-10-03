@@ -1,4 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterAll, describe, it, expect, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createFolderTaskAdapter, FOLDER_ABSENCE_GRACE_MS, type FolderFs } from './folderTaskAdapter'
+import { folderTaskFs } from './folderTaskFs'
 import { describeAdapterContract, type AdapterWorld } from './adapterContract'
 import { CAPABILITY_SHAPES, createFakeRemote } from './testSupport/fakeRemote'
 import { createFakeCinnaServer } from './testSupport/fakeCinnaServer'
@@ -56,6 +62,9 @@ function makeTask(overrides: Partial<TaskDto> = {}): TaskDto {
     budget: null,
     errorMessage: null,
     customFields: null,
+    statusLabel: null,
+    file: null,
+    fromOutside: false,
     jobId: null,
     jobRunId: null,
     createdAt: now,
@@ -151,6 +160,85 @@ function cinnaWorld(ready = true): () => AdapterWorld {
 describeAdapterContract('cinna-core, over its real routes', cinnaWorld())
 describeAdapterContract('cinna-core on an unlinked profile', cinnaWorld(false))
 
+/**
+ * `folder` — the real adapter over the **real filesystem**, in a temp
+ * directory. A "request" is one call into the filesystem layer; the world
+ * fails it (`EIO`), refuses writes (`EACCES`) or deletes the bound file.
+ */
+const folderRoots: string[] = []
+afterAll(() => {
+  for (const root of folderRoots) rmSync(root, { recursive: true, force: true })
+})
+
+function folderWorld(): () => AdapterWorld {
+  return () => {
+    const root = mkdtempSync(join(tmpdir(), 'cinna-folder-contract-'))
+    folderRoots.push(root)
+    const agent = { id: 'agt_1', name: 'Ledger agent', path: root }
+    let requests = 0
+    let transport = false
+    let refuse = false
+    let boundFile: string | null = null
+    const call = <T>(fn: () => T): T => {
+      requests += 1
+      if (transport) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' })
+      return fn()
+    }
+    const writing = <T>(fn: () => T): T => call(() => {
+      if (refuse) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+      return fn()
+    })
+    const fs: FolderFs = {
+      list: (dir) => call(() => folderTaskFs.list(dir)),
+      read: (path) => call(() => folderTaskFs.read(path)),
+      replace: (path, content) => writing(() => folderTaskFs.replace(path, content)),
+      create: (path, content) => writing(() => folderTaskFs.create(path, content)),
+      ensureDir: (dir) => call(() => folderTaskFs.ensureDir(dir)),
+      remove: (path) => writing(() => folderTaskFs.remove(path))
+    }
+    let clock = 1_000_000
+    const adapter = createFolderTaskAdapter({
+      agents: async () => [agent], fs, randomBytes: (size) => randomBytes(size), now: () => clock
+    })
+    return {
+      adapter,
+      userId: USER,
+      ready: true,
+      task: makeTask(),
+      subtask: makeTask({ id: 'tsk_child', title: 'Check the bank feed', parentTaskId: 'tsk_local' }),
+      // A file somebody else wrote: bound by a pull, not by `create`.
+      bind: async () => {
+        const dir = join(root, '.cinna', 'tasks')
+        mkdirSync(dir, { recursive: true })
+        boundFile = join(dir, 'reconcile.md')
+        writeFileSync(boundFile, '---\nid: t-bound\ntitle: Reconcile payouts\nstatus: todo\nmeta:\n  owner: sam\n---\nBody.\n')
+        return { adapter: 'folder', id: 'agt_1:t-bound', key: 't-bound', url: null, state: {} }
+      },
+      requests: () => requests,
+      failTransport: () => { transport = true },
+      // A file is gone once it has been missing on two reads 30 s apart: the
+      // first read is taken here, so the clause's own fetch is the sure one.
+      denyOwnership: async () => {
+        if (!boundFile) return
+        rmSync(boundFile)
+        await adapter.fetch(USER, { adapter: 'folder', id: 'agt_1:t-bound', key: 't-bound', url: null, state: {} }).catch(() => {})
+        clock += FOLDER_ABSENCE_GRACE_MS
+      },
+      refuseWrite: () => { refuse = true },
+      plantAsk: () => {
+        throw new Error('a folder has no asks; the clause should not have run')
+      }
+    }
+  }
+}
+
+describeAdapterContract('a bare agent’s .cinna/tasks folder, on disk', folderWorld(), {
+  knownViolations: {
+    'status.narrow':
+      'a task file has no allowed-status set: Backlog (`new`) is a column a person drops onto and the folder writes its own word for it; only `archived` is refused, as archive() is its route'
+  }
+})
+
 // And the adapter for a service this build does not have must pass the same
 // clauses: a task bound to it still has to open.
 describeAdapterContract('a service this build does not have', () => {
@@ -195,7 +283,8 @@ describe('the adapter registry', () => {
   it('has the adapters this build ships, from the imports at the foot of the registry', async () => {
     const registry = await freshRegistry()
     expect(registry.hasAdapter('cinna')).toBe(true)
-    expect(registry.allAdapters().map((a) => a.id)).toEqual(['cinna'])
+    expect(registry.hasAdapter('folder')).toBe(true)
+    expect(registry.allAdapters().map((a) => a.id)).toEqual(['cinna', 'folder'])
     expect(registry.adapterFor('cinna').id).toBe('cinna')
   })
 

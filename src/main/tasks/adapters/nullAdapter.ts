@@ -39,6 +39,10 @@ const NOTHING: RemoteTaskCapabilities = {
   subtasks: false,
   execute: false,
   asks: false,
+  // Nothing is handed to a service this build does not have, and a task
+  // bound to one keeps the remote table for manual moves.
+  handoffTarget: false,
+  transitionTable: true,
 }
 
 export function createNullAdapter(id: string): RemoteTaskAdapter {

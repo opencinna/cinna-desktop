@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowUp, ChevronsUp, MoreHorizontal } from 'lucide-react'
 import type { TaskDto } from '../../../../shared/tasks'
@@ -10,6 +10,7 @@ import {
   type TaskStatus,
   type TaskStatusCategory
 } from '../../../../shared/taskStatus'
+import { normalizeStatusWord, type TaskBoardColumn } from '../../../../shared/folderTasks'
 import { useAgents } from '../../hooks/useAgents'
 import { useOpenTask, useSetTaskStatus } from '../../hooks/useTasks'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -17,7 +18,13 @@ import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
 import { usePopover } from '../ui/usePopover'
 import { TaskStatusIcon } from './TaskStatusIcon'
 import { TaskAssigneeChip, taskAssigneeAgent } from './TaskAssigneeChip'
-import { boardMoveTargets, taskStatusLabel } from './tasksViewModel'
+import {
+  boardMoveTargets,
+  folderColumnIndex,
+  folderMoveTargets,
+  taskStatusLabel,
+  taskStatusText
+} from './tasksViewModel'
 import { useTaskRowsInPlace } from './useTaskRowsInPlace'
 
 const DRAG_TYPE = 'application/x-cinna-task'
@@ -42,11 +49,27 @@ type AgentList = NonNullable<ReturnType<typeof useAgents>['data']>
  * A drop moves the card at once and moves it back if main refuses, with main's
  * sentence in the view's error line (`onError`). Every movable card also has a
  * ⋯ with the same moves, for the keyboard.
+ *
+ * ## A folder board
+ *
+ * Filtered to one bare agent whose tasks live in its folder, the board is that
+ * folder's own words instead (`folderColumns`, in the order main gives). A
+ * card stands in the column of its own word, else in the first column of its
+ * status, then of its category (`folderColumnIndex`); only `droppable`
+ * columns take a drop. A task kept in a file sends the column's status **and
+ * its word**, so the file gets the word the user dropped on; any other task
+ * of the agent (a handover, a native task) has no word to write, so it is
+ * offered one column per status it may reach and sends the status alone
+ * (`folderMoveTargets`). While a card is dragged the
+ * columns are held as they were at the drag's start: a poll that brings a new
+ * word must not slide a column under the pointer (§1).
  */
-export function TasksBoard({ tasks, onError }: {
+export function TasksBoard({ tasks, onError, folderColumns = null }: {
   tasks: readonly TaskDto[]
   /** The view's one-line error slot under its controls; null clears it. */
   onError: (message: string | null) => void
+  /** A folder's own columns, left to right; null (or empty) for the five categories. */
+  folderColumns?: readonly TaskBoardColumn[] | null
 }): React.JSX.Element {
   const setStatus = useSetTaskStatus()
   const { data: agents } = useAgents()
@@ -54,7 +77,7 @@ export function TasksBoard({ tasks, onError }: {
   const [moved, setMoved] = useState<ReadonlyMap<string, Override>>(new Map())
   const sequence = useRef(0)
   const [dragging, setDragging] = useState<string | null>(null)
-  const [over, setOver] = useState<TaskStatusCategory | null>(null)
+  const [over, setOver] = useState<string | null>(null)
 
   // A read ends an override once it shows the written status, or any status
   // other than the one the move started from — something newer than the move
@@ -82,15 +105,46 @@ export function TasksBoard({ tasks, onError }: {
   }
 
   const statusOf = (task: TaskDto): TaskStatus => moved.get(task.id)?.status ?? task.status
+  /** The word a file task stands by: a pending move's, else its own. Null for a task with no file. */
+  const wordOf = (task: TaskDto): string | null => {
+    if (!task.file) return null
+    const override = moved.get(task.id)
+    return override ? (override.label ?? null) : task.statusLabel
+  }
+  /** The word a card shows: the moved-to column's while a move is unconfirmed, else its own. */
+  const statusTextOf = (task: TaskDto): string => {
+    const override = moved.get(task.id)
+    if (!override) return taskStatusText(task)
+    return override.label ?? taskStatusLabel(override.status)
+  }
 
-  const move = async (task: TaskDto, category: TaskStatusCategory): Promise<void> => {
-    const status = CATEGORY_DROP_STATUS[category]
-    if (!status || !boardMoveTargets(task, statusOf(task)).includes(category)) return
+  // Held while a card is dragged, so a poll cannot add or reorder a column under the pointer.
+  const [heldColumns, setHeldColumns] = useState<readonly TaskBoardColumn[] | null>(null)
+  const folder = heldColumns ?? (folderColumns && folderColumns.length > 0 ? folderColumns : null)
+  const specs = useMemo(() => (folder ? folder.map(folderSpec) : CATEGORY_SPECS), [folder])
+
+  /** The columns this card may move to, by key. */
+  const targetsOf = (task: TaskDto): ColumnSpec[] => {
+    const status = statusOf(task)
+    if (folder) {
+      const keys = new Set(folderMoveTargets(task, status, folder, wordOf(task)).map((column) => normalizeStatusWord(column.label)))
+      return specs.filter((spec) => keys.has(spec.key))
+    }
+    const categories = boardMoveTargets(task, status)
+    return specs.filter((spec) => spec.category !== null && categories.includes(spec.category))
+  }
+
+  const move = async (task: TaskDto, spec: ColumnSpec): Promise<void> => {
+    const drop = spec.drop
+    if (!drop || !targetsOf(task).some((target) => target.key === spec.key)) return
+    const { status } = drop
+    // Only a task kept in a file takes the column's word; main refuses a word for any other.
+    const label = task.file ? drop.label : undefined
     onError(null)
     const seq = ++sequence.current
-    setMoved((current) => new Map(current).set(task.id, { status, seq, from: task.status }))
+    setMoved((current) => new Map(current).set(task.id, { status, label, seq, from: task.status }))
     try {
-      const saved = await setStatus.mutateAsync({ taskId: task.id, status })
+      const saved = await setStatus.mutateAsync({ taskId: task.id, status, ...(label !== undefined ? { label } : {}) })
       // Main answered with another status: show what it wrote, not what was asked.
       if (saved.status !== status) settle(task.id, seq)
     } catch (error) {
@@ -100,31 +154,42 @@ export function TasksBoard({ tasks, onError }: {
   }
 
   const draggedTask = dragging ? tasks.find((task) => task.id === dragging) : undefined
-  const dropTargets = draggedTask ? boardMoveTargets(draggedTask, statusOf(draggedTask)) : []
+  const dropKeys = new Set(draggedTask ? targetsOf(draggedTask).map((spec) => spec.key) : [])
 
-  const columns = new Map<TaskStatusCategory, TaskDto[]>(TASK_STATUS_CATEGORIES.map((category) => [category, []]))
+  const columns = new Map<string, TaskDto[]>(specs.map((spec) => [spec.key, []]))
   for (const task of tasks) {
-    const category = taskStatusCategory(statusOf(task))
-    if (category) columns.get(category)!.push(task)
+    const key = folder ? folderKeyOf(folder, statusOf(task), wordOf(task), !!task.file) : taskStatusCategory(statusOf(task))
+    if (key !== null && columns.has(key)) columns.get(key)!.push(task)
   }
 
   return (
     // Five columns share the main area; it scrolls sideways only when the
     // window cannot give each its 10rem (800 px beside the sidebar). 10, not
     // 11: at the app's 17 px root, 11rem left 1280 px with the sidebar 56 px short.
+    // A folder board has as many columns as the folder has words, at the same minimum.
     <div className="overflow-x-auto pb-2">
-      <div className="grid grid-cols-[repeat(5,minmax(10rem,1fr))] gap-3">
-        {TASK_STATUS_CATEGORIES.map((category) => (
+      <div
+        data-tasks-board={folder ? 'folder' : 'categories'}
+        className="grid gap-3"
+        style={{ gridTemplateColumns: `repeat(${specs.length}, minmax(10rem, 1fr))` }}
+      >
+        {specs.map((spec) => (
           <BoardColumn
-            key={category}
-            category={category}
-            tasks={columns.get(category)!}
+            key={spec.key}
+            spec={spec}
+            tasks={columns.get(spec.key)!}
             agents={agents ?? []}
             statusOf={statusOf}
+            statusTextOf={statusTextOf}
+            targetsOf={targetsOf}
             dragging={dragging}
-            accepts={dropTargets.includes(category)}
-            over={over === category}
-            onDragState={(id) => { setDragging(id); if (!id) setOver(null) }}
+            accepts={dropKeys.has(spec.key)}
+            over={over === spec.key}
+            onDragState={(id) => {
+              setDragging(id)
+              setHeldColumns(id ? folder : null)
+              if (!id) setOver(null)
+            }}
             onOver={(target) => setOver(target)}
             onMove={(task, target) => void move(task, target)}
             findTask={(id) => tasks.find((task) => task.id === id)}
@@ -138,32 +203,93 @@ export function TasksBoard({ tasks, onError }: {
 /** A move not yet confirmed by a read: what it wrote, which move it was, and the status it left. */
 interface Override {
   status: TaskStatus
+  /** The folder column's word the move sent, when it was a folder board move. */
+  label?: string
   seq: number
   from: TaskStatus
 }
 
-function BoardColumn({ category, tasks, agents, statusOf, dragging, accepts, over, onDragState, onOver, onMove, findTask }: {
-  category: TaskStatusCategory
+/**
+ * One board column, either kind: a category (phase-1 board) or a folder's own
+ * word. `key` is the category or the normalized word; `drop` is what a drop
+ * writes, null for a column nobody drops on (In progress, Waiting, an
+ * unmapped word).
+ */
+interface ColumnSpec {
+  key: string
+  title: string
+  /** The folder's word: shown as written, without small capitals. */
+  asWritten: boolean
+  /** The phase-1 category, for a category column; null on a folder board. */
+  category: TaskStatusCategory | null
+  /** Pages by ten, as Done does. */
+  paged: boolean
+  drop: { status: TaskStatus; label?: string } | null
+  folder: TaskBoardColumn | null
+}
+
+const CATEGORY_SPECS: readonly ColumnSpec[] = TASK_STATUS_CATEGORIES.map((category) => {
+  const status = CATEGORY_DROP_STATUS[category]
+  return {
+    key: category,
+    title: TASK_STATUS_CATEGORY_LABEL[category],
+    asWritten: false,
+    category,
+    paged: category === 'closed',
+    drop: status ? { status } : null,
+    folder: null
+  }
+})
+
+function folderSpec(column: TaskBoardColumn): ColumnSpec {
+  return {
+    key: normalizeStatusWord(column.label),
+    title: column.label,
+    asWritten: true,
+    category: null,
+    paged: taskStatusCategory(column.status) === 'closed',
+    drop: column.droppable ? { status: column.status, label: column.label } : null,
+    folder: column
+  }
+}
+
+/** The folder column a card stands in (`folderColumnIndex`), by its key. */
+function folderKeyOf(
+  columns: readonly TaskBoardColumn[],
+  status: TaskStatus,
+  label: string | null,
+  inFile: boolean
+): string | null {
+  const index = folderColumnIndex(columns, status, label, inFile)
+  return index >= 0 ? normalizeStatusWord(columns[index].label) : null
+}
+
+function BoardColumn({ spec, tasks, agents, statusOf, statusTextOf, targetsOf, dragging, accepts, over, onDragState, onOver, onMove, findTask }: {
+  spec: ColumnSpec
   tasks: TaskDto[]
   agents: AgentList
   statusOf: (task: TaskDto) => TaskStatus
+  statusTextOf: (task: TaskDto) => string
+  targetsOf: (task: TaskDto) => ColumnSpec[]
   dragging: string | null
   /** The card being dragged may move here. */
   accepts: boolean
   over: boolean
   onDragState: (taskId: string | null) => void
-  onOver: (category: TaskStatusCategory | null) => void
-  onMove: (task: TaskDto, category: TaskStatusCategory) => void
+  onOver: (key: string | null) => void
+  onMove: (task: TaskDto, spec: ColumnSpec) => void
   findTask: (taskId: string) => TaskDto | undefined
 }): React.JSX.Element {
-  const label = TASK_STATUS_CATEGORY_LABEL[category]
-  const page = category === 'closed' ? DONE_PAGE : ALL
+  const label = spec.title
+  const page = spec.paged ? DONE_PAGE : ALL
   const { ordered, visible, expanded, showMore, sectionRef } = useTaskRowsInPlace(tasks, page, '[data-tasks-scroll]')
   return (
     <section
       ref={sectionRef}
       aria-label={label}
-      data-board-column={category}
+      {...(spec.folder
+        ? { 'data-folder-column': spec.folder.label, 'data-droppable': spec.folder.droppable ? 'true' : 'false' }
+        : { 'data-board-column': spec.category ?? undefined })}
       onDragOver={(event) => {
         // Only a card of this board's: the drag state is set by its dragstart.
         if (!dragging) return
@@ -174,7 +300,7 @@ function BoardColumn({ category, tasks, agents, statusOf, dragging, accepts, ove
         }
         event.preventDefault()
         event.dataTransfer.dropEffect = 'move'
-        if (!over) onOver(category)
+        if (!over) onOver(spec.key)
       }}
       onDragLeave={(event) => {
         if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
@@ -187,15 +313,17 @@ function BoardColumn({ category, tasks, agents, statusOf, dragging, accepts, ove
         onOver(null)
         onDragState(null)
         const task = id ? findTask(id) : undefined
-        if (task) onMove(task, category)
+        if (task) onMove(task, spec)
       }}
       // An outline, not a border: the highlight must not resize the column (§1).
       className={`flex min-h-40 min-w-0 flex-col gap-2 rounded-lg bg-[var(--color-bg-secondary)]/50 p-2 outline outline-1 transition-colors ${
         over ? 'outline-[var(--color-accent)]' : 'outline-transparent'
       }`}
     >
-      <h2 className="flex items-center gap-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-        {label}
+      <h2 className={`flex items-center gap-2 px-1 text-[11px] font-semibold text-[var(--color-text-muted)] ${
+        spec.asWritten ? '' : 'uppercase tracking-wider'
+      }`}>
+        <span className="min-w-0 truncate" title={spec.asWritten ? label : undefined}>{label}</span>
         <span className="font-normal tabular-nums">{ordered.length}</span>
       </h2>
       {ordered.slice(0, visible).map((task) => (
@@ -203,6 +331,8 @@ function BoardColumn({ category, tasks, agents, statusOf, dragging, accepts, ove
           key={task.id}
           task={task}
           status={statusOf(task)}
+          statusText={statusTextOf(task)}
+          targets={targetsOf(task)}
           agents={agents}
           onDragState={onDragState}
           onMove={(next) => onMove(task, next)}
@@ -220,15 +350,18 @@ function BoardColumn({ category, tasks, agents, statusOf, dragging, accepts, ove
   )
 }
 
-function BoardCard({ task, status, agents, onDragState, onMove }: {
+function BoardCard({ task, status, statusText, targets, agents, onDragState, onMove }: {
   task: TaskDto
   status: TaskStatus
+  /** The status as the card's name says it: the folder's word, or the category word. */
+  statusText: string
+  /** The columns this card may move to. */
+  targets: readonly ColumnSpec[]
   agents: AgentList
   onDragState: (taskId: string | null) => void
-  onMove: (category: TaskStatusCategory) => void
+  onMove: (spec: ColumnSpec) => void
 }): React.JSX.Element {
   const openTask = useOpenTask()
-  const targets = boardMoveTargets(task, status)
   const movable = targets.length > 0
   const assigneeName = taskAssigneeAgent(task, agents)?.name
   return (
@@ -254,7 +387,7 @@ function BoardCard({ task, status, agents, onDragState, onMove }: {
       <button
         type="button"
         onClick={() => openTask(task.id)}
-        aria-label={`${task.title} — ${taskStatusLabel(status)}`}
+        aria-label={`${task.title} — ${statusText}`}
         className="min-w-0 flex-1 px-2.5 py-2 text-left"
       >
         <span className="flex items-start gap-2">
@@ -286,8 +419,8 @@ function BoardCard({ task, status, agents, onDragState, onMove }: {
 /** The keyboard path for a drag: Move to each column this card may reach. */
 function CardMenu({ title, targets, onMove }: {
   title: string
-  targets: readonly TaskStatusCategory[]
-  onMove: (category: TaskStatusCategory) => void
+  targets: readonly ColumnSpec[]
+  onMove: (spec: ColumnSpec) => void
 }): React.JSX.Element {
   const menu = usePopover<HTMLButtonElement>('below-right')
   const { open, setOpen } = menu
@@ -316,10 +449,10 @@ function CardMenu({ title, targets, onMove }: {
       {open && menu.style && createPortal(
         <div ref={menu.popoverRef} role="menu" aria-label="Task actions" style={menu.style}
           className={MENU_SURFACE.replace('w-56', 'w-44')}>
-          {targets.map((category) => (
-            <button key={category} type="button" role="menuitem" className={MENU_ITEM}
-              onClick={() => { setOpen(false); onMove(category) }}>
-              Move to {TASK_STATUS_CATEGORY_LABEL[category]}
+          {targets.map((spec) => (
+            <button key={spec.key} type="button" role="menuitem" className={MENU_ITEM}
+              onClick={() => { setOpen(false); onMove(spec) }}>
+              Move to {spec.title}
             </button>
           ))}
         </div>,

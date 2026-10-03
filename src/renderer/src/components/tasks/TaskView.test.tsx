@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, within, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InboxEntry, InboxSnapshot, InboxUnreadableSource } from '../../../../shared/inbox'
 import type { DelegationDto, TaskDelegationsDto } from '../../../../shared/delegations'
 import type { HandoverDto } from '../../../../shared/handovers'
 import type { TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
+import type { TaskBoardColumn } from '../../../../shared/folderTasks'
 
 /**
  * The task page, driven.
@@ -29,7 +30,9 @@ function inbox(entries: InboxEntry[], unreadable: InboxUnreadableSource[] = []):
 }
 const getChat = vi.fn()
 const getJob = vi.fn<(jobId: string) => Promise<unknown>>()
-const setStatus = vi.fn<(taskId: string, status: TaskStatus) => Promise<TaskDto>>()
+const setStatus = vi.fn<(taskId: string, status: TaskStatus, label?: string | null) => Promise<TaskDto>>()
+const folderBoard = vi.fn<(agentId: string) => Promise<TaskBoardColumn[] | null>>()
+const revealFile = vi.fn<(input: { agentId: string; path: string }) => Promise<{ success: true } | { success: false; code: string; error: string }>>()
 const reopenForRerun = vi.fn<(taskId: string) => Promise<TaskDto>>()
 const takeOver = vi.fn<(taskId: string, force?: boolean) => Promise<TaskDto>>()
 const remoteLive = vi.fn<(taskId: string) => Promise<boolean | null>>()
@@ -46,7 +49,8 @@ const forTask = vi.fn<(taskId: string) => Promise<HandoverDto | null>>()
     children: async () => ({ tasks: [], refreshed: true }),
     start: (taskId: string, target: unknown) => startTask(taskId, target),
     get: (taskId: string) => getTask(taskId),
-    setStatus: (taskId: string, status: TaskStatus) => setStatus(taskId, status),
+    setStatus: (...args: [string, TaskStatus, (string | null)?]) => setStatus(...args),
+    folderBoard: (agentId: string) => folderBoard(agentId),
     reopenForRerun: (taskId: string) => reopenForRerun(taskId),
     takeOver: (taskId: string, force?: boolean) => takeOver(taskId, force),
     remoteLive: (taskId: string) => remoteLive(taskId)
@@ -68,7 +72,8 @@ const forTask = vi.fn<(taskId: string) => Promise<HandoverDto | null>>()
   run: {
     start: runSend
   },
-  system: { openExternal: (url: string) => openExternal(url) }
+  system: { openExternal: (url: string) => openExternal(url) },
+  agentFiles: { reveal: (input: { agentId: string; path: string }) => revealFile(input) }
 }
 
 const { TaskView } = await import('./TaskView')
@@ -98,6 +103,9 @@ const BASE: TaskDto = {
   budget: null,
   errorMessage: null,
   customFields: null,
+  statusLabel: null,
+  file: null,
+  fromOutside: false,
   jobId: 'j1',
   jobRunId: 'r1',
   createdAt: new Date('2026-09-11T09:00:00Z'),
@@ -1473,5 +1481,232 @@ describe('reached from the Tasks view, and edited in place', () => {
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' })) })
     expect(screen.queryByRole('dialog', { name: 'Edit task' })).toBeNull()
     expect(updateTask).not.toHaveBeenCalled()
+  })
+})
+
+describe('a task kept in its agent’s folder', () => {
+  const FILE_PATH = '/Users/me/agents/ledger/.cinna/tasks/fix-login.md'
+  const FOLDER: Partial<TaskDto> = {
+    chatId: null, jobId: null, jobRunId: null, status: 'new', statusLabel: 'Todo',
+    assignee: { kind: 'agent', agentId: 'folder:m1', name: 'Ledger Folder' },
+    remote: { adapter: 'folder', id: 'folder:m1:t-1', key: 't-1', url: null } as unknown as TaskDto['remote'],
+    file: { path: FILE_PATH, readOnlyFields: [], blockedBy: [] }
+  }
+  const COLUMNS: TaskBoardColumn[] = [
+    { label: 'Todo', category: 'backlog', status: 'new', droppable: true },
+    { label: 'Up Next', category: 'ready', status: 'open', droppable: true },
+    { label: 'Doing', category: 'active', status: 'in_progress', droppable: false },
+    { label: 'Shipped', category: 'done', status: 'completed', droppable: true },
+    { label: 'Someday', category: null, status: 'new', droppable: false }
+  ]
+  const updateTask = vi.fn<(taskId: string, patch: unknown) => Promise<TaskDto>>()
+  const listTasks = vi.fn<() => Promise<TaskDto[]>>()
+  const tasksApi = (): Record<string, unknown> => (window as unknown as { api: { tasks: Record<string, unknown> } }).api.tasks
+  const originalList = tasksApi().list
+
+  beforeEach(() => {
+    folderBoard.mockReset().mockResolvedValue(COLUMNS)
+    revealFile.mockReset().mockResolvedValue({ success: true })
+    updateTask.mockReset()
+    listTasks.mockReset().mockResolvedValue([])
+    tasksApi().update = (taskId: string, patch: unknown) => updateTask(taskId, patch)
+    tasksApi().list = () => listTasks()
+  })
+  afterEach(() => {
+    tasksApi().list = originalList
+  })
+
+  async function openEdit(task: Partial<TaskDto>): Promise<HTMLElement> {
+    await renderTask(task)
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    fireEvent.click(within(await screen.findByRole('menu', { name: 'Task actions' })).getByRole('menuitem', { name: 'Edit task…' }))
+    return screen.getByRole('dialog', { name: 'Edit task' })
+  }
+  function statusOptions(dialog: HTMLElement): (string | null)[] {
+    return within(within(dialog).getByLabelText('Status')).getAllByRole('option').map((o) => o.textContent)
+  }
+
+  it('names the status in the folder’s own word, as written, and the category word without one', async () => {
+    await renderTask({ ...FOLDER, statusLabel: 'Up next', status: 'open' })
+    expect(detail('Status')).toBe('Up next')
+    expect(screen.getByText('Up next').className).not.toMatch(/uppercase/)
+    expect(screen.getByTitle('Up next')).toBeTruthy()
+    cleanup()
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchInterval: false } } })
+    await renderTask({ ...FOLDER, statusLabel: null, status: 'open' })
+    expect(detail('Status')).toBe('Ready')
+  })
+
+  it('shows the file by its name, the whole path on hover, and reveals it; no Key row beside it', async () => {
+    await renderTask(FOLDER)
+    const file = document.querySelector('[data-task-file]') as HTMLElement
+    expect(file.textContent).toBe('fix-login.md')
+    expect(file.getAttribute('title')).toBe(FILE_PATH)
+    // The file id is the binding's key; the File row already names the task's home.
+    expect(detail('Key')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Reveal' })) })
+    expect(revealFile).toHaveBeenCalledWith({ agentId: 'folder:m1', path: FILE_PATH })
+    expect(screen.queryByText('Changed outside Cinna')).toBeNull()
+    expect(detail('Blocked by')).toBeNull()
+  })
+
+  it('says a refused reveal in the File row, in the name’s place, and gives the name back after a while', async () => {
+    revealFile.mockResolvedValue({ success: false, code: 'not_found', error: 'That file is no longer there.' })
+    await renderTask(FOLDER)
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Reveal' })) })
+      // In the row the button is in, on its one line: no line added under it.
+      // Reveal steps aside while the sentence shows, so it is read whole, not cut.
+      expect(detail('File')).toBe('That file is no longer there.')
+      expect(screen.queryByRole('button', { name: 'Reveal' })).toBeNull()
+      expect(document.querySelector('[data-task-file]')).toBeNull()
+      const header = document.querySelector('header')!.nextElementSibling as HTMLElement
+      expect(header.textContent).toBe('')
+      await act(async () => { vi.advanceTimersByTime(6_000) })
+      expect(document.querySelector('[data-task-file]')?.textContent).toBe('fix-login.md')
+      expect(screen.getByRole('button', { name: 'Reveal' })).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('marks a file changed outside Cinna with a glyph on the File line, not a line of its own', async () => {
+    await renderTask({ ...FOLDER, fromOutside: true })
+    const glyph = screen.getByRole('img', { name: 'Changed outside Cinna' })
+    expect(glyph.hasAttribute('data-task-from-outside')).toBe(true)
+    expect(glyph.getAttribute('title')).toBe('Changed outside Cinna')
+    // The same line as the name: one parent, and no text of its own to wrap.
+    expect(glyph.parentElement).toBe(document.querySelector('[data-task-file]')!.parentElement)
+    expect(glyph.textContent).toBe('')
+    expect(detail('File')).toBe('fix-login.mdReveal')
+    // A detail inside the panel, not a banner over the page.
+    expect(glyph.closest('aside')).not.toBeNull()
+  })
+
+  it('names each blocker by its task’s title, linked, and falls back to the id', async () => {
+    const blocker: TaskDto = {
+      ...BASE, ...FOLDER, id: 't9', title: 'Rotate the keys', statusLabel: 'Todo',
+      remote: { adapter: 'folder', id: 'folder:m1:t-2', key: 't-2', url: null } as unknown as TaskDto['remote'],
+      file: { path: '/Users/me/agents/ledger/.cinna/tasks/rotate.md', readOnlyFields: [], blockedBy: [] }
+    }
+    // Another agent's file with the same id is not this task's blocker.
+    const elsewhere: TaskDto = { ...blocker, id: 't8', title: 'Somebody else’s', assignee: { kind: 'agent', agentId: 'a1', name: 'Invoice Checker' } }
+    listTasks.mockResolvedValue([elsewhere, blocker])
+    await renderTask({ ...FOLDER, file: { path: FILE_PATH, readOnlyFields: [], blockedBy: ['t-2', 't-3'] } })
+    const link = await screen.findByRole('button', { name: 'Rotate the keys' })
+    expect(detail('Blocked by')).toBe('Rotate the keys,t-3')
+    const items = [...document.querySelector('[data-task-blocked-by]')!.children] as HTMLElement[]
+    expect(items.map((item) => item.className.includes('whitespace-nowrap'))).toEqual([true, true])
+    fireEvent.click(link)
+    await waitFor(() => expect(getTask).toHaveBeenCalledWith('t9'))
+  })
+
+  it('has no File row for a task with no file', async () => {
+    await renderTask({ chatId: null })
+    expect(document.querySelector('[data-task-file]')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Reveal' })).toBeNull()
+  })
+
+  it('locks the assignee in the edit dialog with the reason', async () => {
+    const dialog = await openEdit(FOLDER)
+    expect((within(dialog).getByLabelText('Assignee') as HTMLSelectElement).disabled).toBe(true)
+    expect(within(dialog).getByText('Fixed while the task lives in its agent’s folder.')).toBeTruthy()
+  })
+
+  it('offers the folder board’s droppable columns as statuses, and sends the word with the status', async () => {
+    setStatus.mockResolvedValue({ ...BASE, ...FOLDER, status: 'open', statusLabel: 'Up Next' })
+    const dialog = await openEdit(FOLDER)
+    await waitFor(() => expect(statusOptions(dialog)).toEqual(['Todo', 'Up Next', 'Shipped']))
+    expect(folderBoard).toHaveBeenCalledWith('folder:m1')
+    fireEvent.change(within(dialog).getByLabelText('Status'), { target: { value: 'label:Up Next' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit task' })).toBeNull())
+    expect(setStatus).toHaveBeenCalledWith('t1', 'open', 'Up Next')
+    expect(updateTask).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the category moves when the folder board cannot be read', async () => {
+    folderBoard.mockRejectedValue(new Error('The task folder could not be read.'))
+    const dialog = await openEdit(FOLDER)
+    // Unbound: a file keeps no transition table, so Backlog reaches Ready and Done.
+    // After the hook's one retry, about a second.
+    await waitFor(() => expect(statusOptions(dialog)).toEqual(['Todo', 'Ready', 'Done']), { timeout: 3000 })
+  })
+
+  it('offers where the task is only while its board is read, so no choice is swapped under the user', async () => {
+    let answer!: (columns: TaskBoardColumn[]) => void
+    folderBoard.mockImplementation(() => new Promise((resolve) => { answer = resolve }))
+    const dialog = await openEdit(FOLDER)
+    const select = within(dialog).getByLabelText('Status') as HTMLSelectElement
+    expect(statusOptions(dialog)).toEqual(['Todo'])
+    expect(select.disabled).toBe(true)
+    // No lock sentence for a wait that ends on its own.
+    expect(within(dialog).queryByText('Nothing to move it to from here.')).toBeNull()
+    await act(async () => { answer(COLUMNS) })
+    await waitFor(() => expect(statusOptions(dialog)).toEqual(['Todo', 'Up Next', 'Shipped']))
+    expect(select.disabled).toBe(false)
+  })
+
+  it('says a task file’s agent sets the status a file says is in progress', async () => {
+    const dialog = await openEdit({ ...FOLDER, status: 'in_progress', statusLabel: 'Doing' })
+    await waitFor(() => expect(within(dialog).getByText('Set in the task file by its agent.')).toBeTruthy())
+    expect(within(dialog).queryByText('Set by the run working on it.')).toBeNull()
+    expect((within(dialog).getByLabelText('Status') as HTMLSelectElement).disabled).toBe(true)
+  })
+
+  it('explains read-only fields behind a tip that opens inside the dialog, with keys as the Fields panel writes them', async () => {
+    const dialog = await openEdit({
+      ...FOLDER,
+      customFields: { meta: 'owner: ann' },
+      file: { path: FILE_PATH, readOnlyFields: ['meta'], blockedBy: [] }
+    })
+    const readOnly = dialog.querySelector('[data-read-only-fields]') as HTMLElement
+    expect(within(readOnly).getByText('meta').className).not.toMatch(/font-mono/)
+    expect(readOnly.querySelector('[title^="Nested"]')).toBeNull()
+    await act(async () => { fireEvent.click(within(readOnly).getByRole('button', { name: 'About read-only fields' })) })
+    const tip = await screen.findByRole('dialog', { name: 'About read-only fields' })
+    expect(tip.textContent).toBe('Nested or long values in the task file. Edit them in the file.')
+    // A click in the tip and Escape are the tip's: the untouched form stays open.
+    await act(async () => { fireEvent.mouseDown(tip) })
+    await act(async () => { fireEvent.keyDown(window, { key: 'Escape' }) })
+    expect(screen.queryByRole('dialog', { name: 'About read-only fields' })).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'Edit task' })).toBe(dialog)
+  })
+
+  it('shows read-only fields apart, never as editable rows, and carries them through a save', async () => {
+    updateTask.mockResolvedValue({ ...BASE, ...FOLDER })
+    const dialog = await openEdit({
+      ...FOLDER,
+      customFields: { area: 'billing', meta: 'owner: ann' },
+      file: { path: FILE_PATH, readOnlyFields: ['meta'], blockedBy: [] }
+    })
+    const readOnly = dialog.querySelector('[data-read-only-fields]') as HTMLElement
+    expect(within(readOnly).getByText('meta')).toBeTruthy()
+    expect(within(readOnly).getByText('owner: ann')).toBeTruthy()
+    expect(within(dialog).getAllByLabelText(/^Field \d+ name$/).map((input) => (input as HTMLInputElement).value)).toEqual(['area'])
+    // Reusing a read-only name is refused before main is asked.
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add field/ }))
+    fireEvent.change(within(dialog).getByLabelText('Field 2 name'), { target: { value: 'meta' } })
+    fireEvent.change(within(dialog).getByLabelText('Field 2 value'), { target: { value: 'x' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    expect((await within(dialog).findByRole('alert')).textContent).toBe('“meta” is read-only in the task file.')
+    expect(updateTask).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove field meta' }))
+    fireEvent.change(within(dialog).getByLabelText('Field 1 value'), { target: { value: 'ops' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(updateTask).toHaveBeenCalledWith('t1', { customFields: { meta: 'owner: ann', area: 'ops' } }))
+  })
+
+  it('sends no custom fields when only the read-only ones exist and nothing changed', async () => {
+    updateTask.mockResolvedValue({ ...BASE, ...FOLDER })
+    const dialog = await openEdit({
+      ...FOLDER,
+      customFields: { meta: 'owner: ann', area: 'billing' },
+      file: { path: FILE_PATH, readOnlyFields: ['meta'], blockedBy: [] }
+    })
+    fireEvent.change(within(dialog).getByLabelText('Title'), { target: { value: 'Renamed' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(updateTask).toHaveBeenCalledWith('t1', { title: 'Renamed' }))
   })
 })

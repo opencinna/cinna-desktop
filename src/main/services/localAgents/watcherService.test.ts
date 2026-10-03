@@ -200,6 +200,65 @@ describe('watching a real directory', () => {
    * per-agent one above is: write repeatedly until the platform delivers, and
    * do not assert a timing guarantee `fs.watch` never made.
    */
+  it('asks for a task sync when a task file is written, and rescans nothing', async () => {
+    const project = mkdtempSync(join(tmpdir(), 'cinna-tasks-watch-'))
+    const tasksDir = join(project, '.cinna', 'tasks')
+    const onTasks = vi.fn()
+    const onHandover = vi.fn()
+    const rescanAgent = vi.fn()
+    const rescanRoot = vi.fn()
+    watcherService.configure({
+      rescanAgent,
+      rescanRoot,
+      agentIdForPath: () => 'folder:external:r3:.',
+      agentIdsForRoot: () => ['folder:external:r3:.'],
+      onHandover,
+      onTasks
+    })
+    try {
+      watcherService.watchRoot({ ...root(project), id: 'r3', kind: 'external' })
+      let lastWrite = 0
+      const fired = await waitFor(() => {
+        if (Date.now() - lastWrite > 1_500) {
+          mkdirSync(tasksDir, { recursive: true })
+          writeFileSync(join(tasksDir, 'fix-login.md'), `---\ntitle: Fix ${Date.now()}\n---\n`)
+          lastWrite = Date.now()
+        }
+        return onTasks.mock.calls.length > 0
+      }, 12_000)
+
+      expect(fired).toBe(true)
+      expect(onTasks).toHaveBeenCalledWith(expect.objectContaining({ id: 'r3' }), project)
+
+      // "Rescans nothing" is asserted on a second round. FSEvents sometimes
+      // replays the temp folder's own creation as the watcher arms — an event
+      // named after the root, which reads as a root-level change and rescans.
+      // Events arrive in order and a flush runs every callback synchronously,
+      // so that replay has been handled by the time the first `onTasks` lands;
+      // from here on, the only events are the task file's.
+      onTasks.mockClear()
+      onHandover.mockClear()
+      rescanAgent.mockClear()
+      rescanRoot.mockClear()
+      lastWrite = 0
+      const again = await waitFor(() => {
+        if (Date.now() - lastWrite > 1_500) {
+          writeFileSync(join(tasksDir, 'fix-login.md'), `---\ntitle: Fix ${Date.now()}\n---\n`)
+          lastWrite = Date.now()
+        }
+        return onTasks.mock.calls.length > 0
+      }, 12_000)
+      expect(again).toBe(true)
+      expect(onTasks).toHaveBeenCalledWith(expect.objectContaining({ id: 'r3' }), project)
+      expect(onHandover).not.toHaveBeenCalled()
+      expect(rescanAgent).not.toHaveBeenCalled()
+      expect(rescanRoot).not.toHaveBeenCalled()
+    } finally {
+      watcherService.stopAll()
+      rmSync(project, { recursive: true, force: true })
+    }
+  })
+
   it('scans handovers while a turn holds the agent, instead of deferring them', async () => {
     const project = mkdtempSync(join(tmpdir(), 'cinna-handover-watch-'))
     const handoverDir = join(project, '.cinna', 'handovers', '20260917-1200-retry')
@@ -414,6 +473,25 @@ describe('classifyExternalEvent', () => {
       kind: 'handover',
       agentDir: root
     })
+  })
+
+  /**
+   * `.cinna/tasks/` is the folder's task queue: the same pair rule as
+   * handovers, its own target, because what it asks for is a task sync pass
+   * rather than a handover scan.
+   */
+  it('names the agent folder behind a task file, at the root and nested', () => {
+    expect(classifyExternalEvent(root, '.cinna/tasks/fix-login.md')).toEqual({ kind: 'tasks', agentDir: root })
+    expect(classifyExternalEvent(root, 'projects/uploader/.cinna/tasks/_board.yaml')).toEqual({
+      kind: 'tasks',
+      agentDir: join(root, 'projects', 'uploader')
+    })
+    // The directory appearing, and an atomic write's temp file, mean the same.
+    expect(classifyExternalEvent(root, '.cinna/tasks')).toEqual({ kind: 'tasks', agentDir: root })
+    expect(classifyExternalEvent(root, '.cinna/tasks/.fix-login.md.1234.tmp')).toEqual({ kind: 'tasks', agentDir: root })
+    // `tasks` is only ours under `.cinna`.
+    expect(classifyExternalEvent(root, '.other/tasks/a.md')).toEqual({ kind: 'ignore' })
+    expect(classifyExternalEvent(root, 'tasks/a.md')).not.toMatchObject({ kind: 'tasks' })
   })
 
   it('still ignores everything else under a dot-directory', () => {

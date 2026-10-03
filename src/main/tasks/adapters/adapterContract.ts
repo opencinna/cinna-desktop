@@ -119,8 +119,12 @@ export interface AdapterWorld {
   requests(): number
   /** Every far-side call fails with a transport error from now on. */
   failTransport(): void
-  /** The far side says the task is not this account's, or is gone. */
-  denyOwnership(): void
+  /**
+   * The far side says the task is not this account's, or is gone. Async for a
+   * far side that is only sure after looking twice (a task file must stay
+   * missing past a grace period); `requests()` is read after it settles.
+   */
+  denyOwnership(): void | Promise<void>
   /**
    * The far side understands the request and refuses it — an illegal
    * transition, a field it will not take. **Not** the same as denying
@@ -284,6 +288,8 @@ function patchFor(field: RemoteWritableField): Partial<RemoteTaskFields> {
       return { priority: 'high' }
     case 'assignee':
       return { assignee: { ref: 'agt-remote-1', name: 'Someone else', kind: 'remote_agent' } }
+    case 'customFields':
+      return { customFields: { area: 'billing' } }
   }
 }
 
@@ -692,7 +698,7 @@ export function describeAdapterContract(
     clause('not_ours.no_retry', 'unbinds on a denial instead of retrying it', async () => {
       const world = makeWorld()
       const binding = await bound(world)
-      world.denyOwnership()
+      await world.denyOwnership()
 
       const before = world.requests()
       let thrown: unknown

@@ -21,6 +21,7 @@ import {
 } from '../db/tasks'
 import { TaskError } from '../errors'
 import type { RemoteDirtyField } from '../tasks/adapters/adapter'
+import { homeStatusWord } from '../tasks/adapters/statusWords'
 import { taskFileService } from './taskFileService'
 import { createLogger } from '../logger/logger'
 import {
@@ -50,6 +51,7 @@ import {
   type TaskCustomFields,
   type TaskDto,
   type TaskExecutor,
+  type TaskLocalFile,
   type TaskPriority,
   type TaskRouter
 } from '../../shared/tasks'
@@ -181,11 +183,27 @@ function isReopening(status: TaskStatus): boolean {
  * is not terminal" wiped the finish time and the error text of every task
  * anybody ever archived, unrecoverably, because nothing else holds them.
  */
+/**
+ * The home's word for a new status. When the home cannot tell (no home, or
+ * one this process has not read yet), a word that described the old status is
+ * dropped rather than left on the new one.
+ */
+function statusWordPatch(task: TaskRow, status: TaskStatus): TaskPatch {
+  const word = homeStatusWord(task, status)
+  if (word !== undefined) return word === task.statusLabel ? {} : { statusLabel: word }
+  return task.statusLabel !== null ? { statusLabel: null } : {}
+}
+
 function statusPatch(task: TaskRow, status: TaskStatus, errorMessage?: string | null): TaskPatch {
   const now = new Date()
   const reopening = isReopening(status)
   return {
     status,
+    // The home's word described the old status. A new one takes the word the
+    // push will write (the home's rule, asked synchronously), so the task
+    // keeps a column in between; a caller with a word (a person's drop, a
+    // pull) sets it after this.
+    ...(status !== task.status ? statusWordPatch(task, status) : {}),
     startedAt: task.startedAt ?? (status === 'in_progress' ? now : null),
     finishedAt: isSettled(status) ? (task.finishedAt ?? now) : reopening ? null : task.finishedAt,
     errorMessage:
@@ -337,6 +355,13 @@ export function toTaskDto(
     budget: row.budget ?? null,
     errorMessage: row.errorMessage,
     customFields: row.customFields ?? null,
+    statusLabel: row.statusLabel ?? null,
+    // Display facts about the file a folder task lives in. The digest stays
+    // here: the renderer only needs to know whether Cinna wrote what is there.
+    file: row.localFile
+      ? { path: row.localFile.path, readOnlyFields: [...row.localFile.readOnlyFields], blockedBy: [...row.localFile.blockedBy] }
+      : null,
+    fromOutside: !!row.localFile && row.localFile.digest !== row.trustedDigest,
     jobId: row.jobId,
     jobRunId: row.jobRunId,
     createdAt: row.createdAt,
@@ -410,6 +435,14 @@ export interface RemoteSnapshotPatch {
   updatedAt?: Date
   /** The identity half of the binding is not writable here; only what it displays. */
   binding?: { key: string | null; url: string | null; state: Record<string, unknown> }
+  /** The home's own word for the status; written with the status, never apart from it. */
+  statusLabel?: string | null
+  /** The remote's custom fields (a task file's frontmatter); skipped while a local edit is owed. */
+  customFields?: TaskCustomFields | null
+  /** The file the remote copy is, when it is one on this machine. */
+  localFile?: TaskLocalFile | null
+  /** That file's content is Cinna's own write: trust it (`fromOutside` false). */
+  trustedDigest?: string
 }
 
 /**
@@ -451,6 +484,7 @@ function checkedCustomFields(input: unknown): TaskCustomFields | null {
  * coordinator or script runtime owns its turns.
  */
 function assigneeEditRefusal(userId: string, task: TaskRow): string | null {
+  if (task.deviceLocal) return 'This task lives in its agent’s folder, so its assignee is fixed.'
   if (task.chatId) return 'This task already has a conversation, so its assignee is fixed.'
   if (!taskRunsHere(task, thisDeviceId(userId))) {
     return task.executor === 'remote'
@@ -610,9 +644,12 @@ export const taskService = {
       if (patch.router !== task.router && (patch.router === 'script' || task.router === 'script')) throw new TaskError('invalid_input', 'A task’s script router is fixed when the task is created.')
       next.router = patch.router
     }
-    // No remote field and no dirty marker: custom fields live on this desktop
-    // and its devices (app-sync), not on a bound service.
-    if (patch.customFields !== undefined) next.customFields = checkedCustomFields(patch.customFields)
+    // Custom fields go to a bound remote only where it has room for them (a
+    // task file's frontmatter); the marker is dropped for one that does not.
+    if (patch.customFields !== undefined) {
+      next.customFields = checkedCustomFields(patch.customFields)
+      dirty.push('customFields')
+    }
     if (patch.assignee !== undefined) {
       const refusal = assigneeEditRefusal(userId, task)
       if (refusal) throw new TaskError('invalid_input', refusal)
@@ -649,14 +686,29 @@ export const taskService = {
     userId: string,
     taskId: string,
     status: TaskStatus,
-    opts: { errorMessage?: string | null; manual?: boolean } = {}
+    opts: {
+      errorMessage?: string | null
+      manual?: boolean
+      /**
+       * The home's word for the status, already checked against it by the
+       * caller (`taskAuthoringService.setStatus`). Pushed with the status.
+       */
+      label?: string | null
+      /**
+       * Whether the manual move is judged by the remote table. Defaults to
+       * "the task is bound"; the caller passes false for a remote that keeps
+       * no transition table (`capabilities().transitionTable`), which this
+       * module cannot ask without importing the adapters.
+       */
+      bound?: boolean
+    } = {}
   ): TaskDto {
     const task = requireTask(userId, taskId)
     requireRunsHere(userId, task)
 
     const from = parseTaskStatus(task.status)
     if (opts.manual) {
-      const bound = !!task.remoteAdapter
+      const bound = opts.bound ?? !!task.remoteAdapter
       const refusal = manualStatusRefusal(from, status, bound)
       if (refusal) {
         throw new TaskError('invalid_transition', refusal,
@@ -687,11 +739,9 @@ export const taskService = {
       )
     }
 
-    const row = taskRepo.update(
-      userId,
-      taskId,
-      dirtied(task, statusPatch(task, status, opts.errorMessage), ['status'])
-    )
+    const patch = statusPatch(task, status, opts.errorMessage)
+    if (opts.label !== undefined) patch.statusLabel = opts.label
+    const row = taskRepo.update(userId, taskId, dirtied(task, patch, ['status']))
     if (!row) throw new TaskError('not_found', 'Task not found')
     if (isSettled(status) || status === 'archived') {
       taskInputRequestRepo.expireNextMessageForTask(taskId)
@@ -1218,7 +1268,11 @@ export const taskService = {
       } else if (patch.errorMessage !== undefined) {
         next.errorMessage = patch.errorMessage
       }
+      if (patch.statusLabel !== undefined) next.statusLabel = patch.statusLabel
     }
+    if (patch.customFields !== undefined && !owed.has('customFields')) next.customFields = patch.customFields
+    if (patch.localFile !== undefined) next.localFile = patch.localFile
+    if (patch.trustedDigest !== undefined) next.trustedDigest = patch.trustedDigest
     if (patch.parentTaskId !== undefined) next.parentTaskId = patch.parentTaskId
     if (patch.binding !== undefined) {
       next.remoteKey = patch.binding.key
@@ -1289,6 +1343,12 @@ export const taskService = {
       }
     }
     const local = taskRepo.getById(userId, values.id)
+    // A device-local task is this machine's alone (its home is a path here):
+    // nothing a peer sends for the same id may overwrite it.
+    if (local?.deviceLocal) {
+      logger.warn('a synced task was refused: that task lives in a folder on this device', { taskId: values.id })
+      return null
+    }
     // Branch on the check that was actually made, not on a read-back that came
     // up empty: the two coincide today only because `getById` does not filter
     // `deletedAt`, and a warning that names a second profile the reader then

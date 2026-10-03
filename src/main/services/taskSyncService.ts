@@ -70,10 +70,12 @@
  * that would have to happen anyway, plus the bounded history window beside it.
  */
 
-import { taskRepo, type TaskRow } from '../db/tasks'
+import { taskRepo, type TaskCreateInput, type TaskRow } from '../db/tasks'
+import type { TaskBoardColumn } from '../../shared/folderTasks'
+import { installTaskRunnerHooks } from './taskRunnerBridge'
 import { taskService, type RemoteSnapshotPatch } from './taskService'
 import { taskStatusPath } from '../tasks/taskStatusPath'
-import { adapterFor, allAdapters } from '../tasks/adapters'
+import { adapterFor, allAdapters, localHomeFor } from '../tasks/adapters'
 import {
   RemoteTaskError,
   isRemoteDirtyField,
@@ -90,8 +92,10 @@ import {
   parseTaskAssigneeKind,
   parseTaskPriority,
   type TaskAssignee,
+  type TaskDeleteResult,
   type TaskDto,
-  type TaskListSnapshot
+  type TaskListSnapshot,
+  type TaskLocalFile
 } from '../../shared/tasks'
 import { createLogger } from '../logger/logger'
 import { TaskError } from '../errors'
@@ -104,6 +108,8 @@ import { getDb } from '../db/client'
 import { taskFileService } from './taskFileService'
 import { activeRunsByChat } from './runExecutionState'
 import { taskRunnersByChat } from './taskRunnerState'
+import { taskRuntimeRepo } from '../db/taskRuntimes'
+import { scriptRuntimeRepo } from '../db/scriptRuntimes'
 import { handingOffChats, handingOffTasks, taskOperationKey } from './taskOperationState'
 import { canTransition } from '../../shared/taskStatus'
 import type { TaskHandoffOptions, TaskHandoffTarget, TaskHandoffReceipt } from '../../shared/taskHandoff'
@@ -400,6 +406,11 @@ function wouldChange(row: TaskRow, patch: RemoteSnapshotPatch): boolean {
     if (patch.binding.key !== row.remoteKey) return true
     if (patch.binding.url !== row.remoteUrl) return true
   }
+  if (patch.statusLabel !== undefined && !owed.has('status') && patch.statusLabel !== row.statusLabel) return true
+  if (patch.customFields !== undefined && !owed.has('customFields') &&
+    JSON.stringify(patch.customFields) !== JSON.stringify(row.customFields ?? null)) return true
+  if (patch.localFile !== undefined && JSON.stringify(patch.localFile) !== JSON.stringify(row.localFile ?? null)) return true
+  if (patch.trustedDigest !== undefined && patch.trustedDigest !== row.trustedDigest) return true
   return false
 }
 
@@ -413,7 +424,7 @@ function isTerminalStatus(status: TaskStatus): boolean {
   )
 }
 
-const WRITABLE: readonly RemoteWritableField[] = ['title', 'description', 'priority', 'assignee']
+const WRITABLE: readonly RemoteWritableField[] = ['title', 'description', 'priority', 'assignee', 'customFields']
 
 function isWritableField(field: RemoteDirtyField): field is RemoteWritableField {
   return (WRITABLE as readonly string[]).includes(field)
@@ -430,6 +441,7 @@ function fieldPatch(
     if (field === 'description') patch.description = row.description
     if (field === 'priority') patch.priority = parseTaskPriority(row.priority)
     if (field === 'assignee') patch.assignee = toRemoteAssignee(row)
+    if (field === 'customFields') patch.customFields = row.customFields ?? null
   }
   return patch
 }
@@ -479,6 +491,8 @@ function toRemoteAssignee(row: TaskRow): RemoteAssignee | null {
  */
 async function preferredAdapter(userId: string): Promise<RemoteTaskAdapter | null> {
   for (const adapter of allAdapters()) {
+    // A task's home by construction (a folder) is never where work is handed.
+    if (!adapter.capabilities().handoffTarget) continue
     if ((await adapter.availability(userId)).ready) return adapter
   }
   return null
@@ -510,11 +524,51 @@ function render(row: TaskRow, field: RemoteDirtyField): string {
       return JSON.stringify(row.status)
     case 'handoffNote':
       return JSON.stringify(row.handoffNote)
+    case 'customFields':
+      return JSON.stringify(row.customFields ?? null)
   }
 }
 
+/**
+ * The assignee's id in the space its kind names: the remote's own id for a
+ * `remote_agent`, a local `agents` row for an `agent` (a folder home's agent).
+ */
+function assigneeAgentId(snapshot: RemoteTaskSnapshot): string | null {
+  const kind = snapshot.assignee?.kind
+  return kind === 'remote_agent' || kind === 'agent' ? (snapshot.assignee?.ref ?? null) : null
+}
+
+/** The file a snapshot came from, as the index keeps it; null when it is none. */
+function localFileOf(snapshot: RemoteTaskSnapshot): TaskLocalFile | null {
+  const file = snapshot.file
+  if (!file) return null
+  return { path: file.path, digest: file.digest, readOnlyFields: [...file.readOnlyFields], blockedBy: [...file.blockedBy] }
+}
+
+/**
+ * The binding state a snapshot leaves on `row`: the snapshot's own, unless the
+ * row still owes the remote some fields and the adapter keeps part of its
+ * state for those ({@link RemoteTaskAdapter.stateWhileOwed}). Read with the
+ * row as it is at the moment of writing — no await between this and the write.
+ */
+function owedStateOf(adapter: RemoteTaskAdapter, row: TaskRow | null | undefined, snapshot: RemoteTaskSnapshot): Record<string, unknown> {
+  const owed = (row?.remoteDirty ?? []).filter(isRemoteDirtyField)
+  if (!row || !adapter.stateWhileOwed || owed.length === 0 || !row.remoteState) return snapshot.binding.state
+  return adapter.stateWhileOwed(row.remoteState, snapshot.binding.state, owed)
+}
+
 /** A snapshot, in the desktop's words, with the parent already resolved. */
-function patchFrom(snapshot: RemoteTaskSnapshot, parentTaskId: string | null): RemoteSnapshotPatch {
+function patchFrom(
+  snapshot: RemoteTaskSnapshot,
+  parentTaskId: string | null,
+  /** The adapter and the row it lands on, when that row may still owe fields. */
+  onto?: { adapter: RemoteTaskAdapter; row: TaskRow | null | undefined }
+): RemoteSnapshotPatch {
+  const extra: Pick<RemoteSnapshotPatch, 'statusLabel' | 'customFields' | 'localFile' | 'trustedDigest'> = {}
+  if (snapshot.statusLabel !== undefined) extra.statusLabel = snapshot.statusLabel
+  if (snapshot.customFields !== undefined) extra.customFields = snapshot.customFields
+  if (snapshot.file !== undefined) extra.localFile = localFileOf(snapshot)
+  if (snapshot.file?.ours) extra.trustedDigest = snapshot.file.digest
   const assignee: TaskAssignee | undefined = snapshot.assignee
     ? {
         // `agentId` is an id **in the space `kind` names**, so the remote's own
@@ -522,12 +576,13 @@ function patchFrom(snapshot: RemoteTaskSnapshot, parentTaskId: string | null): R
         // — which the first version did — is what left a replica unable to push
         // an assignee at all: the only place the remote's agent id ever arrives
         // is this snapshot, and a pull is the only way a replica gets one.
-        agentId: snapshot.assignee.kind === 'remote_agent' ? snapshot.assignee.ref : null,
+        agentId: assigneeAgentId(snapshot),
         name: snapshot.assignee.name,
         kind: snapshot.assignee.kind
       }
     : undefined
   return {
+    ...extra,
     title: snapshot.title,
     description: snapshot.description,
     priority: snapshot.priority,
@@ -539,7 +594,7 @@ function patchFrom(snapshot: RemoteTaskSnapshot, parentTaskId: string | null): R
     binding: {
       key: snapshot.binding.key,
       url: snapshot.binding.url,
-      state: snapshot.binding.state
+      state: onto ? owedStateOf(onto.adapter, onto.row, snapshot) : snapshot.binding.state
     }
   }
 }
@@ -654,14 +709,16 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
 
   // The handoff note.
   if (remaining.has('handoffNote')) {
-    if (!caps.handoffNote || row.handoffNote === null) {
+    if (!caps.handoffNote || (row.handoffNote === null && !caps.clearHandoffNote)) {
       // A cleared note has nothing to post. Comment streams are append-only
       // and there is no unposting, so the marker goes rather than queueing a
-      // write whose body would be empty.
+      // write whose body would be empty. A remote that can empty the note's
+      // place (`clearHandoffNote`) is told instead.
       remaining.delete('handoffNote')
     } else {
       try {
-        await call(() => adapter.putHandoffNote(userId, binding, row.handoffNote!))
+        const refreshed = await call(() => adapter.putHandoffNote(userId, binding, row.handoffNote))
+        if (refreshed) binding = refreshed
         contacted = true
         remaining.delete('handoffNote')
       } catch (err) {
@@ -691,6 +748,16 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
       }
     } else if (!caps.writeStatus) {
       remaining.delete('status')
+    } else if (!caps.transitionTable) {
+      // A remote that keeps no table — a file's `status:` line — takes the
+      // destination as it is, in the word the task carries if it has one.
+      try {
+        binding = await call(() => adapter.pushStatus(userId, binding, status, PUSH_REASON, { label: row.statusLabel }))
+        contacted = true
+        remaining.delete('status')
+      } catch (err) {
+        if (!settle(err, 'pushing the status', ['status'])) return
+      }
     } else {
       try {
         // What the remote thinks, asked rather than remembered: it may have
@@ -880,6 +947,105 @@ export const taskSyncService = {
    */
   async preferredAdapterId(userId: string): Promise<string | null> {
     return (await preferredAdapter(userId))?.id ?? null
+  },
+
+  /**
+   * A task written straight into its home — a bare agent's `.cinna/tasks/` —
+   * and bound to the file it now is.
+   *
+   * The row is created first (device-local, so it never syncs even for the
+   * instant it is unbound), then the adapter writes the file, then the row is
+   * bound and read back once through `fetch` so it carries the file's word for
+   * its status, its path and the digest of what Cinna wrote — which is what
+   * makes it trusted. A file that could not be written takes the row with it:
+   * the user sees the refusal, not a task that lives nowhere.
+   */
+  async createInHome(userId: string, adapter: RemoteTaskAdapter, input: TaskCreateInput): Promise<TaskDto> {
+    const created = taskService.create(userId, { ...input, deviceLocal: true })
+    // The file exists before the row is bound to it: a pull that lists the
+    // folder in between would index it as a second task. Discovery for this
+    // adapter waits until the bind, as it does for a hand-off's create.
+    const createKey = cursorKey(userId, adapter.id)
+    unboundCreates.set(createKey, (unboundCreates.get(createKey) ?? 0) + 1)
+    let binding: RemoteBinding
+    try {
+      try {
+        // A subtask is written beside its parent, which the adapter finds by the parent's binding.
+        const parentRow = created.parentTaskId ? taskRepo.getById(userId, created.parentTaskId) : undefined
+        binding = await adapter.create(userId, created, parentRow ? bindingOf(parentRow) : null)
+      } catch (err) {
+        taskService.remove(userId, created.id)
+        throw new TaskError('invalid_input', err instanceof RemoteTaskError ? err.message : 'The task file could not be written.',
+          describe(err))
+      }
+      try {
+        taskService.bindRemote(userId, created.id, binding)
+      } catch (err) {
+        // The row went while the file was being written (deleted from another
+        // window). Left on disk, the file would be indexed by the next pull as
+        // a task nobody created; it goes the way the row went.
+        await adapter.localHome?.discard(userId, binding).catch((discardErr: unknown) =>
+          logger.warn('a task file whose row was deleted during its create could not be removed',
+            { taskId: created.id, error: describe(discardErr) }))
+        throw err
+      }
+    } finally {
+      const remaining = (unboundCreates.get(createKey) ?? 1) - 1
+      if (remaining) unboundCreates.set(createKey, remaining); else unboundCreates.delete(createKey)
+    }
+    try {
+      const snapshot = await adapter.fetch(userId, binding)
+      return taskService.applyRemoteSnapshot(userId, created.id,
+        patchFrom(snapshot, created.parentTaskId ?? resolveParent(userId, adapter.id, snapshot.parentId),
+          { adapter, row: taskRepo.getById(userId, created.id) }))
+    } catch (err) {
+      // Written and bound; the next pull reads it. Not a failure of the create.
+      logger.warn('a new task file could not be read back', { taskId: created.id, error: describe(err) })
+      return taskService.getById(userId, created.id)
+    }
+  },
+
+  /**
+   * `task:delete`: the task (and the job run that produced it, as
+   * `removeWithJobRun` decides), then — for a task kept in a local home, a
+   * bare agent's `.cinna/tasks/` — its file. The row is deleted first and
+   * stays deleted whatever the home answers: a file that cannot be removed is
+   * a warning, and its tombstone keeps a later pull from indexing it again.
+   * A device-sync tombstone never comes here, so it never touches a file.
+   */
+  async removeTask(userId: string, taskId: string): Promise<Omit<TaskDeleteResult, 'success'>> {
+    const before = taskRepo.getById(userId, taskId)
+    const result = taskService.removeWithJobRun(userId, taskId)
+    const binding = before ? bindingOf(before) : null
+    const home = binding ? adapterFor(binding.adapter).localHome : undefined
+    if (!binding || !home) return result
+    // A push already on its way finishes first, so it cannot land after the delete.
+    await pushesInFlight.get(cursorKey(userId, taskId))?.catch(() => {})
+    try {
+      await home.discard(userId, binding)
+    } catch (err) {
+      logger.warn('a deleted task’s file could not be removed', { taskId, adapter: binding.adapter, error: describe(err) })
+    }
+    return result
+  },
+
+  /**
+   * The status columns of the board of a local agent whose tasks live in its
+   * folder, left to right; null when that agent's tasks are native.
+   */
+  async folderBoard(userId: string, agentId: string): Promise<TaskBoardColumn[] | null> {
+    const home = await localHomeFor(agentId)
+    if (!home?.localHome) return null
+    // Every task the board shows for this agent, file or not: a status with no
+    // column of the folder's own still gets one.
+    const shown = taskRepo.list(userId)
+      .filter((row) => row.assigneeAgentId === agentId)
+      .map((row) => ({ status: parseTaskStatus(row.status), statusLabel: row.statusLabel ?? null }))
+    try {
+      return await home.localHome.board(userId, agentId, shown)
+    } catch (err) {
+      throw new TaskError('invalid_input', err instanceof RemoteTaskError ? err.message : 'The task folder could not be read.', describe(err))
+    }
   },
 
   /**
@@ -1303,11 +1469,14 @@ function upsert(
   const parentTaskId = resolveParent(userId, adapter.id, snapshot.parentId)
   if (existing) {
     // Nothing new to say, so nothing is written — see {@link wouldChange}.
-    const patch = patchFrom(snapshot, parentTaskId)
+    const patch = patchFrom(snapshot, parentTaskId, { adapter, row: existing })
     if (!wouldChange(existing, patch)) return existing.id
     taskService.applyRemoteSnapshot(userId, existing.id, patch)
     return existing.id
   }
+  // A remote copy that is a file on this machine is worked here and stays
+  // here: executed by the desktop, never carried by device sync.
+  const local = !!snapshot.file
   return taskService.create(userId, {
     title: snapshot.title,
     // A remote with no notion of an original ask falls back to the title —
@@ -1319,9 +1488,13 @@ function upsert(
     status: snapshot.status,
     priority: snapshot.priority,
     origin: 'remote',
-    executor: 'remote',
-    assigneeAgentId:
-      snapshot.assignee?.kind === 'remote_agent' ? snapshot.assignee.ref : null,
+    executor: local ? 'desktop' : 'remote',
+    deviceLocal: local,
+    statusLabel: snapshot.statusLabel ?? null,
+    customFields: snapshot.customFields ?? null,
+    localFile: localFileOf(snapshot),
+    trustedDigest: snapshot.file?.ours ? snapshot.file.digest : null,
+    assigneeAgentId: assigneeAgentId(snapshot),
     assigneeName: snapshot.assignee?.name ?? null,
     assigneeKind: snapshot.assignee?.kind ?? 'model',
     parentTaskId,
@@ -1386,7 +1559,9 @@ async function dropMissing(
   userId: string,
   adapter: RemoteTaskAdapter,
   active: RemoteTaskSnapshot[] | null,
-  started = generation(userId)
+  started = generation(userId),
+  /** Only device-local rows: the per-pass check a file's disappearance gets. */
+  deviceLocalOnly = false
 ): Promise<void> {
   const live = active ?? (await adapter.list(userId, null))
   if (generation(userId) !== started) return
@@ -1397,11 +1572,19 @@ async function dropMissing(
     // Remote execution can originate here. Confirm missing active work for
     // those tasks too, but preserve locally authored tasks when unbinding.
     // Desktop-owned mirrors retain the existing lazy confirmation policy.
-    if ((row.origin !== 'remote' && row.executor !== 'remote') || !row.remoteId || seen.has(row.remoteId)) continue
-    // Terminal replicas are absent from the active set by construction, so
-    // confirming them is a permanent per-poll cost for tasks nobody is waiting
-    // on. See the method comment.
-    if (isTerminalStatus(parseTaskStatus(row.status))) continue
+    //
+    // A device-local row is a file on this machine: whatever its origin and
+    // status, a confirmed absence means the file is gone, and so is the task.
+    // Confirming one is a directory listing, so it is checked every pass.
+    if (deviceLocalOnly && !row.deviceLocal) continue
+    if (!row.remoteId || seen.has(row.remoteId)) continue
+    if (!row.deviceLocal) {
+      if (row.origin !== 'remote' && row.executor !== 'remote') continue
+      // Terminal replicas are absent from the active set by construction, so
+      // confirming them is a permanent per-poll cost for tasks nobody is
+      // waiting on. See the method comment.
+      if (isTerminalStatus(parseTaskStatus(row.status))) continue
+    }
     const binding = bindingOf(row)
     if (!binding) continue
     if (!bindingIsCurrent(userId, row.id, binding, started)) continue
@@ -1418,22 +1601,49 @@ async function dropMissing(
       taskService.applyRemoteSnapshot(
         userId,
         row.id,
-        patchFrom(snapshot, resolveParent(userId, adapter.id, snapshot.parentId))
+        patchFrom(snapshot, resolveParent(userId, adapter.id, snapshot.parentId), { adapter, row: taskRepo.getById(userId, row.id) })
       )
     } catch (err) {
       if (!bindingIsCurrent(userId, row.id, binding, started) ||
         !readIsCurrent(userId, binding, revision)) continue
       if (err instanceof RemoteTaskError && err.code === 'not_ours') {
-        logger.info('dropping a replica the service no longer has', {
-          taskId: row.id,
-          adapter: adapter.id
-        })
-        bump(revisionKey)
-        taskService.unbindRemote(userId, row.id, 'the service no longer has this task', { confirmedMissing: true })
-        if (row.origin === 'remote') taskService.remove(userId, row.id)
+        dropConfirmedMissing(userId, row, revisionKey, 'the service no longer has this task')
       }
     }
   }
+}
+
+/**
+ * Something is working on this task here right now: a runtime owns it, its
+ * chat has a turn or an autonomous runner going, or it has an open Inbox ask.
+ */
+function busyHere(userId: string, row: TaskRow): boolean {
+  if (taskRuntimeRepo.get(userId, row.id) || scriptRuntimeRepo.owner(userId, row.id)) return true
+  if (row.chatId && (activeRunsByChat.has(row.chatId) || taskRunnersByChat.has(row.chatId))) return true
+  return taskInputRequestRepo.listOpenForTask(row.id).length > 0
+}
+
+/**
+ * The remote confirmed it no longer has this task (`not_ours`): unbind it, and
+ * remove it when it was only ever the remote's (`origin: remote`) or a file on
+ * this machine (device-local).
+ *
+ * A device-local task something is working on is **kept, bound**: a file that
+ * vanished under a running task is more often a branch switch or a stash than
+ * a delete, and removing it would pull the task out from under its runtime,
+ * its turn or its Inbox ask. It stays as it is — its reads answer the absence
+ * again — and goes on a later pass once the work has stopped.
+ */
+function dropConfirmedMissing(userId: string, row: TaskRow, revisionKey: string, reason: string): boolean {
+  if (row.deviceLocal && busyHere(userId, row)) {
+    logger.info('keeping a task whose file is gone while it is being worked on', { taskId: row.id, adapter: row.remoteAdapter })
+    return false
+  }
+  logger.info('dropping a replica the service no longer has', { taskId: row.id, adapter: row.remoteAdapter })
+  bump(revisionKey)
+  taskService.unbindRemote(userId, row.id, reason, { confirmedMissing: true })
+  if (row.origin === 'remote' || row.deviceLocal) taskService.remove(userId, row.id)
+  return true
 }
 
 function describe(err: unknown): string {
@@ -1552,6 +1762,11 @@ async function pullRemoteTasks(userId: string): Promise<void> {
         // mostly terminal tasks, and handing those to `dropMissing` as "still
         // listed as active" is a claim about the service that is not true.
         await dropMissing(userId, adapter, firstPass ? active : null, started)
+      } else if (!contended && taskRepo.list(userId, { remoteAdapter: adapter.id, includeArchived: true }).some((row) => row.deviceLocal)) {
+        // A deleted task file should leave the list on the next pass, not on
+        // the twentieth. Only device-local rows are looked at, and each absent
+        // one is still confirmed by a `fetch` before it goes.
+        await dropMissing(userId, adapter, active, started, true)
       }
     } catch (err) {
       logger.warn('pull failed for a service', {
@@ -1593,11 +1808,19 @@ async function pullSingleTask(userId: string, taskId: string): Promise<TaskDto |
     return taskService.applyRemoteSnapshot(
       userId,
       taskId,
-      patchFrom(snapshot, resolveParent(userId, adapter.id, snapshot.parentId))
+      patchFrom(snapshot, resolveParent(userId, adapter.id, snapshot.parentId), { adapter, row: taskRepo.getById(userId, taskId) })
     )
   } catch (err) {
     if (!valid()) return null
     if (consequenceOf(err, 'fetching the task') === 'unbind') {
+      const current = taskRepo.getById(userId, taskId) ?? row
+      if (current.deviceLocal) {
+        // A file on this machine that is gone takes its task with it, as on a
+        // pull pass — unless something is working on it, which keeps it.
+        if (dropConfirmedMissing(userId, current, key, `fetching the task: ${describe(err)}`)) refreshErrors.delete(key)
+        else refreshErrors.set(key, 'This task’s file is not in its folder right now. Showing the saved task.')
+        return null
+      }
       bump(key)
       refreshErrors.delete(key)
       taskService.unbindRemote(userId, taskId, `fetching the task: ${describe(err)}`, { confirmedMissing: true })
@@ -1656,6 +1879,13 @@ async function performHandoff(
   assertCurrent(true)
   if (!availability.ready) throw new TaskError('no_service', availability.reason ?? 'That service is unavailable.')
   const caps = adapter.capabilities()
+  // A folder's queue is a task's home, not somewhere work is handed. Moving a
+  // task out of one is a later phase's.
+  if (!caps.handoffTarget) {
+    throw new TaskError('unsupported', binding
+      ? 'This task lives in its agent’s folder and can’t be handed off.'
+      : 'That service does not take handed-off work.')
+  }
   let assignee = toRemoteAssignee(original)
   if (target) {
     if (!caps.assigneeDirectory) throw new TaskError('unsupported', 'This service does not offer an agent directory.')
@@ -1775,3 +2005,42 @@ async function performHandoff(
     if (binding) bump(bindingKey(userId, binding))
   }
 }
+
+/**
+ * **A local write to a folder task is pushed now**, not on the next pass.
+ *
+ * The file is what the agent, an editor and `git` see, and five seconds of it
+ * disagreeing with the screen is five seconds in which somebody reads the old
+ * word. Every `taskService` write ends in `taskRunnerBridge.taskChanged`; this
+ * listens there — `taskService` itself stays free of the sync stack, because
+ * the device-sync apply path imports it.
+ *
+ * Keyed on `deviceLocal` (a file on this machine is cheap to write), never on
+ * which adapter the task is bound to. A push already in flight for the task is
+ * left alone: its own bookkeeping write lands here too, and a push that failed
+ * keeps its markers for the scheduled pass rather than retrying in a loop.
+ */
+const pushSoon = new Set<string>()
+installTaskRunnerHooks({
+  answer: () => null,
+  taskChanged(userId, taskId) {
+    const key = `${userId} ${taskId}`
+    if (pushSoon.has(key) || pushesInFlight.has(key)) return
+    pushSoon.add(key)
+    setImmediate(() => {
+      pushSoon.delete(key)
+      try {
+        const row = taskRepo.getById(userId, taskId)
+        if (!row || row.deletedAt || !row.deviceLocal || !row.remoteAdapter || !(row.remoteDirty ?? []).length) return
+        if (pushesInFlight.has(key)) return
+        void taskSyncService.push(userId, taskId).catch((error) => {
+          logger.warn('an immediate folder push failed', { taskId, error: describe(error) })
+        })
+      } catch (error) {
+        logger.debug('an immediate folder push was skipped', { taskId, error: describe(error) })
+      }
+    })
+  },
+  chatRemoved: () => {},
+  profileRemoved: () => {}
+}, 'device-local-push')

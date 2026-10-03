@@ -125,6 +125,16 @@ export function migrateTasks(sqlite: Database.Database): void {
   // User-defined fields (`TaskDto.customFields`), JSON; null for every task
   // that has none, which is every task written before this column.
   if (!hasColumn(sqlite, 'tasks', 'custom_fields')) sqlite.exec('ALTER TABLE tasks ADD COLUMN custom_fields TEXT')
+  // Folder tasks (`.cinna/tasks/*.md`): the folder's own status word, the
+  // device-local flag that keeps a path-bound task out of device sync, the
+  // digest of content Cinna wrote, and the file as last read. All four are
+  // null/false for every task written before them.
+  if (!hasColumn(sqlite, 'tasks', 'status_label')) sqlite.exec('ALTER TABLE tasks ADD COLUMN status_label TEXT')
+  if (!hasColumn(sqlite, 'tasks', 'device_local')) {
+    sqlite.exec('ALTER TABLE tasks ADD COLUMN device_local INTEGER NOT NULL DEFAULT 0')
+  }
+  if (!hasColumn(sqlite, 'tasks', 'trusted_digest')) sqlite.exec('ALTER TABLE tasks ADD COLUMN trusted_digest TEXT')
+  if (!hasColumn(sqlite, 'tasks', 'local_file')) sqlite.exec('ALTER TABLE tasks ADD COLUMN local_file TEXT')
 
   // Legacy request rows remain unowned; new events carry exact root/invocation
   // identity so a late or parallel turn cannot settle a sibling's request.

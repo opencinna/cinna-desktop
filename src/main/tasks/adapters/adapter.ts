@@ -45,9 +45,11 @@ import type { TaskStatus } from '../../../shared/taskStatus'
 import type {
   TaskArtifact,
   TaskAssigneeKind,
+  TaskCustomFields,
   TaskDto,
   TaskPriority
 } from '../../../shared/tasks'
+import type { TaskBoardColumn } from '../../../shared/folderTasks'
 
 /**
  * What went wrong talking to a remote system.
@@ -108,8 +110,14 @@ export class UnsupportedRemoteOperation extends RemoteTaskError {
   }
 }
 
-/** Fields a remote may let the desktop write. Narrower than `TaskPatch` on purpose. */
-export type RemoteWritableField = 'title' | 'description' | 'priority' | 'assignee'
+/**
+ * Fields a remote may let the desktop write. Narrower than `TaskPatch` on purpose.
+ *
+ * `customFields` is the user's own key/value set: a remote that has room for
+ * them (a task file's frontmatter) lists it; one that does not (cinna) leaves
+ * it out, and the marker is dropped there like any field a remote cannot take.
+ */
+export type RemoteWritableField = 'title' | 'description' | 'priority' | 'assignee' | 'customFields'
 
 /**
  * What `tasks.remote_dirty` holds: the things changed here since the last
@@ -134,6 +142,7 @@ export const REMOTE_DIRTY_FIELDS: readonly RemoteDirtyField[] = [
   'description',
   'priority',
   'assignee',
+  'customFields',
   'status',
   'handoffNote'
 ]
@@ -183,6 +192,13 @@ export interface RemoteTaskCapabilities {
   /** The note has somewhere to go: {@link RemoteTaskAdapter.putHandoffNote}. */
   handoffNote: boolean
   /**
+   * The note's place can be **emptied**: `putHandoffNote(…, null)` removes it
+   * (a file's handoff section). Absent or false on a remote whose note channel
+   * is append-only (cinna's comment stream), where a cleared note has nothing
+   * to unpost and is never sent.
+   */
+  clearHandoffNote?: boolean
+  /**
    * Which kinds of {@link TaskArtifact} the remote can actually store — the
    * same shape as {@link RemoteTaskCapabilities.writeFields}, and for the same
    * reason: a boolean would say "attachments work" and be wrong half the time.
@@ -220,6 +236,22 @@ export interface RemoteTaskCapabilities {
   execute: boolean
   /** The remote parks on human input, and this adapter can list and answer those asks. */
   asks: boolean
+  /**
+   * Work may be **handed off** to this remote: `preferredAdapter` may choose
+   * it and a hand-off may name it. False for a remote that is a task's home
+   * by construction rather than by a person's choice — a folder's
+   * `.cinna/tasks/` holds the tasks of the agent that lives there, and is
+   * created into by `task:create`, never by Hand off.
+   */
+  handoffTarget: boolean
+  /**
+   * The remote validates status **transitions**, so a push walks
+   * `taskStatusPath` one legal step at a time and a person's move keeps the
+   * remote table (no manual overlay). False for a remote that just stores the
+   * status it is given — a file's `status:` line — where the destination is
+   * written directly and a manual move is judged as for an unbound task.
+   */
+  transitionTable: boolean
 }
 
 /**
@@ -293,14 +325,88 @@ export interface RemoteTaskSnapshot {
   subtaskCount: number
   subtaskCompletedCount: number
   updatedAt: Date
+  /** The remote's own word for the status, when it has its own vocabulary. */
+  statusLabel?: string | null
+  /** User-defined fields the remote holds; absent when it has no such thing. */
+  customFields?: TaskCustomFields | null
+  /** Present when the remote copy is a file on this machine. */
+  file?: RemoteLocalFile | null
 }
 
-/** The four fields a push may carry, as far as `capabilities().writeFields` allows. */
+/**
+ * An adapter that is the **home** of a local agent's tasks — the folder agent's
+ * own `.cinna/tasks/`. Optional: a remote service is nobody's home.
+ *
+ * Asked by `task:create` (is this assignee's work written to its folder?) and
+ * by the folder board, without either naming the adapter.
+ */
+export interface RemoteLocalHome {
+  /** Is this enabled local agent's work kept here? Reads no task files. */
+  accepts(agentId: string): Promise<boolean>
+  /**
+   * The ordered status columns of that agent's board. `shown` is every task
+   * the board shows for the agent — its home's tasks and any other assigned to
+   * it (native, handover, delegation) — by status and home word, so a status
+   * no column of the home's own holds still gets one.
+   */
+  board(userId: string, agentId: string, shown: readonly RemoteBoardTask[]): Promise<TaskBoardColumn[]>
+  /**
+   * The word this home will hold for `status` once it is pushed — the word a
+   * status change stores right away, so the task keeps a column meanwhile.
+   * `current` is the task's word now. Synchronous, from the home as last
+   * read; undefined when this process has not read it yet.
+   */
+  statusWord(remoteId: string, status: TaskStatus, current: string | null): string | undefined
+  /**
+   * The user deleted this task in Cinna: remove its copy from the home — only
+   * the copy that still is this task when read now. One already gone is fine;
+   * one that cannot be removed throws, and the task stays deleted anyway.
+   */
+  discard(userId: string, binding: RemoteBinding): Promise<void>
+}
+
+/** A task on a local home's board, as far as its columns care. */
+export interface RemoteBoardTask {
+  status: TaskStatus
+  /** The home's word for it, or null for a task the home does not hold. */
+  statusLabel: string | null
+}
+
+/** Optional detail for a status push. */
+export interface RemoteStatusOptions {
+  /**
+   * The word a person chose for the status (`task:set-status`'s label), or
+   * the task's current label. Only a remote with its own vocabulary reads it.
+   */
+  label?: string | null
+}
+
+/** The fields a push may carry, as far as `capabilities().writeFields` allows. */
 export interface RemoteTaskFields {
   title: string
   description: string | null
   priority: TaskPriority
   assignee: RemoteAssignee | null
+  /** The whole set as the task now has it; null when it has none. */
+  customFields: TaskCustomFields | null
+}
+
+/**
+ * A remote copy that is **a file on this machine** (a folder's
+ * `.cinna/tasks/<name>.md`). Its presence on a snapshot makes the replica
+ * device-local: the path exists on one machine, so device sync never carries
+ * the row. Display facts plus the content digest the trust record compares.
+ */
+export interface RemoteLocalFile {
+  /** Absolute. */
+  path: string
+  /** sha256 of the bytes this snapshot was read from. */
+  digest: string
+  /** Those bytes are exactly what this adapter last wrote — Cinna's own content. */
+  ours: boolean
+  /** Custom field keys the file holds in a shape a write will not touch. */
+  readOnlyFields: string[]
+  blockedBy: string[]
 }
 
 /** A comment as it comes back from the remote. */
@@ -464,8 +570,12 @@ export interface RemoteTaskAdapter {
    * `result` comment, a session-log remote appends a message. The desktop side
    * of the same string is `taskFileService`'s exported file (§5.11) — one note,
    * in the two places an agent might look.
+   *
+   * An adapter whose binding state changes with the write (a file's digest)
+   * returns the refreshed binding; one that has nothing to refresh returns
+   * nothing.
    */
-  putHandoffNote(userId: string, binding: RemoteBinding, note: string): Promise<void>
+  putHandoffNote(userId: string, binding: RemoteBinding, note: string | null): Promise<RemoteBinding | void>
 
   pushFields(
     userId: string,
@@ -487,7 +597,8 @@ export interface RemoteTaskAdapter {
     userId: string,
     binding: RemoteBinding,
     status: TaskStatus,
-    reason?: string
+    reason?: string,
+    options?: RemoteStatusOptions
   ): Promise<RemoteBinding>
 
   /**
@@ -577,6 +688,26 @@ export interface RemoteTaskAdapter {
     askId: string,
     resolution: RequestResolution
   ): Promise<RemoteAnswerOutcome>
+
+  /** Present on an adapter that is a local agent's task home (see {@link RemoteLocalHome}). */
+  readonly localHome?: RemoteLocalHome
+
+  /**
+   * The binding state to store when a pull's snapshot lands on a row that still
+   * owes the remote some fields. Absent: the snapshot's state is stored as it
+   * came.
+   *
+   * For an adapter whose push merges against what it last read (the `folder`
+   * adapter's `base`): a pull between a local edit and its push must not move
+   * that "last read" forward for a field the edit is still waiting to send, or
+   * the push mistakes the remote's own change of that field for one it already
+   * knew and overwrites it.
+   */
+  stateWhileOwed?(
+    stored: Record<string, unknown>,
+    incoming: Record<string, unknown>,
+    owed: readonly RemoteDirtyField[]
+  ): Record<string, unknown>
 
   /**
    * Where a person would go to look at this task, or null when there is nowhere.

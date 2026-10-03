@@ -20,6 +20,7 @@ import type {
   TaskArtifact,
   TaskAssignee,
   TaskCustomFields,
+  TaskLocalFile,
   TaskBudget,
   TaskExecutor,
   TaskInputRequestStatus,
@@ -795,6 +796,17 @@ export const tasks = sqliteTable('tasks', {
   script: text('script', { mode: 'json' }).$type<TaskScript>(),
   /** User-defined fields; null when the task has none. Synced; absent on the wire keeps the local value. */
   customFields: text('custom_fields', { mode: 'json' }).$type<TaskCustomFields | null>(),
+  /** The home's own word for the status (a folder's `doing`); null when it has none. */
+  statusLabel: text('status_label'),
+  /**
+   * The task lives on this machine only — its home is a folder path — so
+   * device sync never sends it and never overwrites it. Set at creation.
+   */
+  deviceLocal: integer('device_local', { mode: 'boolean' }).notNull().default(false),
+  /** sha256 of file content Cinna wrote. Never synced. */
+  trustedDigest: text('trusted_digest'),
+  /** The file a folder task lives in, as last read. Never synced. */
+  localFile: text('local_file', { mode: 'json' }).$type<TaskLocalFile | null>(),
   errorMessage: text('error_message'),
 
   createdAt: integer('created_at', { mode: 'timestamp' })

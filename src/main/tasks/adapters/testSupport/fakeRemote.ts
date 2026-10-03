@@ -107,6 +107,8 @@ const FULL: RemoteTaskCapabilities = {
   subtasks: true,
   execute: true,
   asks: true,
+  handoffTarget: true,
+  transitionTable: true,
 }
 
 /** The four worked examples from §5.6, as capability sets. */

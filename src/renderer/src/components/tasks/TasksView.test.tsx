@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { createElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TaskDto } from '../../../../shared/tasks'
+import type { TaskBoardColumn } from '../../../../shared/folderTasks'
 
 /**
  * The Tasks view: the list grouped by category, the agent filter and search,
@@ -20,7 +21,8 @@ vi.mock('../../hooks/useAgents', () => ({ useAgents: () => ({ data: AGENTS, isPe
 ;(window as unknown as { api: unknown }).api = { app: { setTheme: async () => undefined } }
 
 const listTasks = vi.fn<() => Promise<TaskDto[]>>()
-const setStatus = vi.fn<(id: string, status: string) => Promise<TaskDto>>()
+const setStatus = vi.fn<(id: string, status: string, label?: string | null) => Promise<TaskDto>>()
+const folderBoard = vi.fn<(agentId: string) => Promise<TaskBoardColumn[] | null>>()
 const createTask = vi.fn<(input: unknown) => Promise<TaskDto>>()
 
 const { TasksView } = await import('./TasksView')
@@ -32,7 +34,7 @@ function task(id: string, overrides: Partial<TaskDto> = {}): TaskDto {
     origin: 'local', executor: 'desktop', executorDevice: null, runsHere: true, chatId: null,
     assignee: { kind: 'model', agentId: null, name: null }, parentTaskId: null, subtaskCount: 0,
     subtaskCompletedCount: 0, remote: null, handoffNote: null, artifacts: [], budget: null, errorMessage: null,
-    customFields: null, jobId: null, jobRunId: null, createdAt: new Date('2026-10-01T09:00:00Z'),
+    customFields: null, statusLabel: null, file: null, fromOutside: false, jobId: null, jobRunId: null, createdAt: new Date('2026-10-01T09:00:00Z'),
     updatedAt: new Date('2026-10-01T09:00:00Z'), startedAt: null, finishedAt: null, ...overrides
   }
 }
@@ -66,13 +68,15 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchInterval: false } } })
   listTasks.mockReset().mockResolvedValue(TASKS)
   setStatus.mockReset()
+  folderBoard.mockReset().mockResolvedValue(null)
   createTask.mockReset()
-  useUIStore.setState({ activeView: 'tasks', tasksViewMode: 'list', activeTaskId: null, taskOpenedFromTasks: false })
+  useUIStore.setState({ activeView: 'tasks', tasksViewMode: 'list', tasksAgentFilter: 'all', activeTaskId: null, taskOpenedFromTasks: false })
   ;(window as unknown as { api: Record<string, unknown> }).api = {
     app: { setTheme: async () => undefined },
     tasks: {
       list: () => listTasks(),
-      setStatus: (id: string, status: string) => setStatus(id, status),
+      setStatus: (...args: [string, string, (string | null)?]) => setStatus(...args),
+      folderBoard: (agentId: string) => folderBoard(agentId),
       create: (input: unknown) => createTask(input)
     },
     inbox: { list: async () => ({ entries: [], unreadable: [] }) }
@@ -98,6 +102,16 @@ describe('list', () => {
     expect(titlesIn(section('Ready'))).toEqual(['Write the changelog'])
     expect(titlesIn(section('Backlog'))).toEqual(['Plan the launch', 'Refine pricing'])
     expect(titlesIn(section('Done'))).toEqual(['Old launch', 'Failed export'])
+  })
+
+  it('keeps the agent filter when the view is left and opened again (Back to Tasks)', async () => {
+    const first = render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'agent:agent-w' } })
+    first.unmount()
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('combobox', { name: 'Agent' })
+    expect((screen.getByRole('combobox', { name: 'Agent' }) as HTMLSelectElement).value).toBe('agent:agent-w')
   })
 
   it('filters by agent and by title, keeping every section header at 0', async () => {
@@ -345,6 +359,240 @@ describe('board', () => {
   })
 })
 
+describe('status words', () => {
+  const FOLDER_TASK = task('f1', {
+    title: 'Fix login', status: 'open', statusLabel: 'up next', assignee: writer,
+    remote: { adapter: 'folder', id: 'agent-w:t-1', key: 't-1', url: null } as unknown as TaskDto['remote'],
+    file: { path: '/w/.cinna/tasks/fix-login.md', readOnlyFields: [], blockedBy: [] }
+  })
+
+  it('names a row by the folder’s word, while it is grouped by its category', async () => {
+    listTasks.mockResolvedValue([...TASKS, FOLDER_TASK])
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: 'Fix login — up next' })
+    expect(titlesIn(section('Ready'))).toEqual(['Write the changelog', 'Fix login'])
+    // A task without a word keeps the category word.
+    expect(screen.getByRole('button', { name: 'Write the changelog — Ready' })).toBeTruthy()
+  })
+
+  it('names a card by the folder’s word on the category board, and moves it as an unbound task', async () => {
+    useUIStore.setState({ tasksViewMode: 'board' })
+    listTasks.mockResolvedValue([FOLDER_TASK])
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: 'Fix login — up next' })
+    expect(document.querySelector('[data-tasks-board]')?.getAttribute('data-tasks-board')).toBe('categories')
+    // Bound to the folder adapter, but a file keeps no table: Ready → Backlog and Done are open to it.
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Fix login' }))
+    const menu = await screen.findByRole('menu', { name: 'Task actions' })
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Move to Backlog', 'Move to Done'])
+  })
+})
+
+describe('folder board', () => {
+  const COLUMNS: TaskBoardColumn[] = [
+    { label: 'Todo', category: 'backlog', status: 'new', droppable: true },
+    { label: 'Up Next', category: 'ready', status: 'open', droppable: true },
+    { label: 'Doing', category: 'active', status: 'in_progress', droppable: false },
+    { label: 'Shipped', category: 'done', status: 'completed', droppable: true },
+    { label: 'Someday', category: null, status: 'new', droppable: false }
+  ]
+  const folderBinding = (id: string): Partial<TaskDto> => ({
+    assignee: writer,
+    remote: { adapter: 'folder', id: `agent-w:${id}`, key: id, url: null } as unknown as TaskDto['remote'],
+    file: { path: `/w/.cinna/tasks/${id}.md`, readOnlyFields: [], blockedBy: [] }
+  })
+  const FOLDER_TASKS: TaskDto[] = [
+    task('f1', { title: 'Fix login', status: 'new', statusLabel: 'todo', ...folderBinding('f1') }),
+    task('f2', { title: 'Ship docs', status: 'open', statusLabel: 'up-next', ...folderBinding('f2') }),
+    task('f3', { title: 'Dream big', status: 'new', statusLabel: 'Someday', ...folderBinding('f3') }),
+    // Its word has no column and its category none either: the first column.
+    task('f4', { title: 'Wait on legal', status: 'blocked', statusLabel: 'review', ...folderBinding('f4') })
+  ]
+
+  function dataTransfer(): DataTransfer {
+    const data = new Map<string, string>()
+    return {
+      dropEffect: 'none', effectAllowed: 'all', types: [],
+      setData: (type: string, value: string) => { data.set(type, value) },
+      getData: (type: string) => data.get(type) ?? ''
+    } as unknown as DataTransfer
+  }
+  function card(id: string): HTMLElement {
+    return document.querySelector(`[data-task-card="${id}"]`) as HTMLElement
+  }
+  function column(name: string): HTMLElement {
+    return screen.getByRole('region', { name })
+  }
+  async function renderFiltered(): Promise<void> {
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'agent:agent-w' } })
+    await screen.findByRole('region', { name: 'Todo' })
+  }
+
+  beforeEach(() => {
+    useUIStore.setState({ tasksViewMode: 'board' })
+    listTasks.mockResolvedValue([...TASKS, ...FOLDER_TASKS])
+    folderBoard.mockImplementation(async (agentId) => (agentId === 'agent-w' ? COLUMNS : null))
+  })
+
+  it('uses the folder’s words as columns, in order, placing each card by its word, else by its category', async () => {
+    await renderFiltered()
+    expect(folderBoard).toHaveBeenCalledWith('agent-w')
+    expect(document.querySelector('[data-tasks-board]')?.getAttribute('data-tasks-board')).toBe('folder')
+    expect(screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Todo', 'Up Next', 'Doing', 'Shipped', 'Someday'])
+    // Native tasks of the agent land in their category's first column.
+    expect(titlesIn(column('Todo'))).toEqual(['Plan the launch', 'Fix login', 'Wait on legal'])
+    expect(titlesIn(column('Up Next'))).toEqual(['Write the changelog', 'Ship docs'])
+    expect(titlesIn(column('Doing'))).toEqual([])
+    expect(titlesIn(column('Shipped'))).toEqual(['Old launch'])
+    expect(titlesIn(column('Someday'))).toEqual(['Dream big'])
+    // The words as written: no small capitals on a folder column's title.
+    expect(within(column('Up Next')).getByRole('heading').className).not.toMatch(/uppercase/)
+    expect(column('Doing').getAttribute('data-droppable')).toBe('false')
+    expect(column('Todo').getAttribute('data-folder-column')).toBe('Todo')
+    expect(screen.getByRole('button', { name: 'Ship docs — up-next' })).toBeTruthy()
+  })
+
+  it('keeps the five categories for an agent without a folder board, and for All agents', async () => {
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    expect(folderBoard).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'agent:agent-r' } })
+    await waitFor(() => expect(folderBoard).toHaveBeenCalledWith('agent-r'))
+    await screen.findByRole('region', { name: 'In progress' })
+    expect(screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Backlog', 'Ready', 'In progress', 'Waiting', 'Done'])
+  })
+
+  it('waits on the loading line, not on five columns it would replace', async () => {
+    let answer!: (columns: TaskBoardColumn[]) => void
+    folderBoard.mockImplementation(() => new Promise((resolve) => { answer = resolve }))
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'agent:agent-w' } })
+    expect(screen.getByText('Loading tasks…')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Backlog' })).toBeNull()
+    await act(async () => { answer(COLUMNS) })
+    expect(await screen.findByRole('region', { name: 'Todo' })).toBeTruthy()
+  })
+
+  it('drops on a droppable column with its status and its word, moving the card at once', async () => {
+    setStatus.mockImplementation(async (id, status, label) =>
+      ({ ...FOLDER_TASKS.find((t) => t.id === id)!, status: status as TaskDto['status'], statusLabel: label ?? null }))
+    await renderFiltered()
+    const transfer = dataTransfer()
+    fireEvent.dragStart(card('f1'), { dataTransfer: transfer })
+    expect(fireEvent.dragOver(column('Up Next'), { dataTransfer: transfer })).toBe(false)
+    expect(transfer.dropEffect).toBe('move')
+    fireEvent.drop(column('Up Next'), { dataTransfer: transfer })
+    expect(titlesIn(column('Up Next'))).toContain('Fix login')
+    expect(screen.getByRole('button', { name: 'Fix login — Up Next' })).toBeTruthy()
+    await waitFor(() => expect(setStatus).toHaveBeenCalledWith('f1', 'open', 'Up Next'))
+    // A native task of the agent has no file for a word: it sends the status alone.
+    const again = dataTransfer()
+    fireEvent.dragStart(card('b1'), { dataTransfer: again })
+    fireEvent.drop(column('Shipped'), { dataTransfer: again })
+    await waitFor(() => expect(setStatus).toHaveBeenCalledWith('b1', 'completed'))
+    expect(setStatus.mock.calls.find((call) => call[0] === 'b1')).toHaveLength(2)
+  })
+
+  it('offers a task with no file one column per status it may reach, the first of that status', async () => {
+    folderBoard.mockResolvedValue([
+      { label: 'Todo', category: 'backlog', status: 'new', droppable: true },
+      { label: 'Up Next', category: 'ready', status: 'open', droppable: true },
+      { label: 'Next', category: 'ready', status: 'open', droppable: true },
+      { label: 'Doing', category: 'active', status: 'in_progress', droppable: false },
+      { label: 'Shipped', category: 'done', status: 'completed', droppable: true },
+      { label: 'Closed', category: 'done', status: 'completed', droppable: true }
+    ])
+    await renderFiltered()
+    fireEvent.click(within(card('b1')).getByRole('button', { name: 'Actions for Plan the launch' }))
+    const menu = await screen.findByRole('menu', { name: 'Task actions' })
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Move to Up Next', 'Move to Shipped'])
+    fireEvent.keyDown(document, { key: 'Escape' })
+    const transfer = dataTransfer()
+    fireEvent.dragStart(card('b1'), { dataTransfer: transfer })
+    // The second column of a status is not a target.
+    expect(fireEvent.dragOver(column('Next'), { dataTransfer: transfer })).toBe(true)
+    expect(transfer.dropEffect).toBe('none')
+    fireEvent.dragEnd(card('b1'), { dataTransfer: transfer })
+  })
+
+  it('places a task with no file by its status, never by a word it carries', async () => {
+    listTasks.mockResolvedValue([...TASKS, task('h1', { title: 'Handed over', status: 'open', statusLabel: 'Todo', assignee: writer })])
+    await renderFiltered()
+    expect(titlesIn(column('Up Next'))).toContain('Handed over')
+    expect(titlesIn(column('Todo'))).not.toContain('Handed over')
+  })
+
+  it('lets a file task with an unmapped word move to a proper word of its own status', async () => {
+    setStatus.mockImplementation(async (id, status, label) =>
+      ({ ...FOLDER_TASKS.find((t) => t.id === id)!, status: status as TaskDto['status'], statusLabel: label ?? null }))
+    await renderFiltered()
+    fireEvent.click(within(card('f3')).getByRole('button', { name: 'Actions for Dream big' }))
+    const menu = await screen.findByRole('menu', { name: 'Task actions' })
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Move to Todo', 'Move to Up Next', 'Move to Shipped'])
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Move to Todo' }))
+    await waitFor(() => expect(setStatus).toHaveBeenCalledWith('f3', 'new', 'Todo'))
+    expect(titlesIn(column('Todo'))).toContain('Dream big')
+    // A file task whose own word has a droppable column is not offered its own status again.
+    fireEvent.click(within(card('f1')).getByRole('button', { name: 'Actions for Fix login' }))
+    const second = await screen.findByRole('menu', { name: 'Task actions' })
+    expect(within(second).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Move to Up Next', 'Move to Shipped'])
+  })
+
+  it('never accepts a drop on a column that is not droppable, or on the card’s own status', async () => {
+    await renderFiltered()
+    for (const name of ['Doing', 'Someday', 'Todo']) {
+      const transfer = dataTransfer()
+      fireEvent.dragStart(card('f2'), { dataTransfer: transfer })
+      if (name === 'Todo') {
+        // Ready → Backlog is a move a person may make, so Todo takes it.
+        expect(fireEvent.dragOver(column(name), { dataTransfer: transfer })).toBe(false)
+        fireEvent.dragEnd(card('f2'), { dataTransfer: transfer })
+        continue
+      }
+      expect(fireEvent.dragOver(column(name), { dataTransfer: transfer })).toBe(true)
+      expect(transfer.dropEffect).toBe('none')
+      fireEvent.drop(column(name), { dataTransfer: transfer })
+      fireEvent.dragEnd(card('f2'), { dataTransfer: transfer })
+    }
+    expect(setStatus).not.toHaveBeenCalled()
+    // The card's ⋯ lists only the droppable columns it can reach.
+    fireEvent.click(within(card('f1')).getByRole('button', { name: 'Actions for Fix login' }))
+    const menu = await screen.findByRole('menu', { name: 'Task actions' })
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Move to Up Next', 'Move to Shipped'])
+    // A Waiting card stays where a question put it, whichever column its word fell into.
+    expect(card('f4').getAttribute('draggable')).toBe('false')
+  })
+
+  it('moves the card back and shows main’s refusal', async () => {
+    setStatus.mockRejectedValue(new Error("Error invoking remote method 'task:set-status': Error: “Up Next” is not a open word in this folder."))
+    await renderFiltered()
+    const transfer = dataTransfer()
+    fireEvent.dragStart(card('f1'), { dataTransfer: transfer })
+    fireEvent.drop(column('Up Next'), { dataTransfer: transfer })
+    expect(titlesIn(column('Up Next'))).toContain('Fix login')
+    expect((await screen.findByRole('alert')).textContent).toBe('“Up Next” is not a open word in this folder.')
+    expect(titlesIn(column('Up Next'))).not.toContain('Fix login')
+    expect(titlesIn(column('Todo'))).toContain('Fix login')
+  })
+
+  it('holds the columns while a card is dragged, and takes a new word once the drag ends', async () => {
+    await renderFiltered()
+    const transfer = dataTransfer()
+    fireEvent.dragStart(card('f1'), { dataTransfer: transfer })
+    folderBoard.mockResolvedValue([{ label: 'Inbox', category: 'backlog', status: 'new', droppable: true }, ...COLUMNS])
+    await act(async () => { await client.invalidateQueries({ queryKey: ['tasks'] }) })
+    expect(folderBoard).toHaveBeenCalledTimes(2)
+    // Let the query's observers hear the new answer (they are notified on a timer).
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+    expect(screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Todo', 'Up Next', 'Doing', 'Shipped', 'Someday'])
+    fireEvent.dragEnd(card('f1'), { dataTransfer: transfer })
+    expect(screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Inbox', 'Todo', 'Up Next', 'Doing', 'Shipped', 'Someday'])
+  })
+})
+
 describe('New task', () => {
   it('stays open with main’s refusal, then closes and opens the task on success', async () => {
     createTask.mockRejectedValueOnce(new Error("Error invoking remote method 'task:create': Error: That agent is unavailable. Choose another agent."))
@@ -424,6 +672,35 @@ describe('New task', () => {
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' })) })
     expect(screen.queryByRole('dialog', { name: 'New task' })).toBeNull()
     expect(createTask).not.toHaveBeenCalled()
+  })
+
+  it('names the Status options by a folder agent’s own words, keeping their values', async () => {
+    let answer!: (columns: TaskBoardColumn[]) => void
+    folderBoard.mockImplementation(async (agentId) => agentId === 'agent-w'
+      ? new Promise<TaskBoardColumn[]>((resolve) => { answer = resolve })
+      : null)
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    const dialog = screen.getByRole('dialog', { name: 'New task' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'More options' }))
+    const options = (): [string, string | null][] => within(within(dialog).getByLabelText('Status')).getAllByRole('option')
+      .map((option) => [(option as HTMLOptionElement).value, option.textContent])
+    expect(options()).toEqual([['new', 'Backlog'], ['open', 'Ready']])
+    fireEvent.change(within(dialog).getByLabelText('Status'), { target: { value: 'open' } })
+    fireEvent.change(within(dialog).getByLabelText('Assignee'), { target: { value: 'agent-w' } })
+    // While the folder's words are unknown, the category words.
+    expect(options()).toEqual([['new', 'Backlog'], ['open', 'Ready']])
+    await act(async () => { answer([
+      { label: 'Inbox', category: 'backlog', status: 'new', droppable: true },
+      { label: 'Todo', category: 'backlog', status: 'new', droppable: true },
+      { label: 'Up Next', category: 'ready', status: 'open', droppable: true }
+    ]) })
+    await waitFor(() => expect(options()).toEqual([['new', 'Inbox'], ['open', 'Up Next']]))
+    expect((within(dialog).getByLabelText('Status') as HTMLSelectElement).value).toBe('open')
+    // An agent without a folder board: the category words again.
+    fireEvent.change(within(dialog).getByLabelText('Assignee'), { target: { value: 'agent-r' } })
+    await waitFor(() => expect(options()).toEqual([['new', 'Backlog'], ['open', 'Ready']]))
   })
 
   it('puts the goal’s default in its placeholder, not a sub-line', async () => {

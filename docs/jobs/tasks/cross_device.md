@@ -23,6 +23,8 @@ A task travels between the devices of one Cinna account as the fifth [app-sync](
 | The **remote binding** (`remote_adapter`, `remote_id`, `remote_key`, `remote_url`, `remote_state`), so a peer opens the same [bound task](remote_sync.md) rather than creating a second one | **`remote_synced_at`** and **`remote_dirty`** — per-device bookkeeping. A device that has never spoken to that service must not inherit a watermark saying it has, nor a list of fields *this* device still owes it |
 | `job_id` / `job_run_id`, carried as-is and tolerated as dangling: jobs sync, job runs do not, so a peer can name the job a task came from but never the run | |
 
+**A device-local task does not travel at all.** A [folder task](folder_tasks.md) lives in a file on this machine (`tasks.device_local`, set when the row is created and never changed), so `taskRepo.listChangedSince` never puts it in the push batch, and a record a peer sends for the same id is refused twice — by `taskService.applySyncedTask` and again by the repository's upsert (`setWhere device_local = 0`). A peer could only show a task it can neither open nor run, and a peer's copy coming back would overwrite the file's content with a stale one. Its `trusted_digest` and `local_file` columns are this machine's facts about one file and are never carried either. A device-sync tombstone never reaches the file: deleting a folder task's file is `task:delete`'s, on this machine only.
+
 **Custom fields** travel as one value, with two rules for a payload that disagrees with this build: a payload with no `customFields` key comes from a build that predates them and keeps this device's fields — a peer that never knew they existed must not wipe them — while an explicit null clears them; a value this build's validator refuses is left alone rather than half-applied. See [the Tasks view](../tasks_view/tasks_view.md#custom-fields).
 
 The assignee descriptor is the same `JobDepDescriptor` a job's dependencies use, and **nothing is auto-created from it**: a device that does not have the agent resolves it to null, keeps the descriptor verbatim, and re-emits it byte for byte — so the assignee re-attaches by itself the day that agent appears here. A job's manifest auto-creates a disabled shell on a miss; a task deliberately does not, because a profile syncs a great many tasks and the user's Agents list would fill with rows they never asked for, from work that already finished somewhere else.
@@ -98,6 +100,7 @@ The **Take over** button sits on the right of its own row: a different row from 
 - **It does not carry the conversation.** A peer copy has `chatId: null`, so *Re-run from the last message* has nothing to send there even after a take-over, and the page says so. What a take-over buys today is the right to move the task's status and to be the device that writes the run when work does start here.
 - **It does not sync the inbox.** `task_input_requests` is not a collection: a `reply` ask is an address on the machine that raised it, and it dies with the driver process holding it.
 - **It does not validate what arrives.** No transition check (the peer is reporting what happened on the device that was running the work), no `requireRunsHere` (a copy of a task another device runs is the point) and no parent check. The rules here are about what *this* device may initiate.
+- **It does not carry a folder task.** Its home is a path; the task exists on the machine that has the folder and nowhere else.
 - **It does not carry a hard delete.** A task's only delete is soft and travels as an ordinary upsert with `deleted: true`. The tombstone arm exists because every collection must answer one, and because a record a mapper ignores is one the server hands back on every pull for ever.
 
 ## Architecture Overview
@@ -142,5 +145,6 @@ renderer: useSyncOnViewOpen (page open, 8s throttle) -> sync.syncNow
 - [The Handoff Note, Exported](handoff_note_export.md) — why the apply path goes through `taskService` and not `taskRepo`
 - [Keeping a Bound Task in Step](remote_sync.md) — the other direction a task can exist twice in, and the columns of that relationship which deliberately stay on one device
 - [Jobs](../jobs/jobs.md) — where tasks come from, and the run history row that opens the task page
+- [Folder Tasks](folder_tasks.md) — the device-local tasks that never travel
 
 Peer edits preserve the claim holder’s artifacts and budget as well as status, timestamps, assignee and handoff note. Independent devices may import a remote task before app-sync arrives. App-sync coalesces those independently minted replicas by a deterministic ID order and remaps local child, job-run and Inbox references; duplicate rows become synced tombstones.

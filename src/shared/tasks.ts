@@ -274,6 +274,27 @@ export function validateTaskCustomFields(input: unknown): { fields: TaskCustomFi
 }
 
 /**
+ * The file a task lives in when its home is a folder on this machine
+ * (`.cinna/tasks/*.md`, the `folder` adapter). Display facts only, written by
+ * the pull; absolute, because the path exists on one machine — which is also
+ * why such a task never syncs.
+ */
+export interface TaskFileRef {
+  /** Absolute path, for Reveal. */
+  path: string
+  /** Custom field keys that are nested or over-long in the file: shown, never written. */
+  readOnlyFields: string[]
+  /** The file's `blocked_by` ids, read-only in this phase. */
+  blockedBy: string[]
+}
+
+/** What the index keeps about that file: the DTO's half plus the content digest. */
+export interface TaskLocalFile extends TaskFileRef {
+  /** sha256 of the bytes last read. Compared with the trusted digest. */
+  digest: string
+}
+
+/**
  * Who a user-created task is assigned to: an agent on this device, the default
  * chat model, or nobody yet (`null`). Stored as `kind: 'model'` either way —
  * the existing convention, where `model` means "the local LLM, or nobody in
@@ -369,6 +390,20 @@ export interface TaskDto {
   errorMessage: string | null
   /** User-defined fields (`validateTaskCustomFields`); null when the task has none. */
   customFields: TaskCustomFields | null
+  /**
+   * The status as the task's home spells it — a folder's own word (`doing`,
+   * `Up Next`) — or null when it has none. `status` stays the canonical value
+   * Cinna reacts to.
+   */
+  statusLabel: string | null
+  /** The file this task lives in (`.cinna/tasks/`), or null for every other task. */
+  file: TaskFileRef | null
+  /**
+   * The file's current content was not written by Cinna — it appeared or
+   * changed outside the app (an editor, a script, `git pull`). Always false
+   * for a task with no file.
+   */
+  fromOutside: boolean
 
   /** Which job run created this task, when one did. Provenance only — the rows may be gone. */
   jobId: string | null

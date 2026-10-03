@@ -1001,3 +1001,44 @@ describe('independent imports of one remote binding', () => {
     expect(on(deviceA, () => taskRepo.list(USER).filter((row) => row.remoteId === 'same-remote').map((row) => row.id))).toEqual(['remote-a'])
   })
 })
+
+/**
+ * A task whose home is a folder on this machine (`.cinna/tasks/`) is the
+ * machine's alone: the path means nothing on a peer, and a peer's copy coming
+ * back must not overwrite what the file said.
+ */
+describe('a device-local task (a folder task)', () => {
+  it('is never in the push batch, even after an edit', () => {
+    const local = on(deviceA, () => taskService.create(USER, { title: 'In a folder', goal: 'Work', deviceLocal: true }))
+    const shared = on(deviceA, () => taskService.create(USER, { title: 'Ordinary', goal: 'Work' }))
+    on(deviceA, () => taskService.update(USER, local.id, { title: 'Still in a folder' }))
+    const ids = on(deviceA, () => taskMapper!.listDirty(USER, 0).map((record) => record.clientEntityId))
+    expect(ids).toContain(shared.id)
+    expect(ids).not.toContain(local.id)
+  })
+
+  it('is never overwritten by a record a peer sends for the same id', () => {
+    const peer = on(deviceB, () => taskService.create(USER, { id: 'same-id', title: 'From the peer', goal: 'Peer work' }))
+    const fromPeer = encode(deviceB, peer.id)
+    on(deviceA, () => taskService.create(USER, { id: 'same-id', title: 'From the file', goal: 'Local work', deviceLocal: true }))
+    applyTo(deviceA, 'same-id', fromPeer)
+    on(deviceA, () => {
+      const row = taskRepo.getById(USER, 'same-id')
+      expect(row?.title).toBe('From the file')
+      expect(row?.deviceLocal).toBe(true)
+      // Refused by the service before the repo is reached: nothing was written.
+      expect(taskService.applySyncedTask(USER, { ...row!, title: 'Again from the peer', deletedAt: null })).toBeNull()
+    })
+  })
+
+  it('is not overwritten even past the service, at the repo', () => {
+    const peer = on(deviceB, () => taskService.create(USER, { id: 'same-id', title: 'From the peer', goal: 'Peer work' }))
+    const fromPeer = encode(deviceB, peer.id)
+    on(deviceA, () => taskService.create(USER, { id: 'same-id', title: 'From the file', goal: 'Local work', deviceLocal: true }))
+    on(deviceA, () => {
+      const values = { ...taskRepo.getById(USER, 'same-id')!, title: String(fromPeer.plaintext.title), deletedAt: null }
+      taskRepo.upsertFromSync(USER, values)
+      expect(taskRepo.getById(USER, 'same-id')?.title).toBe('From the file')
+    })
+  })
+})

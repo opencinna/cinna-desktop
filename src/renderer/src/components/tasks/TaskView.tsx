@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   Link as LinkIcon,
   Loader2,
   MessageSquare,
+  PenLine,
   RotateCcw,
   Server
 } from 'lucide-react'
@@ -45,8 +46,9 @@ import { HandOffTaskControl } from './HandOffTaskControl'
 import { TaskList } from './TaskList'
 import { TaskRuntimeControl } from './TaskRuntimeControl'
 import { TaskActionsMenu } from './TaskActionsMenu'
-import { Detail, HEADER_BUTTON, Prose, Section } from './DetailParts'
-import { customFieldText, isUnassigned, taskStatusLabel } from './tasksViewModel'
+import { DETAIL_LINK, Detail, HEADER_BUTTON, Prose, Section } from './DetailParts'
+import { customFieldText, isUnassigned, taskFileName, taskStatusText } from './tasksViewModel'
+import { useTaskList } from '../../hooks/useTaskList'
 import { hasAgentPage, useOpenAgentPage } from '../../hooks/useOpenAgentPage'
 import type { TaskArtifact, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
@@ -406,7 +408,7 @@ function TaskPage({
               <ArrowLeft size={14} />
             </button>
             {/* The status as an icon, the way it leads a task row; the word is in Details. */}
-            <span className="flex shrink-0 items-center" title={taskStatusLabel(task.status)}>
+            <span className="flex shrink-0 items-center" title={taskStatusText(task)}>
               <TaskStatusIcon status={task.status} size={18} />
             </span>
             <h1
@@ -515,7 +517,7 @@ function TaskPage({
             */}
             <dl className="m-0 grid grid-cols-1 gap-x-6 gap-y-2 @md:grid-cols-2 @2xl:grid-cols-1">
               <Detail label="Status">
-                <TaskStatusPill status={task.status} />
+                <TaskStatusPill status={task.status} label={task.statusLabel} />
               </Detail>
               <Detail label="Assignee">
                 {assigneeAgent ? (
@@ -618,9 +620,20 @@ function TaskPage({
                   </span>
                 </Detail>
               )}
-              {task.remote?.key && (
+              {/* A task file's key is its file id, which Blocked by and the file itself already say. */}
+              {task.remote?.key && !task.file && (
                 <Detail label="Key">
                   <span className="font-mono text-[11px]">{task.remote.key}</span>
+                </Detail>
+              )}
+              {task.file && (
+                <Detail label="File" wide>
+                  <TaskFileValue task={task} file={task.file} />
+                </Detail>
+              )}
+              {task.file && task.file.blockedBy.length > 0 && (
+                <Detail label="Blocked by" wide>
+                  <BlockedByValue task={task} ids={task.file.blockedBy} />
                 </Detail>
               )}
               {task.jobId && !jobGone && (
@@ -1450,5 +1463,111 @@ function ArtifactRow({
         </span>
       )}
     </li>
+  )
+}
+
+/** How long a refused Reveal holds the File row before the name comes back. */
+const REVEAL_REFUSAL_MS = 6_000
+
+/**
+ * The file a folder task lives in: its name, the whole path on hover, and
+ * **Reveal**, which selects it in Finder through the agent-files channel (main
+ * re-checks the path is inside the agent's folder). A refusal takes the name's
+ * place for a few seconds, in the row the button is in (§6) and on the same
+ * one line, so nothing under it moves (§1).
+ *
+ * When the file's content is not what Cinna last wrote — an editor, a script,
+ * a `git pull` — a small glyph on the same line says so, with the sentence in
+ * its tooltip and its accessible name: a fact about where the text came from,
+ * not something to act on now, so not a banner (§2), and not a line that
+ * would grow the row when a poll brings it (§1).
+ */
+function TaskFileValue({ task, file }: {
+  task: TaskDto
+  file: NonNullable<TaskDto['file']>
+}): React.JSX.Element {
+  const agentId = task.assignee.agentId
+  const [refusal, setRefusal] = useState<string | null>(null)
+  useEffect(() => {
+    if (!refusal) return
+    const timer = setTimeout(() => setRefusal(null), REVEAL_REFUSAL_MS)
+    return () => clearTimeout(timer)
+  }, [refusal])
+  const reveal = async (): Promise<void> => {
+    if (!agentId) return
+    setRefusal(null)
+    try {
+      const result = await window.api.agentFiles.reveal({ agentId, path: file.path })
+      if (!result.success) setRefusal(result.error)
+    } catch (error) {
+      setRefusal(unwrapIpcError(error, 'Finder could not show it.'))
+    }
+  }
+  return (
+    <span className="flex h-4 min-w-0 items-center justify-end gap-2 leading-4">
+      {task.fromOutside && !refusal && (
+        <span
+          data-task-from-outside
+          role="img"
+          aria-label="Changed outside Cinna"
+          title="Changed outside Cinna"
+          className="flex shrink-0 text-[var(--color-text-muted)]"
+        >
+          <PenLine size={11} aria-hidden="true" />
+        </span>
+      )}
+      {refusal ? (
+        <span role="alert" title={refusal} className="min-w-0 truncate text-[10px] text-[var(--color-danger)]">
+          {refusal}
+        </span>
+      ) : (
+        <span data-task-file className="min-w-0 truncate font-mono text-[10px]" title={file.path}>
+          {taskFileName(file.path)}
+        </span>
+      )}
+      {/* Hidden while a refusal shows, so the sentence gets the room rather than "Could not…". */}
+      {agentId && !refusal && (
+        <button
+          type="button"
+          onClick={() => void reveal()}
+          title="Show the file in its folder"
+          className="shrink-0 font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
+        >
+          Reveal
+        </button>
+      )}
+    </span>
+  )
+}
+
+/**
+ * What a task file says blocks it: each id as its task's title, a link to that
+ * task, when it is one of the same agent's file tasks this window already
+ * lists (a file id is the task's `remote.key`); else the id as written. Never
+ * broken inside an item.
+ */
+function BlockedByValue({ task, ids }: { task: TaskDto; ids: readonly string[] }): React.JSX.Element {
+  const roots = useTaskList({ rootOnly: true }).data?.tasks ?? []
+  const openTask = useOpenTask()
+  const agentId = task.assignee.agentId
+  const find = (id: string): TaskDto | undefined => roots.find((candidate) =>
+    candidate.file && candidate.id !== task.id && candidate.assignee.agentId === agentId && candidate.remote?.key === id)
+  return (
+    <span data-task-blocked-by className="flex flex-wrap justify-end gap-x-2 gap-y-0.5">
+      {ids.map((id, index) => {
+        const blocker = find(id)
+        const comma = index < ids.length - 1 ? ',' : ''
+        return blocker ? (
+          <span key={id} className="flex min-w-0 max-w-full whitespace-nowrap">
+            <button type="button" onClick={() => openTask(blocker.id)} title={blocker.title}
+              className={`${DETAIL_LINK} min-w-0`}>
+              {blocker.title}
+            </button>{comma}
+          </span>
+        ) : (
+          <span key={id} title={id} className="min-w-0 max-w-full truncate whitespace-nowrap font-mono text-[11px]">{id}{comma}</span>
+        )
+      })}
+    </span>
   )
 }

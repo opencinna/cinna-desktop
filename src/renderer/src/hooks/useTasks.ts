@@ -417,7 +417,28 @@ export function useUpdateTask() {
 export function useSetTaskStatus() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ taskId, status }: { taskId: string; status: TaskStatus }) => window.api.tasks.setStatus(taskId, status),
+    // `label` is a folder board column's word; only then is it sent, so a
+    // category move stays the two-argument call it always was.
+    mutationFn: ({ taskId, status, label }: { taskId: string; status: TaskStatus; label?: string }) =>
+      label !== undefined ? window.api.tasks.setStatus(taskId, status, label) : window.api.tasks.setStatus(taskId, status),
     onSuccess: (task) => refreshTask(queryClient, task)
+  })
+}
+
+/** Under `['tasks']`, so every write that refreshes the task lists refreshes the columns too. */
+export const FOLDER_BOARD_QUERY_KEY = (agentId: string) => ['tasks', 'folder-board', agentId] as const
+
+/**
+ * A bare agent's folder board — its own status words as ordered columns — or
+ * null for an agent whose tasks are not kept in its folder. Idle without an
+ * agent. Polled with the task lists, since a word appears when a file uses it.
+ */
+export function useFolderBoard(agentId: string | null) {
+  return useQuery({
+    queryKey: FOLDER_BOARD_QUERY_KEY(agentId ?? ''),
+    queryFn: () => window.api.tasks.folderBoard(agentId as string),
+    enabled: !!agentId,
+    refetchInterval: 5_000,
+    retry: 1
   })
 }

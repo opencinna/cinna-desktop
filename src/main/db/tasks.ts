@@ -11,6 +11,7 @@ import type {
   TaskAssignee,
   TaskBudget,
   TaskCustomFields,
+  TaskLocalFile,
   TaskExecutor,
   TaskOrigin,
   TaskPriority,
@@ -61,6 +62,12 @@ export interface TaskCreateInput {
   artifacts?: TaskArtifact[] | null
   budget?: TaskBudget | null
   customFields?: TaskCustomFields | null
+  /** The home's own status word (`folder` adapter). */
+  statusLabel?: string | null
+  /** Bound to a path on this machine: never sent by device sync. Set at creation only. */
+  deviceLocal?: boolean
+  trustedDigest?: string | null
+  localFile?: TaskLocalFile | null
 
   createdAt?: Date
   updatedAt?: Date
@@ -110,6 +117,9 @@ export type TaskPatch = Partial<
     | 'artifacts'
     | 'budget'
     | 'customFields'
+    | 'statusLabel'
+    | 'trustedDigest'
+    | 'localFile'
     | 'errorMessage'
     | 'startedAt'
     | 'finishedAt'
@@ -328,6 +338,10 @@ const rawTaskRepo = {
       router: input.router ?? 'direct',
       script: input.script ?? null,
       customFields: input.customFields ?? null,
+      statusLabel: input.statusLabel ?? null,
+      deviceLocal: input.deviceLocal ?? false,
+      trustedDigest: input.trustedDigest ?? null,
+      localFile: input.localFile ?? null,
 
       origin: input.origin ?? 'local',
       executor: input.executor ?? 'desktop',
@@ -426,12 +440,18 @@ const rawTaskRepo = {
   // are INCLUDED here, unlike every read above: a delete is a change like any
   // other and it is the one change a peer most needs to hear about.
 
-  /** Tasks changed since `sinceMs` (exclusive), INCLUDING soft-deleted ones. */
+  /**
+   * Tasks changed since `sinceMs` (exclusive), INCLUDING soft-deleted ones.
+   *
+   * **Never a device-local task.** Its home is a path on this machine (a
+   * folder's `.cinna/tasks/`), so a peer could only show a task it can neither
+   * open nor run — and a peer's copy coming back would overwrite the file's.
+   */
   listChangedSince(userId: string, sinceMs: number): TaskRow[] {
     return getDb()
       .select()
       .from(tasks)
-      .where(and(eq(tasks.userId, userId), gt(tasks.updatedAt, new Date(sinceMs))))
+      .where(and(eq(tasks.userId, userId), eq(tasks.deviceLocal, false), gt(tasks.updatedAt, new Date(sinceMs))))
       .all()
   },
 
@@ -554,7 +574,11 @@ const rawTaskRepo = {
           startedAt: values.startedAt,
           finishedAt: values.finishedAt,
           deletedAt: values.deletedAt
-        }
+        },
+        // A device-local row is this machine's alone; a record a peer sends for
+        // the same id never overwrites it (`taskService.applySyncedTask` refuses
+        // first — this is the second lock on the same door).
+        setWhere: eq(tasks.deviceLocal, false)
       })
       .run()
     return true

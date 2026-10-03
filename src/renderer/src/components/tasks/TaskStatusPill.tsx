@@ -1,4 +1,4 @@
-import { taskStatusLabel } from './tasksViewModel'
+import { taskStatusText } from './tasksViewModel'
 
 /**
  * Where a task stands, in one pill.
@@ -16,9 +16,16 @@ import { taskStatusLabel } from './tasksViewModel'
  * answer; it is never dropped and never guessed at.
  *
  * The words are `taskStatusLabel`'s — the Tasks view's categories (Backlog,
- * Ready, Done…) — so the page and the board name a status one way.
+ * Ready, Done…) — so the page and the board name a status one way. A task
+ * whose home has its own word for the status (a folder's `doing`) shows that
+ * word as written — no small capitals, which would rewrite it — in the tone
+ * of the category it maps to.
  */
-export function TaskStatusPill({ status }: { status: string }): React.JSX.Element {
+export function TaskStatusPill({ status, label }: {
+  status: string
+  /** The home's own word (`TaskDto.statusLabel`); null or absent for the category word. */
+  label?: string | null
+}): React.JSX.Element {
   const lc = status.toLowerCase()
   const tone =
     lc === 'completed' || lc === 'succeeded'
@@ -30,11 +37,12 @@ export function TaskStatusPill({ status }: { status: string }): React.JSX.Elemen
           : lc === 'cancelled' || lc === 'archived'
             ? 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]'
             : 'bg-[var(--color-severity-info)]/15 text-[var(--color-severity-info-text)]'
+  const asWritten = !!label?.trim()
   return (
     <span
-      className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide ${tone}`}
+      className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium ${asWritten ? '' : 'uppercase tracking-wide'} ${tone}`}
     >
-      {taskStatusLabel(lc)}
+      {taskStatusText({ status: lc, statusLabel: label })}
     </span>
   )
 }

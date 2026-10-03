@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Columns3, List, Loader2, Plus, Search } from 'lucide-react'
 import { useTaskList } from '../../hooks/useTaskList'
 import { useAgents } from '../../hooks/useAgents'
-import { useCreateTask, useOpenTask } from '../../hooks/useTasks'
+import { useCreateTask, useFolderBoard, useOpenTask } from '../../hooks/useTasks'
 import { useUIStore, type TasksViewMode } from '../../stores/ui.store'
 import { TasksList } from './TasksList'
 import { TasksBoard } from './TasksBoard'
@@ -32,6 +32,12 @@ const CONTROL =
  * List and board share one width, wide enough for the board's five columns,
  * so switching between them moves none of the controls.
  *
+ * Filtered to one agent, the board asks for that agent's folder board; a bare
+ * agent whose tasks live in `.cinna/tasks/` gets its own words as columns
+ * (`TasksBoard`), every other agent the five categories. Until that answer is
+ * in, the board waits on the loading line rather than drawing five columns it
+ * would then replace (§1). A failed read falls back to the categories.
+ *
  * The New task mutation is owned here, not by the dialog, so the hook-level
  * `onCreated` that closes the dialog and opens the task runs even though the
  * dialog unmounts on the way (§5).
@@ -42,7 +48,10 @@ export function TasksView(): React.JSX.Element {
   const tasks = useTaskList({ rootOnly: true })
   const { data: agents } = useAgents()
   const openTask = useOpenTask()
-  const [agent, setAgent] = useState<TaskAgentFilter>(ALL_AGENTS)
+  // In the store, not local state: Back to Tasks remounts this view, and a
+  // folder board the user filtered to should still be there.
+  const agent: TaskAgentFilter = useUIStore((s) => s.tasksAgentFilter)
+  const setAgent = useUIStore((s) => s.setTasksAgentFilter)
   const [search, setSearch] = useState('')
   const [creating, setCreating] = useState(false)
   const [moveError, setMoveError] = useState<string | null>(null)
@@ -57,6 +66,9 @@ export function TasksView(): React.JSX.Element {
   const agentName = (id: string): string | undefined => agents?.find((entry) => entry.id === id)?.name
   const agentOptions = agentFilterOptions(rows, agentName)
   const visible = useMemo(() => rows.filter((task) => matchesTaskFilters(task, agent, search)), [rows, agent, search])
+  const boardAgent = mode === 'board' && agent.startsWith('agent:') ? agent.slice('agent:'.length) : null
+  const folderBoard = useFolderBoard(boardAgent)
+  const boardPending = boardAgent !== null && folderBoard.isPending
   const empty = !tasks.isPending && rows.length === 0 && !tasks.isError
   /** Tasks exist, the filters leave none: one line instead of five empty sections. */
   const noMatch = rows.length > 0 && visible.length === 0
@@ -111,7 +123,7 @@ export function TasksView(): React.JSX.Element {
           )}
         </header>
 
-        {tasks.isPending ? (
+        {tasks.isPending || boardPending ? (
           <div className="flex items-center py-12 text-xs text-[var(--color-text-muted)]">
             <Loader2 size={14} className="mr-2 animate-spin" />
             Loading tasks…
@@ -121,7 +133,7 @@ export function TasksView(): React.JSX.Element {
         ) : noMatch ? (
           <p className="text-[13px] text-[var(--color-text-muted)]">No tasks match.</p>
         ) : mode === 'board' ? (
-          <TasksBoard tasks={visible} onError={setMoveError} />
+          <TasksBoard tasks={visible} onError={setMoveError} folderColumns={folderBoard.data ?? null} />
         ) : (
           <TasksList tasks={visible} showAssignee={agent === ALL_AGENTS} />
         )}

@@ -12,10 +12,13 @@ import {
   type TaskUpdateInput
 } from '../../../../shared/tasks'
 import { manualTargets, taskStatusCategory, type TaskStatus } from '../../../../shared/taskStatus'
+import type { TaskBoardColumn } from '../../../../shared/folderTasks'
 import { useAgents } from '../../hooks/useAgents'
-import type { useCreateTask, useSetTaskStatus, useUpdateTask } from '../../hooks/useTasks'
+import { useFolderBoard, type useCreateTask, type useSetTaskStatus, type useUpdateTask } from '../../hooks/useTasks'
 import { unwrapIpcError } from '../../utils/ipcError'
-import { customFieldText, taskStatusLabel } from './tasksViewModel'
+import { SettingsInfoTip } from '../settings/SettingsLayout'
+import { Detail } from './DetailParts'
+import { customFieldText, folderMoveTargets, isTableBound, taskStatusLabel, taskStatusText } from './tasksViewModel'
 
 /**
  * The New task and Edit task dialogs, sharing their form parts.
@@ -57,28 +60,79 @@ interface FieldRow {
 }
 
 let nextRowId = 1
-function rowsFrom(fields: TaskCustomFields | null): FieldRow[] {
-  return Object.entries(fields ?? {}).map(([key, value]) => {
+/** Editable rows; `readOnly` keys (a task file's nested values) are shown apart and never edited. */
+function rowsFrom(fields: TaskCustomFields | null, readOnly: readonly string[] = []): FieldRow[] {
+  return Object.entries(fields ?? {}).filter(([key]) => !readOnly.includes(key)).map(([key, value]) => {
     const text = customFieldText(value)
     return { id: nextRowId++, key, text, original: { text, value } }
   })
 }
 
-/** The rows as custom fields, or the first refusal (main checks again). */
-function fieldsFrom(rows: FieldRow[]): { fields: TaskCustomFields } | { error: string } {
+/**
+ * The rows as custom fields, or the first refusal (main checks again).
+ * `kept` are the read-only fields, carried through unchanged so a save does
+ * not read as removing them; a row may not reuse one of their names.
+ */
+function fieldsFrom(rows: FieldRow[], kept: TaskCustomFields = {}): { fields: TaskCustomFields } | { error: string } {
   const out: Record<string, TaskCustomFieldValue> = {}
   for (const row of rows) {
     const key = row.key.trim()
     if (!key && !row.text.trim()) continue
     if (!key) return { error: 'Give each custom field a name.' }
+    if (Object.prototype.hasOwnProperty.call(kept, key)) return { error: `“${key}” is read-only in the task file.` }
     if (Object.prototype.hasOwnProperty.call(out, key)) return { error: `“${key}” is used twice.` }
     out[key] = row.original && row.original.text === row.text ? row.original.value : row.text
   }
-  return validateTaskCustomFields(out)
+  return validateTaskCustomFields({ ...kept, ...out })
 }
 
+/** Same keys and values, in any order: carrying read-only fields back can reorder them. */
 function sameFields(a: TaskCustomFields | null, b: TaskCustomFields): boolean {
-  return JSON.stringify(a ?? {}) === JSON.stringify(b)
+  const sorted = (fields: TaskCustomFields): string =>
+    JSON.stringify(Object.keys(fields).sort().map((key) => [key, fields[key]]))
+  return sorted(a ?? {}) === sorted(b)
+}
+
+/** The fields a task file holds that the dialog shows but never writes. */
+function readOnlyFieldsOf(task: TaskDto): TaskCustomFields {
+  const keys = task.file?.readOnlyFields ?? []
+  const out: Record<string, TaskCustomFieldValue> = {}
+  for (const [key, value] of Object.entries(task.customFields ?? {})) {
+    if (keys.includes(key)) out[key] = value
+  }
+  return out
+}
+
+/**
+ * A task file's read-only fields, as text: nested in the file, so edited
+ * there. Keys as the task page's Fields panel writes them (`Detail asWritten`);
+ * the why behind a focusable tip, which works inside this modal.
+ */
+function ReadOnlyFields({ fields }: { fields: TaskCustomFields }): React.JSX.Element | null {
+  const entries = Object.entries(fields)
+  if (entries.length === 0) return null
+  return (
+    <div className="space-y-1.5" data-read-only-fields>
+      <div className={`${LABEL} flex items-center gap-1`}>
+        Read-only fields
+        <SettingsInfoTip label="About read-only fields">
+          <p>Nested or long values in the task file. Edit them in the file.</p>
+        </SettingsInfoTip>
+      </div>
+      <dl className="m-0 space-y-1">
+        {entries.map(([key, value]) => (
+          <Detail key={key} label={key} asWritten>
+            <span className="block truncate" title={customFieldText(value)}>{customFieldText(value)}</span>
+          </Detail>
+        ))}
+      </dl>
+    </div>
+  )
+}
+
+/** An info tip of the form is open: Escape and a click outside the card are the tip's, not the form's. */
+function tipOpenIn(card: HTMLElement | null): boolean {
+  return !!card?.querySelector('[data-read-only-fields] [aria-expanded="true"]')
 }
 
 /**
@@ -104,9 +158,11 @@ function useDismiss(
       if (!dirtyRef.current) cancel()
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') dismiss()
+      if (e.key === 'Escape' && !tipOpenIn(cardRef.current)) dismiss()
     }
     const onClick = (e: MouseEvent): void => {
+      // The tip's own popover is portaled outside the card.
+      if (tipOpenIn(cardRef.current)) return
       if (cardRef.current && !cardRef.current.contains(e.target as Node)) dismiss()
     }
     window.addEventListener('keydown', onKey)
@@ -233,6 +289,17 @@ function assigneeInput(value: string): TaskAssigneeInput {
   return value === NO_AGENT ? null : { kind: 'agent', agentId: value }
 }
 
+/**
+ * The New task Status options' text: a folder's first backlog and ready
+ * words when the assignee keeps its tasks in a folder, else (or while that is
+ * unknown) the category words.
+ */
+function newStatusWords(columns: readonly TaskBoardColumn[] | null | undefined): { new: string; open: string } {
+  const first = (category: 'backlog' | 'ready'): string | undefined =>
+    columns?.find((column) => column.category === category)?.label
+  return { new: first('backlog') ?? 'Backlog', open: first('ready') ?? 'Ready' }
+}
+
 /** New task: a title, Enter, and the user lands on the task. */
 export function NewTaskDialog({ create, onClose }: {
   /** Owned by the Tasks view, whose hook-level `onCreated` closes this and opens the task. */
@@ -253,6 +320,10 @@ export function NewTaskDialog({ create, onClose }: {
   const dirty = title !== '' || goal !== '' || priority !== 'normal' || assignee !== NO_AGENT || status !== 'new' ||
     rows.some((row) => row.key !== '' || row.text !== '')
   const dismiss = useDismiss(cardRef, { busy: pending, dirty }, onClose)
+  // A bare agent keeps its tasks in its folder: the options say that folder's
+  // words. Text only — the values stay \`new\` and \`open\`, so nothing moves.
+  const board = useFolderBoard(assignee !== NO_AGENT ? assignee : null)
+  const words = newStatusWords(board.data)
 
   useEffect(() => {
     titleRef.current?.focus()
@@ -302,8 +373,8 @@ export function NewTaskDialog({ create, onClose }: {
                   <label htmlFor="new-task-status" className={LABEL}>Status</label>
                   <select id="new-task-status" value={status} disabled={pending} className={INPUT}
                     onChange={(event) => setStatus(event.target.value as 'new' | 'open')}>
-                    <option value="new">Backlog</option>
-                    <option value="open">Ready</option>
+                    <option value="new">{words.new}</option>
+                    <option value="open">{words.open}</option>
                   </select>
                 </div>
               </div>
@@ -330,6 +401,7 @@ export function NewTaskDialog({ create, onClose }: {
  * disabled before the user tries. Main remains the authority.
  */
 export function assigneeLockReason(task: TaskDto): string | null {
+  if (task.file) return 'Fixed while the task lives in its agent’s folder.'
   if (task.chatId) return 'Fixed once the task has a conversation.'
   if (task.executor !== 'desktop') return 'Set by the service running this task.'
   if (!task.runsHere) return 'Another device holds this task. Take it over to change it.'
@@ -345,13 +417,21 @@ export function assigneeLockReason(task: TaskDto): string | null {
  * {@link assigneeLockReason}; `task:set-status` remains the authority.
  */
 export function statusLockReason(task: TaskDto, targets: readonly TaskStatus[]): string | null {
-  if (task.runtime) return 'Moved by the runtime that owns this task.'
-  if (task.status === 'in_progress') return 'Set by the run working on it.'
-  if (task.status === 'blocked') return 'Set by the question waiting on you.'
+  const held = heldReason(task)
+  if (held) return held
   if (targets.length > 0) return null
   if (taskStatusCategory(task.status) === 'closed') return 'A finished task stays where it is.'
-  if (task.remote) return 'Moved by the service this task is connected to.'
+  if (task.remote && !task.file) return 'Moved by the service this task is connected to.'
   return 'Nothing to move it to from here.'
+}
+
+/** A run, a question or — for a task file — its agent holds the status, whatever the targets. */
+function heldReason(task: TaskDto): string | null {
+  if (task.runtime) return 'Moved by the runtime that owns this task.'
+  if (task.file && (task.status === 'in_progress' || task.status === 'blocked')) return 'Set in the task file by its agent.'
+  if (task.status === 'in_progress') return 'Set by the run working on it.'
+  if (task.status === 'blocked') return 'Set by the question waiting on you.'
+  return null
 }
 
 /**
@@ -361,8 +441,38 @@ export function statusLockReason(task: TaskDto, targets: readonly TaskStatus[]):
  */
 function editTargets(task: TaskDto): TaskStatus[] {
   const here = taskStatusCategory(task.status)
-  return manualTargets(task.status, { bound: task.remote != null })
+  return manualTargets(task.status, { bound: isTableBound(task) })
     .filter((status) => taskStatusCategory(status) !== here)
+}
+
+/** One choice of the Status select: `label` is a folder column's word, sent with the status. */
+interface StatusChoice {
+  value: string
+  status: TaskStatus
+  label?: string
+  text: string
+}
+
+const CURRENT = '__current'
+
+/**
+ * The Status select's choices: where the task is now, then where it may go.
+ * A folder task with a folder board offers that board's droppable columns
+ * (`folderMoveTargets`, the board's own rule) and sends the word with the
+ * status; any other task — or a folder task whose board could not be read —
+ * offers the category moves of {@link editTargets}. While a folder task's
+ * board is still being read it offers where it is only: a choice made in that
+ * window would be swapped for another list under the user (§1).
+ */
+function statusChoices(task: TaskDto, columns: readonly TaskBoardColumn[] | null | undefined, boardPending: boolean): StatusChoice[] {
+  const current: StatusChoice = { value: CURRENT, status: task.status, text: taskStatusText(task) }
+  if (task.file && boardPending) return [current]
+  if (task.file && columns && columns.length > 0) {
+    return [current, ...folderMoveTargets(task, task.status, columns).map((column) => ({
+      value: `label:${column.label}`, status: column.status, label: column.label, text: column.label
+    }))]
+  }
+  return [current, ...editTargets(task).map((status) => ({ value: status, status, text: taskStatusLabel(status) }))]
 }
 
 /** Edit task, from the task page's ⋯. */
@@ -379,23 +489,32 @@ export function EditTaskDialog({ task, update, setStatus, onClose }: {
   const [priority, setPriority] = useState<TaskPriority>(task.priority)
   const startAgent = task.assignee.kind === 'agent' && task.assignee.agentId ? task.assignee.agentId : NO_AGENT
   const [assignee, setAssignee] = useState(startAgent)
-  const [status, setStatusChoice] = useState<TaskStatus>(task.status)
-  const [rows, setRows] = useState<FieldRow[]>(() => rowsFrom(task.customFields))
+  const [statusValue, setStatusValue] = useState(CURRENT)
+  const readOnly = task.file?.readOnlyFields ?? []
+  const kept = readOnlyFieldsOf(task)
+  const [rows, setRows] = useState<FieldRow[]>(() => rowsFrom(task.customFields, readOnly))
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const startRows = useState(() => rowsText(rowsFrom(task.customFields)))[0]
+  const startRows = useState(() => rowsText(rowsFrom(task.customFields, readOnly)))[0]
   const dirty = title !== task.title || description !== (task.description ?? '') || priority !== task.priority ||
-    assignee !== startAgent || status !== task.status || rowsText(rows) !== startRows
+    assignee !== startAgent || statusValue !== CURRENT || rowsText(rows) !== startRows
   const dismiss = useDismiss(cardRef, { busy: saving, dirty }, onClose)
   const lock = assigneeLockReason(task)
-  const targets = editTargets(task)
-  const statusLock = statusLockReason(task, targets)
-  const statuses = [task.status, ...(statusLock ? [] : targets)]
+  // A folder task's choices are its board's words; until they are read it offers where it is.
+  const board = useFolderBoard(task.file ? task.assignee.agentId : null)
+  // A disabled query (no agent id) is pending forever too: only a read in flight counts.
+  const boardPending = !!task.file && !!task.assignee.agentId && board.isPending
+  const choices = statusChoices(task, board.data, boardPending)
+  const targets = choices.slice(1)
+  // While the board is read, only a reason that holds whatever it says; no "nothing to move it to" yet.
+  const statusLock = boardPending ? heldReason(task) : statusLockReason(task, targets.map((choice) => choice.status))
+  const statuses = statusLock ? choices.slice(0, 1) : choices
+  const chosen = statuses.find((choice) => choice.value === statusValue) ?? statuses[0]
 
   const save = async (): Promise<void> => {
     if (saving) return
     if (!title.trim()) { setError('Title is required.'); return }
-    const fields = fieldsFrom(rows)
+    const fields = fieldsFrom(rows, kept)
     if ('error' in fields) { setError(fields.error); return }
     const patch: TaskUpdateInput = {}
     if (title.trim() !== task.title) patch.title = title.trim()
@@ -410,8 +529,12 @@ export function EditTaskDialog({ task, update, setStatus, onClose }: {
     // is refused nothing has been saved, so the sentence is simply main's.
     let statusSaved = false
     try {
-      if (status !== task.status) {
-        await setStatus.mutateAsync({ taskId: task.id, status })
+      if (chosen.value !== CURRENT) {
+        await setStatus.mutateAsync({
+          taskId: task.id,
+          status: chosen.status,
+          ...(chosen.label !== undefined ? { label: chosen.label } : {})
+        })
         statusSaved = true
       }
       if (Object.keys(patch).length > 0) await update.mutateAsync({ taskId: task.id, patch })
@@ -450,15 +573,16 @@ export function EditTaskDialog({ task, update, setStatus, onClose }: {
           <PriorityField id="edit-task-priority" value={priority} onChange={setPriority} disabled={saving} />
           <div className="space-y-1.5">
             <label htmlFor="edit-task-status" className={LABEL}>Status</label>
-            <select id="edit-task-status" value={status} disabled={saving || !!statusLock} className={INPUT}
-              onChange={(event) => setStatusChoice(event.target.value as TaskStatus)}>
-              {statuses.map((entry) => <option key={entry} value={entry}>{taskStatusLabel(entry)}</option>)}
+            <select id="edit-task-status" value={chosen.value} disabled={saving || !!statusLock || boardPending} className={INPUT}
+              onChange={(event) => setStatusValue(event.target.value)}>
+              {statuses.map((entry) => <option key={entry.value} value={entry.value}>{entry.text}</option>)}
             </select>
             {statusLock && <p className="text-[10px] text-[var(--color-text-muted)]">{statusLock}</p>}
           </div>
         </div>
         <AssigneeField id="edit-task-assignee" value={assignee} onChange={setAssignee}
           disabled={saving || !!lock} reason={lock} current={current} />
+        <ReadOnlyFields fields={kept} />
         <CustomFieldsEditor rows={rows} onChange={setRows} disabled={saving} />
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" onClick={dismiss} disabled={saving} className={CANCEL}>Cancel</button>

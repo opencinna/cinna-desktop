@@ -76,6 +76,7 @@ import { discoverBareAgents, KIT_WORKSHOP_DIR } from './externalScan'
 import { isWithin } from './pathRules'
 import { turnLock } from './turnLock'
 import { HANDOVERS_DIR } from '../../../shared/handovers'
+import { FOLDER_TASKS_DIR } from '../../../shared/folderTasks'
 
 const logger = createLogger('local-agent-watch')
 
@@ -111,6 +112,8 @@ const WATCHED_SUBDIRS = ['docs', 'credentials'] as const
  * `localDevService` writes an unrelated `.cinna/account.json` in a workspace.
  */
 const [CINNA_DIR, HANDOVERS_SUBDIR] = HANDOVERS_DIR.split('/')
+/** `.cinna/tasks/` — the folder's task queue (`shared/folderTasks.ts`); the same pair rule. */
+const TASKS_SUBDIR = FOLDER_TASKS_DIR.split('/')[1]
 
 interface RootWatch {
   root: AgentRootRow
@@ -124,6 +127,10 @@ interface RootWatch {
    * rescan answers every `pending` entry, and it answers none of these.
    */
   pendingHandovers: Set<string>
+  /** A task file moved somewhere in this root: one sync refresh, whichever agent. */
+  pendingTasks: boolean
+  /** The last agent folder that event named, for the callback's log line. */
+  pendingTasksDir: string | null
   timer: NodeJS.Timeout | null
   /**
    * True when one recursive handle covers the whole root. The per-directory
@@ -160,6 +167,12 @@ export interface WatcherDeps {
    * (and the kit-only path) can configure the watcher without it.
    */
   onHandover?: (root: AgentRootRow, agentDir: string) => void
+  /**
+   * Something changed under `<agentDir>/.cinna/tasks/`. The folder adapter's
+   * pull reads it; this only asks for that pull now rather than in five
+   * seconds. Optional, as `onHandover` is.
+   */
+  onTasks?: (root: AgentRootRow, agentDir: string) => void
 }
 
 const watches = new Map<string, RootWatch>()
@@ -192,6 +205,12 @@ export type WatchTarget =
    * now instead of waiting for the minute scan.
    */
   | { kind: 'handover'; agentDir: string }
+  /**
+   * Something happened under a bare agent's `.cinna/tasks/` — a task file
+   * written, renamed or deleted, or `_board.yaml` edited. Rescans nothing; it
+   * asks the task sync for a pass now.
+   */
+  | { kind: 'tasks'; agentDir: string }
 
 /**
  * Classify an event path. Exported because it is the rule that decides what a
@@ -254,8 +273,17 @@ const EXTERNAL_ROOT_FILES: ReadonlySet<string> = new Set<string>(
  * an empty array means the root is itself the agent.
  */
 function handoverSegments(segments: string[]): string[] | null {
+  return cinnaSegments(segments, HANDOVERS_SUBDIR)
+}
+
+/** The same, before `.cinna/tasks` — matched on the pair for the same reason. */
+function tasksSegments(segments: string[]): string[] | null {
+  return cinnaSegments(segments, TASKS_SUBDIR)
+}
+
+function cinnaSegments(segments: string[], subdir: string): string[] | null {
   const index = segments.findIndex(
-    (segment, at) => segment === CINNA_DIR && segments[at + 1] === HANDOVERS_SUBDIR
+    (segment, at) => segment === CINNA_DIR && segments[at + 1] === subdir
   )
   return index === -1 ? null : segments.slice(0, index)
 }
@@ -303,6 +331,8 @@ export function classifyExternalEvent(rootPath: string, filename: string | null)
   // when the root *is* the agent (`segments` starting at `.cinna`).
   const handover = handoverSegments(segments)
   if (handover) return { kind: 'handover', agentDir: join(rootPath, ...handover) }
+  const tasks = tasksSegments(segments)
+  if (tasks) return { kind: 'tasks', agentDir: join(rootPath, ...tasks) }
   // A dot-entry anywhere on the path: `.git` writing an index, `.venv`, an
   // editor's bookkeeping. `.git` alone would otherwise fire on every command
   // the update check runs.
@@ -345,9 +375,22 @@ function flush(state: RootWatch): void {
   const whole = state.pendingWholeRoot
   const dirs = [...state.pending]
   const handoverDirs = [...state.pendingHandovers]
+  const tasksDir = state.pendingTasks ? state.pendingTasksDir : null
   state.pendingWholeRoot = false
   state.pending.clear()
   state.pendingHandovers.clear()
+  state.pendingTasks = false
+  state.pendingTasksDir = null
+
+  // One refresh for any number of task-file events in this window: the pull
+  // reads every folder anyway, and its stamp cache skips what did not move.
+  if (tasksDir !== null) {
+    try {
+      deps.onTasks?.(state.root, tasksDir)
+    } catch (err) {
+      logger.error('a task sync after a watch event failed', { rootId: state.root.id, error: err })
+    }
+  }
 
   // **Not deferred through `turnLock.whenFree`, and not skipped when a whole-
   // root rescan is pending either.** The turn holding the lock is very often
@@ -442,6 +485,10 @@ function schedule(state: RootWatch, target: WatchTarget): void {
   if (state.closed || target.kind === 'ignore') return
   if (target.kind === 'root') state.pendingWholeRoot = true
   else if (target.kind === 'handover') state.pendingHandovers.add(target.agentDir)
+  else if (target.kind === 'tasks') {
+    state.pendingTasks = true
+    state.pendingTasksDir = target.agentDir
+  }
   else state.pending.add(target.dir)
   if (state.timer) clearTimeout(state.timer)
   state.timer = setTimeout(() => flush(state), DEBOUNCE_MS)
@@ -633,6 +680,8 @@ export const watcherService = {
       pending: new Set(),
       pendingWholeRoot: false,
       pendingHandovers: new Set(),
+      pendingTasks: false,
+      pendingTasksDir: null,
       timer: null,
       recursive: false,
       rearmed: false,

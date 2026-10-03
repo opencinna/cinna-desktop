@@ -4,7 +4,7 @@ import { useRelativeNow } from '../../hooks/useRelativeNow'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { TaskStatusIcon } from './TaskStatusIcon'
 import { TaskAssigneeChip } from './TaskAssigneeChip'
-import { taskStatusLabel } from './tasksViewModel'
+import { taskStatusText } from './tasksViewModel'
 
 /**
  * One task as a list row: where it stands, what it is, and when it last moved.
@@ -29,7 +29,7 @@ export function TaskRow({
   showAssignee = false,
   onOpened
 }: {
-  task: Pick<TaskDto, 'id' | 'title' | 'status' | 'updatedAt'> & Partial<Pick<TaskDto, 'assignee'>>
+  task: Pick<TaskDto, 'id' | 'title' | 'status' | 'updatedAt'> & Partial<Pick<TaskDto, 'assignee' | 'statusLabel'>>
   /**
    * The type scale of the surface the row renders into (`ux_rules.md` §12):
    * `regular` is the Inbox's 13/11, `compact` the composer chrome's 12/11
@@ -57,7 +57,8 @@ export function TaskRow({
         sits on, so the title alone announced a list whose whole
         point — where each piece of work stands — was visible to
         everyone except the reader who most depends on it being said.
-        The pill's own wording, so the two cannot diverge.
+        The pill's own wording, so the two cannot diverge — a folder
+        task's own word (`statusLabel`) included.
 
         The relative time is deliberately left out: it is the one
         part of the row that rewrites itself while the list sits
@@ -65,7 +66,7 @@ export function TaskRow({
         minute is worse than one that omits a detail the user can
         reach by reading the row.
       */
-      aria-label={`${task.title} — ${taskStatusLabel(task.status)}`}
+      aria-label={`${task.title} — ${taskStatusText(task)}`}
       onClick={() => {
         openTask(task.id)
         onOpened?.()

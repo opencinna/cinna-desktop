@@ -33,6 +33,7 @@ import {
   type TaskUpdateInput
 } from '../../shared/tasks'
 import type { TaskStatus } from '../../shared/taskStatus'
+import type { TaskBoardColumn } from '../../shared/folderTasks'
 
 /**
  * `task:*` and `inbox:*` — one module, because the inbox is a view over tasks
@@ -93,6 +94,13 @@ function customFieldsInput(value: unknown): TaskCustomFields {
     throw new Error('Custom fields must be a set of named values.')
   }
   return { ...(value as TaskCustomFields) }
+}
+
+/** `task:set-status`'s optional word: text up to 200 characters, or nothing. */
+export function statusLabelInput(value: unknown): string | null {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'string' || value.length > 200) throw new Error('A status word must be text.')
+  return value
 }
 
 /** `task:create`, rebuilt field by field — never a spread of what the renderer sent. */
@@ -250,7 +258,7 @@ export function registerTaskHandlers(): void {
   ipcHandle('task:create', async (_event, payload: unknown): Promise<TaskDto> => {
     userActivation.requireActivated()
     const profileUserId = getProfileScopeUserId()
-    const task = taskAuthoringService.create(
+    const task = await taskAuthoringService.createRouted(
       { profileUserId, settingsUserId: getSettingsScopeUserId() }, parseTaskCreatePayload(payload))
     syncService.markDirty(profileUserId)
     return task
@@ -278,13 +286,34 @@ export function registerTaskHandlers(): void {
    * progress does not come through here; it goes through `applyRunState`, which
    * is the one path allowed to be lenient about a step the table forbids.
    */
-  ipcHandle('task:set-status', async (_event, taskId: string, status: TaskStatus) => {
+  ipcHandle('task:set-status', async (_event, taskId: string, status: TaskStatus, label?: unknown) => {
     userActivation.requireActivated()
     const userId = getProfileScopeUserId()
-    // A person's move: the remote table plus the manual overlay for unbound tasks.
-    const task = taskService.setStatus(userId, taskId, status, { manual: true })
+    // A person's move: the remote table plus the manual overlay for unbound
+    // tasks (and for a folder task, whose file keeps no table). `label` is the
+    // folder's own word for the column it was dropped on.
+    const task = await taskAuthoringService.setStatus(
+      { profileUserId: userId, settingsUserId: getSettingsScopeUserId() }, taskId, status, statusLabelInput(label))
     syncService.markDirty(userId)
     return task
+  })
+
+  /**
+   * The status columns of a bare agent's folder board, left to right: its
+   * `_board.yaml` words, then default words its files use, then unmapped
+   * words. Null when that agent's tasks are not kept in its folder.
+   */
+  ipcHandle('task:folder-board', async (_event, agentId: unknown): Promise<TaskBoardColumn[] | null> => {
+    userActivation.requireActivated()
+    if (typeof agentId !== 'string' || !agentId) throw new Error('A folder board needs an agent id.')
+    const columns = await taskSyncService.folderBoard(getProfileScopeUserId(), agentId)
+    // Rebuilt field by field: nothing beyond the four documented fields crosses.
+    return columns?.map((column) => ({
+      label: column.label,
+      category: column.category,
+      status: column.status,
+      droppable: column.droppable
+    })) ?? null
   })
 
   /**
@@ -353,13 +382,14 @@ export function registerTaskHandlers(): void {
 
   /**
    * The task page's Delete task. A task a live job run produced takes that run
-   * and its chat with it, in one transaction (`removeWithJobRun`); what was
-   * removed comes back as data, so the renderer knows which caches to drop.
+   * and its chat with it, in one transaction (`removeWithJobRun`), and a task
+   * kept in its agent's folder takes its file (`taskSyncService.removeTask`);
+   * what was removed comes back as data, so the renderer knows which caches to drop.
    */
   ipcHandle('task:delete', async (_event, taskId: string): Promise<TaskDeleteResult> => {
     userActivation.requireActivated()
     const userId = getProfileScopeUserId()
-    const result = taskService.removeWithJobRun(userId, taskId)
+    const result = await taskSyncService.removeTask(userId, taskId)
     syncService.markDirty(userId)
     return { success: true, ...result }
   })

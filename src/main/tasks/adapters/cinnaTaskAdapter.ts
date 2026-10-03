@@ -202,6 +202,8 @@ const CINNA_CAPABILITIES: RemoteTaskCapabilities = {
   subtasks: true,
   execute: true,
   asks: true,
+  handoffTarget: true,
+  transitionTable: true,
 }
 
 /** A cinna task row, as much of it as this adapter reads. */

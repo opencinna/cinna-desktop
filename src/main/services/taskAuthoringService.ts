@@ -9,6 +9,8 @@ import type {
   TaskDto,
   TaskUpdateInput
 } from '../../shared/tasks'
+import type { TaskStatus } from '../../shared/taskStatus'
+import { EMPTY_FOLDER_BOARD, folderLabelMapsTo, normalizeStatusWord } from '../../shared/folderTasks'
 
 /**
  * Tasks a **person** writes down and edits by hand — the Tasks view's New task
@@ -48,12 +50,40 @@ export const taskAuthoringService = {
    * directly.
    */
   create(scope: TaskAuthoringScope, input: TaskCreateInput): TaskDto {
+    return taskService.create(scope.profileUserId, this.prepare(scope, input).create)
+  },
+
+  /**
+   * `task:create`: the same task, written **where it lives**. A task for an
+   * enabled bare folder agent is written into that agent's `.cinna/tasks/`
+   * and bound to the file (device-local, trusted); every other task — a kit
+   * agent's, the model's, nobody's — is native, exactly as {@link create}.
+   *
+   * Async because asking which agents keep a folder queue reads the local
+   * agent index, and writing the file is the adapter's. The sync stack is
+   * imported on use: this module is also loaded where it must not pull it in.
+   */
+  async createRouted(scope: TaskAuthoringScope, input: TaskCreateInput): Promise<TaskDto> {
+    const { create, assignee } = this.prepare(scope, input)
+    if (assignee.kind === 'agent' && assignee.agentId) {
+      const { localHomeFor } = await import('../tasks/adapters')
+      const home = await localHomeFor(assignee.agentId)
+      if (home) {
+        const { taskSyncService } = await import('./taskSyncService')
+        return taskSyncService.createInHome(scope.profileUserId, home, create)
+      }
+    }
+    return taskService.create(scope.profileUserId, create)
+  },
+
+  /** Validate and default a create once, for both entry points. */
+  prepare(scope: TaskAuthoringScope, input: TaskCreateInput): { create: Parameters<typeof taskService.create>[1]; assignee: TaskAssignee } {
     const title = input.title.trim()
     if (!title) throw new TaskError('invalid_input', 'Title is required')
     const goal = input.goal?.trim() || title
     const description = input.description?.trim() || null
     const assignee = resolveAssignee(scope, input.assignee ?? null)
-    return taskService.create(scope.profileUserId, {
+    return { assignee, create: {
       title,
       goal,
       description,
@@ -66,6 +96,44 @@ export const taskAuthoringService = {
       assigneeAgentId: assignee.agentId,
       assigneeName: assignee.name,
       customFields: input.customFields
+    } }
+  },
+
+  /**
+   * `task:set-status`: a person's move, optionally in the words of the task's
+   * folder (`label`, from a folder board's column). The label must mean that
+   * status in that folder; it is then what the file gets.
+   *
+   * A task whose home keeps no transition table (a file) is judged by the
+   * manual overlay as an unbound task is — asked of its adapter's
+   * capabilities here, since `taskService` cannot import the adapters.
+   */
+  async setStatus(scope: TaskAuthoringScope, taskId: string, status: TaskStatus, label?: string | null): Promise<TaskDto> {
+    const row = taskService.getRow(scope.profileUserId, taskId)
+    let bound: boolean | undefined
+    if (row.remoteAdapter) {
+      const { adapterFor } = await import('../tasks/adapters')
+      bound = adapterFor(row.remoteAdapter).capabilities().transitionTable
+    }
+    let word: string | undefined
+    if (label !== undefined && label !== null) {
+      word = label.trim()
+      if (!row.deviceLocal || !row.assigneeAgentId || !word) {
+        throw new TaskError('invalid_input', 'Only a task kept in its agent’s folder takes a status word.')
+      }
+      const { taskSyncService } = await import('./taskSyncService')
+      const columns = (await taskSyncService.folderBoard(scope.profileUserId, row.assigneeAgentId)) ?? []
+      const normalized = normalizeStatusWord(word)
+      const column = columns.find((candidate) => normalizeStatusWord(candidate.label) === normalized)
+      const fits = column
+        ? column.category !== null && column.status === status
+        : folderLabelMapsTo(word, status, EMPTY_FOLDER_BOARD)
+      if (!fits) throw new TaskError('invalid_input', `“${word.slice(0, 64)}” is not a ${status.replace(/_/g, ' ')} word in this folder.`)
+    }
+    return taskService.setStatus(scope.profileUserId, taskId, status, {
+      manual: true,
+      ...(bound !== undefined ? { bound } : {}),
+      ...(word !== undefined ? { label: word } : {})
     })
   },
 

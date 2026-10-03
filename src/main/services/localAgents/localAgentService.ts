@@ -542,6 +542,13 @@ export const localAgentService = {
         void import('../handoverService')
           .then(({ handoverService }) => handoverService.scanFolderNow(agentDir))
           .catch((error) => logger.warn('a handover watch scan could not run', { agentDir, error: String(error) }))
+      },
+      // A task file under `<agentDir>/.cinna/tasks/` changed: ask the task
+      // sync for a pass now. The folder adapter's pull does the reading.
+      onTasks: (_root, agentDir) => {
+        void import('../taskSyncScheduler')
+          .then(({ taskSyncScheduler }) => taskSyncScheduler.refresh())
+          .catch((error) => logger.warn('a task sync after a watch event could not run', { agentDir, error: String(error) }))
       }
     })
     logger.info('local agents configured')
