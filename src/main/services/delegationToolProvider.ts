@@ -51,7 +51,7 @@ const schemas: Record<string, ToolSchema> = {
     description: [
       'Create a task. Without an assignee (or with yourself) it goes into your own queue: status backlog (default) or ready; parent is one of your own tasks.',
       'For a bare folder agent that queue is the Markdown files in .cinna/tasks/ of your folder, which you may also create and edit directly (frontmatter title, status, priority; status words such as todo, ready, doing, review, done).',
-      'With an assignee from handover_targets it delegates the work: id is required and makes the call idempotent, description is the brief, and status draft is for bare folders only.',
+      'With an assignee from handover_targets it delegates the work: id is required and makes the call idempotent, description is the brief, and status draft, priority and custom_fields are for bare folders only.',
       'A delegation returns immediately; end your turn and Cinna will wake you with the result. For a bare folder, writing the brief.md directly is also fine.'
     ].join(' '),
     properties: {

@@ -139,12 +139,12 @@ afterEach(async () => {
 })
 
 describe('task_create into the agent’s own queue', () => {
-  it('makes a native task for a kit agent, assigned to it, with the agent, the chat and depth 0 recorded', async () => {
+  it('makes a native task for a kit agent, assigned to it, with the agent, the chat and depth 1 recorded', async () => {
     const kit = session('kit-1')
     const created = await taskToolService.taskCreate(kit, { title: 'Write docs', description: 'The upload docs.', status: 'ready', priority: 'high' }) as { id: string; file: string | null }
     const row = taskRepo.getById(USER, created.id)!
     expect(row).toMatchObject({ title: 'Write docs', description: 'The upload docs.', status: 'open', priority: 'high',
-      assigneeAgentId: 'kit-1', createdByAgentId: 'kit-1', createdByChatId: kit.chatId, chainDepth: 0, deviceLocal: false, remoteAdapter: null })
+      assigneeAgentId: 'kit-1', createdByAgentId: 'kit-1', createdByChatId: kit.chatId, chainDepth: 1, deviceLocal: false, remoteAdapter: null })
     expect(created.file).toBeNull()
     expect(holder.delegate).not.toHaveBeenCalled()
     // Backlog is the default.
@@ -190,6 +190,12 @@ describe('task_create into the agent’s own queue', () => {
 })
 
 describe('chain depth and the per-chat cap', () => {
+  it('starts an own-queue task from a chat with no task at depth 1, like a delegation from it', async () => {
+    const plainChat = session('kit-1')
+    const first = await taskToolService.taskCreate(plainChat, { title: 'First', description: 'F.' }) as { id: string }
+    expect(taskRepo.getById(USER, first.id)?.chainDepth).toBe(1)
+  })
+
   it('puts a task one deeper than the chat’s own task, and refuses past depth 2', async () => {
     const atOne = session('kit-1', { chainDepth: 1 })
     const created = await taskToolService.taskCreate(atOne, { title: 'Deeper', description: 'D.' }) as { id: string }
@@ -274,10 +280,19 @@ describe('task_create with an assignee is the old handover_create', () => {
     expect(() => options.beforeNew()).toThrow(`${TASK_TOOL_CHAT_CAP} tasks`)
   })
 
-  it('refuses own-queue fields on a delegation', async () => {
-    await expect(taskToolService.taskCreate(session('kit-1'), { title: 'X', description: 'Y', assignee: { kind: 'kit', agentId: 'kit-2' }, id: 'x-1', priority: 'high' }))
+  it('refuses a parent on a delegation', async () => {
+    await expect(taskToolService.taskCreate(session('kit-1'), { title: 'X', description: 'Y', assignee: { kind: 'kit', agentId: 'kit-2' }, id: 'x-1', parent: 'p-1' }))
       .rejects.toThrow('own queue')
     expect(holder.delegate).not.toHaveBeenCalled()
+  })
+
+  it('hands priority and custom fields to the delegation, which puts them in a bare brief', async () => {
+    await taskToolService.taskCreate(session('kit-1'), {
+      title: 'X', description: 'Y', assignee: { kind: 'bare', agentId: 'bare-2' }, id: 'x-1', priority: 'high', custom_fields: { estimate: 3 }
+    })
+    expect(holder.delegate).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ priority: 'high', customFields: { estimate: 3 } }), undefined, expect.anything())
+    await expect(taskToolService.taskCreate(session('kit-1'), { title: 'X', description: 'Y', assignee: { kind: 'bare', agentId: 'bare-2' }, id: 'x-2', priority: 'soon' }))
+      .rejects.toThrow('Choose a priority')
   })
 })
 

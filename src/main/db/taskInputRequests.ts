@@ -1,5 +1,5 @@
 import { redactingRepository } from '../security/serviceCredentialRedaction'
-import { and, desc, eq, isNull, or } from 'drizzle-orm'
+import { and, asc, desc, eq, isNotNull, isNull, or } from 'drizzle-orm'
 import { getDb } from './client'
 import { taskInputRequests, tasks } from './schema'
 import type { InputRequest, InputResumeMode } from '../../shared/runEvents'
@@ -83,7 +83,10 @@ const rawTaskInputRequestRepo = {
       status: 'open',
       resolution: null,
       createdAt: new Date(),
-      resolvedAt: null
+      resolvedAt: null,
+      queuedAnswer: null,
+      queuedAt: null,
+      queuedError: null
     }
     getDb()
       .insert(taskInputRequests)
@@ -118,7 +121,9 @@ const rawTaskInputRequestRepo = {
   ): TaskInputRequestRow | undefined {
     const result = getDb()
       .update(taskInputRequests)
-      .set({ status, resolution, resolvedAt: new Date() })
+      // A settled ask has nothing left to send: an answer stored for the queue
+      // is superseded by whatever settled it (a typed message, an expiry).
+      .set({ status, resolution, resolvedAt: new Date(), queuedAnswer: null, queuedAt: null })
       .where(and(eq(taskInputRequests.id, requestId), eq(taskInputRequests.status, 'open'),
         scope ? eq(taskInputRequests.chatId, scope.chatId) : undefined,
         scope ? scope.rootRunId ? eq(taskInputRequests.rootRunId, scope.rootRunId) : isNull(taskInputRequests.rootRunId) : undefined,
@@ -159,6 +164,42 @@ const rawTaskInputRequestRepo = {
       if (!saved) throw new Error('The request is no longer open.')
       updateTask(current.taskId)
     })
+  },
+
+  /**
+   * Store the answer to an open ask for the task dispatcher to send
+   * (`queued_answer`), clearing an earlier send error. False when the ask is no
+   * longer open, or already holds an answer waiting to be sent.
+   */
+  queueAnswer(requestId: string, content: string): boolean {
+    return getDb().update(taskInputRequests)
+      .set({ queuedAnswer: content, queuedAt: new Date(), queuedError: null })
+      .where(and(eq(taskInputRequests.id, requestId), eq(taskInputRequests.status, 'open'), isNull(taskInputRequests.queuedAnswer)))
+      .run().changes > 0
+  },
+
+  /**
+   * Drop a stored answer that could not be sent, saying why on the ask (null:
+   * say nothing). Only the answer stored at `queuedAt`, so a newer one stays.
+   */
+  dropQueuedAnswer(requestId: string, queuedAt: Date, error: string | null): boolean {
+    return getDb().update(taskInputRequests)
+      .set({ queuedAnswer: null, queuedAt: null, queuedError: error })
+      .where(and(eq(taskInputRequests.id, requestId), eq(taskInputRequests.queuedAt, queuedAt)))
+      .run().changes > 0
+  },
+
+  /** Open asks of this profile holding an answer the dispatcher has yet to send, oldest answer first. */
+  listQueued(userId: string): TaskInputRequestRow[] {
+    return getDb()
+      .select({ row: taskInputRequests })
+      .from(taskInputRequests)
+      .innerJoin(tasks, eq(tasks.id, taskInputRequests.taskId))
+      .where(and(eq(tasks.userId, userId), isNull(tasks.deletedAt), eq(taskInputRequests.status, 'open'),
+        isNotNull(taskInputRequests.queuedAnswer)))
+      .orderBy(asc(taskInputRequests.queuedAt))
+      .all()
+      .map(({ row }) => row)
   },
 
   /** Every ask this profile is waiting on, newest first. The inbox. */

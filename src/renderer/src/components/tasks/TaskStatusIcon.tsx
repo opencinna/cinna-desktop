@@ -29,7 +29,7 @@ import {
  * ## It says nothing to a screen reader, deliberately
  *
  * `aria-hidden`, because the row's own accessible name already ends in the
- * status word (`RecentTasks`). Letting the icon announce itself too would read
+ * status word (`TaskRow`). Letting the icon announce itself too would read
  * the status twice, and letting it announce *instead* would trade a word for a
  * shape — which is the trade this component makes for the eye and must not make
  * for the ear.

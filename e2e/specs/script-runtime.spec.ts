@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs'
 import { test, expect, type CinnaApp } from '../fixtures/app'
+import { openRecentTasks } from '../fixtures/tasksView'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine } from '../fixtures/scriptAcpEngine'
 import { splitTurnHeader } from '../fixtures/turnHeader'
@@ -95,8 +96,7 @@ async function openInbox(cinna: CinnaApp) {
   await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
 }
 async function openTask(cinna: CinnaApp) {
-  await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
-  await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true }).getByRole('button', { name: TITLE }).click()
+  await (await openRecentTasks(cinna.page)).getByRole('button', { name: TITLE }).click()
 }
 async function verifyCompleted(cinna: CinnaApp, fake: ScriptAcpEngine, jobId: string, taskId: string, chatId: string, summary: string, turns: number) {
   await expect.poll(() => cinna.page.evaluate((id) => window.api.tasks.get(id), taskId))

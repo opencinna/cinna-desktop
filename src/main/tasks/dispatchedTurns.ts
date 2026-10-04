@@ -11,7 +11,7 @@
  * once the dispatcher has settled it.
  *
  * In memory: a turn Cinna quit under is found at boot through the dispatcher's
- * persisted `active_task_id` instead.
+ * persisted runs in flight (`agent_task_dispatch_runs`) instead.
  */
 const dispatched = new Set<string>()
 
@@ -66,4 +66,20 @@ export function settleDispatchOwnedTurn(end: DispatchOwnedTurnEnd): boolean {
   if (!ownedTurnSettler) return false
   ownedTurnSettler(end)
   return true
+}
+
+/**
+ * Wake the dispatcher: an Inbox answer was stored for its queue to send
+ * (`task_input_requests.queued_answer`). Registered by the dispatcher, for the
+ * same import-cycle reason as {@link setDispatchOwnedTurnSettler}; a no-op
+ * until it is, and the answer waits for the next pass (its tick) anyway.
+ */
+let dispatchWake: (() => void) | null = null
+
+export function setDispatchWake(wake: (() => void) | null): void {
+  dispatchWake = wake
+}
+
+export function wakeDispatcher(): void {
+  dispatchWake?.()
 }

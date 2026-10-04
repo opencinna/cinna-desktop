@@ -307,24 +307,42 @@ export const CATEGORY_DROP_STATUS: Partial<Record<TaskStatusCategory, TaskStatus
 export const MANUAL_TARGET_STATUSES: readonly TaskStatus[] = ['new', 'open', 'completed']
 
 /**
- * Can a person move a task **out of** this status at all? Only from a user
- * column: Backlog, Ready or Done. In progress and Waiting belong to a run or a
- * question, and closing one by hand would settle a run that is still working.
+ * How a manual move is judged. `bound`: the task's remote keeps a transition
+ * table. `flagged`: a `blocked` task the dispatcher left with a note
+ * (`TaskDto.dispatchNote`) and nothing holds — no open ask, so no one is
+ * waiting on an answer. Main also refuses while a runtime owns the task or a
+ * turn is live in its chat, which this module cannot see.
  */
-export function isManualSource(from: TaskStatus): boolean {
+export interface ManualMoveOptions {
+  bound: boolean
+  flagged?: boolean
+}
+
+/**
+ * Can a person move a task **out of** this status at all? From a user column:
+ * Backlog, Ready or Done. In progress and Waiting belong to a run or a
+ * question, and closing one by hand would settle a run that is still working —
+ * except a `blocked` task the dispatcher flagged, which stays where it is until
+ * the user moves it.
+ */
+export function isManualSource(from: TaskStatus, opts: { flagged?: boolean } = {}): boolean {
+  if (from === 'blocked' && opts.flagged) return true
   const category = taskStatusCategory(from)
   return category === 'backlog' || category === 'ready' || category === 'closed'
 }
 
 /**
  * Is `from → to` a move a person may make — the status half of the rule
- * `task:set-status` applies? From a user column, to a user column or
- * `cancelled`, along {@link canTransitionManually}. Main adds what this cannot
- * see: a runtime that owns the task and a run live in its chat.
+ * `task:set-status` applies? From a user column (or a flagged task), to a user
+ * column or `cancelled`, along {@link canTransitionManually}. Main adds what
+ * this cannot see: a runtime that owns the task and a run live in its chat.
  */
-export function canMoveManually(from: TaskStatus, to: TaskStatus, opts: { bound: boolean }): boolean {
-  if (!isManualSource(from)) return false
+export function canMoveManually(from: TaskStatus, to: TaskStatus, opts: ManualMoveOptions): boolean {
+  if (!isManualSource(from, opts)) return false
   if (to !== 'cancelled' && !MANUAL_TARGET_STATUSES.includes(to)) return false
+  // A flagged task: `cancelled` is in the table; the user columns are the
+  // unbound overlay, as from any other user column.
+  if (from === 'blocked') return to === 'cancelled' || !opts.bound
   return canTransitionManually(from, to, opts)
 }
 
@@ -333,6 +351,6 @@ export function canMoveManually(from: TaskStatus, to: TaskStatus, opts: { bound:
  * itself excluded — what the Edit dialog and the board offer. Empty for a task
  * a run or a question holds.
  */
-export function manualTargets(from: TaskStatus, opts: { bound: boolean }): TaskStatus[] {
+export function manualTargets(from: TaskStatus, opts: ManualMoveOptions): TaskStatus[] {
   return MANUAL_TARGET_STATUSES.filter((to) => to !== from && canMoveManually(from, to, opts))
 }

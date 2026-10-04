@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { test, expect, type CinnaApp } from '../fixtures/app'
+import { openRecentTasks } from '../fixtures/tasksView'
 
 /**
  * Tasks with no asks and no job runs must be reachable through their own UI.
@@ -116,8 +117,7 @@ test('remote work with no ask or job opens from Tasks and a delegated child open
     expect(await cinna.page.evaluate(() => window.api.tasks.list())).toEqual([])
     expect(await cinna.page.evaluate(() => window.api.jobs.list())).toEqual([])
     await linkSandboxAccount(cinna, fake.host)
-    await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
-    const taskList = cinna.page.getByRole('region', { name: 'Recent tasks', exact: true })
+    const taskList = await openRecentTasks(cinna.page)
     await expect(taskList).toBeVisible()
     const rootLink = taskList.getByRole('button', { name: ROOT_TITLE })
     await expect(rootLink).toBeVisible({ timeout: 20_000 })

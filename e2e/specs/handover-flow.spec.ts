@@ -3,6 +3,7 @@ import { basename, join } from 'node:path'
 import type { Locator } from '@playwright/test'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { seedChatTask } from '../fixtures/seed'
+import { openRecentTasks } from '../fixtures/tasksView'
 import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine } from '../fixtures/scriptAcpEngine'
 import {
   HANDOVERS_DIR,
@@ -386,8 +387,7 @@ test.describe('file handovers', () => {
     await expect(cinna.page.getByRole('article')).toHaveCount(0)
     expect(fake.calls).toEqual([])
 
-    await cinna.page
-      .getByRole('region', { name: 'Recent tasks', exact: true })
+    await (await openRecentTasks(cinna.page))
       .getByRole('button', { name: TITLE })
       .click()
     await expect(cinna.page.getByRole('heading', { level: 1 })).toHaveText(TITLE)
@@ -465,8 +465,7 @@ test.describe('file handovers', () => {
       await expect(cinna.page.getByText(`Project: ${worker}`)).toBeVisible()
     })
     await test.step('both task pages navigate the delegation independently of subtasks', async () => {
-      await openInbox(cinna)
-      await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true }).getByRole('button', { name: new RegExp(TITLE) }).click()
+      await (await openRecentTasks(cinna.page)).getByRole('button', { name: new RegExp(TITLE) }).click()
       await expect(detailValue(cinna, 'Delegated from').getByRole('button', { name: 'Coordinate delivery' })).toBeVisible()
       await cinna.page.screenshot({ path: testInfo.outputPath('delegated-task.png'), animations: 'disabled' })
       await detailValue(cinna, 'Delegated from').getByRole('button', { name: 'Coordinate delivery' }).click()

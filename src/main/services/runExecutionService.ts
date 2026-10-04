@@ -29,7 +29,7 @@ import { isDesktopAuthored, type TurnInputOrigin } from '../../shared/turnOrigin
 
 import type { RunEvent } from '../../shared/runEvents'
 import type { RunEventContext } from './inboxService'
-import { activeRunsByChat as activeChats, runClosed } from './runExecutionState'
+import { activeRunsByChat as activeChats, runClosed, runOpened } from './runExecutionState'
 import { forgetAgentStatusReports } from '../tasks/agentStatusReports'
 import { handingOffChats } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
@@ -195,6 +195,7 @@ export const runExecutionService = {
       steer: async () => 'unavailable'
     }
     activeChats.set(chatId, handle)
+    runOpened(chatId)
     forgetAgentStatusReports(chatId)
     live.accepted()
     const post = (event: RunEvent): void => {
@@ -380,6 +381,7 @@ export const runExecutionService = {
     // The IPC caller need not await acceptance, but headless callers can.
     void handle.accepted.catch(() => {})
     activeChats.set(payload.chatId, handle)
+    runOpened(payload.chatId)
     // A new turn: an earlier run's unread status report must not outlive it.
     forgetAgentStatusReports(payload.chatId)
     const finish: TurnCompletion = (result) => {

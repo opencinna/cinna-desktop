@@ -117,17 +117,20 @@ describe('the job page’s Tasks history', () => {
     return screen.getByRole('region', { name: 'Tasks history' })
   }
 
-  it('shows ten runs, then more in place, then says all are shown — as the Inbox does', () => {
+  it('shows ten runs, then the rest below an inert "All N shown" left in the Show more slot', () => {
     runsState.current = Array.from({ length: 23 }, (_, i) => ({ id: `run-${i + 1}` }))
     jobState.current = job()
     render(<JobDetail />)
     expect(within(history()).getAllByTestId('run-row')).toHaveLength(10)
     fireEvent.click(within(history()).getByRole('button', { name: 'Show more tasks' }))
-    expect(within(history()).getAllByTestId('run-row')).toHaveLength(20)
-    fireEvent.click(within(history()).getByRole('button', { name: 'Show more tasks' }))
-    expect(within(history()).getAllByTestId('run-row')).toHaveLength(23)
+    const rows = within(history()).getAllByTestId('run-row')
+    expect(rows).toHaveLength(23)
     expect(within(history()).queryByRole('button', { name: 'Show more tasks' })).toBeNull()
-    expect(within(history()).getByText('All 23 shown')).toBeTruthy()
+    // The line sits where the button was, after the first ten and before the rest,
+    // so the pointer that pressed Show more is not left on a run.
+    const line = within(history()).getByText('All 23 shown')
+    expect(rows[9].compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(line.compareDocumentPosition(rows[10]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('puts a run that starts while the page is open on top, keeping the others in place', () => {
@@ -149,7 +152,7 @@ describe('the job page’s Tasks history', () => {
     expect(within(history()).queryByRole('button', { name: 'Show more tasks' })).toBeNull()
   })
 
-  it('says there are none, flush with its heading as the Inbox’s Recent tasks is', () => {
+  it('says there are none, flush with its heading', () => {
     jobState.current = job()
     render(<JobDetail />)
     const empty = within(history()).getByText('No tasks yet')

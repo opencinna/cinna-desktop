@@ -28,7 +28,6 @@ import { createLogger } from '../logger/logger'
 import {
   canTransition,
   canMoveManually,
-  isManualOnlyTransition,
   isManualSource,
   MANUAL_TARGET_STATUSES,
   TASK_STATUS_CATEGORY_LABEL,
@@ -249,9 +248,9 @@ function manualRefusal(from: TaskStatus, to: TaskStatus, bound: boolean): string
  * lists targets with — and is worded here; the runtime and live-run checks
  * live in `setStatus`, because only main can see them.
  */
-function manualStatusRefusal(from: TaskStatus, to: TaskStatus, bound: boolean): string | null {
-  if (canMoveManually(from, to, { bound })) return null
-  if (!isManualSource(from)) {
+function manualStatusRefusal(from: TaskStatus, to: TaskStatus, bound: boolean, flagged: boolean): string | null {
+  if (canMoveManually(from, to, { bound, flagged })) return null
+  if (!isManualSource(from, { flagged })) {
     const category = taskStatusCategory(from)
     if (category === 'active') return 'This task is in progress — let its run finish it, or stop the run.'
     if (category === 'waiting') return 'This task is waiting on an answer — answer it in the Inbox, or stop the run.'
@@ -394,9 +393,9 @@ export function taskBlockers(row: Pick<TaskRow, 'userId' | 'localFile'>): TaskBl
     .filter((candidate) => candidate.localFile && dirname(candidate.localFile.path) === folder)
   return ids.map((id) => {
     const found = candidates.find((candidate) => candidate.remoteKey === id)
-    return found
-      ? { id, taskId: found.id, title: found.title, done: parseTaskStatus(found.status) === 'completed' }
-      : { id, taskId: null, title: null, done: false }
+    if (!found) return { id, taskId: null, title: null, status: null, done: false }
+    const status = parseTaskStatus(found.status)
+    return { id, taskId: found.id, title: found.title, status, done: status === 'completed' }
   })
 }
 
@@ -703,7 +702,8 @@ export const taskService = {
    * that cannot produce an illegal step. It is loud for that reason.
    *
    * `manual` is a person's move (`task:set-status`): from a user column
-   * (Backlog, Ready, Done) to a user column or `cancelled`, along the table
+   * (Backlog, Ready, Done), or a `blocked` task the dispatcher flagged with no
+   * open ask, to a user column or `cancelled`, along the table
    * plus `MANUAL_TRANSITIONS` for a task bound to no service
    * (`canMoveManually`, the rule the renderer's `manualTargets` lists from),
    * refused in category words. Also refused while a coordinator or script
@@ -743,7 +743,11 @@ export const taskService = {
     const from = parseTaskStatus(task.status)
     if (opts.manual) {
       const bound = opts.bound ?? !!task.remoteAdapter
-      const refusal = manualStatusRefusal(from, status, bound)
+      // A task the dispatcher flagged waits on no one: no ask is open for it.
+      // The runtime and live-run checks below still apply to it.
+      const flagged = from === 'blocked' && !!task.dispatchNote &&
+        taskInputRequestRepo.listOpenForTask(taskId).length === 0
+      const refusal = manualStatusRefusal(from, status, bound, flagged)
       if (refusal) {
         throw new TaskError('invalid_transition', refusal,
           `Allowed from ${from}: ${VALID_TRANSITIONS[from].join(', ') || 'nothing'}`)
@@ -758,7 +762,8 @@ export const taskService = {
         throw new TaskError('invalid_transition',
           'This task has a run going in its conversation — let the run finish it, or stop the run.')
       }
-      if (isManualOnlyTransition(from, status) && isSettled(status) && task.jobRunId) {
+      // Not in the table: a manual-only close (a flagged `blocked` → Done too).
+      if (!canTransition(from, status) && isSettled(status) && task.jobRunId) {
         const run = jobRunsRepo.getById(userId, task.jobRunId)
         if (run && (run.status === 'pending' || run.status === 'running')) {
           throw new TaskError('invalid_transition',

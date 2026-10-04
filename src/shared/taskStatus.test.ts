@@ -285,6 +285,18 @@ describe('manualTargets / canMoveManually', () => {
     }
   })
 
+  it('lets a flagged blocked task go to the user columns, and a bound one only to cancelled', () => {
+    expect(manualTargets('blocked', { bound: false, flagged: true })).toEqual(['new', 'open', 'completed'])
+    expect(canMoveManually('blocked', 'cancelled', { bound: false, flagged: true })).toBe(true)
+    expect(manualTargets('blocked', { bound: true, flagged: true })).toEqual([])
+    expect(canMoveManually('blocked', 'cancelled', { bound: true, flagged: true })).toBe(true)
+    for (const to of ['in_progress', 'error', 'archived', 'refining'] as const) {
+      expect(canMoveManually('blocked', to, { bound: false, flagged: true })).toBe(false)
+    }
+    // The flag frees only `blocked`: In progress stays held.
+    expect(manualTargets('in_progress', { bound: false, flagged: true })).toEqual([])
+  })
+
   it('agrees with manualTargets, adding only a table step to cancelled', () => {
     for (const bound of [false, true]) {
       for (const from of TASK_STATUSES) {

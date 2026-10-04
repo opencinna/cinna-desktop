@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { test, expect, type CinnaApp } from '../fixtures/app'
+import { openRecentTasks } from '../fixtures/tasksView'
 import { installConductorAcpEngine } from '../fixtures/conductorAcpEngine'
 
 const MODEL = 'qwen3:8b'
@@ -136,8 +137,7 @@ async function openInbox(cinna: CinnaApp): Promise<void> {
   await expect(cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveCount(0)
 }
 async function openTask(cinna: CinnaApp): Promise<void> {
-  await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
-  await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true }).getByRole('button', { name: GOAL }).click()
+  await (await openRecentTasks(cinna.page)).getByRole('button', { name: GOAL }).click()
 }
 async function finalTranscript(cinna: CinnaApp, chatId: string, summary: string, calls: number[]): Promise<void> {
   await openTask(cinna)

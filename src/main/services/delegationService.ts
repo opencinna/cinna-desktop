@@ -9,7 +9,8 @@ import { agentOverrideRepo } from '../db/agents'
 import {
   delegationOriginKey, isOutsideOrigin, DELEGATION_TERMINAL_STATES, type DelegationResult
 } from '../../shared/delegations'
-import { isHandoverId, MAX_HANDOVER_DEPTH, allowsAuto, HANDOVER_GATE_OPTIONS, recordedExecution } from '../../shared/handovers'
+import { isHandoverId, MAX_HANDOVER_DEPTH, allowsAuto, HANDOVER_BRIEF_KEYS, HANDOVER_GATE_OPTIONS, recordedExecution } from '../../shared/handovers'
+import { isTaskPriority, validateTaskCustomFields, type TaskCustomFields, type TaskPriority } from '../../shared/tasks'
 import type { InboxAnswerCode, InboxAnswerResult } from '../../shared/inbox'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
@@ -267,6 +268,22 @@ function refused(code: InboxAnswerCode, reason: string): InboxAnswerResult {
   return { ok: false, code, reason }
 }
 
+/**
+ * `custom_fields` for a brief: valid task custom fields whose keys the brief
+ * does not own (in any case — `Execution:` is a refusal there, not a field).
+ */
+function briefCustomFields(value: unknown): TaskCustomFields | undefined {
+  if (value === undefined || value === null) return undefined
+  const checked = validateTaskCustomFields(value)
+  if ('error' in checked) throw new Error(checked.error)
+  for (const key of Object.keys(checked.fields)) {
+    if ((HANDOVER_BRIEF_KEYS as readonly string[]).includes(key.toLowerCase())) {
+      throw new Error(`“${key}” is a brief field and cannot be a custom field.`)
+    }
+  }
+  return Object.keys(checked.fields).length > 0 ? checked.fields : undefined
+}
+
 export const delegationService = {
   async targets(session: DelegationSession, signal?: AbortSignal) {
     signal?.throwIfAborted()
@@ -343,11 +360,21 @@ export const delegationService = {
       throw new Error('Choose draft or ready status.')
     }
     const target = requireTarget(input.target)
-    if (target.kind !== 'bare' && input.status === 'draft') {
-      throw new Error('Drafts are available for bare-folder briefs only.')
+    // Drafts, and the priority and custom fields a brief carries as a task
+    // file would, exist only in a bare folder's brief; other channels have
+    // nowhere to put them.
+    if (target.kind !== 'bare' && (input.status === 'draft' || input.priority !== undefined || input.customFields !== undefined)) {
+      throw new Error(input.status === 'draft'
+        ? 'Drafts are available for bare-folder briefs only.'
+        : 'priority and custom_fields travel only in a bare-folder brief; leave them out for this target.')
     }
     const group = input.group as string | undefined
     const adapterId = target.adapter ?? null
+    if (input.priority !== undefined && !isTaskPriority(input.priority)) {
+      throw new Error('Choose a priority: low, normal, high or urgent.')
+    }
+    const priority = input.priority as TaskPriority | undefined
+    const customFields = briefCustomFields(input.customFields)
 
     const origin = originFor(session, task?.id ?? null)
     const originKey = delegationOriginKey(origin)
@@ -409,7 +436,9 @@ export const delegationService = {
           chatId: session.chatId,
           taskId: task?.id ?? null,
           depth,
-          group
+          group,
+          ...(priority ? { priority } : {}),
+          ...(customFields ? { customFields } : {})
         })
         const { handoverService } = await import('./handoverService')
         await handoverService.scanFolderNow(targetEntry.folder!)

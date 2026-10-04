@@ -593,7 +593,7 @@ describe('the tasks badge', () => {
     fireEvent.mouseEnter(badge)
     const dialog = screen.getByRole('dialog', { name: 'Tasks in this chat' })
     expect(within(dialog).getAllByRole('button', { name: /^Task \d — / })).toHaveLength(3)
-    expect(within(dialog).queryByRole('button', { name: 'Open Inbox' })).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: 'Open Tasks' })).toBeNull()
     expect(dialog.textContent).not.toContain('Showing')
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Task 2 — Done' }))
@@ -602,17 +602,19 @@ describe('the tasks badge', () => {
     expect(screen.queryByRole('dialog', { name: 'Tasks in this chat' })).toBeNull()
   })
 
-  it('shows ten rows and Open Inbox when there are more', async () => {
+  it('shows ten rows and Open Tasks when there are more', async () => {
     spies.listTasks.mockResolvedValue(Array.from({ length: 12 }, (_v, i) => task(i)))
-    useUIStore.setState({ activeView: 'chat' })
+    useUIStore.setState({ activeView: 'chat', tasksViewMode: 'board' })
     await mount()
     const badge = await screen.findByRole('button', { name: '12 tasks in this chat' })
     fireEvent.mouseEnter(badge)
     const dialog = screen.getByRole('dialog', { name: 'Tasks in this chat' })
     expect(dialog.textContent).toContain('Showing 10 of 12')
     expect(within(dialog).getAllByRole('button', { name: /^Task \d+ — / })).toHaveLength(10)
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Open Inbox' }))
-    expect(useUIStore.getState().activeView).toBe('inbox')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open Tasks' }))
+    expect(useUIStore.getState().activeView).toBe('tasks')
+    // In the Recent layout, whatever layout the Tasks view was left in.
+    expect(useUIStore.getState().tasksViewMode).toBe('recent')
   })
 
   it('hands focus back to the badge on Tab past the last row or Shift+Tab before the first', async () => {

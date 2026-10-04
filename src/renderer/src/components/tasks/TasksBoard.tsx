@@ -282,10 +282,9 @@ function BoardColumn({ spec, tasks, agents, statusOf, statusTextOf, targetsOf, d
 }): React.JSX.Element {
   const label = spec.title
   const page = spec.paged ? DONE_PAGE : ALL
-  const { ordered, visible, expanded, showMore, sectionRef } = useTaskRowsInPlace(tasks, page, '[data-tasks-scroll]')
+  const { ordered, head, rest, more, expanded, showMore } = useTaskRowsInPlace(tasks, page)
   return (
     <section
-      ref={sectionRef}
       aria-label={label}
       {...(spec.folder
         ? { 'data-folder-column': spec.folder.label, 'data-droppable': spec.folder.droppable ? 'true' : 'false' }
@@ -326,7 +325,7 @@ function BoardColumn({ spec, tasks, agents, statusOf, statusTextOf, targetsOf, d
         <span className="min-w-0 truncate" title={spec.asWritten ? label : undefined}>{label}</span>
         <span className="font-normal tabular-nums">{ordered.length}</span>
       </h2>
-      {ordered.slice(0, visible).map((task) => (
+      {head.map((task) => (
         <BoardCard
           key={task.id}
           task={task}
@@ -338,7 +337,8 @@ function BoardColumn({ spec, tasks, agents, statusOf, statusTextOf, targetsOf, d
           onMove={(next) => onMove(task, next)}
         />
       ))}
-      {ordered.length > visible ? (
+      {/* The slot keeps its line once pressed; the rest goes below it (`useTaskRowsInPlace`). */}
+      {more ? (
         <button type="button" onClick={showMore}
           className="px-1 text-left text-[13px] font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors">
           Show more tasks
@@ -346,6 +346,18 @@ function BoardColumn({ spec, tasks, agents, statusOf, statusTextOf, targetsOf, d
       ) : expanded && (
         <p className="px-1 text-[13px] text-[var(--color-text-muted)]">All {ordered.length} shown</p>
       )}
+      {rest.map((task) => (
+        <BoardCard
+          key={task.id}
+          task={task}
+          status={statusOf(task)}
+          statusText={statusTextOf(task)}
+          targets={targetsOf(task)}
+          agents={agents}
+          onDragState={onDragState}
+          onMove={(next) => onMove(task, next)}
+        />
+      ))}
     </section>
   )
 }

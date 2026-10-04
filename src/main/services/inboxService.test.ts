@@ -78,6 +78,7 @@ vi.mock('../auth/scope', () => ({ getSettingsScopeUserId: () => '__default__' })
 const { inboxService } = await import('./inboxService')
 const { taskService } = await import('./taskService')
 const { taskInputRequestRepo } = await import('../db/taskInputRequests')
+const { taskRepo } = await import('../db/tasks')
 const { jobsRepo, jobRunsRepo } = await import('../db/jobs')
 const { handoverRepo } = await import('../db/handovers')
 const { delegationRepo } = await import('../db/delegations')
@@ -1097,6 +1098,38 @@ describe('next-message continuation', () => {
     const [repeated] = taskInputRequestRepo.listOpenForChat(CHAT)
     expect(repeated).toMatchObject({ agentId: AGENT, rootRunId: 'resumed-run', invocationId: 'resumed-run:original-call', resume: 'next_message' })
     expect(taskService.getById(USER, task.id).status).toBe('blocked')
+  })
+
+  it('stores the answer for the queue that owns the task, starting nothing, and a typed message supersedes it', async () => {
+    // Mutation: drop the stored-answer branch → the answer starts a turn at once (runStart is called).
+    const task = makeTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+    taskRepo.setDispatchAgent(USER, task.id, AGENT)
+    const [entry] = await listEntries(USER)
+    // Even while the chat is still finishing: nothing starts here.
+    runBusy.mockReturnValue(true)
+    expect(await inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [['main', 'dev']] })).toEqual({ ok: true, queued: true })
+    runBusy.mockReturnValue(false)
+    expect(runStart).not.toHaveBeenCalled()
+    const [listed] = await listEntries(USER)
+    expect(listed).toMatchObject({ requestId: entry.requestId, queuedAnswer: 'main, dev' })
+    expect(listed.queuedFolder).toBeUndefined()
+    expect(taskInputRequestRepo.getById(entry.requestId)).toMatchObject({ status: 'open', queuedAnswer: 'main, dev' })
+
+    inboxService.resumeChat(ctx(), 'typed instead')
+    expect(taskInputRequestRepo.getById(entry.requestId)).toMatchObject({ status: 'answered', queuedAnswer: null, queuedAt: null })
+    expect(await listEntries(USER)).toHaveLength(0)
+  })
+
+  it('still validates an answer for an owned task before storing it', async () => {
+    const task = makeTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
+    taskRepo.setDispatchAgent(USER, task.id, AGENT)
+    const [entry] = await listEntries(USER)
+    expect(await inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [['  ']] }))
+      .toMatchObject({ ok: false, code: 'malformed' })
+    expect(taskInputRequestRepo.getById(entry.requestId)?.queuedAnswer).toBeNull()
   })
 
   it('retains the waiting ask and answer when dispatch is busy or refuses before acceptance', async () => {

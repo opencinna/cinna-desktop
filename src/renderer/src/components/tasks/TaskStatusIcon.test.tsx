@@ -4,10 +4,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { TaskStatusIcon } from './TaskStatusIcon'
 
 /**
- * The status icon at the head of a Recent tasks row.
+ * The status icon at the head of a task row.
  *
  * The mapping is the whole component, and until this file it was covered only
- * sideways, through the row names in `RecentTasks.test.tsx` — which carry the
+ * sideways, through the row names in the task list tests — which carry the
  * status *word* and would pass with every icon drawn the same grey circle. What
  * is asserted here is the component's own contract: the pill's severity
  * colours, one spinning state, a distinct shape per decided status, nothing

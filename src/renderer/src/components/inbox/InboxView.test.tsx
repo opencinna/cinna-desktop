@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type {
   AskAnswerPayload,
   InboxAnswerResult,
@@ -31,9 +31,6 @@ function snapshot(entries: InboxEntry[], unreadable: InboxUnreadableSource[] = [
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
   inbox: { list: () => listMock(), answer: (data: AskAnswerPayload) => answerMock(data) },
-  // The second half of this screen is the recent tasks; it is covered in
-  // `RecentTasks.test.tsx` and only needs to be quiet here.
-  tasks: { list: async () => [] },
   agents: {
     list: async () => [{ id: 'a1', name: 'Invoice Checker' }],
     onRemoteSyncComplete: () => () => {},
@@ -250,6 +247,60 @@ describe('InboxView', () => {
     // The button being gone is also what a vanished card looks like. Retention
     // for questions has its own way to break, so say the row is still there.
     expect(screen.getByText('Weekly digest')).toBeTruthy()
+  })
+
+  it('shows an answer waiting for the task’s queue, and when it goes, with nothing to press', async () => {
+    // Mutation: ignore `result.queued` → the row says "Answered" for an answer nothing has sent yet.
+    listMock.mockResolvedValueOnce(snapshot([{ ...QUESTION, resume: 'next_message' }]))
+      .mockResolvedValue(snapshot([{
+        ...QUESTION, resume: 'next_message', queuedAnswer: 'The first', queuedAt: new Date('2026-09-11T09:05:00Z'), queuedFolder: 'ledger'
+      }]))
+    answerMock.mockResolvedValue({ ok: true, queued: true })
+    // Mutation: resolve the ask in the chat store on any ok → an open chat would show it answered.
+    const original = useChatStore.getState().resolveInputRequest
+    const resolveInputRequest = vi.fn()
+    useChatStore.setState({ resolveInputRequest } as never)
+    onTestFinished(() => useChatStore.setState({ resolveInputRequest: original } as never))
+    renderInbox()
+    fireEvent.click(await screen.findByRole('button', { name: /^Answer$/ }))
+    fireEvent.click(await screen.findByText('The first'))
+    fireEvent.click(screen.getByRole('button', { name: /Send answer/ }))
+    // At once, before the next read: the answer as given, read-only.
+    await waitFor(() => expect(document.querySelector('[data-inbox-queued]')).not.toBeNull())
+    expect(screen.queryByText('Answered: The first.')).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Answer$/ })).toBeNull()
+    // Once main's read lands, its folder names when it goes.
+    await waitFor(() => expect(document.querySelector('[data-inbox-queued]')?.textContent).toBe('The firstSends when ledger is free.'))
+    expect(resolveInputRequest).not.toHaveBeenCalled()
+    expect(screen.getByText('Weekly digest')).toBeTruthy()
+  })
+
+  it('drops the waiting answer at the first read after it, so a send that fails twice with the same error shows it both times', async () => {
+    // Mutation: keep the waiting answer while the entry's error is unchanged
+    // (the old `priorError` rule) → the second answer sticks on "Sends when …".
+    const failed: InboxEntry = { ...QUESTION, resume: 'next_message', queuedError: 'That agent is unavailable.' }
+    listMock.mockResolvedValue(snapshot([{ ...QUESTION, resume: 'next_message' }]))
+    answerMock.mockResolvedValue({ ok: true, queued: true })
+    renderInbox()
+    for (let round = 1; round <= 2; round += 1) {
+      fireEvent.click(await screen.findByRole('button', { name: /^Answer$/ }))
+      fireEvent.click(await screen.findByText('The first'))
+      // Main stored it, the queue tried and failed: the next read says so.
+      listMock.mockResolvedValue(snapshot([failed]))
+      fireEvent.click(screen.getByRole('button', { name: /Send answer/ }))
+      await waitFor(() => expect(answerMock).toHaveBeenCalledTimes(round))
+      await waitFor(() => expect(document.querySelector('[data-inbox-queued]')).toBeNull())
+      expect(screen.getByRole('alert').textContent).toBe('Not sent: That agent is unavailable.')
+      expect(screen.getByRole('button', { name: /^Answer$/ })).toBeTruthy()
+    }
+  })
+
+  it('says why a stored answer was not sent, and offers the question again', async () => {
+    listMock.mockResolvedValue(snapshot([{ ...QUESTION, resume: 'next_message', queuedError: 'That agent is unavailable.' }]))
+    renderInbox()
+    expect((await screen.findByRole('alert')).textContent).toBe('Not sent: That agent is unavailable.')
+    expect(screen.getByRole('button', { name: /^Answer$/ })).toBeTruthy()
+    expect(document.querySelector('[data-inbox-queued]')).toBeNull()
   })
 
   it('settles a row whose ask died, rather than leaving three buttons that cannot work', async () => {

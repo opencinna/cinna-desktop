@@ -39,8 +39,10 @@ import {
   TASK_CUSTOM_FIELDS_MAX,
   TASK_CUSTOM_FIELD_STRING_MAX,
   TASK_RESERVED_FIELD_KEYS,
+  isTaskPriority,
   type TaskCustomFieldValue,
-  type TaskCustomFields
+  type TaskCustomFields,
+  type TaskPriority
 } from './tasks'
 import type { TaskStatus } from './taskStatus'
 
@@ -79,6 +81,24 @@ export type FolderTaskOwnedKey = (typeof FOLDER_TASK_OWNED_KEYS)[number]
 
 function isOwnedKey(key: string): key is FolderTaskOwnedKey {
   return (FOLDER_TASK_OWNED_KEYS as readonly string[]).includes(key)
+}
+
+/**
+ * The priority words a task file — and a handover brief, which reads the same
+ * words — understands: the four priorities, plus `medium` as normal and
+ * `critical` as urgent, matched like a status word (`High` is `high`).
+ */
+const PRIORITY_ALIASES: Record<string, TaskPriority> = { medium: 'normal', critical: 'urgent' }
+
+/**
+ * The priority a word names, or null for a word that names none (or no word).
+ * A task file reads null as `normal`; a brief refuses it.
+ */
+export function folderPriorityOf(raw: string | null | undefined): TaskPriority | null {
+  if (raw === null || raw === undefined) return null
+  const normalized = normalizeStatusWord(raw)
+  if (isTaskPriority(normalized)) return normalized
+  return PRIORITY_ALIASES[normalized] ?? null
 }
 
 /** A task file's name: `*.md`, not a dotfile. `_board.yaml` is not `.md`. */
@@ -617,11 +637,42 @@ export function parseFolderTaskFile(text: string, stem: string): ParsedFolderTas
     if (single) blockedBy = [single]
   }
 
+  const custom = customFieldsOf(doc, entries, FOLDER_TASK_OWNED_KEYS)
+
+  const { head, section, tail } = bodyParts(doc)
+  // Text after the section is the user's description too, read as one with
+  // the text before it. The comment log is not: it is Cinna's export.
+  const { before, after } = logParts(head)
+  const description = [joined(before), joined(after), joined(tail)].filter((part) => part !== '').join('\n\n')
+  const note = section.length === 0 ? '' : joined(section.slice(1, -1))
+
+  return {
+    version: version !== null && Number.isFinite(version) ? version : null,
+    id: fileId ?? stem,
+    idFromFile: fileId !== null,
+    title: textOf(lastEntry(entries, 'title')),
+    status: textOf(lastEntry(entries, 'status')),
+    priority: textOf(lastEntry(entries, 'priority')),
+    parent: textOf(lastEntry(entries, 'parent')),
+    blockedBy,
+    origin: textOf(lastEntry(entries, 'origin')),
+    custom,
+    description: description === '' ? null : description,
+    handoffNote: note === '' ? null : note
+  }
+}
+
+/**
+ * Every top-level key not in `ownKeys`, as custom fields: a one-line value is
+ * editable; a nested or over-long one is read-only text. The last line for a
+ * key wins; at most {@link TASK_CUSTOM_FIELDS_MAX}.
+ */
+function customFieldsOf(doc: Document, entries: Entry[], ownKeys: readonly string[]): FolderTaskCustomField[] {
   const custom: FolderTaskCustomField[] = []
   const customSeen = new Set<string>()
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i]
-    if (isOwnedKey(entry.key) || customSeen.has(entry.key)) continue
+    if (ownKeys.includes(entry.key) || customSeen.has(entry.key)) continue
     customSeen.add(entry.key)
     // A key the app's custom-field validator would refuse is left in the file
     // and out of the task: showing it would make every later edit of the
@@ -650,40 +701,35 @@ export function parseFolderTaskFile(text: string, stem: string): ParsedFolderTas
       custom.unshift({ key: entry.key, value, editable: true })
     }
   }
+  return custom.slice(0, TASK_CUSTOM_FIELDS_MAX)
+}
 
-  const { head, section, tail } = bodyParts(doc)
-  // Text after the section is the user's description too, read as one with
-  // the text before it. The comment log is not: it is Cinna's export.
-  const { before, after } = logParts(head)
-  const description = [joined(before), joined(after), joined(tail)].filter((part) => part !== '').join('\n\n')
-  const note = section.length === 0 ? '' : joined(section.slice(1, -1))
-
-  return {
-    version: version !== null && Number.isFinite(version) ? version : null,
-    id: fileId ?? stem,
-    idFromFile: fileId !== null,
-    title: textOf(lastEntry(entries, 'title')),
-    status: textOf(lastEntry(entries, 'status')),
-    priority: textOf(lastEntry(entries, 'priority')),
-    parent: textOf(lastEntry(entries, 'parent')),
-    blockedBy,
-    origin: textOf(lastEntry(entries, 'origin')),
-    custom: custom.slice(0, TASK_CUSTOM_FIELDS_MAX),
-    description: description === '' ? null : description,
-    handoffNote: note === '' ? null : note
-  }
+/**
+ * The custom fields of any file in the frontmatter subset, read exactly as a
+ * task file's are. A handover brief shares this reader, so a brief's extra key
+ * means on its task what the same key means in a task file. `ownKeys` are the
+ * file's own keys, never custom fields. Empty when the text has no frontmatter.
+ */
+export function frontmatterCustomFields(text: string, ownKeys: readonly string[]): FolderTaskCustomField[] {
+  const doc = toDocument(text)
+  return doc ? customFieldsOf(doc, entriesOf(doc), ownKeys) : []
 }
 
 function clip(text: string): string {
   return text.length > TASK_CUSTOM_FIELD_STRING_MAX ? `${text.slice(0, TASK_CUSTOM_FIELD_STRING_MAX - 1)}…` : text
 }
 
+/** Custom fields as a task stores them; null when there are none. */
+export function customFieldValues(custom: readonly FolderTaskCustomField[]): TaskCustomFields | null {
+  if (custom.length === 0) return null
+  const fields: TaskCustomFields = {}
+  for (const field of custom) fields[field.key] = field.value
+  return fields
+}
+
 /** The custom fields as a task stores them; null when there are none. */
 export function folderCustomFields(parsed: ParsedFolderTask): TaskCustomFields | null {
-  if (parsed.custom.length === 0) return null
-  const fields: TaskCustomFields = {}
-  for (const field of parsed.custom) fields[field.key] = field.value
-  return fields
+  return customFieldValues(parsed.custom)
 }
 
 // ---------------------------------------------------------------------------
@@ -704,7 +750,8 @@ export function formatFolderValue(value: string | number | boolean): string {
   return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 }
 
-function formatCustom(value: TaskCustomFieldValue): string {
+/** A custom field's value as one frontmatter token — a flat list as `[a, b]`, null as nothing. */
+export function formatCustom(value: TaskCustomFieldValue): string {
   if (value === null) return ''
   if (Array.isArray(value)) return `[${value.map((item) => formatFolderValue(item)).join(', ')}]`
   return formatFolderValue(value as string | number | boolean)

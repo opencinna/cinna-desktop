@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test'
 import { test, expect, type CinnaApp } from '../fixtures/app'
+import { openRecentTasks } from '../fixtures/tasksView'
 import { seedChatTask } from '../fixtures/seed'
 import { heldA2aAgent } from '../fixtures/heldA2aAgent'
 
@@ -65,9 +66,8 @@ async function seedPlainTask(cinna: CinnaApp): Promise<{ chatId: string; taskId:
   return { chatId, taskId }
 }
 
-async function openTaskFromInbox(page: Page, title: string): Promise<void> {
-  await page.getByRole('button', { name: /^Inbox/ }).click()
-  await page.getByRole('region', { name: 'Recent tasks', exact: true }).getByRole('button', { name: title }).click()
+async function openTaskFromTasks(page: Page, title: string): Promise<void> {
+  await (await openRecentTasks(page)).getByRole('button', { name: title }).click()
   await expect(page.getByRole('heading', { level: 1, name: title, exact: true })).toBeVisible()
 }
 
@@ -115,9 +115,10 @@ test('a job-run task: refused while its run goes, then deleted with its run and 
       const page = cinna.page
       await page.getByRole('button', { name: 'More actions', exact: true }).click()
       const items = taskMenu(page).getByRole('menuitem')
-      await expect(items).toHaveCount(2)
+      await expect(items).toHaveCount(3)
       await expect(items.nth(0)).toHaveAccessibleName('Show in the Chats list')
-      await expect(items.nth(1)).toHaveAccessibleName('Delete task…')
+      await expect(items.nth(1)).toHaveAccessibleName('Edit task…')
+      await expect(items.nth(2)).toHaveAccessibleName('Delete task…')
       await expect(taskMenu(page).getByRole('menuitem', { name: 'Open on the server' })).toHaveCount(0)
       // The trigger toggles it shut again.
       await page.getByRole('button', { name: 'More actions', exact: true }).click()
@@ -188,7 +189,7 @@ test('a task not created by a job: the dialog says its chat stays, and it does',
   const { chatId, taskId } = await seedPlainTask(cinna)
   await cinna.relaunch()
   await cinna.skipOnboarding()
-  await openTaskFromInbox(cinna.page, PLAIN_TITLE)
+  await openTaskFromTasks(cinna.page, PLAIN_TITLE)
 
   const dialog = await openDeleteDialog(cinna.page)
   await expect(dialog.locator('p')).toHaveText(
@@ -196,11 +197,11 @@ test('a task not created by a job: the dialog says its chat stays, and it does',
   )
   await dialog.getByRole('button', { name: 'Delete', exact: true }).click()
   await expect(dialog).toHaveCount(0)
-  // No job to go back to: the page goes back to the Inbox.
-  await expect(cinna.page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
-  await expect(
-    cinna.page.getByRole('region', { name: 'Recent tasks', exact: true }).getByRole('button', { name: PLAIN_TITLE })
-  ).toHaveCount(0)
+  // Opened from Tasks, with no job: the page goes back to Tasks, still on Recent.
+  await expect(cinna.page.getByRole('heading', { level: 1, name: 'Tasks', exact: true })).toBeVisible()
+  // It was the only task, so Recent has nothing left to list.
+  await expect(cinna.page.getByText('No tasks yet.', { exact: true })).toBeVisible()
+  await expect(cinna.page.getByRole('button', { name: PLAIN_TITLE })).toHaveCount(0)
   const after = await cinna.page.evaluate(
     async ({ taskId, chatId }) => {
       const chat = await window.api.chat.get(chatId)
@@ -228,7 +229,7 @@ test('a delete that fails keeps the dialog open with the reason, and Delete does
       throw new Error(reason)
     })
   }, REASON)
-  await openTaskFromInbox(cinna.page, PLAIN_TITLE)
+  await openTaskFromTasks(cinna.page, PLAIN_TITLE)
 
   const dialog = await openDeleteDialog(cinna.page)
   const del = dialog.getByRole('button', { name: 'Delete', exact: true })

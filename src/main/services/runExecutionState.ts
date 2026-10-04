@@ -4,6 +4,23 @@ import type { RunHandle } from './runExecutionService'
 export const activeRunsByChat = new Map<string, RunHandle>()
 
 const closedListeners = new Set<(chatId: string) => void>()
+const openedListeners = new Set<(chatId: string) => void>()
+
+/**
+ * Told the chat id each time a main-owned turn takes a chat. The task
+ * dispatcher re-reads its queues on it: a turn in a folder is what its
+ * "waiting on a conversation" state reports. A listener that throws is ignored.
+ */
+export function onRunOpened(listener: (chatId: string) => void): () => void {
+  openedListeners.add(listener)
+  return () => { openedListeners.delete(listener) }
+}
+
+export function runOpened(chatId: string): void {
+  for (const listener of [...openedListeners]) {
+    try { listener(chatId) } catch { /* a listener's failure is its own */ }
+  }
+}
 
 /**
  * Told the chat id each time a main-owned turn lets go of its chat. The task

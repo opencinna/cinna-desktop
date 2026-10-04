@@ -267,6 +267,8 @@ function harness(): Harness {
           goal: input.goal,
           description: input.description ?? null,
           status: (input.status as TaskStatus) ?? 'new',
+          priority: input.priority ?? 'normal',
+          customFields: input.customFields ?? null,
           parentTaskId: (input.parentTaskId as string | null) ?? null,
           chatId: null,
           handoffNote: null,
@@ -495,6 +497,20 @@ describe('intake', () => {
     h.write('20260917-1200-retry', 'brief.md', brief(''))
     await h.service.scanAgent(SCOPE, h.agent)
     expect(h.rows.size).toBe(1)
+  })
+
+  it('gives the task the brief’s priority and its other keys as custom fields', async () => {
+    h.write('20260917-1200-retry', 'brief.md', brief('id: 20260917-1200-retry\npriority: critical\nestimate: 3\nlabels: [ui, docs]\n'))
+    await h.service.scanAgent(SCOPE, h.agent)
+    expect(h.task()).toMatchObject({ priority: 'urgent', customFields: { estimate: 3, labels: ['ui', 'docs'] } })
+  })
+
+  it('takes in no brief whose id is not its folder’s, or whose priority is no priority', async () => {
+    h.write('20260917-1200-retry', 'brief.md', brief('id: 20260917-1300-other\n'))
+    h.write('20260917-1200-later', 'brief.md', brief('priority: someday\n'))
+    await h.service.scanAgent(SCOPE, h.agent)
+    expect(h.rows.size).toBe(0)
+    expect(h.tasks.size).toBe(0)
   })
 
   it('ignores a directory whose name is not a handover id', async () => {

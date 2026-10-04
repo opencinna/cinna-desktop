@@ -33,6 +33,7 @@ const { scriptRuntimeRepo } = await import('../db/scriptRuntimes')
 const { activeRunsByChat } = await import('./runExecutionState')
 const { agentOverrideRepo } = await import('../db/agents')
 const { chatRepo } = await import('../db/chats')
+const { taskInputRequestRepo } = await import('../db/taskInputRequests')
 const { jobsRepo, jobRunsRepo } = await import('../db/jobs')
 const { COLLECTION_MAPPERS, newResolveCache } = await import('../sync/collections')
 
@@ -108,6 +109,36 @@ describe('task:create', () => {
     expect(() => taskAuthoringService.create(SCOPE, { title: 'T', customFields: { '1bad': 'x' } })).toThrow(/not a field name/)
     expect(() => taskAuthoringService.create(SCOPE, { title: 'T', customFields: { deep: { a: 1 } } as never })).toThrow(/must be text/)
     expect(taskRepo.list(USER)).toEqual([])
+  })
+})
+
+describe('task:create with a parent (Add subtask)', () => {
+  it('makes a subtask of a live parent with the same assignee', async () => {
+    const unassigned = taskAuthoringService.create(SCOPE, { title: 'Parent' })
+    const child = await taskAuthoringService.createRouted(SCOPE, { title: 'Child', parentTaskId: unassigned.id })
+    expect(child.parentTaskId).toBe(unassigned.id)
+    const agents = taskAuthoringService.create(SCOPE, { title: 'Agent parent', assignee: { kind: 'agent', agentId: 'agent-on' } })
+    const agentChild = await taskAuthoringService.createRouted(SCOPE, { title: 'Agent child', parentTaskId: agents.id, assignee: { kind: 'agent', agentId: 'agent-on' } })
+    expect(agentChild).toMatchObject({ parentTaskId: agents.id, assignee: { agentId: 'agent-on' } })
+  })
+
+  it('refuses a missing, deleted or archived parent, or another assignee, and writes nothing', async () => {
+    const parent = taskAuthoringService.create(SCOPE, { title: 'Parent', assignee: { kind: 'agent', agentId: 'agent-on' } })
+    await expect(taskAuthoringService.createRouted(SCOPE, { title: 'C', parentTaskId: 'nope', assignee: { kind: 'agent', agentId: 'agent-on' } }))
+      .rejects.toThrow('no longer exists')
+    await expect(taskAuthoringService.createRouted(SCOPE, { title: 'C', parentTaskId: parent.id }))
+      .rejects.toThrow('parent’s assignee')
+    const otherProfile = { profileUserId: 'profile-2', settingsUserId: 'settings-1' }
+    await expect(taskAuthoringService.createRouted(otherProfile, { title: 'C', parentTaskId: parent.id, assignee: { kind: 'agent', agentId: 'agent-on' } }))
+      .rejects.toThrow('no longer exists')
+    taskRepo.update(USER, parent.id, { status: 'archived' })
+    await expect(taskAuthoringService.createRouted(SCOPE, { title: 'C', parentTaskId: parent.id, assignee: { kind: 'agent', agentId: 'agent-on' } }))
+      .rejects.toThrow('archived')
+    taskRepo.update(USER, parent.id, { status: 'new' })
+    taskRepo.softDelete(USER, parent.id)
+    await expect(taskAuthoringService.createRouted(SCOPE, { title: 'C', parentTaskId: parent.id, assignee: { kind: 'agent', agentId: 'agent-on' } }))
+      .rejects.toThrow('no longer exists')
+    expect(taskRepo.list(USER).filter((row) => row.title === 'C')).toEqual([])
   })
 })
 
@@ -272,6 +303,51 @@ describe('a person moving a task by hand (setStatus manual)', () => {
       expect(taskService.getById(USER, task.id).status).toBe('open')
     } finally { activeRunsByChat.delete(chat.id) }
     expect(taskService.setStatus(USER, task.id, 'completed', { manual: true }).status).toBe('completed')
+  })
+
+  describe('a task the dispatcher flagged (blocked with a dispatch note)', () => {
+    function flagged(chatId?: string) {
+      const task = taskService.create(USER, { title: 'T', goal: 'G', status: 'in_progress', ...(chatId ? { chatId } : {}) })
+      return taskService.setStatus(USER, task.id, 'blocked', { dispatchNote: 'Ended without reporting' })
+    }
+
+    it('moves to Ready, Backlog, Done or Cancelled by hand, and the note goes', () => {
+      const ready = taskService.setStatus(USER, flagged().id, 'open', { manual: true })
+      expect(ready).toMatchObject({ status: 'open', dispatchNote: null })
+      expect(taskService.setStatus(USER, flagged().id, 'new', { manual: true }).status).toBe('new')
+      expect(taskService.setStatus(USER, flagged().id, 'completed', { manual: true }).status).toBe('completed')
+      expect(taskService.setStatus(USER, flagged().id, 'cancelled', { manual: true }).status).toBe('cancelled')
+      expect(() => taskService.setStatus(USER, flagged().id, 'in_progress', { manual: true })).toThrow(/A run puts a task in In progress/)
+    })
+
+    it('still refuses while an ask is open for it, a turn is live in its chat, or a runtime owns it', () => {
+      const asked = flagged()
+      taskInputRequestRepo.open({
+        requestId: 'ask-1', taskId: asked.id, chatId: 'chat-x', agentId: null, deliveryOwner: 'handover',
+        request: { kind: 'question', questions: [{ question: 'Go?', multiSelect: false, options: [{ label: 'Go' }] }] },
+        resume: 'reply'
+      })
+      expect(() => taskService.setStatus(USER, asked.id, 'open', { manual: true })).toThrow(/waiting on an answer/)
+
+      const chat = chatRepo.create(USER, { title: 'Chat' })
+      const live = flagged(chat.id)
+      activeRunsByChat.set(chat.id, { id: 'run-1' } as never)
+      try {
+        expect(() => taskService.setStatus(USER, live.id, 'open', { manual: true })).toThrow(/has a run going/)
+      } finally { activeRunsByChat.delete(chat.id) }
+
+      const owned = flagged()
+      taskRuntimeRepo.save(USER, owned.id, { state: 'running' } as never)
+      expect(() => taskService.setStatus(USER, owned.id, 'open', { manual: true })).toThrow(/run by its runtime/)
+      for (const task of [asked, live, owned]) expect(taskService.getById(USER, task.id).status).toBe('blocked')
+    })
+
+    it('keeps a bound flagged task to the table: Cancelled, not Ready', () => {
+      const task = flagged()
+      taskService.bindRemote(USER, task.id, { adapter: 'fake', id: 'r1', key: null, url: null, state: {} })
+      expect(() => taskService.setStatus(USER, task.id, 'open', { manual: true })).toThrow(/connected service/)
+      expect(taskService.setStatus(USER, task.id, 'cancelled', { manual: true }).status).toBe('cancelled')
+    })
   })
 
   it('refuses an unbound task a move nothing allows, without raw status words', () => {

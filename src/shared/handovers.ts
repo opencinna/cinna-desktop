@@ -20,8 +20,9 @@
  * the kit contract, but it is a main-process module and the renderer cannot
  * import it). The subset here is deliberately smaller than miniYaml's: flat
  * `key: value` scalars, the one nested `origin:` map, and `artifacts:` as a
- * block list. Anything else in the frontmatter is ignored, so a newer writer's
- * extra keys do not make an old build refuse the file.
+ * block list. Any other key in a brief becomes a custom field of its task (read
+ * by the task-file reader in `folderTasks.ts`); in a report it is ignored. Either
+ * way a newer writer's extra keys do not make an old build refuse the file.
  *
  * Cinna reads this tree and never writes it (`drafts/file_handovers` §3.2,
  * §4.3): every desktop-side fact — task id, run state, refusal reason — has a
@@ -30,6 +31,8 @@
 
 import type { InputQuestion } from './runEvents'
 import { parseScalar, splitFrontmatter, splitKey, unquote, type FrontmatterScalar } from './frontmatter'
+import { customFieldValues, folderPriorityOf, frontmatterCustomFields } from './folderTasks'
+import type { TaskCustomFields, TaskPriority } from './tasks'
 
 /** Marker *and* schema version: `cinna_handover: 1`. Without it, the folder is not a handover. */
 export const HANDOVER_SCHEMA_VERSION = 1
@@ -166,9 +169,34 @@ export interface HandoverBrief {
   depth: number
   /** Fan-out group id (phase 4); `null` when absent. */
   group: string | null
+  /** The task's priority, in the task-file words (`folderPriorityOf`); `null` when absent. */
+  priority: TaskPriority | null
+  /**
+   * Every other top-level key, as the created task's custom fields — read by
+   * the task-file reader, so a nested value is read-only text there too.
+   * `null` when there are none.
+   */
+  customFields: TaskCustomFields | null
   /** The markdown after the frontmatter, trimmed at the ends and otherwise verbatim. */
   body: string
 }
+
+/**
+ * A brief's own keys — never a custom field of its task. `id`, when present,
+ * must be the handover folder's name; it is there so a brief reads like a task
+ * file, not to choose anything.
+ */
+export const HANDOVER_BRIEF_KEYS = [
+  'cinna_handover',
+  'id',
+  'title',
+  'status',
+  'execution',
+  'priority',
+  'origin',
+  'depth',
+  'group'
+] as const
 
 /**
  * A `revisions/NNN.md` — the requester coming back with more to say.
@@ -208,6 +236,8 @@ export type HandoverParseReason =
   | 'bad_schema_version'
   | 'bad_status'
   | 'bad_execution'
+  | 'bad_priority'
+  | 'bad_id'
   | 'bad_depth'
   | 'bad_title'
   | 'bad_origin'
@@ -416,8 +446,14 @@ function readOrigin(fm: Frontmatter): { ok: true; origin: HandoverOrigin | null 
  *
  * A depth over the cap parses fine. Refusing it is intake's decision (it wants
  * to record the row and show a reason), so ask {@link isDepthAllowed}.
+ *
+ * `priority` takes exactly the task-file words, and any other one is
+ * `bad_priority` — a brief asking for `urgnet` should be fixed, not run as
+ * normal. An `id` must equal `handoverId`, the folder's name, when the caller
+ * names it (`bad_id`). Every key not in {@link HANDOVER_BRIEF_KEYS} becomes a
+ * custom field of the task, read by the task-file reader.
  */
-export function parseHandoverBrief(text: string): HandoverBriefParseResult {
+export function parseHandoverBrief(text: string, options: { handoverId?: string } = {}): HandoverBriefParseResult {
   const split = splitFrontmatter(text)
   if (!split) return fail('no_frontmatter')
   const fm = parseFrontmatter(split.lines, split.body)
@@ -459,6 +495,17 @@ export function parseHandoverBrief(text: string): HandoverBriefParseResult {
   const group = rawGroup === undefined ? null : asText(rawGroup)
   if (rawGroup !== undefined && !isHandoverId(group)) return fail('bad_group', group ?? '')
 
+  const rawPriority = fm.scalars.get('priority')
+  const priorityText = rawPriority === undefined ? null : (asText(rawPriority) ?? '')
+  const priority = priorityText === null ? null : folderPriorityOf(priorityText)
+  if (priorityText !== null && priority === null) return fail('bad_priority', priorityText)
+
+  const rawId = fm.scalars.get('id')
+  if (rawId !== undefined) {
+    const id = asText(rawId) ?? ''
+    if (!isHandoverId(id) || (options.handoverId !== undefined && id !== options.handoverId)) return fail('bad_id', id)
+  }
+
   return {
     ok: true,
     brief: {
@@ -468,6 +515,8 @@ export function parseHandoverBrief(text: string): HandoverBriefParseResult {
       origin: origin.origin,
       depth,
       group,
+      priority,
+      customFields: customFieldValues(frontmatterCustomFields(text, HANDOVER_BRIEF_KEYS)),
       body: fm.body
     }
   }

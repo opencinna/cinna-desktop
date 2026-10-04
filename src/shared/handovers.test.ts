@@ -63,7 +63,8 @@ describe('parseHandoverBrief — the happy path', () => {
           '  task: task_456',
           'depth: 2',
           'group: release-cut',
-          'unknown_key: ignored'
+          'priority: high',
+          'unknown_key: kept'
         ].join('\n'),
         'Retry the 5xx path.\n\nTwo tests, please.'
       )
@@ -81,6 +82,8 @@ describe('parseHandoverBrief — the happy path', () => {
       },
       depth: 2,
       group: 'release-cut',
+      priority: 'high',
+      customFields: { unknown_key: 'kept' },
       body: 'Retry the 5xx path.\n\nTwo tests, please.'
     })
     expect(isReadyBrief(result)).toBe(true)
@@ -95,6 +98,59 @@ describe('parseHandoverBrief — the happy path', () => {
     expect(result.brief.depth).toBe(1)
     expect(result.brief.origin).toBeNull()
     expect(result.brief.group).toBeNull()
+    expect(result.brief.priority).toBeNull()
+    expect(result.brief.customFields).toBeNull()
+  })
+
+  it('reads priority in exactly the task-file words', () => {
+    const cases: [string, string][] = [
+      ['low', 'low'], ['normal', 'normal'], ['high', 'high'], ['urgent', 'urgent'],
+      ['medium', 'normal'], ['critical', 'urgent'], ['High', 'high'], ['"urgent"', 'urgent']
+    ]
+    for (const [word, priority] of cases) {
+      const result = parseHandoverBrief(brief(`${READY}\npriority: ${word}`))
+      expect(result.ok ? result.brief.priority : result.reason).toBe(priority)
+    }
+  })
+
+  it('accepts an id that is the folder name, and an id when the folder is not named', () => {
+    const text = brief(`${READY}\nid: 20260917-1430-add-retry`)
+    expect(reasonOf(parseHandoverBrief(text, { handoverId: '20260917-1430-add-retry' }))).toBe('ok')
+    expect(reasonOf(parseHandoverBrief(text))).toBe('ok')
+  })
+
+  it('reads every other key as a custom field, the way a task file reads it', () => {
+    const result = parseHandoverBrief(
+      brief(
+        [
+          READY,
+          'id: add-retry',
+          'estimate: 3',
+          'area: "billing: EU"',
+          'urgent_fix: true',
+          'labels: [ui, docs]',
+          'meta:',
+          '  owner: ana',
+          '  team: core',
+          'goal: reserved',
+          '9bad: refused key',
+          'origin:',
+          '  agent: a1'
+        ].join('\n')
+      ),
+      { handoverId: 'add-retry' }
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // Brief keys (`id`, `origin`…) and keys a task cannot hold are not fields;
+    // a nested value is its text, as in a task file.
+    expect(result.brief.customFields).toEqual({
+      estimate: 3,
+      area: 'billing: EU',
+      urgent_fix: true,
+      labels: ['ui', 'docs'],
+      meta: 'owner: ana\nteam: core'
+    })
   })
 
   it('accepts single- and double-quoted values', () => {
@@ -176,12 +232,17 @@ describe('parseHandoverBrief — the reject matrix', () => {
     ['an empty origin value', brief(`${READY}\norigin:\n  chat:`), 'bad_origin'],
     ['an inline origin', brief(`${READY}\norigin: agent-1`), 'bad_origin'],
     ['an uppercase group', brief(`${READY}\ngroup: Release-Cut`), 'bad_group'],
-    ['an empty group', brief(`${READY}\ngroup:`), 'bad_group']
+    ['an empty group', brief(`${READY}\ngroup:`), 'bad_group'],
+    ['an unknown priority word', brief(`${READY}\npriority: urgnet`), 'bad_priority'],
+    ['a numeric priority', brief(`${READY}\npriority: 1`), 'bad_priority'],
+    ['an empty priority', brief(`${READY}\npriority:`), 'bad_priority'],
+    ['an id that is not the folder name', brief(`${READY}\nid: another-brief`), 'bad_id'],
+    ['an empty id', brief(`${READY}\nid:`), 'bad_id']
   ]
 
   for (const [label, text, reason] of rows) {
     it(`rejects ${label} with ${reason}`, () => {
-      expect(reasonOf(parseHandoverBrief(text))).toBe(reason)
+      expect(reasonOf(parseHandoverBrief(text, { handoverId: 'add-retry' }))).toBe(reason)
     })
   }
 

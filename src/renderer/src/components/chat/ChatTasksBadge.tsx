@@ -7,7 +7,7 @@ import { TaskRow } from '../tasks/TaskRow'
 import { useHoverPopover } from '../ui/useHoverPopover'
 import { metaBadgeClass, metaCountClass, metaPopoverClass } from './SessionActivityBadges'
 
-/** Rows in the popover; the rest are one click away in the Inbox. */
+/** Rows in the popover; the rest are one click away in the Tasks view. */
 const MAX_ROWS = 10
 
 export function tasksLabel(count: number): string {
@@ -18,20 +18,22 @@ export function tasksLabel(count: number): string {
  * The chat's root tasks, under the composer. Shown once the chat has one.
  *
  * The rows are `TaskRow` at the composer's chrome scale; a row opens its task.
- * More than ten, and the popover ends in **Open Inbox**, where `RecentTasks`
- * pages through all of them.
+ * More than ten, and the popover ends in **Open Tasks**, the Tasks view in its
+ * Recent layout — newest first, as the popover lists them — where all of them
+ * are listed.
  */
 export function ChatTasksBadge({ chatId }: { chatId: string }): React.JSX.Element | null {
   const tasks = useTaskList({ chatId, rootOnly: true })
   const popover = useHoverPopover<HTMLButtonElement, HTMLDivElement>('above-right')
   const setActiveView = useUIStore((s) => s.setActiveView)
+  const setTasksViewMode = useUIStore((s) => s.setTasksViewMode)
   const rows = useMemo(() => tasks.data?.tasks ?? [], [tasks.data])
 
   /**
    * The order is taken when the popover opens and held while it is open. The
    * list is re-read every five seconds newest-first, so a task that moves while
    * the pointer is on the list would otherwise slide a different row under it
-   * (`ux_rules.md` §1) — `RecentTasks` holds its order for the same reason.
+   * (`ux_rules.md` §1) — the Tasks view's lists hold their order for the same reason.
    */
   const order = useRef<string[] | null>(null)
   if (!popover.open) order.current = null
@@ -93,11 +95,12 @@ export function ChatTasksBadge({ chatId }: { chatId: string }): React.JSX.Elemen
                 type="button"
                 onClick={() => {
                   popover.close()
-                  setActiveView('inbox')
+                  setTasksViewMode('recent')
+                  setActiveView('tasks')
                 }}
                 className="mx-3 mt-1.5 text-[11px] font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
               >
-                Open Inbox
+                Open Tasks
               </button>
             )}
           </div>,

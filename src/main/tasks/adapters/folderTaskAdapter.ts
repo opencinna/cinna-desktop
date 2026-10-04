@@ -40,8 +40,8 @@ import {
   folderTaskId,
   folderTaskSlug,
   folderWordForStatus,
+  folderPriorityOf,
   isFolderTaskFileName,
-  normalizeStatusWord,
   parseFolderBoard,
   parseFolderTaskFile,
   patchFolderTaskFile,
@@ -51,7 +51,7 @@ import {
   type FolderTaskPatch,
   type ParsedFolderTask
 } from '../../../shared/folderTasks'
-import { isTaskPriority, type TaskCustomFieldValue, type TaskCustomFields, type TaskDto, type TaskPriority } from '../../../shared/tasks'
+import { type TaskCustomFieldValue, type TaskCustomFields, type TaskDto, type TaskPriority } from '../../../shared/tasks'
 import type { TaskStatus } from '../../../shared/taskStatus'
 import { createLogger } from '../../logger/logger'
 import {
@@ -149,7 +149,7 @@ interface FolderState {
    * The digest of content Cinna vouches for: its own creation, a write onto
    * content that was already trusted, or the user's approval of outside
    * content (`localHome.trust`). Null = nothing trusted. Absent on a binding
-   * stored before this field existed, where `writtenDigest` meant the same.
+   * stored before this field existed, which trusts nothing either.
    */
   trustedDigest?: string | null
   stamp: string
@@ -246,12 +246,9 @@ function notThere(detail: string): RemoteTaskError {
   return new RemoteTaskError('unavailable', 'This task’s file could not be read.', detail)
 }
 
+/** A word no priority answers to reads as normal in a task file (a brief refuses it). */
 function priorityOf(raw: string | null): TaskPriority {
-  const normalized = raw === null ? '' : normalizeStatusWord(raw)
-  if (isTaskPriority(normalized)) return normalized
-  if (normalized === 'medium') return 'normal'
-  if (normalized === 'critical') return 'urgent'
-  return 'normal'
+  return folderPriorityOf(raw) ?? 'normal'
 }
 
 function baseOf(parsed: ParsedFolderTask): FolderBase {
@@ -270,12 +267,14 @@ function stateOf(binding: RemoteBinding): Partial<FolderState> {
   return binding.state as Partial<FolderState>
 }
 
-/** A stored state's digests; an older binding without `trustedDigest` trusted what it wrote. */
+/**
+ * A stored state's digests. A binding without `trustedDigest` (stored before
+ * the dispatcher) trusts nothing: what Cinna wrote is not what the user
+ * approved, so each such file is approved once before a queue runs it.
+ */
 function digestsOf(state: Partial<FolderState> | undefined): FolderDigests {
   const written = typeof state?.writtenDigest === 'string' ? state.writtenDigest : undefined
-  const trusted = state && 'trustedDigest' in state
-    ? (typeof state.trustedDigest === 'string' ? state.trustedDigest : undefined)
-    : written
+  const trusted = typeof state?.trustedDigest === 'string' ? state.trustedDigest : undefined
   return { written, trusted }
 }
 

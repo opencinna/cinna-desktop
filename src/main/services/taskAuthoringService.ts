@@ -1,4 +1,5 @@
 import { agentOverrideRepo } from '../db/agents'
+import { taskRepo } from '../db/tasks'
 import { agentService } from './agentService'
 import { taskService } from './taskService'
 import { TaskError } from '../errors'
@@ -74,7 +75,8 @@ export const taskAuthoringService = {
   ): Promise<TaskDto> {
     const prepared = this.prepare(scope, input)
     const { assignee } = prepared
-    const create = { ...prepared.create, ...extra }
+    const parentTaskId = input.parentTaskId === undefined ? undefined : this.checkParent(scope, input.parentTaskId, assignee)
+    const create = { ...prepared.create, ...(parentTaskId ? { parentTaskId } : {}), ...extra }
     if (assignee.kind === 'agent' && assignee.agentId) {
       const { localHomeFor } = await import('../tasks/adapters')
       const home = await localHomeFor(assignee.agentId)
@@ -84,6 +86,23 @@ export const taskAuthoringService = {
       }
     }
     return taskService.create(scope.profileUserId, create)
+  },
+
+  /**
+   * The parent a person named for a new task (Add subtask): one in this
+   * profile, not deleted or archived, with the same assignee as the new task
+   * — a subtask is the same agent's work, and a folder subtask must live in
+   * its parent's folder. Its id, or a refusal in words. One level only is
+   * `taskService.create`'s rule.
+   */
+  checkParent(scope: TaskAuthoringScope, parentTaskId: string, assignee: TaskAssignee): string {
+    const parent = taskRepo.getById(scope.profileUserId, parentTaskId)
+    if (!parent || parent.deletedAt) throw new TaskError('not_found', 'The parent task no longer exists.')
+    if (parent.status === 'archived') throw new TaskError('invalid_input', 'The parent task is archived; reopen it to add a subtask.')
+    if (parent.assigneeKind !== assignee.kind || (parent.assigneeAgentId ?? null) !== (assignee.agentId ?? null)) {
+      throw new TaskError('invalid_input', 'A subtask is assigned to its parent’s assignee.')
+    }
+    return parent.id
   },
 
   /** Validate and default a create once, for both entry points. */

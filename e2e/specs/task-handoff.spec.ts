@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { test, expect, type CinnaApp } from '../fixtures/app'
+import { openRecentTasks } from '../fixtures/tasksView'
 
 /** A row of the job page's Tasks history, found by where it stands: its accessible name ends in the status. */
 function runRow(page: CinnaApp['page'], status: string) {
@@ -209,14 +210,13 @@ async function arrangeTask(cinna: CinnaApp, fake: Awaited<ReturnType<typeof serv
   expect(fake.state.localSends).toBe(0)
   await linkSandboxAccount(cinna, fake.host)
   // The Jobs *tab* first, and not because the task is reached through it — it
-  // is on the Inbox screen now. This test later asserts the running spinner on
+  // is in the Tasks view now. This test later asserts the running spinner on
   // the job's sidebar row (`getByLabel('Running')`), which only renders while
   // that tab is the selected one, and reaching the task used to select it as a
-  // side effect. The Inbox is a tabless view, so opening it leaves the tab
+  // side effect. The Tasks view is tabless, so opening it leaves the tab
   // where this put it.
   await cinna.page.getByRole('button', { name: 'Jobs', exact: true }).click()
-  await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
-  await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true })
+  await (await openRecentTasks(cinna.page))
     .getByRole('button', { name: TITLE }).click()
   await expect(cinna.page.getByRole('heading', { name: TITLE, level: 1, exact: true })).toBeVisible()
   return { original, jobId: job.id }
@@ -279,13 +279,12 @@ test('an existing desktop task hands off once and preserves its recipient and no
     await expect(runRow(cinna.page, 'succeeded')).toBeVisible({ timeout: 20_000 })
     await expect(cinna.page.getByLabel('Running', { exact: true })).toHaveCount(0)
     // The attempt is over, so leaving the job page can no longer assist it.
-    // The task list lives on the Inbox screen now.
-    await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
+    // The task list lives in the Tasks view's Recent layout now.
+    const recent = await openRecentTasks(cinna.page)
     // The row's status is an icon, so the word is in its accessible name and
     // nowhere in its text — the name is the one place both the reader and this
     // assertion can find it.
-    await expect(cinna.page.getByRole('region', { name: 'Recent tasks', exact: true })
-      .getByRole('button', { name: TITLE })).toHaveAccessibleName(`${TITLE} — Done`)
+    await expect(recent.getByRole('button', { name: TITLE })).toHaveAccessibleName(`${TITLE} — Done`)
     expect((await cinna.page.evaluate((id) => window.api.jobs.listRuns(id), jobId))[0])
       .toMatchObject({ status: 'succeeded', taskId: original.id, localChatId: original.chatId })
     expect((await cinna.page.evaluate(() => window.api.jobs.list())).find((job) => job.id === jobId)?.inProgressRunsCount).toBe(0)

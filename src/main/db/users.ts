@@ -19,6 +19,7 @@ import {
   tasks,
   taskHandoffs,
   agentTaskDispatch,
+  agentTaskDispatchRuns,
   taskDispatchGates
 } from './schema'
 
@@ -170,6 +171,7 @@ export const userRepo = {
       // tasks only while FK enforcement is on; the per-agent rows have no FK.
       tx.delete(taskDispatchGates).where(eq(taskDispatchGates.userId, id)).run()
       tx.delete(agentTaskDispatch).where(eq(agentTaskDispatch.userId, id)).run()
+      tx.delete(agentTaskDispatchRuns).where(eq(agentTaskDispatchRuns.userId, id)).run()
       tx.delete(tasks).where(eq(tasks.userId, id)).run()
       tx.delete(jobFolders).where(eq(jobFolders.userId, id)).run()
       tx.delete(notes).where(eq(notes.userId, id)).run()

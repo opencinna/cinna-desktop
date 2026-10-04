@@ -9,14 +9,24 @@
 /**
  * How an agent's queue runs. `manual` (the default, stored as no row): nothing
  * starts on its own, Run next still works. `one`: Cinna starts the next Ready
- * task whenever the agent and its folder are free.
+ * task whenever the agent and its folder are free. `up_to`: Cinna keeps up to
+ * N of the agent's tasks running at once ({@link TASK_DISPATCH_MAX_RUNS}),
+ * without waiting for its folder to be free.
  */
-export type TaskDispatchMode = 'manual' | 'one'
+export type TaskDispatchMode = 'manual' | 'one' | 'up_to'
 
-export const TASK_DISPATCH_MODES: readonly TaskDispatchMode[] = ['manual', 'one']
+export const TASK_DISPATCH_MODES: readonly TaskDispatchMode[] = ['manual', 'one', 'up_to']
 
 export function isTaskDispatchMode(value: unknown): value is TaskDispatchMode {
   return (TASK_DISPATCH_MODES as readonly unknown[]).includes(value)
+}
+
+/** The N of `up_to`: how many of the agent's tasks may run at once. */
+export const TASK_DISPATCH_MAX_RUNS = { min: 2, max: 8, default: 2 } as const
+
+export function isTaskDispatchMaxRuns(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) &&
+    value >= TASK_DISPATCH_MAX_RUNS.min && value <= TASK_DISPATCH_MAX_RUNS.max
 }
 
 /**
@@ -33,11 +43,12 @@ export type TaskDispatchPauseReason = 'unreported' | 'error' | 'stopped' | 'inte
 export const TASK_DISPATCH_PAUSE_REASONS: readonly TaskDispatchPauseReason[] = ['unreported', 'error', 'stopped', 'interrupted']
 
 /**
- * Why a queue in `one` mode is not starting its next task right now.
+ * Why a queue in `one` or `up_to` mode is not starting its next task right now.
  *
  *  - `folder_busy` — another dispatched run (this agent's or another agent's
- *    sharing the folder) is working there.
+ *    sharing the folder) is working there. Never for an `up_to` queue.
  *  - `live_turn` — a turn that is not the dispatcher's is running in the folder.
+ *    Never for an `up_to` queue.
  *  - `slot` — waiting for a global task runner slot.
  *  - `gate` — every Ready task left waits on an Inbox approval of its content,
  *    and a card for one of them is open in the Inbox (in any mode). With no
@@ -56,7 +67,10 @@ export interface AgentDispatchState {
     /** Epoch milliseconds. */
     at: number
   }
-  running: null | { taskId: string; chatId: string; title: string }
+  /** N while the mode is `up_to`; null in the other modes (they run one at most). */
+  maxRuns: number | null
+  /** The dispatched turns running now, oldest first. One at most outside `up_to`. */
+  running: { taskId: string; chatId: string; title: string }[]
   /**
    * The task Run next would take. `needsApproval`: only tasks waiting on an
    * approval of outside content are left and no card for them is open
@@ -87,7 +101,7 @@ export type TaskDispatchRunResult =
   | { ok: true; gate: string }
   | { ok: false; code: TaskDispatchRefusalCode; message: string }
 
-/** `taskDispatch:set-mode` and `taskDispatch:resume`. */
+/** `taskDispatch:set-mode` (agent id, mode, N for `up_to`) and `taskDispatch:resume`. */
 export type TaskDispatchUpdateResult =
   | { ok: true; state: AgentDispatchState }
   | { ok: false; code: TaskDispatchRefusalCode; message: string }

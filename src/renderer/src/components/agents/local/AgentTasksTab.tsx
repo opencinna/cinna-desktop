@@ -1,14 +1,21 @@
 import { AlertTriangle, Loader2, Play } from 'lucide-react'
 import { useOpenTask } from '../../../hooks/useTasks'
 import {
+  DISPATCH_MAX_RUNS_CHOICES,
   DISPATCH_MODE_LABELS,
+  dispatchModeLabel,
   dispatchPausedParts,
   dispatchStatusParts,
   useAgentDispatch,
   useDispatchControls
 } from '../../../hooks/useTaskDispatch'
 import { unwrapIpcError } from '../../../utils/ipcError'
-import { TASK_DISPATCH_MODES, isTaskDispatchMode, type AgentDispatchState } from '../../../../../shared/taskDispatch'
+import {
+  TASK_DISPATCH_MAX_RUNS,
+  TASK_DISPATCH_MODES,
+  type AgentDispatchState,
+  type TaskDispatchMode
+} from '../../../../../shared/taskDispatch'
 import {
   SettingsButton,
   SettingsCard,
@@ -22,6 +29,26 @@ import {
 /** A task named in a status line: a link to its page, in the accent colour (§11). */
 const TASK_LINK =
   'min-w-0 truncate font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors'
+
+/**
+ * The Run mode select's choices: Manual, One at a time, then Up to N spelled
+ * out for every N ("Up to 2" … "Up to 8"), so the mode and its N are one pick.
+ */
+const RUN_MODE_CHOICES: readonly { value: string; label: string }[] = TASK_DISPATCH_MODES.flatMap((mode) =>
+  mode === 'up_to'
+    ? DISPATCH_MAX_RUNS_CHOICES.map((n) => ({ value: `up_to:${n}`, label: dispatchModeLabel('up_to', n) }))
+    : [{ value: mode, label: DISPATCH_MODE_LABELS[mode] }]
+)
+
+function runModeValue(mode: TaskDispatchMode, maxRuns: number): string {
+  return mode === 'up_to' ? `up_to:${maxRuns}` : mode
+}
+
+function parseRunModeValue(value: string): { mode: TaskDispatchMode; maxRuns?: number } | null {
+  if (value === 'manual' || value === 'one') return { mode: value }
+  const n = /^up_to:(\d+)$/.exec(value)
+  return n && DISPATCH_MAX_RUNS_CHOICES.includes(Number(n[1])) ? { mode: 'up_to', maxRuns: Number(n[1]) } : null
+}
 
 /**
  * The Tasks tab's badge: a queue that paused needs the user, and the tab is
@@ -54,7 +81,7 @@ export function AgentTasksTab({ agent }: { agent: { id: string; name: string } }
       title="Task queue"
       info={
         <SettingsInfoTip label="About the task queue">
-          Cinna works this agent’s Ready tasks one at a time, highest priority first, then oldest. A task
+          Cinna works this agent’s Ready tasks, highest priority first, then oldest. A task
           blocked by another starts only once that one is done. Run next starts the next one now, in any mode.
         </SettingsInfoTip>
       }
@@ -102,6 +129,7 @@ function QueueBody({
   const openTask = useOpenTask()
   const selectId = `task-queue-mode-${agentId}`
   const mode = controls.pendingMode ?? state.mode
+  const maxRuns = controls.pendingMaxRuns ?? state.maxRuns ?? TASK_DISPATCH_MAX_RUNS.default
   const status = dispatchStatusParts(state)
   const paused = state.paused ? dispatchPausedParts(state.paused) : null
 
@@ -117,23 +145,31 @@ function QueueBody({
                 One at a time — Cinna starts the next Ready task whenever the agent and its folder are free. Only
                 while Cinna is open.
               </p>
+              <p className="mt-1.5">
+                Up to N — Cinna keeps up to N of this agent’s tasks running at once, in the same folder, without
+                waiting for it to be free. Only for an agent whose tasks do not get in each other’s way.
+              </p>
             </>
           }
           infoLabel="About Run mode"
         >
           Run mode
         </SettingsLabel>
+        {/* One select for mode and N together: "Up to 3" is a choice of its own,
+            so nothing appears beside the select when it is picked (§1). */}
         <select
           id={selectId}
           className={settingsInputClass}
-          value={mode}
+          value={runModeValue(mode, maxRuns)}
           disabled={controls.pending === 'mode'}
           onChange={(event) => {
-            if (isTaskDispatchMode(event.target.value)) void controls.setMode(event.target.value)
+            const next = parseRunModeValue(event.target.value)
+            if (!next) return
+            void (next.mode === 'up_to' ? controls.setMode('up_to', next.maxRuns) : controls.setMode(next.mode))
           }}
         >
-          {TASK_DISPATCH_MODES.map((value) => (
-            <option key={value} value={value}>{DISPATCH_MODE_LABELS[value]}</option>
+          {RUN_MODE_CHOICES.map((choice) => (
+            <option key={choice.value} value={choice.value}>{choice.label}</option>
           ))}
         </select>
       </div>

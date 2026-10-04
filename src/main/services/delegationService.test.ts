@@ -170,6 +170,18 @@ describe('delegation bus session authority and gates', () => {
     await delegationService.create(session, { ...input, id: 'asked-work', target: { kind: 'bare', agentId: 'bare' }, execution: 'ask' })
     expect(world.file).toHaveBeenLastCalledWith(expect.objectContaining({ execution: 'ask' }))
   })
+  it('carries task_create’s priority and custom fields into a bare brief, and refuses them elsewhere', async () => {
+    const tools = new DelegationToolProvider(session, false)
+    const bare = { ...asTaskCreate({ ...input, target: { kind: 'bare', agentId: 'bare' } }), priority: 'high', custom_fields: { estimate: 3, labels: ['ui'] } }
+    await tools.callTool('task_create', bare)
+    expect(world.file).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 'high', customFields: { estimate: 3, labels: ['ui'] } }))
+    await expect(tools.callTool('task_create', { ...bare, id: 'brief-key', custom_fields: { Execution: 'auto' } })).rejects.toThrow('brief field')
+    await expect(tools.callTool('task_create', { ...bare, id: 'bad-priority', priority: 'soon' })).rejects.toThrow('priority')
+    await expect(tools.callTool('task_create', { ...asTaskCreate(input), priority: 'high' })).rejects.toThrow('bare-folder brief')
+    await expect(tools.callTool('task_create', { ...asTaskCreate(input), custom_fields: { a: 1 } })).rejects.toThrow('bare-folder brief')
+    expect(world.file).toHaveBeenCalledTimes(1)
+    expect(world.tasks.size).toBe(0)
+  })
   it('takes cloud permission from the requester and dispatches only the new task', async () => {
     world.task = { id: 'parent-task' }; world.sourceAuto = true
     await delegationService.create(session, { ...input, target: { kind: 'cloud', agentId: 'cloud-agent', adapter: 'remote' }, execution: 'auto' })

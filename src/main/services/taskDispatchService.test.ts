@@ -3,9 +3,9 @@ vi.mock('../host/runtimeHost', async () => {
   return { runtimeHost: createDesktopHost() }
 })
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
 import type { RunOutcome } from './runExecutionService'
 
@@ -32,8 +32,9 @@ vi.mock('../db/client', () => ({
 }))
 vi.mock('../db/sync', () => ({ syncRepo: { getState: () => null } }))
 
-const { createTaskDispatchService, WAKE_DEBOUNCE_MS, dispatchableAgentIds } = await import('./taskDispatchService')
-const { setDispatchableAgentsSource } = await import('./taskDispatchInbox')
+const { createTaskDispatchService, WAKE_DEBOUNCE_MS, NOT_DISPATCHABLE_ANSWER, dispatchableAgentIds } = await import('./taskDispatchService')
+const { setDispatchableAgentsSource, setDispatchFolderNamesSource } = await import('./taskDispatchInbox')
+const { agentService } = await import('./agentService')
 const { setDispatchOwnedTurnSettler } = await import('../tasks/dispatchedTurns')
 const { installTaskRunnerHooks } = await import('./taskRunnerBridge')
 const { localAgentService } = await import('./localAgents/localAgentService')
@@ -75,8 +76,16 @@ interface World {
   ignoreAbort: boolean
   /** Hand a waiting flight the slot it waits for. */
   grant: () => void
+  /** `grant` hands the slot to the newest waiter instead of the oldest (a reordered production wait). */
+  grantNewest: boolean
   refreshed: string[]
   published: (string | null)[]
+  /** Stored answers the dispatcher sent, in order. */
+  answersSent: { requestId: string; content: string }[]
+  /** Chats a turn holds now (`deps.chatRunning`). */
+  runningChats: string[]
+  /** How many times a flight asked for a runner slot. */
+  slotRequests: number
 }
 
 let world: World
@@ -107,7 +116,26 @@ function deps() {
       })
       return { chatId, runId, completed }
     },
+    /** As `inboxService.startNextMessageTurn`: the answer resumes the chat, settling the ask in acceptance. */
+    async resume(_scope: unknown, ask: { id: string; taskId: string; chatId: string; agentId: string | null }, content: string, options: {
+      onRunAccepted: (run: { chatId: string; runId: string }) => void
+    }) {
+      if (world.startError) throw new Error(world.startError)
+      const runId = `run-${world.starts.length + 1}`
+      world.answersSent.push({ requestId: ask.id, content })
+      inboxService.resumeChat({ userId: USER, chatId: ask.chatId, agentId: ask.agentId, turnId: runId, rootRunId: runId, completionOwner: 'turn' }, content)
+      options.onRunAccepted({ chatId: ask.chatId, runId })
+      let end!: (outcome: RunOutcome) => void
+      const completed = new Promise<RunOutcome>((resolve) => { end = resolve })
+      world.starts.push({
+        taskId: ask.taskId, agentId: ask.agentId ?? '', chatId: ask.chatId, runId, continueInChat: true,
+        end: (state, extra = {}) => end({ state, text: '', runId, accepted: true, inputRequestIds: [], ...extra })
+      })
+      return { chatId: ask.chatId, runId, completed }
+    },
+    chatRunning: (chatId: string) => world.runningChats.includes(chatId),
     async withSlot<T>(_agentId: string, signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+      world.slotRequests += 1
       while (world.inUse >= world.slots) {
         await new Promise<void>((resolve, reject) => {
           waiters.push(resolve)
@@ -130,14 +158,19 @@ function deps() {
     publish: (agentId: string | null) => { world.published.push(agentId) },
     grant: () => {
       world.slots += 1
-      waiters.shift()?.()
+      ;(world.grantNewest ? waiters.pop() : waiters.shift())?.()
     }
   }
 }
 
-/** Let a debounced wake and its pass run, and whatever the pass started settle. */
+/**
+ * Let a debounced wake and its pass run, and whatever the pass started settle.
+ * The clock is fake (timeouts and intervals only): the debounce fires when
+ * this advances it, never by wall time, so a slow machine cannot end the wait
+ * before the pass a wake queued has run. `setImmediate` stays real.
+ */
 async function drain(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, WAKE_DEBOUNCE_MS + 40))
+  await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS + 40)
   for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve))
 }
 
@@ -172,18 +205,26 @@ function ready(agentId: string, options: {
   return created
 }
 
+/** The agent's dispatch row with its oldest run in flight, as the single-run columns read before `up_to`. */
+function rowOf(agentId: string) {
+  const runs = agentTaskDispatchRepo.listRuns(USER, agentId)
+  return { ...agentTaskDispatchRepo.get(USER, agentId), activeTaskId: runs[0]?.taskId ?? null, activeChatId: runs[0]?.chatId ?? null, runs }
+}
+
 function statusOf(taskId: string): string | undefined {
   return taskRepo.getById(USER, taskId)?.status
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
   holder.current = createTestDatabase()
   holder.userData = mkdtempSync(join(tmpdir(), 'cinna-dispatch-ud-'))
   dir = mkdtempSync(join(tmpdir(), 'cinna-dispatch-'))
   world = {
     agents: [{ id: 'agent-a', name: 'Alpha', path: dir }],
     starts: [], live: [], slots: 2, inUse: 0, slotFree: true, startError: null,
-    refresh: null, refreshed: [], published: [], ignoreAbort: false, grant: () => {}
+    refresh: null, refreshed: [], published: [], ignoreAbort: false, grant: () => {},
+    answersSent: [], runningChats: [], slotRequests: 0, grantNewest: false
   }
   const built = deps()
   world.grant = built.grant
@@ -191,10 +232,15 @@ beforeEach(() => {
   // The production module registered its own instance; these tests drive theirs.
   setDispatchOwnedTurnSettler((end) => service.settleOwnedTurn(end))
   setDispatchableAgentsSource(async () => new Set(world.agents.map((agent) => agent.id)))
+  setDispatchFolderNamesSource(async () => new Map(world.agents.map((agent) => [agent.id, basename(agent.path)])))
+  // An Inbox answer checks that the asking agent still exists.
+  vi.spyOn(agentService, 'findAgent').mockReturnValue({ row: {} as never, userId: USER })
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   service.shutdown()
+  vi.useRealTimers()
   await new Promise((resolve) => setImmediate(resolve))
   holder.current?.close()
   holder.current = null
@@ -247,8 +293,8 @@ describe('selection', () => {
 
       const dto = taskService.getById(USER, blocked.id)
       expect(dto.blockedBy).toEqual([
-        { id: 't-first', taskId: first.id, title: first.title, done: false },
-        { id: 't-missing', taskId: null, title: null, done: false }
+        { id: 't-first', taskId: first.id, title: first.title, status: 'open', done: false },
+        { id: 't-missing', taskId: null, title: null, status: null, done: false }
       ])
       expect((await service.get(SCOPE, 'agent-a'))?.next?.taskId).toBe(first.id)
 
@@ -257,6 +303,7 @@ describe('selection', () => {
       taskService.setStatus(USER, first.id, 'in_progress')
       taskService.setStatus(USER, first.id, 'completed')
       expect(taskService.getById(USER, blocked.id).blockedBy[0].done).toBe(true)
+      expect(taskService.getById(USER, blocked.id).blockedBy[0].status).toBe('completed')
       expect((await service.get(SCOPE, 'agent-a'))?.next).toBeNull()
 
       ready('agent-a', { file: { key: 't-missing' } })
@@ -279,6 +326,50 @@ describe('selection', () => {
   })
 })
 
+describe('a Ready task whose chat runs a turn', () => {
+  function busyChat(taskId: string): string {
+    const chat = chatRepo.create(USER, { agentId: 'agent-a' })
+    taskRepo.update(USER, taskId, { chatId: chat.id })
+    world.runningChats.push(chat.id)
+    return chat.id
+  }
+
+  it('is passed over by a One at a time pass without taking a slot, and runs once the turn ends', async () => {
+    // Mutation: drop `chatBusy` in `pass` → every pass takes a slot for it, refuses, and wakes again.
+    const busy = ready('agent-a', { priority: 'urgent' })
+    const other = ready('agent-a')
+    const chatId = busyChat(busy.id)
+    agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
+    service.start(SCOPE)
+    await drain()
+    await drain()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([other.id])
+    expect(world.slotRequests).toBe(1)
+
+    taskService.setStatus(USER, other.id, 'completed')
+    world.starts[0].end('completed')
+    await drain()
+    await drain()
+    expect(world.starts).toHaveLength(1)
+    expect(world.slotRequests).toBe(1)
+    world.runningChats = world.runningChats.filter((id) => id !== chatId)
+    service.wake()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([other.id, busy.id])
+  })
+
+  it('is refused by Run next as a live turn, which takes the next task instead', async () => {
+    // Mutation: drop the `chatBusy` refusal in `runNext` → the named task takes a slot and fails on its chat.
+    const busy = ready('agent-a', { priority: 'urgent' })
+    const other = ready('agent-a')
+    busyChat(busy.id)
+    expect(await service.runNext(SCOPE, 'agent-a', busy.id)).toMatchObject({ ok: false, code: 'live_turn' })
+    expect(world.slotRequests).toBe(0)
+    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: other.id })
+  })
+})
+
 describe('exclusivity', () => {
   it('runs one dispatched task per agent and holds a runner slot until the turn ends', async () => {
     const first = ready('agent-a', { priority: 'high' })
@@ -290,7 +381,7 @@ describe('exclusivity', () => {
     await drain()
     expect(world.starts.map((s) => s.taskId)).toEqual([first.id])
     expect(world.inUse).toBe(1)
-    expect((await service.get(SCOPE, 'agent-a'))?.running).toEqual({ taskId: first.id, chatId: world.starts[0].chatId, title: first.title })
+    expect((await service.get(SCOPE, 'agent-a'))?.running).toEqual([{ taskId: first.id, chatId: world.starts[0].chatId, title: first.title }])
 
     taskService.setStatus(USER, first.id, 'completed')
     world.starts[0].end('completed')
@@ -312,6 +403,56 @@ describe('exclusivity', () => {
     const idle = world.starts[0].agentId === 'agent-a' ? 'agent-b' : 'agent-a'
     expect((await service.get(SCOPE, idle))?.waiting).toBe('folder_busy')
     expect(await service.runNext(SCOPE, idle)).toMatchObject({ ok: false, code: 'folder_busy' })
+  })
+
+  describe('a folder reached through a symlink', () => {
+    let linkHome: string
+    let link: string
+    beforeEach(() => {
+      linkHome = mkdtempSync(join(tmpdir(), 'cinna-dispatch-link-'))
+      link = join(linkHome, 'linked')
+      symlinkSync(dir, link, 'dir')
+    })
+    afterEach(() => { rmSync(linkHome, { recursive: true, force: true }) })
+
+    it('is one folder for two One at a time agents', async () => {
+      // Mutation: `folderOf` without realpath → both agents start in the one folder.
+      world.agents.push({ id: 'agent-b', name: 'Beta', path: link })
+      ready('agent-a')
+      ready('agent-b')
+      agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
+      agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
+      service.start(SCOPE)
+      await drain()
+      expect(world.starts).toHaveLength(1)
+      const idle = world.starts[0].agentId === 'agent-a' ? 'agent-b' : 'agent-a'
+      expect((await service.get(SCOPE, idle))?.waiting).toBe('folder_busy')
+    })
+
+    it('makes a One at a time agent wait for a live turn and for an Up to N agent’s runs there', async () => {
+      world.slots = 8
+      world.agents.push({ id: 'agent-b', name: 'Beta', path: link })
+      ready('agent-b')
+      agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
+      world.live = ['agent-a']
+      service.start(SCOPE)
+      await drain()
+      expect(world.starts).toHaveLength(0)
+      expect((await service.get(SCOPE, 'agent-b'))?.waiting).toBe('live_turn')
+
+      world.live = []
+      const a1 = ready('agent-a', { priority: 'high' })
+      agentTaskDispatchRepo.setMode(USER, 'agent-b', 'manual')
+      agentTaskDispatchRepo.setMode(USER, 'agent-a', 'up_to', 2)
+      service.wake()
+      await drain()
+      expect(world.starts.map((s) => s.taskId)).toEqual([a1.id])
+      agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
+      service.wake()
+      await drain()
+      expect(world.starts.map((s) => s.taskId)).toEqual([a1.id])
+      expect((await service.get(SCOPE, 'agent-b'))?.waiting).toBe('folder_busy')
+    })
   })
 
   it('never starts while any turn runs in the folder, and starts once it ends', async () => {
@@ -337,7 +478,7 @@ describe('exclusivity', () => {
     service.start(SCOPE)
     await drain()
     expect(world.starts).toHaveLength(0)
-    expect(await service.get(SCOPE, 'agent-a')).toMatchObject({ waiting: 'slot', next: { taskId: task.id }, running: null })
+    expect(await service.get(SCOPE, 'agent-a')).toMatchObject({ waiting: 'slot', next: { taskId: task.id }, running: [] })
     // Switching to manual abandons the queue's own wait.
     await service.setMode(SCOPE, 'agent-a', 'manual')
     await drain()
@@ -430,7 +571,7 @@ describe('the report rule', () => {
     started.end('canceled')
     await drain()
     expect(statusOf(task.id)).toBe('cancelled')
-    expect(agentTaskDispatchRepo.get(USER, 'agent-a')).toMatchObject({ pausedReason: 'stopped', pausedTaskId: task.id })
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'stopped', pausedTaskId: task.id })
   })
 
   it('leaves a task that ended on an open question to its ask, and the queue continues', async () => {
@@ -449,13 +590,36 @@ describe('the report rule', () => {
     expect(world.starts.map((s) => s.taskId)).toEqual([task.id, next.id])
   })
 
+  it.each(['completed', 'canceled', 'failed'] as const)('lets go of a task archived before its turn ended (%s), writes nothing and continues', async (state) => {
+    // Mutation: drop the archived/deleted branch in `settleTask` → the queue pauses (unreported, stopped or error).
+    const { task, next, started } = await dispatchOne()
+    taskService.setStatus(USER, task.id, 'archived')
+    started.end(state, state === 'failed' ? { error: { message: 'boom' } } : {})
+    await drain()
+    await drain()
+    expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'archived', dispatchNote: null, dispatchAgentId: null })
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: null, activeTaskId: next.id })
+    expect(world.starts.map((s) => s.taskId)).toEqual([task.id, next.id])
+  })
+
+  it.each(['completed', 'canceled'] as const)('lets go of a task deleted before its turn ended (%s) and continues', async (state) => {
+    const { task, next, started } = await dispatchOne()
+    taskService.remove(USER, task.id)
+    started.end(state)
+    await drain()
+    await drain()
+    expect(taskRepo.getById(USER, task.id)).toMatchObject({ dispatchAgentId: null })
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: null, activeTaskId: next.id })
+    expect(world.starts.map((s) => s.taskId)).toEqual([task.id, next.id])
+  })
+
   it('pauses on a task the queue could not start', async () => {
     const task = ready('agent-a')
     world.startError = 'That agent is unavailable.'
     agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
     service.start(SCOPE)
     await drain()
-    expect(agentTaskDispatchRepo.get(USER, 'agent-a')).toMatchObject({ pausedReason: 'error', pausedTaskId: task.id, activeTaskId: null })
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'error', pausedTaskId: task.id, activeTaskId: null })
   })
 })
 
@@ -472,7 +636,7 @@ describe('back in Ready or Backlog is no report', () => {
 
   function expectFlagged(taskId: string, nextId: string) {
     expect(taskRepo.getById(USER, taskId)).toMatchObject({ status: 'blocked', dispatchNote: DISPATCH_NOTE_UNREPORTED })
-    expect(agentTaskDispatchRepo.get(USER, 'agent-a')).toMatchObject({ pausedReason: 'unreported', pausedTaskId: taskId })
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'unreported', pausedTaskId: taskId })
     // Not run again.
     expect(world.starts.map((s) => s.taskId)).toEqual([taskId])
     expect(statusOf(nextId)).toBe('open')
@@ -523,7 +687,7 @@ describe('after the slot wait', () => {
 
   /** No pause; whatever runs now is the next task, not the one that waited. */
   function expectQuietEnd(nextId: string | null) {
-    expect(agentTaskDispatchRepo.get(USER, 'agent-a')).toMatchObject({ pausedReason: null, pausedTaskId: null, activeTaskId: nextId })
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: null, pausedTaskId: null, activeTaskId: nextId })
   }
 
   it('lets the user’s own turn on the waiting task settle normally, then ends the flight quietly and moves on', async () => {
@@ -617,7 +781,7 @@ describe('boot recovery', () => {
     service.recoverInterrupted()
 
     expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'blocked', dispatchNote: DISPATCH_NOTE_INTERRUPTED })
-    expect(agentTaskDispatchRepo.get(USER, 'agent-a')).toMatchObject({
+    expect(rowOf('agent-a')).toMatchObject({
       mode: 'one', pausedReason: 'interrupted', pausedTaskId: task.id, activeTaskId: null, activeChatId: null
     })
   })
@@ -630,7 +794,7 @@ describe('boot recovery', () => {
     service.shutdown()
     world.starts[0].end('canceled')
     await drain()
-    expect(agentTaskDispatchRepo.get(USER, 'agent-a')).toMatchObject({ activeTaskId: task.id, pausedReason: null })
+    expect(rowOf('agent-a')).toMatchObject({ activeTaskId: task.id, pausedReason: null })
     expect(statusOf(task.id)).toBe('in_progress')
   })
 })
@@ -698,7 +862,7 @@ describe('the outside-content gate', () => {
     const first = taskDispatchGateRepo.listOpen(USER)
     expect(first).toHaveLength(1)
     world.published = []
-    expect(await service.answerGate(SCOPE, first[0].id, 'skip')).toEqual({ ok: true, started: null, mode: 'one' })
+    expect(await service.answerGate(SCOPE, first[0].id, 'skip')).toEqual({ ok: true, started: null, mode: 'one', maxRuns: null })
     // Mutation: drop the skip's notification → other surfaces keep the card.
     expect(world.published).toContain('agent-a')
     service.wake()
@@ -740,7 +904,7 @@ describe('the outside-content gate', () => {
     const changed: string[] = []
     installTaskRunnerHooks({ answer: () => null, taskChanged: (_u, taskId) => { changed.push(taskId) }, chatRemoved: () => {}, profileRemoved: () => {} }, 'dispatch-test')
     const answer = await service.answerGate(SCOPE, (card as { gate: string }).gate, 'approve')
-    expect(answer).toEqual({ ok: true, started: null, reason: 'live_turn', mode: 'manual' })
+    expect(answer).toEqual({ ok: true, started: null, reason: 'live_turn', mode: 'manual', maxRuns: null })
     expect(taskService.getById(USER, outside.id).fromOutside).toBe(false)
     // Mutation: drop the approval's notifications → nothing tells the task page or the queue.
     expect(world.published).toContain('agent-a')
@@ -756,9 +920,15 @@ describe('the outside-content gate', () => {
     agentTaskDispatchRepo.pause(USER, 'agent-a', 'error', null)
     const card = await service.runNext(SCOPE, 'agent-a', outside.id) as { gate: string }
     expect(await service.answerGate(SCOPE, card.gate, 'approve')).toEqual({
-      ok: true, started: { taskId: outside.id, chatId: world.starts[0].chatId }, mode: 'one'
+      ok: true, started: { taskId: outside.id, chatId: world.starts[0].chatId }, mode: 'one', maxRuns: null
     })
     expect(agentTaskDispatchRepo.get(USER, 'agent-a').pausedReason).toBe('error')
+
+    // Another of agent-a's tasks, approved while its run goes: the agent is
+    // busy, not the folder (mutation: fold agent_busy into folder_busy).
+    const busy = ready('agent-a', { file: { key: 't-busy', trusted: false, digest: 'd4' } })
+    const busyGate = taskDispatchGateRepo.open(USER, { taskId: busy.id, agentId: 'agent-a', digest: 'd4', title: busy.title, filePath: null, body: 'b' })
+    expect(await service.answerGate(SCOPE, busyGate.id, 'approve')).toEqual({ ok: true, started: null, reason: 'agent_busy', mode: 'one', maxRuns: null })
 
     // A second agent in another folder: its approval waits for a slot.
     const other = mkdtempSync(join(tmpdir(), 'cinna-dispatch-b-'))
@@ -767,7 +937,7 @@ describe('the outside-content gate', () => {
       const second = ready('agent-b', { file: { key: 't-b', trusted: false, digest: 'd2', folder: other } })
       const secondCard = await service.runNext(SCOPE, 'agent-b', second.id) as { gate: string }
       world.slotFree = false
-      expect(await service.answerGate(SCOPE, secondCard.gate, 'approve')).toEqual({ ok: true, started: null, reason: 'slot', mode: 'manual' })
+      expect(await service.answerGate(SCOPE, secondCard.gate, 'approve')).toEqual({ ok: true, started: null, reason: 'slot', mode: 'manual', maxRuns: null })
       // And one sharing agent-a's busy folder reports the folder.
       world.slotFree = true
       world.agents.push({ id: 'agent-c', name: 'Gamma', path: dir })
@@ -777,7 +947,7 @@ describe('the outside-content gate', () => {
       const gate = taskDispatchGateRepo.open(USER, {
         taskId: third.id, agentId: 'agent-c', digest: 'd3', title: third.title, filePath: null, body: 'b'
       })
-      expect(await service.answerGate(SCOPE, gate.id, 'approve')).toEqual({ ok: true, started: null, reason: 'folder_busy', mode: 'manual' })
+      expect(await service.answerGate(SCOPE, gate.id, 'approve')).toEqual({ ok: true, started: null, reason: 'folder_busy', mode: 'manual', maxRuns: null })
       expect(taskRepo.getById(USER, third.id)?.trustedDigest).toBe('d3')
     } finally {
       rmSync(other, { recursive: true, force: true })
@@ -855,7 +1025,7 @@ describe('a turn resumed after a dispatched ask', () => {
     end({ type: 'done', stopReason: 'end_turn' })
     await drain()
     expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'blocked', dispatchNote: DISPATCH_NOTE_UNREPORTED, dispatchAgentId: null })
-    expect(agentTaskDispatchRepo.get(USER, 'agent-a')).toMatchObject({ pausedReason: 'unreported', pausedTaskId: task.id })
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'unreported', pausedTaskId: task.id })
   })
 
   it('keeps the report when the resumed turn reported', async () => {
@@ -883,7 +1053,7 @@ describe('a turn resumed after a dispatched ask', () => {
     end({ type: 'error', error: 'The engine crashed.' })
     await drain()
     expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'error', errorMessage: 'The engine crashed.', dispatchAgentId: null })
-    expect(agentTaskDispatchRepo.get(USER, 'agent-a')).toMatchObject({ pausedReason: 'error', pausedTaskId: task.id })
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'error', pausedTaskId: task.id })
   })
 
   it('maps a Stop to cancelled and pauses', async () => {
@@ -891,7 +1061,7 @@ describe('a turn resumed after a dispatched ask', () => {
     end({ type: 'done', stopReason: 'canceled' })
     await drain()
     expect(statusOf(task.id)).toBe('cancelled')
-    expect(agentTaskDispatchRepo.get(USER, 'agent-a')).toMatchObject({ pausedReason: 'stopped', pausedTaskId: task.id })
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'stopped', pausedTaskId: task.id })
   })
 
   it('starts no next task while the resumed turn is being settled, and moves on once its pause is written', async () => {
@@ -911,9 +1081,60 @@ describe('a turn resumed after a dispatched ask', () => {
     release()
     await drain()
     expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'blocked', dispatchNote: DISPATCH_NOTE_UNREPORTED })
-    expect(agentTaskDispatchRepo.get(USER, 'agent-a')).toMatchObject({ pausedReason: 'unreported', pausedTaskId: task.id })
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'unreported', pausedTaskId: task.id })
     expect(world.starts.map((s) => s.taskId)).toEqual([task.id])
     expect(statusOf(next.id)).toBe('open')
+  })
+
+  it.each(['one', 'up_to'] as const)('starts no %s flight whose slot comes while the resumed turn is being settled, and starts it once settled', async (mode) => {
+    // Mutations: drop the `settling` check at the slot grant → the up_to flight
+    // starts mid-settle; drop it and the `settlingIn` folder check → the one flight does.
+    const { task, end } = await dispatchedThenAsk(null, { file: { key: 't-owned-slot' } })
+    if (mode === 'up_to') agentTaskDispatchRepo.setMode(USER, 'agent-a', 'up_to', 2)
+    const next = ready('agent-a', { priority: 'low' })
+    world.slots = 0
+    service.wake()
+    await drain()
+    expect((await service.get(SCOPE, 'agent-a'))?.waiting).toBe('slot')
+    let release!: () => void
+    world.refresh = () => new Promise<void>((resolve) => { release = resolve })
+    end({ type: 'done', stopReason: 'end_turn' })
+    world.grant()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([task.id])
+    expect(statusOf(next.id)).toBe('open')
+
+    // The agent reported while its file was read: no pause, and the queue goes on.
+    taskService.setStatus(USER, task.id, 'completed')
+    release()
+    await drain()
+    await drain()
+    expect(agentTaskDispatchRepo.get(USER, 'agent-a').pausedReason).toBeNull()
+    expect(world.starts.map((s) => s.taskId)).toEqual([task.id, next.id])
+  })
+
+  it('starts no flight of another One at a time agent in the folder whose slot comes mid-settle', async () => {
+    // Mutation: drop the `settlingIn` folder check at the slot grant → agent-b starts beside the settle.
+    world.agents.push({ id: 'agent-b', name: 'Beta', path: dir })
+    const { task, end } = await dispatchedThenAsk(null, { file: { key: 't-owned-b-slot' } })
+    const other = ready('agent-b')
+    agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
+    world.slots = 0
+    service.wake()
+    await drain()
+    expect((await service.get(SCOPE, 'agent-b'))?.waiting).toBe('slot')
+    let release!: () => void
+    world.refresh = () => new Promise<void>((resolve) => { release = resolve })
+    end({ type: 'done', stopReason: 'end_turn' })
+    world.grant()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([task.id])
+
+    taskService.setStatus(USER, task.id, 'completed')
+    release()
+    await drain()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([task.id, other.id])
   })
 
   it('treats the settling agent’s folder as busy for another agent there', async () => {
@@ -947,7 +1168,7 @@ describe('a turn resumed after a dispatched ask', () => {
 
     service.recoverInterrupted()
     expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'blocked', dispatchNote: DISPATCH_NOTE_INTERRUPTED, dispatchAgentId: null })
-    expect(agentTaskDispatchRepo.get(USER, 'agent-a')).toMatchObject({ pausedReason: 'interrupted', pausedTaskId: task.id })
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'interrupted', pausedTaskId: task.id })
   })
 
   it('is left alone at boot while it still waits on an open ask', async () => {
@@ -959,6 +1180,251 @@ describe('a turn resumed after a dispatched ask', () => {
     service.recoverInterrupted()
     expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'in_progress', dispatchAgentId: 'agent-a' })
     expect(agentTaskDispatchRepo.get(USER, 'agent-a').pausedReason).toBeNull()
+  })
+
+  describe('an Inbox answer', () => {
+    const ANSWER = { kind: 'question' as const, answers: [['This one.']] }
+    const askRow = () => taskInputRequestRepo.getById('ask-r')!
+    /** The answered turn ends as the agent left it, through `endTurn` as a real turn's end would. */
+    function endSent(state: RunOutcome['state'] = 'completed'): void {
+      const sent = world.starts[world.starts.length - 1]
+      inboxService.recordRunEvent({ userId: USER, chatId: sent.chatId, agentId: 'agent-a', turnId: sent.runId, rootRunId: sent.runId, completionOwner: 'turn' },
+        state === 'canceled' ? { type: 'done', stopReason: 'canceled' } : { type: 'done', stopReason: 'end_turn' })
+      sent.end(state)
+    }
+
+    it('is stored on the ask, and sent as a flight that waits for a runner slot', async () => {
+      // Mutation: drop the stored-answer branch in `inboxService.answer` → the answer starts a turn at once, beside the queue.
+      const { task } = await dispatchedThenAsk(() => {})
+      world.slots = 0
+      expect(await inboxService.answer(USER, 'ask-r', ANSWER)).toEqual({ ok: true, queued: true })
+      expect(askRow()).toMatchObject({ status: 'open', queuedAnswer: 'This one.', queuedError: null })
+      // Still listed, with the answer and the folder it waits on.
+      const { entries } = await inboxService.list(USER)
+      expect(entries).toEqual([expect.objectContaining({ requestId: 'ask-r', queuedAnswer: 'This one.', queuedFolder: basename(dir) })])
+      expect(entries[0].queuedAt).toBeInstanceOf(Date)
+
+      service.wake()
+      await drain()
+      expect(world.answersSent).toEqual([])
+      expect(await service.get(SCOPE, 'agent-a')).toMatchObject({ waiting: 'slot', next: { taskId: task.id } })
+      expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: false, code: 'agent_busy' })
+
+      world.grant()
+      await drain()
+      expect(world.answersSent).toEqual([{ requestId: 'ask-r', content: 'This one.' }])
+      expect(askRow()).toMatchObject({ status: 'answered', queuedAnswer: null })
+      expect(statusOf(task.id)).toBe('in_progress')
+      const sent = world.starts[1]
+      expect(isDispatchedRun(sent.chatId, sent.runId)).toBe(true)
+      expect(rowOf('agent-a')).toMatchObject({ activeTaskId: task.id, activeChatId: sent.chatId })
+
+      // Its turn ends without a report: the flight, not `endTurn`, settles it.
+      endSent()
+      await drain()
+      expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'blocked', dispatchNote: DISPATCH_NOTE_UNREPORTED, dispatchAgentId: null })
+      expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'unreported', pausedTaskId: task.id, activeTaskId: null })
+      expect(isDispatchedRun(sent.chatId, sent.runId)).toBe(false)
+    })
+
+    it('goes out before the next Ready task, and the queue continues after a report', async () => {
+      const { task } = await dispatchedThenAsk(() => {})
+      const next = ready('agent-a', { priority: 'urgent' })
+      await inboxService.answer(USER, 'ask-r', ANSWER)
+      service.wake()
+      await drain()
+      expect(world.starts.map((s) => s.taskId)).toEqual([task.id, task.id])
+      taskService.setStatus(USER, task.id, 'completed')
+      endSent()
+      await drain()
+      await drain()
+      expect(agentTaskDispatchRepo.get(USER, 'agent-a').pausedReason).toBeNull()
+      expect(world.starts.map((s) => s.taskId)).toEqual([task.id, task.id, next.id])
+    })
+
+    it('is sent in Manual mode and while the queue is paused', async () => {
+      // Mutation: check mode and pause before stored answers in `pass` → it never goes.
+      const { task } = await dispatchedThenAsk(() => {})
+      agentTaskDispatchRepo.setMode(USER, 'agent-a', 'manual')
+      agentTaskDispatchRepo.pause(USER, 'agent-a', 'error', 'other')
+      ready('agent-a')
+      await inboxService.answer(USER, 'ask-r', ANSWER)
+      service.wake()
+      await drain()
+      expect(world.answersSent).toHaveLength(1)
+      expect(world.starts.map((s) => s.taskId)).toEqual([task.id, task.id])
+      expect(agentTaskDispatchRepo.get(USER, 'agent-a').pausedReason).toBe('error')
+    })
+
+    it('waits while another dispatched run works in the same folder, or a turn runs there', async () => {
+      world.agents.push({ id: 'agent-b', name: 'Beta', path: dir })
+      await dispatchedThenAsk(() => {})
+      const other = ready('agent-b')
+      const run = await service.runNext(SCOPE, 'agent-b')
+      expect(run).toMatchObject({ ok: true, taskId: other.id })
+      await inboxService.answer(USER, 'ask-r', ANSWER)
+      service.wake()
+      await drain()
+      expect(world.answersSent).toEqual([])
+
+      // The other run reports; a turn is now running in the folder.
+      taskService.setStatus(USER, other.id, 'completed')
+      world.live = ['agent-b']
+      world.starts[1].end('completed')
+      await drain()
+      expect(world.answersSent).toEqual([])
+
+      world.live = []
+      service.wake()
+      await drain()
+      expect(world.answersSent).toHaveLength(1)
+    })
+
+    it('is superseded by a message typed in the chat while it waits', async () => {
+      // Mutation: skip the stored-answer recheck after the slot wait → the answer is sent as a second turn.
+      const { started } = await dispatchedThenAsk(() => {})
+      world.slots = 0
+      await inboxService.answer(USER, 'ask-r', ANSWER)
+      service.wake()
+      await drain()
+      inboxService.resumeChat({ userId: USER, chatId: started.chatId, agentId: 'agent-a', turnId: 'typed', rootRunId: 'typed', completionOwner: 'turn' }, 'Typed instead.')
+      expect(askRow()).toMatchObject({ status: 'answered', queuedAnswer: null })
+      world.grant()
+      await drain()
+      expect(world.answersSent).toEqual([])
+      expect(rowOf('agent-a')).toMatchObject({ pausedReason: null, activeTaskId: null })
+    })
+
+    it('is cleared with a reason when its agent can no longer work a queue', async () => {
+      // Mutation: drop the clearing of answers for agents missing from the pass → it waits forever.
+      await dispatchedThenAsk(() => {})
+      world.slots = 0
+      expect(await inboxService.answer(USER, 'ask-r', ANSWER)).toEqual({ ok: true, queued: true })
+      world.agents = []
+      service.wake()
+      await drain()
+      expect(askRow()).toMatchObject({ status: 'open', queuedAnswer: null, queuedError: NOT_DISPATCHABLE_ANSWER })
+      expect(world.answersSent).toEqual([])
+    })
+
+    it('goes to the chat at once, unstored, when its agent can no longer work a queue', async () => {
+      // Mutation: store whenever the task has a dispatch agent → `queued: true`, and nothing ever sends it.
+      await dispatchedThenAsk(() => {})
+      world.agents = []
+      const startNext = vi.spyOn(inboxService, 'startNextMessageTurn').mockReturnValue({
+        id: 'direct', accepted: Promise.resolve(), completed: new Promise(() => {})
+      } as never)
+      expect(await inboxService.answer(USER, 'ask-r', ANSWER)).toEqual({ ok: true })
+      expect(startNext).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'ask-r' }), 'This one.')
+      expect(askRow().queuedAnswer).toBeNull()
+    })
+
+    it('says why on the ask when it could not be sent, without pausing, and can be answered again', async () => {
+      // Mutation: leave the stored answer on a failed send → the card keeps saying it will send.
+      await dispatchedThenAsk(() => {})
+      world.startError = 'That agent is unavailable.'
+      await inboxService.answer(USER, 'ask-r', ANSWER)
+      service.wake()
+      await drain()
+      expect(askRow()).toMatchObject({ status: 'open', queuedAnswer: null, queuedError: 'That agent is unavailable.' })
+      expect((await inboxService.list(USER)).entries[0]).toMatchObject({ queuedError: 'That agent is unavailable.' })
+      expect((await inboxService.list(USER)).entries[0].queuedAnswer).toBeUndefined()
+      expect(rowOf('agent-a')).toMatchObject({ pausedReason: null, activeTaskId: null })
+
+      world.startError = null
+      expect(await inboxService.answer(USER, 'ask-r', ANSWER)).toEqual({ ok: true, queued: true })
+      expect(askRow().queuedError).toBeNull()
+      service.wake()
+      await drain()
+      expect(world.answersSent).toHaveLength(1)
+    })
+
+    it('is not attempted while its chat is still running, and goes once it closes', async () => {
+      // Mutation: drop the chatRunning check in `pass` → each pass takes a slot, fails on the running chat and wakes again.
+      const { started } = await dispatchedThenAsk(() => {})
+      ready('agent-a', { priority: 'urgent' })
+      world.runningChats = [started.chatId]
+      await inboxService.answer(USER, 'ask-r', ANSWER)
+      const before = world.slotRequests
+      service.wake()
+      await drain()
+      service.wake()
+      await drain()
+      expect(world.slotRequests).toBe(before)
+      expect(world.answersSent).toEqual([])
+      // Nothing else starts for the agent while its answer waits.
+      expect(world.starts).toHaveLength(1)
+      expect(askRow()).toMatchObject({ queuedAnswer: 'This one.', queuedError: null })
+
+      world.runningChats = []
+      service.wake()
+      await drain()
+      expect(world.answersSent).toHaveLength(1)
+    })
+
+    it('is what Run next sends, before any Ready task; Start on a named task still starts that task', async () => {
+      // Mutation: skip stored answers in `runNext` → Run next starts the Ready task instead.
+      const { task, started } = await dispatchedThenAsk(() => {})
+      agentTaskDispatchRepo.setMode(USER, 'agent-a', 'manual')
+      const other = ready('agent-a', { priority: 'urgent' })
+      await inboxService.answer(USER, 'ask-r', ANSWER)
+      expect(await service.runNext(SCOPE, 'agent-a')).toEqual({ ok: true, taskId: task.id, chatId: started.chatId })
+      expect(world.answersSent).toHaveLength(1)
+      expect(world.starts.map((s) => s.taskId)).toEqual([task.id, task.id])
+
+      // Its turn reports; another answer waits again on a fresh ask.
+      taskService.setStatus(USER, task.id, 'blocked')
+      endSent()
+      await drain()
+      taskInputRequestRepo.open({
+        requestId: 'ask-r2', taskId: task.id, chatId: started.chatId, agentId: 'agent-a', resume: 'next_message',
+        request: { kind: 'question', questions: [{ question: 'And?', options: [], multiSelect: false }] }
+      })
+      taskRepo.setDispatchAgent(USER, task.id, 'agent-a')
+      await inboxService.answer(USER, 'ask-r2', ANSWER)
+      expect(await service.runNext(SCOPE, 'agent-a', other.id)).toMatchObject({ ok: true, taskId: other.id })
+      expect(world.answersSent).toHaveLength(1)
+    })
+
+    it('Run next says so when the answer’s chat is still running', async () => {
+      const { started } = await dispatchedThenAsk(() => {})
+      await inboxService.answer(USER, 'ask-r', ANSWER)
+      world.runningChats = [started.chatId]
+      expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: false, code: 'live_turn' })
+      expect(world.answersSent).toEqual([])
+    })
+
+    it('refuses a second answer while one waits', async () => {
+      await dispatchedThenAsk(() => {})
+      world.slots = 0
+      await inboxService.answer(USER, 'ask-r', ANSWER)
+      expect(await inboxService.answer(USER, 'ask-r', { kind: 'question', answers: [['Another.']] }))
+        .toMatchObject({ ok: false, code: 'already_answered' })
+      expect(askRow().queuedAnswer).toBe('This one.')
+    })
+
+    it('outlives a restart: boot recovery leaves it, and the next start sends it', async () => {
+      const { task } = await dispatchedThenAsk(() => {})
+      service.shutdown()
+      await inboxService.answer(USER, 'ask-r', ANSWER)
+      service.recoverInterrupted()
+      expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'blocked', dispatchAgentId: 'agent-a' })
+      expect(askRow().queuedAnswer).toBe('This one.')
+      service.start(SCOPE)
+      await drain()
+      expect(world.answersSent).toHaveLength(1)
+    })
+
+    it('is cleared with a reason when its task left the queue before it was sent', async () => {
+      const { task } = await dispatchedThenAsk(() => {})
+      world.slots = 0
+      await inboxService.answer(USER, 'ask-r', ANSWER)
+      taskRepo.setDispatchAgent(USER, task.id, null)
+      service.wake()
+      await drain()
+      expect(askRow()).toMatchObject({ status: 'open', queuedAnswer: null, queuedError: expect.stringContaining('left its queue') })
+      expect(world.answersSent).toEqual([])
+    })
   })
 
   it('is given up when the task is taken over or handed to its remote', async () => {
@@ -985,6 +1451,298 @@ describe('a turn resumed after a dispatched ask', () => {
     end({ type: 'done', stopReason: 'end_turn' })
     await drain()
     expect(agentTaskDispatchRepo.get(USER, 'agent-a').pausedReason).toBeNull()
+  })
+})
+
+describe('up to N', () => {
+  function upTo(agentId: string, n: number): void {
+    agentTaskDispatchRepo.setMode(USER, agentId, 'up_to', n)
+  }
+
+  it('runs up to N of the agent’s tasks at once, never the same task twice, in queue order', async () => {
+    // Mutations: drop `held` from `candidates` → the second flight takes the
+    // first one's task; launch only once per pass → one start.
+    world.slots = 8
+    const low = ready('agent-a', { title: 'Low', priority: 'low' })
+    const old = ready('agent-a', { title: 'Old', createdAt: new Date('2026-01-01') })
+    const urgent = ready('agent-a', { title: 'Urgent', priority: 'urgent' })
+    const young = ready('agent-a', { title: 'Young', createdAt: new Date('2026-02-01') })
+    upTo('agent-a', 3)
+    service.start(SCOPE)
+    await drain()
+    service.wake()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([urgent.id, old.id, young.id])
+    const state = await service.get(SCOPE, 'agent-a')
+    expect(state).toMatchObject({ mode: 'up_to', maxRuns: 3, waiting: null, next: { taskId: low.id } })
+    expect(state?.running.map((run) => run.taskId)).toEqual([urgent.id, old.id, young.id])
+    expect(rowOf('agent-a').runs.map((run) => run.taskId).sort()).toEqual([urgent.id, old.id, young.id].sort())
+
+    taskService.setStatus(USER, old.id, 'completed')
+    world.starts[1].end('completed')
+    await drain()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([urgent.id, old.id, young.id, low.id])
+    expect(new Set(world.starts.map((s) => s.taskId)).size).toBe(4)
+  })
+
+  it('starts beside another agent’s run in the folder, while a One at a time agent there still waits', async () => {
+    // Mutation: keep the folder check for `up_to` in `pass` → agent-a waits for agent-b's run.
+    world.slots = 8
+    world.agents = [{ id: 'agent-b', name: 'Beta', path: dir }, { id: 'agent-a', name: 'Alpha', path: dir }]
+    const b1 = ready('agent-b', { createdAt: new Date('2026-01-01') })
+    const b2 = ready('agent-b', { createdAt: new Date('2026-02-01') })
+    const a1 = ready('agent-a', { priority: 'high' })
+    const a2 = ready('agent-a')
+    agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
+    upTo('agent-a', 2)
+    service.start(SCOPE)
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([b1.id, a1.id, a2.id])
+
+    // agent-b's run reports; agent-a's runs still work in the folder, so the
+    // One at a time agent waits on them (mutation: lift the folder rule for
+    // every agent → b2 starts).
+    taskService.setStatus(USER, b1.id, 'completed')
+    world.starts[0].end('completed')
+    await drain()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([b1.id, a1.id, a2.id])
+    expect((await service.get(SCOPE, 'agent-b'))?.waiting).toBe('folder_busy')
+    expect(await service.runNext(SCOPE, 'agent-b')).toMatchObject({ ok: false, code: 'folder_busy' })
+
+    taskService.setStatus(USER, a1.id, 'completed')
+    world.starts[1].end('completed')
+    taskService.setStatus(USER, a2.id, 'completed')
+    world.starts[2].end('completed')
+    await drain()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([b1.id, a1.id, a2.id, b2.id])
+  })
+
+  it('makes a One at a time flight that gets its slot after an up_to run got going in the folder end quietly, and start later', async () => {
+    // Mutation: drop the folder check at the slot grant → b1 starts beside a1.
+    world.slots = 0
+    world.agents = [{ id: 'agent-b', name: 'Beta', path: dir }, { id: 'agent-a', name: 'Alpha', path: dir }]
+    const b1 = ready('agent-b')
+    const a1 = ready('agent-a')
+    agentTaskDispatchRepo.setMode(USER, 'agent-b', 'one')
+    upTo('agent-a', 2)
+    service.start(SCOPE)
+    await drain()
+    expect(world.starts).toHaveLength(0)
+    world.grantNewest = true
+    world.grant()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([a1.id])
+    world.grantNewest = false
+    world.grant()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([a1.id])
+    expect(rowOf('agent-b')).toMatchObject({ pausedReason: null, runs: [] })
+    expect(statusOf(b1.id)).toBe('open')
+
+    taskService.setStatus(USER, a1.id, 'completed')
+    world.starts[0].end('completed')
+    await drain()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([a1.id, b1.id])
+  })
+
+  it('is not stopped by a live turn in its folder, and neither is its Run next', async () => {
+    // Mutation: keep the live-turn check for `up_to` → nothing starts.
+    world.live = ['agent-a']
+    const first = ready('agent-a', { priority: 'high' })
+    const second = ready('agent-a')
+    upTo('agent-a', 2)
+    agentTaskDispatchRepo.pause(USER, 'agent-a', 'unreported', null)
+    service.start(SCOPE)
+    await drain()
+    expect(world.starts).toHaveLength(0)
+    expect((await service.get(SCOPE, 'agent-a'))?.waiting).toBeNull()
+    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: first.id })
+    await service.resume(SCOPE, 'agent-a')
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id, second.id])
+  })
+
+  it('passes over a task whose chat runs a turn instead of relaunching it every pass', async () => {
+    // Mutation: drop `chatBusy` in `passWide` → a flight takes a slot, refuses, wakes, and does it again.
+    const busy = ready('agent-a', { priority: 'urgent' })
+    const other = ready('agent-a')
+    const chat = chatRepo.create(USER, { agentId: 'agent-a' })
+    taskRepo.update(USER, busy.id, { chatId: chat.id })
+    world.runningChats = [chat.id]
+    upTo('agent-a', 2)
+    service.start(SCOPE)
+    for (let i = 0; i < 4; i += 1) await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([other.id])
+    expect(world.slotRequests).toBe(1)
+
+    world.runningChats = []
+    service.wake()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([other.id, busy.id])
+  })
+
+  it('starts no queued flight whose slot comes after another run paused the queue, and starts it on Resume', async () => {
+    // Mutation: drop the paused check at the slot grant → the waiting flight starts on a paused queue.
+    world.slots = 1
+    const first = ready('agent-a', { priority: 'urgent' })
+    const second = ready('agent-a')
+    upTo('agent-a', 2)
+    service.start(SCOPE)
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id])
+    expect((await service.get(SCOPE, 'agent-a'))?.waiting).toBe('slot')
+
+    // The first run ends without a report: the pause is written, then its slot goes to the waiting flight.
+    world.starts[0].end('completed')
+    await drain()
+    await drain()
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'unreported', pausedTaskId: first.id, runs: [] })
+    expect(world.starts).toHaveLength(1)
+    expect(statusOf(second.id)).toBe('open')
+
+    await service.resume(SCOPE, 'agent-a')
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id, second.id])
+  })
+
+  it('takes no more runner slots than are free: one flight waits, the rest are not launched', async () => {
+    // Mutation: drop the one-waiting-flight bound in `passWide` → three slot requests.
+    world.slots = 1
+    const first = ready('agent-a', { priority: 'urgent' })
+    const second = ready('agent-a', { priority: 'high' })
+    const third = ready('agent-a')
+    upTo('agent-a', 3)
+    service.start(SCOPE)
+    await drain()
+    service.wake()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id])
+    expect(world.slotRequests).toBe(2)
+    expect(await service.get(SCOPE, 'agent-a')).toMatchObject({ waiting: 'slot', next: { taskId: second.id } })
+    expect((await service.get(SCOPE, 'agent-a'))?.running).toHaveLength(1)
+
+    // The waiting flight holds its task, which is still Ready: Run next takes
+    // the one after it (mutation: drop `held` from `candidates` → it takes the
+    // same task, which is no longer Ready by its turn).
+    const pending = service.runNext(SCOPE, 'agent-a')
+    await drain()
+    taskService.setStatus(USER, first.id, 'completed')
+    world.starts[0].end('completed')
+    await drain()
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id, second.id])
+    expect(world.inUse).toBe(1)
+    taskService.setStatus(USER, second.id, 'completed')
+    world.starts[1].end('completed')
+    await drain()
+    await drain()
+    expect(await pending).toMatchObject({ ok: true, taskId: third.id })
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id, second.id, third.id])
+  })
+
+  it('pauses on the first flagged run, lets the others finish by the report rule, and keeps the first pause', async () => {
+    // Mutation: let `pause` overwrite an existing pause → the pause names the second task.
+    const first = ready('agent-a', { priority: 'urgent' })
+    const second = ready('agent-a', { priority: 'high' })
+    const third = ready('agent-a')
+    upTo('agent-a', 2)
+    service.start(SCOPE)
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id, second.id])
+
+    world.starts[0].end('completed')
+    await drain()
+    expect(taskRepo.getById(USER, first.id)).toMatchObject({ status: 'blocked', dispatchNote: DISPATCH_NOTE_UNREPORTED })
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'unreported', pausedTaskId: first.id })
+    expect(world.starts).toHaveLength(2)
+
+    world.starts[1].end('failed', { error: { message: 'Boom.' } } as Partial<RunOutcome>)
+    await drain()
+    expect(statusOf(second.id)).toBe('error')
+    expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'unreported', pausedTaskId: first.id, runs: [] })
+    expect(world.starts).toHaveLength(2)
+    const { dispatch } = await inboxService.list(USER)
+    expect(dispatch?.filter((item) => item.kind === 'dispatch_paused')).toEqual([expect.objectContaining({ agentId: 'agent-a', taskId: first.id })])
+
+    await service.resume(SCOPE, 'agent-a')
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([first.id, second.id, third.id])
+  })
+
+  it('records every run in flight, and boot recovery flags each of them', async () => {
+    // Mutation: keep one in-flight record per agent → the second run is not flagged.
+    const first = ready('agent-a', { priority: 'urgent' })
+    const second = ready('agent-a')
+    upTo('agent-a', 2)
+    service.start(SCOPE)
+    await drain()
+    expect(rowOf('agent-a').runs).toHaveLength(2)
+    service.shutdown()
+    world.starts[0].end('canceled')
+    world.starts[1].end('canceled')
+    await drain()
+    expect(rowOf('agent-a').runs).toHaveLength(2)
+
+    service.recoverInterrupted()
+    for (const task of [first, second]) {
+      expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'blocked', dispatchNote: DISPATCH_NOTE_INTERRUPTED, dispatchAgentId: null })
+    }
+    expect(rowOf('agent-a')).toMatchObject({ mode: 'up_to', maxRuns: 2, pausedReason: 'interrupted', runs: [] })
+    expect([first.id, second.id]).toContain(rowOf('agent-a').pausedTaskId)
+  })
+
+  it('refuses Run next as busy only once the agent has N runs', async () => {
+    // Mutation: refuse at one flight as before → the second Run next is agent_busy.
+    const first = ready('agent-a', { priority: 'urgent' })
+    const second = ready('agent-a', { priority: 'high' })
+    ready('agent-a')
+    upTo('agent-a', 2)
+    agentTaskDispatchRepo.pause(USER, 'agent-a', 'unreported', null)
+    service.start(SCOPE)
+    await drain()
+    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: first.id })
+    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: second.id })
+    expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: false, code: 'agent_busy' })
+    expect(await service.runNext(SCOPE, 'agent-a', first.id)).toMatchObject({ ok: false, code: 'agent_busy' })
+  })
+
+  it('sends a stored answer beside the agent’s other runs once it has room, not waiting for the folder', async () => {
+    // Mutation: keep the folder check for a wide agent's answers → the answer waits until both runs end.
+    const asked = ready('agent-a', { priority: 'urgent' })
+    const other = ready('agent-a', { priority: 'high' })
+    const third = ready('agent-a')
+    upTo('agent-a', 2)
+    service.start(SCOPE)
+    await drain()
+    expect(world.starts.map((s) => s.taskId)).toEqual([asked.id, other.id])
+    const first = world.starts[0]
+    taskInputRequestRepo.open({
+      requestId: 'ask-u', taskId: asked.id, chatId: first.chatId, agentId: 'agent-a', resume: 'next_message',
+      request: { kind: 'question', questions: [{ question: 'Which?', options: [], multiSelect: false }] }
+    })
+    taskService.applyRunState(USER, asked.id, 'needs_input')
+    inboxService.recordRunEvent({ userId: USER, chatId: first.chatId, agentId: 'agent-a', turnId: first.runId, rootRunId: first.runId, completionOwner: 'turn' },
+      { type: 'done', stopReason: 'end_turn' })
+    first.end('needs_input')
+    await drain()
+    // The asked task waits; the queue fills its free run with the next task.
+    expect(world.starts.map((s) => s.taskId)).toEqual([asked.id, other.id, third.id])
+
+    expect(await inboxService.answer(USER, 'ask-u', { kind: 'question', answers: [['This one.']] })).toEqual({ ok: true, queued: true })
+    service.wake()
+    await drain()
+    expect(world.answersSent).toEqual([])
+
+    taskService.setStatus(USER, third.id, 'completed')
+    world.starts[2].end('completed')
+    await drain()
+    await drain()
+    expect(world.answersSent).toEqual([{ requestId: 'ask-u', content: 'This one.' }])
+    expect(world.starts[3]).toMatchObject({ taskId: asked.id })
   })
 })
 
@@ -1028,6 +1786,31 @@ describe('Run next', () => {
 })
 
 describe('mode and resume', () => {
+  it('publishes a queue whose state a pass finds changed, and stays quiet when nothing moved', async () => {
+    // Mutation: drop `announceChanges` at the end of `pass` → a task made Ready changes "Next" with no push.
+    service.start(SCOPE)
+    await drain()
+    world.published = []
+    service.wake()
+    await drain()
+    expect(world.published).toEqual([])
+
+    const task = ready('agent-a')
+    service.wake()
+    await drain()
+    expect(world.published).toEqual(['agent-a'])
+    expect((await service.get(SCOPE, 'agent-a'))?.next?.taskId).toBe(task.id)
+
+    // A turn in the folder is a state of its own ("waiting on a conversation").
+    agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
+    world.live = ['agent-a']
+    world.published = []
+    service.wake()
+    await drain()
+    expect(world.published).toEqual(['agent-a'])
+    expect(world.starts).toEqual([])
+  })
+
   it('resumes a paused queue, leaving the flagged task blocked, and starts the next', async () => {
     const flagged = ready('agent-a')
     const chat = chatRepo.create(USER, { agentId: 'agent-a' })
@@ -1053,6 +1836,16 @@ describe('mode and resume', () => {
     expect(agentTaskDispatchRepo.listForUser(USER)).toEqual([])
   })
 
+  it('stores N with up_to, refuses one outside 2–8, and drops it with the other modes', async () => {
+    expect(await service.setMode(SCOPE, 'agent-a', 'up_to', 9)).toMatchObject({ ok: false, code: 'invalid_input' })
+    expect(await service.setMode(SCOPE, 'agent-a', 'up_to')).toMatchObject({ ok: false, code: 'invalid_input' })
+    expect(agentTaskDispatchRepo.listForUser(USER)).toEqual([])
+    expect(await service.setMode(SCOPE, 'agent-a', 'up_to', 4)).toMatchObject({ ok: true, state: { mode: 'up_to', maxRuns: 4 } })
+    expect(agentTaskDispatchRepo.get(USER, 'agent-a')).toMatchObject({ mode: 'up_to', maxRuns: 4 })
+    expect(await service.setMode(SCOPE, 'agent-a', 'one', 4)).toMatchObject({ ok: true, state: { mode: 'one', maxRuns: null } })
+    expect(agentTaskDispatchRepo.get(USER, 'agent-a').maxRuns).toBeNull()
+  })
+
   it('keeps no row for an agent back at manual and idle', async () => {
     await service.setMode(SCOPE, 'agent-a', 'one')
     expect(agentTaskDispatchRepo.listForUser(USER)).toHaveLength(1)
@@ -1062,6 +1855,32 @@ describe('mode and resume', () => {
 })
 
 describe('migration', () => {
+  it('untrusts a folder task whose binding predates trustedDigest, once, and leaves recorded trust alone', () => {
+    // Mutation: drop the UPDATE in `migrateTasks` → the legacy task still reads as trusted.
+    const legacy = ready('agent-a', { file: { key: 't-legacy' } })
+    const recorded = ready('agent-a', { file: { key: 't-recorded' } })
+    const recordedNull = ready('agent-a', { file: { key: 't-null' } })
+    const put = holder.current!.sqlite.prepare("UPDATE tasks SET remote_adapter = 'folder', remote_state = ? WHERE id = ?")
+    const digestOf = (id: string): string => taskRepo.getById(USER, id)!.localFile!.digest
+    put.run(JSON.stringify({ file: 'a.md', writtenDigest: digestOf(legacy.id) }), legacy.id)
+    put.run(JSON.stringify({ file: 'b.md', writtenDigest: digestOf(recorded.id), trustedDigest: digestOf(recorded.id) }), recorded.id)
+    put.run(JSON.stringify({ file: 'c.md', trustedDigest: null }), recordedNull.id)
+    expect(taskService.getById(USER, legacy.id).fromOutside).toBe(false)
+
+    migrateTasks(holder.current!.sqlite)
+    expect(taskRepo.getById(USER, legacy.id)?.trustedDigest).toBeNull()
+    expect(taskService.getById(USER, legacy.id).fromOutside).toBe(true)
+    expect(taskService.getById(USER, recorded.id).fromOutside).toBe(false)
+    // A recorded null is the binding's own word; the row is left as it is.
+    expect(taskRepo.getById(USER, recordedNull.id)?.trustedDigest).toBe(digestOf(recordedNull.id))
+
+    // Once approved, a later boot does not take the approval back.
+    taskRepo.setTrustedDigest(USER, legacy.id, digestOf(legacy.id))
+    put.run(JSON.stringify({ file: 'a.md', writtenDigest: digestOf(legacy.id), trustedDigest: digestOf(legacy.id) }), legacy.id)
+    migrateTasks(holder.current!.sqlite)
+    expect(taskService.getById(USER, legacy.id).fromOutside).toBe(false)
+  })
+
   it('is idempotent', () => {
     expect(() => { migrateTasks(holder.current!.sqlite); migrateTasks(holder.current!.sqlite) }).not.toThrow()
     agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')

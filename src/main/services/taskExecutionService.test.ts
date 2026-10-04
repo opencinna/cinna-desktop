@@ -23,7 +23,7 @@ const modelConfig = vi.hoisted(() => vi.fn())
 vi.mock('./taskModelConfig', () => ({ resolveTaskModelConfig: modelConfig }))
 type StartOptions = { observe: RunObserver; onAccepted: (ctx: RunEventContext) => void }
 const dispatch = vi.hoisted(() => vi.fn<(scope: RunScope, payload: RunSendPayload, options: StartOptions) => unknown>())
-const isRunning = vi.hoisted(() => vi.fn(() => false))
+const isRunning = vi.hoisted(() => vi.fn((_chatId: string) => false))
 vi.mock('./runExecutionService', () => ({ runExecutionService: { start: dispatch, isRunning } }))
 
 const { taskExecutionService, taskContinuationPrompt } = await import('./taskExecutionService')
@@ -313,6 +313,56 @@ describe('continuing a task in its own conversation', () => {
       isRunning.mockReturnValue(false)
     }
     expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('continues in the task’s chat when its own run is registered on that chat before acceptance', async () => {
+    const { task, chat } = readyWithChat()
+    // As the real service: the run is in activeChats before onAccepted fires.
+    const running = new Set<string>()
+    isRunning.mockImplementation((chatId: string) => running.has(chatId))
+    dispatch.mockImplementationOnce((scope, payload, options) => {
+      running.add(payload.chatId)
+      const ctx = { userId: scope.profileUserId, chatId: payload.chatId, agentId: TARGET.agentId, turnId: 'turn-one', rootRunId: 'turn-one' }
+      const accepted = new Promise<void>((resolve, reject) => {
+        try {
+          messageRepo.saveUser({ chatId: payload.chatId, content: payload.content }, () => options.onAccepted(ctx))
+          resolve()
+        } catch (error) { running.delete(payload.chatId); reject(error) }
+      })
+      return { id: 'turn-one', accepted, completed: new Promise(() => {}) }
+    })
+    try {
+      const result = await taskExecutionService.start(SCOPE, task.id, TARGET, { continueInChat: true })
+      expect(result.chatId).toBe(chat.id)
+      expect(taskService.getById('profile', task.id)).toMatchObject({ status: 'in_progress', chatId: chat.id })
+    } finally {
+      isRunning.mockImplementation(() => false)
+    }
+  })
+
+  it('still refuses at acceptance when the task’s other chat started running meanwhile', async () => {
+    const { task, chat } = readyWithChat()
+    chatRepo.softDelete('profile', chat.id)
+    const running = new Set<string>()
+    isRunning.mockImplementation((chatId: string) => running.has(chatId))
+    dispatch.mockImplementationOnce((scope, payload, options) => {
+      running.add(payload.chatId)
+      running.add(chat.id)
+      const ctx = { userId: scope.profileUserId, chatId: payload.chatId, agentId: TARGET.agentId }
+      const accepted = new Promise<void>((resolve, reject) => {
+        try {
+          messageRepo.saveUser({ chatId: payload.chatId, content: payload.content }, () => options.onAccepted(ctx))
+          resolve()
+        } catch (error) { reject(error) }
+      })
+      return { id: 'turn-one', accepted, completed: new Promise(() => {}) }
+    })
+    try {
+      await expect(taskExecutionService.start(SCOPE, task.id, TARGET, { continueInChat: true })).rejects.toThrow('turn running')
+      expect(taskService.getById('profile', task.id)).toMatchObject({ status: 'open', chatId: chat.id })
+    } finally {
+      isRunning.mockImplementation(() => false)
+    }
   })
 
   it('starts a new chat when the task’s chat was deleted', async () => {

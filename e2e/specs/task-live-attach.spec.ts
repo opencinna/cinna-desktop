@@ -1,6 +1,7 @@
 import { createServer, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { test, expect, type CinnaApp } from '../fixtures/app'
+import { openRecentTasks } from '../fixtures/tasksView'
 
 const AGENT = 'Live Attachment Reporter'
 const CHAT_A = 'Live attachment A'
@@ -201,8 +202,7 @@ test('Task Continue attaches to main-owned live output before the turn finishes'
     await linkSandboxAccount(cinna, fake.host)
     await expect.poll(() => cinna.page.evaluate(() => window.api.tasks.list()), { timeout: 20_000 })
       .toEqual([expect.objectContaining({ title: TASK_TITLE, chatId: null, executor: 'remote' })])
-    await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
-    await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true }).getByRole('button', { name: TASK_TITLE }).click()
+    await (await openRecentTasks(cinna.page)).getByRole('button', { name: TASK_TITLE }).click()
     await cinna.page.getByRole('button', { name: 'Take over', exact: true }).click()
     const continuation = cinna.page.getByRole('region', { name: 'Continue this task', exact: true })
     await continuation.getByRole('combobox', { name: 'Continue with', exact: true }).selectOption({ label: AGENT })
@@ -215,8 +215,7 @@ test('Task Continue attaches to main-owned live output before the turn finishes'
     expect(running.chatId).toBeTruthy()
     await visitB(cinna)
     fake.emit(FIRST + SECOND)
-    await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
-    await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true }).getByRole('button', { name: TASK_TITLE }).click()
+    await (await openRecentTasks(cinna.page)).getByRole('button', { name: TASK_TITLE }).click()
     await cinna.page.getByRole('button', { name: 'Open the chat', exact: true }).click()
     await expect(cinna.page.getByText(FIRST + SECOND, { exact: true })).toHaveCount(1)
     fake.emit(FIRST + SECOND + THIRD)

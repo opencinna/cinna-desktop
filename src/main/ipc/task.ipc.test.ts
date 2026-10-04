@@ -278,12 +278,19 @@ describe('task:create and task:update payloads', () => {
     expect(authoring.createRouted).toHaveBeenLastCalledWith(expect.anything(), { title: 'T', assignee: null })
   })
 
+  it('forwards the parent of an Add subtask for the service to check', async () => {
+    await invoke('task:create', { title: 'Child', parentTaskId: 'p1', assignee: { kind: 'agent', agentId: 'a1' } })
+    expect(authoring.createRouted).toHaveBeenLastCalledWith(expect.anything(), { title: 'Child', parentTaskId: 'p1', assignee: { kind: 'agent', agentId: 'a1' } })
+  })
+
   it.each([
     [{ goal: 'no title' }, 'title'],
     [{ title: 'T', status: 'in_progress' }, 'Backlog or Ready'],
     [{ title: 'T', priority: 'max' }, 'priority'],
     [{ title: 'T', assignee: { kind: 'remote_agent', agentId: 'x' } }, 'Choose an agent'],
-    [{ title: 'T', customFields: ['a'] }, 'named values']
+    [{ title: 'T', customFields: ['a'] }, 'named values'],
+    [{ title: 'T', parentTaskId: 42 }, 'parent task'],
+    [{ title: 'T', parentTaskId: ' ' }, 'parent task']
   ] as const)('refuses %j before it reaches the service', async (payload, message) => {
     await expect(invoke('task:create', payload)).rejects.toThrow(message)
     expect(authoring.createRouted).not.toHaveBeenCalled()

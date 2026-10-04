@@ -359,43 +359,42 @@ function JobPrompt({ prompt }: { prompt: string }): React.JSX.Element {
 const HISTORY_PAGE = 10
 
 /**
- * The tasks the job's runs produced, as the Inbox lists tasks: one line each,
+ * The tasks the job's runs produced, as the Tasks view lists tasks: one line each,
  * no gap, the hover fill separating them — at the width of the work column,
  * not the page. Built from the runs, so a run from before tasks existed still
- * shows. Pages like the Inbox's Recent tasks, through the same hook: ten rows,
+ * shows. Pages like the Tasks view's Recent list, through the same hook: ten rows,
  * newest first — a run that starts while the page is open goes on top —
- * an in-place "Show more tasks" that keeps its place under the pointer, then
- * "All N shown" in its slot.
+ * then "Show more tasks", which turns into an inert "All N shown" in its slot
+ * with the rest of the runs below it.
  */
 function TasksHistory({ runs }: { runs: JobRunData[] }): React.JSX.Element {
-  const { ordered, visible, expanded, showMore, sectionRef } = useTaskRowsInPlace(
+  const { ordered, head, rest, more, expanded, showMore } = useTaskRowsInPlace(
     runs,
     HISTORY_PAGE,
-    '[data-job-scroll]',
     // A run started from this page's Run button lands on top, not behind Show more.
     'prepend'
   )
   return (
     <div
-      ref={sectionRef as React.RefObject<HTMLDivElement | null>}
       role="region"
       aria-label="Tasks history"
       className="min-w-0 @2xl:col-start-1 @2xl:row-start-2"
     >
       <Section title="Tasks history">
         {ordered.length === 0 ? (
-          // Flush with the heading, as the Inbox's empty Recent tasks is.
+          // Flush with the heading, as the other empty task lists are.
           <p className="text-[13px] text-[var(--color-text-muted)]">No tasks yet</p>
         ) : (
           <div className="space-y-3">
             <ul className="list-none m-0 p-0">
-              {ordered.slice(0, visible).map((run) => (
+              {head.map((run) => (
                 <li key={run.id}>
                   <JobRunRow run={run} />
                 </li>
               ))}
             </ul>
-            {ordered.length > visible ? (
+            {/* The slot keeps its line once pressed; the rest goes below it (`useTaskRowsInPlace`). */}
+            {more ? (
               <button
                 type="button"
                 onClick={showMore}
@@ -405,6 +404,15 @@ function TasksHistory({ runs }: { runs: JobRunData[] }): React.JSX.Element {
               </button>
             ) : expanded && (
               <p className="px-2 text-[13px] text-[var(--color-text-muted)]">All {ordered.length} shown</p>
+            )}
+            {rest.length > 0 && (
+              <ul className="list-none m-0 p-0">
+                {rest.map((run) => (
+                  <li key={run.id}>
+                    <JobRunRow run={run} />
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         )}

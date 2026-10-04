@@ -474,7 +474,10 @@ describe('tasks on an install that predates them', () => {
         'status',
         'resolution',
         'created_at',
-        'resolved_at'
+        'resolved_at',
+        'queued_answer',
+        'queued_at',
+        'queued_error'
       ])
     )
     raw.close()
@@ -577,7 +580,8 @@ describe('input request ownership on an existing install', () => {
     runAllMigrations(adaptDatabase(raw))
     runAllMigrations(adaptDatabase(raw))
     expect(raw.prepare('SELECT * FROM task_input_requests ORDER BY id').all()).toEqual(before.map((row) => ({
-      ...row, delivery_owner: 'driver', root_run_id: null, invocation_id: null
+      ...row, delivery_owner: 'driver', root_run_id: null, invocation_id: null,
+      queued_answer: null, queued_at: null, queued_error: null
     })))
     expect(() => raw.prepare(`INSERT INTO task_input_requests (id, task_id, chat_id, agent_id, delivery_owner, request, resume, created_at)
       VALUES ('gate', 'old-task', 'chat', NULL, 'runner', '{"kind":"question","questions":[]}', 'reply', 15)`).run()).not.toThrow()
@@ -602,7 +606,8 @@ describe('input request ownership on an existing install', () => {
     expect(raw.prepare('SELECT * FROM task_input_requests').all()).toEqual([{
       id: 'legacy-ask', task_id: 'legacy-task', chat_id: 'legacy-chat', agent_id: 'legacy-agent',
       request, resume: 'reply', status: 'open', resolution: null, created_at: 42, resolved_at: null,
-      root_run_id: null, invocation_id: null, delivery_owner: 'driver'
+      root_run_id: null, invocation_id: null, delivery_owner: 'driver',
+      queued_answer: null, queued_at: null, queued_error: null
     }])
     expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
     raw.close()
@@ -824,6 +829,46 @@ describe('session telemetry', () => {
     raw.exec("DELETE FROM chats WHERE id = 'c1'")
     expect(raw.prepare('SELECT COUNT(*) AS n FROM session_telemetry').get()).toEqual({ n: 0 })
     expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.close()
+  })
+})
+
+describe('task dispatcher runs in flight on an install from before up_to', () => {
+  it('moves each recorded run to its own table, adds max_runs, and replays idempotently', () => {
+    // Mutation: drop the copy into `agent_task_dispatch_runs` → the interrupted runs are lost at boot.
+    const raw = freshDatabase()
+    raw.exec(`DROP TABLE agent_task_dispatch; DROP TABLE agent_task_dispatch_runs;
+      CREATE TABLE agent_task_dispatch (
+        user_id TEXT NOT NULL, agent_id TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'manual',
+        paused_reason TEXT, paused_task_id TEXT, paused_at INTEGER,
+        active_task_id TEXT, active_chat_id TEXT, updated_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, agent_id));
+      INSERT INTO agent_task_dispatch (user_id, agent_id, mode, active_task_id, active_chat_id, updated_at)
+        VALUES ('u1', 'queue-agent', 'one', 't-queue', 'c-queue', 10),
+               ('u1', 'manual-agent', 'manual', 't-manual', NULL, 20),
+               ('u1', 'idle-agent', 'one', NULL, NULL, 30);`)
+    runAllMigrations(adaptDatabase(raw))
+    const runs = (): unknown[] => raw.prepare('SELECT * FROM agent_task_dispatch_runs ORDER BY task_id').all()
+    expect(runs()).toEqual([
+      { user_id: 'u1', agent_id: 'manual-agent', task_id: 't-manual', chat_id: null, started_at: 20 },
+      { user_id: 'u1', agent_id: 'queue-agent', task_id: 't-queue', chat_id: 'c-queue', started_at: 10 }
+    ])
+    // The run Run next started in Manual is kept; the row it alone kept alive is not (no row = manual).
+    expect(raw.prepare('SELECT agent_id, mode, max_runs, active_task_id, active_chat_id FROM agent_task_dispatch ORDER BY agent_id').all()).toEqual([
+      { agent_id: 'idle-agent', mode: 'one', max_runs: null, active_task_id: null, active_chat_id: null },
+      { agent_id: 'queue-agent', mode: 'one', max_runs: null, active_task_id: null, active_chat_id: null }
+    ])
+    runAllMigrations(adaptDatabase(raw))
+    expect(runs()).toHaveLength(2)
+    raw.close()
+  })
+
+  it('creates the table with max_runs and without the legacy columns on a fresh install', () => {
+    const raw = freshDatabase()
+    const columns = (raw.prepare("SELECT name FROM pragma_table_info('agent_task_dispatch')").all() as { name: string }[]).map((c) => c.name)
+    expect(columns).toContain('max_runs')
+    expect(columns).not.toContain('active_task_id')
+    expect(tableNames(raw).has('agent_task_dispatch_runs')).toBe(true)
     raw.close()
   })
 })

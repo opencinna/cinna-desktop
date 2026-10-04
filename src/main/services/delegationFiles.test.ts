@@ -46,6 +46,26 @@ describe('main-authored handover files', () => {
     expect(() => createDelegationBrief({ ...input, brief: 'Changed work' })).toThrow('different brief')
     expect(readFileSync(result.briefPath, 'utf8')).toContain('Do the work.')
   })
+  it('writes the priority and custom fields as brief keys that read back as the task’s', () => {
+    const input = { ...fixture(), priority: 'urgent' as const, customFields: { estimate: 3, area: 'billing: EU', labels: ['ui', 'docs'], done_before: null } }
+    const result = createDelegationBrief(input)
+    const text = readFileSync(result.briefPath, 'utf8')
+    expect(text).toMatch(/^priority: urgent$/m)
+    expect(text).toMatch(/^labels: \[ui, docs\]$/m)
+    expect(parseHandoverBrief(text, { handoverId: input.id })).toMatchObject({
+      ok: true,
+      brief: { priority: 'urgent', customFields: { estimate: 3, area: 'billing: EU', labels: ['ui', 'docs'], done_before: null } }
+    })
+    // A retry must say the same; a different priority or field is another brief.
+    expect(createDelegationBrief(input)).toEqual(result)
+    expect(() => createDelegationBrief({ ...input, priority: 'low' })).toThrow('different brief')
+    expect(() => createDelegationBrief({ ...input, customFields: { estimate: 4 } })).toThrow('different brief')
+  })
+  it('refuses a custom field the brief would not read back as one', () => {
+    const input = { ...fixture(), customFields: { group: 'not-a-field' } }
+    expect(() => createDelegationBrief(input)).toThrow('could not be represented')
+    expect(existsSync(handoverPaths(input.folder, input.id).briefPath)).toBe(false)
+  })
   it('supports drafts without converting them to ready on retry', () => {
     const input = { ...fixture(), status: 'draft' as const }
     createDelegationBrief(input)

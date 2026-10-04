@@ -124,6 +124,10 @@ export function parseTaskCreatePayload(payload: unknown): TaskCreateInput {
   }
   if (raw.assignee !== undefined) input.assignee = assigneeInput(raw.assignee)
   if (raw.customFields !== undefined) input.customFields = customFieldsInput(raw.customFields)
+  if (raw.parentTaskId !== undefined) {
+    if (typeof raw.parentTaskId !== 'string' || !raw.parentTaskId.trim()) throw new Error('A parent task needs an id.')
+    input.parentTaskId = raw.parentTaskId
+  }
   return input
 }
 
@@ -253,9 +257,11 @@ export function registerTaskHandlers(): void {
   })
 
   /**
-   * A task the user wrote down by hand (the Tasks view's New task). Main fills
-   * in everything but the title (`taskAuthoringService.create`); the handoff
-   * export follows through `taskService.create`.
+   * A task the user wrote down by hand (the Tasks view's New task, or the task
+   * page's Add subtask with `parentTaskId`). Main fills in everything but the
+   * title (`taskAuthoringService.create`) and checks the parent; the handoff
+   * export follows through `taskService.create`. A refusal is a thrown
+   * sentence, which the dialog shows through `unwrapIpcError`.
    */
   ipcHandle('task:create', async (_event, payload: unknown): Promise<TaskDto> => {
     userActivation.requireActivated()

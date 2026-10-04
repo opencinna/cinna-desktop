@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { test, expect, type CinnaApp } from '../fixtures/app'
+import { openRecentTasks } from '../fixtures/tasksView'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { scriptAcpEngine, SCRIPT_MODEL } from '../fixtures/scriptAcpEngine'
 import { jobRemoteService, linkSandboxAccount, TITLE, GOAL, NOTE, LOCAL_AGENT, REMOTE_AGENT,
@@ -53,8 +54,7 @@ test('a local-origin Job handed remote refreshes through its bound task without 
     expect(mutationCounts(fake)).toEqual({ creates: 0, executes: 0, local: 0 })
     await linkSandboxAccount(cinna, fake.host)
     fake.state.refuseNote = false
-    await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
-    await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true })
+    await (await openRecentTasks(cinna.page))
       .getByRole('button', { name: TITLE }).click()
     await cinna.page.getByRole('button', { name: 'Hand off', exact: true }).click()
     const dialog = cinna.page.getByRole('dialog', { name: 'Hand off task', exact: true })
@@ -144,8 +144,7 @@ test('an accepted main-owned Job starts one ACP step without a renderer model pr
     await cinna.page.evaluate(() => window.api.localAgents.rescan())
     await openJob(cinna, title)
     await expect(runRow(cinna.page, 'succeeded')).toBeVisible()
-    await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
-    await cinna.page.getByRole('region', { name: 'Recent tasks', exact: true })
+    await (await openRecentTasks(cinna.page))
       .getByRole('button', { name: title }).click()
     await cinna.page.getByRole('button', { name: 'Open the chat', exact: true }).click()
     await expect(cinna.page.getByText(summary, { exact: true })).toHaveCount(1)

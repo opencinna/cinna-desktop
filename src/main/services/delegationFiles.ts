@@ -6,6 +6,8 @@ import {
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { HANDOVER_HOW_TO_REPORT, isHandoverId, parseHandoverBrief } from '../../shared/handovers'
+import { formatCustom } from '../../shared/folderTasks'
+import type { TaskCustomFields, TaskPriority } from '../../shared/tasks'
 
 /** Never follow a project-controlled symlink when writing on a requester's behalf. */
 function directory(path: string): void {
@@ -71,6 +73,19 @@ export interface DelegationFileInput {
   taskId: string | null
   depth: number
   group?: string
+  /** Written as `priority:`; absent leaves the task at its default. */
+  priority?: TaskPriority
+  /** Written as top-level keys, which the receiving side reads as the task's custom fields. */
+  customFields?: TaskCustomFields
+}
+
+/** The same fields, compared as the brief's reader sees them: absent and empty are one. */
+function sameCustomFields(read: TaskCustomFields | null, written: TaskCustomFields | undefined): boolean {
+  const left = read ?? {}
+  const right = written ?? {}
+  const keys = Object.keys(left)
+  return keys.length === Object.keys(right).length &&
+    keys.every((key) => key in right && JSON.stringify(left[key]) === JSON.stringify(right[key]))
 }
 
 /** Whether a brief is already written at this id (followed by `createDelegationBrief`'s own checks). */
@@ -89,7 +104,7 @@ export function createDelegationBrief(input: DelegationFileInput) {
   try {
     const stat = lstatSync(paths.briefPath)
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('The existing brief must be a regular file.')
-    const parsed = parseHandoverBrief(readFileSync(paths.briefPath, 'utf8'))
+    const parsed = parseHandoverBrief(readFileSync(paths.briefPath, 'utf8'), { handoverId: input.id })
     const sameBrief =
       parsed.ok &&
       parsed.brief.origin?.agentId === input.agentId &&
@@ -99,7 +114,9 @@ export function createDelegationBrief(input: DelegationFileInput) {
       parsed.brief.body === body &&
       // An omitted `execution` has no opinion and matches whatever the brief says; a stated one must match.
       (input.execution === null || parsed.brief.execution === input.execution) &&
-      parsed.brief.group === (input.group ?? null)
+      parsed.brief.group === (input.group ?? null) &&
+      parsed.brief.priority === (input.priority ?? null) &&
+      sameCustomFields(parsed.brief.customFields, input.customFields)
     if (!parsed.ok || !sameBrief) {
       throw new Error('This handover id already belongs to a different brief. Choose a new id.')
     }
@@ -120,11 +137,19 @@ export function createDelegationBrief(input: DelegationFileInput) {
     ...(input.taskId ? [`  task: ${JSON.stringify(input.taskId)}`] : []),
     `depth: ${input.depth}`,
     ...(input.group ? [`group: ${JSON.stringify(input.group)}`] : []),
+    ...(input.priority ? [`priority: ${input.priority}`] : []),
+    ...Object.entries(input.customFields ?? {}).map(([key, value]) => {
+      const token = formatCustom(value)
+      return token === '' ? `${key}:` : `${key}: ${token}`
+    }),
     '---',
     body,
     ''
   ].join('\n')
-  if (!parseHandoverBrief(content).ok) {
+  const written = parseHandoverBrief(content, { handoverId: input.id })
+  // A custom field that does not read back as itself (a key the brief owns, or
+  // one the task-file reader leaves out) would reach the task as something else.
+  if (!written.ok || !sameCustomFields(written.brief.customFields, input.customFields)) {
     throw new Error('The brief could not be represented in the handover file format.')
   }
   atomicWrite(paths.briefPath, content)

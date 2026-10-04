@@ -18,7 +18,7 @@ import { useFolderBoard, type useCreateTask, type useSetTaskStatus, type useUpda
 import { unwrapIpcError } from '../../utils/ipcError'
 import { SettingsInfoTip } from '../settings/SettingsLayout'
 import { Detail } from './DetailParts'
-import { customFieldText, folderMoveTargets, isTableBound, taskStatusLabel, taskStatusText } from './tasksViewModel'
+import { customFieldText, folderMoveTargets, isDispatchFlagged, manualMoveOptions, taskStatusLabel, taskStatusText } from './tasksViewModel'
 
 /**
  * The New task and Edit task dialogs, sharing their form parts.
@@ -300,24 +300,40 @@ function newStatusWords(columns: readonly TaskBoardColumn[] | null | undefined):
   return { new: first('backlog') ?? 'Backlog', open: first('ready') ?? 'Ready' }
 }
 
-/** New task: a title, Enter, and the user lands on the task. */
-export function NewTaskDialog({ create, onClose }: {
-  /** Owned by the Tasks view, whose hook-level `onCreated` closes this and opens the task. */
+/** The task a new subtask goes under, as the dialog names it and locks its assignee. */
+export interface NewTaskParent {
+  id: string
+  title: string
+  /** The parent's agent, or null for an unassigned parent. */
+  agent: { id: string; name: string } | null
+}
+
+/**
+ * New task: a title, Enter, and the user lands on the task. With a `parent`
+ * (the task page's Add subtask) it is a subtask: the parent and the assignee
+ * it inherits are named at the top, where they move nothing and need no More
+ * options to be seen, and the Assignee select under More options is locked to
+ * the parent's — main refuses any other.
+ */
+export function NewTaskDialog({ create, onClose, parent }: {
+  /** Owned by the view that opened it, whose hook-level `onCreated` closes this and opens the task. */
   create: ReturnType<typeof useCreateTask>
   onClose: () => void
+  parent?: NewTaskParent
 }): React.JSX.Element {
   const cardRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLInputElement>(null)
+  const initialAssignee = parent?.agent?.id ?? NO_AGENT
   const [title, setTitle] = useState('')
   const [more, setMore] = useState(false)
   const [goal, setGoal] = useState('')
   const [priority, setPriority] = useState<TaskPriority>('normal')
-  const [assignee, setAssignee] = useState(NO_AGENT)
+  const [assignee, setAssignee] = useState(initialAssignee)
   const [status, setStatus] = useState<'new' | 'open'>('new')
   const [rows, setRows] = useState<FieldRow[]>([])
   const [localError, setLocalError] = useState<string | null>(null)
   const pending = create.isPending
-  const dirty = title !== '' || goal !== '' || priority !== 'normal' || assignee !== NO_AGENT || status !== 'new' ||
+  const dirty = title !== '' || goal !== '' || priority !== 'normal' || assignee !== initialAssignee || status !== 'new' ||
     rows.some((row) => row.key !== '' || row.text !== '')
   const dismiss = useDismiss(cardRef, { busy: pending, dirty }, onClose)
   // A bare agent keeps its tasks in its folder: the options say that folder's
@@ -339,7 +355,9 @@ export function NewTaskDialog({ create, onClose }: {
       ...(goal.trim() ? { goal: goal.trim() } : {}),
       ...(priority !== 'normal' ? { priority } : {}),
       ...(status !== 'new' ? { status } : {}),
-      ...(assignee !== NO_AGENT ? { assignee: assigneeInput(assignee) } : {}),
+      // A subtask always names its parent's assignee, Unassigned included.
+      ...(parent ? { assignee: assigneeInput(initialAssignee), parentTaskId: parent.id }
+        : assignee !== NO_AGENT ? { assignee: assigneeInput(assignee) } : {}),
       ...(Object.keys(fields.fields).length > 0 ? { customFields: fields.fields } : {})
     })
   }
@@ -347,7 +365,17 @@ export function NewTaskDialog({ create, onClose }: {
   const error = localError ?? (create.error ? unwrapIpcError(create.error, 'The task could not be created.') : null)
 
   return (
-    <DialogFrame label="New task" cardRef={cardRef}>
+    <DialogFrame label={parent ? 'New subtask' : 'New task'} cardRef={cardRef}>
+      {parent && (
+        // The parent's title gives way first; who the subtask goes to stays whole.
+        <p data-subtask-parent className="mt-1 flex min-w-0 items-baseline text-xs text-[var(--color-text-muted)]">
+          <span className="shrink-0 whitespace-pre">Under </span>
+          <span className="min-w-0 truncate font-medium text-[var(--color-text)]" title={parent.title}>{parent.title}</span>
+          <span className="shrink-0 whitespace-pre">
+            {parent.agent ? <> · assigned to <span className="font-medium text-[var(--color-text)]">{parent.agent.name}</span></> : ' · unassigned'}
+          </span>
+        </p>
+      )}
       <form className="mt-4 space-y-4" onSubmit={(event) => { event.preventDefault(); submit() }}>
         <div className="space-y-1.5">
           <label htmlFor="new-task-title" className={LABEL}>Title</label>
@@ -378,7 +406,8 @@ export function NewTaskDialog({ create, onClose }: {
                   </select>
                 </div>
               </div>
-              <AssigneeField id="new-task-assignee" value={assignee} onChange={setAssignee} disabled={pending} />
+              <AssigneeField id="new-task-assignee" value={assignee} onChange={setAssignee} disabled={pending || !!parent}
+                current={parent?.agent ?? null} />
               <CustomFieldsEditor rows={rows} onChange={setRows} disabled={pending} />
             </div>
           )}
@@ -428,6 +457,7 @@ export function statusLockReason(task: TaskDto, targets: readonly TaskStatus[]):
 /** A run, a question or — for a task file — its agent holds the status, whatever the targets. */
 function heldReason(task: TaskDto): string | null {
   if (task.runtime) return 'Moved by the runtime that owns this task.'
+  if (isDispatchFlagged(task, task.status)) return null
   if (task.file && (task.status === 'in_progress' || task.status === 'blocked')) return 'Set in the task file by its agent.'
   if (task.status === 'in_progress') return 'Set by the run working on it.'
   if (task.status === 'blocked') return 'Set by the question waiting on you.'
@@ -441,7 +471,7 @@ function heldReason(task: TaskDto): string | null {
  */
 function editTargets(task: TaskDto): TaskStatus[] {
   const here = taskStatusCategory(task.status)
-  return manualTargets(task.status, { bound: isTableBound(task) })
+  return manualTargets(task.status, manualMoveOptions(task, task.status))
     .filter((status) => taskStatusCategory(status) !== here)
 }
 

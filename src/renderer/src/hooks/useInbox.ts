@@ -1,5 +1,5 @@
-import { useCallback } from 'react'
-import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
+import { useCallback, useSyncExternalStore } from 'react'
+import { useQuery, useQueryClient, type QueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
 import type {
   AskAnswerPayload,
@@ -130,6 +130,27 @@ export function useInboxList(): UseQueryResult<InboxSnapshot> {
   })
 }
 
+/** How many Inbox reads have landed so far: each completed read counts one. */
+function inboxReadCount(queryClient: QueryClient): number {
+  return queryClient.getQueryState(INBOX_QUERY_KEY)?.dataUpdateCount ?? 0
+}
+
+/** {@link inboxReadCount}, kept current: a component re-renders as each read lands. */
+export function useInboxReadCount(): number {
+  const queryClient = useQueryClient()
+  return useSyncExternalStore(
+    useCallback((onChange) => queryClient.getQueryCache().subscribe(onChange), [queryClient]),
+    () => inboxReadCount(queryClient)
+  )
+}
+
+/**
+ * An answer's outcome, with how many Inbox reads had landed when main
+ * returned it ({@link useInboxReadCount}). Main stores a queued answer before
+ * it returns, so any read past `readsAtAnswer` already says what became of it.
+ */
+export type AskAnswerOutcome = InboxAnswerResult & { readsAtAnswer: number }
+
 /**
  * Deliver an answer from the inbox.
  *
@@ -144,17 +165,21 @@ export function useInboxList(): UseQueryResult<InboxSnapshot> {
  * A refusal still refreshes the list: `no_longer_waiting` means main settled
  * the row on the way out, so the count must stop counting it.
  */
-export function useAnswerAsk(): (payload: AskAnswerPayload) => Promise<InboxAnswerResult> {
+export function useAnswerAsk(): (payload: AskAnswerPayload) => Promise<AskAnswerOutcome> {
   const queryClient = useQueryClient()
   return useCallback(
     async (payload: AskAnswerPayload) => {
-      const result = await window.api.inbox.answer(payload)
+      const answered = await window.api.inbox.answer(payload)
+      // Counted before the re-read below is even asked for: every read after
+      // this one began after main had answered.
+      const result: AskAnswerOutcome = { ...answered, readsAtAnswer: inboxReadCount(queryClient) }
       void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
       // The chat may be open behind this view, with a live block over the same
       // ask. Its `input_resolved` rides the turn's port and will settle it
       // anyway; saying so here means it is already settled when the user
       // switches to the transcript rather than a tick later.
-      if (result.ok) useChatStore.getState().resolveInputRequest(payload.requestId)
+      // An answer stored for the task's queue (`queued`) has settled nothing yet.
+      if (result.ok && !result.queued) useChatStore.getState().resolveInputRequest(payload.requestId)
       return result
     },
     [queryClient]

@@ -880,8 +880,10 @@ export const taskComments = sqliteTable('task_comments', {
  * No FK to `agents.id` (sync may re-create a row under the same id). Not a
  * synced collection.
  *
- * `active_task_id` / `active_chat_id` are the dispatched run in flight, kept
- * so that a run Cinna quit under is found at the next boot and flagged.
+ * `max_runs` is the N of `up_to` (null in the other modes). The runs in
+ * flight are {@link agentTaskDispatchRuns}; an install from before `up_to`
+ * still has `active_task_id` / `active_chat_id` here, emptied into that table
+ * by the migration and never written again.
  */
 export const agentTaskDispatch = sqliteTable(
   'agent_task_dispatch',
@@ -889,14 +891,31 @@ export const agentTaskDispatch = sqliteTable(
     userId: text('user_id').notNull(),
     agentId: text('agent_id').notNull(),
     mode: text('mode').$type<TaskDispatchMode>().notNull().default('manual'),
+    maxRuns: integer('max_runs'),
     pausedReason: text('paused_reason').$type<TaskDispatchPauseReason | null>(),
     pausedTaskId: text('paused_task_id'),
     pausedAt: integer('paused_at', { mode: 'timestamp_ms' }),
-    activeTaskId: text('active_task_id'),
-    activeChatId: text('active_chat_id'),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
   },
   (table) => [primaryKey({ columns: [table.userId, table.agentId] })]
+)
+
+/**
+ * Every dispatched run in flight, one row per (profile, agent, task), kept so
+ * that each run Cinna quit under is found at the next boot and flagged. A row
+ * is written when the run is about to start (`chat_id` null) and gets its chat
+ * once the run is accepted; the settle removes it. Device-local, no FK.
+ */
+export const agentTaskDispatchRuns = sqliteTable(
+  'agent_task_dispatch_runs',
+  {
+    userId: text('user_id').notNull(),
+    agentId: text('agent_id').notNull(),
+    taskId: text('task_id').notNull(),
+    chatId: text('chat_id'),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull()
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.agentId, table.taskId] })]
 )
 
 /**
@@ -1013,7 +1032,17 @@ export const taskInputRequests = sqliteTable('task_input_requests', {
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date()),
-  resolvedAt: integer('resolved_at', { mode: 'timestamp' })
+  resolvedAt: integer('resolved_at', { mode: 'timestamp' }),
+  /**
+   * An Inbox answer to a `next_message` ask on a task a dispatcher queue owns,
+   * stored until the queue sends it (`taskDispatchService`, as a flight that
+   * holds a runner slot and the agent's folder). The ask stays open meanwhile.
+   * Null when nothing waits to be sent.
+   */
+  queuedAnswer: text('queued_answer'),
+  queuedAt: integer('queued_at', { mode: 'timestamp' }),
+  /** Why the queue could not send the last stored answer; cleared by the next answer. */
+  queuedError: text('queued_error')
 })
 
 /**

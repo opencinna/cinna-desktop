@@ -124,7 +124,15 @@ describe('the outside-content approval', () => {
 
   it.each([
     [{ reason: 'folder_busy', mode: 'one' }, 'Approved. It starts when the folder is free.'],
-    [{ reason: 'live_turn', mode: 'manual' }, 'Approved. Use Run next when the folder is free.'],
+    [{ reason: 'folder_busy', mode: 'manual' }, 'Approved. Use Run next when the folder is free.'],
+    // Mutation: fold agent_busy, live_turn and slot back into folder_busy → the folder sentence for each.
+    [{ reason: 'agent_busy', mode: 'up_to', maxRuns: 3 }, 'Approved. It starts when one of Writer’s 3 runs finishes.'],
+    [{ reason: 'agent_busy', mode: 'one', maxRuns: null }, 'Approved. It starts when Writer’s current run finishes.'],
+    [{ reason: 'agent_busy', mode: 'manual', maxRuns: null }, 'Approved. Use Run next when Writer’s current run finishes.'],
+    [{ reason: 'live_turn', mode: 'one' }, 'Approved. It starts when the conversation running there finishes.'],
+    [{ reason: 'live_turn', mode: 'manual' }, 'Approved. Use Run next when the conversation running there finishes.'],
+    [{ reason: 'slot', mode: 'one' }, 'Approved. It starts when a task runner slot is free.'],
+    [{ reason: 'slot', mode: 'up_to', maxRuns: 2 }, 'Approved. It starts when a task runner slot is free.'],
     [{ reason: 'not_eligible', mode: 'one' }, 'Approved. It is not ready to run yet.'],
     [{ reason: 'not_eligible', mode: 'manual' }, 'Approved. It is not ready to run yet.']
   ] as const)('says when an approved task it could not start will run (%o)', async (deferral, text) => {
@@ -214,7 +222,7 @@ describe('Run next’s request to mark an approval', () => {
 describe('a paused queue', () => {
   it('names the queue and the task, and resumes it', async () => {
     listMock.mockResolvedValue(snapshot([PAUSED]))
-    resume.mockResolvedValue({ ok: true, state: { agentId: 'folder:w', mode: 'one', paused: null, running: null, next: null, waiting: null } })
+    resume.mockResolvedValue({ ok: true, state: { agentId: 'folder:w', mode: 'one', maxRuns: null, paused: null, running: [], next: null, waiting: null } })
     render(createElement(InboxView), { wrapper })
     const card = await screen.findByRole('article', { name: /queue is paused$/ })
     await waitFor(() => expect(card.getAttribute('aria-label')).toBe('Writer’s queue is paused'))

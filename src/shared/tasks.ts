@@ -294,7 +294,10 @@ export interface TaskBlocker {
   id: string
   /** The task it names in the same folder, or null when it names none. */
   taskId: string | null
+  /** That task's title, or null when the id names none. */
   title: string | null
+  /** That task's status, or null when the id names none — so a page lists blockers without a fetch each. */
+  status: TaskStatus | null
   /** That task is `completed`. */
   done: boolean
 }
@@ -324,6 +327,12 @@ export interface TaskCreateInput {
   status?: 'new' | 'open'
   assignee?: TaskAssigneeInput
   customFields?: TaskCustomFields
+  /**
+   * Make it a subtask of this task (the task page's Add subtask). Main
+   * refuses a parent that is missing, deleted or archived, or whose assignee
+   * is not the new task's — a folder subtask lives in its parent's folder.
+   */
+  parentTaskId?: string
 }
 
 /**

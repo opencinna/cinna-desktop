@@ -1,8 +1,8 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 
 /**
  * A polled task list that does not move under the pointer — the two rules the
- * Inbox's Recent tasks and a task page's Subtasks share.
+ * Tasks view's lists and a task page's Subtasks share.
  *
  * ## The order each row was first seen in, held for the life of the mount
  *
@@ -15,25 +15,19 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react'
  * when the order is taken again — so a caller that shows a different list in
  * the same place must remount (a `key`).
  *
- * ## Show more keeps its button under the pointer that pressed it
+ * ## Show more leaves nothing clickable under the pointer that pressed it
  *
- * The revealed rows are inserted above the button, which would drop it by their
- * height and slide a task row into the pixels it left; a second click then opens
- * a task nobody chose. The nearest `scrollSelector` ancestor is scrolled by
- * exactly the height that was added. That is allowed where a poll-driven shift
- * is not: it is the direct consequence of the user's own gesture.
- *
- * On the last page the button goes away, and compensating for the rows alone
- * would then put a task row where it was. So once the list has been expanded,
- * the caller renders a line of the button's height in its place (`expanded`),
- * and the same compensation lands that line under the pointer.
+ * Show more reveals every remaining row at once, and they go **below** the
+ * button's slot, not above it: the caller renders the first page (`head`), then
+ * the slot, then the rest (`rest`). Once pressed, the slot holds an inert line
+ * of the button's height ("All N shown"), so the pointer that pressed it rests
+ * on text, and nothing above it moved — no scroll compensation needed.
  */
 export function useTaskRowsInPlace<T extends { id: string }>(
   rows: T[],
   pageSize: number,
-  scrollSelector: string,
   /**
-   * Where a row first seen after mount goes. `'append'` (the Inbox) keeps
+   * Where a row first seen after mount goes. `'append'` (the Tasks view) keeps
    * every row above it still; `'prepend'` (a job's Tasks history, newest
    * first) puts a run the user just started where they look for it, above
    * any "Show more". Rows already seen keep their order either way.
@@ -41,11 +35,15 @@ export function useTaskRowsInPlace<T extends { id: string }>(
   newRows: 'append' | 'prepend' = 'append'
 ): {
   ordered: T[]
-  visible: number
-  /** Show more has been pressed — the button's slot must stay filled. */
+  /** The rows above the Show more slot: the first page. */
+  head: T[]
+  /** The rows below the slot: empty until Show more, then every other row. */
+  rest: T[]
+  /** The slot holds the Show more button. */
+  more: boolean
+  /** Show more has been pressed — the slot holds the inert "All N shown" line. */
   expanded: boolean
   showMore: () => void
-  sectionRef: React.RefObject<HTMLElement | null>
 } {
   const order = useRef<string[]>([])
   const ordered = useMemo(() => {
@@ -59,23 +57,15 @@ export function useTaskRowsInPlace<T extends { id: string }>(
     return order.current.map((id) => byId.get(id)).filter((row) => row !== undefined)
   }, [rows, newRows])
 
-  const [visible, setVisible] = useState(pageSize)
-  const sectionRef = useRef<HTMLElement | null>(null)
-  const grownFrom = useRef<number | null>(null)
+  const [expanded, setExpanded] = useState(false)
+  const showMore = useCallback(() => setExpanded(true), [])
 
-  const showMore = (): void => {
-    grownFrom.current = sectionRef.current?.getBoundingClientRect().height ?? null
-    setVisible((count) => count + pageSize)
+  return {
+    ordered,
+    head: ordered.slice(0, pageSize),
+    rest: expanded ? ordered.slice(pageSize) : [],
+    more: !expanded && ordered.length > pageSize,
+    expanded,
+    showMore
   }
-
-  useLayoutEffect(() => {
-    const before = grownFrom.current
-    grownFrom.current = null
-    if (before === null || !sectionRef.current) return
-    const grew = sectionRef.current.getBoundingClientRect().height - before
-    const scroller = sectionRef.current.closest(scrollSelector)
-    if (scroller && grew > 0) scroller.scrollTop += grew
-  }, [visible, scrollSelector])
-
-  return { ordered, visible, expanded: visible > pageSize, showMore, sectionRef }
 }

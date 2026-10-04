@@ -80,14 +80,16 @@ const CHAT_GROUP_BY_DATE_KEY = 'cinna-chat-group-by-date'
 const CHAT_SHOW_ACTIVE_KEY = 'cinna-chat-show-active'
 const CHAT_GROUPS_COLLAPSED_KEY = 'cinna-chat-groups-collapsed'
 // The top bar's Tasks button (on unless turned off), and the Tasks view's
-// last List | Board choice.
+// last List | Recent | Board choice.
 const TASKS_BUTTON_KEY = 'cinna-show-tasks-button'
 const TASKS_VIEW_MODE_KEY = 'cinna-tasks-view-mode'
 
-export type TasksViewMode = 'list' | 'board'
+/** The list grouped by category, the list by last change (Recent), or the board. */
+export type TasksViewMode = 'list' | 'recent' | 'board'
 
 function readTasksViewMode(): TasksViewMode {
-  return localStorage.getItem(TASKS_VIEW_MODE_KEY) === 'board' ? 'board' : 'list'
+  const stored = localStorage.getItem(TASKS_VIEW_MODE_KEY)
+  return stored === 'board' || stored === 'recent' ? stored : 'list'
 }
 
 /** `pendingModeId` for a new chat with no chat mode at all. */

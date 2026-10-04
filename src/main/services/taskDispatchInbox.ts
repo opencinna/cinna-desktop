@@ -29,6 +29,32 @@ export function setDispatchableAgentsSource(source: DispatchableAgentsSource | n
   dispatchableAgents = source
 }
 
+/**
+ * Whether this agent can work a queue now. Unregistered or unreadable counts
+ * as yes: an answer stored for a queue nobody works is cleared by the next
+ * dispatch pass, with a sentence, so a wrong yes costs one more answer.
+ */
+export async function isDispatchableAgent(userId: string, agentId: string): Promise<boolean> {
+  if (!dispatchableAgents) return true
+  try { return (await dispatchableAgents(userId)).has(agentId) } catch { return true }
+}
+
+/**
+ * Each dispatchable agent's folder name, by agent id — what an answer waiting
+ * for its queue says it waits on. Registered by the dispatcher's wiring.
+ */
+type DispatchFolderNamesSource = (userId: string) => Promise<ReadonlyMap<string, string>>
+let dispatchFolderNames: DispatchFolderNamesSource | null = null
+
+export function setDispatchFolderNamesSource(source: DispatchFolderNamesSource | null): void {
+  dispatchFolderNames = source
+}
+
+/** The folder names, or an empty map when unregistered or unreadable. */
+export async function dispatchFolderNamesFor(userId: string): Promise<ReadonlyMap<string, string>> {
+  try { return dispatchFolderNames ? await dispatchFolderNames(userId) : new Map() } catch { return new Map() }
+}
+
 export async function taskDispatchInboxItems(userId: string): Promise<TaskDispatchInboxItem[]> {
   // Unregistered, or unreadable: list every card rather than hide one the
   // user must answer.

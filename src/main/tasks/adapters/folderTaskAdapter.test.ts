@@ -334,13 +334,17 @@ describe('push', () => {
     expect((await only()).file?.ours).toBe(false)
   })
 
-  it('reads a binding stored before trust was kept apart as trusting what it wrote', async () => {
+  it('reads a binding stored before trust was kept apart as trusting nothing, even what it wrote', async () => {
+    // Mutation: fall back to `writtenDigest` when `trustedDigest` is absent → the file reads as ours.
     put('a.md', NESTED)
     const read = await only()
     const legacy = { ...read.binding, state: { ...(read.binding.state as Record<string, unknown>), writtenDigest: read.file!.digest } }
     delete (legacy.state as { trustedDigest?: unknown }).trustedDigest
     remember(legacy)
-    expect((await only()).file?.ours).toBe(true)
+    const pulled = await only()
+    expect(pulled.file?.ours).toBe(false)
+    // Carried forward as an explicit null, so the binding says so from now on.
+    expect((pulled.binding.state as { trustedDigest?: unknown }).trustedDigest).toBeNull()
   })
 
   it('patches owned lines only, leaving nested custom YAML exactly as it was', async () => {

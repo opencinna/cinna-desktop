@@ -165,24 +165,41 @@ export function migrateTasks(sqlite: Database.Database): void {
 
   // The task dispatcher (phase 4 of unified tasks). `dispatch_note` says why
   // the dispatcher left a task blocked; `agent_task_dispatch` is each folder
-  // agent's run mode, pause and in-flight run, per profile (no row = manual);
+  // agent's run mode and pause, per profile (no row = manual), and
+  // `agent_task_dispatch_runs` its runs in flight;
   // `task_dispatch_gates` is the Inbox approval asked before running content
   // that came from outside Cinna, one per task and digest. All device-local:
   // none is a synced collection, and the note is not in the task sync payload.
   if (!hasColumn(sqlite, 'tasks', 'dispatch_note')) sqlite.exec('ALTER TABLE tasks ADD COLUMN dispatch_note TEXT')
   // The agent whose queue still owns a dispatched task across an ask (and a restart).
   if (!hasColumn(sqlite, 'tasks', 'dispatch_agent_id')) sqlite.exec('ALTER TABLE tasks ADD COLUMN dispatch_agent_id TEXT')
+  // A folder binding stored before the dispatcher has no `trustedDigest`, and
+  // its task row took what Cinna wrote as trusted. Nobody approved that
+  // content, so it is untrusted until the user approves it once in the Inbox
+  // (the adapter no longer falls back to `writtenDigest`). Idempotent: a
+  // binding that records trust (even a null one) is left alone, and an
+  // untrusted row stays untrusted.
+  sqlite.exec(`UPDATE tasks SET trusted_digest = NULL
+    WHERE remote_adapter = 'folder' AND trusted_digest IS NOT NULL
+      AND (remote_state IS NULL OR json_valid(remote_state) = 0 OR json_type(remote_state, '$.trustedDigest') IS NULL)`)
   sqlite.exec(`CREATE TABLE IF NOT EXISTS agent_task_dispatch (
     user_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
     mode TEXT NOT NULL DEFAULT 'manual',
+    max_runs INTEGER,
     paused_reason TEXT,
     paused_task_id TEXT,
     paused_at INTEGER,
-    active_task_id TEXT,
-    active_chat_id TEXT,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, agent_id)
+  );
+  CREATE TABLE IF NOT EXISTS agent_task_dispatch_runs (
+    user_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    chat_id TEXT,
+    started_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, agent_id, task_id)
   );
   CREATE TABLE IF NOT EXISTS task_dispatch_gates (
     id TEXT PRIMARY KEY,
@@ -199,6 +216,18 @@ export function migrateTasks(sqlite: Database.Database): void {
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_task_dispatch_gates_digest ON task_dispatch_gates(user_id, task_id, digest);
   CREATE INDEX IF NOT EXISTS idx_task_dispatch_gates_open ON task_dispatch_gates(user_id, status);`)
+  // `up_to` (several dispatched runs per agent): its N, and the runs in flight
+  // moved from one pair of columns to a table of their own, so every run Cinna
+  // quits under is found at boot. An install from before keeps its legacy
+  // `active_*` columns; a run still recorded there is copied over once, and a
+  // row left manual and unpaused by that is deleted (no row means manual).
+  if (!hasColumn(sqlite, 'agent_task_dispatch', 'max_runs')) sqlite.exec('ALTER TABLE agent_task_dispatch ADD COLUMN max_runs INTEGER')
+  if (hasColumn(sqlite, 'agent_task_dispatch', 'active_task_id')) {
+    sqlite.transaction(() => sqlite.exec(`INSERT OR IGNORE INTO agent_task_dispatch_runs (user_id, agent_id, task_id, chat_id, started_at)
+      SELECT user_id, agent_id, active_task_id, active_chat_id, updated_at FROM agent_task_dispatch WHERE active_task_id IS NOT NULL;
+    UPDATE agent_task_dispatch SET active_task_id = NULL, active_chat_id = NULL WHERE active_task_id IS NOT NULL OR active_chat_id IS NOT NULL;
+    DELETE FROM agent_task_dispatch WHERE mode = 'manual' AND paused_reason IS NULL;`))()
+  }
 
   // Legacy request rows remain unowned; new events carry exact root/invocation
   // identity so a late or parallel turn cannot settle a sibling's request.
@@ -229,6 +258,14 @@ export function migrateTasks(sqlite: Database.Database): void {
     ALTER TABLE task_input_requests_next RENAME TO task_input_requests;
     CREATE INDEX idx_task_input_requests_open ON task_input_requests(status, created_at);
     CREATE INDEX idx_task_input_requests_task ON task_input_requests(task_id);`))()
+  }
+  // An Inbox answer the task dispatcher sends when the agent's folder is free
+  // (a dispatch-owned task's `next_message` ask). After the rebuild above,
+  // which would drop them. Null on every row before them.
+  for (const column of ['queued_answer', 'queued_at', 'queued_error']) {
+    if (!hasColumn(sqlite, 'task_input_requests', column)) {
+      sqlite.exec(`ALTER TABLE task_input_requests ADD COLUMN ${column} ${column === 'queued_at' ? 'INTEGER' : 'TEXT'}`)
+    }
   }
   sqlite.exec(`CREATE TABLE IF NOT EXISTS task_script_runtimes (
     task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,

@@ -9,6 +9,7 @@ import {
   agentShortcuts,
   agentColors,
   agentTaskDispatch,
+  agentTaskDispatchRuns,
   chatOnDemandAgents,
   chats,
   jobAgents,
@@ -704,6 +705,14 @@ export const agentRepo = {
           .update(agentTaskDispatch)
           .set({ agentId: newId })
           .where(eq(agentTaskDispatch.agentId, oldId))
+          .run().changes
+      )
+      count(
+        'agent_task_dispatch_runs',
+        tx
+          .update(agentTaskDispatchRuns)
+          .set({ agentId: newId })
+          .where(eq(agentTaskDispatchRuns.agentId, oldId))
           .run().changes
       )
       // Message-level attributions: which agent a turn was addressed to, which

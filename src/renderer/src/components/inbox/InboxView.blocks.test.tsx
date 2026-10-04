@@ -41,8 +41,6 @@ vi.mock('../chat/AskUserQuestionBlock', () => ({
     list: async (): Promise<InboxSnapshot> => ({ entries, unreadable: [] }),
     answer: async () => ({ ok: true })
   },
-  // The screen's second half; covered in `RecentTasks.test.tsx`.
-  tasks: { list: async () => [] },
   agents: {
     list: async () => [{ id: 'a1', name: 'Invoice Checker' }],
     onRemoteSyncComplete: () => () => {},

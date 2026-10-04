@@ -27,7 +27,7 @@ const folderBoard = vi.fn<(agentId: string) => Promise<TaskBoardColumn[] | null>
 const createTask = vi.fn<(input: unknown) => Promise<TaskDto>>()
 const dispatchList = vi.fn<() => Promise<AgentDispatchState[]>>()
 const runNext = vi.fn<(agentId: string, taskId?: string) => Promise<TaskDispatchRunResult>>()
-const setMode = vi.fn<(agentId: string, mode: TaskDispatchMode) => Promise<TaskDispatchUpdateResult>>()
+const setMode = vi.fn<(agentId: string, mode: TaskDispatchMode, maxRuns?: number) => Promise<TaskDispatchUpdateResult>>()
 const resume = vi.fn<(agentId: string) => Promise<TaskDispatchUpdateResult>>()
 /** The pushed `taskDispatch:changed`, captured so a test can fire it. */
 let dispatchChanged: (() => void) | null = null
@@ -95,7 +95,7 @@ beforeEach(() => {
     taskDispatch: {
       list: () => dispatchList(),
       runNext: (agentId: string, taskId?: string) => runNext(agentId, taskId),
-      setMode: (agentId: string, mode: TaskDispatchMode) => setMode(agentId, mode),
+      setMode: (...args: [string, TaskDispatchMode, number?]) => setMode(...args),
       resume: (agentId: string) => resume(agentId),
       onChanged: (handler: () => void) => { dispatchChanged = handler; return () => {} }
     }
@@ -186,12 +186,98 @@ describe('list', () => {
     expect(screen.getAllByRole('region')).toHaveLength(5)
   })
 
+  it('folds the search to its glyph when narrow, opens it in place, and keeps it open while it holds text', async () => {
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    const field = (): HTMLElement => screen.getByRole('searchbox', { name: 'Search tasks' }).closest('label')!
+    // Folded below @xl: the field is hidden there, the glyph shown (and hidden from @xl up).
+    const glyph = screen.getByRole('button', { name: 'Search' })
+    expect(glyph.className).toContain('@xl:hidden')
+    expect(field().className).toMatch(/(^| )hidden( |$)/)
+    expect(field().className).toContain('@xl:flex')
+    fireEvent.click(glyph)
+    expect(screen.queryByRole('button', { name: 'Search' })).toBeNull()
+    expect(field().className).not.toMatch(/(^| )hidden( |$)/)
+    const input = screen.getByRole('searchbox', { name: 'Search tasks' })
+    expect(document.activeElement).toBe(input)
+    fireEvent.change(input, { target: { value: 'launch' } })
+    fireEvent.blur(input)
+    // Holding text: still open, nothing folded under what was typed.
+    expect(screen.queryByRole('button', { name: 'Search' })).toBeNull()
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.blur(input)
+    expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
+  })
+
+  it('lets the agent filter narrow rather than push the row past its edge', async () => {
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    const filter = screen.getByRole('combobox', { name: 'Agent' })
+    expect(filter.className).toContain('shrink')
+    expect(filter.className).not.toContain('shrink-0')
+    expect(filter.className).toContain('min-w-16')
+  })
+
   it('remembers List | Board', async () => {
     render(createElement(TasksView), { wrapper })
     await screen.findByRole('button', { name: /^Plan the launch/ })
     fireEvent.click(screen.getByRole('button', { name: 'Board' }))
     expect(useUIStore.getState().tasksViewMode).toBe('board')
     expect(localStorage.getItem('cinna-tasks-view-mode')).toBe('board')
+  })
+})
+
+describe('recent', () => {
+  const at = (minute: number): Date => new Date(Date.UTC(2026, 9, 1, 9, minute))
+
+  it('lists every task in one section, the last changed first, and is remembered', async () => {
+    listTasks.mockResolvedValue([
+      task('old', { title: 'Old', status: 'completed', updatedAt: at(1) }),
+      task('new', { title: 'Newest', status: 'blocked', updatedAt: at(9) }),
+      task('mid', { title: 'Middle', status: 'open', updatedAt: at(5) })
+    ])
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Old/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Recent' }))
+    expect(useUIStore.getState().tasksViewMode).toBe('recent')
+    expect(localStorage.getItem('cinna-tasks-view-mode')).toBe('recent')
+    expect(screen.getAllByRole('region').map((region) => region.getAttribute('aria-label'))).toEqual(['Recent tasks'])
+    expect(titlesIn(section('Recent tasks'))).toEqual(['Newest', 'Middle', 'Old'])
+  })
+
+  it('holds the order a row was first seen in while open, and adds a new task at the end', async () => {
+    // Mutation: sort on every read instead of holding the first-seen order and
+    // this fails — a task an agent writes to jumps to the top under the pointer.
+    useUIStore.setState({ tasksViewMode: 'recent' })
+    listTasks.mockResolvedValue([task('a', { title: 'A', updatedAt: at(3) }), task('b', { title: 'B', updatedAt: at(2) })])
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^A/ })
+    expect(titlesIn(section('Recent tasks'))).toEqual(['A', 'B'])
+    listTasks.mockResolvedValue([
+      task('c', { title: 'C', updatedAt: at(9) }),
+      task('b', { title: 'B', updatedAt: at(8) }),
+      task('a', { title: 'A', updatedAt: at(3) })
+    ])
+    await act(async () => { await client.refetchQueries({ queryKey: ['tasks', 'roots'] }) })
+    await waitFor(() => expect(titlesIn(section('Recent tasks'))).toEqual(['A', 'B', 'C']))
+  })
+
+  it('shows ten rows, then the rest below an inert line left in the Show more slot', async () => {
+    useUIStore.setState({ tasksViewMode: 'recent' })
+    listTasks.mockResolvedValue(Array.from({ length: 25 }, (_v, i) => task(`t${i}`, { title: `Row ${i}`, updatedAt: at(59 - i) })))
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Row 0/ })
+    expect(titlesIn(section('Recent tasks'))).toHaveLength(10)
+    fireEvent.click(screen.getByRole('button', { name: 'Show more tasks' }))
+    expect(titlesIn(section('Recent tasks'))).toHaveLength(25)
+    expect(screen.queryByRole('button', { name: 'Show more tasks' })).toBeNull()
+    // Nothing clickable lands under the pointer: the slot is a line, and row 10 follows it.
+    const line = screen.getByText('All 25 shown')
+    expect(line.tagName).toBe('P')
+    const tenth = screen.getByRole('button', { name: /^Row 9\b/ })
+    const eleventh = screen.getByRole('button', { name: /^Row 10\b/ })
+    expect(tenth.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(line.compareDocumentPosition(eleventh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
 
@@ -744,7 +830,7 @@ describe('empty', () => {
 
 describe('the queue control, filtered to one folder agent', () => {
   function queue(overrides: Partial<AgentDispatchState> = {}): AgentDispatchState {
-    return { agentId: 'agent-w', mode: 'manual', paused: null, running: null, next: null, waiting: null, ...overrides }
+    return { agentId: 'agent-w', mode: 'manual', maxRuns: null, paused: null, running: [], next: null, waiting: null, ...overrides }
   }
 
   it('appears only while the filter names one agent whose queue Cinna works', async () => {
@@ -773,11 +859,106 @@ describe('the queue control, filtered to one folder agent', () => {
     const manual = within(menu).getByRole('menuitemradio', { name: /Manual/ })
     expect(manual.getAttribute('aria-checked')).toBe('true')
     expect(within(menu).getByRole('menuitemradio', { name: /One at a time/ }).getAttribute('aria-checked')).toBe('false')
-    // Healthy: the menu is the run mode alone.
-    expect(within(menu).queryByRole('menuitem')).toBeNull()
+    // Healthy: the menu is the run mode alone, with Up to N's own − and +.
+    expect(within(menu).queryAllByRole('menuitem').map((item) => item.getAttribute('aria-label'))).toEqual(['Fewer tasks at once', 'More tasks at once'])
     await act(async () => { fireEvent.click(within(menu).getByRole('menuitemradio', { name: /One at a time/ })) })
     expect(setMode).toHaveBeenCalledWith('agent-w', 'one')
     expect(screen.queryByRole('menu', { name: 'Run mode' })).toBeNull()
+  })
+
+  it('chooses Up to N in the menu, N set on the item’s own line before or after', async () => {
+    dispatchList.mockResolvedValue([queue()])
+    setMode.mockResolvedValue({ ok: true, state: queue({ mode: 'up_to', maxRuns: 4 }) })
+    useUIStore.setState({ tasksAgentFilter: 'agent:agent-w' })
+    render(createElement(TasksView), { wrapper })
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose how the queue runs' }))
+    const menu = screen.getByRole('menu', { name: 'Run mode' })
+    const upTo = within(menu).getByRole('menuitemradio', { name: 'Up to 2' })
+    expect(upTo.getAttribute('aria-checked')).toBe('false')
+    // Not Up to N yet: − and + only set N, the menu stays open, nothing is saved.
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'More tasks at once' }))
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'More tasks at once' }))
+    expect(setMode).not.toHaveBeenCalled()
+    expect(screen.getByRole('menu', { name: 'Run mode' })).toBe(menu)
+    expect(upTo.textContent).toBe('Up to 4')
+    await act(async () => { fireEvent.click(upTo) })
+    expect(setMode).toHaveBeenCalledWith('agent-w', 'up_to', 4)
+    expect(screen.queryByRole('menu', { name: 'Run mode' })).toBeNull()
+  })
+
+  it('takes every fast click on − and + at once, and saves only the latest N', async () => {
+    dispatchList.mockResolvedValue([queue({ mode: 'up_to', maxRuns: 3 })])
+    setMode.mockResolvedValue({ ok: true, state: queue({ mode: 'up_to', maxRuns: 5 }) })
+    useUIStore.setState({ tasksAgentFilter: 'agent:agent-w' })
+    render(createElement(TasksView), { wrapper })
+    const chevron = await screen.findByRole('button', { name: 'Choose how the queue runs' })
+    await waitFor(() => expect(chevron.getAttribute('title')).toBe('Run mode: Up to 3'))
+    fireEvent.click(chevron)
+    const menu = screen.getByRole('menu', { name: 'Run mode' })
+    const item = within(menu).getByRole('menuitemradio', { name: 'Up to 3' })
+    expect(item.getAttribute('aria-checked')).toBe('true')
+    // No tooltip saying "Up to N" over an item that reads "Up to 3".
+    expect(item.hasAttribute('title')).toBe(false)
+    const more = within(menu).getByRole('menuitem', { name: 'More tasks at once' }) as HTMLButtonElement
+    fireEvent.click(more)
+    // The second click lands: nothing was disabled by the first.
+    expect(more.disabled).toBe(false)
+    fireEvent.click(more)
+    expect(item.textContent).toBe('Up to 5')
+    expect(setMode).not.toHaveBeenCalled()
+    await waitFor(() => expect(setMode).toHaveBeenCalledTimes(1))
+    expect(setMode).toHaveBeenCalledWith('agent-w', 'up_to', 5)
+    expect(screen.getByRole('menu', { name: 'Run mode' })).toBe(menu)
+  })
+
+  it('saves a held N to the agent it was chosen for when the filter moves on before the pause', async () => {
+    dispatchList.mockResolvedValue([
+      queue({ mode: 'up_to', maxRuns: 3 }),
+      queue({ agentId: 'agent-r', mode: 'up_to', maxRuns: 2 })
+    ])
+    setMode.mockResolvedValue({ ok: true, state: queue({ mode: 'up_to', maxRuns: 4 }) })
+    useUIStore.setState({ tasksAgentFilter: 'agent:agent-w' })
+    render(createElement(TasksView), { wrapper })
+    const chevron = await screen.findByRole('button', { name: 'Choose how the queue runs' })
+    await waitFor(() => expect(chevron.getAttribute('title')).toBe('Run mode: Up to 3'))
+    fireEvent.click(chevron)
+    fireEvent.click(within(screen.getByRole('menu', { name: 'Run mode' })).getByRole('menuitem', { name: 'More tasks at once' }))
+    // Within the pause: Reviewer's control replaces Writer's.
+    act(() => useUIStore.setState({ tasksAgentFilter: 'agent:agent-r' }))
+    await waitFor(() => expect(setMode).toHaveBeenCalledTimes(1))
+    expect(setMode).toHaveBeenCalledWith('agent-w', 'up_to', 4)
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(setMode).toHaveBeenCalledTimes(1)
+    expect(setMode).not.toHaveBeenCalledWith('agent-r', expect.anything(), expect.anything())
+  })
+
+  it('saves an N clicked while a save is in flight once that save ends', async () => {
+    dispatchList.mockResolvedValue([queue({ mode: 'up_to', maxRuns: 3 })])
+    let finish: (() => void) | null = null
+    setMode.mockImplementationOnce((_agent, _mode, n) => new Promise((resolve) => {
+      finish = () => resolve({ ok: true, state: queue({ mode: 'up_to', maxRuns: n }) })
+    }))
+    setMode.mockResolvedValue({ ok: true, state: queue({ mode: 'up_to', maxRuns: 5 }) })
+    useUIStore.setState({ tasksAgentFilter: 'agent:agent-w' })
+    render(createElement(TasksView), { wrapper })
+    const chevron = await screen.findByRole('button', { name: 'Choose how the queue runs' })
+    await waitFor(() => expect(chevron.getAttribute('title')).toBe('Run mode: Up to 3'))
+    fireEvent.click(chevron)
+    const menu = screen.getByRole('menu', { name: 'Run mode' })
+    const more = within(menu).getByRole('menuitem', { name: 'More tasks at once' }) as HTMLButtonElement
+    fireEvent.click(more)
+    await waitFor(() => expect(setMode).toHaveBeenCalledWith('agent-w', 'up_to', 4))
+    // The save of 4 is still out; + still answers, and shows 5 at once.
+    expect(more.disabled).toBe(false)
+    fireEvent.click(more)
+    expect(within(menu).getByRole('menuitemradio', { name: 'Up to 5' })).toBeTruthy()
+    // Past the pause: 5 waits for the save in flight rather than being sent beside it.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(setMode).toHaveBeenCalledTimes(1)
+    expect(within(menu).getByRole('menuitemradio', { name: 'Up to 5' })).toBeTruthy()
+    await act(async () => { finish!() })
+    await waitFor(() => expect(setMode).toHaveBeenCalledTimes(2))
+    expect(setMode).toHaveBeenLastCalledWith('agent-w', 'up_to', 5)
   })
 
   it('moves focus into the menu, walks it with the arrows, and Escape returns focus to the chevron', async () => {
@@ -787,14 +968,20 @@ describe('the queue control, filtered to one folder agent', () => {
     const chevron = await screen.findByRole('button', { name: 'Choose how the queue runs' })
     fireEvent.click(chevron)
     const menu = screen.getByRole('menu', { name: 'Run mode' })
-    const [manual, one] = within(menu).getAllByRole('menuitemradio')
+    const [manual, one, upTo] = within(menu).getAllByRole('menuitemradio')
+    // At N = 2, − is disabled and skipped; + is the last item.
+    const more = within(menu).getByRole('menuitem', { name: 'More tasks at once' })
     await waitFor(() => expect(document.activeElement).toBe(manual))
     fireEvent.keyDown(window, { key: 'ArrowDown' })
     expect(document.activeElement).toBe(one)
     fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(upTo)
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(more)
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
     expect(document.activeElement).toBe(manual)
     fireEvent.keyDown(window, { key: 'ArrowUp' })
-    expect(document.activeElement).toBe(one)
+    expect(document.activeElement).toBe(more)
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.queryByRole('menu', { name: 'Run mode' })).toBeNull()
     expect(document.activeElement).toBe(chevron)
@@ -853,7 +1040,7 @@ describe('the queue control, filtered to one folder agent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Choose how the queue runs' }))
     const menu = screen.getByRole('menu', { name: 'Run mode' })
     const items = [...menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')]
-    expect(items.map((item) => item.textContent)).toEqual(['Open Write the changelog', 'Run next', 'Manual', 'One at a time'])
+    expect(items.map((item) => item.getAttribute('aria-label') ?? item.textContent)).toEqual(['Open Write the changelog', 'Run next', 'Manual', 'One at a time', 'Up to 2', 'Fewer tasks at once', 'More tasks at once'])
     runNext.mockResolvedValueOnce({ ok: true, taskId: 'r2', chatId: 'c2' })
     await act(async () => { fireEvent.click(items[1]) })
     expect(runNext).toHaveBeenCalledWith('agent-w', undefined)

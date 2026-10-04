@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test'
 import { test, expect, type CinnaApp } from '../fixtures/app'
+import { openRecentTasks } from '../fixtures/tasksView'
 import { seedChatTask } from '../fixtures/seed'
 import { heldA2aAgent } from '../fixtures/heldA2aAgent'
 
@@ -40,9 +41,8 @@ function sidebar(page: Page) {
   return page.locator('.app-sidebar-wrap')
 }
 
-async function openTaskFromInbox(page: Page, title: string): Promise<void> {
-  await page.getByRole('button', { name: /^Inbox/ }).click()
-  await page.getByRole('region', { name: 'Recent tasks', exact: true }).getByRole('button', { name: title }).click()
+async function openTaskFromTasks(page: Page, title: string): Promise<void> {
+  await (await openRecentTasks(page)).getByRole('button', { name: title }).click()
   await expect(page.getByRole('heading', { level: 1, name: title, exact: true })).toBeVisible()
 }
 
@@ -99,7 +99,7 @@ test('a hidden job chat is moved into the Chats list and revealed there, and the
     const page = cinna.page
     // Start from another tab, so the switch to Chats is something that happens.
     await page.getByRole('button', { name: 'Jobs', exact: true }).click()
-    await openTaskFromInbox(page, JOB_TITLE)
+    await openTaskFromTasks(page, JOB_TITLE)
     const menu = await openTaskMenu(page)
     await menu.getByRole('menuitem', { name: 'Show in the Chats list', exact: true }).click()
 
@@ -138,7 +138,7 @@ test('a chat already in the list is revealed without being moved', async ({ cinn
 
   const page = cinna.page
   await page.getByRole('button', { name: 'Jobs', exact: true }).click()
-  await openTaskFromInbox(page, PLAIN_TITLE)
+  await openTaskFromTasks(page, PLAIN_TITLE)
   const menu = await openTaskMenu(page)
   await menu.getByRole('menuitem', { name: 'Show in the Chats list', exact: true }).click()
 
@@ -161,7 +161,7 @@ test('a chat in the Trash: the item is disabled and says so', async ({ cinna }) 
 
   const page = cinna.page
   await page.getByRole('button', { name: 'Jobs', exact: true }).click()
-  await openTaskFromInbox(page, PLAIN_TITLE)
+  await openTaskFromTasks(page, PLAIN_TITLE)
   const menu = await openTaskMenu(page)
   const item = menu.getByRole('menuitem', { name: 'Show in the Chats list', exact: true })
   await expect(item).toHaveAttribute('aria-disabled', 'true')

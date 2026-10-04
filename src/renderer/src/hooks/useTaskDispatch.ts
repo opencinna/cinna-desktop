@@ -3,6 +3,7 @@ import { useQuery, useQueryClient, type QueryClient, type UseQueryResult } from 
 import { useUIStore } from '../stores/ui.store'
 import { INBOX_QUERY_KEY } from './useInbox'
 import { unwrapIpcError } from '../utils/ipcError'
+import { TASK_DISPATCH_MAX_RUNS } from '../../../shared/taskDispatch'
 import type {
   AgentDispatchState,
   TaskDispatchMode,
@@ -22,23 +23,22 @@ import type { TaskDispatchGateAction, TaskDispatchGateResult } from '../../../sh
  * a rejected call is unwrapped with `unwrapIpcError`, so every surface shows
  * the user's words beside the control that was pressed (`ux_rules.md` §6).
  *
- * Kept fresh two ways: main's `taskDispatch:changed` push, and the same
- * five-second poll the task lists use — a task the user moves to Ready, or a
- * file an editor saves, changes what "Next" says without the queue itself
- * having changed.
+ * Kept fresh by main's `taskDispatch:changed` push alone (plus a re-read when
+ * the window regains focus), with no poll: main publishes every change of a
+ * queue's state, including the ones its queue did not cause — a task the user
+ * moves to Ready, a file an editor saves, a turn opening in the folder — by
+ * comparing each agent's state after every dispatch pass.
  */
 export const TASK_DISPATCH_KEY = ['task-dispatch'] as const
 const LIST_KEY = ['task-dispatch', 'list'] as const
 const AGENT_KEY = (agentId: string): readonly unknown[] => ['task-dispatch', 'agent', agentId]
 
-const POLL_MS = 5_000
-
 /**
  * Everything a dispatch change can move: the queues, the task rows, every
  * open task page (`['task', id]`, so a page updates without waiting for its
- * own poll), the Inbox cards.
+ * own read), the Inbox cards.
  */
-function refreshAfterDispatch(queryClient: QueryClient): void {
+export function refreshAfterDispatch(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: TASK_DISPATCH_KEY })
   void queryClient.invalidateQueries({ queryKey: ['tasks'] })
   void queryClient.invalidateQueries({ queryKey: ['task'] })
@@ -57,7 +57,7 @@ export function useTaskDispatchList(): UseQueryResult<AgentDispatchState[]> {
   return useQuery({
     queryKey: LIST_KEY,
     queryFn: () => window.api.taskDispatch.list(),
-    refetchInterval: POLL_MS,
+    refetchOnWindowFocus: true,
     retry: 1
   })
 }
@@ -69,7 +69,7 @@ export function useAgentDispatch(agentId: string | null): UseQueryResult<AgentDi
     queryKey: AGENT_KEY(agentId ?? ''),
     queryFn: () => window.api.taskDispatch.get(agentId as string),
     enabled: !!agentId,
-    refetchInterval: POLL_MS,
+    refetchOnWindowFocus: true,
     retry: 1
   })
 }
@@ -112,13 +112,15 @@ export function useDispatchControls(
   agentId: string | null,
   options: { onStarted?: (started: { taskId: string; chatId: string }) => void } = {}
 ): {
-  /** Each resolves true when main did it, false on a refusal or failure (shown in `error`). */
-  setMode: (mode: TaskDispatchMode) => Promise<boolean>
+  /** Each resolves true when main did it, false on a refusal or failure (shown in `error`). `maxRuns` is N for `up_to`. */
+  setMode: (mode: TaskDispatchMode, maxRuns?: number) => Promise<boolean>
   resume: () => Promise<boolean>
   runNext: (taskId?: string) => Promise<boolean>
   pending: DispatchAction | null
   /** The mode being saved, so a select shows the choice rather than snapping back. */
   pendingMode: TaskDispatchMode | null
+  /** The N being saved with `up_to`, for the same reason. */
+  pendingMaxRuns: number | null
   /** `code` is main's refusal code, or null for a failed call. */
   error: { action: DispatchAction; code: TaskDispatchRefusalCode | null; message: string } | null
   clearError: () => void
@@ -127,6 +129,7 @@ export function useDispatchControls(
   const openGate = useOpenInboxGate()
   const [pending, setPending] = useState<DispatchAction | null>(null)
   const [pendingMode, setPendingMode] = useState<TaskDispatchMode | null>(null)
+  const [pendingMaxRuns, setPendingMaxRuns] = useState<number | null>(null)
   const [error, setError] = useState<{
     agentId: string
     action: DispatchAction
@@ -153,17 +156,21 @@ export function useDispatchControls(
         pendingRef.current = false
         setPending(null)
         setPendingMode(null)
+        setPendingMaxRuns(null)
       }
     },
     [agentId]
   )
 
   const setMode = useCallback(
-    async (mode: TaskDispatchMode): Promise<boolean> => {
+    async (mode: TaskDispatchMode, maxRuns?: number): Promise<boolean> => {
       if (!agentId || pendingRef.current) return false
       setPendingMode(mode)
+      setPendingMaxRuns(mode === 'up_to' ? maxRuns ?? null : null)
       return run('mode', async () => {
-        const result = await window.api.taskDispatch.setMode(agentId as string, mode)
+        const result = mode === 'up_to'
+          ? await window.api.taskDispatch.setMode(agentId as string, mode, maxRuns)
+          : await window.api.taskDispatch.setMode(agentId as string, mode)
         if (!result.ok) return result
         queryClient.setQueryData(AGENT_KEY(result.state.agentId), result.state)
         refreshAfterDispatch(queryClient)
@@ -211,6 +218,7 @@ export function useDispatchControls(
     runNext,
     pending,
     pendingMode,
+    pendingMaxRuns,
     error: error && error.agentId === agentId ? { action: error.action, code: error.code, message: error.message } : null,
     clearError
   }
@@ -245,8 +253,20 @@ export function useAnswerDispatchGate(): (gateId: string, action: TaskDispatchGa
 
 export const DISPATCH_MODE_LABELS: Record<TaskDispatchMode, string> = {
   manual: 'Manual',
-  one: 'One at a time'
+  one: 'One at a time',
+  up_to: 'Up to N'
 }
+
+/** The mode with its N filled in ("Up to 3"), for a title that names the current mode. */
+export function dispatchModeLabel(mode: TaskDispatchMode, maxRuns: number | null): string {
+  return mode === 'up_to' && maxRuns != null ? `Up to ${maxRuns}` : DISPATCH_MODE_LABELS[mode]
+}
+
+/** The N choices of Up to N, in order. */
+export const DISPATCH_MAX_RUNS_CHOICES: readonly number[] = Array.from(
+  { length: TASK_DISPATCH_MAX_RUNS.max - TASK_DISPATCH_MAX_RUNS.min + 1 },
+  (_, index) => TASK_DISPATCH_MAX_RUNS.min + index
+)
 
 /** What happened to the task a queue paused on, after its title. */
 const PAUSE_ENDINGS: Record<TaskDispatchPauseReason, string> = {
@@ -298,7 +318,17 @@ export function dispatchStatusParts(state: AgentDispatchState): {
   task: { id: string; title: string } | null
   tail: string
 } {
-  if (state.running) return { text: 'Running ', task: { id: state.running.taskId, title: state.running.title }, tail: '' }
+  const running = state.running
+  if (running.length > 0) {
+    // Up to N says how full it is, and still names a lone run; a wait for a
+    // slot beside the runs is said after them.
+    const slot = state.waiting === 'slot' ? ' · waiting for a runner slot' : ''
+    if (state.maxRuns != null && running.length > 1) {
+      return { text: `Running ${running.length} of ${state.maxRuns}${slot}`, task: null, tail: '' }
+    }
+    const of = state.maxRuns != null ? ` · 1 of ${state.maxRuns}` : ''
+    return { text: 'Running ', task: { id: running[0].taskId, title: running[0].title }, tail: `${of}${slot}` }
+  }
   if (state.waiting) return { text: WAITING_TEXT[state.waiting], task: null, tail: '' }
   if (state.next) {
     return {
@@ -312,13 +342,31 @@ export function dispatchStatusParts(state: AgentDispatchState): {
 
 /**
  * What an answered approval settled as, in the card that asked. An approved
- * task main could not start right away says when it will: on its own in
- * One at a time, by Run next in Manual, or not yet when it is not Ready.
+ * task main could not start right away says when it will — on its own in
+ * One at a time and Up to N, by Run next in Manual — and what it waits for:
+ * the agent's own runs, the folder, a conversation, or a runner slot; or not
+ * yet when it is not Ready. `agentLabel` names the agent, null while unknown.
  */
-export function dispatchGateSettledText(action: TaskDispatchGateAction, result: TaskDispatchGateResult & { ok: true }): string {
+export function dispatchGateSettledText(
+  action: TaskDispatchGateAction,
+  result: TaskDispatchGateResult & { ok: true },
+  agentLabel: string | null = null
+): string {
   if (action === 'skip') return 'Skipped. The queue passes over this task until its file changes.'
   if (result.started) return 'Approved. The task is running.'
   if (result.reason === 'not_eligible') return 'Approved. It is not ready to run yet.'
-  if (result.mode === 'manual') return 'Approved. Use Run next when the folder is free.'
-  return 'Approved. It starts when the folder is free.'
+  const when = result.mode === 'manual' ? 'Use Run next when' : 'It starts when'
+  const agent = agentLabel ?? 'the agent'
+  switch (result.reason) {
+    case 'agent_busy':
+      return result.mode === 'up_to' && result.maxRuns
+        ? `Approved. ${when} one of ${agent}’s ${result.maxRuns} runs finishes.`
+        : `Approved. ${when} ${agent}’s current run finishes.`
+    case 'live_turn':
+      return `Approved. ${when} the conversation running there finishes.`
+    case 'slot':
+      return `Approved. ${when} a task runner slot is free.`
+    default:
+      return result.mode === 'manual' ? 'Approved. Use Run next when the folder is free.' : 'Approved. It starts when the folder is free.'
+  }
 }

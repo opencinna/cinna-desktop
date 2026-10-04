@@ -39,7 +39,7 @@ Before this existed, all of it was invisible. A background shell finished, Claud
 ### Seeing the chat's tasks
 1. Once a chat owns at least one root task, a **Tasks** badge (a checklist icon and the count) sits next to the router badge
 2. Its popover lists the tasks. A row opens its task, and the popover closes with it
-3. With more than ten tasks, the popover says "Showing 10 of N" and ends in **Open Inbox**, where all of them can be paged
+3. With more than ten tasks, the popover says "Showing 10 of N" and ends in **Open Tasks**, which opens the Tasks view in its Recent layout, newest first as the popover lists them, where all of them are listed
 
 ### When the process goes away
 1. The agent's process exits, crashes, is retired, or is reaped. Every item it was running becomes **Lost**, and its row says *"The agent's process ended before this finished."*
@@ -117,7 +117,7 @@ User Stop ──► sessionActivity:stop ──► stopSessionActivity ──►
 - [The Claude Engine](../local_agents/claude_engine.md) and [The Codex Engine](../local_agents/codex_engine.md) — what each engine is sent and what it reports
 - [The Local Engine](../local_agents/engine.md) — the process pool whose reaper reads the hub
 - [Command-line Agents](../custom_agents/custom_agents.md) — custom ACP commands, which get background tasks only
-- [Tasks](../../jobs/tasks/tasks.md) and [the Inbox](../../jobs/tasks/inbox.md) — the rows the Tasks badge shows, and where "Open Inbox" leads
+- [Tasks](../../jobs/tasks/tasks.md) and [the Inbox](../../jobs/tasks/inbox.md) — the rows the Tasks badge shows; [the Tasks view](../../jobs/tasks_view/tasks_view.md) is where "Open Tasks" leads
 - [Sidebar Session Status](../../chat/session_status/session_status.md) — the unread result a follow-up turn leaves in an inactive chat
 - [Interrupted Turn Recovery](../turn_recovery/turn_recovery.md) — a follow-up turn the app was killed under
 - [UX Rules](../../development/ui_guidelines/ux_rules.md) — rule 1, which decides the badge order and the non-wrapping composer row

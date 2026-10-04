@@ -1,15 +1,18 @@
-import { useEffect, useId } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, Check, ChevronDown, ExternalLink, Loader2, Play } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, ExternalLink, Loader2, Minus, Play, Plus } from 'lucide-react'
 import { usePopover } from '../ui/usePopover'
 import { useOpenTask } from '../../hooks/useTasks'
 import {
   DISPATCH_MODE_LABELS,
+  dispatchModeLabel,
   dispatchPausedParts,
   dispatchPausedText,
+  refreshAfterDispatch,
   type useDispatchControls
 } from '../../hooks/useTaskDispatch'
-import { TASK_DISPATCH_MODES, type AgentDispatchState } from '../../../../shared/taskDispatch'
+import { TASK_DISPATCH_MAX_RUNS, TASK_DISPATCH_MODES, type AgentDispatchState } from '../../../../shared/taskDispatch'
 
 type Controls = ReturnType<typeof useDispatchControls>
 
@@ -29,7 +32,14 @@ const MENU_ITEM =
   'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--color-text)] ' +
   'transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:bg-[var(--color-bg-hover)] focus-visible:outline-none ' +
   'disabled:cursor-not-allowed disabled:opacity-40'
+/** How long − and + wait for the next click before saving N. */
+const STEP_SAVE_DELAY_MS = 400
 const ITEM_SELECTOR = '[role="menuitem"],[role="menuitemradio"]'
+/** The − and + beside Up to N: square, on the item's line, so the menu keeps its rows. */
+const STEP =
+  'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-secondary)] ' +
+  'transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] focus-visible:bg-[var(--color-bg-hover)] ' +
+  'focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40'
 
 /**
  * The Tasks view's queue control, shown only while the view is filtered to one
@@ -66,6 +76,13 @@ export function TasksRunNextControl({
   const running = controls.pending === 'run'
   const resuming = controls.pending === 'resume'
   const mode = controls.pendingMode ?? state.mode
+  const savedRuns = controls.pendingMaxRuns ?? state.maxRuns
+  // N for Up to N, held here so − and + answer every click at once: the
+  // shown N is this one, never the one a save is still carrying. While the
+  // queue runs Up to N, the latest N is saved once the clicks pause (and
+  // after any save in flight); otherwise it is the N choosing Up to N saves.
+  const [draftRuns, setDraftRuns] = useState<number | null>(null)
+  const runs = draftRuns ?? savedRuns ?? TASK_DISPATCH_MAX_RUNS.default
   const paused = state.paused
   const pausedParts = paused ? dispatchPausedParts(paused) : null
   const pausedSentence = paused ? dispatchPausedText(paused) : null
@@ -110,6 +127,49 @@ export function TasksRunNextControl({
     return () => window.removeEventListener('keydown', onKey, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, setOpen, triggerRef])
+
+  // The menu opening or closing drops the held N back to the saved one —
+  // unless an N is still on its way to being saved, which is what the user
+  // last chose.
+  const unsaved = mode === 'up_to' && draftRuns !== null && draftRuns !== savedRuns
+  useEffect(() => {
+    if (!unsaved) setDraftRuns(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  // Save the latest N once the clicks pause and nothing else is being saved.
+  // When the save settles, the held N gives way to what main saved (on a
+  // refusal, the N that is really in force, with the error beside the
+  // control) — unless another click has moved it meanwhile, which is then
+  // saved in turn.
+  const setMode = controls.setMode
+  useEffect(() => {
+    if (!unsaved || controls.pending !== null) return
+    const n = draftRuns!
+    const timer = setTimeout(() => {
+      void setMode('up_to', n).then(() => setDraftRuns((current) => (current === n ? null : current)))
+    }, STEP_SAVE_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [unsaved, draftRuns, controls.pending, setMode])
+
+  // An N still waiting for its pause is saved when the control goes away (the
+  // filter moved to another agent or to all agents), straight through the
+  // bridge for this control's agent: the controls hook now belongs to the next
+  // agent, and its pending state is not this save's to show.
+  const queryClient = useQueryClient()
+  const flushRef = useRef<(() => void) | null>(null)
+  flushRef.current = unsaved && controls.pending === null
+    ? () => {
+        void window.api.taskDispatch.setMode(state.agentId, 'up_to', draftRuns!)
+          .then(() => refreshAfterDispatch(queryClient), () => refreshAfterDispatch(queryClient))
+      }
+    : null
+  useEffect(() => () => flushRef.current?.(), [])
+
+  const step = (delta: number): void => {
+    const next = Math.min(TASK_DISPATCH_MAX_RUNS.max, Math.max(TASK_DISPATCH_MAX_RUNS.min, runs + delta))
+    if (next !== runs) setDraftRuns(next)
+  }
 
   const pick = (fn: () => void): void => {
     setOpen(false)
@@ -160,7 +220,7 @@ export function TasksRunNextControl({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Choose how the queue runs"
-        title={`Run mode: ${DISPATCH_MODE_LABELS[mode]}`}
+        title={`Run mode: ${dispatchModeLabel(mode, mode === 'up_to' ? runs : null)}`}
         onClick={() => setOpen(!open)}
       >
         <ChevronDown size={12} aria-hidden="true" />
@@ -194,7 +254,46 @@ export function TasksRunNextControl({
             </button>
           )}
           {paused && <div role="separator" className="my-1 border-t border-[var(--color-border)]" />}
-          {TASK_DISPATCH_MODES.map((value) => (
+          {TASK_DISPATCH_MODES.map((value) => value === 'up_to' ? (
+            // N is chosen on the item's own line: − and + beside it, the menu
+            // open meanwhile, and the item saves Up to that N.
+            <div key={value} className="flex items-center gap-0.5" data-dispatch-up-to>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={value === mode}
+                aria-label={dispatchModeLabel(value, runs)}
+                className={`${MENU_ITEM} min-w-0 flex-1`}
+                disabled={controls.pending === 'mode'}
+                onClick={() => pick(() => { if (value !== mode || runs !== savedRuns) void controls.setMode(value, runs) })}
+              >
+                <span className="flex-1 truncate">{dispatchModeLabel(value, runs)}</span>
+                {value === mode && <Check size={12} className="text-[var(--color-accent)]" aria-hidden="true" />}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                aria-label="Fewer tasks at once"
+                title="Fewer tasks at once"
+                className={STEP}
+                disabled={runs <= TASK_DISPATCH_MAX_RUNS.min}
+                onClick={() => step(-1)}
+              >
+                <Minus size={12} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                aria-label="More tasks at once"
+                title="More tasks at once"
+                className={STEP}
+                disabled={runs >= TASK_DISPATCH_MAX_RUNS.max}
+                onClick={() => step(1)}
+              >
+                <Plus size={12} aria-hidden="true" />
+              </button>
+            </div>
+          ) : (
             <button
               key={value}
               type="button"

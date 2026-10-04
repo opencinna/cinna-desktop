@@ -220,15 +220,16 @@ async function createTask(session: DelegationSession, input: Record<string, unkn
   const self = !!assignee && typeof assignee === 'object' && assignee.agentId === session.agentId &&
     Object.keys(assignee).every((key) => key === 'kind' || key === 'agentId')
   if (assignee !== undefined && !self) {
-    for (const key of ['priority', 'custom_fields', 'parent'] as const) {
-      if (input[key] !== undefined) fail(`${key} applies to your own queue; leave it out when delegating.`)
-    }
-    // The old `handover_create`, verbatim: the brief is the description.
+    if (input.parent !== undefined) fail('parent applies to your own queue; leave it out when delegating.')
+    // The old `handover_create`, verbatim: the brief is the description. A
+    // bare folder's brief also carries the priority and custom fields.
     const request: Record<string, unknown> = {
       target: assignee,
       id: input.id,
       title: input.title,
       brief: input.description,
+      ...(input.priority !== undefined ? { priority: priorityOf(input.priority) } : {}),
+      ...(input.custom_fields !== undefined ? { customFields: customFieldsOf(input.custom_fields) } : {}),
       ...(input.execution !== undefined ? { execution: input.execution } : {}),
       ...(input.group !== undefined ? { group: input.group } : {}),
       ...(input.status !== undefined ? { status: input.status } : {})
@@ -248,7 +249,9 @@ async function createTask(session: DelegationSession, input: Record<string, unkn
 
   const { task } = validateSession(session)
   const { profileUserId, settingsUserId } = session.scope
-  const depth = task ? depthOf(profileUserId, task) + 1 : 0
+  // One deeper than the chat's task — and a chat with no task is the root, so
+  // its first task is at depth 1, as a delegation from it is.
+  const depth = (task ? depthOf(profileUserId, task) : 0) + 1
   if (depth > MAX_TASK_CHAIN_DEPTH) {
     fail(`Tasks created by agents are limited to a chain of depth ${MAX_TASK_CHAIN_DEPTH}; this conversation's task is already at ${depth - 1}.`)
   }

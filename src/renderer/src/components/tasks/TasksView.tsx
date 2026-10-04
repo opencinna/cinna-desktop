@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react'
-import { Columns3, List, Loader2, Plus, Search } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Columns3, HistoryIcon, List, Loader2, Plus, Search } from 'lucide-react'
 import { useTaskList } from '../../hooks/useTaskList'
 import { useAgents } from '../../hooks/useAgents'
 import { useCreateTask, useFolderBoard, useOpenTask } from '../../hooks/useTasks'
 import { useUIStore, type TasksViewMode } from '../../stores/ui.store'
-import { TasksList } from './TasksList'
+import { TasksList, TasksRecentList } from './TasksList'
 import { TasksBoard } from './TasksBoard'
 import { NewTaskDialog } from './TaskFormDialog'
 import { TasksRunNextControl } from './TasksDispatchControl'
@@ -13,6 +13,7 @@ import { ALL_AGENTS, UNASSIGNED, agentFilterOptions, matchesTaskFilters, type Ta
 
 const MODES: readonly { value: TasksViewMode; label: string; Icon: typeof List }[] = [
   { value: 'list', label: 'List', Icon: List },
+  { value: 'recent', label: 'Recent', Icon: HistoryIcon },
   { value: 'board', label: 'Board', Icon: Columns3 }
 ]
 
@@ -21,11 +22,12 @@ const CONTROL =
   'focus:border-[var(--color-accent)] focus:outline-none'
 
 /**
- * Every root task, as a list grouped by category or as a board — the
+ * Every root task, as a list grouped by category, as one list by last change
+ * (**Recent**, what the Inbox's Recent tasks used to be) or as a board — the
  * top bar's Tasks button opens it, and like the Inbox it belongs to no tab.
  *
- * Controls first, in one row (`ux_rules.md` §2): the title, List | Board
- * (remembered), the agent filter, a title search and **New task**, the one
+ * Controls first, in one row (`ux_rules.md` §2): the title, List | Recent |
+ * Board (remembered), the agent filter, a title search and **New task**, the one
  * primary action. A refused board move says so in one line laid over the gap
  * under the controls — absolutely placed, so neither the controls nor the
  * board move when it comes and goes (§1). Archived tasks are not here: the
@@ -63,6 +65,14 @@ export function TasksView(): React.JSX.Element {
   const agent: TaskAgentFilter = useUIStore((s) => s.tasksAgentFilter)
   const setAgent = useUIStore((s) => s.setTasksAgentFilter)
   const [search, setSearch] = useState('')
+  // Narrower than the row needs, the search is a glyph until asked for. It
+  // stays open while it holds text, so typing never collapses it (§1).
+  const [searchOpen, setSearchOpen] = useState(false)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const searchExpanded = searchOpen || search !== ''
+  useEffect(() => {
+    if (searchOpen) searchRef.current?.focus({ preventScroll: true })
+  }, [searchOpen])
   const [creating, setCreating] = useState(false)
   const [moveError, setMoveError] = useState<string | null>(null)
   const dispatchList = useTaskDispatchList()
@@ -95,9 +105,10 @@ export function TasksView(): React.JSX.Element {
         {/*
           One row at every width (§2): at the 800 px minimum, beside the
           sidebar, the switch drops its words for its icons (the name stays,
-          in aria-label and title) and the search shrinks first.
+          in aria-label and title), the search folds to its glyph, and the
+          agent filter gives up width before anything spills past the row.
         */}
-        <header className={`@container relative flex items-center ${dispatchState ? 'gap-1.5 @xl:gap-2' : 'gap-2'}`}>
+        <header className={`@container relative flex min-w-0 items-center ${dispatchState ? 'gap-1.5 @xl:gap-2' : 'gap-2'}`}>
           <h1 className="mr-1 shrink-0 text-base font-semibold text-[var(--color-text)]">Tasks</h1>
           <div role="group" aria-label="Tasks layout" className="flex shrink-0 rounded-md border border-[var(--color-border)] p-0.5">
             {MODES.map(({ value, label, Icon }) => (
@@ -109,31 +120,47 @@ export function TasksView(): React.JSX.Element {
               </button>
             ))}
           </div>
-          <select aria-label="Agent" value={agent} onChange={(event) => setAgent(event.target.value)}
-            className={`${CONTROL} ${dispatchState ? 'w-24 @xl:w-28' : 'w-28'} shrink-0 px-2 @2xl:w-40`}>
-            <option value={ALL_AGENTS}>All agents</option>
-            {agentOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            {agent !== ALL_AGENTS && agent !== UNASSIGNED && !agentOptions.some((option) => option.value === agent) && (
-              <option value={agent}>{agentName(agent.slice('agent:'.length)) ?? 'Agent'}</option>
-            )}
-            <option value={UNASSIGNED}>No agent</option>
-          </select>
           {/*
-            min-w-24: the placeholder whole at 800 px beside the sidebar, with the row still one line.
-            With the queue control in the row as well, the 800 px row has no room for it: the search
-            narrows to its glyph plus a few characters and drops a placeholder it could not show whole
-            (§7); its name stays in aria-label. Run next drops its word first (TasksRunNextControl).
+            The agent filter and the search share what the row has left. The
+            filter gives up width first (it truncates). Below @xl (the 800 px
+            window beside the sidebar) that leaves too little for a field, so
+            the search is its glyph alone; a click or Tab onto it opens the
+            field laid over the filter, so nothing in the row moves. Open, it
+            stays open while it holds text, and folds again on leaving it empty.
           */}
-          <label className={`relative flex flex-1 items-center ${dispatchState ? 'min-w-10 @xl:min-w-24' : 'min-w-24'}`}>
-            <Search size={12} aria-hidden="true" className="pointer-events-none absolute left-2 text-[var(--color-text-muted)]" />
-            <input type="search" aria-label="Search tasks" placeholder="Search" value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className={`${CONTROL} w-full pl-7 pr-2 ${dispatchState
-                ? 'placeholder:text-transparent @xl:placeholder:text-[var(--color-text-muted)]'
-                : 'placeholder:text-[var(--color-text-muted)]'}`} />
-          </label>
+          <div className={`relative flex min-w-0 flex-1 items-center ${dispatchState ? 'gap-1.5 @xl:gap-2' : 'gap-2'}`}>
+            <select aria-label="Agent" value={agent} onChange={(event) => setAgent(event.target.value)}
+              className={`${CONTROL} w-40 min-w-16 shrink truncate px-2`}>
+              <option value={ALL_AGENTS}>All agents</option>
+              {agentOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              {agent !== ALL_AGENTS && agent !== UNASSIGNED && !agentOptions.some((option) => option.value === agent) && (
+                <option value={agent}>{agentName(agent.slice('agent:'.length)) ?? 'Agent'}</option>
+              )}
+              <option value={UNASSIGNED}>No agent</option>
+            </select>
+            <div className="flex min-w-7 flex-1 basis-0 items-center @xl:min-w-20">
+              {!searchExpanded && (
+                <button type="button" aria-label="Search" title="Search tasks"
+                  onFocus={() => setSearchOpen(true)} onClick={() => setSearchOpen(true)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--color-border)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] @xl:hidden">
+                  <Search size={12} aria-hidden="true" />
+                </button>
+              )}
+              <label className={`min-w-20 flex-1 items-center ${searchExpanded
+                ? 'absolute inset-0 z-10 flex @xl:relative'
+                : 'relative hidden @xl:flex'}`}>
+                <Search size={12} aria-hidden="true" className="pointer-events-none absolute left-2 text-[var(--color-text-muted)]" />
+                <input ref={searchRef} type="search" aria-label="Search tasks" placeholder="Search" value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  onBlur={() => setSearchOpen(false)}
+                  className={`${CONTROL} w-full pl-7 pr-2 placeholder:text-[var(--color-text-muted)]`} />
+              </label>
+            </div>
+          </div>
           {dispatchState && (
             <TasksRunNextControl
+              // One instance per agent: a held N belongs to the agent it was chosen for.
+              key={dispatchState.agentId}
               agentName={agentName(dispatchState.agentId) ?? 'This agent'}
               state={dispatchState}
               controls={{ ...dispatch, runNext: (taskId) => { setMoveError(null); return dispatch.runNext(taskId) } }}
@@ -170,6 +197,10 @@ export function TasksView(): React.JSX.Element {
           <p className="text-[13px] text-[var(--color-text-muted)]">No tasks match.</p>
         ) : mode === 'board' ? (
           <TasksBoard tasks={visible} onError={(message) => { if (message) dispatch.clearError(); setMoveError(message) }} folderColumns={folderBoard.data ?? null} />
+        ) : mode === 'recent' ? (
+          // Keyed by the filter: its rows hold the order first seen, and
+          // another agent's rows were never seen here (`TasksRecentList`).
+          <TasksRecentList key={agent} tasks={visible} showAssignee={agent === ALL_AGENTS} />
         ) : (
           <TasksList tasks={visible} showAssignee={agent === ALL_AGENTS} />
         )}

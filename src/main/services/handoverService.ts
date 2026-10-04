@@ -408,7 +408,7 @@ export function createHandoverService(deps: HandoverDeps) {
       }
       const bytes = readBytes(briefPath)
       if (!bytes) continue
-      const parsed = parseHandoverBrief(bytes.toString('utf8'))
+      const parsed = parseHandoverBrief(bytes.toString('utf8'), { handoverId: entry.name })
       if (!parsed.ok || parsed.brief.status !== 'ready') continue
       found.push({
         handoverId: entry.name,
@@ -696,6 +696,10 @@ export function createHandoverService(deps: HandoverDeps) {
           // `Brief:` line said it a second time (`ux_rules.md` §7).
           description: handoverProtocolParagraph({ handoverId: found.handoverId }),
           status: 'new',
+          // The brief reads like a task file: its priority and its other keys
+          // are the task's.
+          ...(brief.priority ? { priority: brief.priority } : {}),
+          ...(brief.customFields ? { customFields: brief.customFields } : {}),
           assigneeAgentId: agent.id,
           assigneeName: agent.name,
           assigneeKind: 'agent',

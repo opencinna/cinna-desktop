@@ -136,7 +136,10 @@ export const taskExecutionService = {
     starting.add(key)
     let createdChatId: string | null = null
     let accepted = false
-    const assertTask = (): TaskDto => {
+    // `acceptingChatId`: inside acceptance the run being accepted is already
+    // registered on its chat, so that chat counts as running. Only another
+    // running turn refuses the start.
+    const assertTask = (acceptingChatId?: string): TaskDto => {
       if (handingOffTasks.has(taskOperationKey(scope.profileUserId, taskId)) || taskHandoffRepo.unresolved(scope.profileUserId, taskId)) {
         throw new TaskError('handoff_uncertain', 'Resolve this task’s remote handoff before starting it here.')
       }
@@ -152,7 +155,7 @@ export const taskExecutionService = {
         throw new TaskError('invalid_transition', `A ${task.status} task cannot be started.`)
       }
       if (task.router === 'script' || task.script != null) throw new TaskError('invalid_input', 'This task needs its script runner.')
-      if (task.chatId && runExecutionService.isRunning(task.chatId)) {
+      if (task.chatId && task.chatId !== acceptingChatId && runExecutionService.isRunning(task.chatId)) {
         throw new TaskError('invalid_input', 'This task already has a turn running. Stop it before starting another.')
       }
       if (!options.continueInChat && task.chatId && visibleChat(scope.profileUserId, task.chatId)?.deletedAt === null) {
@@ -216,7 +219,7 @@ export const taskExecutionService = {
           preserveOnRefusal: true,
           observe: (ctx, event) => inboxService.recordRunEvent(ctx, event),
           onAccepted: (ctx) => {
-            assertTask()
+            assertTask(chat.id)
             assertAgentCurrent()
             model?.assertCurrent()
             taskService.beginDesktopChat(scope.profileUserId, taskId, chat.id, assignee)

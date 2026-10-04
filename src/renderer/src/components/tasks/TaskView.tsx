@@ -10,6 +10,7 @@ import {
   Loader2,
   MessageSquare,
   PenLine,
+  Plus,
   RotateCcw,
   Server,
   User
@@ -31,6 +32,7 @@ import { useRelativeNow } from '../../hooks/useRelativeNow'
 import { useOpenExternal } from '../../hooks/useSystem'
 import {
   useRemoteLiveSession,
+  useCreateTask,
   useRerunTask,
   useTakeOverTask,
   useStartTask,
@@ -49,6 +51,7 @@ import { TaskStatusPill } from './TaskStatusPill'
 import { PendingHandoffControl } from './PendingHandoffControl'
 import { HandOffTaskControl } from './HandOffTaskControl'
 import { TaskList } from './TaskList'
+import { NewTaskDialog, type NewTaskParent } from './TaskFormDialog'
 import { TaskRuntimeControl } from './TaskRuntimeControl'
 import { TaskActionsMenu } from './TaskActionsMenu'
 import { DETAIL_LINK, Detail, HEADER_BUTTON, Prose, Section } from './DetailParts'
@@ -219,6 +222,19 @@ function TaskPage({
    * constraint; the slot clamps as a guarantee rather than as a fallback.
    */
   const [openError, setOpenError] = useState<string | null>(null)
+  /**
+   * Add subtask's dialog and its mutation, owned here so the hook-level
+   * `onCreated` that closes the dialog and lands on the new subtask runs
+   * though the dialog unmounts on the way (`ux_rules.md` §3, §5).
+   */
+  const [addingSubtask, setAddingSubtask] = useState(false)
+  const createSubtask = useCreateTask({
+    onCreated: (created) => {
+      setAddingSubtask(false)
+      openTask(created.id)
+    }
+  })
+  const subtaskParent = subtaskParentOf(task)
 
   const openUrl = async (url: string): Promise<void> => {
     setOpenError(null)
@@ -723,9 +739,23 @@ function TaskPage({
           </aside>
         </div>
 
-        {/* Renders nothing for a task with no subtasks — see `TaskList`. */}
+        {/*
+          Renders nothing for a task with no subtasks that cannot take one —
+          see `TaskList`. One that can shows the heading with Add subtask from
+          the first render, so the control never arrives late (§1).
+        */}
         {!task.parentTaskId && (
-          <TaskList key={task.id} parentTaskId={task.id} expected={task.subtaskCount > 0} />
+          <TaskList key={task.id} parentTaskId={task.id} expected={task.subtaskCount > 0}
+            action={subtaskParent && (
+              <button type="button" onClick={() => { createSubtask.reset(); setAddingSubtask(true) }}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--color-accent)] transition-colors hover:text-[var(--color-accent-hover)]">
+                <Plus size={12} aria-hidden="true" />
+                Add subtask
+              </button>
+            )} />
+        )}
+        {addingSubtask && subtaskParent && (
+          <NewTaskDialog create={createSubtask} parent={subtaskParent} onClose={() => setAddingSubtask(false)} />
         )}
 
         {/*
@@ -750,6 +780,19 @@ function TaskPage({
       </div>
     </div>
   )
+}
+
+/**
+ * The parent a new subtask of this task would have, or null when it can take
+ * none: a subtask (one level only), an archived task, or one assigned to a
+ * remote agent, which the New task dialog cannot name. Main checks again.
+ */
+function subtaskParentOf(task: TaskDto): NewTaskParent | null {
+  if (task.parentTaskId || task.status === 'archived' || task.assignee.kind === 'remote_agent') return null
+  const agent = task.assignee.kind === 'agent' && task.assignee.agentId
+    ? { id: task.assignee.agentId, name: task.assignee.name ?? 'Agent' }
+    : null
+  return { id: task.id, title: task.title, agent }
 }
 
 /**
@@ -1892,13 +1935,14 @@ function BlockedByValue({ blockers }: { blockers: TaskDto['blockedBy'] }): React
 }
 
 /**
- * One blocker that names a task. Its status is read from the task itself
- * (`['task', id]`, shared with that task's page); until it arrives, the
- * resolved `done` stands in, so a finished blocker never shows as open.
+ * One blocker that names a task, with the status main resolved for it
+ * (`TaskBlocker.status`) when it read this task, so a page lists its blockers
+ * without a fetch each. It is as fresh as this task's own read: a blocker's
+ * status change shows once this page reads its task again.
  */
 function BlockerRow({ blocker }: { blocker: TaskDto['blockedBy'][number] & { taskId: string } }): React.JSX.Element {
   const openTask = useOpenTask()
-  const status = useTask(blocker.taskId).data?.status ?? (blocker.done ? 'completed' : 'open')
+  const status = blocker.status ?? (blocker.done ? 'completed' : 'open')
   const title = blocker.title ?? blocker.id
   return (
     <span className="flex min-w-0 max-w-full items-center gap-1.5 whitespace-nowrap" data-blocker-status={status}>

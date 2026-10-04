@@ -56,6 +56,20 @@ describe('taskDispatch channels', () => {
     expect(dispatcher.setMode).not.toHaveBeenCalled()
   })
 
+  it('passes N with up_to, and answers an N outside 2–8 (or none) as data', async () => {
+    // Mutation: drop the N check in the handler → setMode is called with 9.
+    await invoke('taskDispatch:set-mode', 'agent-a', 'up_to', 3)
+    expect(dispatcher.setMode).toHaveBeenCalledWith(SCOPE, 'agent-a', 'up_to', 3)
+    dispatcher.setMode.mockClear()
+    for (const bad of [undefined, 1, 9, 2.5, '3', null]) {
+      await expect(invoke('taskDispatch:set-mode', 'agent-a', 'up_to', bad)).resolves.toMatchObject({ ok: false, code: 'invalid_input' })
+    }
+    expect(dispatcher.setMode).not.toHaveBeenCalled()
+    // The other modes ignore it.
+    await invoke('taskDispatch:set-mode', 'agent-a', 'one', 99)
+    expect(dispatcher.setMode).toHaveBeenCalledWith(SCOPE, 'agent-a', 'one')
+  })
+
   it('returns the gate Run next answered with', async () => {
     await expect(invoke('taskDispatch:run-next', 'agent-a')).resolves.toEqual({ ok: true, gate: 'dgate_1' })
   })

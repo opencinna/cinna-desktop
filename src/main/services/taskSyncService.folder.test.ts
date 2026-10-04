@@ -468,6 +468,19 @@ describe('task:set-status on a folder task', () => {
     expect(readFileSync(file, 'utf8')).toContain('status: Shipped')
   })
 
+  it('moves a task the dispatcher flagged back to Ready with the folder’s Ready word', async () => {
+    put('_board.yaml', 'Up Next: ready\nDoing: active\nStuck: waiting\n')
+    const task = await taskAuthoringService.createRouted(SCOPE, { title: 'Flag me', status: 'open', assignee: { kind: 'agent', agentId: 'bare-1' } })
+    taskService.setStatus(USER, task.id, 'in_progress')
+    const blocked = taskService.setStatus(USER, task.id, 'blocked', { dispatchNote: 'Ended without reporting' })
+    expect(blocked.statusLabel).toBe('Stuck')
+    await settle()
+    const moved = await taskAuthoringService.setStatus(SCOPE, task.id, 'open', 'Up Next')
+    expect(moved).toMatchObject({ status: 'open', statusLabel: 'Up Next', dispatchNote: null })
+    await settle()
+    expect(readFileSync(join(tasksDir, 'flag-me.md'), 'utf8')).toContain('status: Up Next')
+  })
+
   it('moves the word with the status when a run moves it: the word the push writes, before it is written', async () => {
     put('_board.yaml', 'Up Next: ready\nDoing: active\n')
     const task = await taskAuthoringService.createRouted(SCOPE, { title: 'Run me', status: 'open', assignee: { kind: 'agent', agentId: 'bare-1' } })
@@ -686,6 +699,8 @@ describe('trust in outside content', () => {
         started.push(taskId)
         return { chatId: chat.id, runId: 'run-1', completed: new Promise(() => {}) }
       },
+      resume: async () => { throw new Error('No answer is sent in this test.') },
+      chatRunning: () => false,
       withSlot: (_agentId, _signal, run) => run(),
       slotFree: () => true,
       trust: (userId, taskId, digest) => taskSyncService.trustLocalContent(userId, taskId, digest),

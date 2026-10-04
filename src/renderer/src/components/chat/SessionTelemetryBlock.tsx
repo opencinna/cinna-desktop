@@ -342,7 +342,7 @@ function Qualified({ value, qualifier }: { value: React.ReactNode; qualifier?: s
   )
 }
 
-/** Accent text, the `Open Inbox` shape: an action, not one more word of the section (§11). */
+/** Accent text, the `Open Tasks` shape: an action, not one more word of the section (§11). */
 const actionClass = `grid text-[11px] font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]
   aria-disabled:cursor-default aria-disabled:hover:text-[var(--color-accent)] transition-colors
   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] rounded`

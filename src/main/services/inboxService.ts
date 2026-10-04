@@ -1,6 +1,6 @@
 import { takeAgentStatusReport } from '../tasks/agentStatusReports'
-import { isDispatchedRun, settleDispatchOwnedTurn } from '../tasks/dispatchedTurns'
-import { taskDispatchInboxItems } from './taskDispatchInbox'
+import { isDispatchedRun, settleDispatchOwnedTurn, wakeDispatcher } from '../tasks/dispatchedTurns'
+import { dispatchFolderNamesFor, isDispatchableAgent, taskDispatchInboxItems } from './taskDispatchInbox'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
 import { nanoid } from 'nanoid'
 import { taskInputRequestRepo, type TaskInputRequestRow } from '../db/taskInputRequests'
@@ -18,7 +18,7 @@ import { taskService } from './taskService'
 import { deliverAnswer, deliverAnswerWithCommit } from './askDelivery'
 import { pendingRequests } from '../agents/drivers/pendingRequests'
 import { remoteInboxService } from './remoteInboxService'
-import { runExecutionService } from './runExecutionService'
+import { runExecutionService, type RunHandle, type RunScope } from './runExecutionService'
 import { agentService } from './agentService'
 import { completeNestedContinuation, nestedToolCallId } from './nestedContinuationService'
 import { getSettingsScopeUserId } from '../auth/scope'
@@ -76,8 +76,13 @@ function settledStatus(resolution: RequestResolution): Exclude<TaskInputRequestS
   return 'answered'
 }
 
-function toEntry(row: TaskInputRequestRow, taskTitle: string): InboxEntry {
+function toEntry(row: TaskInputRequestRow, taskTitle: string, folders: ReadonlyMap<string, string>): InboxEntry {
+  const queued = row.queuedAnswer !== null && row.queuedAnswer !== undefined
+  const folder = queued && row.agentId ? folders.get(row.agentId) : undefined
   return {
+    ...(queued ? { queuedAnswer: row.queuedAnswer!, ...(row.queuedAt ? { queuedAt: row.queuedAt } : {}) } : {}),
+    ...(folder ? { queuedFolder: folder } : {}),
+    ...(row.queuedError ? { queuedError: row.queuedError } : {}),
     requestId: row.id,
     source: 'local',
     deliveryOwner: row.deliveryOwner,
@@ -436,6 +441,38 @@ export const inboxService = {
     markTask(ctx.userId, task.id, endedAs(event))
   },
 
+  /**
+   * Start the turn that answers a `next_message` ask: `content` goes to the
+   * agent that asked, as the chat's next message, and the ask is settled
+   * inside that message's acceptance ({@link inboxService.resumeChat}).
+   * `onAccepted` runs after it, still inside acceptance and before any of the
+   * turn's events. A nested agent's ask continues inside its wrapper's tool
+   * call. Shared by an Inbox answer and the task dispatcher sending an answer
+   * it stored; the caller checks first that the chat is not running.
+   */
+  startNextMessageTurn(scope: RunScope, row: TaskInputRequestRow, content: string,
+    onAccepted?: (ctx: RunEventContext) => void): RunHandle {
+    const toolCallId = nestedToolCallId(row)
+    const handle = runExecutionService.start(scope, {
+      chatId: row.chatId, content, addressedAgentId: row.agentId
+    }, {
+      observe: (ctx, event) => this.recordRunEvent(ctx, toolCallId
+        ? { type: 'child', toolCallId, agentId: row.agentId!, event }
+        : event),
+      preserveOnRefusal: true,
+      ...(row.agentId ? { agentId: row.agentId } : {}),
+      ...(toolCallId ? { nested: { toolCallId } } : {}),
+      onAccepted: (ctx) => {
+        this.resumeChat(ctx, content)
+        onAccepted?.(ctx)
+      }
+    })
+    if (toolCallId) {
+      void handle.accepted.then(() => completeNestedContinuation(scope, row, handle, toolCallId), () => {})
+    }
+    return handle
+  },
+
   hasNextMessage(userId: string, chatId: string): boolean {
     return !!visibleChat(userId, chatId) && taskInputRequestRepo.listOpenForChat(chatId)
       .some((row) => row.resume === 'next_message')
@@ -490,8 +527,12 @@ export const inboxService = {
       read is synchronous SQLite, so overlapping them costs nothing.
     */
     const pending = remoteInboxService.list(userId)
-    const local = taskInputRequestRepo
-      .listOpen(userId)
+    const open = taskInputRequestRepo.listOpen(userId)
+    // Only an answer waiting for its queue names the agent's folder.
+    const folders = open.some(({ row }) => row.queuedAnswer != null)
+      ? await dispatchFolderNamesFor(userId)
+      : new Map<string, string>()
+    const local = open
       .filter(({ row }) => {
         // An allowlist, not `!== 'runner'`: a reply address the user can answer
         // with the chat closed. A runner gate is resumed by its runner and is
@@ -502,7 +543,7 @@ export const inboxService = {
         const task = taskService.getById(userId, row.taskId)
         return task.executor === 'desktop' && task.runsHere && ['blocked', 'in_progress'].includes(task.status)
       })
-      .map(({ row, taskTitle }) => toEntry(row, taskTitle))
+      .map(({ row, taskTitle }) => toEntry(row, taskTitle, folders))
     const dispatchPending = taskDispatchInboxItems(userId)
     const remote = await pending
     const dispatch = await dispatchPending
@@ -584,27 +625,31 @@ export const inboxService = {
         !agentService.findAgent(settingsUserId, userId, row.agentId)) {
         return { ok: false, reason: 'The conversation or its agent is no longer available.', code: 'not_here' }
       }
+      const content = resolution.answers.map((answers) => answers.join(', ')).join('\n')
+      // **A task a dispatcher queue owns is answered as a dispatched run.**
+      // The answer is stored on the ask, which stays open and listed, and the
+      // queue sends it as a flight: with a runner slot, once the agent and its
+      // folder are free, in any mode and while paused (the answer is the
+      // user's explicit act, like Run next). Its turn then ends by the report
+      // rule. A message typed in the chat still goes at once, and supersedes it.
+      // Not for an agent that can no longer work a queue (disabled, its folder
+      // gone): nothing would ever send it, so it goes to the chat at once.
+      if (task.dispatchAgentId && await isDispatchableAgent(userId, task.dispatchAgentId)) {
+        if (!taskInputRequestRepo.queueAnswer(requestId, content)) {
+          return { ok: false, reason: 'An answer to this question is already waiting to be sent.', code: 'already_answered' }
+        }
+        logger.info('an answer waits for its task’s queue', { requestId, taskId: row.taskId, agentId: task.dispatchAgentId })
+        wakeDispatcher()
+        return { ok: true, queued: true }
+      }
       // Check the active owner before consuming the ask. A simultaneous typed
       // answer or another card must not launch a second turn in this chat.
       if (runExecutionService.isRunning(row.chatId)) {
         return { ok: false, reason: 'This conversation is still finishing its turn. Try again shortly.', code: 'unavailable' }
       }
-      const content = resolution.answers.map((answers) => answers.join(', ')).join('\n')
       try {
-        const toolCallId = nestedToolCallId(row)
-        const handle = runExecutionService.start({ profileUserId: userId, settingsUserId }, {
-          chatId: row.chatId, content, addressedAgentId: row.agentId
-        }, {
-          observe: (ctx, event) => this.recordRunEvent(ctx, toolCallId
-            ? { type: 'child', toolCallId, agentId: row.agentId!, event }
-            : event),
-          preserveOnRefusal: true,
-          agentId: row.agentId,
-          ...(toolCallId ? { nested: { toolCallId } } : {}),
-          onAccepted: (ctx) => this.resumeChat(ctx, content)
-        })
+        const handle = this.startNextMessageTurn({ profileUserId: userId, settingsUserId }, row, content)
         await handle.accepted
-        if (toolCallId) void completeNestedContinuation({ profileUserId: userId, settingsUserId }, row, handle, toolCallId)
         return { ok: true }
       } catch (error) {
         return { ok: false, reason: error instanceof Error ? error.message : 'The answer could not be sent.', code: 'unavailable' }

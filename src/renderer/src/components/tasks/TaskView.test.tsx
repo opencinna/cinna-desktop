@@ -44,8 +44,11 @@ const delegationLinks = vi.fn<(taskId: string) => Promise<TaskDelegationsDto>>()
 const forTask = vi.fn<(taskId: string) => Promise<HandoverDto | null>>()
 const taskComments = vi.fn<(taskId: string) => Promise<TaskCommentDto[]>>()
 const dispatchList = vi.fn<() => Promise<AgentDispatchState[]>>()
+/** Main's `taskDispatch:changed` subscribers. */
+const dispatchListeners = new Set<() => void>()
 const runNext = vi.fn<(agentId: string, taskId?: string) => Promise<TaskDispatchRunResult>>()
 const resumeQueue = vi.fn<(agentId: string) => Promise<TaskDispatchUpdateResult>>()
+const createTask = vi.fn<(input: unknown) => Promise<TaskDto>>()
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
@@ -59,7 +62,8 @@ const resumeQueue = vi.fn<(agentId: string) => Promise<TaskDispatchUpdateResult>
     reopenForRerun: (taskId: string) => reopenForRerun(taskId),
     takeOver: (taskId: string, force?: boolean) => takeOver(taskId, force),
     remoteLive: (taskId: string) => remoteLive(taskId),
-    comments: (taskId: string) => taskComments(taskId)
+    comments: (taskId: string) => taskComments(taskId),
+    create: (input: unknown) => createTask(input)
   },
   inbox: { list: () => listInbox() },
   agents: {
@@ -84,7 +88,10 @@ const resumeQueue = vi.fn<(agentId: string) => Promise<TaskDispatchUpdateResult>
     list: () => dispatchList(),
     runNext: (agentId: string, taskId?: string) => runNext(agentId, taskId),
     resume: (agentId: string) => resumeQueue(agentId),
-    onChanged: () => () => {}
+    onChanged: (listener: () => void) => {
+      dispatchListeners.add(listener)
+      return () => { dispatchListeners.delete(listener) }
+    }
   }
 }
 
@@ -1607,9 +1614,9 @@ describe('a task kept in its agent’s folder', () => {
         ...BASE, ...FOLDER,
         file: { path: FILE_PATH, readOnlyFields: [], blockedBy: ['t-2', 't-4', 't-3'] },
         blockedBy: [
-          { id: 't-2', taskId: 't9', title: 'Rotate the keys', done: true },
-          { id: 't-4', taskId: 't7', title: 'Draft the notice', done: false },
-          { id: 't-3', taskId: null, title: null, done: false }
+          { id: 't-2', taskId: 't9', title: 'Rotate the keys', status: 'completed', done: true },
+          { id: 't-4', taskId: 't7', title: 'Draft the notice', status: 'in_progress', done: false },
+          { id: 't-3', taskId: null, title: null, status: null, done: false }
         ]
       } as TaskDto
       : { ...BASE, id: id ?? '', status: STATUSES[id ?? ''] ?? 'open' })
@@ -1634,13 +1641,15 @@ describe('a task kept in its agent’s folder', () => {
     expect(notFound.className).toContain('shrink-0')
     expect(within(items[2]).getByRole('img', { name: 'Not found' })).toBeTruthy()
     expect(within(items[2]).queryByRole('button')).toBeNull()
+    // The statuses came with the task: no blocker was fetched on its own.
+    expect(getTask.mock.calls.map(([id]) => id).filter((id) => id !== 't1')).toEqual([])
     fireEvent.click(within(items[1]).getByRole('button', { name: 'Draft the notice' }))
     expect(useUIStore.getState().activeTaskId).toBe('t7')
   })
 
   it('shows “Paused <agent>’s queue” with Resume on the task the queue paused on, and refreshes the page', async () => {
     const PAUSED: AgentDispatchState = {
-      agentId: 'folder:m1', mode: 'one', running: null, next: null, waiting: null,
+      agentId: 'folder:m1', mode: 'one', maxRuns: null, running: [], next: null, waiting: null,
       paused: { reason: 'unreported', taskId: 't1', taskTitle: 'Check the invoices', at: 1 }
     }
     dispatchList.mockResolvedValue([PAUSED])
@@ -1665,9 +1674,28 @@ describe('a task kept in its agent’s folder', () => {
     await waitFor(() => expect(getTask.mock.calls.length).toBeGreaterThan(reads))
   })
 
+  it('reads the queues again on main’s push, not on a timer', async () => {
+    // Mutation: put a refetchInterval back on the dispatch queries → the queues are re-read while nothing changed.
+    dispatchList.mockResolvedValue([])
+    // Before the render, so a query's interval would be a fake timer too.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await renderTask({ ...FOLDER, status: 'blocked', statusLabel: null })
+      await waitFor(() => expect(dispatchList).toHaveBeenCalled())
+      const reads = dispatchList.mock.calls.length
+      await act(async () => { vi.advanceTimersByTime(12_000) })
+      expect(dispatchList.mock.calls.length).toBe(reads)
+      expect(dispatchListeners.size).toBeGreaterThan(0)
+      await act(async () => { for (const listener of dispatchListeners) listener() })
+      await waitFor(() => expect(dispatchList.mock.calls.length).toBeGreaterThan(reads))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('has no paused line on a task another queue paused on, or none did', async () => {
     dispatchList.mockResolvedValue([{
-      agentId: 'folder:m1', mode: 'one', running: null, next: null, waiting: null,
+      agentId: 'folder:m1', mode: 'one', maxRuns: null, running: [], next: null, waiting: null,
       paused: { reason: 'error', taskId: 'other', taskTitle: 'Other', at: 1 }
     }])
     await renderTask({ ...FOLDER, status: 'blocked', statusLabel: null })
@@ -1687,7 +1715,7 @@ describe('a task kept in its agent’s folder', () => {
   })
 
   describe('Start on a Ready task of a folder agent whose queue Cinna works', () => {
-    const QUEUE: AgentDispatchState = { agentId: 'folder:m1', mode: 'manual', paused: null, running: null, next: null, waiting: null }
+    const QUEUE: AgentDispatchState = { agentId: 'folder:m1', mode: 'manual', maxRuns: null, paused: null, running: [], next: null, waiting: null }
     const READY: Partial<TaskDto> = { ...FOLDER, status: 'open', statusLabel: null }
     /** The section once the queue read is in (it remounts from its loading shape). */
     async function startSection(): Promise<HTMLElement> {
@@ -1743,9 +1771,9 @@ describe('a task kept in its agent’s folder', () => {
       await renderTask({
         ...READY,
         blockedBy: [
-          { id: 't-2', taskId: 't9', title: 'Rotate the keys', done: true },
-          { id: 't-4', taskId: 't7', title: 'Draft the notice', done: false },
-          { id: 't-3', taskId: null, title: null, done: false }
+          { id: 't-2', taskId: 't9', title: 'Rotate the keys', status: 'completed', done: true },
+          { id: 't-4', taskId: 't7', title: 'Draft the notice', status: 'in_progress', done: false },
+          { id: 't-3', taskId: null, title: null, status: null, done: false }
         ]
       })
       const picker = await screen.findByRole('region', { name: 'Continue this task' })
@@ -2041,5 +2069,59 @@ describe('comments', () => {
     await renderTask()
     await waitFor(() => expect(taskComments).toHaveBeenCalled())
     expect(screen.queryByRole('heading', { name: 'Comments' })).toBeNull()
+  })
+})
+
+describe('Add subtask', () => {
+  it('shows the Subtasks heading with Add subtask on a task with none', async () => {
+    await renderTask()
+    const subtasks = await screen.findByRole('region', { name: 'Subtasks' })
+    expect(within(subtasks).getByRole('button', { name: 'Add subtask' })).toBeTruthy()
+    // Nothing under the heading that could come and go (§1).
+    expect(within(subtasks).queryByText(/Loading subtasks|No subtasks/)).toBeNull()
+  })
+
+  it.each([
+    ['a subtask', { parentTaskId: 'p0' }],
+    ['an archived task', { status: 'archived' as const }],
+    ['a remote agent’s task', { assignee: { kind: 'remote_agent' as const, agentId: 'r1', name: 'Cloud' } }]
+  ])('offers no Add subtask on %s', async (_label, overrides) => {
+    await renderTask(overrides)
+    expect(screen.queryByRole('button', { name: 'Add subtask' })).toBeNull()
+  })
+
+  it('opens New task naming the parent, with its assignee locked, and lands on the subtask it made', async () => {
+    createTask.mockResolvedValue({ ...BASE, id: 't-child', title: 'Child', parentTaskId: 't1' })
+    await renderTask()
+    fireEvent.click(await screen.findByRole('button', { name: 'Add subtask' }))
+    const dialog = screen.getByRole('dialog', { name: 'New subtask' })
+    // Who it goes to is said under the title, not behind More options.
+    const line = dialog.querySelector('[data-subtask-parent]') as HTMLElement
+    expect(line.textContent).toBe('Under Check the invoices · assigned to Invoice Checker')
+    expect(dialog.textContent).not.toContain('goes to its parent’s assignee')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'More options' }))
+    expect(dialog.textContent).not.toContain('goes to its parent’s assignee')
+    const assignee = within(dialog).getByRole('combobox', { name: 'Assignee' }) as HTMLSelectElement
+    expect(assignee.value).toBe('a1')
+    expect(assignee.disabled).toBe(true)
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Title' }), { target: { value: 'Child' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(useUIStore.getState().activeTaskId).toBe('t-child'))
+    expect(createTask).toHaveBeenCalledWith({ title: 'Child', assignee: { kind: 'agent', agentId: 'a1' }, parentTaskId: 't1' })
+    expect(screen.queryByRole('dialog', { name: 'New subtask' })).toBeNull()
+  })
+
+  it('sends an unassigned parent’s subtask as unassigned, and keeps main’s refusal in the dialog', async () => {
+    createTask.mockRejectedValue(new Error('A subtask is assigned to its parent’s assignee.'))
+    await renderTask({ assignee: { kind: 'model', agentId: null, name: null }, chatId: null })
+    fireEvent.click(await screen.findByRole('button', { name: 'Add subtask' }))
+    const dialog = screen.getByRole('dialog', { name: 'New subtask' })
+    expect((dialog.querySelector('[data-subtask-parent]') as HTMLElement).textContent).toBe('Under Check the invoices · unassigned')
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Title' }), { target: { value: 'Child' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }))
+    expect(await within(dialog).findByRole('alert')).toBeTruthy()
+    expect(within(dialog).getByRole('alert').textContent).toContain('parent’s assignee')
+    expect(createTask).toHaveBeenCalledWith({ title: 'Child', assignee: null, parentTaskId: 't1' })
+    expect(screen.getByRole('dialog', { name: 'New subtask' })).toBeTruthy()
   })
 })

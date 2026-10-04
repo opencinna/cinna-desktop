@@ -1421,8 +1421,9 @@ const api = {
   taskDispatch: {
     list: (): Promise<AgentDispatchState[]> => ipcRenderer.invoke('taskDispatch:list'),
     get: (agentId: string): Promise<AgentDispatchState | null> => ipcRenderer.invoke('taskDispatch:get', agentId),
-    setMode: (agentId: string, mode: TaskDispatchMode): Promise<TaskDispatchUpdateResult> =>
-      ipcRenderer.invoke('taskDispatch:set-mode', agentId, mode),
+    /** `maxRuns` is N for `up_to` (2–8); the other modes ignore it. */
+    setMode: (agentId: string, mode: TaskDispatchMode, maxRuns?: number): Promise<TaskDispatchUpdateResult> =>
+      ipcRenderer.invoke('taskDispatch:set-mode', agentId, mode, maxRuns),
     resume: (agentId: string): Promise<TaskDispatchUpdateResult> => ipcRenderer.invoke('taskDispatch:resume', agentId),
     runNext: (agentId: string, taskId?: string): Promise<TaskDispatchRunResult> =>
       ipcRenderer.invoke('taskDispatch:run-next', agentId, taskId),

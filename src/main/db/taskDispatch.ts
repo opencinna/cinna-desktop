@@ -1,17 +1,18 @@
-import { and, desc, eq, isNotNull, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, ne } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import { getDb } from './client'
-import { agentTaskDispatch, taskDispatchGates } from './schema'
+import { agentTaskDispatch, agentTaskDispatchRuns, taskDispatchGates } from './schema'
 import type { TaskDispatchMode, TaskDispatchPauseReason } from '../../shared/taskDispatch'
 
 export type AgentTaskDispatchRow = typeof agentTaskDispatch.$inferSelect
+export type AgentTaskDispatchRunRow = typeof agentTaskDispatchRuns.$inferSelect
 export type TaskDispatchGateRow = typeof taskDispatchGates.$inferSelect
 
-/** What a profile's agent has when it has no row: manual, not paused, nothing in flight. */
+/** What a profile's agent has when it has no row: manual, not paused. */
 function emptyRow(userId: string, agentId: string): AgentTaskDispatchRow {
   return {
-    userId, agentId, mode: 'manual', pausedReason: null, pausedTaskId: null, pausedAt: null,
-    activeTaskId: null, activeChatId: null, updatedAt: new Date(0)
+    userId, agentId, mode: 'manual', maxRuns: null, pausedReason: null, pausedTaskId: null, pausedAt: null,
+    updatedAt: new Date(0)
   }
 }
 
@@ -19,8 +20,9 @@ type DispatchPatch = Partial<Omit<AgentTaskDispatchRow, 'userId' | 'agentId' | '
 
 /**
  * Per-profile, device-local dispatch state of each folder agent
- * (`agent_task_dispatch`). A row that has gone back to all defaults is
- * deleted, so "no row" keeps meaning manual and idle.
+ * (`agent_task_dispatch`, and its runs in flight in
+ * `agent_task_dispatch_runs`). A row that has gone back to all defaults is
+ * deleted, so "no row" keeps meaning manual and not paused.
  */
 export const agentTaskDispatchRepo = {
   get(userId: string, agentId: string): AgentTaskDispatchRow {
@@ -33,14 +35,24 @@ export const agentTaskDispatchRepo = {
     return getDb().select().from(agentTaskDispatch).where(eq(agentTaskDispatch.userId, userId)).all()
   },
 
-  /** Every row, of every profile, that still names a run in flight — the boot sweep's input. */
-  listActive(): AgentTaskDispatchRow[] {
-    return getDb().select().from(agentTaskDispatch).where(isNotNull(agentTaskDispatch.activeTaskId)).all()
+  /** Every dispatched run in flight, of every profile, oldest first — the boot sweep's input. */
+  listActive(): AgentTaskDispatchRunRow[] {
+    return getDb().select().from(agentTaskDispatchRuns)
+      .orderBy(asc(agentTaskDispatchRuns.startedAt), asc(agentTaskDispatchRuns.taskId)).all()
+  },
+
+  /** One agent's runs in flight, oldest first. */
+  listRuns(userId: string, agentId: string): AgentTaskDispatchRunRow[] {
+    return getDb().select().from(agentTaskDispatchRuns)
+      .where(and(eq(agentTaskDispatchRuns.userId, userId), eq(agentTaskDispatchRuns.agentId, agentId)))
+      .orderBy(asc(agentTaskDispatchRuns.startedAt), asc(agentTaskDispatchRuns.taskId)).all()
   },
 
   patch(userId: string, agentId: string, patch: DispatchPatch): AgentTaskDispatchRow {
     const next = { ...this.get(userId, agentId), ...patch, userId, agentId, updatedAt: new Date() }
-    const idle = next.mode === 'manual' && !next.pausedReason && !next.activeTaskId && !next.activeChatId
+    // N belongs to `up_to` alone, so a row back at manual and idle is no row.
+    if (next.mode !== 'up_to') next.maxRuns = null
+    const idle = next.mode === 'manual' && !next.pausedReason
     const db = getDb()
     if (idle) {
       db.delete(agentTaskDispatch)
@@ -51,19 +63,19 @@ export const agentTaskDispatchRepo = {
       target: [agentTaskDispatch.userId, agentTaskDispatch.agentId],
       set: {
         mode: next.mode,
+        maxRuns: next.maxRuns,
         pausedReason: next.pausedReason,
         pausedTaskId: next.pausedTaskId,
         pausedAt: next.pausedAt,
-        activeTaskId: next.activeTaskId,
-        activeChatId: next.activeChatId,
         updatedAt: next.updatedAt
       }
     }).run()
     return next
   },
 
-  setMode(userId: string, agentId: string, mode: TaskDispatchMode): AgentTaskDispatchRow {
-    return this.patch(userId, agentId, { mode })
+  /** `maxRuns` is kept only for `up_to`. */
+  setMode(userId: string, agentId: string, mode: TaskDispatchMode, maxRuns: number | null = null): AgentTaskDispatchRow {
+    return this.patch(userId, agentId, { mode, maxRuns: mode === 'up_to' ? maxRuns : null })
   },
 
   pause(userId: string, agentId: string, reason: TaskDispatchPauseReason, taskId: string | null, at = new Date()): AgentTaskDispatchRow {
@@ -74,8 +86,20 @@ export const agentTaskDispatchRepo = {
     return this.patch(userId, agentId, { pausedReason: null, pausedTaskId: null, pausedAt: null })
   },
 
-  setActive(userId: string, agentId: string, taskId: string | null, chatId: string | null): AgentTaskDispatchRow {
-    return this.patch(userId, agentId, { activeTaskId: taskId, activeChatId: chatId })
+  /** Record a run in flight (`chatId` null until it is accepted), or give it its chat. */
+  setActive(userId: string, agentId: string, taskId: string, chatId: string | null): void {
+    getDb().insert(agentTaskDispatchRuns).values({ userId, agentId, taskId, chatId, startedAt: new Date() })
+      .onConflictDoUpdate({
+        target: [agentTaskDispatchRuns.userId, agentTaskDispatchRuns.agentId, agentTaskDispatchRuns.taskId],
+        set: { chatId }
+      }).run()
+  },
+
+  /** The run is settled, never started, or flagged at boot: no longer in flight. */
+  clearActive(userId: string, agentId: string, taskId: string): void {
+    getDb().delete(agentTaskDispatchRuns)
+      .where(and(eq(agentTaskDispatchRuns.userId, userId), eq(agentTaskDispatchRuns.agentId, agentId),
+        eq(agentTaskDispatchRuns.taskId, taskId))).run()
   }
 }
 

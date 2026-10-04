@@ -78,17 +78,34 @@ export function isUserColumn(category: TaskStatusCategory): boolean {
  * `task:set-status` checks the table and the claim again.
  */
 export function boardMoveTargets(
-  task: Pick<TaskDto, 'executor' | 'runsHere' | 'runtime' | 'remote'> & Partial<Pick<TaskDto, 'file'>>,
+  task: Pick<TaskDto, 'executor' | 'runsHere' | 'runtime' | 'remote'> & Partial<Pick<TaskDto, 'file' | 'dispatchNote'>>,
   status: TaskStatus
 ): TaskStatusCategory[] {
   if (task.executor !== 'desktop' || !task.runsHere || task.runtime) return []
   const here = taskStatusCategory(status)
   const out: TaskStatusCategory[] = []
-  for (const target of manualTargets(status, { bound: isTableBound(task) })) {
+  for (const target of manualTargets(status, manualMoveOptions(task, status))) {
     const category = taskStatusCategory(target)
     if (category && category !== here && isUserColumn(category) && !out.includes(category)) out.push(category)
   }
   return out
+}
+
+/**
+ * A `blocked` task the dispatcher flagged (`dispatchNote`): it waits on no
+ * one, so the user may move it to a user column. Main checks again that no
+ * ask is open for it and no run holds it.
+ */
+export function isDispatchFlagged(task: Partial<Pick<TaskDto, 'dispatchNote'>>, status: TaskStatus): boolean {
+  return status === 'blocked' && !!task.dispatchNote
+}
+
+/** The options the shared manual-move rule takes for this task at `status`. */
+export function manualMoveOptions(
+  task: Pick<TaskDto, 'remote'> & Partial<Pick<TaskDto, 'file' | 'dispatchNote'>>,
+  status: TaskStatus
+): { bound: boolean; flagged: boolean } {
+  return { bound: isTableBound(task), flagged: isDispatchFlagged(task, status) }
 }
 
 /**
@@ -118,7 +135,7 @@ export function isTableBound(task: Pick<TaskDto, 'remote'> & Partial<Pick<TaskDt
  * no word.
  */
 export function folderMoveTargets(
-  task: Pick<TaskDto, 'executor' | 'runsHere' | 'runtime' | 'remote'> & Partial<Pick<TaskDto, 'file' | 'statusLabel'>>,
+  task: Pick<TaskDto, 'executor' | 'runsHere' | 'runtime' | 'remote'> & Partial<Pick<TaskDto, 'file' | 'statusLabel' | 'dispatchNote'>>,
   status: TaskStatus,
   columns: readonly TaskBoardColumn[],
   /** The word the card shows now, when a pending move has replaced the task's own. */
@@ -128,7 +145,7 @@ export function folderMoveTargets(
   if (!task.file) {
     const here = taskStatusCategory(status)
     const out: TaskBoardColumn[] = []
-    for (const target of manualTargets(status, { bound: isTableBound(task) })) {
+    for (const target of manualTargets(status, manualMoveOptions(task, status))) {
       const category = taskStatusCategory(target)
       if (!category || category === here || !isUserColumn(category)) continue
       const column = columns.find((candidate) => candidate.status === target)
@@ -143,7 +160,7 @@ export function folderMoveTargets(
   return columns.filter((column) => {
     if (!column.droppable) return false
     if (column.status === status) return stray && column !== standing
-    return canMoveManually(status, column.status, { bound: false })
+    return canMoveManually(status, column.status, { bound: false, flagged: isDispatchFlagged(task, status) })
   })
 }
 

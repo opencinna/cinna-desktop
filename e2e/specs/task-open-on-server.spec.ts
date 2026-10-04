@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { test, expect, type CinnaApp } from '../fixtures/app'
+import { openRecentTasks } from '../fixtures/tasksView'
 import {
   jobRemoteService,
   linkSandboxAccount,
@@ -127,9 +128,8 @@ test('a Cinna run’s task offers Open on the server first, and it lands on the 
     await test.step('from the Inbox, with no job active, Open on the server lands on the run view', async () => {
       await restart(cinna)
       const page = cinna.page
-      await page.getByRole('button', { name: /^Inbox/ }).click()
-      await page
-        .getByRole('region', { name: 'Recent tasks', exact: true })
+      await (await openRecentTasks(page))
+        
         .getByRole('button', { name: TITLE })
         .click()
       await expect(page.getByRole('heading', { level: 1, name: TITLE, exact: true })).toBeVisible()
@@ -137,8 +137,9 @@ test('a Cinna run’s task offers Open on the server first, and it lands on the 
       const menu = page.getByRole('menu', { name: 'Task actions', exact: true })
       const items = menu.getByRole('menuitem')
       await expect(items.first()).toHaveAccessibleName('Open on the server')
-      await expect(items).toHaveCount(2)
-      await expect(items.nth(1)).toHaveAccessibleName('Delete task…')
+      await expect(items).toHaveCount(3)
+      await expect(items.nth(1)).toHaveAccessibleName('Edit task…')
+      await expect(items.nth(2)).toHaveAccessibleName('Delete task…')
       await items.first().click()
 
       await expect(page.getByText(`#${REMOTE_KEY}`, { exact: true })).toBeVisible()

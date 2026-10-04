@@ -17,7 +17,7 @@ import type {
  */
 
 const getQueue = vi.fn<(agentId: string) => Promise<AgentDispatchState | null>>()
-const setMode = vi.fn<(agentId: string, mode: TaskDispatchMode) => Promise<TaskDispatchUpdateResult>>()
+const setMode = vi.fn<(agentId: string, mode: TaskDispatchMode, maxRuns?: number) => Promise<TaskDispatchUpdateResult>>()
 const resume = vi.fn<(agentId: string) => Promise<TaskDispatchUpdateResult>>()
 const runNext = vi.fn<(agentId: string, taskId?: string) => Promise<TaskDispatchRunResult>>()
 
@@ -25,7 +25,7 @@ const runNext = vi.fn<(agentId: string, taskId?: string) => Promise<TaskDispatch
   app: { setTheme: async () => undefined },
   taskDispatch: {
     get: (agentId: string) => getQueue(agentId),
-    setMode: (agentId: string, mode: TaskDispatchMode) => setMode(agentId, mode),
+    setMode: (...args: [string, TaskDispatchMode, number?]) => setMode(...args),
     resume: (agentId: string) => resume(agentId),
     runNext: (agentId: string, taskId?: string) => runNext(agentId, taskId),
     onChanged: () => () => {}
@@ -38,7 +38,7 @@ const { useUIStore } = await import('../../../stores/ui.store')
 const AGENT = { id: 'folder:ledger', name: 'Ledger' }
 
 function queue(overrides: Partial<AgentDispatchState> = {}): AgentDispatchState {
-  return { agentId: AGENT.id, mode: 'manual', paused: null, running: null, next: null, waiting: null, ...overrides }
+  return { agentId: AGENT.id, mode: 'manual', maxRuns: null, paused: null, running: [], next: null, waiting: null, ...overrides }
 }
 
 let client: QueryClient
@@ -101,7 +101,7 @@ describe('AgentTasksTab', () => {
     expect(statusLine()).toBe('Waiting for approval in the Inbox')
     cleanup()
 
-    await renderTab(queue({ running: { taskId: 't1', chatId: 'c1', title: 'Reconcile August' } }))
+    await renderTab(queue({ running: [{ taskId: 't1', chatId: 'c1', title: 'Reconcile August' }] }))
     expect(statusLine()).toBe('Running Reconcile August')
     // The task is a link to its page.
     fireEvent.click(within(document.querySelector('[data-queue-status]') as HTMLElement).getByRole('button', { name: 'Reconcile August' }))
@@ -126,6 +126,47 @@ describe('AgentTasksTab', () => {
     expect(alert.textContent).toBe('This agent is disabled.')
     // Last in the card: nothing after it.
     expect(alert.nextElementSibling).toBeNull()
+  })
+
+  it('offers Up to 2 … Up to 8 in the one Run mode select, with no second control', async () => {
+    await renderTab(queue())
+    const select = screen.getByLabelText('Run mode') as HTMLSelectElement
+    expect([...select.options].map((o) => o.text)).toEqual([
+      'Manual', 'One at a time', 'Up to 2', 'Up to 3', 'Up to 4', 'Up to 5', 'Up to 6', 'Up to 7', 'Up to 8'
+    ])
+    // One control on the row: nothing held beside it, nothing to appear (§1).
+    expect(select.parentElement!.querySelectorAll('select')).toHaveLength(1)
+    expect(document.querySelector('[data-queue-max-runs]')).toBeNull()
+
+    setMode.mockResolvedValueOnce({ ok: true, state: queue({ mode: 'up_to', maxRuns: 3 }) })
+    getQueue.mockResolvedValue(queue({ mode: 'up_to', maxRuns: 3 }))
+    await act(async () => {
+      fireEvent.change(select, { target: { value: 'up_to:3' } })
+    })
+    expect(setMode).toHaveBeenCalledWith(AGENT.id, 'up_to', 3)
+    await waitFor(() => expect(select.options[select.selectedIndex].text).toBe('Up to 3'))
+
+    setMode.mockResolvedValueOnce({ ok: true, state: queue({ mode: 'one' }) })
+    getQueue.mockResolvedValue(queue({ mode: 'one' }))
+    await act(async () => { fireEvent.change(select, { target: { value: 'one' } }) })
+    expect(setMode).toHaveBeenLastCalledWith(AGENT.id, 'one')
+    await waitFor(() => expect(select.value).toBe('one'))
+  })
+
+  it('shows a saved Up to N as its own choice', async () => {
+    await renderTab(queue({ mode: 'up_to', maxRuns: 6 }))
+    const select = screen.getByLabelText('Run mode') as HTMLSelectElement
+    expect(select.options[select.selectedIndex].text).toBe('Up to 6')
+  })
+
+  it('says how full an Up to N queue is', async () => {
+    const run = (id: string, title: string) => ({ taskId: id, chatId: `c-${id}`, title })
+    await renderTab(queue({ mode: 'up_to', maxRuns: 3, running: [run('t1', 'Reconcile August'), run('t2', 'Close the books')] }))
+    expect(statusLine()).toBe('Running 2 of 3')
+    cleanup()
+
+    await renderTab(queue({ mode: 'up_to', maxRuns: 3, running: [run('t1', 'Reconcile August')], waiting: 'slot' }))
+    expect(statusLine()).toBe('Running Reconcile August · 1 of 3 · waiting for a runner slot')
   })
 
   it('runs the next task and stays on the page', async () => {
