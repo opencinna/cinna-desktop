@@ -1,10 +1,12 @@
 import { test, expect, type CinnaApp } from '../fixtures/app'
+import { closeTaskFilters, openTaskFilters, showTasksLayout } from '../fixtures/tasksView'
 
 /**
  * The Tasks view (`TasksView`): the top bar's Tasks button, New task with and
- * without More options, the list grouped by category, the board's drag and its
- * ⋯ keyboard path, the search, the remembered List | Board choice and the
- * Settings → Features switch that hides the button.
+ * without More options, the Agents layout it opens on, the Filters form's
+ * period and search with their pills beside Filters, the list grouped by
+ * category, the board's drag and its ⋯ keyboard path, the remembered layout
+ * choice and the Settings → Features switch that hides the button.
  *
  * Everything is driven through the UI; main is read back with `tasks.list()` /
  * `tasks.get()` to prove a move was stored, not only drawn. No model, engine or
@@ -66,7 +68,7 @@ async function openFeatures(cinna: CinnaApp): Promise<void> {
   await page.getByRole('button', { name: 'Features', exact: true }).click()
 }
 
-test('Tasks view: create, list, board moves, search, remembered layout, and the Features switch', async ({ cinna }) => {
+test('Tasks view: create, agents, filters, list, board moves, search, remembered layout, and the Features switch', async ({ cinna }) => {
   await cinna.skipOnboarding()
 
   await test.step('the top bar has Tasks immediately left of Agent status, and it opens the view', async () => {
@@ -120,9 +122,43 @@ test('Tasks view: create, list, board moves, search, remembered layout, and the 
     await cinna.page.getByRole('button', { name: 'Back to Tasks', exact: true }).click()
   })
 
-  await test.step('List: each task under its category, with counts', async () => {
-    await expect(cinna.page.getByRole('group', { name: 'Tasks layout' }).getByRole('button', { name: 'List', exact: true }))
+  await test.step('Agents is the default layout: each task sits in its agent’s card, here No agent', async () => {
+    await expect(cinna.page.getByRole('group', { name: 'Tasks layout' }).getByRole('button', { name: 'Agents', exact: true }))
       .toHaveAttribute('aria-pressed', 'true')
+    const noAgent = cinna.page.getByRole('region', { name: 'No agent', exact: true })
+    await expect(noAgent.getByRole('button', { name: `${ALPHA} — Backlog`, exact: true })).toBeVisible()
+    await expect(noAgent.getByRole('button', { name: `${BRAVO} — Ready`, exact: true })).toBeVisible()
+    // Open work counted in the card's header, as glyphs named by the sentence: Backlog is not.
+    await expect(noAgent.locator('header').getByRole('img', { name: '1 ready', exact: true })).toBeVisible()
+  })
+
+  await test.step('Filters: the period radio changes the period pill beside Filters, and its × goes to All time', async () => {
+    // Every pill stays mounted (a collapsed one aria-hidden, keeping its words): read the exposed ×s, not the text.
+    const applied = cinna.page.getByRole('group', { name: 'Applied filters', exact: true })
+    await expect(applied.getByRole('button')).toHaveCount(1)
+    await expect(applied.getByRole('button', { name: 'Remove Last week', exact: true })).toBeVisible()
+    const form = await openTaskFilters(cinna.page)
+    await expect(form.getByRole('searchbox', { name: 'Search tasks', exact: true })).toBeFocused()
+    const period = form.getByRole('radiogroup', { name: 'Changed in', exact: true })
+    await expect(period.getByRole('radio', { name: 'Last week', exact: true })).toHaveAttribute('aria-checked', 'true')
+    await period.getByRole('radio', { name: 'Last month', exact: true }).click()
+    await expect(period.getByRole('radio', { name: 'Last month', exact: true })).toHaveAttribute('aria-checked', 'true')
+    await expect(applied.getByRole('button', { name: 'Remove Last month', exact: true })).toBeVisible()
+    await expect(applied.getByRole('button')).toHaveCount(1)
+    await closeTaskFilters(cinna.page)
+    await expect(cinna.page.getByRole('button', { name: 'Filters', exact: true })).toBeFocused()
+    await applied.getByRole('button', { name: 'Remove Last month', exact: true }).click()
+    // All time has no pill: nothing applied, the block is just Filters.
+    await expect(applied.getByRole('button')).toHaveCount(0)
+    const again = await openTaskFilters(cinna.page)
+    await expect(again.getByRole('radio', { name: 'All time', exact: true })).toHaveAttribute('aria-checked', 'true')
+    await again.getByRole('radio', { name: 'Last week', exact: true }).click()
+    await closeTaskFilters(cinna.page)
+    await expect(applied.getByRole('button', { name: 'Remove Last week', exact: true })).toBeVisible()
+  })
+
+  await test.step('List: each task under its category, with counts', async () => {
+    await showTasksLayout(cinna.page, 'List')
     const backlog = cinna.page.getByRole('region', { name: 'Backlog', exact: true })
     const ready = cinna.page.getByRole('region', { name: 'Ready', exact: true })
     await expect(backlog.getByRole('heading', { level: 2 })).toHaveText('Backlog1')
@@ -168,14 +204,20 @@ test('Tasks view: create, list, board moves, search, remembered layout, and the 
     await expect(board(cinna, 'closed').getByRole('button', { name: `${BRAVO} — Done`, exact: true })).toBeVisible()
   })
 
-  await test.step('Search: a query nothing matches says so', async () => {
-    const search = cinna.page.getByRole('searchbox', { name: 'Search tasks', exact: true })
+  await test.step('Search: a query nothing matches says so; its pill beside Filters clears it', async () => {
+    const search = (await openTaskFilters(cinna.page)).getByRole('searchbox', { name: 'Search tasks', exact: true })
     await search.fill('zzqx nothing like this')
     await expect(cinna.page.getByText('No tasks match.', { exact: true })).toBeVisible()
     await expect(cinna.page.locator('[data-task-card]')).toHaveCount(0)
     await search.fill('alpha')
     await expect(cinna.page.locator('[data-task-card]')).toHaveCount(1)
     await expect(card(cinna, ALPHA)).toBeVisible()
+    await closeTaskFilters(cinna.page)
+    const applied = cinna.page.getByRole('group', { name: 'Applied filters', exact: true })
+    await expect(applied.getByText('“alpha”', { exact: true })).toBeVisible()
+    await applied.getByRole('button', { name: 'Clear the search', exact: true }).click()
+    await expect(cinna.page.locator('[data-task-card]')).toHaveCount(2)
+    await expect(applied.getByRole('button', { name: 'Clear the search', exact: true })).toHaveCount(0)
   })
 
   await test.step('the Board choice survives a relaunch', async () => {

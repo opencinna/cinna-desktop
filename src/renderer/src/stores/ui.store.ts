@@ -80,17 +80,20 @@ const CHAT_GROUP_BY_DATE_KEY = 'cinna-chat-group-by-date'
 const CHAT_SHOW_ACTIVE_KEY = 'cinna-chat-show-active'
 const CHAT_GROUPS_COLLAPSED_KEY = 'cinna-chat-groups-collapsed'
 // The top bar's Tasks button (on unless turned off), and the Tasks view's
-// last List | Recent | Board choice.
+// last Agents | Recent | Board | List choice.
 const TASKS_BUTTON_KEY = 'cinna-show-tasks-button'
 const TASKS_VIEW_MODE_KEY = 'cinna-tasks-view-mode'
 
-/** The list grouped by category, the list by last change (Recent), or the board. */
-export type TasksViewMode = 'list' | 'recent' | 'board'
+/** A card per agent (the default), the list by last change (Recent), the board, or the list grouped by category. */
+export type TasksViewMode = 'agents' | 'recent' | 'board' | 'list'
 
 function readTasksViewMode(): TasksViewMode {
   const stored = localStorage.getItem(TASKS_VIEW_MODE_KEY)
-  return stored === 'board' || stored === 'recent' ? stored : 'list'
+  return stored === 'board' || stored === 'recent' || stored === 'list' ? stored : 'agents'
 }
+
+/** How far back the Tasks view reaches for work nobody holds open (`withinTaskPeriod`). */
+export type TasksPeriod = 'week' | 'month' | 'all'
 
 /** `pendingModeId` for a new chat with no chat mode at all. */
 export const NO_CHAT_MODE = '__none__'
@@ -140,7 +143,7 @@ interface UIStore {
   taskOpenedFromTasks: boolean
   /** The top bar's Tasks button; on by default (Settings → Features → Interface). */
   showTasksButton: boolean
-  /** The Tasks view's last List | Board choice. */
+  /** The Tasks view's last Agents | Recent | Board | List choice. */
   tasksViewMode: TasksViewMode
   /**
    * The Tasks view's Agent filter, kept while the window lives so a task opened
@@ -148,6 +151,11 @@ interface UIStore {
    * an agent id is profile-scoped and may be gone by the next launch.
    */
   tasksAgentFilter: string
+  /**
+   * The Tasks view's period filter, Last week until changed. Kept while the
+   * window lives, like the Agent filter; every launch starts at a week.
+   */
+  tasksPeriod: TasksPeriod
   activeNoteId: string | null
   /**
    * A note whose sidebar row should scroll into view once, when it renders
@@ -230,6 +238,7 @@ interface UIStore {
   setShowTasksButton: (show: boolean) => void
   setTasksViewMode: (mode: TasksViewMode) => void
   setTasksAgentFilter: (filter: string) => void
+  setTasksPeriod: (period: TasksPeriod) => void
   setActiveNoteId: (id: string | null) => void
   setRevealNoteId: (id: string | null) => void
   setRevealChatId: (id: string | null) => void
@@ -273,6 +282,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   showTasksButton: localStorage.getItem(TASKS_BUTTON_KEY) !== '0',
   tasksViewMode: readTasksViewMode(),
   tasksAgentFilter: 'all',
+  tasksPeriod: 'week',
   activeNoteId: null,
   revealNoteId: null,
   revealChatId: null,
@@ -317,6 +327,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
     set({ tasksViewMode })
   },
   setTasksAgentFilter: (tasksAgentFilter) => set({ tasksAgentFilter }),
+  setTasksPeriod: (tasksPeriod) => set({ tasksPeriod }),
   setActiveNoteId: (id) => set({ activeNoteId: id }),
   setRevealNoteId: (id) => set({ revealNoteId: id }),
   setRevealChatId: (id) => set({ revealChatId: id }),

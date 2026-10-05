@@ -7,9 +7,10 @@ import type { TaskBoardColumn } from '../../../../shared/folderTasks'
 import type { AgentDispatchState, TaskDispatchMode, TaskDispatchRunResult, TaskDispatchUpdateResult } from '../../../../shared/taskDispatch'
 
 /**
- * The Tasks view: the list grouped by category, the agent filter and search,
- * the board's drops through `task:set-status` (and what happens when main
- * refuses one), and New task closing only on success.
+ * The Tasks view: the Agents layout (its default), the list grouped by
+ * category, the Filters form (search, agent, period) and its pills beside
+ * the Filters button, the board's drops through `task:set-status` (and what
+ * happens when main refuses one), and New task closing only on success.
  */
 
 const AGENTS = [
@@ -71,7 +72,14 @@ function wrapper({ children }: { children: ReactNode }): React.JSX.Element {
   return createElement(QueryClientProvider, { client }, children)
 }
 
+/** "Now" for every test: the fixtures' 2026-10-01 is inside Last week, the default period. */
+const NOW = new Date('2026-10-05T12:00:00Z')
+const DAY = 24 * 60 * 60 * 1000
+
 beforeEach(() => {
+  // Only Date is faked: the queries, polls and waits keep real timers.
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(NOW)
   client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchInterval: false } } })
   listTasks.mockReset().mockResolvedValue(TASKS)
   setStatus.mockReset()
@@ -82,7 +90,7 @@ beforeEach(() => {
   setMode.mockReset()
   resume.mockReset()
   dispatchChanged = null
-  useUIStore.setState({ activeView: 'tasks', tasksViewMode: 'list', tasksAgentFilter: 'all', activeTaskId: null, taskOpenedFromTasks: false })
+  useUIStore.setState({ activeView: 'tasks', tasksViewMode: 'list', tasksAgentFilter: 'all', tasksPeriod: 'week', activeTaskId: null, taskOpenedFromTasks: false })
   ;(window as unknown as { api: Record<string, unknown> }).api = {
     app: { setTheme: async () => undefined },
     tasks: {
@@ -101,13 +109,38 @@ beforeEach(() => {
     }
   }
 })
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 
 function section(name: string): HTMLElement {
   return screen.getByRole('region', { name })
 }
 function titlesIn(element: HTMLElement): string[] {
   return within(element).queryAllByRole('button', { name: / — / }).map((button) => button.getAttribute('aria-label')!.split(' — ')[0])
+}
+/** The Filters form, opened from its button unless it is open already. */
+async function openFilters(): Promise<HTMLElement> {
+  const open = screen.queryByRole('dialog', { name: 'Filter tasks' })
+  if (open) return open
+  fireEvent.click(screen.getByRole('button', { name: 'Filters' }))
+  return screen.findByRole('dialog', { name: 'Filter tasks' })
+}
+async function filterByAgent(value: string): Promise<void> {
+  fireEvent.change(within(await openFilters()).getByRole('combobox', { name: 'Agent' }), { target: { value } })
+}
+async function searchTasks(value: string): Promise<void> {
+  fireEvent.change(within(await openFilters()).getByRole('searchbox', { name: 'Search tasks' }), { target: { value } })
+}
+/**
+ * The pills the applied-filters group exposes. Every pill stays mounted and a
+ * collapsed one keeps its words, so only the ones not `aria-hidden` count.
+ */
+function appliedFilters(): string[] {
+  return [...screen.getByRole('group', { name: 'Applied filters' }).children]
+    .filter((pill) => pill.getAttribute('aria-hidden') !== 'true')
+    .map((pill) => pill.textContent ?? '')
 }
 
 describe('list', () => {
@@ -126,17 +159,18 @@ describe('list', () => {
   it('keeps the agent filter when the view is left and opened again (Back to Tasks)', async () => {
     const first = render(createElement(TasksView), { wrapper })
     await screen.findByRole('button', { name: /^Plan the launch/ })
-    fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'agent:agent-w' } })
+    await filterByAgent('agent:agent-w')
     first.unmount()
     render(createElement(TasksView), { wrapper })
-    await screen.findByRole('combobox', { name: 'Agent' })
-    expect((screen.getByRole('combobox', { name: 'Agent' }) as HTMLSelectElement).value).toBe('agent:agent-w')
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    expect(appliedFilters()).toEqual(['Last week', 'Writer'])
+    expect((within(await openFilters()).getByRole('combobox', { name: 'Agent' }) as HTMLSelectElement).value).toBe('agent:agent-w')
   })
 
   it('filters by agent and by title, keeping every section header at 0', async () => {
     render(createElement(TasksView), { wrapper })
     await screen.findByRole('button', { name: /^Plan the launch/ })
-    const agent = screen.getByRole('combobox', { name: 'Agent' })
+    const agent = within(await openFilters()).getByRole('combobox', { name: 'Agent' })
     expect(within(agent).getAllByRole('option').map((o) => o.textContent)).toEqual(['All agents', 'Reviewer', 'Writer', 'No agent'])
 
     fireEvent.change(agent, { target: { value: 'agent:agent-w' } })
@@ -150,7 +184,7 @@ describe('list', () => {
     expect(titlesIn(section('Waiting'))).toEqual(['Answer legal'])
 
     fireEvent.change(agent, { target: { value: 'all' } })
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Search tasks' }), { target: { value: 'LAUNCH' } })
+    await searchTasks('LAUNCH')
     expect(titlesIn(section('Backlog'))).toEqual(['Plan the launch'])
     expect(titlesIn(section('Done'))).toEqual(['Old launch'])
     expect(titlesIn(section('Ready'))).toEqual([])
@@ -168,62 +202,360 @@ describe('list', () => {
     expect(within(row).getByText('Writer')).toBeTruthy()
     // Unassigned rows carry no chip.
     expect(within(screen.getByRole('button', { name: /^Answer legal/ })).queryByText(/Writer|Reviewer|Unassigned/)).toBeNull()
-    fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'agent:agent-w' } })
+    await filterByAgent('agent:agent-w')
     expect(within(screen.getByRole('button', { name: /^Write the changelog/ })).queryByText('Writer')).toBeNull()
   })
 
   it('says “No tasks match.” in place of the sections when the search finds nothing', async () => {
     render(createElement(TasksView), { wrapper })
     await screen.findByRole('button', { name: /^Plan the launch/ })
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Search tasks' }), { target: { value: 'zzz' } })
+    await searchTasks('zzz')
     expect(screen.getByText('No tasks match.')).toBeTruthy()
     expect(screen.queryByRole('region')).toBeNull()
     expect(screen.getByRole('button', { name: 'New task' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Board' }))
     expect(screen.getByText('No tasks match.')).toBeTruthy()
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Search tasks' }), { target: { value: '' } })
+    await searchTasks('')
     expect(screen.queryByText('No tasks match.')).toBeNull()
     expect(screen.getAllByRole('region')).toHaveLength(5)
   })
 
-  it('folds the search to its glyph when narrow, opens it in place, and keeps it open while it holds text', async () => {
+  it('opens the Filters form on its button with the search focused; Escape closes it and gives focus back', async () => {
     render(createElement(TasksView), { wrapper })
     await screen.findByRole('button', { name: /^Plan the launch/ })
-    const field = (): HTMLElement => screen.getByRole('searchbox', { name: 'Search tasks' }).closest('label')!
-    // Folded below @xl: the field is hidden there, the glyph shown (and hidden from @xl up).
-    const glyph = screen.getByRole('button', { name: 'Search' })
-    expect(glyph.className).toContain('@xl:hidden')
-    expect(field().className).toMatch(/(^| )hidden( |$)/)
-    expect(field().className).toContain('@xl:flex')
-    fireEvent.click(glyph)
-    expect(screen.queryByRole('button', { name: 'Search' })).toBeNull()
-    expect(field().className).not.toMatch(/(^| )hidden( |$)/)
-    const input = screen.getByRole('searchbox', { name: 'Search tasks' })
-    expect(document.activeElement).toBe(input)
-    fireEvent.change(input, { target: { value: 'launch' } })
-    fireEvent.blur(input)
-    // Holding text: still open, nothing folded under what was typed.
-    expect(screen.queryByRole('button', { name: 'Search' })).toBeNull()
-    fireEvent.change(input, { target: { value: '' } })
-    fireEvent.blur(input)
-    expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
+    // The search and the agent live only in the form.
+    expect(screen.queryByRole('searchbox', { name: 'Search tasks' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: 'Agent' })).toBeNull()
+    const button = screen.getByRole('button', { name: 'Filters' })
+    expect(button.getAttribute('aria-expanded')).toBe('false')
+    const form = await openFilters()
+    expect(button.getAttribute('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(within(form).getByRole('searchbox', { name: 'Search tasks' }))
+    expect(within(form).getByRole('combobox', { name: 'Agent' })).toBeTruthy()
+    expect(within(within(form).getByRole('radiogroup', { name: 'Changed in' })).getAllByRole('radio').map((r) => r.textContent))
+      .toEqual(['Last week', 'Last month', 'All time'])
+    // Changes apply at once; the form stays open while it is used.
+    fireEvent.change(within(form).getByRole('searchbox', { name: 'Search tasks' }), { target: { value: 'launch' } })
+    expect(screen.getByRole('dialog', { name: 'Filter tasks' })).toBe(form)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Filter tasks' })).toBeNull()
+    expect(document.activeElement).toBe(button)
+    // An outside click closes it too, keeping what it applied.
+    await openFilters()
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByRole('dialog', { name: 'Filter tasks' })).toBeNull()
+    expect(titlesIn(section('Backlog'))).toEqual(['Plan the launch'])
   })
 
-  it('lets the agent filter narrow rather than push the row past its edge', async () => {
+  it('shows what the filters apply as pills beside Filters, each × clearing its own filter', async () => {
     render(createElement(TasksView), { wrapper })
     await screen.findByRole('button', { name: /^Plan the launch/ })
-    const filter = screen.getByRole('combobox', { name: 'Agent' })
-    expect(filter.className).toContain('shrink')
-    expect(filter.className).not.toContain('shrink-0')
-    expect(filter.className).toContain('min-w-16')
+    const group = screen.getByRole('group', { name: 'Applied filters' })
+    // One block: the pills, then the Filters button as its last control.
+    expect(group.parentElement!.lastElementChild).toBe(screen.getByRole('button', { name: 'Filters' }))
+    // The default: the Last week pill alone.
+    expect(appliedFilters()).toEqual(['Last week'])
+    expect(within(group).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Remove Last week'])
+
+    await filterByAgent('agent:agent-w')
+    await searchTasks('  launch ')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(appliedFilters()).toEqual(['Last week', 'Writer', '“launch”'])
+    expect(titlesIn(section('Backlog'))).toEqual(['Plan the launch'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear the search' }))
+    expect(appliedFilters()).toEqual(['Last week', 'Writer'])
+    expect(titlesIn(section('Ready'))).toEqual(['Write the changelog'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove the Writer filter' }))
+    expect(appliedFilters()).toEqual(['Last week'])
+    expect(useUIStore.getState().tasksAgentFilter).toBe('all')
+    expect(titlesIn(section('Waiting'))).toEqual(['Answer legal'])
+
+    // Mutation: let the period's × go back to Last week (or anywhere but All time) and this fails.
+    const periodPill = screen.getByRole('button', { name: 'Remove Last week' }).closest('[aria-hidden]')!
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Last week' }))
+    expect(useUIStore.getState().tasksPeriod).toBe('all')
+    expect(titlesIn(section('Done'))).toEqual(['Old launch', 'Failed export'])
+    // Collapsed, not unmounted: it keeps its words but leaves the accessibility tree.
+    expect(periodPill.isConnected).toBe(true)
+    expect(periodPill.getAttribute('aria-hidden')).toBe('true')
+    expect(periodPill.textContent).toBe('Last week')
+    // Nothing applied: no pill and no × exposed, the block is just Filters.
+    expect(appliedFilters()).toEqual([])
+    expect(within(group).queryAllByRole('button')).toEqual([])
+    expect(within(await openFilters()).getByRole('radio', { name: 'All time' }).getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(within(await openFilters()).getByRole('radio', { name: 'Last month' }))
+    expect(appliedFilters()).toEqual(['Last month'])
+    expect(screen.getByRole('button', { name: 'Remove Last month' })).toBeTruthy()
   })
 
-  it('remembers List | Board', async () => {
+  it('takes the list’s order again when a search is cleared', async () => {
+    // Mutation: drop the List's key and the row the search showed stays first,
+    // the one it hid (never seen while the List was mounted) after it.
+    useUIStore.setState({ tasksViewMode: 'board' })
     render(createElement(TasksView), { wrapper })
     await screen.findByRole('button', { name: /^Plan the launch/ })
+    await searchTasks('pricing')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.click(screen.getByRole('button', { name: 'List' }))
+    expect(titlesIn(section('Backlog'))).toEqual(['Refine pricing'])
+    fireEvent.click(screen.getByRole('button', { name: 'Clear the search' }))
+    expect(titlesIn(section('Backlog'))).toEqual(['Plan the launch', 'Refine pricing'])
+  })
+
+  it('closes the Filters form on a scroll of the view, not on a scroll inside the form', async () => {
+    // Mutation: drop the scroll listener and the form stays fixed while the view moves away under it.
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    const form = await openFilters()
+    fireEvent.scroll(within(form).getByRole('combobox', { name: 'Agent' }))
+    expect(screen.getByRole('dialog', { name: 'Filter tasks' })).toBe(form)
+    fireEvent.scroll(document.querySelector('[data-tasks-scroll]')!)
+    expect(screen.queryByRole('dialog', { name: 'Filter tasks' })).toBeNull()
+  })
+
+  it('gives focus to the Filters button when a pill’s × clears its filter', async () => {
+    // Mutation: drop the focus() and it falls to the page as the pill turns inert.
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    await filterByAgent('agent:agent-w')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    const remove = screen.getByRole('button', { name: 'Remove the Writer filter' })
+    remove.focus()
+    fireEvent.click(remove)
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Filters' }))
+    const period = screen.getByRole('button', { name: 'Remove Last week' })
+    period.focus()
+    fireEvent.click(period)
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Filters' }))
+  })
+
+  it('lets the period reach Backlog and Done by last change, never Waiting, In progress or Ready', async () => {
+    // Mutation: let the period hide open work too and this fails — a task stuck
+    // on a question for two months would drop out of sight for sitting still.
+    const ago = (days: number): Date => new Date(NOW.getTime() - days * DAY)
+    listTasks.mockResolvedValue([
+      task('w', { title: 'Old question', status: 'blocked', updatedAt: ago(90) }),
+      task('a', { title: 'Long run', status: 'in_progress', updatedAt: ago(90) }),
+      task('r', { title: 'Queued long ago', status: 'open', updatedAt: ago(90) }),
+      task('b6', { title: 'Fresh idea', status: 'new', updatedAt: ago(6) }),
+      task('b20', { title: 'Older idea', status: 'refining', updatedAt: ago(20) }),
+      task('b90', { title: 'Ancient idea', status: 'new', updatedAt: ago(90) }),
+      task('d6', { title: 'Done lately', status: 'completed', updatedAt: ago(6) }),
+      task('d20', { title: 'Failed a while back', status: 'error', updatedAt: ago(20) }),
+      task('d90', { title: 'Done long ago', status: 'completed', updatedAt: ago(90) })
+    ])
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Old question/ })
+    const open = (): string[][] => [titlesIn(section('Waiting')), titlesIn(section('In progress')), titlesIn(section('Ready'))]
+    const always = [['Old question'], ['Long run'], ['Queued long ago']]
+
+    expect(open()).toEqual(always)
+    expect(titlesIn(section('Backlog'))).toEqual(['Fresh idea'])
+    expect(titlesIn(section('Done'))).toEqual(['Done lately'])
+
+    const period = within(await openFilters()).getByRole('radiogroup', { name: 'Changed in' })
+    fireEvent.click(within(period).getByRole('radio', { name: 'Last month' }))
+    expect(within(period).getByRole('radio', { name: 'Last month' }).getAttribute('aria-checked')).toBe('true')
+    expect(open()).toEqual(always)
+    expect(titlesIn(section('Backlog'))).toEqual(['Fresh idea', 'Older idea'])
+    expect(titlesIn(section('Done'))).toEqual(['Done lately', 'Failed a while back'])
+
+    fireEvent.click(within(period).getByRole('radio', { name: 'All time' }))
+    expect(open()).toEqual(always)
+    expect(titlesIn(section('Backlog'))).toEqual(['Fresh idea', 'Older idea', 'Ancient idea'])
+    expect(titlesIn(section('Done'))).toEqual(['Done lately', 'Failed a while back', 'Done long ago'])
+  })
+
+  it('names the period, not a match, when only the period leaves nothing', async () => {
+    listTasks.mockResolvedValue([task('old', { title: 'Old idea', status: 'new', updatedAt: new Date(NOW.getTime() - 20 * DAY) })])
+    render(createElement(TasksView), { wrapper })
+    expect(await screen.findByText('No tasks in the last week.')).toBeTruthy()
+    expect(screen.queryByText('No tasks match.')).toBeNull()
+    fireEvent.click(within(await openFilters()).getByRole('radio', { name: 'Last month' }))
+    expect(await screen.findByRole('button', { name: /^Old idea/ })).toBeTruthy()
+  })
+
+  it('offers Agents | Recent | Board | List, and remembers the choice', async () => {
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    const layouts = screen.getByRole('group', { name: 'Tasks layout' })
+    expect(within(layouts).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Agents', 'Recent', 'Board', 'List'])
     fireEvent.click(screen.getByRole('button', { name: 'Board' }))
     expect(useUIStore.getState().tasksViewMode).toBe('board')
     expect(localStorage.getItem('cinna-tasks-view-mode')).toBe('board')
+  })
+})
+
+describe('agents', () => {
+  const sleeper = { kind: 'agent' as const, agentId: 'agent-off', name: 'Sleeper' }
+  function cards(): string[] {
+    return screen.queryAllByRole('region').map((region) => region.getAttribute('aria-label')!)
+  }
+  /** The header's open-work count, by its accessible name (glyphs on screen). */
+  function countOf(name: string): string {
+    return within(section(name)).queryByRole('img')?.getAttribute('aria-label') ?? section(name).querySelector('header')!.textContent ?? ''
+  }
+
+  beforeEach(() => { useUIStore.setState({ tasksViewMode: 'agents' }) })
+
+  it('is the layout a profile without a stored choice opens on, while a stored one is honoured', async () => {
+    for (const [stored, expected] of [[null, 'agents'], ['bogus', 'agents'], ['list', 'list'], ['recent', 'recent'], ['board', 'board']] as const) {
+      if (stored === null) localStorage.removeItem('cinna-tasks-view-mode')
+      else localStorage.setItem('cinna-tasks-view-mode', stored)
+      vi.resetModules()
+      const fresh = await import('../../stores/ui.store')
+      expect(fresh.useUIStore.getState().tasksViewMode).toBe(expected)
+      expect(fresh.useUIStore.getState().tasksPeriod).toBe('week')
+    }
+  })
+
+  it('draws a card per agent with a task, A→Z, its tasks in the list’s order and its open work counted, then No agent', async () => {
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    expect(screen.getByRole('button', { name: 'Agents' }).getAttribute('aria-pressed')).toBe('true')
+    expect(cards()).toEqual(['Reviewer', 'Writer', 'No agent'])
+    expect(titlesIn(section('Writer'))).toEqual(['Write the changelog', 'Plan the launch', 'Old launch'])
+    expect(titlesIn(section('Reviewer'))).toEqual(['Review copy'])
+    expect(titlesIn(section('No agent'))).toEqual(['Answer legal', 'Refine pricing', 'Failed export'])
+    expect(countOf('Writer')).toContain('1 ready')
+    expect(countOf('Reviewer')).toContain('1 in progress')
+    expect(countOf('No agent')).toContain('1 waiting')
+    // Inside a card, the agent is the card: no chip on its rows.
+    expect(within(screen.getByRole('button', { name: /^Write the changelog/ })).queryByText('Writer')).toBeNull()
+  })
+
+  it('draws no card while the first read has failed: nothing is known, so no agent claims an empty week', async () => {
+    // Nothing is known: neither a card nor a line that would claim an empty period.
+    listTasks.mockReset().mockRejectedValue(new Error('locked'))
+    render(createElement(TasksView), { wrapper })
+    await screen.findByText(/Tasks could not be read/, {}, { timeout: 4000 })
+    expect(cards()).toEqual([])
+    expect(screen.queryByText(/No tasks/)).toBeNull()
+  })
+
+  it('offers in the Agent filter only the agents that have a task', async () => {
+    listTasks.mockResolvedValue([task('w1', { title: 'Draft notes', assignee: writer })])
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Draft notes/ })
+    const options = Array.from(within(await openFilters()).getByRole('combobox', { name: 'Agent' }).querySelectorAll('option')).map((o) => o.textContent)
+    expect(options).toEqual(['All agents', 'Writer', 'No agent'])
+  })
+
+  it('draws a card only for an agent with a task the filters let through, and No agent only for an unassigned task', async () => {
+    // Mutation: add a card for every agent in the agents list and this fails — Reviewer shows, empty, under Last week.
+    listTasks.mockResolvedValue([
+      task('w1', { title: 'Draft notes', status: 'new', assignee: writer }),
+      task('w2', { title: 'Shipped notes', status: 'completed', assignee: writer }),
+      // A switched-off agent still has its card while it has a task.
+      task('s1', { title: 'Nap plan', status: 'new', assignee: sleeper }),
+      // Reviewer's only task is older than a week.
+      task('r1', { title: 'Old review', status: 'completed', assignee: reviewer, updatedAt: new Date(NOW.getTime() - 20 * DAY) })
+    ])
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Draft notes/ })
+    expect(cards()).toEqual(['Sleeper', 'Writer'])
+    expect(screen.queryByText(/^No tasks/)).toBeNull()
+    // Only Backlog and Done: the total, not an open-work count.
+    expect(countOf('Writer')).toContain('2 tasks')
+    fireEvent.click(within(await openFilters()).getByRole('radio', { name: 'All time' }))
+    expect(cards()).toEqual(['Reviewer', 'Sleeper', 'Writer'])
+    expect(titlesIn(section('Reviewer'))).toEqual(['Old review'])
+    fireEvent.click(within(await openFilters()).getByRole('radio', { name: 'Last week' }))
+    expect(cards()).toEqual(['Sleeper', 'Writer'])
+  })
+
+  it('names the period when it alone leaves no card', async () => {
+    listTasks.mockResolvedValue([task('r1', { title: 'Old review', status: 'completed', assignee: reviewer, updatedAt: new Date(NOW.getTime() - 20 * DAY) })])
+    render(createElement(TasksView), { wrapper })
+    expect(await screen.findByText('No tasks in the last week.')).toBeTruthy()
+    expect(cards()).toEqual([])
+    fireEvent.click(within(await openFilters()).getByRole('radio', { name: 'Last month' }))
+    expect(cards()).toEqual(['Reviewer'])
+  })
+
+  it('hides the cards a search finds nothing in, and narrows to the one card the agent filter names', async () => {
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    await searchTasks('launch')
+    expect(cards()).toEqual(['Writer'])
+    expect(titlesIn(section('Writer'))).toEqual(['Plan the launch', 'Old launch'])
+    await searchTasks('zzz')
+    expect(cards()).toEqual([])
+    expect(screen.getByText('No tasks match.')).toBeTruthy()
+    await searchTasks('')
+    expect(cards()).toEqual(['Reviewer', 'Writer', 'No agent'])
+    await filterByAgent('agent:agent-r')
+    expect(cards()).toEqual(['Reviewer'])
+    await filterByAgent('none')
+    expect(cards()).toEqual(['No agent'])
+  })
+
+  it('takes a card’s order again when a search is cleared', async () => {
+    // Mutation: leave the search out of the cards' key and the changelog, never
+    // seen while the cards were mounted under the search, trails the launch rows.
+    useUIStore.setState({ tasksViewMode: 'board' })
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Plan the launch/ })
+    await searchTasks('launch')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.click(screen.getByRole('button', { name: 'Agents' }))
+    expect(titlesIn(section('Writer'))).toEqual(['Plan the launch', 'Old launch'])
+    fireEvent.click(screen.getByRole('button', { name: 'Clear the search' }))
+    expect(titlesIn(section('Writer'))).toEqual(['Write the changelog', 'Plan the launch', 'Old launch'])
+  })
+
+  it('shows six rows on a card, opens the rest in place behind Show more, and folds them back with Show less', async () => {
+    listTasks.mockResolvedValue(Array.from({ length: 8 }, (_v, i) => task(`t${i}`, { title: `Row ${i}`, assignee: writer })))
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Row 0/ })
+    expect(titlesIn(section('Writer'))).toHaveLength(6)
+    fireEvent.click(within(section('Writer')).getByRole('button', { name: 'Show more tasks' }))
+    await waitFor(() => expect(titlesIn(section('Writer'))).toHaveLength(8))
+    // One unbroken list: no "All N shown" line between the pages, the toggle at the foot.
+    expect(within(section('Writer')).queryByText(/shown$/)).toBeNull()
+    const less = within(section('Writer')).getByRole('button', { name: 'Show less' })
+    expect(less.getAttribute('aria-expanded')).toBe('true')
+    expect(titlesIn(section('Writer'))).toEqual(Array.from({ length: 8 }, (_v, i) => `Row ${i}`))
+    fireEvent.click(less)
+    const more = within(section('Writer')).getByRole('button', { name: 'Show more tasks' })
+    expect(more.getAttribute('aria-expanded')).toBe('false')
+    // The rest folds away once the collapse's own transition ends, not a row's.
+    const collapse = section('Writer').querySelectorAll('ul')[1].parentElement!
+    fireEvent.transitionEnd(collapse.querySelector('li')!)
+    expect(titlesIn(section('Writer'))).toHaveLength(8)
+    fireEvent.transitionEnd(collapse)
+    expect(titlesIn(section('Writer'))).toEqual(Array.from({ length: 6 }, (_v, i) => `Row ${i}`))
+  })
+
+  it('offers no Show more on a card of exactly six rows', async () => {
+    listTasks.mockResolvedValue(Array.from({ length: 6 }, (_v, i) => task(`t${i}`, { title: `Row ${i}`, assignee: writer })))
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Row 0/ })
+    expect(titlesIn(section('Writer'))).toHaveLength(6)
+    expect(within(section('Writer')).queryByRole('button', { name: /^Show (more tasks|less)$/ })).toBeNull()
+  })
+
+  it('folds a card again once a poll leaves it six rows, so a seventh brings Show more, not Show less', async () => {
+    // Mutation: drop the reset effect and the seventh row arrives already open, under "Show less".
+    const rows = (n: number): TaskDto[] => Array.from({ length: n }, (_v, i) => task(`t${i}`, { title: `Row ${i}`, assignee: writer }))
+    listTasks.mockResolvedValue(rows(8))
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Row 0/ })
+    fireEvent.click(within(section('Writer')).getByRole('button', { name: 'Show more tasks' }))
+    expect(within(section('Writer')).getByRole('button', { name: 'Show less' })).toBeTruthy()
+
+    listTasks.mockResolvedValue(rows(6))
+    await act(async () => { await client.refetchQueries({ queryKey: ['tasks', 'roots'] }) })
+    await waitFor(() => expect(within(section('Writer')).queryByRole('button', { name: /^Show (more tasks|less)$/ })).toBeNull())
+
+    listTasks.mockResolvedValue(rows(7))
+    await act(async () => { await client.refetchQueries({ queryKey: ['tasks', 'roots'] }) })
+    const toggle = await within(section('Writer')).findByRole('button', { name: /^Show (more tasks|less)$/ })
+    expect(toggle.textContent).toBe('Show more tasks')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
   })
 })
 
@@ -251,7 +583,7 @@ describe('recent', () => {
     useUIStore.setState({ tasksViewMode: 'recent' })
     listTasks.mockResolvedValue([task('a', { title: 'A', updatedAt: at(3) }), task('b', { title: 'B', updatedAt: at(2) })])
     render(createElement(TasksView), { wrapper })
-    await screen.findByRole('button', { name: /^A/ })
+    await screen.findByRole('button', { name: /^A — / })
     expect(titlesIn(section('Recent tasks'))).toEqual(['A', 'B'])
     listTasks.mockResolvedValue([
       task('c', { title: 'C', updatedAt: at(9) }),
@@ -344,6 +676,28 @@ describe('board', () => {
     expect(screen.getByRole('button', { name: 'New task' }).compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(alert.closest('header')).not.toBeNull()
     expect(alert.className).toMatch(/\babsolute\b/)
+    expect(alert.className).toMatch(/\btop-full\b/)
+  })
+
+  it('clears a refusal when the period or the agent filter changes', async () => {
+    // Mutation: drop clearErrors() from the period's setter and the refusal outlives the view it was about.
+    setStatus.mockRejectedValue(new Error("Error invoking remote method 'task:set-status': Error: A task cannot go from open to new"))
+    render(createElement(TasksView), { wrapper })
+    await screen.findByRole('button', { name: /^Write the changelog/ })
+    const refuse = async (): Promise<void> => {
+      const transfer = dataTransfer()
+      fireEvent.dragStart(card('r1'), { dataTransfer: transfer })
+      fireEvent.drop(column('Backlog'), { dataTransfer: transfer })
+      expect((await screen.findByRole('alert')).textContent).toBe('A task cannot go from open to new')
+    }
+    await refuse()
+    fireEvent.click(within(await openFilters()).getByRole('radio', { name: 'Last month' }))
+    expect(screen.queryByRole('alert')).toBeNull()
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    await refuse()
+    await filterByAgent('none')
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('offers a card only the columns it can reach: Failed goes back to Backlog, Done goes nowhere', async () => {
@@ -531,7 +885,7 @@ describe('folder board', () => {
   async function renderFiltered(): Promise<void> {
     render(createElement(TasksView), { wrapper })
     await screen.findByRole('button', { name: /^Plan the launch/ })
-    fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'agent:agent-w' } })
+    await filterByAgent('agent:agent-w')
     await screen.findByRole('region', { name: 'Todo' })
   }
 
@@ -563,7 +917,7 @@ describe('folder board', () => {
     render(createElement(TasksView), { wrapper })
     await screen.findByRole('button', { name: /^Plan the launch/ })
     expect(folderBoard).not.toHaveBeenCalled()
-    fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'agent:agent-r' } })
+    await filterByAgent('agent:agent-r')
     await waitFor(() => expect(folderBoard).toHaveBeenCalledWith('agent-r'))
     await screen.findByRole('region', { name: 'In progress' })
     expect(screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Backlog', 'Ready', 'In progress', 'Waiting', 'Done'])
@@ -574,7 +928,7 @@ describe('folder board', () => {
     folderBoard.mockImplementation(() => new Promise((resolve) => { answer = resolve }))
     render(createElement(TasksView), { wrapper })
     await screen.findByRole('button', { name: /^Plan the launch/ })
-    fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'agent:agent-w' } })
+    await filterByAgent('agent:agent-w')
     expect(screen.getByText('Loading tasks…')).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Backlog' })).toBeNull()
     await act(async () => { answer(COLUMNS) })
@@ -845,7 +1199,7 @@ describe('the queue control, filtered to one folder agent', () => {
     act(() => useUIStore.setState({ tasksAgentFilter: 'agent:agent-w' }))
     expect(await screen.findByRole('button', { name: /Run next/ })).toBeTruthy()
     // Typing in search moves nothing in or out.
-    fireEvent.change(screen.getByLabelText('Search tasks'), { target: { value: 'zzz' } })
+    await searchTasks('zzz')
     expect(screen.getByRole('button', { name: /Run next/ })).toBeTruthy()
   })
 
@@ -1062,7 +1416,7 @@ describe('the queue control, filtered to one folder agent', () => {
 
     // The queue resumes: the control goes back to Run next on the dispatch event, not on a keystroke.
     dispatchList.mockResolvedValue([queue()])
-    fireEvent.change(screen.getByLabelText('Search tasks'), { target: { value: 'W' } })
+    await searchTasks('W')
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy()
     await act(async () => { dispatchChanged?.() })
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run next' })).toBeTruthy())

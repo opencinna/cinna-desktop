@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
+import { filterTasksByAgent, showTasksLayout } from '../fixtures/tasksView'
 import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpHeld } from '../fixtures/scriptAcpEngine'
 import { LOG_CLOSE, LOG_OPEN } from '../../src/shared/folderTasks'
 
@@ -116,7 +117,8 @@ test('a bare agent keeps its own queue through the task tools', async ({ cinna }
       expect(text).toContain(DESCRIPTION)
 
       await cinna.page.getByRole('button', { name: 'Tasks', exact: true }).click()
-      await cinna.page.getByRole('combobox', { name: 'Agent' }).selectOption({ label: BARE_HEADING })
+      await filterTasksByAgent(cinna.page, BARE_HEADING)
+      await showTasksLayout(cinna.page, 'List')
       await expect(cinna.page.getByRole('region', { name: 'Ready' }).getByRole('button', { name: `${TITLE} — open` })).toBeVisible({ timeout: 15_000 })
       await expect(cinna.page.getByRole('region', { name: 'Ready' }).getByRole('button')).toHaveCount(1)
     })

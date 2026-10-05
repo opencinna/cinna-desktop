@@ -4,6 +4,7 @@ import type { Locator } from '@playwright/test'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
+import { showTasksLayout } from '../fixtures/tasksView'
 import {
   HANDOVERS_DIR,
   HANDOVER_BRIEF_FILE,
@@ -182,6 +183,7 @@ test('@live one agent processes a task started from the task page', async ({ cin
 
   await test.step('the task page reads Done, and the board shows it in Done', async () => {
     await tasksButton(cinna).click()
+    await showTasksLayout(cinna.page, 'List')
     await cinna.page.getByRole('region', { name: 'Done', exact: true })
       .getByRole('button', { name: `${title} — Done`, exact: true }).click()
     await expect(cinna.page.getByRole('heading', { level: 1, name: title, exact: true })).toBeVisible()

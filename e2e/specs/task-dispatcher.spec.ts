@@ -2,6 +2,7 @@ import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot } from '../fixtures/seed'
+import { filterTasksByAgent, showTasksLayout } from '../fixtures/tasksView'
 import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine, type ScriptAcpHeld } from '../fixtures/scriptAcpEngine'
 
 /**
@@ -82,10 +83,14 @@ async function workAndReport(cinna: CinnaApp, fake: ScriptAcpEngine, i: number, 
   await expect.poll(() => taskStatus(cinna, taskId), { timeout: 30_000 }).toBe('completed')
 }
 
-/** Tasks view, filtered to the agent, so its queue control is in the header. */
+/**
+ * Tasks view, filtered to the agent, so its queue control is in the header, in
+ * the List layout, whose Waiting and Ready sections the steps read.
+ */
 async function openTasksView(cinna: CinnaApp): Promise<void> {
   await cinna.page.getByRole('button', { name: 'Tasks', exact: true }).click()
-  await cinna.page.getByRole('combobox', { name: 'Agent' }).selectOption({ label: BARE_HEADING })
+  await filterTasksByAgent(cinna.page, BARE_HEADING)
+  await showTasksLayout(cinna.page, 'List')
 }
 
 test('a bare agent’s task queue runs one at a time, pauses on a silent turn, gates outside content, and waits in Manual', async ({ cinna }) => {

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
+import { filterTasksByAgent } from '../fixtures/tasksView'
 
 /**
  * Folder tasks (Unified Tasks phase 2): a bare agent's work queue is
@@ -84,7 +85,7 @@ const details = (cinna: CinnaApp) => cinna.page.getByRole('complementary', { nam
 
 /** The board filtered to one agent. Both choices survive a visit to a task page. */
 async function showAgentBoard(cinna: CinnaApp, agentName: string): Promise<void> {
-  await cinna.page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption({ label: agentName })
+  await filterTasksByAgent(cinna.page, agentName)
   await layout(cinna).getByRole('button', { name: 'Board', exact: true }).click()
   await expect(cinna.page.locator('[data-tasks-board="folder"]')).toBeVisible()
 }

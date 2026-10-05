@@ -1,4 +1,5 @@
 import type { TaskCustomFieldValue, TaskDto } from '../../../../shared/tasks'
+import type { TasksPeriod } from '../../stores/ui.store'
 import {
   canMoveManually,
   isTaskStatus,
@@ -59,6 +60,84 @@ export function matchesTaskFilters(
   if (agent !== ALL_AGENTS && taskAgentKey(task) !== agent) return false
   const query = search.trim().toLowerCase()
   return !query || task.title.toLowerCase().includes(query)
+}
+
+/** The period filter (`ui.store`'s, which keeps it for the window's life). */
+export type TaskPeriod = TasksPeriod
+
+/** The period filter's choices, in the order the filter form offers them. */
+
+export const TASK_PERIODS: readonly { value: TaskPeriod; label: string }[] = [
+  { value: 'week', label: 'Last week' },
+  { value: 'month', label: 'Last month' },
+  { value: 'all', label: 'All time' }
+]
+
+const PERIOD_DAYS: Record<Exclude<TaskPeriod, 'all'>, number> = { week: 7, month: 30 }
+
+export function taskPeriodLabel(period: TaskPeriod): string {
+  return TASK_PERIODS.find((entry) => entry.value === period)!.label
+}
+
+/**
+ * Whether the period lets this task through. **Open work always shows**:
+ * Waiting, In progress and Ready are held by a question, a run or the queue,
+ * and a stuck task is the one that must not drop out of sight for having sat
+ * still. The period reaches only Backlog and Done, by last change.
+ */
+export function withinTaskPeriod(
+  task: Pick<TaskDto, 'status' | 'updatedAt'>,
+  period: TaskPeriod,
+  now: number
+): boolean {
+  if (period === 'all') return true
+  const category = taskStatusCategory(task.status)
+  if (category === 'waiting' || category === 'active' || category === 'ready') return true
+  return task.updatedAt.getTime() >= now - PERIOD_DAYS[period] * 24 * 60 * 60 * 1000
+}
+
+/** One card of the Agents layout: an agent (or No agent) and its tasks. */
+export interface TaskAgentCard {
+  /** The filter value naming it: `agent:<id>`, or {@link UNASSIGNED}. */
+  key: TaskAgentFilter
+  agentId: string | null
+  name: string
+  tasks: TaskDto[]
+}
+
+/**
+ * The Agents layout's cards: one per agent that has a task the filters let
+ * through, A→Z by name — so a poll reorders no card — then **No agent**, when
+ * such tasks pass. An agent with nothing to show has no card. Each card's
+ * tasks in the list's section order, the last changed first within a section.
+ */
+export function agentCards(
+  tasks: readonly TaskDto[],
+  agentName: (agentId: string) => string | undefined
+): TaskAgentCard[] {
+  const byKey = new Map<TaskAgentFilter, TaskDto[]>()
+  for (const task of tasks) {
+    const key = taskAgentKey(task)
+    const list = byKey.get(key)
+    if (list) list.push(task)
+    else byKey.set(key, [task])
+  }
+  const rank = (task: TaskDto): number => {
+    const category = taskStatusCategory(task.status)
+    return category ? LIST_SECTION_ORDER.indexOf(category) : LIST_SECTION_ORDER.length
+  }
+  const sorted = (list: TaskDto[]): TaskDto[] => [...list].sort((a, b) =>
+    rank(a) - rank(b) || b.updatedAt.getTime() - a.updatedAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const out: TaskAgentCard[] = []
+  for (const [key, list] of byKey) {
+    if (key === UNASSIGNED) continue
+    const id = key.slice('agent:'.length)
+    out.push({ key, agentId: id, name: agentName(id) ?? list[0].assignee.name ?? 'Unnamed agent', tasks: sorted(list) })
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name))
+  const unassigned = byKey.get(UNASSIGNED)
+  if (unassigned) out.push({ key: UNASSIGNED, agentId: null, name: 'No agent', tasks: sorted(unassigned) })
+  return out
 }
 
 /** The list view's section order: what needs the user first, finished work last. */

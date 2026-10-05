@@ -14,7 +14,7 @@ A bare folder agent's work queue is a set of markdown files in its own folder, `
 - **Comment log** — the task's comments ([`task_comment`](agent_task_tools.md#comments)), appended between `<!-- cinna:log -->` and `<!-- /cinna:log -->` before the handoff section. The rest of the body, outside both sections, is the description.
 - **Status word** — the word a file writes in `status:` (`doing`, `Up Next`, `wontfix`). It maps to a **category**, and the category to the canonical status Cinna reacts to. The task keeps both: `status` for every rule, `statusLabel` for what the user reads.
 - **`_board.yaml`** — an optional file beside the tasks naming the folder's own words, one flat `word: category` per line, in board order.
-- **Folder board** — the Tasks board filtered to one such agent: one column per status word, not the five categories.
+- **Folder board** — the Tasks board filtered to one such agent (**Filters → Agent**): one column per status word, not the five categories.
 
 ## The file
 

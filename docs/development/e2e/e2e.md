@@ -168,7 +168,7 @@ playwright test -> fixtures/app.ts -> electron.launch(repoRoot, HOME=sandbox, CI
 - `e2e/specs/task-handoff.spec.ts` — task handoff regression.
 - `e2e/specs/task-live-attach.spec.ts` — task live attach regression.
 - `e2e/specs/task-sync.spec.ts` — task sync regression.
-- `e2e/specs/tasks-view.spec.ts` — the [Tasks view](../../jobs/tasks_view/tasks_view.md) through the UI with no model: the top bar's Tasks button, New task with and without More options, the list's category sections, a board drag and the ⋯ Move to… keyboard path read back from main, the search, the remembered List | Board choice, and the Settings → Features switch that hides the button.
+- `e2e/specs/tasks-view.spec.ts` — the [Tasks view](../../jobs/tasks_view/tasks_view.md) through the UI with no model: the top bar's Tasks button, New task with and without More options, the Agents layout it opens on (the No agent card and its open-work count), the Filters form's period and its pill beside Filters (× to All time, focus back on Filters), the list's category sections, a board drag and the ⋯ Move to… keyboard path read back from main, the search and its pill, the remembered layout choice, and the Settings → Features switch that hides the button.
 - `e2e/fixtures/seed.ts` — `addAgentRoot`, `createFolderAgent`
 - `e2e/fixtures/live.ts` — `OPENAI_API_KEY`, `LIVE_REQUESTED` (`CINNA_E2E_LIVE=1`), `requireLiveKey()`, `PREFERRED_MODELS` and `seedOpenAiDefaultMode()`
 - `e2e/fixtures/liveCinnaLink.ts` — `linkLiveCinnaProfile()`, `liveCoreSession()` and `coreApi()`: a sandbox profile linked to a real cinna-core without the browser, for the cloud live test

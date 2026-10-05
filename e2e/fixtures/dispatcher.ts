@@ -2,6 +2,7 @@ import { realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, homeDir, type CinnaApp } from './app'
 import { SCRIPT_MODEL, type ScriptAcpEngine, type ScriptAcpHeld } from './scriptAcpEngine'
+import { filterTasksByAgent } from './tasksView'
 
 /**
  * Arrange helpers for the task dispatcher specs (`task-dispatcher*.spec.ts`):
@@ -100,7 +101,7 @@ export async function openTasksTab(cinna: CinnaApp, heading: string): Promise<vo
 /** Tasks view, filtered to the agent, so its queue control is in the header. */
 export async function openTasksView(cinna: CinnaApp, heading: string): Promise<void> {
   await cinna.page.getByRole('button', { name: 'Tasks', exact: true }).click()
-  await cinna.page.getByRole('combobox', { name: 'Agent' }).selectOption({ label: heading })
+  await filterTasksByAgent(cinna.page, heading)
 }
 
 /** The task's page, from the Tasks view filtered to its agent. */

@@ -5,6 +5,7 @@ import type { Locator } from '@playwright/test'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
+import { showTasksLayout } from '../fixtures/tasksView'
 import {
   HANDOVERS_DIR,
   HANDOVER_BRIEF_FILE,
@@ -354,6 +355,7 @@ test('@live 1 a third-party brief with no execution field auto-runs on a bare ag
 
     await test.step('the task page reads Done', async () => {
       await cinna.page.getByRole('button', { name: 'Tasks', exact: true }).click()
+      await showTasksLayout(cinna.page, 'List')
       await cinna.page.getByRole('region', { name: 'Done', exact: true })
         .getByRole('button', { name: `${b.title} — Done`, exact: true }).click()
       await expect(detailValue(cinna, 'Status')).toHaveText('Done')
@@ -582,6 +584,7 @@ test('@live 5 a real coordinator delegates without execution to an auto bare fol
     await test.step('the user starts the coordinator task from its page', async () => {
       const page = cinna.page
       await page.getByRole('button', { name: 'Tasks', exact: true }).click()
+      await showTasksLayout(page, 'List')
       await page.getByRole('region', { name: 'Ready', exact: true }).getByRole('button', { name: `${TITLE} — Ready`, exact: true }).click()
       // A Ready task of a local folder agent starts through that agent's queue (the task dispatcher).
       const controls = page.getByRole('region', { name: 'Start this task', exact: true })

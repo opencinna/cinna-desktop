@@ -52,7 +52,10 @@ export function AnimatedCollapse({ open, children, className = '' }: AnimatedCol
     })
   }, [isVisible, open, height])
 
-  const handleTransitionEnd = useCallback((): void => {
+  const handleTransitionEnd = useCallback((event: React.TransitionEvent<HTMLDivElement>): void => {
+    // Only this wrapper's own height/opacity: a child's transition (a row's
+    // hover colour) bubbles here too and would end the collapse early.
+    if (event.target !== event.currentTarget) return
     if (open) {
       setHeight(undefined)
     } else {

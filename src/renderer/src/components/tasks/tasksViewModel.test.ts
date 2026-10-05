@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TaskDto } from '../../../../shared/tasks'
 import type { TaskBoardColumn } from '../../../../shared/folderTasks'
-import { boardMoveTargets, folderMoveTargets } from './tasksViewModel'
+import { agentCards, boardMoveTargets, folderMoveTargets, withinTaskPeriod } from './tasksViewModel'
 import { statusLockReason } from './TaskFormDialog'
 
 /**
@@ -41,5 +41,71 @@ describe('a task the dispatcher flagged', () => {
     const task = { ...HERE, ...FILE, status: 'blocked', statusLabel: 'Stuck', dispatchNote: 'Ended without reporting' } as unknown as TaskDto
     expect(statusLockReason(task, ['open'])).toBeNull()
     expect(statusLockReason({ ...task, dispatchNote: null }, [])).toBe('Set in the task file by its agent.')
+  })
+})
+
+describe('withinTaskPeriod', () => {
+  const NOW = Date.UTC(2026, 9, 5, 12)
+  const DAY = 24 * 60 * 60 * 1000
+  const at = (status: TaskDto['status'], daysAgo: number): Pick<TaskDto, 'status' | 'updatedAt'> =>
+    ({ status, updatedAt: new Date(NOW - daysAgo * DAY) })
+
+  it('always lets Waiting, In progress and Ready through, however long they sat still', () => {
+    // Mutation: apply the cutoff to every category and this fails.
+    for (const status of ['blocked', 'in_progress', 'open'] as const) {
+      for (const period of ['week', 'month', 'all'] as const) expect(withinTaskPeriod(at(status, 400), period, NOW)).toBe(true)
+    }
+  })
+
+  it('lets Backlog and Done through only inside the period, by last change', () => {
+    for (const status of ['new', 'refining', 'completed', 'error'] as const) {
+      expect(withinTaskPeriod(at(status, 6.9), 'week', NOW)).toBe(true)
+      expect(withinTaskPeriod(at(status, 7), 'week', NOW)).toBe(true)
+      expect(withinTaskPeriod(at(status, 7.1), 'week', NOW)).toBe(false)
+      expect(withinTaskPeriod(at(status, 29), 'month', NOW)).toBe(true)
+      expect(withinTaskPeriod(at(status, 31), 'month', NOW)).toBe(false)
+      expect(withinTaskPeriod(at(status, 4000), 'all', NOW)).toBe(true)
+    }
+  })
+})
+
+describe('agentCards', () => {
+  const t = (id: string, overrides: Partial<TaskDto>): TaskDto => ({
+    id, title: id, status: 'new', updatedAt: new Date(Date.UTC(2026, 9, 1)),
+    assignee: { kind: 'model', agentId: null, name: null }, ...overrides
+  }) as unknown as TaskDto
+  const of = (agentId: string, name: string): Partial<TaskDto> => ({ assignee: { kind: 'agent', agentId, name } as TaskDto['assignee'] })
+  const NAMES: Record<string, string> = { w: 'writer', r: 'Reviewer', e: 'Editor', gone: 'Archivist' }
+  const name = (id: string): string | undefined => NAMES[id]
+
+  it('draws a card only for an agent with a task, A→Z, then No agent only when an unassigned task exists', () => {
+    // Mutation: add a card for every known agent and this fails — Editor has no task.
+    const tasks = [t('a', of('w', 'writer')), t('b', of('r', 'Reviewer'))]
+    expect(agentCards(tasks, name).map((card) => [card.name, card.tasks.length])).toEqual([['Reviewer', 1], ['writer', 1]])
+    const withUnassigned = agentCards([...tasks, t('u', {})], name)
+    expect(withUnassigned.map((card) => card.key)).toEqual(['agent:r', 'agent:w', 'none'])
+    expect(withUnassigned.at(-1)).toMatchObject({ agentId: null, name: 'No agent', tasks: [expect.objectContaining({ id: 'u' })] })
+    expect(agentCards([], name)).toEqual([])
+  })
+
+  it('names a card by the agents list, else the task, else Unnamed agent', () => {
+    const cards = agentCards([
+      t('g', of('gone', 'Old name')),
+      t('x', of('x', 'Remote helper')),
+      t('y', { assignee: { kind: 'agent', agentId: 'y', name: null } as TaskDto['assignee'] })
+    ], name)
+    expect(cards.map((card) => card.name)).toEqual(['Archivist', 'Remote helper', 'Unnamed agent'])
+  })
+
+  it('orders a card’s tasks by the list’s sections, the last changed first within one', () => {
+    const day = (d: number): Date => new Date(Date.UTC(2026, 9, d))
+    const [card] = agentCards([
+      t('done', { ...of('w', 'writer'), status: 'completed', updatedAt: day(4) }),
+      t('back-old', { ...of('w', 'writer'), status: 'new', updatedAt: day(1) }),
+      t('back-new', { ...of('w', 'writer'), status: 'new', updatedAt: day(3) }),
+      t('ready', { ...of('w', 'writer'), status: 'open', updatedAt: day(1) }),
+      t('wait', { ...of('w', 'writer'), status: 'blocked', updatedAt: day(1) })
+    ], name)
+    expect(card.tasks.map((task) => task.id)).toEqual(['wait', 'ready', 'back-new', 'back-old', 'done'])
   })
 })

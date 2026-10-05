@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot } from '../fixtures/seed'
 import { scriptAcpEngine } from '../fixtures/scriptAcpEngine'
+import { showTasksLayout } from '../fixtures/tasksView'
 import {
   adoptBare, arrangeScripted, createReady, openInbox, openTaskPage, openTasksTab, openTasksView,
   promptFor, report, setMode, taskStatus
@@ -220,6 +221,7 @@ test('a task waits until every blocked_by task is Done, and an id that names no 
     taskFile(tasksDir, 'ship.md', ['id: t-granite-ship', `title: ${DEPENDENT}`, 'status: open', 'priority: urgent', `blocked_by: [${BLOCKER_ID}]`], 'Ship the counted crates.')
     taskFile(tasksDir, 'label.md', ['id: t-granite-label', `title: ${TYPO}`, 'status: open', 'priority: urgent', `blocked_by: [${MISSING_ID}]`], 'Label every crate.')
     await openTasksView(cinna, HEADING)
+    await showTasksLayout(cinna.page, 'List')
     await expect(cinna.page.getByRole('region', { name: 'Ready' }).getByRole('button', { name: new RegExp(`^${TYPO} — `) })).toBeVisible({ timeout: 30_000 })
     const ids = Object.fromEntries((await cinna.page.evaluate(() => window.api.tasks.list()))
       .map((task: { title: string; id: string }) => [task.title, task.id]))

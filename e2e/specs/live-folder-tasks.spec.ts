@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFi
 import { join } from 'node:path'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
+import { filterTasksByAgent } from '../fixtures/tasksView'
 
 /**
  * @live — **a real agent edits its own task file.** A bare folder agent on the
@@ -126,7 +127,7 @@ test('@live a real agent moves its own task by editing the task file', async ({ 
     await expect.poll(() => taskByTitle(cinna, TITLE), { timeout: 30_000 }).toEqual({ status: 'completed', statusLabel: 'Shipped' })
 
     await cinna.page.getByRole('button', { name: 'Tasks', exact: true }).click()
-    await cinna.page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption({ label: agent.name })
+    await filterTasksByAgent(cinna.page, agent.name)
     await cinna.page.getByRole('group', { name: 'Tasks layout' }).getByRole('button', { name: 'Board', exact: true }).click()
     await expect(cinna.page.locator('[data-tasks-board="folder"]')).toBeVisible()
     await expect(folderColumn(cinna, 'Shipped').getByRole('button', { name: `${TITLE} — Shipped`, exact: true })).toBeVisible()

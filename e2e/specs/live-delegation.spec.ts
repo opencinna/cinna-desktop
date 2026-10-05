@@ -3,6 +3,7 @@ import { basename, join } from 'node:path'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
+import { showTasksLayout } from '../fixtures/tasksView'
 import { coreApi, linkLiveCinnaProfile, liveCoreSession } from '../fixtures/liveCinnaLink'
 import type { LiveCinnaConfig } from '../fixtures/liveCinna'
 
@@ -87,6 +88,7 @@ async function createReadyTask(cinna: CinnaApp, title: string, goal: string, age
 async function startTaskThroughUi(cinna: CinnaApp, title: string, agentName: string): Promise<void> {
   const page = cinna.page
   await page.getByRole('button', { name: 'Tasks', exact: true }).click()
+  await showTasksLayout(page, 'List')
   await page.getByRole('region', { name: 'Ready', exact: true }).getByRole('button', { name: `${title} — Ready`, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1, name: title, exact: true })).toBeVisible()
   const queued = page.getByRole('region', { name: 'Start this task', exact: true })

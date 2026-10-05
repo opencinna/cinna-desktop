@@ -111,6 +111,7 @@ rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] ov
 - Wraps the expanded content div
 - Provides smooth 200ms height + opacity CSS transition
 - Handles mount/unmount of children (only renders when visible)
+- Ends its transition only on its own wrapper's `transitionend`: a child's transition (a row's hover colour) bubbles up and is ignored, else it would cut the expand/collapse short
 - Never use conditional rendering `{expanded && (...)}` for card content — always use `AnimatedCollapse`
 
 ### Expanded Content
