@@ -327,6 +327,10 @@
   [data-header-wave] > .ambient-header-button:nth-child(2)::before { animation-delay: 220ms; }
   [data-header-wave] > .ambient-header-button:nth-child(3)::before { animation-delay: 440ms; }
   [data-header-wave] > .ambient-header-button:nth-child(4)::before { animation-delay: 660ms; }
+  /* One step per button, left to right: sidebar, Tasks, Agent status, Inbox,
+     New chat. A button without its step glows with the first one and breaks
+     the wave; with Tasks turned off the rest move up a step on their own. */
+  [data-header-wave] > .ambient-header-button:nth-child(5)::before { animation-delay: 880ms; }
   [data-header-wave] > .ambient-header-button:is(:hover, :focus-visible)::before {
     animation: none;
     opacity: 0;
