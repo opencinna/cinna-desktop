@@ -161,13 +161,18 @@ export function applyTelemetryChange(
       const model = base.model.selected
       const sameContext = base.context.sessionId === change.sessionId && base.context.model === model
       const used = change.used ?? base.context.used
+      // Claude's adapter streams its own guess (200K) after a fresh query or a
+      // switch until a result corrects it, and a costed reading can still
+      // carry that guess. A proven size is kept: only the turn's own window
+      // (`result.modelUsage`) moves it. Codex reports the real window always.
+      const proven = sameContext && base.context.sizeAuthoritative && change.engine !== 'codex'
       next.context = {
         ...base.context,
         used,
-        size: change.size ?? base.context.size,
+        size: proven ? base.context.size : change.size ?? base.context.size,
         // Claude's size is a guess until a result corrects it, which is the
         // costed reading; Codex reports the model's window from the start.
-        sizeAuthoritative: (sameContext && base.context.sizeAuthoritative) || change.costed || change.engine === 'codex',
+        sizeAuthoritative: proven || change.costed || change.engine === 'codex',
         sessionId: change.sessionId
       }
       if (model !== undefined) next.context.model = model

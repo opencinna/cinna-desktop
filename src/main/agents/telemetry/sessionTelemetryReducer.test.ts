@@ -105,6 +105,22 @@ describe('the session telemetry reducer', () => {
     expect(applyTelemetryChange(proven, 'chat', context(50, 1_000_000), 9).context.sizeAuthoritative).toBe(true)
   })
 
+  it('keeps a proven size when a later reading of the same context carries the adapter’s guess', () => {
+    // A 1M window proven by the turn's own result, then the adapter streaming
+    // its 200K default (a fresh query): the Mid budget would drop from 350K to
+    // 160K and a 167K context would read as over it until the turn ended.
+    const proven = fold([{ type: 'model', engine: 'claude', selected: 'opus' }, context(165_999, 1_000_000), turn({ model: 'claude-opus-5', tokens: tally(1, 1) }, { contextWindow: 1_000_000 })])
+    expect(proven.context).toMatchObject({ size: 1_000_000, sizeAuthoritative: true })
+    const guessed = applyTelemetryChange(proven, 'chat', context(167_423, 200_000), 9)
+    expect(guessed.context).toMatchObject({ used: 167_423, size: 1_000_000, sizeAuthoritative: true })
+    expect(applyTelemetryChange(guessed, 'chat', context(181_397, 200_000, true), 10).context).toMatchObject({ used: 181_397, size: 1_000_000, sizeAuthoritative: true })
+    // The turn's own window still moves it.
+    expect(applyTelemetryChange(guessed, 'chat', turn({ model: 'claude-opus-5', tokens: tally(1, 1) }, { contextWindow: 200_000 }), 10).context.size).toBe(200_000)
+    // Codex's readings are the model's window, so they always move it.
+    const codex = fold([{ type: 'context', engine: 'codex', sessionId: 's1', used: 5, size: 258_400, costed: false, at: 1 }, { type: 'context', engine: 'codex', sessionId: 's1', used: 6, size: 400_000, costed: false, at: 2 }])
+    expect(codex.context.size).toBe(400_000)
+  })
+
   it('keeps no Claude cost reading, and drops the ones a legacy row carries on the session’s next write', () => {
     const state = fold([
       { type: 'context', engine: 'claude', sessionId: 's1', used: 1, size: 2, costed: true, at: 1 },

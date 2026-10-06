@@ -92,7 +92,7 @@ Implementation reference for [Session Telemetry](session_telemetry.md). The turn
 
 ### Reducer — what each change does
 - `request` (Claude TTL-known only past the model update) — resolved model with `source: 'init'`; TTL 1h over 5m over last seen over assumed 5m; `lastRequestAt`, `expiresAt`; with `awaitingBaseline` and input > 0, `breakdown = {baseline: input, conversation: 0}`
-- `context` — `used`, `size`, authority (no cost reading is kept); categories dropped when from another session; `breakdown.conversation = max(0, used − baseline)`; without `cacheTimed`, the reading is the cache clock (TTL-known engines also get `ttlMs` / `expiresAt`)
+- `context` — `used`, `size`, authority (no cost reading is kept); a Claude size already authoritative for the same session and model is kept, so the reading moves `used` only (Codex always sets `size`); categories dropped when from another session; `breakdown.conversation = max(0, used − baseline)`; without `cacheTimed`, the reading is the cache clock (TTL-known engines also get `ttlMs` / `expiresAt`)
 - `model` (a switch, not the first report) — size a guess, resolved cleared, `invalidate('model_change')`
 - `session` — `fresh` → `invalidate('new_session')`; a load whose digest differs from the saved one → `invalidate('session_params_change')`; saves the digest
 - `compaction` → `invalidate('compaction')`
