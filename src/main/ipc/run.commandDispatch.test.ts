@@ -99,6 +99,8 @@ const REMOTE_AGENT: AgentRow = {
 } as unknown as AgentRow
 
 const findAgent = vi.fn(() => ({ row: FOLDER_AGENT, userId: 'owner-1' }))
+// Pinned absent, so the header does not change when the bundle gains the skill.
+vi.mock('../services/tasksSkillService', () => ({ tasksSkillLabel: () => null }))
 vi.mock('../services/agentService', () => ({
   agentService: { findAgent, listMerged: vi.fn(() => []) }
 }))
@@ -195,10 +197,9 @@ describe('run:send — the /run: dispatch call site', () => {
       // was made on the *typed* text, which is the property that matters here:
       // a command prefixed by wire-only context is still the command.
       wireContent: [
-        'Turn context from Cinna Desktop, not part of the conversation:',
-        '- chat id: `chat-1`',
-        '- task id: none',
-        '- handover depth: 0',
+        'Cinna task context (not part of the conversation):',
+        `- here: Cinna Desktop, folder agent \`${FOLDER_AGENT.id}\` · chat \`chat-1\``,
+        '- current task: none',
         '',
         '/run:check'
       ].join('\n'),

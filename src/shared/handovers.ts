@@ -763,68 +763,46 @@ export const HANDOVER_HOW_TO_REPORT = [
 ].join('\n')
 
 /**
- * What a Cinna agent is told about *asking* for a handover — the requester's
- * half of the protocol, pasted into every folder agent's system prompt (§3.5,
- * §3.8: kit agents are requesters too, even though they are not targets).
- *
- * It names the agent's own id because that is what `origin.agent` has to say,
- * and it points at the turn header for the chat and task ids: those change per
- * turn and cannot live in a system prompt (a chat id there would start one
- * Codex process per chat).
- *
- * The example is a whole file rather than a list of fields, because the failure
- * this text exists to prevent is a half-written brief: a `ready` frontmatter
- * with no body, or a body appended after the desktop already recorded the file.
+ * How the agent is told to open the `cinna-tasks` skill — decided by the
+ * caller per engine (`tasksSkillService.tasksSkillDeliveryFor`): `skill` when
+ * the engine loads it itself (Claude's plugin, OpenCode's `skills.paths`),
+ * `pointer` with the absolute `SKILL.md` path when it does not (Codex).
  */
-export function handoverRequesterSection(agentId: string): string {
+export type CinnaTasksSkillDelivery = { kind: 'skill' } | { kind: 'pointer'; path: string }
+
+/**
+ * What every folder agent's system prompt says about Cinna tasks — the stub
+ * of the Cinna Task Protocol (`cinna-tasks` skill, §2.4).
+ *
+ * Short on purpose. The verbs, the lifecycle, delegation and the file
+ * protocol live in the skill (`SKILL.md`, `references/file-protocol.md`),
+ * opened when the agent first needs them; the prompt keeps only what must
+ * never be missed — the two rules, quoted from the skill — the agent's own id
+ * (a brief's `origin.agent` has to state it) and one line saying how to open
+ * the skill. Without a skill to open, that line is left out.
+ *
+ * **Per-agent stable**: no chat, task or turn value. Codex pools processes on
+ * the prompt bytes; the per-turn facts travel in the wire-only turn header
+ * (`threadContextService.buildTurnHeader`).
+ */
+export function cinnaTasksSection(agentId: string, delivery: CinnaTasksSkillDelivery | null = null): string {
+  const open = delivery === null
+    ? []
+    : delivery.kind === 'skill'
+      ? ['Open the `cinna-tasks` skill before your first `tasks_*` call.']
+      : [`Read \`${delivery.path}\` before your first \`tasks_*\` call.`]
   return [
-    '## Handing work to another project',
+    '## Cinna tasks',
     '',
-    'Use `handover_targets` to discover available agents and exact folders. For a bare folder, writing the brief directly is preferred. If a direct write is refused or needs permission, use `task_create` with that target as `assignee`, an id, a title and the brief as `description`; Cinna writes the same brief and returns its paths. For kit or cloud agents, use `task_create` with an `assignee`.',
-    'After delegating, end your turn. Cinna wakes this conversation with the result. Do not poll or wait inside your turn. `handover_list` gives a status snapshot when the user asks; `handover_reply` answers a blocked executor or sends a follow-up. In an executor session, `handover_report` reports progress or completion without writing report.md.',
+    'Cinna tasks are shared work items on the `cinna` tool server; every tool starts with `tasks_`.',
     '',
-    `Any folder adopted in Cinna Desktop has a handover inbox. To ask one for work, create \`${HANDOVERS_DIR}/<id>/${HANDOVER_BRIEF_FILE}\` inside **that** project. The \`<id>\` is yours to choose: 3 to 64 characters, lower case, starting with a letter or digit, then dots, dashes and underscores — use \`YYYYMMDD-HHMM-<slug>\`, e.g. \`20260917-1430-add-retry\`.`,
+    '1. **Report before ending a turn on an assigned task.** When the turn context shows a current task with `report required: yes`, call `tasks_report` with `done` or `failed` and a one-line `summary` before stopping, or `blocked` with a `question` when you cannot continue. Without it the task is left Waiting with "Ended without reporting" and the queue behind it pauses.',
+    '2. **Never wait inside a turn.** After `tasks_create` with an `assignee`, end the turn. The result arrives later in this conversation as a message beginning `Task result from <agent> on <ref>:`. Do not poll `tasks_list` or `tasks_get` for it.',
     '',
-    'Write the file whole — a temp file, then a rename — and set `status: ready` only when everything else in it is final. A `ready` brief is never edited again; if you got it wrong, write a new one.',
-    '',
-    "Leave `execution` out unless the person must approve this run: `execution: ask` forces an approval; otherwise the receiving project's own setting decides whether it runs without asking.",
-    '',
-    '```yaml',
-    '---',
-    `cinna_handover: ${HANDOVER_SCHEMA_VERSION}`,
-    'title: Add retry to the uploader',
-    'status: ready',
-    'origin:',
-    `  agent: ${agentId}`,
-    "  chat: <the chat id from this turn's context>",
-    "  task: <the task id from this turn's context, when there is one>",
-    "depth: 1                # this turn's handover depth, plus one",
-    '---',
-    'What you need done, in Markdown.',
-    '```',
-    '',
-    'End the brief with these lines unchanged — the executor may be a terminal session Cinna never talks to, and this is all it gets:',
-    '',
-    '```markdown',
-    HANDOVER_HOW_TO_REPORT,
-    '```',
-    '',
-    "Cinna Desktop notices the file, records it as a task for that folder's agent, asks the person or runs it, and brings the result back to this conversation as a turn. Once the report is final and you have read it you may delete your own handover folder; nothing else cleans it up. Never write in another project's handover folder except to create your own.",
-    '',
-    `**Following up.** When a report comes back \`blocked\` with a question — or you have more to say about work still under way — do not write a new brief. Write \`${HANDOVER_REVISIONS_DIR}/001.md\` in that same handover folder (then \`002.md\`, and so on; each is written once), whole, with this frontmatter and your message as the body. Where Cinna runs the executor, it arrives in the executor's own conversation, with everything it has already read:`,
-    '',
-    '```markdown',
-    '---',
-    `cinna_handover: ${HANDOVER_SCHEMA_VERSION}`,
-    'title: Answer — use the uploader module',
-    '---',
-    'Your message.',
-    '```',
-    '',
-    '**Handing the same work to several projects.** Give every brief the same `group: <id>` (same id rule as a handover id) and this conversation is woken once, when all of them are over, with one line per project — instead of once per report.'
+    `Your Cinna agent id is \`${agentId}\` — the \`origin.agent\` of any task or brief you create.`,
+    ...open
   ].join('\n')
 }
-
 
 /**
  * The same protocol, for the task description when **Cinna** runs the executor.
@@ -852,7 +830,7 @@ export function handoverProtocolParagraph(input: { handoverId: string }): string
   const dir = `${HANDOVERS_DIR}/${input.handoverId}`
   return [
     `File handover: read \`${dir}/${HANDOVER_BRIEF_FILE}\` in your project folder and do what it asks.`,
-    `Write \`${dir}/${HANDOVER_REPORT_FILE}\` (that folder, not the project root) with frontmatter \`cinna_handover: 1\`,`,
+    `Report with \`tasks_report\`, or write \`${dir}/${HANDOVER_REPORT_FILE}\` (that folder, not the project root) with frontmatter \`cinna_handover: 1\`,`,
     '`status: in_progress | blocked | done | failed`, a one-line `summary` and a closing `---`:',
     '`in_progress` before you start, a final status when you stop.',
     'Do not edit the brief.'
@@ -1083,8 +1061,20 @@ const PACKET_VERB: Record<HandoverReportStatus, string> = {
   in_progress: 'is in progress'
 }
 
+/**
+ * The first line of every result packet a requester reads, the Cinna Task
+ * Protocol's `text_prefix`: `Task result from <agent> on <ref>: <status> —
+ * <summary>`. The skill and the prompt tell an agent to recognise a result by
+ * these first words, so every channel and the group packet start with them.
+ */
+export function taskResultHead(agent: string, ref: string, status: string, summary: string): string {
+  return `Task result from ${agent} on ${ref}: ${status} — ${summary}`
+}
+
 export interface HandoverReturnPacketInput {
   handoverId: string
+  /** The executor as the requester knows it: its display name, else its id. */
+  agentName: string
   folderPath: string
   /** The handover task, so the origin can open it. */
   taskId: string | null
@@ -1115,8 +1105,9 @@ export interface HandoverReturnPacketInput {
 export function buildHandoverReturnPacket(input: HandoverReturnPacketInput): string {
   const cap = input.cap ?? HANDOVER_PACKET_CAP
   const summary = input.summary.trim() || 'No summary was given.'
-  const lines = [`Handover \`${input.handoverId}\` ${PACKET_VERB[input.status]}: ${summary}`, '']
+  const lines = [taskResultHead(input.agentName, input.taskId ?? input.handoverId, input.status, summary), '']
 
+  lines.push(`Handover \`${input.handoverId}\` ${PACKET_VERB[input.status]}.`)
   lines.push(`Project: ${input.folderPath}`)
   if (input.taskId) lines.push(`Task: ${input.taskId}`)
 
@@ -1197,6 +1188,8 @@ export function buildHandoverRevisionTurn(input: HandoverRevisionTurnInput): str
 /** One row of a group, as the group packet names it. */
 export interface HandoverGroupMember {
   handoverId: string
+  /** The executor as the requester knows it: its display name, else its id. */
+  agentName: string
   /** The desktop's state, which is wider than the report's: `skipped` counts. */
   state: HandoverState
   summary?: string | null
@@ -1234,9 +1227,10 @@ export function buildHandoverGroupPacket(input: {
   cap?: number
 }): string {
   const cap = input.cap ?? HANDOVER_PACKET_CAP
-  const head = `Handover group \`${input.groupId}\` has finished — ${input.members.length} ${
-    input.members.length === 1 ? 'handover' : 'handovers'
-  }:`
+  const agents = [...new Set(input.members.map((member) => member.agentName))].join(', ')
+  const head = `${taskResultHead(agents, `group \`${input.groupId}\``, 'finished', `${input.members.length} ${
+    input.members.length === 1 ? 'task' : 'tasks'
+  }`)}:`
   const lines = [head, '']
   let used = head.length + 1
 
@@ -1244,7 +1238,7 @@ export function buildHandoverGroupPacket(input: {
   for (const member of input.members) {
     const verb = GROUP_MEMBER_VERB[member.state] ?? member.state
     const summary = member.summary?.trim()
-    const line = `- \`${member.handoverId}\` — ${verb}${summary ? `: ${summary}` : ''}${
+    const line = `- \`${member.handoverId}\` (${member.agentName}) — ${verb}${summary ? `: ${summary}` : ''}${
       member.taskId ? ` (task ${member.taskId})` : ''
     }`
     if (used + line.length + 1 > cap && lines.length > 2) {

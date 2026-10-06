@@ -12,7 +12,7 @@ import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine, type ScriptAcpHeld
  * Real: `taskDispatchService` (passes, the report rule, the pause, the
  * outside-content gate), `taskExecutionService.start`, the folder adapter
  * writing and reading `.cinna/tasks/*.md`, the session's `cinna` MCP server
- * answering `task_update`, the agent page's Tasks tab, the Tasks view's queue
+ * answering `tasks_report`, the agent page's Tasks tab, the Tasks view's queue
  * control and the Inbox's dispatch cards. Scripted: what each ACP turn decides
  * to do (`scriptAcpAgent.mjs`). No model, nothing billed.
  *
@@ -71,14 +71,14 @@ async function taskStatus(cinna: CinnaApp, id: string): Promise<string> {
   return (await cinna.page.evaluate((taskId) => window.api.tasks.get(taskId), id)).status
 }
 
-/** The dispatched prompt `i` arrives for `title` (its goal), and the agent reports it completed with `task_update`. */
+/** The dispatched prompt `i` arrives for `title` (its goal), and the agent reports it done with `tasks_report`. */
 async function workAndReport(cinna: CinnaApp, fake: ScriptAcpEngine, i: number, taskId: string, title: string): Promise<void> {
   await expect.poll(() => fake.calls.length, { timeout: 60_000 }).toBe(i + 1)
   expect(fake.calls[i].text).toContain(`Continue this task.\n\nGoal:\n${title}`)
   const toolsBefore = fake.tools.length
-  fake.calls[i].release({ tools: [{ name: 'task_update', args: { id: taskId, status: 'completed' } }] })
+  fake.calls[i].release({ tools: [{ name: 'tasks_report', args: { ref: taskId, status: 'done', summary: `Done: ${title}.` } }] })
   await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(toolsBefore + 1)
-  expect(okResult(fake.tools[toolsBefore])).toMatchObject({ id: taskId, status: 'completed' })
+  expect(okResult(fake.tools[toolsBefore])).toMatchObject({ ref: taskId, status: 'done', taskStatus: 'completed' })
   fake.tools[toolsBefore].release({ text: `Done: ${title}.` })
   await expect.poll(() => taskStatus(cinna, taskId), { timeout: 30_000 }).toBe('completed')
 }
@@ -113,7 +113,7 @@ test('a bare agent’s task queue runs one at a time, pauses on a silent turn, g
     await cinna.relaunch()
     await cinna.page.evaluate(() => window.api.localAgents.rescan())
 
-    await test.step('One at a time runs two Ready tasks in priority order, each reported with task_update', async () => {
+    await test.step('One at a time runs two Ready tasks in priority order, each reported with tasks_report', async () => {
       // Created in the default Manual mode: nothing may start yet, so the order is the queue's choice.
       const low = await createReady(cinna, agentId, LOW, 'low')
       const high = await createReady(cinna, agentId, HIGH, 'high')

@@ -34,6 +34,7 @@ import { forgetAgentStatusReports } from '../tasks/agentStatusReports'
 import { handingOffChats } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import { delegationRepo } from '../db/delegations'
+import { tasksSkillLabel } from './tasksSkillService'
 import { DELEGATION_TERMINAL_STATES } from '../../shared/delegations'
 import type { CoordinatorToolProvider } from './coordinatorToolProvider'
 import type { AgentDriver, FollowUpScope, SteerFn } from '../agents/drivers/driver'
@@ -733,6 +734,8 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
  * Depth comes from the chain this chat is already in: the chat's task, and the
  * handover row that task belongs to. No task, or a task nobody handed over, is
  * depth 0 — which is what makes a brief written from this turn depth 1.
+ * `report required` is yes for a task someone waits on: dispatched by the
+ * agent's queue, the target of a delegation, or a job run's task.
  */
 function turnHeaderFor(input: {
   driver: AgentDriver
@@ -741,16 +744,24 @@ function turnHeaderFor(input: {
   chatId: string
 }): string | null {
   if (!input.driver.capabilities(input.agent).cwd) return null
-  let taskId: string | null = null
+  let task: { ref: string; title: string; reportRequired: boolean } | null = null
   let depth = 0
-  let openDelegations: { total: number; running: number; waitingOnUser: number } | undefined
+  let openDelegations: { total: number; waitingOnUser: number } | undefined
   let readyTasks = 0
+  let tasksSkill: string | null = null
   try {
-    const task = taskRepo.getByChatId(input.profileUserId, input.chatId)
-    taskId = task?.id ?? null
-    if (task) depth = delegationRepo.byTaskId(input.profileUserId, task.id)?.depth ?? 0
+    const row = taskRepo.getByChatId(input.profileUserId, input.chatId)
+    const taskId = row?.id ?? null
+    if (row) {
+      const delegation = delegationRepo.byTaskId(input.profileUserId, row.id)
+      depth = delegation?.depth ?? 0
+      // Someone is waiting on an outcome: the queue that dispatched it, the
+      // agent that delegated it, or the job run it records.
+      const reportRequired = Boolean(row.dispatchAgentId) || Boolean(delegation) || Boolean(row.jobRunId)
+      task = { ref: row.id, title: row.title, reportRequired }
+    }
     const open = delegationRepo.listForOrigin(input.profileUserId, input.chatId, taskId).filter((row) => !DELEGATION_TERMINAL_STATES.has(row.state))
-    if (open.length) openDelegations = { total: open.length, running: open.filter((row) => row.state === 'running').length, waitingOnUser: open.filter((row) => delegationRepo.toDto(row).waitingOnUser).length }
+    if (open.length) openDelegations = { total: open.length, waitingOnUser: open.filter((row) => delegationRepo.toDto(row).waitingOnUser).length }
     readyTasks = taskRepo.countReadyFor(input.profileUserId, input.agent.id)
   } catch (error) {
     // A header is context, never a precondition: a turn still runs without it.
@@ -759,7 +770,12 @@ function turnHeaderFor(input: {
       error: error instanceof Error ? error.message : String(error)
     })
   }
-  return buildTurnHeader({ chatId: input.chatId, taskId, depth, openDelegations, readyTasks })
+  try {
+    tasksSkill = tasksSkillLabel()
+  } catch {
+    /* no skill line rather than no header */
+  }
+  return buildTurnHeader({ agentId: input.agent.id, chatId: input.chatId, task, depth, openDelegations, readyTasks, tasksSkill })
 }
 
 function bindTurn(input: {

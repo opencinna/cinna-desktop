@@ -4,13 +4,14 @@ import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent, seedChatTask } from '../fixtures/seed'
 import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpHeld } from '../fixtures/scriptAcpEngine'
 import { HANDOVER_GATE_OPTIONS, HANDOVER_HOW_TO_REPORT } from '../../src/shared/handovers'
+import { encodeTaskTarget } from '../../src/shared/taskTargets'
 
 /**
  * The handover bus over its **file** channel, driven only through the session's
  * `cinna` MCP tools: a kit requester delegates to an adopted bare folder, and
  * neither side ever writes a protocol file itself — `brief.md` and
  * `revisions/001.md` are published by main, and both reports are
- * `handover_report` calls (no `report.md` exists at any point).
+ * `tasks_report` calls (no `report.md` exists at any point).
  *
  * Real: the loopback MCP server and its session token, `delegationService`,
  * the file publication, the folder scan, the Inbox gate (answered through the
@@ -100,20 +101,22 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
     let created: any
     const createArgs = { id: HANDOVER_ID, title: TITLE, description: BRIEF }
 
-    await test.step('handover_targets lists the bare folder; task_create with it as assignee publishes the brief', async () => {
+    await test.step('tasks_targets lists the bare folder; tasks_create with its target as assignee publishes the brief', async () => {
       await cinna.page.evaluate((id) => window.api.run.start({ chatId: id, content: 'Delegate the basalt work.' }), chatId)
       await expect.poll(() => fake.calls.length, { timeout: 60_000 }).toBe(1)
-      fake.calls[0].release({ tools: [{ name: 'handover_targets' }] })
+      fake.calls[0].release({ tools: [{ name: 'tasks_targets' }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(1)
-      const targets = parsed(fake.tools[0]) as { target: { kind: string; agentId: string }; folder: string | null }[]
-      const entry = targets.find((item) => item.target.agentId === executorId)
+      const listed = parsed(fake.tools[0]) as { protocol_version: number; targets: { target: string; kind: string; location: string; folder: string | null }[] }
+      expect(listed.protocol_version).toBe(1)
+      const targets = listed.targets
+      const entry = targets.find((item) => item.target === encodeTaskTarget({ kind: 'bare', agentId: executorId }))
       expect(entry, JSON.stringify(targets)).toBeDefined()
-      expect(entry!.target).toEqual({ kind: 'bare', agentId: executorId })
+      expect(entry).toMatchObject({ kind: 'folder', location: 'local' })
       expect(realpathSync(entry!.folder!)).toBe(realpathSync(folder))
 
       // The requester has written nothing: the folder holds no handover yet.
       expect(existsSync(join(folder, '.cinna'))).toBe(false)
-      fake.tools[0].release({ tools: [{ name: 'task_create', args: { assignee: entry!.target, ...createArgs } }] })
+      fake.tools[0].release({ tools: [{ name: 'tasks_create', args: { assignee: entry!.target, ...createArgs } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(2)
       created = parsed(fake.tools[1])
       expect(created).toMatchObject({ handoverId: HANDOVER_ID })
@@ -132,9 +135,9 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
       expect(brief).toContain(HANDOVER_HOW_TO_REPORT)
     })
 
-    await test.step('a repeated task_create is the same delegation, and rewrites nothing', async () => {
+    await test.step('a repeated tasks_create is the same delegation, and rewrites nothing', async () => {
       const before = { text: readFileSync(briefFile, 'utf8'), ino: statSync(briefFile).ino, mtimeMs: statSync(briefFile).mtimeMs }
-      fake.tools[1].release({ tools: [{ name: 'task_create', args: { assignee: { kind: 'bare', agentId: executorId }, ...createArgs } }] })
+      fake.tools[1].release({ tools: [{ name: 'tasks_create', args: { assignee: encodeTaskTarget({ kind: 'bare', agentId: executorId }), ...createArgs } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(3)
       const again = parsed(fake.tools[2])
       expect(again).toMatchObject({ delegationId: created.delegationId, taskId: created.taskId, handoverId: HANDOVER_ID })
@@ -167,10 +170,10 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
       expect(realpathSync(fake.calls[1].cwd)).toBe(realpathSync(folder))
     })
 
-    const executorChatId = await test.step('a blocked handover_report survives the executor turn ending', async () => {
-      fake.calls[1].release({ tools: [{ name: 'handover_report', args: { status: 'blocked', summary: `Choose a basalt format. ${EXECUTOR_SECRET}`, question: QUESTION } }] })
+    const executorChatId = await test.step('a blocked tasks_report survives the executor turn ending', async () => {
+      fake.calls[1].release({ tools: [{ name: 'tasks_report', args: { status: 'blocked', summary: `Choose a basalt format. ${EXECUTOR_SECRET}`, question: QUESTION } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(4)
-      expect(fake.tools[3].params.offered).toContain('handover_report')
+      expect(fake.tools[3].params.offered).toContain('tasks_report')
       expect(parsed(fake.tools[3])).toMatchObject({ delegationId: created.delegationId, status: 'blocked' })
       fake.tools[3].release({ text: 'Waiting for the requester.' })
 
@@ -192,7 +195,7 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
       // Read while the requester's turn is held, well after the executor's ended.
       expect(await taskOf(created.taskId)).toMatchObject({ status: 'blocked', chatId: executorChatId })
 
-      fake.calls[2].release({ tools: [{ name: 'handover_reply', args: { id: created.delegationId, message: `${REPLY} ${EXECUTOR_SECRET}` } }] })
+      fake.calls[2].release({ tools: [{ name: 'tasks_reply', args: { ref: created.taskId, message: `${REPLY} ${EXECUTOR_SECRET}` } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(5)
       const replied = parsed(fake.tools[4])
       expect(replied).toMatchObject({ delegationId: created.delegationId })
@@ -210,7 +213,7 @@ test('a kit delegates to a bare folder through MCP alone: brief, blocked, revisi
       expect(fake.calls[3].text).not.toContain(EXECUTOR_SECRET)
       expect(fake.calls[3].sessionId).toBe(fake.calls[1].sessionId)
       expect(await taskOf(created.taskId)).toMatchObject({ chatId: executorChatId })
-      fake.calls[3].release({ tools: [{ name: 'handover_report', args: { status: 'done', summary: DONE_SUMMARY } }] })
+      fake.calls[3].release({ tools: [{ name: 'tasks_report', args: { status: 'done', summary: DONE_SUMMARY } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(6)
       expect(parsed(fake.tools[5])).toMatchObject({ delegationId: created.delegationId, status: 'done' })
       fake.tools[5].release({ text: 'Finished.' })

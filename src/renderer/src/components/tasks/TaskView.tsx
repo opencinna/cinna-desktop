@@ -1644,7 +1644,7 @@ const COMMENT_CLAMP_LINES = 8
 
 /**
  * The task's comments, oldest first: who, when, what. Read-only — agents write
- * them (`task_comment`). Last on the page, under the subtasks, so a comment
+ * them (`tasks_comment`). Last on the page, under the subtasks, so a comment
  * arriving on the poll lands under everything the user is reading.
  *
  * The latest {@link COMMENTS_SHOWN} are shown, the rest behind an in-place

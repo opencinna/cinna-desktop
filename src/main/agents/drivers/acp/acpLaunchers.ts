@@ -456,6 +456,14 @@ export interface ClaudeLauncherDeps {
    * settings, and this is not called for it.
    */
   folderAgents(agentPath: string): Record<string, unknown>
+  /**
+   * The desktop-owned local plugin that carries the `cinna-tasks` skill
+   * (`tasksSkillService.ensureTasksSkillPlugin`), or null when this build has
+   * no skill. Passed as `plugins` on **both** branches: a desktop plugin is
+   * not a user or project setting, so `settingSources: []` does not hide it
+   * (`claude.session.options-plugins` in the contract).
+   */
+  tasksSkillPlugin?(): string | null
 }
 
 /**
@@ -543,6 +551,11 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
       // from the settings that branch keeps enabled, and passing them as well
       // would hand the adapter every definition twice.
       const agents = native ? {} : safely(() => deps.folderAgents(ctx.folder.path), {})
+      // Default `argv` delivery (one `--plugin-dir`): `pluginDelivery:
+      // 'initialize'` exists only from SDK 0.3.261, and the adapter runs its
+      // own SDK dependency (0.3.257 under adapter 0.76.0), which ignores it.
+      const pluginPath = safely(() => deps.tasksSkillPlugin?.() ?? null, null)
+      const plugins = pluginPath ? { plugins: [{ type: 'local' as const, path: pluginPath }] } : {}
 
       return {
         spec: {
@@ -594,7 +607,8 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
                       ...(systemPrompt ? { append: systemPrompt } : {})
                     },
                     ...(model ? { model } : {}),
-                    settingSources: ['user', 'project', 'local']
+                    settingSources: ['user', 'project', 'local'],
+                    ...plugins
                   }
                 : {
                     // The folder already says what this agent is, through
@@ -614,7 +628,10 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
                     // The folder's own subagents, omitted rather than passed empty
                     // so a folder without them hands the adapter exactly what it
                     // was handed before this option existed.
-                    ...(Object.keys(agents).length > 0 ? { agents } : {})
+                    ...(Object.keys(agents).length > 0 ? { agents } : {}),
+                    // Desktop-owned, so not a "user plugin" the pair above
+                    // shuts out: the one plugin an isolated session loads.
+                    ...plugins
                   }
             }
           }

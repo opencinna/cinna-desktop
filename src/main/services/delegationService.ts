@@ -9,6 +9,7 @@ import { agentOverrideRepo } from '../db/agents'
 import {
   delegationOriginKey, isOutsideOrigin, DELEGATION_TERMINAL_STATES, type DelegationResult
 } from '../../shared/delegations'
+import { parseTaskReport } from '../tasks/taskReport'
 import { isHandoverId, MAX_HANDOVER_DEPTH, allowsAuto, HANDOVER_BRIEF_KEYS, HANDOVER_GATE_OPTIONS, recordedExecution } from '../../shared/handovers'
 import { isTaskPriority, validateTaskCustomFields, type TaskCustomFields, type TaskPriority } from '../../shared/tasks'
 import type { InboxAnswerCode, InboxAnswerResult } from '../../shared/inbox'
@@ -20,6 +21,8 @@ import { localAgentService } from './localAgents/localAgentService'
 import { chatAnswersToAgent } from './chatRouting'
 import { createDelegationBrief, createDelegationRevision, delegationBriefExists } from './delegationFiles'
 import { taskService } from './taskService'
+import { encodeTaskTarget, taskTargetKind } from '../../shared/taskTargets'
+import { TASKS_PROTOCOL_VERSION } from '../kit/tasksProtocol'
 import { taskExecutionService } from './taskExecutionService'
 import type { RunScope } from './runExecutionService'
 import { installTaskRunnerHooks } from './taskRunnerBridge'
@@ -31,7 +34,7 @@ export interface DelegationSession {
   agentId: string
 }
 
-/** What `task_create` adds around a delegation; the delegation rules themselves are unchanged. */
+/** What `tasks_create` adds around a delegation; the delegation rules themselves are unchanged. */
 export interface DelegationCreateOptions {
   /**
    * Called once the request is known to be new — after the idempotency lookup,
@@ -47,12 +50,42 @@ interface Target {
   adapter?: string
 }
 
-interface CloudTargetEntry {
+interface TargetEntry {
   target: Target
   name: string
-  folder: null
+  /** A local agent's folder; null for a remote one. */
+  folder: string | null
   acceptsDelegations: boolean
+  /** The standing grant: a run starts without asking. */
   auto: boolean
+  location: 'local' | 'remote'
+  capabilities: TasksTargetCapabilities
+}
+
+/** What a target's channel carries, in the protocol's words. */
+export interface TasksTargetCapabilities { structured_report: boolean; reply: boolean; priority: boolean; custom_fields: boolean; attachments: boolean }
+
+/**
+ * What each local channel carries today: a bare brief has fields for priority
+ * and custom fields, a report.md and a revisions/ reply; a kit request has a
+ * reply and nothing else. A remote target's are its adapter's.
+ */
+const LOCAL_CAPABILITIES: Record<'bare' | 'kit', TasksTargetCapabilities> = {
+  bare: { structured_report: true, reply: true, priority: true, custom_fields: true, attachments: false },
+  kit: { structured_report: true, reply: true, priority: false, custom_fields: false, attachments: false }
+}
+
+/** One `tasks_targets` entry, in the protocol's words (`tasks.schema.json`). */
+export interface TasksTargetEntry {
+  target: string
+  name: string
+  kind: 'folder' | 'kit' | 'cinna'
+  location: 'local' | 'remote'
+  folder: string | null
+  acceptsDelegations: boolean
+  capabilities: TasksTargetCapabilities
+  protocol_version: number
+  requires_approval: boolean
 }
 
 const logger = createLogger('delegations')
@@ -136,7 +169,7 @@ function owned(session: DelegationSession, id: string): DelegationRow {
   return row
 }
 
-/** The `target` argument of a delegation (`task_create`'s `assignee`), exactly as `handover_targets` returned it. */
+/** The `target` of a delegation: `tasks_create`'s `assignee`, decoded from the string `tasks_targets` returned. */
 function requireTarget(value: unknown): Target {
   const target = value as Target | undefined
   if (
@@ -145,12 +178,12 @@ function requireTarget(value: unknown): Target {
     typeof target.agentId !== 'string' ||
     Object.keys(target).some((key) => !['kind', 'agentId', 'adapter'].includes(key))
   ) {
-    throw new Error('Choose a target from handover_targets.')
+    throw new Error('Choose a target from tasks_targets.')
   }
   const adapterMismatch = target.kind === 'cloud'
     ? typeof target.adapter !== 'string' || !target.adapter.trim()
     : target.adapter !== undefined
-  if (adapterMismatch) throw new Error('Use the exact target returned by handover_targets.')
+  if (adapterMismatch) throw new Error('Use the exact target returned by tasks_targets.')
   return target
 }
 
@@ -285,30 +318,60 @@ function briefCustomFields(value: unknown): TaskCustomFields | undefined {
 }
 
 export const delegationService = {
-  async targets(session: DelegationSession, signal?: AbortSignal) {
+  /** `tasks_targets`: every target with the string to pass as `tasks_create.assignee`. */
+  async targets(session: DelegationSession, signal?: AbortSignal): Promise<{ protocol_version: number; targets: TasksTargetEntry[] }> {
+    const entries = await this.targetEntries(session, signal)
+    return {
+      protocol_version: TASKS_PROTOCOL_VERSION,
+      targets: entries.map((entry) => ({
+        target: encodeTaskTarget(entry.target),
+        name: entry.name,
+        kind: taskTargetKind(entry.target.kind),
+        location: entry.location,
+        folder: entry.folder,
+        acceptsDelegations: entry.acceptsDelegations,
+        capabilities: entry.capabilities,
+        protocol_version: TASKS_PROTOCOL_VERSION,
+        requires_approval: !entry.auto
+      }))
+    }
+  },
+
+  /** The targets in the delegation service's own shape: what `create` matches a request against. */
+  async targetEntries(session: DelegationSession, signal?: AbortSignal): Promise<TargetEntry[]> {
     signal?.throwIfAborted()
     const { source } = validateSession(session)
     const { profileUserId, settingsUserId } = session.scope
 
-    const local = localAgentService.list(settingsUserId).agents.map((agent) => ({
+    const local: TargetEntry[] = localAgentService.list(settingsUserId).agents.map((agent) => ({
       target: { kind: agent.kind, agentId: agent.id },
       name: agent.name,
       folder: agent.path,
       acceptsDelegations: agent.enabled && agentOverrideRepo.get(profileUserId, agent.id)?.enabled !== false,
-      auto: agent.kind === 'bare' ? agent.desktop.handovers === 'auto' : agent.desktop.delegations === 'auto'
+      auto: agent.kind === 'bare' ? agent.desktop.handovers === 'auto' : agent.desktop.delegations === 'auto',
+      location: 'local' as const,
+      capabilities: LOCAL_CAPABILITIES[agent.kind]
     }))
     for (const entry of local) {
       if (entry.target.kind !== 'bare' || !entry.auto) continue
       const { handoverGit } = await import('./handoverGit')
-      entry.auto = allowsAuto(await handoverGit.check(entry.folder))
+      entry.auto = allowsAuto(await handoverGit.check(entry.folder!))
     }
 
-    const cloud: CloudTargetEntry[] = []
+    const cloud: TargetEntry[] = []
     for (const adapter of allAdapters()) {
       try {
         const caps = adapter.capabilities()
         if (!caps.create || !caps.execute || !caps.assigneeDirectory) continue
         if (!(await adapter.availability(profileUserId)).ready) continue
+        const support = await adapter.delegationSupport?.(profileUserId)
+        const capabilities: TasksTargetCapabilities = {
+          structured_report: support?.structuredResult === true,
+          reply: support?.reply === true,
+          priority: false,
+          custom_fields: false,
+          attachments: caps.writeArtifactKinds.includes('file')
+        }
 
         for (const assignee of await adapter.listAssignees(profileUserId)) {
           if (assignee.kind !== 'remote_agent') continue
@@ -317,7 +380,9 @@ export const delegationService = {
             name: assignee.name ?? assignee.ref,
             folder: null,
             acceptsDelegations: true,
-            auto: source.desktop.cloudDelegations === 'auto'
+            auto: source.desktop.cloudDelegations === 'auto',
+            location: 'remote',
+            capabilities
           })
         }
       } catch (error) {
@@ -329,15 +394,8 @@ export const delegationService = {
     return [...local, ...cloud]
   },
 
-  list(session: DelegationSession) {
-    const { task } = validateSession(session)
-    return delegationRepo
-      .listForOrigin(session.scope.profileUserId, session.chatId, task?.id)
-      .map((row) => delegationRepo.toDto(row))
-  },
-
   /**
-   * Delegate work: `task_create` with an `assignee`, its arguments mapped to
+   * Delegate work: `tasks_create` with an `assignee`, its arguments mapped to
    * this shape (`target`, `brief`) by `taskToolService`. The task it creates
    * records the requesting agent and the delegation depth as its provenance.
    */
@@ -357,7 +415,7 @@ export const delegationService = {
       throw new Error('Choose ask or auto execution.')
     }
     if (input.status !== undefined && input.status !== 'draft' && input.status !== 'ready') {
-      throw new Error('Choose draft or ready status.')
+      throw new Error('Choose category draft or ready for a delegation.')
     }
     const target = requireTarget(input.target)
     // Drafts, and the priority and custom fields a brief carries as a task
@@ -409,7 +467,7 @@ export const delegationService = {
       const depth = Math.max(parent?.depth ?? 0, task?.chainDepth ?? 0) + 1
       if (depth > MAX_HANDOVER_DEPTH) throw new Error(`Delegations are limited to depth ${MAX_HANDOVER_DEPTH}.`)
 
-      const targetEntry = (await this.targets(session, signal)).find((entry) => sameTarget(entry.target, target))
+      const targetEntry = (await this.targetEntries(session, signal)).find((entry) => sameTarget(entry.target, target))
       signal?.throwIfAborted()
       const fresh = validateSession(session)
       if ((fresh.task?.id ?? null) !== (task?.id ?? null) || (fresh.parent?.depth ?? 0) !== (parent?.depth ?? 0)) {
@@ -478,7 +536,7 @@ export const delegationService = {
           taskService.create(profileUserId, {
             title,
             goal: brief,
-            description: `${brief}\n\nThis is delegated work. Report progress, questions and completion with handover_report.`,
+            description: `${brief}\n\nThis is delegated work. Report progress, questions and completion with tasks_report.`,
             assigneeKind: target.kind === 'kit' ? 'agent' : 'remote_agent',
             assigneeAgentId: target.agentId,
             assigneeName: targetEntry.name,
@@ -517,41 +575,40 @@ export const delegationService = {
     }
   },
 
+  /**
+   * `tasks_report` on a delegation executor's own task: the result goes
+   * through the bus (`delegationLifecycle.applyResult`), which writes the
+   * task's status, handoff note and artifacts and wakes the requester. An
+   * identical repeat is recognised there by its digest and changes nothing.
+   */
   async report(session: DelegationSession, input: Record<string, unknown>) {
     const { task, source } = validateSession(session)
     const row = task ? delegationRepo.byTaskId(session.scope.profileUserId, task.id) : undefined
     if (!row || row.targetAgentId !== session.agentId || row.channel === 'cloud') {
       throw new Error('This is not a delegation executor session.')
     }
-    if (!['in_progress', 'blocked', 'done', 'failed'].includes(String(input.status))) {
-      throw new Error('Choose a valid report status.')
-    }
-    const summary = requiredString(input.summary, 'summary', 2000)
-    if (/[\r\n]/.test(summary)) throw new Error('The summary must be one line.')
-
-    const validArtifacts =
-      input.artifacts === undefined ||
-      (Array.isArray(input.artifacts) &&
-        input.artifacts.length <= 100 &&
-        input.artifacts.every((item) => typeof item === 'string' && item.length <= 4096))
-    if (!validArtifacts) throw new Error('Artifacts must be a list of file paths or URLs.')
-
+    const report = parseTaskReport(input, 'requester')
     // A relative artifact is relative to the executor's own folder.
     const absolute = (ref: string) => (/^https?:\/\//.test(ref) || isAbsolute(ref) ? ref : join(source.path, ref))
     const result: DelegationResult = {
-      status: input.status as DelegationResult['status'],
-      summary,
-      question: input.question === undefined ? undefined : requiredString(input.question, 'question', 4000),
-      artifacts: (input.artifacts as string[] | undefined)?.map(absolute)
+      status: report.status,
+      summary: report.summary,
+      question: report.question ?? undefined,
+      artifacts: report.artifacts.map((artifact) => absolute(artifact.ref)),
+      ...(report.body ? { body: report.body } : {}),
+      audience: report.audience
     }
     const { delegationLifecycle } = await import('./delegationLifecycle')
     delegationLifecycle.applyResult(session.scope, row, result)
-    return { delegationId: row.id, status: result.status }
+    return { delegationId: row.id, taskId: row.taskId, status: result.status }
   },
 
+  /** `tasks_reply`: `ref` is the delegated task (or, as before, the delegation's own id). */
   async reply(session: DelegationSession, input: Record<string, unknown>) {
-    const row = owned(session, requiredString(input.id, 'delegation id', 100))
-    const message = requiredString(input.message, 'message')
+    const ref = requiredString(input.ref, 'ref', 128)
+    const byTask = delegationRepo.byTaskId(session.scope.profileUserId, ref)
+    const row = owned(session, byTask?.id ?? ref)
+    const message = requiredString(input.message, 'message', 64_000)
 
     if (row.channel === 'cloud') {
       const { delegationCloud } = await import('./delegationCloud')

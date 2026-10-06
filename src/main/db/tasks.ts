@@ -68,7 +68,7 @@ export interface TaskCreateInput {
   deviceLocal?: boolean
   trustedDigest?: string | null
   localFile?: TaskLocalFile | null
-  /** Tool-created provenance (`task_create`). Device-local, never synced. */
+  /** Tool-created provenance (`tasks_create`). Device-local, never synced. */
   createdByAgentId?: string | null
   createdByChatId?: string | null
   chainDepth?: number
@@ -307,7 +307,7 @@ const rawTaskRepo = {
   },
 
   /**
-   * How many tasks an agent's `task_create` made in this chat for its own
+   * How many tasks an agent's `tasks_create` made in this chat for its own
    * queue, deleted ones included: the per-chat cap counts creations, so
    * deleting a task does not buy another. Delegated work is counted from the
    * delegations table (`delegationRepo.countForOriginChat`).

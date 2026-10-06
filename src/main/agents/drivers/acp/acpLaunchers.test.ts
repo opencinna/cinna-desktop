@@ -440,6 +440,26 @@ describe('the Claude launcher', () => {
     expect(claudeOptions(p).systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' })
   })
 
+  it('loads the desktop’s cinna-tasks plugin on both branches, and nothing when there is none', async () => {
+    // A desktop-owned local plugin is not a user or project setting, so
+    // `settingSources: []` does not hide it (claude.session.options-plugins).
+    // Mutation: pass it on one branch only and the other loses the skill.
+    const withPlugin = { ...deps, tasksSkillPlugin: () => '/data/cinna-plugins/cinna-tasks' }
+    for (const ctx of [CTX, BARE_CTX]) {
+      const options = claudeOptions(plan(await createClaudeLauncher(withPlugin).plan(ctx)))
+      expect(options.plugins).toEqual([{ type: 'local', path: '/data/cinna-plugins/cinna-tasks' }])
+      // The adapter's own SDK (0.3.257) has no `pluginDelivery`; argv is its only delivery.
+      expect('pluginDelivery' in options).toBe(false)
+    }
+    for (const ctx of [CTX, BARE_CTX]) {
+      expect('plugins' in claudeOptions(plan(await createClaudeLauncher(deps).plan(ctx)))).toBe(false)
+      const none = { ...deps, tasksSkillPlugin: () => null }
+      expect('plugins' in claudeOptions(plan(await createClaudeLauncher(none).plan(ctx)))).toBe(false)
+      const broken = { ...deps, tasksSkillPlugin: () => { throw new Error('disk full') } }
+      expect('plugins' in claudeOptions(plan(await createClaudeLauncher(broken).plan(ctx)))).toBe(false)
+    }
+  })
+
   it('offers the folder’s own subagents when it has some', async () => {
     const p = plan(
       await createClaudeLauncher({

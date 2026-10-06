@@ -57,7 +57,7 @@ export const TASK_COMMENTS_KEY = (taskId: string): readonly unknown[] => ['task'
 
 /**
  * A task's comments, oldest first. Agents add them during a turn
- * (`task_comment`) while the page is open, so the list is re-read on the
+ * (`tasks_comment`) while the page is open, so the list is re-read on the
  * page's own poll interval.
  */
 export function useTaskComments(taskId: string): UseQueryResult<TaskCommentDto[]> {

@@ -350,7 +350,11 @@ export const CONVERSATION_PERMISSIONS: Record<string, unknown> = {
     'rm -fr *': 'ask'
   },
   webfetch: 'ask',
-  external_directory: 'ask'
+  external_directory: 'ask',
+  // The skill tool asks `skill` with the skill's name as its pattern; under
+  // `'*': 'ask'` every opening of the platform's own `cinna-tasks` skill would
+  // stop the turn for a click. Any other skill still asks.
+  skill: { '*': 'ask', 'cinna-tasks': 'allow' }
 }
 
 /** One AI credential, ready to become a provider entry. */
@@ -388,6 +392,12 @@ export interface EngineAgentInput {
 export interface EngineConfigInput {
   providers: EngineProviderInput[]
   agents: EngineAgentInput[]
+  /**
+   * Folders OpenCode scans recursively for `SKILL.md` files (`skills.paths`, verified in the
+   * 1.18.27 binary's `ConfigSkillsV1`): the bundled kit's `skills/`, which
+   * holds `cinna-tasks`. Absent or empty when the build has no skill.
+   */
+  skillPaths?: string[]
 }
 
 /** A credential that could not become a provider entry, and why. */
@@ -628,6 +638,7 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
   const agentModels = new Map<string, EngineModelRef>()
   const prompts = new Map<string, string>()
   const skippedAgents: SkippedAgent[] = []
+  const profile = profileWithSkillReads(input.skillPaths ?? [])
 
   for (const agent of [...input.agents].sort((a, b) => a.agentId.localeCompare(b.agentId))) {
     const providerKey = providerKeys.get(agent.providerId)
@@ -656,7 +667,7 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       prompt: agent.prompt,
       permission: agent.permissionMode === 'replace'
         ? { '*': 'deny', ...agent.permissions }
-        : mergePermissions(agent.permissions)
+        : mergePermissions(agent.permissions, profile)
     }
   }
 
@@ -664,7 +675,8 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
     config: {
       $schema: 'https://opencode.ai/config.json',
       provider: providers,
-      agent: agents
+      agent: agents,
+      ...(input.skillPaths?.length ? { skills: { paths: [...input.skillPaths] } } : {})
     },
     env,
     providerKeys,
@@ -780,7 +792,33 @@ export function digestEngineConfig(built: BuiltEngineConfig): EngineConfigDigest
  * override. The folder is the user's own, so this is not a trust boundary —
  * it is a legibility one.
  */
-function mergePermissions(overrides?: Record<string, unknown> | null): Record<string, unknown> {
-  if (!overrides || typeof overrides !== 'object') return { ...CONVERSATION_PERMISSIONS }
-  return { ...CONVERSATION_PERMISSIONS, ...overrides }
+function mergePermissions(
+  overrides?: Record<string, unknown> | null,
+  profile: Record<string, unknown> = CONVERSATION_PERMISSIONS
+): Record<string, unknown> {
+  if (!overrides || typeof overrides !== 'object') return { ...profile }
+  return { ...profile, ...overrides }
+}
+
+/**
+ * The conversation profile with reads of the platform skill folders allowed.
+ *
+ * Opening `cinna-tasks` hands the agent its base directory, and its own
+ * `references/file-protocol.md` is read from there — outside the project, so
+ * under `external_directory: 'ask'` every read of the skill's reference would
+ * stop the turn for a click. **A path-scoped allow, not a copy under the
+ * project**: the 1.18.27 binary asks `external_directory` with the pattern
+ * `<parent dir>/*` (`Tool.assertExternalDirectory`), its `Wildcard.match`
+ * compiles `*` to `.*` (so it crosses `/`, covering `references/`), and the
+ * last matching rule wins — so `'*': 'ask'` first and `'<skills root>/*':
+ * 'allow'` after it opens exactly the folders in `skills.paths` and nothing
+ * else. Materialising the skill instead would only move the same question to
+ * another folder outside the project. A manifest's own `external_directory`
+ * still replaces the entry whole, as every override does.
+ */
+function profileWithSkillReads(skillPaths: readonly string[]): Record<string, unknown> {
+  if (skillPaths.length === 0) return CONVERSATION_PERMISSIONS
+  const external: Record<string, string> = { '*': 'ask' }
+  for (const path of skillPaths) external[`${path.replaceAll('\\', '/').replace(/\/+$/, '')}/*`] = 'allow'
+  return { ...CONVERSATION_PERMISSIONS, external_directory: external }
 }

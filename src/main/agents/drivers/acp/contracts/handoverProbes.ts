@@ -1,6 +1,6 @@
 /** Native folder evidence for file handovers: real engines, local fake models only. */
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { ConductorMcpServer } from '../../../../services/conductorMcpServer'
 import { makeScratch, spawnAdapter, startFakeProvider, writeProviderConfig, type AdapterConnection, type AdapterMessage, type ProviderReply } from './codexHarness'
 import { makeClaudeScratch, startFakeAnthropic, type ClaudeProviderReply, type EgressTrap } from './claudeHarness'
@@ -9,13 +9,19 @@ type Json = Record<string, unknown>
 export interface HandoverProbe {
   writes: { mode: string; accepted: boolean; permissionCount: number; kinds: string[]; titles: string[]; wrote: boolean; outputs: string[]; promptError: unknown }[]
   mcp: { nativeTools: boolean; first: boolean; second: boolean; loaded: boolean; calls: string[]; listReads: number; differentDescriptors: boolean; outputs: string[] }
+  /**
+   * Codex only: one shell read of a file outside the working folder (a sibling
+   * of it, not a temp root), per mode — how a folder agent reaches the
+   * `cinna-tasks` SKILL.md under the app's resources.
+   */
+  reads: { mode: string; permissionCount: number; kinds: string[]; read: boolean; outputs: string[]; promptError: unknown }[]
 }
 const allow = (request: AdapterMessage): Json | undefined => {
   const options = request.params?.options as Json[] | undefined
   const option = options?.find((value) => value.kind === 'allow_once')
   return option ? { outcome: { outcome: 'selected', optionId: option.optionId } } : undefined
 }
-const initial = (): HandoverProbe => ({ writes: [], mcp: { nativeTools: false, first: false, second: false, loaded: false, calls: [], listReads: 0, differentDescriptors: false, outputs: [] } })
+const initial = (): HandoverProbe => ({ writes: [], reads: [], mcp: { nativeTools: false, first: false, second: false, loaded: false, calls: [], listReads: 0, differentDescriptors: false, outputs: [] } })
 
 export async function probeFolderHandovers(engine: 'claude' | 'codex', binary: string, adapterPath: string, trap?: EgressTrap): Promise<HandoverProbe> {
   const result = initial()
@@ -26,6 +32,7 @@ export async function probeFolderHandovers(engine: 'claude' | 'codex', binary: s
   const mcp = new ConductorMcpServer()
   let connection: AdapterConnection | undefined
   const marker = 'HANDOVER_OUTSIDE_WRITE_OK'
+  const readMarker = 'CINNA_SKILL_OUTSIDE_READ_OK'
   const options = { systemPrompt: 'Use the requested tool then answer OK.', settingSources: [], strictMcpConfig: true, mcpServers: {} }
   const meta = engine === 'claude' ? { claudeCode: { options } } : undefined
   try {
@@ -38,6 +45,10 @@ export async function probeFolderHandovers(engine: 'claude' | 'codex', binary: s
     if (initialized.error) throw new Error(JSON.stringify(initialized.error))
     const sibling = join(scratch.home, 'sibling')
     mkdirSync(sibling)
+    // Stands in for `<resources>/cinna-agent-kit/skills/cinna-tasks/SKILL.md`: outside cwd, not a temp root.
+    const skillFile = join(scratch.home, 'resources', 'cinna-tasks', 'SKILL.md')
+    mkdirSync(dirname(skillFile), { recursive: true })
+    writeFileSync(skillFile, `${readMarker}\n`)
     for (const mode of engine === 'claude' ? ['default', 'auto'] : ['read-only', 'agent']) {
       const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [], ...(meta ? { _meta: meta } : {}) }, 60_000)
       const sessionId = String(created.result?.sessionId ?? '')
@@ -58,6 +69,17 @@ export async function probeFolderHandovers(engine: 'claude' | 'codex', binary: s
           wrote: existsSync(path) && readFileSync(path, 'utf8') === marker,
           outputs: (claude ? claude.turns.slice(beforeTurns).flatMap((turn) => turn.toolResults) : codex!.turns.slice(beforeTurns).flatMap((turn) => turn.pendingOutputs ? turn.outputs.slice(-turn.pendingOutputs) : [])).map((output) => output.replaceAll(scratch.home, '<scratch>')),
           promptError: prompt.error ?? null })
+      }
+      if (codex) {
+        const before = connection.clientRequests.length
+        const beforeTurns = codex.turns.length
+        codexScript = [{ kind: 'tool', name: 'exec_command', args: JSON.stringify({ cmd: `cat '${skillFile}'`, yield_time_ms: 1000, max_output_tokens: 1000 }) }]
+        const prompt = await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: `Read the file ${skillFile}.` }] }, 60_000)
+        const permissions = connection.clientRequests.slice(before).filter((request) => request.method === 'session/request_permission')
+        const outputs = codex.turns.slice(beforeTurns).flatMap((turn) => turn.pendingOutputs ? turn.outputs.slice(-turn.pendingOutputs) : []).map((output) => output.replaceAll(scratch.home, '<scratch>'))
+        result.reads.push({ mode, permissionCount: permissions.length,
+          kinds: permissions.map((request) => String((request.params?.toolCall as Json)?.kind ?? '')),
+          read: outputs.some((output) => output.includes(readMarker)), outputs, promptError: prompt.error ?? null })
       }
     }
     const sessions = await Promise.all(['first', 'second'].map((identity) => mcp.ensureSession(`handover-${identity}`, { getProviders: () => {
@@ -103,6 +125,8 @@ export function handoverProbeSnapshot(probe: HandoverProbe | null): Json | null 
     writes: probe.writes.map(({ outputs, ...write }) => ({ ...write,
       deniedBySandbox: outputs.some((output) => /operation not permitted|permission denied/i.test(output)),
       reviewUnavailable: outputs.some((output) => /could not evaluate|approval review failed/.test(output)) })),
-    mcp: { ...probe.mcp, listReads: probe.mcp.listReads > 0, outputs: [...new Set(probe.mcp.outputs.flatMap((output) => output.match(/HANDOVER_SESSION_(first|second)/g) ?? []))].sort() }
+    mcp: { ...probe.mcp, listReads: probe.mcp.listReads > 0, outputs: [...new Set(probe.mcp.outputs.flatMap((output) => output.match(/HANDOVER_SESSION_(first|second)/g) ?? []))].sort() },
+    // Codex only; absent for Claude, whose snapshot this probe does not touch.
+    ...(probe.reads.length ? { reads: probe.reads.map(({ outputs: _outputs, ...read }) => read) } : {})
   }
 }

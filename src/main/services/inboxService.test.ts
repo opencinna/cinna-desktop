@@ -502,7 +502,7 @@ describe('a turn ending in a chat that owns its own task', () => {
     expect(taskService.getById(USER, task.id).status).toBe('completed')
   })
 
-  it.each(['blocked', 'error'] as const)('keeps a %s the agent reported with task_update, once', async (status) => {
+  it.each(['blocked', 'error'] as const)('keeps a %s the agent reported with tasks_report, once', async (status) => {
     const { noteAgentStatusReport } = await import('../tasks/agentStatusReports')
     const task = makeChatTask()
     taskService.setStatus(USER, task.id, status)

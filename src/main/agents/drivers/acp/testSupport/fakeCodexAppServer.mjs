@@ -35,7 +35,7 @@ async function runTurn(params, turn) {
   // Fresh-session replay precedes the current prompt in separate ACP blocks.
   // Fixture commands address the current message, not the replayed transcript.
   const text = (params.input?.filter((part) => part.type === 'text').at(-1)?.text ?? '')
-    .replace(/^Turn context from Cinna Desktop, not part of the conversation:\n[\s\S]*?\n\n/, '')
+    .replace(/^Cinna task context \(not part of the conversation\):\n[\s\S]*?\n\n/, '')
   if (text === 'Wait until stopped') return
   if (text === 'Report token usage') {
     // Two model requests in one turn, as the app-server reports them: `last`

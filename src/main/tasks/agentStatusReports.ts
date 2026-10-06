@@ -1,6 +1,6 @@
 /**
  * Tasks whose status the agent working on them set itself during its turn
- * (`task_update` on the chat's own task: completed, blocked or error).
+ * (`tasks_report` on the chat's own task: done, blocked, failed or in progress).
  *
  * A turn's end settles a hand-opened chat's task from how the turn ended
  * (`inboxService.endTurn`), which would turn an agent's `blocked` or `error`

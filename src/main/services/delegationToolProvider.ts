@@ -2,135 +2,168 @@ import type { ToolProvider, ToolExecutionResult, ToolCallOptions } from '../llm/
 import type { ToolDefinition } from '../llm/types'
 import type { DelegationSession } from './delegationService'
 
-const string = { type: 'string' }
+/*
+ * The Cinna Task Protocol's eight tools, exactly as `tasks.schema.json`
+ * states them (`tasksProtocolParity.test.ts` holds the two equal): the
+ * schema's `$ref`s are written out here, because an engine reads each tool's
+ * input schema on its own, without the file's `$defs`.
+ */
 
-
-interface ToolSchema {
-  description: string
-  properties: Record<string, unknown>
-  required?: string[]
+const ref = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 128,
+  description: 'A task reference as this host shows it (`t-3f9a2b1c`, `TASK-5`, a folder task\'s id). Opaque: never built or translated by the agent, always copied from a tool result or the turn context.'
 }
 
-const schemas: Record<string, ToolSchema> = {
-  handover_targets: {
-    description:
-      'List agents you can delegate to, with their permissions and the exact assignee to pass to task_create.',
-    properties: {}
-  },
-  handover_list: {
-    description:
-      'Read delegations requested by this conversation and task. Do not poll: end your turn to receive the automatic return packet.',
-    properties: {}
-  },
-  handover_reply: {
-    description: 'Answer a blocked executor or send a follow-up to a delegation requested by this conversation.',
-    properties: { id: string, message: string },
-    required: ['id', 'message']
-  },
-  handover_report: {
-    description:
-      'Report this delegation’s progress, question, or final result to its requester. Report blocked for a requester question.',
-    properties: {
-      status: { enum: ['in_progress', 'blocked', 'done', 'failed'] },
-      summary: string,
-      question: string,
-      artifacts: { type: 'array', items: string }
-    },
-    required: ['status', 'summary']
-  },
-  tasks_list: {
-    description:
-      'List tasks assigned to you, created by you, or delegated by you (newest first, at most 50). Closed tasks are left out unless include_closed is true.',
-    properties: {
-      relation: { enum: ['assigned', 'created', 'delegated', 'all'] },
-      category: { enum: ['backlog', 'ready', 'active', 'waiting', 'closed'] },
-      include_closed: { type: 'boolean' }
-    }
-  },
-  task_create: {
-    description: [
-      'Create a task. Without an assignee (or with yourself) it goes into your own queue: status backlog (default) or ready; parent is one of your own tasks.',
-      'For a bare folder agent that queue is the Markdown files in .cinna/tasks/ of your folder, which you may also create and edit directly (frontmatter title, status, priority; status words such as todo, ready, doing, review, done).',
-      'With an assignee from handover_targets it delegates the work: id is required and makes the call idempotent, description is the brief, and status draft, priority and custom_fields are for bare folders only.',
-      'A delegation returns immediately; end your turn and Cinna will wake you with the result. For a bare folder, writing the brief.md directly is also fine.'
-    ].join(' '),
-    properties: {
-      title: string,
-      description: string,
-      priority: { enum: ['low', 'normal', 'high', 'urgent'] },
-      custom_fields: { type: 'object' },
-      status: { enum: ['backlog', 'ready', 'draft'] },
-      parent: string,
-      assignee: {
-        type: 'object',
-        properties: { kind: { enum: ['bare', 'kit', 'cloud'] }, agentId: string, adapter: string },
-        required: ['kind', 'agentId'],
-        additionalProperties: false
-      },
-      id: string,
-      execution: {
-        enum: ['ask', 'auto'],
-        description:
-          'Delegation only. `ask` forces the person to approve this run; otherwise the receiving side’s own setting decides whether it runs without asking. Leave it out unless approval is needed.'
-      },
-      group: string
-    },
-    required: ['title', 'description']
-  },
-  task_update: {
-    description: [
-      'Change a task assigned to you, or one you created that no conversation has started: title, description, priority, custom_fields, status.',
-      'Status moves follow the board: backlog, ready, done or cancelled (a folder task also takes its folder’s status words). For the task of this conversation you may also set completed, blocked or error to report how your work ended.'
-    ].join(' '),
-    properties: {
-      id: string,
-      title: string,
-      description: string,
-      priority: { enum: ['low', 'normal', 'high', 'urgent'] },
-      custom_fields: { type: 'object', description: 'The whole set of custom fields; {} clears them.' },
-      status: string
-    },
-    required: ['id']
-  },
-  task_comment: {
-    description: 'Add a comment to a task assigned to you, created by you or delegated by you. It is shown on the task page and copied to the task’s file or service.',
-    properties: { id: string, body: { type: 'string', maxLength: 8000 } },
-    required: ['id', 'body']
+const priority = { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] }
+
+const customFields = {
+  type: 'object',
+  maxProperties: 32,
+  description: 'User-named values on the task: text, number, boolean or a flat list of strings. Keys the protocol owns (status, title, priority, id, execution, origin, depth, group, parent, blocked_by) are refused in any letter case. The whole set is replaced on update; `{}` clears it.',
+  additionalProperties: {
+    oneOf: [
+      { type: 'string', maxLength: 2000 },
+      { type: 'number' },
+      { type: 'boolean' },
+      { type: 'array', maxItems: 64, items: { type: 'string', maxLength: 200 } }
+    ]
   }
 }
 
-const UNCHANGED_NOTICE = 'Nothing has changed; end your turn — you will be woken when a result arrives.'
+const artifact = {
+  oneOf: [
+    {
+      type: 'string',
+      minLength: 1,
+      maxLength: 1024,
+      description: 'A path relative to the working folder, or an http(s) URL.'
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ref'],
+      properties: {
+        kind: { type: 'string', enum: ['file', 'link'] },
+        name: { type: 'string', maxLength: 200 },
+        ref: { type: 'string', minLength: 1, maxLength: 1024 }
+      }
+    }
+  ]
+}
+
+/** The handover id shape (`isHandoverId`), for `id` and `group`. */
+const slug = '^[a-z0-9][a-z0-9._-]{2,63}$'
+
+interface ToolSchema {
+  description: string
+  inputSchema: Record<string, unknown> & { properties: Record<string, unknown> }
+}
+
+function object(properties: Record<string, unknown>, required?: string[]): ToolSchema['inputSchema'] {
+  return { type: 'object', additionalProperties: false, ...(required ? { required } : {}), properties }
+}
+
+export const TASKS_TOOL_SCHEMAS: Record<string, ToolSchema> = {
+  tasks_targets: {
+    description: 'Who you can hand work to. Returns one entry per target with the exact `target` string to pass as `tasks_create.assignee`, its name, kind, where it runs, what it supports and its protocol version. Call it before delegating; never guess a target.',
+    inputSchema: object({})
+  },
+  tasks_list: {
+    description: 'The tasks that concern you: assigned to you, created by you, or delegated by you. Newest first, at most 50, closed ones left out unless `include_closed`. Not a wait primitive: if nothing changed since your last call in this turn, end your turn.',
+    inputSchema: object({
+      relation: { type: 'string', enum: ['assigned', 'created', 'delegated', 'all'], default: 'all' },
+      category: {
+        type: 'string',
+        enum: ['backlog', 'ready', 'active', 'waiting', 'done'],
+        description: 'Where a task sits. `done` covers completed, failed and cancelled work.'
+      },
+      include_closed: { type: 'boolean', default: false }
+    })
+  },
+  tasks_get: {
+    description: 'One task in full: goal, description, status and category, priority, assignee, parent, blocked_by, custom fields, the latest comments, the latest report, and where any attached files were placed for you to read.',
+    inputSchema: object({ ref }, ['ref'])
+  },
+  tasks_create: {
+    description: 'Create work. Without `assignee` it goes into your own queue (Backlog unless `category: ready`). With an `assignee` from `tasks_targets` it is a delegation: `description` is the brief, `id` makes the request idempotent (repeating it returns the same work), and you end your turn afterwards — the result arrives later as a message in this conversation. `parent` must be a task of yours; with an assignee it makes a delegated subtask. Depth is capped at 2 and at most 20 tool-created tasks per conversation.',
+    inputSchema: object({
+      title: { type: 'string', minLength: 1, maxLength: 500 },
+      description: { type: 'string', minLength: 1, maxLength: 100000, description: 'Markdown. For a delegation, everything the executor needs; it may not see this conversation.' },
+      priority,
+      category: { type: 'string', enum: ['backlog', 'ready', 'draft'], description: '`backlog` (default) or `ready`. `draft` is only for a delegation to a folder target: the brief is written but not picked up until made ready.' },
+      parent: ref,
+      assignee: { type: 'string', maxLength: 256, description: 'A `target` from `tasks_targets`, verbatim. Omit for your own queue.' },
+      id: { type: 'string', pattern: slug, description: 'Delegations only. Your idempotency key for this request; `YYYYMMDD-HHMM-<slug>` is the recommended shape.' },
+      execution: { type: 'string', enum: ['ask', 'auto'], description: 'Delegations only. `ask` forces a person to approve the run; otherwise the receiving side\'s own setting decides.' },
+      group: { type: 'string', pattern: slug, description: 'Delegations only. Give several requests the same group and you are woken once, when all of them are over.' },
+      custom_fields: customFields
+    }, ['title', 'description'])
+  },
+  tasks_update: {
+    description: 'Edit a task\'s fields, or move it by hand between Backlog, Ready, Done and Cancelled as a person would on the board. Not for saying how your work went — that is `tasks_report`. Refused on a task something else is working on: a running turn, an open question, a queue or a delegation.',
+    inputSchema: object({
+      ref,
+      title: { type: 'string', minLength: 1, maxLength: 500 },
+      description: { type: 'string', maxLength: 100000 },
+      priority,
+      custom_fields: customFields,
+      category: { type: 'string', enum: ['backlog', 'ready', 'done', 'cancelled'], description: 'A manual move. A host with status words of its own (a folder\'s `_board.yaml`) also accepts one of those words here.' }
+    }, ['ref'])
+  },
+  tasks_comment: {
+    description: 'Leave a Markdown note on a task — a finding, an intermediate result, a question for a person reading the task page. Shown on the task and copied to the task\'s home where it has one. Does not change status; use `tasks_report` for that.',
+    inputSchema: object({
+      ref: { ...ref, description: 'Defaults to the task this conversation is working on.' },
+      body: { type: 'string', minLength: 1, maxLength: 8000 },
+      files: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 1024 }, description: 'Paths relative to the working folder to attach, where the host supports attachments. A missing file fails the call and posts nothing.' }
+    }, ['body'])
+  },
+  tasks_report: {
+    description: 'Say how your work on a task is going or how it ended. The only way to close work you were given: `done` or `failed` with a one-line summary before you end your turn; `blocked` with a `question` when you cannot continue (audience `requester` wakes the agent that asked, `user` waits for a person); `in_progress` for a progress note. A dispatched or delegated task that ends without a report is left Waiting with “Ended without reporting”. Idempotent: repeating the same report changes nothing.',
+    inputSchema: object({
+      ref: { ...ref, description: 'Defaults to the task this conversation is working on.' },
+      status: { type: 'string', enum: ['in_progress', 'blocked', 'done', 'failed'] },
+      summary: { type: 'string', minLength: 1, maxLength: 1000, description: 'One line. It is what every list shows.' },
+      question: { type: 'string', maxLength: 4000, description: 'Required when `status` is `blocked`.' },
+      audience: { type: 'string', enum: ['requester', 'user'], description: 'Who a `blocked` question is for. Defaults to `requester` when an agent asked for this work, else `user`.' },
+      artifacts: { type: 'array', maxItems: 100, items: artifact },
+      body: { type: 'string', maxLength: 100000, description: 'The full answer or report, Markdown.' }
+    }, ['status', 'summary'])
+  },
+  tasks_reply: {
+    description: 'Answer a `blocked` question from work you delegated, or send a follow-up to work still under way. The executor receives it in its own conversation with everything it has already read.',
+    inputSchema: object({
+      ref: { ...ref, description: 'The delegated task.' },
+      message: { type: 'string', minLength: 1, maxLength: 64000 }
+    }, ['ref', 'message'])
+  }
+}
+
+/** What `tasks_list` adds when nothing changed since the previous call in this provider's life. */
+export const UNCHANGED_NOTICE = 'Nothing has changed since your last call in this turn; end your turn.'
 
 /**
- * The session tools of a folder agent's own (or human-routed) chat: the
- * delegation bus (`handover_*`) and the agent task tools (`task*`, served by
- * `taskToolService`). One provider, one MCP server (`cinna-handovers`).
+ * The session tools of a folder agent's own (or human-routed) chat: the Cinna
+ * Task Protocol's `tasks_*`, served by `taskToolService` (and through it by
+ * the delegation bus). One provider, one loopback MCP server (`cinna`).
  */
 export class DelegationToolProvider implements ToolProvider {
   readonly providerType = 'mcp' as const
-  readonly displayName = 'Cinna handovers'
+  readonly displayName = 'Cinna tasks'
   private lastList: string | null = null
 
-  constructor(
-    private readonly session: DelegationSession,
-    private readonly executor: boolean
-  ) {}
+  constructor(private readonly session: DelegationSession) {}
 
   getTools(): ToolDefinition[] {
-    return Object.entries(schemas)
-      .filter(([name]) => name !== 'handover_report' || this.executor)
-      .map(([name, schema]) => ({
-        name,
-        description: schema.description,
-        inputSchema: {
-          type: 'object',
-          properties: schema.properties,
-          required: schema.required ?? [],
-          additionalProperties: false
-        },
-        mcpProviderId: 'cinna-handovers',
-        providerType: 'mcp'
-      }))
+    return Object.entries(TASKS_TOOL_SCHEMAS).map(([name, schema]) => ({
+      name,
+      description: schema.description,
+      inputSchema: schema.inputSchema,
+      mcpProviderId: 'cinna-handovers',
+      providerType: 'mcp'
+    }))
   }
 
   async callTool(
@@ -140,33 +173,36 @@ export class DelegationToolProvider implements ToolProvider {
   ): Promise<ToolExecutionResult> {
     const signal = options?.signal
     signal?.throwIfAborted()
-    if (!this.getTools().some((tool) => tool.name === name)) {
-      throw new Error('This tool is not offered to this session.')
-    }
-    const schema = schemas[name]
-    if (Object.keys(input).some((key) => !(key in schema.properties))) {
+    const schema = TASKS_TOOL_SCHEMAS[name]
+    if (!schema) throw new Error('This tool is not offered to this session.')
+    if (Object.keys(input).some((key) => !(key in schema.inputSchema.properties))) {
       throw new Error('The tool received an unknown argument.')
     }
 
-    if (name.startsWith('task')) {
-      const { taskToolService } = await import('./taskToolService')
-      signal?.throwIfAborted()
-      if (name === 'tasks_list') return { content: taskToolService.tasksList(this.session, input) }
-      if (name === 'task_create') return { content: await taskToolService.taskCreate(this.session, input, signal) }
-      if (name === 'task_update') return { content: await taskToolService.taskUpdate(this.session, input) }
-      return { content: await taskToolService.taskComment(this.session, input) }
-    }
-
-    const { delegationService } = await import('./delegationService')
+    const { taskToolService } = await import('./taskToolService')
     signal?.throwIfAborted()
-    if (name === 'handover_targets') return { content: await delegationService.targets(this.session, signal) }
-    if (name === 'handover_reply') return { content: await delegationService.reply(this.session, input) }
-    if (name === 'handover_report') return { content: await delegationService.report(this.session, input) }
-
-    const delegations = delegationService.list(this.session)
-    const digest = JSON.stringify(delegations)
-    const unchanged = digest === this.lastList
-    this.lastList = digest
-    return { content: { delegations, ...(unchanged ? { notice: UNCHANGED_NOTICE } : {}) } }
+    switch (name) {
+      case 'tasks_targets':
+        return { content: await taskToolService.tasksTargets(this.session, signal) }
+      case 'tasks_list': {
+        const listed = taskToolService.tasksList(this.session, input)
+        const digest = JSON.stringify(listed)
+        const unchanged = digest === this.lastList
+        this.lastList = digest
+        return { content: { ...listed, ...(unchanged ? { notice: UNCHANGED_NOTICE } : {}) } }
+      }
+      case 'tasks_get':
+        return { content: await taskToolService.tasksGet(this.session, input) }
+      case 'tasks_create':
+        return { content: await taskToolService.tasksCreate(this.session, input, signal) }
+      case 'tasks_update':
+        return { content: await taskToolService.tasksUpdate(this.session, input) }
+      case 'tasks_comment':
+        return { content: await taskToolService.tasksComment(this.session, input) }
+      case 'tasks_report':
+        return { content: await taskToolService.tasksReport(this.session, input) }
+      default:
+        return { content: await taskToolService.tasksReply(this.session, input) }
+    }
   }
 }

@@ -99,6 +99,7 @@ import { createManagedDriver } from './managed/managedDriver'
 import { createManagedTurnRecoverer } from './managed/managedTurnRecoverer'
 import { agentService } from '../../services/agentService'
 import { managedAgentService } from '../../services/managedAgentService'
+import { ensureTasksSkillPlugin } from '../../services/tasksSkillService'
 import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
 
 const logger = createLogger('agent-driver')
@@ -298,7 +299,7 @@ function folderSystemPrompt(
     const agent = localAgentService.get(userId, agentId)
     // The agent's own id, which is stable per agent — see
     // `DesktopPromptContext.agentId` for why a per-turn id could not go here.
-    const context = { ...resolveDesktopPromptContext(), agentId }
+    const context = { ...resolveDesktopPromptContext(engine), agentId }
     if (mode === 'native') {
       return assembleBareNativePrompt(agent.path, agent.name, context, engine)
     }
@@ -569,6 +570,7 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
     claudeEnv: async () =>
       withDeveloperToolShims(buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: runtimeHost.getVersion() })),
     systemPrompt: folderSystemPrompt('claude'),
+    tasksSkillPlugin: () => ensureTasksSkillPlugin(),
     // A model **alias** (`haiku` / `sonnet` / `opus`), not a catalogue id: a
     // plan serves what the plan serves, and `runtimeService.resolve` returns the
     // alias for this engine. Null hands the choice to the CLI's own default.

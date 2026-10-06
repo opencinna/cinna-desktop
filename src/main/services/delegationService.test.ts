@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { delegationRepo, type DelegationRow } from '../db/delegations'
+import { encodeTaskTarget, type TaskTargetRef } from '../../shared/taskTargets'
 
 const world = vi.hoisted(() => ({
   rows: new Map<string, DelegationRow>(), tasks: new Map<string, any>(), requests: new Map<string, any>(), parent: null as DelegationRow | null,
@@ -14,11 +15,11 @@ vi.mock('../db/delegations', () => ({ delegationRepo: {
   byHandoverId: () => undefined,
   byTaskId: () => world.parent,
   byRequesterKey: (user: string, origin: string, kind: string, target: string, key: string) => [...world.rows.values()].find((r) => r.userId === user && r.originKey === origin && r.targetKind === kind && r.targetAgentId === target && r.requesterKey === key),
-  listForOrigin: () => [...world.rows.values()], toDto: (row: any) => row, list: () => [...world.rows.values()],
+  listForOrigin: () => [...world.rows.values()], toDto: (row: any) => row, list: () => [...world.rows.values()], listByOriginAgent: () => [],
   countForOriginChat: (user: string, chat: string) => [...world.rows.values()].filter((row) => row.userId === user && row.originChatId === chat).length
 } }))
 vi.mock('../db/handovers', () => ({ handoverRepo: { byAgentAndHandoverId: () => world.handover } }))
-vi.mock('../db/tasks', () => ({ taskRepo: { getByChatId: () => world.task, countCreatedInChat: () => world.ownCreated, setProvenance: vi.fn() } }))
+vi.mock('../db/tasks', () => ({ taskRepo: { getByChatId: () => world.task, countCreatedInChat: () => world.ownCreated, setProvenance: vi.fn(), list: () => [] } }))
 vi.mock('../db/chats', () => ({ chatRepo: { create: () => ({ id: 'gate-chat' }), getOwned: () => ({ id: 'gate-chat' }), permanentDelete: vi.fn() } }))
 vi.mock('../db/agents', () => ({ agentOverrideRepo: { get: () => undefined } }))
 vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: {
@@ -28,7 +29,7 @@ vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: {
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => world.active, getSettingsScopeUserId: () => 'settings' }))
 vi.mock('../auth/activation', () => ({ userActivation: { requireActivated: vi.fn() } }))
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }))
-vi.mock('../tasks/adapters', () => ({ allAdapters: () => [{ id: 'remote', capabilities: () => ({ create: true, execute: true, assigneeDirectory: true }), availability: async () => ({ ready: true }), listAssignees: async () => [{ kind: 'remote_agent', ref: 'cloud-agent', name: 'Cloud' }] }] }))
+vi.mock('../tasks/adapters', () => ({ allAdapters: () => [{ id: 'remote', capabilities: () => ({ create: true, execute: true, assigneeDirectory: true, writeArtifactKinds: ['file'] }), availability: async () => ({ ready: true }), delegationSupport: async () => ({ metadata: true, structuredResult: true, reply: false }), listAssignees: async () => [{ kind: 'remote_agent', ref: 'cloud-agent', name: 'Cloud' }] }] }))
 vi.mock('./localAgents/localAgentService', () => ({ localAgentService: {
   get: (_user: string, id: string) => ({ id, enabled: true, kind: 'kit', path: '/tmp/agent', desktop: { delegations: world.targetAuto ? 'auto' : null, cloudDelegations: world.sourceAuto ? 'auto' : null } }),
   list: () => ({ agents: [{ id: 'kit', enabled: true, kind: 'kit', name: 'Kit', path: '/tmp/kit', desktop: { delegations: world.targetAuto ? 'auto' : null } }, { id: 'bare', enabled: true, kind: 'bare', name: 'Bare', path: '/tmp/bare', desktop: {} }] }),
@@ -52,8 +53,8 @@ const { delegationService } = await import('./delegationService')
 const { DelegationToolProvider } = await import('./delegationToolProvider')
 const session = { scope: { profileUserId: 'profile', settingsUserId: 'settings' }, chatId: 'chat', agentId: 'source' }
 const input = { target: { kind: 'kit', agentId: 'kit' }, id: 'request-one', title: 'Work', brief: 'Implement the requested work.' }
-/** The same request as `task_create` arguments: `assignee` for `target`, `description` for `brief`. */
-const asTaskCreate = ({ target, brief, ...rest }: Record<string, unknown>) => ({ ...rest, assignee: target, description: brief })
+/** The same request as `tasks_create` arguments: the encoded target as `assignee`, `description` for `brief`. */
+const asTaskCreate = ({ target, brief, ...rest }: Record<string, unknown>) => ({ ...rest, assignee: encodeTaskTarget(target as TaskTargetRef), description: brief })
 beforeEach(() => {
   world.briefs.clear(); world.rows.clear(); world.tasks.clear(); world.requests.clear(); world.parent = null; world.task = null; world.active = 'profile'; world.ownCreated = 0; world.handover = undefined; world.sourceAuto = false; world.targetAuto = false; world.refusal = null
   vi.clearAllMocks()
@@ -170,15 +171,15 @@ describe('delegation bus session authority and gates', () => {
     await delegationService.create(session, { ...input, id: 'asked-work', target: { kind: 'bare', agentId: 'bare' }, execution: 'ask' })
     expect(world.file).toHaveBeenLastCalledWith(expect.objectContaining({ execution: 'ask' }))
   })
-  it('carries task_create’s priority and custom fields into a bare brief, and refuses them elsewhere', async () => {
-    const tools = new DelegationToolProvider(session, false)
+  it('carries tasks_create’s priority and custom fields into a bare brief, and refuses them elsewhere', async () => {
+    const tools = new DelegationToolProvider(session)
     const bare = { ...asTaskCreate({ ...input, target: { kind: 'bare', agentId: 'bare' } }), priority: 'high', custom_fields: { estimate: 3, labels: ['ui'] } }
-    await tools.callTool('task_create', bare)
+    await tools.callTool('tasks_create', bare)
     expect(world.file).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 'high', customFields: { estimate: 3, labels: ['ui'] } }))
-    await expect(tools.callTool('task_create', { ...bare, id: 'brief-key', custom_fields: { Execution: 'auto' } })).rejects.toThrow('brief field')
-    await expect(tools.callTool('task_create', { ...bare, id: 'bad-priority', priority: 'soon' })).rejects.toThrow('priority')
-    await expect(tools.callTool('task_create', { ...asTaskCreate(input), priority: 'high' })).rejects.toThrow('bare-folder brief')
-    await expect(tools.callTool('task_create', { ...asTaskCreate(input), custom_fields: { a: 1 } })).rejects.toThrow('bare-folder brief')
+    await expect(tools.callTool('tasks_create', { ...bare, id: 'brief-key', custom_fields: { Execution: 'auto' } })).rejects.toThrow('brief field')
+    await expect(tools.callTool('tasks_create', { ...bare, id: 'bad-priority', priority: 'soon' })).rejects.toThrow('priority')
+    await expect(tools.callTool('tasks_create', { ...asTaskCreate(input), priority: 'high' })).rejects.toThrow('bare-folder brief')
+    await expect(tools.callTool('tasks_create', { ...asTaskCreate(input), custom_fields: { a: 1 } })).rejects.toThrow('bare-folder brief')
     expect(world.file).toHaveBeenCalledTimes(1)
     expect(world.tasks.size).toBe(0)
   })
@@ -244,12 +245,12 @@ describe('delegation bus session authority and gates', () => {
   })
   it('does not accept work after the requesting turn is canceled during discovery', async () => {
     const controller = new AbortController()
-    const targets = vi.spyOn(delegationService, 'targets').mockImplementationOnce(async () => {
+    const targets = vi.spyOn(delegationService, 'targetEntries').mockImplementationOnce(async () => {
       controller.abort(new Error('Requester stopped'))
       return []
     })
-    const tools = new DelegationToolProvider(session, false)
-    await expect(tools.callTool('task_create', asTaskCreate(input), { signal: controller.signal })).rejects.toThrow('Requester stopped')
+    const tools = new DelegationToolProvider(session)
+    await expect(tools.callTool('tasks_create', asTaskCreate(input), { signal: controller.signal })).rejects.toThrow('Requester stopped')
     expect(world.rows.size).toBe(0)
     expect(world.tasks.size).toBe(0)
     targets.mockRestore()
@@ -266,19 +267,56 @@ describe('delegation bus session authority and gates', () => {
     expect(world.requests.get(`delegation:${row.id}`)?.status).toBe('open')
     expect(world.start).not.toHaveBeenCalled()
   })
-  it('offers report only to executors, forbids forged origin fields, and warns on unchanged reads', async () => {
-    const tools = new DelegationToolProvider(session, false)
-    expect(tools.getTools().some((tool) => tool.name === 'handover_report')).toBe(false)
-    await expect(tools.callTool('handover_report', {})).rejects.toThrow('not offered')
-    await expect(tools.callTool('task_create', { ...asTaskCreate(input), depth: 0 })).rejects.toThrow('unknown argument')
-    await tools.callTool('handover_list', {})
-    expect(await tools.callTool('handover_list', {})).toMatchObject({ content: { notice: expect.stringContaining('end your turn') } })
-    expect(await new DelegationToolProvider(session, false).callTool('handover_list', {})).toEqual({ content: { delegations: [] } })
+  it('offers the eight tasks_* tools and no old name, forbids forged origin fields, and warns on unchanged reads', async () => {
+    const tools = new DelegationToolProvider(session)
+    expect(tools.getTools().map((tool) => tool.name)).toEqual(['tasks_targets', 'tasks_list', 'tasks_get', 'tasks_create', 'tasks_update', 'tasks_comment', 'tasks_report', 'tasks_reply'])
+    for (const old of ['handover_report', 'handover_targets', 'handover_list', 'handover_reply', 'task_create', 'task_update', 'task_comment']) {
+      await expect(tools.callTool(old, {})).rejects.toThrow('not offered')
+    }
+    await expect(tools.callTool('tasks_create', { ...asTaskCreate(input), depth: 0 })).rejects.toThrow('unknown argument')
+    await tools.callTool('tasks_list', {})
+    expect(await tools.callTool('tasks_list', {})).toMatchObject({ content: { notice: 'Nothing has changed since your last call in this turn; end your turn.' } })
+    expect(await new DelegationToolProvider(session).callTool('tasks_list', {})).toEqual({ content: { tasks: [] } })
+  })
+  it('lists targets as protocol entries whose target string tasks_create takes back', async () => {
+    world.sourceAuto = true
+    const { content } = await new DelegationToolProvider(session).callTool('tasks_targets', {}) as { content: { protocol_version: number; targets: Record<string, unknown>[] } }
+    expect(content.protocol_version).toBe(1)
+    expect(content.targets).toEqual([
+      expect.objectContaining({ target: 'kit:kit', name: 'Kit', kind: 'kit', location: 'local', requires_approval: true, protocol_version: 1,
+        capabilities: { structured_report: true, reply: true, priority: false, custom_fields: false, attachments: false } }),
+      expect.objectContaining({ target: 'folder:bare', kind: 'folder', location: 'local', folder: '/tmp/bare',
+        capabilities: { structured_report: true, reply: true, priority: true, custom_fields: true, attachments: false } }),
+      expect.objectContaining({ target: 'cinna:remote:cloud-agent', name: 'Cloud', kind: 'cinna', location: 'remote', requires_approval: false,
+        capabilities: { structured_report: true, reply: false, priority: false, custom_fields: false, attachments: true } })
+    ])
+    await expect(new DelegationToolProvider(session).callTool('tasks_create', { ...asTaskCreate(input), assignee: 'kit' })).rejects.toThrow('tasks_targets')
+    await new DelegationToolProvider(session).callTool('tasks_create', asTaskCreate(input))
+    expect([...world.rows.values()][0]).toMatchObject({ targetKind: 'kit', targetAgentId: 'kit' })
   })
   it('refuses reporting from a requester chat and applying a stranger’s reply', async () => {
     await expect(delegationService.report(session, { status: 'done', summary: 'Done' })).rejects.toThrow('executor session')
     world.rows.set('foreign', { id: 'foreign', userId: 'profile', originAgentId: 'other', originChatId: 'other' } as DelegationRow)
-    await expect(delegationService.reply(session, { id: 'foreign', message: 'change it' })).rejects.toThrow('did not request')
+    await expect(delegationService.reply(session, { ref: 'foreign', message: 'change it' })).rejects.toThrow('did not request')
     expect(world.result).not.toHaveBeenCalled()
+  })
+  it('sends an executor’s report through the bus with its body, audience and artifacts, and wants a question when blocked', async () => {
+    world.task = { id: 'exec-task' }
+    world.parent = { id: 'd-exec', taskId: 'exec-task', targetAgentId: 'source', channel: 'local' } as DelegationRow
+    await expect(delegationService.report(session, { status: 'blocked', summary: 'Stuck' })).rejects.toThrow('question')
+    const answer = await delegationService.report(session, { status: 'done', summary: 'Built', body: 'All of it.', artifacts: ['out/a.txt', { ref: 'https://x.test/r', kind: 'link' }] })
+    expect(answer).toEqual({ delegationId: 'd-exec', taskId: 'exec-task', status: 'done' })
+    expect(world.result).toHaveBeenCalledWith(session.scope, world.parent, {
+      status: 'done', summary: 'Built', question: undefined, artifacts: ['/tmp/agent/out/a.txt', 'https://x.test/r'], body: 'All of it.', audience: 'requester'
+    })
+  })
+  it('resolves a reply by the delegated task’s ref, and still by the delegation id', async () => {
+    world.rows.set('d-own', { id: 'd-own', userId: 'profile', originAgentId: 'source', originChatId: 'chat', channel: 'local', taskId: 'child-task' } as DelegationRow)
+    world.parent = world.rows.get('d-own')!
+    const { delegationReplies } = await import('./delegationReplies')
+    await delegationService.reply(session, { ref: 'child-task', message: 'Use v2.' })
+    world.parent = null
+    await delegationService.reply(session, { ref: 'd-own', message: 'Use v3.' })
+    expect(vi.mocked(delegationReplies.enqueue).mock.calls.map((call) => [(call[1] as DelegationRow).id, call[2]])).toEqual([['d-own', 'Use v2.'], ['d-own', 'Use v3.']])
   })
 })

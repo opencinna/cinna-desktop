@@ -389,6 +389,7 @@ The folder already contains everything the agent needs to know; it is just sprea
 4. The **list** of `.md` topics under `Local/<slug>/knowledge/`
 5. A handover block separating legacy sibling hints from explicit [task-coordinator handback](../../jobs/tasks/manifest_handback.md) guidance. Main grants eligibility only to the current handed-off task owner; prompt text alone grants none
 6. The desktop context block
+7. The **Cinna tasks** stub: the two rules every folder agent must not miss (report before ending a turn on an assigned task; never wait inside a turn), its own agent id, and one line saying how to open the `cinna-tasks` skill — by name on OpenCode and Claude, by its absolute `SKILL.md` path on Codex. The protocol itself lives in the skill, not here ([The Cinna Task Protocol](../../jobs/tasks/task_protocol.md)). Bare prompts end with the same section
 
 Four rules shape it:
 
@@ -446,7 +447,7 @@ The last building-mode line exists for that window: when asked for its actual jo
 
 This generated profile and `runtime.permissions` overrides apply to OpenCode. [Claude](claude_engine.md) and [Codex](codex_engine.md) use their own approval mechanisms; the desktop standing-grant store is shared.
 
-**An agent works freely inside its own folder.** A session's `location.directory` *is* the agent folder, so `read`, `edit`, `write` and `bash` are `allow`; what still asks is what the folder boundary does not cover — `external_directory`, `webfetch`, the agent's own manifest and workflow prompt, secret files, and `sudo` / `rm -r`. This replaced a profile that allowed writes only under `app-data/` and only three shapes of command, which asked about nearly every step of ordinary work: **a permission prompt that fires constantly is not a control, it is a thing users learn to click through.**
+**An agent works freely inside its own folder.** A session's `location.directory` *is* the agent folder, so `read`, `edit`, `write` and `bash` are `allow`; what still asks is what the folder boundary does not cover — `external_directory`, `webfetch`, the agent's own manifest and workflow prompt, secret files, and `sudo` / `rm -r`. Two narrow exceptions exist for the platform's `cinna-tasks` skill, which OpenCode finds through `skills.paths` in the generated config: opening that skill is allowed (any other skill still asks), and reads under the bundled kit's `skills/` folder are allowed. Without them every opening of the skill, and every read of its reference file outside the agent folder, would stop the turn for a click. This replaced a profile that allowed writes only under `app-data/` and only three shapes of command, which asked about nearly every step of ordinary work: **a permission prompt that fires constantly is not a control, it is a thing users learn to click through.**
 
 The whole profile, each entry with the failure it exists for, plus the matcher rules every pattern in it depends on, is [Local Agent Permissions](permissions.md#business-rules). Two things belong here because they are about generating the config rather than about the policy:
 

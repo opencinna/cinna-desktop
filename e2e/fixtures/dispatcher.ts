@@ -8,7 +8,7 @@ import { filterTasksByAgent } from './tasksView'
  * Arrange helpers for the task dispatcher specs (`task-dispatcher*.spec.ts`):
  * the scripted ACP engine behind a keyless provider, bare folders adopted over
  * the same `folder-pick` → `folder-add` pair the dialog uses, Ready tasks made
- * over IPC, and the agent's `task_update` report.
+ * over IPC, and the agent's `tasks_report`.
  */
 
 export type Priority = 'low' | 'normal' | 'high' | 'urgent'
@@ -80,12 +80,12 @@ export async function promptFor(fake: ScriptAcpEngine, title: string, timeout = 
   return fake.calls.findIndex((call) => call.text.includes(needle))
 }
 
-/** The agent reports prompt `i`'s task completed with `task_update`, then ends its turn. */
+/** The agent reports prompt `i`'s task done with `tasks_report`, then ends its turn. */
 export async function report(cinna: CinnaApp, fake: ScriptAcpEngine, i: number, taskId: string, title: string): Promise<void> {
   const toolsBefore = fake.tools.length
-  fake.calls[i].release({ tools: [{ name: 'task_update', args: { id: taskId, status: 'completed' } }] })
+  fake.calls[i].release({ tools: [{ name: 'tasks_report', args: { ref: taskId, status: 'done', summary: `Done: ${title}.` } }] })
   await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(toolsBefore + 1)
-  expect(okResult(fake.tools[toolsBefore])).toMatchObject({ id: taskId, status: 'completed' })
+  expect(okResult(fake.tools[toolsBefore])).toMatchObject({ ref: taskId, status: 'done', taskStatus: 'completed' })
   fake.tools[toolsBefore].release({ text: `Done: ${title}.` })
   await expect.poll(() => taskStatus(cinna, taskId), { timeout: 30_000 }).toBe('completed')
 }

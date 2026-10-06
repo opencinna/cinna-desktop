@@ -58,6 +58,10 @@ const writeSnapshot = process.env['CINNA_CONTRACT_WRITE_SNAPSHOT'] === '1'
 const SYSTEM_MARKER = 'CONTRACT_SYSTEM_PROMPT_5a1'
 const CLAUDE_MD_MARKER = 'CONTRACT_CLAUDE_MD_c77'
 const SUBAGENT = 'contract-helper-3e9'
+/** The desktop's plugin and skill name, and the name Claude must offer it under. */
+const PLUGIN_SKILL = 'cinna-tasks'
+const PLUGIN_SKILL_QUALIFIED = `${PLUGIN_SKILL}:${PLUGIN_SKILL}`
+const PLUGIN_SKILL_MARKER = 'CONTRACT_PLUGIN_SKILL_4d2'
 const POLICY_MARKER = 'CONTRACT_POLICY_PROMPT_e52'
 const FIRST_PROMPT = 'CONTRACT_FIRST_MESSAGE_81b. Answer OK.'
 /** What the `claude_code` preset says and an agent's own prompt must not. */
@@ -73,6 +77,16 @@ async function until(check: () => boolean, ms = 15_000): Promise<boolean> {
   return check()
 }
 const conversation = (turns: ClaudeProviderTurn[]): ClaudeProviderTurn[] => turns.filter((turn) => turn.kind === 'conversation')
+
+/**
+ * Whether the plugin's skill reached the model: its description marker, under
+ * the plugin-qualified name or — when nothing else uses it — the bare one
+ * (Claude Code namespaces plugin skills `<plugin>:<skill>`).
+ */
+function pluginSkillOffered(turns: ClaudeProviderTurn[]): boolean {
+  return turns.some((turn) => turn.mentions(PLUGIN_SKILL_MARKER) &&
+    (turn.mentions(PLUGIN_SKILL_QUALIFIED) || turn.mentions(PLUGIN_SKILL)))
+}
 
 /** Everything the two scenarios observed. Filled by `beforeAll`. */
 const seen = {
@@ -92,6 +106,8 @@ const seen = {
   contextUsageTraffic: { other: [] as string[], messages: 0 },
   question: { request: null as AdapterMessage | null, toolResults: [] as string[] },
   nativeMentionsClaudeMd: false, isolatedMentionsClaudeMd: true,
+  /** Whether the plugin's skill reached the model, by its qualified name, per branch. */
+  pluginSkill: { isolated: false, native: false },
   bypassInMetaMode: null as unknown,
   policyTurns: [] as ClaudeProviderTurn[],
   policyOptions: null as Json | null,
@@ -148,8 +164,16 @@ async function folderScenario(binary: string, trap: EgressTrap): Promise<void> {
         return { action: 'accept', content: { question_0: 'Yes' } }
       } })
     seen.initialize = await connection.rpc('initialize', initParams)
+    // The plugin as `tasksSkillService` lays it out, outside the project and HOME's settings.
+    const plugin = join(scratch.home, 'cinna-plugins', PLUGIN_SKILL)
+    mkdirSync(join(plugin, '.claude-plugin'), { recursive: true })
+    mkdirSync(join(plugin, 'skills', PLUGIN_SKILL), { recursive: true })
+    writeFileSync(join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: PLUGIN_SKILL, description: 'Contract plugin.', version: '1' }))
+    writeFileSync(join(plugin, 'skills', PLUGIN_SKILL, 'SKILL.md'),
+      `---\nname: ${PLUGIN_SKILL}\ndescription: ${PLUGIN_SKILL_MARKER} Work with Cinna tasks.\nversion: "1"\nuser-invocable: false\n---\n\n# Cinna tasks\n`)
+    const plugins = [{ type: 'local', path: plugin }]
     const isolated = { systemPrompt: SYSTEM_MARKER, settingSources: [], strictMcpConfig: true, mcpServers: {},
-      agents: { [SUBAGENT]: { description: 'A contract subagent.', prompt: 'Answer OK.' } } }
+      agents: { [SUBAGENT]: { description: 'A contract subagent.', prompt: 'Answer OK.' } }, plugins }
     seen.sessionNew = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [], _meta: { claudeCode: { options: isolated } } }, 60_000)
     seen.wrapperRan = existsSync(marker)
     const sessionId = String(seen.sessionNew.result?.sessionId ?? '')
@@ -175,16 +199,18 @@ async function folderScenario(binary: string, trap: EgressTrap): Promise<void> {
     seen.question.toolResults = provider.turns.flatMap((turn) => turn.toolResults)
     seen.folderTurns = [...provider.turns]
     seen.isolatedMentionsClaudeMd = conversation(provider.turns).some((turn) => turn.mentions(CLAUDE_MD_MARKER))
+    seen.pluginSkill.isolated = pluginSkillOffered(conversation(provider.turns))
 
     // The native branch, in the same folder: the launcher's other set of options.
     const before = provider.turns.length
     const native = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [], _meta: { claudeCode: { options: {
-      systemPrompt: { type: 'preset', preset: 'claude_code', append: 'CONTRACT_NATIVE_APPEND' }, settingSources: ['user', 'project', 'local'] } } } }, 60_000)
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: 'CONTRACT_NATIVE_APPEND' }, settingSources: ['user', 'project', 'local'], plugins } } } }, 60_000)
     const nativeId = String(native.result?.sessionId ?? '')
     if (nativeId) {
       await connection.rpc('session/set_mode', { sessionId: nativeId, modeId: 'default' })
       await connection.rpc('session/prompt', { sessionId: nativeId, prompt: [{ type: 'text', text: 'Answer OK.' }] }, 90_000)
       seen.nativeMentionsClaudeMd = conversation(provider.turns.slice(before)).some((turn) => turn.mentions(CLAUDE_MD_MARKER))
+      seen.pluginSkill.native = pluginSkillOffered(conversation(provider.turns.slice(before)))
     }
     seen.otherRequests.push(...provider.otherRequests)
   } finally {
@@ -448,6 +474,11 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
     const first = conversation(seen.folderTurns)[0]
     expect(first?.tools).toContain('Agent')
     expect(first?.mentions(SUBAGENT), 'the subagent passed in `agents` was not offered to the model').toBe(true)
+  })
+
+  it(entry('claude.session.options-plugins'), () => {
+    expect(seen.pluginSkill.isolated, 'the plugin skill did not reach an isolated (`settingSources: []`) session').toBe(true)
+    expect(seen.pluginSkill.native, 'the plugin skill did not reach a native session').toBe(true)
   })
 
   it(entry('claude.session.set-mode'), () => {

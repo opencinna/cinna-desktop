@@ -128,7 +128,8 @@ export interface HandoverDeps {
   originProfile?(brief: HandoverBrief): string | null
   /** Depth of the delegation that owns the origin's task — found by task id, or through the origin chat. */
   chainDepth?(userId: string, origin: { taskId: string | null; chatId: string | null }): number | null
-  applyResult?(scope: RunScope, row: HandoverRow, report: HandoverReport): void
+  /** Hand a report to the delegation bus; `false` when no delegation stands behind the row, which then takes the report itself. */
+  applyResult?(scope: RunScope, row: HandoverRow, report: HandoverReport): boolean | void
   checkDelegationGroup?(scope: RunScope, row: HandoverRow): void
   /**
    * Is this executor still waiting on delegations it made itself — from its task or its chat? Such a
@@ -865,8 +866,9 @@ export function createHandoverService(deps: HandoverDeps) {
   function applyReportEffects(scope: RunScope, row: HandoverRow, report: HandoverReport): void {
     if (deps.applyResult) {
       if (row.state === 'gated') deps.repo.update(row.userId, row.id, withdrawGate(row))
-      deps.applyResult(scope, row, report)
-      return
+      if (deps.applyResult(scope, row, report) !== false) return
+      // No delegation behind this brief: its own effects below, on the row as it now is.
+      row = deps.repo.getById(row.userId, row.id) ?? row
     }
     const userId = scope.profileUserId
     const taskId = row.taskId
@@ -1032,7 +1034,7 @@ export function createHandoverService(deps: HandoverDeps) {
     }
     /*
       **Nor while the executor waits on its own delegations.** An executor that delegated onward ended
-      its turn as `task_create` tells it to; the child's packet resumes it in its chat, and that
+      its turn as `tasks_create` tells it to; the child's packet resumes it in its chat, and that
       turn's outcome (`watchRelay`) settles the row. Settling here woke the origin with a "no report"
       packet before the child had answered — and a lost-run sweep would do the same to a relay that
       is simply between turns.
@@ -1815,7 +1817,9 @@ function productionDeps(): HandoverDeps {
     chainDepth: (userId, origin) => delegationRepo.parentOfOrigin(userId, origin)?.depth ?? null,
     applyResult: (scope, row, report) => {
       const delegation = delegationRepo.getById(row.userId, row.id)
-      if (delegation) delegationLifecycle.applyResult(scope, delegation, { ...report, artifacts: report.artifacts.map((path) => join(row.folderPath, path)) })
+      if (!delegation) return false
+      delegationLifecycle.applyResult(scope, delegation, { ...report, artifacts: report.artifacts.map((path) => join(row.folderPath, path)) })
+      return true
     },
     checkDelegationGroup: (scope, row) => {
       const delegation = delegationRepo.getById(row.userId, row.id)

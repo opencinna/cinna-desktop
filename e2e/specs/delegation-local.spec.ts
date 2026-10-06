@@ -1,11 +1,14 @@
 import { test, expect } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent, seedChatTask } from '../fixtures/seed'
 import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpHeld } from '../fixtures/scriptAcpEngine'
+import { splitTurnHeader } from '../fixtures/turnHeader'
+import { encodeTaskTarget } from '../../src/shared/taskTargets'
 
 function result(held: ScriptAcpHeld): any {
   const responses = held.params.results as { result: { isError?: boolean; content: { type: string; text?: string }[] } }[]
-  expect(responses[0].result.isError).not.toBe(true)
-  return JSON.parse(responses[0].result.content.find((item) => item.type === 'text')!.text!)
+  const text = responses[0].result.content.find((item) => item.type === 'text')?.text
+  expect(responses[0].result.isError, `tool answered: ${text}`).not.toBe(true)
+  return JSON.parse(text!)
 }
 
 test('a folder delegates to a kit through MCP, reports, and wakes its requester', async ({ cinna }) => {
@@ -30,7 +33,7 @@ test('a folder delegates to a kit through MCP, reports, and wakes its requester'
     const originTaskId = await seedChatTask(cinna, { chatId, title: 'Original task' })
     await cinna.page.evaluate((chatId) => window.api.run.start({ chatId, content: 'Delegate the implementation.' }), chatId)
     await expect.poll(() => fake.calls.length, { timeout: 60_000 }).toBe(1)
-    fake.calls[0].release({ tools: [{ name: 'task_create', args: { assignee: { kind: 'kit', agentId: executor.id }, id: 'kit-feature-work', title: 'Implement quartz feature', description: 'Implement quartz-9531.' } }] })
+    fake.calls[0].release({ tools: [{ name: 'tasks_create', args: { assignee: encodeTaskTarget({ kind: 'kit', agentId: executor.id }), id: 'kit-feature-work', title: 'Implement quartz feature', description: 'Implement quartz-9531.' } }] })
     await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(1)
     const created = result(fake.tools[0])
     expect(created).toMatchObject({ state: 'gated', depth: 1, originTaskId, targetAgentId: executor.id })
@@ -41,22 +44,22 @@ test('a folder delegates to a kit through MCP, reports, and wakes its requester'
     expect(gate.deliveryOwner).toBe('handover')
     expect(await cinna.page.evaluate((requestId) => window.api.inbox.answer({ requestId, answers: [['Run']] }), gate.requestId)).toMatchObject({ ok: true })
     await expect.poll(() => fake.calls.length, { timeout: 60_000 }).toBe(2)
-    expect(fake.calls[1].text).toContain('- handover depth: 1')
+    expect(splitTurnHeader(fake.calls[1].text).depth).toBe(1)
     expect(fake.calls[1].text).toContain('quartz-9531')
-    fake.calls[1].release({ tools: [{ name: 'handover_report', args: { status: 'blocked', summary: 'Choose a quartz format.', question: 'Should quartz be exported as JSON?' } }] })
+    fake.calls[1].release({ tools: [{ name: 'tasks_report', args: { status: 'blocked', summary: 'Choose a quartz format.', question: 'Should quartz be exported as JSON?' } }] })
     await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(2)
     expect(result(fake.tools[1])).toMatchObject({ delegationId: created.id, status: 'blocked' })
-    expect(fake.tools[1].params.offered).toContain('handover_report')
+    expect(fake.tools[1].params.offered).toContain('tasks_report')
     fake.tools[1].release({ text: 'Waiting for the requester.' })
     await expect.poll(() => fake.calls.length, { timeout: 60_000 }).toBe(3)
     expect(fake.calls[2].text).toContain('Should quartz be exported as JSON?')
-    fake.calls[2].release({ tools: [{ name: 'handover_reply', args: { id: created.id, message: 'Use JSON with the quartz-9531 key.' } }] })
+    fake.calls[2].release({ tools: [{ name: 'tasks_reply', args: { ref: created.taskId, message: 'Use JSON with the quartz-9531 key.' } }] })
     await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(3)
     expect(result(fake.tools[2])).toMatchObject({ delegationId: created.id, state: 'queued' })
     fake.tools[2].release({ text: 'The executor has the requested format.' })
     await expect.poll(() => fake.calls.length, { timeout: 60_000 }).toBe(4)
     expect(fake.calls[3].text).toContain('Use JSON with the quartz-9531 key.')
-    fake.calls[3].release({ tools: [{ name: 'handover_report', args: { status: 'done', summary: 'Quartz feature implemented.' } }] })
+    fake.calls[3].release({ tools: [{ name: 'tasks_report', args: { status: 'done', summary: 'Quartz feature implemented.' } }] })
     await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(4)
     expect(result(fake.tools[3])).toMatchObject({ delegationId: created.id, status: 'done' })
     fake.tools[3].release({ text: 'Finished.' })

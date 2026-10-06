@@ -91,6 +91,7 @@ import { parseTaskStatus, type TaskStatus } from '../../shared/taskStatus'
 import {
   parseTaskAssigneeKind,
   parseTaskPriority,
+  type TaskArtifact,
   type TaskAssignee,
   type TaskDeleteResult,
   type TaskDto,
@@ -1048,6 +1049,28 @@ export const taskSyncService = {
     if (!adapter.capabilities().comments) return false
     await adapter.addComment(userId, binding, { type: 'note', body: comment.remoteBody })
     return true
+  },
+
+  /**
+   * Whether files can be attached to this task (`tasks_comment.files`): it is
+   * bound to a service that stores uploaded files. A local home (a task file)
+   * and an unbound task have nowhere to put them.
+   */
+  canAttachFiles(userId: string, taskId: string): boolean {
+    const row = taskRepo.getById(userId, taskId)
+    const binding = row && !row.deletedAt ? bindingOf(row) : null
+    if (!binding) return false
+    const adapter = adapterFor(binding.adapter)
+    return !adapter.localHome && adapter.capabilities().writeArtifactKinds.includes('file')
+  },
+
+  /** Upload files to the task's service, one by one; throws on the first that fails. Ask {@link canAttachFiles} first. */
+  async attachFiles(userId: string, taskId: string, files: TaskArtifact[]): Promise<void> {
+    const row = taskRepo.getById(userId, taskId)
+    const binding = row && !row.deletedAt ? bindingOf(row) : null
+    if (!binding) throw new TaskError('invalid_input', 'This task has no service to attach files to.')
+    const adapter = adapterFor(binding.adapter)
+    for (const file of files) await adapter.putArtifact(userId, binding, file)
   },
 
   /**

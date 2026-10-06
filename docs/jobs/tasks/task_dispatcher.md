@@ -24,7 +24,7 @@ Cinna works a folder agent's queue of Ready tasks for it, one task at a time or 
 
 1. **Turn a queue on.** On a folder agent's page, the **Tasks** tab shows the **Task queue** section: one **Run mode** select (Manual, One at a time, Up to 2 … Up to 8), **Run next** beside the title, and one status line. Choosing One at a time starts the next Ready task as soon as the agent and its folder are free. Choosing Up to 3 keeps three running, and the status line reads **Running 2 of 3**, or names a lone run as **Running <task> · 1 of 3**.
 2. **Run one task by hand.** **Run next** starts the top of the queue. The Tasks view filtered to that agent (**Filters → Agent**) has the same control: **Run next**, with the run mode behind its chevron. There, **Up to N** is one menu item with **−** and **+** on its own line; the menu stays open while N changes, and N is saved once the clicks pause. On a Ready task's own page, **Start** runs that task through its agent's queue, so the same folder and approval rules apply.
-3. **The agent reports.** During the turn the agent moves its task — `task_update` with a status, a new status word in its task file, or `handover_report`. When the turn ends, Cinna reads the task again, sees it was reported on, and goes on to the next task.
+3. **The agent reports.** During the turn the agent calls `tasks_report` with `done`, `failed` or `blocked` — on its own task, or, on delegated work, through the bus — or moves the status word in its task file. The turn context told it `report required: yes`. When the turn ends, Cinna reads the task again, sees it was reported on, and goes on to the next task. An `in_progress` report is a progress note and leaves the task In progress, which is no report.
 4. **The agent does not report.** The turn ends with the task still In progress, or moved back to Ready or Backlog. Cinna moves it to Waiting with the note **Ended without reporting** and pauses the queue.
 5. **See the pause.** The **Tasks** tab gets a warning dot. The tab shows **Paused — <task> ended without reporting** with **Resume**. In the filtered Tasks view, the Run next half of the control becomes **Resume** in the warning tone. The Inbox shows **<agent>'s queue is paused**. The flagged task's page shows its note and **Paused <agent>'s queue · Resume**.
 6. **Resume.** Any of those Resume buttons clears the pause. The flagged task stays where it is until the user moves it — dragged on the board, or **Move to** Backlog, Ready, Done or Cancelled, as from any user column.
@@ -143,11 +143,11 @@ pass end -> state changed? -> taskDispatch:changed -> renderer invalidates queue
 ## Integration Points
 
 - [Folder Tasks](folder_tasks.md) — the files a bare agent's queue lives in, status words, `blocked_by`, and the two digests behind the gate.
-- [Agent Task Tools](agent_task_tools.md) — `task_update`, the way an agent reports.
+- [Agent Task Tools](agent_task_tools.md) — `tasks_report`, the way an agent reports; `tasks_update` cannot close a dispatched task.
 - [A Chat's First Ask Creates Its Task](chat_tasks.md) — the ordinary turn-end settlement that dispatched turns skip.
 - [Autonomous Tasks](autonomous_tasks.md) — the runner slots the dispatcher shares.
 - [The Inbox](inbox.md) — the approval and pause cards, and the stored-answer card.
 - [The Tasks View](../tasks_view/tasks_view.md) — the filtered view's Run next / Resume control.
-- [Handover Bus](handover_bus.md) and [File Handovers](file_handovers.md) — delegated work starts through its own approval, never through the queue. `handover_report` is a report.
+- [Handover Bus](handover_bus.md) and [File Handovers](file_handovers.md) — delegated work starts through its own approval, never through the queue. `tasks_report` on delegated work is a report.
 - [Jobs](../jobs/jobs.md) — a job-run task's attempt is mapped from the agent's report.
 - [Technical details](task_dispatcher_tech.md).

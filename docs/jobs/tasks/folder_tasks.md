@@ -11,7 +11,7 @@ A bare folder agent's work queue is a set of markdown files in its own folder, `
 - **Owned keys** — `cinna_task`, `id`, `title`, `status`, `priority`, `parent`, `blocked_by`, `origin`. The only keys Cinna reads as task fields, and the only ones it ever rewrites (`blocked_by` is read, never written).
 - **Custom fields** — every other top-level key. A one-line value (text, number, `true`/`false`, a flat `[a, b]` list) is an editable [custom field](../tasks_view/tasks_view.md#custom-fields). Anything spanning lines — a nested map, a block list, a block scalar, a `{…}` flow map — or a value over 2000 characters is **read-only**: shown as text, never written.
 - **Handoff section** — the [handoff note](tasks.md) lives at the end of the body between `<!-- cinna:handoff -->` and `<!-- /cinna:handoff -->`.
-- **Comment log** — the task's comments ([`task_comment`](agent_task_tools.md#comments)), appended between `<!-- cinna:log -->` and `<!-- /cinna:log -->` before the handoff section. The rest of the body, outside both sections, is the description.
+- **Comment log** — the task's comments ([`tasks_comment`](agent_task_tools.md#comments)), appended between `<!-- cinna:log -->` and `<!-- /cinna:log -->` before the handoff section. The rest of the body, outside both sections, is the description.
 - **Status word** — the word a file writes in `status:` (`doing`, `Up Next`, `wontfix`). It maps to a **category**, and the category to the canonical status Cinna reacts to. The task keeps both: `status` for every rule, `statusLabel` for what the user reads.
 - **`_board.yaml`** — an optional file beside the tasks naming the folder's own words, one flat `word: category` per line, in board order.
 - **Folder board** — the Tasks board filtered to one such agent (**Filters → Agent**): one column per status word, not the five categories.
@@ -97,7 +97,7 @@ A bare folder agent's work queue is a set of markdown files in its own folder, `
 
 ## Create and delete
 
-- **New task for an enabled bare agent writes its file**, whether a person made it or the agent's own [`task_create`](agent_task_tools.md) did. The row is created device-local first, the file is written, the row is bound to it, and the file is read back once so the task carries the folder's word, its path and the digest that makes it trusted. A file that cannot be written takes the row with it — the user sees the refusal, not a task that lives nowhere. A pull that lists the folder while the file is unbound does not index it as a second task.
+- **New task for an enabled bare agent writes its file**, whether a person made it or the agent's own [`tasks_create`](agent_task_tools.md) did. The row is created device-local first, the file is written, the row is bound to it, and the file is read back once so the task carries the folder's word, its path and the digest that makes it trusted. A file that cannot be written takes the row with it — the user sees the refusal, not a task that lives nowhere. A pull that lists the folder while the file is unbound does not index it as a second task.
 - **A subtask is written beside its parent** and must live in the parent's folder. A task file's subtasks are the files in the same folder whose `parent` is its id; one counts as completed when its word means `completed` (as in the cinna adapter, `error` and `cancelled` do not count).
 - **Every other assignee stays native**: a kit agent, a disabled agent, the default model, nobody.
 - **Delete task deletes the file.** The row is deleted first and stays deleted whatever the folder answers; the file is removed only if, read now, it still carries this task's id — one renamed over or rewritten as another task stays. One that cannot be removed is a warning, and the row's tombstone keeps the next pull from indexing it again. A push already in flight finishes before the delete.
@@ -133,7 +133,7 @@ User edit / run / drop -> taskService (row + remote_dirty) -> taskChanged hook
 
 task:create (bare agent) -> taskAuthoringService.createRouted -> localHomeFor -> createInHome
 task:delete -> taskSyncService.removeTask -> localHome.discard
-task_comment -> taskSyncService.copyComment -> appendLog (queued behind the push) -> localHome.appendLog
+tasks_comment -> taskSyncService.copyComment -> appendLog (queued behind the push) -> localHome.appendLog
 Board -> task:folder-board -> taskSyncService.folderBoard -> localHome.board
 ```
 

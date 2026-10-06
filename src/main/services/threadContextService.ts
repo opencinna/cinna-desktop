@@ -166,34 +166,55 @@ export function withCatchUp(packet: string | null, userContent: string): string 
   return packet ? `${packet}\n\n${userContent}` : userContent
 }
 
+/** First line of the turn header — the Cinna Task Protocol's `context_block`. */
+export const TURN_HEADER_TITLE = 'Cinna task context (not part of the conversation):'
+
 /**
- * The turn's own identifiers, as wire-only text in front of the message.
+ * The turn's task context, as wire-only data in front of the message — the
+ * `context_block` of the Cinna Task Protocol (`tasks.schema.json`).
  *
- * The agent already knows *who it is* from its system prompt; what it cannot
- * know from there is which conversation this turn belongs to, which task if
- * any, and how deep in a chain of handovers it is — all three change per turn,
- * and a chat id in a system prompt would start one pooled Codex process per
- * chat. So they travel the way the catch-up packet does: prepended to the wire
- * content, never persisted (the transcript row is written from the user's text
- * alone, in `messageRoutingService`).
+ * Facts only, never instructions: what they mean is taught by the
+ * `cinna-tasks` skill and the prompt's stub. The agent knows *who it is* from
+ * its system prompt; what it cannot know from there is which conversation this
+ * turn belongs to, which task if any, and how deep in a chain it is — all of
+ * which change per turn, and a chat id in a system prompt would start one
+ * pooled Codex process per chat. So they travel the way the catch-up packet
+ * does: prepended to the wire content, never persisted (the transcript row is
+ * written from the user's text alone, in `messageRoutingService`).
  *
- * Only agents that run *in a folder on this machine* are told: a handover
- * brief names a path, and a remote agent has no path to write one in.
+ * Only agents that run *in a folder on this machine* are told: a brief names a
+ * path, and a remote agent has no path to write one in.
+ *
+ * The counts line holds only its nonzero parts and is dropped when none is;
+ * the skill line only when the skill is available.
  */
 export function buildTurnHeader(input: {
+  agentId: string
   chatId: string
-  taskId?: string | null
+  /** The task this chat works on; `ref` is what the `tasks_*` tools accept. */
+  task?: { ref: string; title: string; reportRequired: boolean } | null
   depth?: number
-  openDelegations?: { total: number; running: number; waitingOnUser: number }
-  /** Ready tasks assigned to this agent; the line is left out at 0. */
+  openDelegations?: { total: number; waitingOnUser: number }
+  /** Ready tasks assigned to this agent. */
   readyTasks?: number
+  /** `cinna-tasks v1`, or null/absent when the skill is not available. */
+  tasksSkill?: string | null
 }): string {
+  const counts: string[] = []
+  if (input.depth) counts.push(`chain depth: ${input.depth}`)
+  if (input.openDelegations?.total) {
+    const waiting = input.openDelegations.waitingOnUser
+    counts.push(`open delegations: ${input.openDelegations.total}${waiting ? ` (${waiting} waiting on the user)` : ''}`)
+  }
+  if (input.readyTasks) counts.push(`ready tasks: ${input.readyTasks}`)
+  const task = input.task
   return [
-    'Turn context from Cinna Desktop, not part of the conversation:',
-    `- chat id: \`${input.chatId}\``,
-    `- task id: ${input.taskId ? `\`${input.taskId}\`` : 'none'}`,
-    `- handover depth: ${input.depth ?? 0}`,
-    ...(input.openDelegations?.total ? [`- open delegations: ${input.openDelegations.total} (${input.openDelegations.running} running, ${input.openDelegations.waitingOnUser} waiting on the user)`] : []),
-    ...(input.readyTasks ? [`- ready tasks: ${input.readyTasks}`] : [])
+    TURN_HEADER_TITLE,
+    `- here: Cinna Desktop, folder agent \`${input.agentId}\` · chat \`${input.chatId}\``,
+    task
+      ? `- current task: \`${task.ref}\` ${JSON.stringify(task.title)} (report required: ${task.reportRequired ? 'yes' : 'no'})`
+      : '- current task: none',
+    ...(counts.length ? [`- ${counts.join(' · ')}`] : []),
+    ...(input.tasksSkill ? [`- tasks skill: ${input.tasksSkill}`] : [])
   ].join('\n')
 }

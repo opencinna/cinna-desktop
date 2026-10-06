@@ -717,3 +717,56 @@ describe('buildEngineConfig', () => {
     expect(credentialEnvName('a-b')).not.toBe(credentialEnvName('a_b'))
   })
 })
+
+describe('the cinna-tasks skill', () => {
+  it('lists the bundled skills folder under skills.paths, and leaves the key out without one', () => {
+    // OpenCode 1.18.27 reads `skills: { paths }` and scans each folder for
+    // SKILL.md files. Mutation: drop the key and an OpenCode agent's prompt
+    // tells it to open a skill the engine never loaded.
+    const withSkill = buildEngineConfig(input({ skillPaths: ['/app/resources/cinna-agent-kit/skills'] }))
+    expect(withSkill.config.skills).toEqual({ paths: ['/app/resources/cinna-agent-kit/skills'] })
+    expect('skills' in buildEngineConfig(input()).config).toBe(false)
+    expect('skills' in buildEngineConfig(input({ skillPaths: [] })).config).toBe(false)
+  })
+
+  it('opens cinna-tasks without a permission ask, and still asks for any other skill', () => {
+    // The skill tool asks `skill` with the skill name as its pattern; the last
+    // matching rule wins, so the wildcard has to come first.
+    const skill = CONVERSATION_PERMISSIONS.skill as Record<string, string>
+    expect(Object.entries(skill)).toEqual([['*', 'ask'], ['cinna-tasks', 'allow']])
+  })
+})
+
+describe('reading the skill’s own files', () => {
+  /** The 1.18.27 matcher (`Wildcard.match`): `*` is `.*`, anchored, last matching rule wins. */
+  function decide(rules: Record<string, string>, asked: string): string | undefined {
+    let action: string | undefined
+    for (const [pattern, value] of Object.entries(rules)) {
+      const source = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
+      if (new RegExp(`^${source}$`, 's').test(asked)) action = value
+    }
+    return action
+  }
+
+  it('allows external reads under the skills folder only, so opening references/ asks nothing', () => {
+    // The engine asks `external_directory` with `<parent dir>/*`. Mutation:
+    // drop the path-scoped allow and every read of references/file-protocol.md
+    // stops the turn for a click; widen it and any outside folder is open.
+    const built = buildEngineConfig(input({ skillPaths: ['/app/kit/skills'] }))
+    const permission = [...Object.values(built.config.agent as Record<string, { permission: Record<string, unknown> }>)][0].permission
+    const external = permission.external_directory as Record<string, string>
+    expect(decide(external, '/app/kit/skills/cinna-tasks/*')).toBe('allow')
+    expect(decide(external, '/app/kit/skills/cinna-tasks/references/*')).toBe('allow')
+    expect(decide(external, '/app/kit/other/*')).toBe('ask')
+    expect(decide(external, '/Users/x/secrets/*')).toBe('ask')
+  })
+
+  it('keeps the plain profile without a skill, and lets a manifest override replace the entry', () => {
+    const plain = buildEngineConfig(input())
+    const permission = [...Object.values(plain.config.agent as Record<string, { permission: Record<string, unknown> }>)][0].permission
+    expect(permission.external_directory).toBe('ask')
+    // The shared constant itself is never mutated by a build with a skill.
+    buildEngineConfig(input({ skillPaths: ['/app/kit/skills'] }))
+    expect(CONVERSATION_PERMISSIONS.external_directory).toBe('ask')
+  })
+})

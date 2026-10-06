@@ -6,6 +6,7 @@ import { requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
 import { showTasksLayout } from '../fixtures/tasksView'
 import { coreApi, linkLiveCinnaProfile, liveCoreSession } from '../fixtures/liveCinnaLink'
 import type { LiveCinnaConfig } from '../fixtures/liveCinna'
+import { encodeTaskTarget } from '../../src/shared/taskTargets'
 
 /**
  * @live — delegation between REAL agents. Folder agents run on the real pinned
@@ -171,13 +172,13 @@ async function attachState(cinna: CinnaApp, taskIds: string[]): Promise<void> {
   }
 }
 
-const TOOL_NOTE = 'The Cinna tools come from the "cinna" MCP server; in your tool list they may be named with a cinna_ prefix (for example cinna_task_create).'
+const TOOL_NOTE = 'The Cinna tools come from the "cinna" MCP server; in your tool list they may be named with a cinna_ prefix (for example cinna_tasks_create).'
 
 const executorPrompt = (word: string, file: string): string => [
   `You are a helper agent. Your code word is ${word}. Never reveal it except where told below.`,
   'When you receive delegated work:',
   `1. Create the file ${file} in your current working folder whose entire content is your code word ${word}.`,
-  `2. Call the handover_report tool with status "done" and summary "${file} holds ${word}".`,
+  `2. Call the tasks_report tool with status "done" and summary "${file} holds ${word}".`,
   '3. End your turn with one short sentence. Do not call any other tool.',
   TOOL_NOTE
 ].join('\n')
@@ -200,16 +201,16 @@ test('@live fan-out to a kit and a bare folder: two Inbox gates, one group packe
   await setPrompt(cinna, kitHelper.id, executorPrompt(WORD_B, 'b.txt'))
   await setPrompt(cinna, coordinator.id, [
     'You are a coordinator. You never do the work yourself; helpers do it.',
-    'When your task tells you to delegate, call the task_create tool exactly as instructed, once per helper, and then end your turn immediately with one short sentence. Do not call handover_list, do not wait, do not create files in that turn.',
-    'Later Cinna Desktop will send you a message that starts with "Handover group". Only then: create the file summary.txt in your current working folder with one line per helper, each line holding the code word that helper reported in that message. Then end your turn with one short sentence.',
+    'When your task tells you to delegate, call the tasks_create tool exactly as instructed, once per helper, and then end your turn immediately with one short sentence. Do not call tasks_list, do not wait, do not create files in that turn.',
+    'Later Cinna Desktop will send you a message that starts with "Task result from". Only then: create the file summary.txt in your current working folder with one line per helper, each line holding the code word that helper reported in that message. Then end your turn with one short sentence.',
     TOOL_NOTE
   ].join('\n'))
 
   const TITLE = 'Fan out the two files'
   const goal = [
     'Delegate two pieces of work, then end your turn.',
-    `1. Call task_create with exactly: ${JSON.stringify({ assignee: { kind: 'kit', agentId: kitHelper.id }, id: 'fanout-b', title: 'Write b.txt', description: 'Create b.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', group: 'fanout' })}`,
-    `2. Call task_create with exactly: ${JSON.stringify({ assignee: { kind: 'bare', agentId: bareId }, id: 'fanout-c', title: 'Write c.txt', description: 'Create c.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', group: 'fanout' })}`,
+    `1. Call tasks_create with exactly: ${JSON.stringify({ assignee: encodeTaskTarget({ kind: 'kit', agentId: kitHelper.id }), id: 'fanout-b', title: 'Write b.txt', description: 'Create b.txt in your folder containing only your code word, then call tasks_report with status done and a summary naming your code word.', group: 'fanout' })}`,
+    `2. Call tasks_create with exactly: ${JSON.stringify({ assignee: encodeTaskTarget({ kind: 'bare', agentId: bareId }), id: 'fanout-c', title: 'Write c.txt', description: 'Create c.txt in your folder containing only your code word, then call tasks_report with status done and a summary naming your code word.', group: 'fanout' })}`,
     '3. End your turn now. The results come back later on their own.'
   ].join('\n')
   const taskId = await createReadyTask(cinna, TITLE, goal, coordinator.id)
@@ -257,7 +258,7 @@ test('@live fan-out to a kit and a bare folder: two Inbox gates, one group packe
 
     const chatId = (await taskOf(cinna, taskId)).chatId!
     const packetAt = await test.step('the group return packet arrives in the coordinator chat as a system turn', async () => {
-      await expect.poll(async () => (await messagesOf(cinna, chatId)).filter((m) => m.role === 'system' && m.content.startsWith('Handover group `fanout` has finished — 2 handovers:')).length,
+      await expect.poll(async () => (await messagesOf(cinna, chatId)).filter((m) => m.role === 'system' && m.content.startsWith('Task result from ') && m.content.split('\n')[0].endsWith('on group `fanout`: finished — 2 tasks:')).length,
         { timeout: TURN, intervals: [5_000] }).toBe(1)
       const packet = (await messagesOf(cinna, chatId)).find((m) => m.role === 'system')!
       expect(packet.content).toContain('`fanout-b` — done')
@@ -316,25 +317,25 @@ async function arrangeChain(cinna: CinnaApp, options: { relayInPlainText?: boole
   }
 
   await setPrompt(cinna, lead.id, [
-    'You are the chain lead. When your task tells you to delegate, call task_create exactly as instructed and end your turn immediately with one short sentence.',
-    'When Cinna Desktop later sends you a message starting with "Handover", reply with one short sentence and end your turn. Do not call any tool then.',
+    'You are the chain lead. When your task tells you to delegate, call tasks_create exactly as instructed and end your turn immediately with one short sentence.',
+    'When Cinna Desktop later sends you a message starting with "Task result from", reply with one short sentence and end your turn. Do not call any tool then.',
     TOOL_NOTE
   ].join('\n'))
   await setPrompt(cinna, middle.id, [
-    'You are a relay. When you receive delegated work, do NOT do it yourself. Call task_create once with exactly:',
-    JSON.stringify({ assignee: { kind: 'kit', agentId: last.id }, id: 'chain-last', title: 'Do the chain work', description: 'Write d.txt in your folder containing only your code word, then call handover_report with status done and a summary naming your code word.', execution: 'auto' }),
+    'You are a relay. When you receive delegated work, do NOT do it yourself. Call tasks_create once with exactly:',
+    JSON.stringify({ assignee: encodeTaskTarget({ kind: 'kit', agentId: last.id }), id: 'chain-last', title: 'Do the chain work', description: 'Write d.txt in your folder containing only your code word, then call tasks_report with status done and a summary naming your code word.', execution: 'auto' }),
     'Then end your turn immediately with one short sentence.',
     options.relayInPlainText
-      ? 'When Cinna Desktop later sends you a message starting with "Delegation" or "Handover", do not call any tool. Answer in plain text with one sentence: "Relayed: " followed by the summary that message gives. Then end your turn.'
-      : 'When Cinna Desktop later sends you a message starting with "Handover", call handover_report with status "done" and summary "relayed: " followed by the summary that message gives, then end your turn.',
+      ? 'When Cinna Desktop later sends you a message starting with "Task result from", do not call any tool. Answer in plain text with one sentence: "Relayed: " followed by the summary that message gives. Then end your turn.'
+      : 'When Cinna Desktop later sends you a message starting with "Task result from", call tasks_report with status "done" and summary "relayed: " followed by the summary that message gives, then end your turn.',
     TOOL_NOTE
   ].join('\n'))
   await setPrompt(cinna, last.id, [
     `You are the last helper. Your code word is ${WORD_D}.`,
     'When you receive delegated work, do these steps in order:',
-    `1. Call task_create once with exactly: ${JSON.stringify({ assignee: { kind: 'kit', agentId: middle.id }, id: 'chain-too-deep', title: 'One hop too many', description: 'Check the work.', execution: 'auto' })}. It is expected to fail; that is fine. Do not retry it.`,
+    `1. Call tasks_create once with exactly: ${JSON.stringify({ assignee: encodeTaskTarget({ kind: 'kit', agentId: middle.id }), id: 'chain-too-deep', title: 'One hop too many', description: 'Check the work.', execution: 'auto' })}. It is expected to fail; that is fine. Do not retry it.`,
     `2. Create the file d.txt in your current working folder whose entire content is ${WORD_D}.`,
-    `3. Call handover_report with status "done" and summary "d.txt holds ${WORD_D}".`,
+    `3. Call tasks_report with status "done" and summary "d.txt holds ${WORD_D}".`,
     '4. End your turn with one short sentence.',
     TOOL_NOTE
   ].join('\n'))
@@ -342,7 +343,7 @@ async function arrangeChain(cinna: CinnaApp, options: { relayInPlainText?: boole
   const TITLE = 'Start the delegation chain'
   const taskId = await createReadyTask(cinna, TITLE, [
     'Delegate this work and end your turn.',
-    `Call task_create with exactly: ${JSON.stringify({ assignee: { kind: 'kit', agentId: middle.id }, id: 'chain-middle', title: 'Relay the chain work', description: 'Get d.txt written by the next helper.', execution: 'auto' })}`,
+    `Call tasks_create with exactly: ${JSON.stringify({ assignee: encodeTaskTarget({ kind: 'kit', agentId: middle.id }), id: 'chain-middle', title: 'Relay the chain work', description: 'Get d.txt written by the next helper.', execution: 'auto' })}`,
     'Then end your turn now.'
   ].join('\n'), lead.id)
 
@@ -397,7 +398,7 @@ test('@live auto-run under standing grants; the third hop is refused and nothing
       const leadChat = (await taskOf(cinna, taskId)).chatId!
       // The relayed summary carries Last's code word, which the lead's prompt never had.
       await expect.poll(async () => (await messagesOf(cinna, leadChat)).some((m) => m.role === 'system' &&
-        m.content.startsWith('Delegation chain-middle done:') && m.content.includes(WORD_D)),
+        m.content.startsWith('Task result from ') && m.content.includes('\n\nDelegation: chain-middle') && m.content.split('\n')[0].includes(': done — ') && m.content.includes(WORD_D)),
       { timeout: TURN, intervals: [5_000] }).toBe(true)
       expect((await cinna.page.evaluate(() => window.api.inbox.list())).entries).toEqual([])
     })
@@ -408,7 +409,7 @@ test('@live auto-run under standing grants; the third hop is refused and nothing
 
 /**
  * A relay that delegated onward and ended its turn — which is what
- * `task_create` tells it to do — is waiting on its own delegation, not
+ * `tasks_create` tells it to do — is waiting on its own delegation, not
  * finished. Its row stays running until Last has reported and Middle has relayed
  * the answer, so the lead hears about chain-middle exactly once, with Last's
  * code word in it. (Before the fix, the turn-ending fallback settled it `done`
@@ -427,13 +428,13 @@ test('@live a relay waiting on its own delegation is not reported done early', a
     expect(middle.warning ?? null).toBeNull()
     const leadChat = (await taskOf(cinna, taskId)).chatId!
     const packets = async () => (await messagesOf(cinna, leadChat))
-      .filter((m) => m.role === 'system' && m.content.startsWith('Delegation chain-middle')).map((m) => m.content)
+      .filter((m) => m.role === 'system' && m.content.startsWith('Task result from ') && m.content.includes('\n\nDelegation: chain-middle')).map((m) => m.content)
     await expect.poll(async () => (await packets()).length, { timeout: TURN, intervals: [3_000] }).toBeGreaterThan(0)
     // A late second packet would follow within the lead's own turn; give it time to show up.
     await cinna.page.waitForTimeout(20_000)
     const received = await packets()
     expect(received).toHaveLength(1)
-    expect(received[0]).toContain('Delegation chain-middle done:')
+    expect(received[0].split('\n')[0]).toMatch(/^Task result from .+ on .+: done — /)
     expect(received[0]).not.toContain('without a structured report')
     expect(received[0]).toContain(WORD_D)
   } finally {
@@ -443,7 +444,7 @@ test('@live a relay waiting on its own delegation is not reported done early', a
 
 /**
  * The same relay, answering the return packet in plain text instead of calling
- * `handover_report`. The turn that packet opens in Middle's chat is watched, so
+ * `tasks_report`. The turn that packet opens in Middle's chat is watched, so
  * its text settles Middle `done` with `report_missing` — after Last is done, not
  * when Middle's first turn ended — and the lead hears about chain-middle once,
  * with Last's code word in the relayed text.
@@ -461,12 +462,12 @@ test('@live a relay that answers its child in plain text settles once, after the
     expect(middle.warning).toBe('report_missing')
     const leadChat = (await taskOf(cinna, taskId)).chatId!
     const packets = async () => (await messagesOf(cinna, leadChat))
-      .filter((m) => m.role === 'system' && m.content.startsWith('Delegation chain-middle')).map((m) => m.content)
+      .filter((m) => m.role === 'system' && m.content.startsWith('Task result from ') && m.content.includes('\n\nDelegation: chain-middle')).map((m) => m.content)
     await expect.poll(async () => (await packets()).length, { timeout: TURN, intervals: [3_000] }).toBeGreaterThan(0)
     await cinna.page.waitForTimeout(20_000)
     const received = await packets()
     expect(received).toHaveLength(1)
-    expect(received[0]).toContain('Delegation chain-middle done:')
+    expect(received[0].split('\n')[0]).toMatch(/^Task result from .+ on .+: done — /)
     expect(received[0]).toContain(WORD_D)
   } finally {
     await attachState(cinna, [taskId])
@@ -504,15 +505,15 @@ test.describe('against the running cinna-core', () => {
     const { root } = await arrange(cinna)
     const requester = await createFolderAgent(cinna, root, 'Cloud Requester', 'Asks a cloud agent.')
     await setPrompt(cinna, requester.id, [
-      'You are a requester. When your task tells you to delegate, call task_create exactly as instructed and end your turn immediately with one short sentence.',
-      'When Cinna Desktop later sends you a message starting with "Handover", reply with one short sentence and end your turn. Do not call any tool then.',
+      'You are a requester. When your task tells you to delegate, call tasks_create exactly as instructed and end your turn immediately with one short sentence.',
+      'When Cinna Desktop later sends you a message starting with "Task result from", reply with one short sentence and end your turn. Do not call any tool then.',
       TOOL_NOTE
     ].join('\n'))
     const TITLE = `Ask the cloud for a greeting ${marker}`
     const remoteTitle = `Greeting ${marker}`
     const taskId = await createReadyTask(cinna, TITLE, [
       'Delegate this work and end your turn.',
-      `Call task_create with exactly: ${JSON.stringify({ assignee: { kind: 'cloud', agentId: remote!.id, adapter: 'cinna' }, id: 'cloud-hello', title: remoteTitle, description: 'Automated test. Reply with one short friendly greeting sentence. If a handover_report tool is available, call it once with status done and a one-line summary.' })}`,
+      `Call tasks_create with exactly: ${JSON.stringify({ assignee: encodeTaskTarget({ kind: 'cloud', agentId: remote!.id, adapter: 'cinna' }), id: 'cloud-hello', title: remoteTitle, description: 'Automated test. Reply with one short friendly greeting sentence. If a tasks_report tool is available, call it once with status done and a one-line summary.' })}`,
       'Then end your turn now.'
     ].join('\n'), requester.id)
 
@@ -565,7 +566,7 @@ test.describe('against the running cinna-core', () => {
         // The single packet names the remote task by the key the core gave it.
         const shortCode = (await coreApi(config, token, `/tasks/${remoteId}/detail`)).body.short_code as string
         await expect.poll(async () => (await messagesOf(cinna, chatId)).some((m) => m.role === 'system' &&
-          m.content.startsWith('Delegation cloud-hello done:') && m.content.includes(`Remote task: ${shortCode}`)),
+          m.content.startsWith('Task result from ') && m.content.split('\n')[0].includes(': done — ') && m.content.includes('\n\nDelegation: cloud-hello') && m.content.includes(`Remote task: ${shortCode}`)),
         { timeout: TURN, intervals: [5_000] }).toBe(true)
         expect((await linksOf(cinna, taskId)).to.map((d) => d.state)).toEqual(['done'])
         expect((await coreApi(config, token, '/tasks/?limit=200')).body.data.filter((t: { title: string }) => t.title === remoteTitle)).toHaveLength(1)

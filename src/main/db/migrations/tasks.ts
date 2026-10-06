@@ -135,7 +135,7 @@ export function migrateTasks(sqlite: Database.Database): void {
   }
   if (!hasColumn(sqlite, 'tasks', 'trusted_digest')) sqlite.exec('ALTER TABLE tasks ADD COLUMN trusted_digest TEXT')
   if (!hasColumn(sqlite, 'tasks', 'local_file')) sqlite.exec('ALTER TABLE tasks ADD COLUMN local_file TEXT')
-  // Agent task tools (`task_create`): which agent created the task, from which
+  // Agent task tools (`tasks_create`): which agent created the task, from which
   // chat, and how deep in a chain of tool-created work it sits. All three are
   // device-local provenance — an agent id and a chat id mean nothing on another
   // device — so none of them travels in device sync. Null / 0 for every task a
@@ -147,7 +147,7 @@ export function migrateTasks(sqlite: Database.Database): void {
   }
   sqlite.exec('CREATE INDEX IF NOT EXISTS idx_tasks_created_by_chat ON tasks(user_id, created_by_chat_id)')
 
-  // Comments on a task (`task_comment`), written by an agent or — later — by a
+  // Comments on a task (`tasks_comment`), written by an agent or — later — by a
   // person. Device-local, like the task rows a folder keeps: nothing sends them
   // to another device. `remote_status` is the best-effort copy to a bound
   // service's comment stream (`pending`, `sent`, `failed`) or the folder file's

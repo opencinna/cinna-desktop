@@ -1365,7 +1365,7 @@ const api = {
      */
     folderBoard: (agentId: string): Promise<import('../shared/folderTasks').TaskBoardColumn[] | null> =>
       ipcRenderer.invoke('task:folder-board', agentId),
-    /** A task's comments, oldest first (read-only; agents write them with `task_comment`). */
+    /** A task's comments, oldest first (read-only; agents write them with `tasks_comment`). */
     comments: (taskId: string): Promise<import('../shared/tasks').TaskCommentDto[]> =>
       ipcRenderer.invoke('task:comments', taskId),
     /** Re-run from the last message: reopen the task, and the job run it belongs to. */

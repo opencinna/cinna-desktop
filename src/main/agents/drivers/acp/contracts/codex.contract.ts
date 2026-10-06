@@ -124,8 +124,15 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     id: 'codex.sandbox.write-outside-workspace', area: 'permissions & questions', surface: 'ACP method', name: 'sibling write / session/request_permission',
     expectation: 'A sibling-directory exec_command outside the workspace and system temp roots is denied without an ACP ask in read-only and agent modes. Explicit require_escalated in read-only raises an execute permission and allow_once writes; the isolated fake-provider automatic reviewer refuses invalid reviewer output in agent mode.',
     owners: ['src/main/agents/drivers/acp/codexLauncher.ts#modeId'],
-    feature: 'The file-handover requester cannot assume it can write another adopted folder unattended; task_create with an assignee supplies the main-owned alternative.',
+    feature: 'The file-handover requester cannot assume it can write another adopted folder unattended; tasks_create with an assignee supplies the main-owned alternative.',
     flow: { steps: ['none'], note: 'the whole flow does not write another adopted folder' }
+  },
+  {
+    id: 'codex.sandbox.read-outside-workspace', area: 'permissions & questions', surface: 'ACP method', name: 'sibling read / session/request_permission',
+    expectation: 'A shell read (`cat`) of a file outside the workspace and outside the system temp roots runs without an ACP ask and returns the file’s content, in read-only and in agent mode alike: the sandbox confines writes, not reads. Measured 6 Oct 2026 on the pinned CLI with a fake provider.',
+    owners: ['src/main/agents/drivers/acp/codexLauncher.ts#modeId'],
+    feature: 'A Codex folder agent is told to read the `cinna-tasks` SKILL.md under the app’s resources before its first tasks_* call; if that read is refused or waits on an approval, it works the task verbs without the skill.',
+    flow: { steps: ['none'], note: 'no step reads a file outside the working folder' }
   },
   {
     id: 'codex.mcp.folder-session-load', area: 'tools & MCP', surface: 'ACP field', name: 'native folder session/new and session/load mcpServers',

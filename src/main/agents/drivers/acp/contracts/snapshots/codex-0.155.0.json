@@ -503,6 +503,22 @@
       ],
       "second": true
     },
+    "reads": [
+      {
+        "kinds": [],
+        "mode": "read-only",
+        "permissionCount": 0,
+        "promptError": null,
+        "read": true
+      },
+      {
+        "kinds": [],
+        "mode": "agent",
+        "permissionCount": 0,
+        "promptError": null,
+        "read": true
+      }
+    ],
     "writes": [
       {
         "accepted": true,

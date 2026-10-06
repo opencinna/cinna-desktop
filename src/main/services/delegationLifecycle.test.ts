@@ -7,13 +7,14 @@ vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => 'user' }))
 vi.mock('../db/client', () => ({ getDb: () => ({}) }))
 vi.mock('../db/handovers', () => ({ handoverRepo: {} }))
 vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: {} }))
+vi.mock('../db/tasks', () => ({ taskRepo: { getById: (_user: string, id: string) => (id === 'task-named' ? { assigneeName: 'Researcher' } : undefined) } }))
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ warn() {}, debug() {}, info() {} }) }))
 vi.mock('./handoverWake', () => ({ createHandoverWake: () => ({}) }))
 vi.mock('./chatRouting', () => ({ chatAnswersToAgent: () => null }))
 vi.mock('./inboxService', () => ({ inboxService: {} }))
 vi.mock('./runExecutionService', () => ({ runExecutionService: {} }))
 vi.mock('./taskService', () => ({ taskService: {} }))
-const { createDelegationLifecycle } = await import('./delegationLifecycle')
+const { createDelegationLifecycle, returnPacket } = await import('./delegationLifecycle')
 const scope = { profileUserId: 'user', settingsUserId: 'settings' }
 let rows: Map<string, DelegationRow>
 let deps: DelegationLifecycleDeps
@@ -322,5 +323,24 @@ describe('a relay waiting on its own delegations', () => {
     rows.get('last')!.state = 'done'
     service.sweepLostRuns(scope)
     expect(rows.get('middle')).toMatchObject({ state: 'failed', warning: 'run_lost' })
+  })
+})
+
+describe('the local and cloud return packet', () => {
+  const packetOf = (overrides: Partial<DelegationRow>) => returnPacket({
+    id: 'd-1', userId: 'user', requesterKey: 'chain-middle', targetAgentId: 'agent-9', taskId: 'task-named',
+    channel: 'local', state: 'done', resultStatus: 'done', summary: 'Wrote the notes', artifacts: [], question: null,
+    resultBody: null, remoteUrl: null, remoteTaskKey: null, warning: null, ...overrides
+  } as DelegationRow)
+
+  it('starts with the protocol’s first words, naming the executor and the task', () => {
+    const packet = packetOf({})
+    expect(packet.split('\n')[0]).toBe('Task result from Researcher on task-named: done — Wrote the notes')
+    expect(packet).toContain('Delegation: chain-middle')
+  })
+
+  it('falls back to the target agent id when the task names nobody', () => {
+    expect(packetOf({ taskId: 'task-7', resultStatus: 'failed', summary: 'No' }).split('\n')[0])
+      .toBe('Task result from agent-9 on task-7: failed — No')
   })
 })

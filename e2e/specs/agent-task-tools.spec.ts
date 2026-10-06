@@ -7,8 +7,8 @@ import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpHeld } from '../fixtures/s
 import { LOG_CLOSE, LOG_OPEN } from '../../src/shared/folderTasks'
 
 /**
- * The agent task tools (`task_create`, `tasks_list`, `task_update`,
- * `task_comment`) driven by a bare folder agent in its own chat, through the
+ * The agent task tools (`tasks_create`, `tasks_list`, `tasks_update`,
+ * `tasks_comment`) driven by a bare folder agent in its own chat, through the
  * session's `cinna` loopback MCP server — the agent's own queue, no assignee.
  *
  * Real: the loopback MCP server and its session token, `taskToolService`,
@@ -18,7 +18,7 @@ import { LOG_CLOSE, LOG_OPEN } from '../../src/shared/folderTasks'
  * No model, nothing billed.
  *
  * Not proved: that a model would pick these tools, delegation through
- * `task_create` (the `delegation-*` specs), status reports on the chat's own
+ * `tasks_create` (the `delegation-*` specs), `tasks_report` on the chat's own
  * task, the 20-per-chat cap and the depth cap (unit-tested in
  * `taskToolService.test.ts`).
  */
@@ -95,17 +95,17 @@ test('a bare agent keeps its own queue through the task tools', async ({ cinna }
     let taskId = ''
     let taskFile = ''
 
-    await test.step('task_create without an assignee writes a ready task file in the agent’s folder', async () => {
+    await test.step('tasks_create without an assignee writes a ready task file in the agent’s folder', async () => {
       await cinna.page.evaluate((id) => window.api.run.start({ chatId: id, content: 'Plan the granite work.' }), chatId)
       await expect.poll(() => fake.calls.length, { timeout: 60_000 }).toBe(1)
       // Nothing is ready for this agent yet, so the header has no such line.
-      expect(fake.calls[0].text).not.toContain('- ready tasks:')
-      fake.calls[0].release({ tools: [{ name: 'task_create', args: { title: TITLE, description: DESCRIPTION, status: 'ready' } }] })
+      expect(fake.calls[0].text).not.toContain('ready tasks:')
+      fake.calls[0].release({ tools: [{ name: 'tasks_create', args: { title: TITLE, description: DESCRIPTION, category: 'ready' } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(1)
       const created = ok(results(fake.tools[0])[0])
       expect(created).toMatchObject({ title: TITLE, status: 'open', category: 'ready', relations: ['assigned', 'created'], assignee: { agentId } })
       expect(created.file).toMatch(/^\.cinna\/tasks\/.+\.md$/)
-      taskId = created.id
+      taskId = created.ref
       taskFile = join(folder, created.file)
       fake.tools[0].release({ text: 'Queued the granite index.' })
 
@@ -129,34 +129,34 @@ test('a bare agent keeps its own queue through the task tools', async ({ cinna }
       await cinna.page.evaluate((id) => window.api.run.start({ chatId: id, content: 'Check your queue and finish the index.' }), chatId)
       await expect.poll(() => fake.calls.length, { timeout: 60_000 }).toBe(2)
       expect(fake.calls[1].sessionId).toBe(fake.calls[0].sessionId)
-      expect(fake.calls[1].text).toContain('- ready tasks: 1\n')
+      expect(fake.calls[1].text).toMatch(/^- (?:.* · )?ready tasks: 1$/m)
     })
 
     await test.step('tasks_list answers the task as assigned and created', async () => {
       fake.calls[1].release({ tools: [{ name: 'tasks_list', args: {} }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(2)
       const listed = ok(results(fake.tools[1])[0]) as { tasks: any[] }
-      const mine = listed.tasks.filter((task) => task.id === taskId)
+      const mine = listed.tasks.filter((task) => task.ref === taskId)
       expect(mine, JSON.stringify(listed)).toHaveLength(1)
       expect(mine[0]).toMatchObject({ title: TITLE, category: 'ready', statusLabel: 'open', relations: ['assigned', 'created'], file: `.cinna/tasks/${taskFile.split('/').pop()}` })
       // Another agent's queue is never listed.
-      expect(listed.tasks.map((task) => task.id)).not.toContain(otherTask.id)
+      expect(listed.tasks.map((task) => task.ref)).not.toContain(otherTask.id)
     })
 
-    await test.step('task_update to done rewrites the file’s status word and moves the task to Done', async () => {
-      fake.tools[1].release({ tools: [{ name: 'task_update', args: { id: taskId, status: 'done' } }] })
+    await test.step('tasks_update to done rewrites the file’s status word and moves the task to Done', async () => {
+      fake.tools[1].release({ tools: [{ name: 'tasks_update', args: { ref: taskId, category: 'done' } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(3)
-      expect(ok(results(fake.tools[2])[0])).toMatchObject({ id: taskId, status: 'completed', category: 'closed', statusLabel: 'done' })
+      expect(ok(results(fake.tools[2])[0])).toMatchObject({ ref: taskId, status: 'completed', category: 'done', statusLabel: 'done' })
       expect(readFileSync(taskFile, 'utf8')).toMatch(/^status: done$/m)
       await expect(cinna.page.getByRole('region', { name: 'Done' }).getByRole('button', { name: `${TITLE} — done` })).toBeVisible({ timeout: 15_000 })
       await expect(cinna.page.getByRole('region', { name: 'Ready' }).getByRole('button')).toHaveCount(0)
     })
 
-    await test.step('task_comment shows under Comments and lands in the file’s log section', async () => {
-      fake.tools[2].release({ tools: [{ name: 'task_comment', args: { id: taskId, body: COMMENT } }] })
+    await test.step('tasks_comment shows under Comments and lands in the file’s log section', async () => {
+      fake.tools[2].release({ tools: [{ name: 'tasks_comment', args: { ref: taskId, body: COMMENT } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(4)
       const commented = ok(results(fake.tools[3])[0])
-      expect(commented).toMatchObject({ taskId, commentId: expect.any(String) })
+      expect(commented).toMatchObject({ ref: taskId, commentId: expect.any(String) })
       expect(commented.warning).toBeUndefined()
 
       const text = readFileSync(taskFile, 'utf8')
@@ -178,9 +178,9 @@ test('a bare agent keeps its own queue through the task tools', async ({ cinna }
       await expect(comments.getByRole('listitem').getByRole('button', { name: BARE_HEADING, exact: true })).toBeVisible()
     })
 
-    await test.step('task_update on another agent’s task is refused to the agent', async () => {
+    await test.step('tasks_update on another agent’s task is refused to the agent', async () => {
       const before = await cinna.page.evaluate((id) => window.api.tasks.get(id), otherTask.id)
-      fake.tools[3].release({ tools: [{ name: 'task_update', args: { id: otherTask.id, status: 'done' } }] })
+      fake.tools[3].release({ tools: [{ name: 'tasks_update', args: { ref: otherTask.id, category: 'done' } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(5)
       const refused = results(fake.tools[4])[0]
       expect(refused.isError, JSON.stringify(refused)).toBe(true)

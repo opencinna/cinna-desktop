@@ -29,6 +29,7 @@ import {
   resolveDesktopPromptContext
 } from '../services/localAgents/promptAssembly'
 import { createLogger } from '../logger/logger'
+import { tasksSkillInfo } from '../services/tasksSkillService'
 import type { EngineAgentInput, EngineConfigInput, EngineProviderInput } from './configGenerator'
 
 const logger = createLogger('engine-config-source')
@@ -217,7 +218,7 @@ async function listLocalModels(): Promise<CachedModel[]> {
  * cannot run instead of the agent merely being absent from the engine.
  */
 export function collectEngineAgents(userId: string): EngineAgentInput[] {
-  const context = resolveDesktopPromptContext()
+  const context = resolveDesktopPromptContext('opencode')
   const providers = providerService.listMerged()
   const out: EngineAgentInput[] = []
 
@@ -317,5 +318,15 @@ export async function collectEngineConfigInput(
   const scope: ModelRefreshScope =
     options.refreshModels === false && cloudCatalogueLoaded ? 'local' : 'all'
   await refreshModelCache(scope)
-  return { providers: collectEngineProviders(), agents: collectEngineAgents(userId) }
+  return { providers: collectEngineProviders(), agents: collectEngineAgents(userId), skillPaths: collectSkillPaths() }
+}
+
+/** The bundled `skills/` folder when it holds the `cinna-tasks` skill; none otherwise. */
+function collectSkillPaths(): string[] {
+  try {
+    const info = tasksSkillInfo()
+    return info.available ? [info.skillsRoot] : []
+  } catch {
+    return []
+  }
 }

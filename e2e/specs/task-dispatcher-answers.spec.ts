@@ -118,7 +118,7 @@ test('a Ready task that already has a conversation continues in it when Run next
     expect(await cinna.page.evaluate((id) => window.api.taskDispatch.runNext(id), agentId)).toMatchObject({ ok: true, taskId: task })
     const i = await promptFor(fake, AGAIN)
     const toolsBefore = fake.tools.length
-    fake.calls[i].release({ tools: [{ name: 'task_update', args: { id: task, status: 'failed' } }] })
+    fake.calls[i].release({ tools: [{ name: 'tasks_report', args: { ref: task, status: 'failed', summary: 'The first look failed.' } }] })
     await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(toolsBefore + 1)
     okResult(fake.tools[toolsBefore])
     fake.tools[toolsBefore].release({ text: 'The first look failed.' })
@@ -170,7 +170,7 @@ test('an Inbox answer to a dispatched turn’s question waits while another disp
       const i = await promptFor(fake, ASKED)
       // The agent reports this first attempt failed (a report: no pause), and a person puts it back.
       const toolsBefore = fake.tools.length
-      fake.calls[i].release({ tools: [{ name: 'task_update', args: { id: asked, status: 'failed' } }] })
+      fake.calls[i].release({ tools: [{ name: 'tasks_report', args: { ref: asked, status: 'failed', summary: 'The first look failed.' } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(toolsBefore + 1)
       okResult(fake.tools[toolsBefore])
       fake.tools[toolsBefore].release({ text: 'The first look failed.' })

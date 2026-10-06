@@ -68,7 +68,7 @@ export const taskAuthoringService = {
     scope: TaskAuthoringScope,
     input: TaskCreateInput,
     /**
-     * What an agent's `task_create` adds: the parent in its own queue, and
+     * What an agent's `tasks_create` adds: the parent in its own queue, and
      * the provenance (agent, chat, chain depth). Absent for a person's task.
      */
     extra: Pick<Parameters<typeof taskService.create>[1], 'parentTaskId' | 'createdByAgentId' | 'createdByChatId' | 'chainDepth'> = {}

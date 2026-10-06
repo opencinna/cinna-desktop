@@ -17,7 +17,7 @@ import {
  * Real: `taskDispatchService` (the report rule's Stop and error arms, boot
  * recovery, the gate's Skip and its reopening by Run next, the `blocked_by`
  * refusal), `taskExecutionService.start`, the folder adapter, the session's
- * `cinna` MCP `task_update`, the Tasks tab, the Tasks view's Run next, the
+ * `cinna` MCP `tasks_report`, the Tasks tab, the Tasks view's Run next, the
  * task page and the Inbox cards. Scripted: what each ACP turn does
  * (`scriptAcpAgent.mjs`). The error ending is the agent process dying
  * mid-turn (SIGKILL), the one way a scripted turn fails without a fixture

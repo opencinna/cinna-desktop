@@ -14,7 +14,7 @@ import {
  *
  * Real: `taskDispatchService` (flights, the per-agent and per-folder rules,
  * `withRuntimeAgent`'s slots), `taskExecutionService.start`, native tasks and
- * the folder adapter, the session's `cinna` MCP `task_update`, and the agent
+ * the folder adapter, the session's `cinna` MCP `tasks_report`, and the agent
  * page's Tasks tab (the single Run mode select, the status line). Scripted:
  * what each ACP turn does (`scriptAcpAgent.mjs`). No model, nothing billed.
  *
@@ -44,7 +44,7 @@ const KIT = 'Quarry Clerk'
 const KIT_FIRST = 'Weigh the quarry-5120 slabs'
 const KIT_SECOND = 'Stack the quarry-5121 slabs'
 
-test('a kit agent’s queue runs its native tasks one at a time, each reported with task_update', async ({ cinna }) => {
+test('a kit agent’s queue runs its native tasks one at a time, each reported with tasks_report', async ({ cinna }) => {
   test.setTimeout(240_000)
   const fake = await scriptAcpEngine()
   try {

@@ -473,7 +473,7 @@ export interface TaskListQuery {
 
 /**
  * A comment on a task, as the task page lists it (`task:comments`). Written by
- * an agent's `task_comment` (a person's own comments come later). The author's
+ * an agent's `tasks_comment` (a person's own comments come later). The author's
  * name is resolved in main: the agent's current name, or null for a person.
  */
 export interface TaskCommentDto {
@@ -492,7 +492,7 @@ export interface TaskCommentDto {
   remoteStatus: 'pending' | 'sent' | 'failed' | null
 }
 
-/** The longest comment `task_comment` accepts. */
+/** The longest comment `tasks_comment` accepts. */
 export const TASK_COMMENT_MAX = 8000
 
 export interface TaskListSnapshot {

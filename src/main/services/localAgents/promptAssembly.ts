@@ -1,5 +1,5 @@
 import { isCoordinatorHandover } from '../../../shared/kit/handovers'
-import { handoverRequesterSection } from '../../../shared/handovers'
+import { cinnaTasksSection, type CinnaTasksSkillDelivery } from '../../../shared/handovers'
 /**
  * The system prompt a folder agent runs on.
  *
@@ -37,6 +37,7 @@ import {
   type BareInstructionsFile
 } from '../../../shared/localAgents'
 import { resolveBareInstructionsFile } from './externalScan'
+import { tasksSkillDeliveryFor, type TasksSkillEngine } from '../tasksSkillService'
 
 /** Longest any one included document may be. A guard, not a design limit. */
 const MAX_SECTION_BYTES = 64 * 1024
@@ -81,6 +82,12 @@ export interface DesktopPromptContext {
    * and the handover protocol are left out rather than written blank.
    */
   agentId?: string
+  /**
+   * How this engine's agent opens the `cinna-tasks` skill, or null/absent
+   * when there is none to open — the Cinna tasks section then leaves its
+   * delivery line out. Stable per engine and per build, so it may live here.
+   */
+  tasksSkill?: CinnaTasksSkillDelivery | null
 }
 
 /** True when `path` is a regular file. */
@@ -212,15 +219,15 @@ function agentIdBullets(context: DesktopPromptContext): string[] {
 }
 
 /**
- * The handover protocol as its own section, or nothing.
+ * The Cinna tasks stub as its own section, or nothing.
  *
- * Both folder kinds get it, on every engine: a kit agent is not a handover
- * *target* (§8) but it is very much a requester (§3.8). It needs the agent id
- * to state `origin.agent`, so a context without one gets no section — the same
- * rule as {@link agentIdBullets}, for the same reason.
+ * Both folder kinds get it, on every engine: a kit agent is a requester too
+ * (§3.8). It names the agent's id for `origin.agent`, so a context without one
+ * gets no section — the same rule as {@link agentIdBullets}. The protocol
+ * itself is in the `cinna-tasks` skill; the section says how to open it.
  */
 function handoverSections(context: DesktopPromptContext): string[] {
-  return context.agentId ? [handoverRequesterSection(context.agentId)] : []
+  return context.agentId ? [cinnaTasksSection(context.agentId, context.tasksSkill ?? null)] : []
 }
 
 /**
@@ -684,8 +691,12 @@ export function assembleBareNativePrompt(
   return `${sections.join('\n\n---\n\n')}\n`
 }
 
-/** The machine's locale and time zone, with fallbacks that never throw. */
-export function resolveDesktopPromptContext(): DesktopPromptContext {
+/**
+ * The machine's locale and time zone, with fallbacks that never throw — and,
+ * when the caller names the engine, how that engine's agent opens the
+ * `cinna-tasks` skill.
+ */
+export function resolveDesktopPromptContext(engine?: TasksSkillEngine): DesktopPromptContext {
   let locale = 'en-US'
   let timeZone = 'UTC'
   try {
@@ -695,5 +706,11 @@ export function resolveDesktopPromptContext(): DesktopPromptContext {
   } catch {
     /* keep the fallbacks */
   }
-  return { locale, timeZone }
+  let tasksSkill: CinnaTasksSkillDelivery | null = null
+  try {
+    if (engine) tasksSkill = tasksSkillDeliveryFor(engine)
+  } catch {
+    /* no skill line rather than no prompt */
+  }
+  return { locale, timeZone, ...(engine ? { tasksSkill } : {}) }
 }

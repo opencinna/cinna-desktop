@@ -498,7 +498,7 @@ describe('the report rule', () => {
     return { task, next, started: world.starts[0] }
   }
 
-  it('continues the queue when the agent reported with task_update', async () => {
+  it('continues the queue when the agent reported with tasks_report', async () => {
     const { task, next, started } = await dispatchOne()
     taskService.setStatus(USER, task.id, 'blocked')
     started.end('completed')
@@ -522,7 +522,7 @@ describe('the report rule', () => {
     expect(agentTaskDispatchRepo.get(USER, 'agent-a').pausedReason).toBeNull()
   })
 
-  it('takes a delegated task’s handover_report (its status write) as the report', async () => {
+  it('takes a delegated task’s tasks_report (its status write through the bus) as the report', async () => {
     const { task, started } = await dispatchOne()
     taskService.acceptRemoteResult(USER, task.id, { status: 'completed', handoffNote: 'Done.', artifacts: [] })
     started.end('completed')
@@ -642,7 +642,7 @@ describe('back in Ready or Backlog is no report', () => {
     expect(statusOf(nextId)).toBe('open')
   }
 
-  it('flags a task the agent moved back to Ready with task_update', async () => {
+  it('flags a task the agent moved back to Ready with tasks_update', async () => {
     // Mutation: count any status but in_progress as a report → the queue runs it again.
     const { task, next, started } = await dispatchFile('t-back')
     taskService.acceptRemoteStatus(USER, task.id, 'open')

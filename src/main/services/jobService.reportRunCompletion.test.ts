@@ -215,7 +215,7 @@ describe('a finished run finishes its task', () => {
   })
 
   describe('the agent’s own report wins over the run’s outcome', () => {
-    /** What `task_update` does on a report: the status write, then the mark for this chat's run. */
+    /** What `tasks_report` does on a report: the status write, then the mark for this chat's run. */
     async function agentReports(userTaskId: string, chatId: string, status: 'completed' | 'blocked' | 'error'): Promise<void> {
       const { noteAgentStatusReport } = await import('../tasks/agentStatusReports')
       taskService.setStatus(USER, userTaskId, status, status === 'error' ? { errorMessage: 'The build is red.' } : {})

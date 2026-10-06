@@ -50,15 +50,16 @@ test('an outbound cloud delegation preserves the requester and returns its struc
     await cinna.page.evaluate(() => window.api.localAgents.rescan())
     await cinna.page.evaluate((chatId) => window.api.run.start({ chatId, content: 'Delegate to the cloud.' }), chatId)
     await expect.poll(() => fake.calls.length, { timeout: 60_000 }).toBe(1)
-    fake.calls[0].release({ tools: [{ name: 'handover_targets' }] })
+    fake.calls[0].release({ tools: [{ name: 'tasks_targets' }] })
     await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(1)
     const outputs = fake.tools[0].params.results as { result: { content: { text: string }[]; isError?: boolean } }[]
     expect(outputs[0].result.isError).not.toBe(true)
-    const targets = JSON.parse(outputs[0].result.content[0].text) as { target: { kind: string; agentId: string; adapter?: string } }[]
-    const cloudTarget = targets.find((entry) => entry.target.kind === 'cloud')
+    const { targets } = JSON.parse(outputs[0].result.content[0].text) as { targets: { target: string; kind: string; location: string }[] }
+    const cloudTarget = targets.find((entry) => entry.kind === 'cinna')
+    expect(cloudTarget).toMatchObject({ location: 'remote', target: expect.stringMatching(/^cinna:/) })
     expect(cloudTarget).toBeTruthy()
     const target = cloudTarget!.target
-    fake.tools[0].release({ tools: [{ name: 'task_create', args: { assignee: target, id: 'cloud-feature-work', title: 'Cloud quartz feature', description: 'Build quartz-cloud-5031.' } }] })
+    fake.tools[0].release({ tools: [{ name: 'tasks_create', args: { assignee: target, id: 'cloud-feature-work', title: 'Cloud quartz feature', description: 'Build quartz-cloud-5031.' } }] })
     await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(2)
     const createdOutput = fake.tools[1].params.results as typeof outputs
     expect(createdOutput[0].result.isError).not.toBe(true)
@@ -82,7 +83,7 @@ test('an outbound cloud delegation preserves the requester and returns its struc
       expect(fake.calls[1 + round].text).toContain('Use JSON for quartz?')
       const waiting = await cinna.page.evaluate(() => window.api.inbox.list())
       expect(waiting.entries.some((entry) => entry.taskId === created.taskId)).toBe(false)
-      fake.calls[1 + round].release({ tools: [{ name: 'handover_reply', args: { id: created.id, message: `Use JSON, confirmation ${round + 1}.` } }] })
+      fake.calls[1 + round].release({ tools: [{ name: 'tasks_reply', args: { ref: created.taskId, message: `Use JSON, confirmation ${round + 1}.` } }] })
       await expect.poll(() => fake.tools.length, { timeout: 60_000 }).toBe(3 + round)
       const replyOutput = fake.tools[2 + round].params.results as typeof outputs
       expect(replyOutput[0].result.isError).not.toBe(true)

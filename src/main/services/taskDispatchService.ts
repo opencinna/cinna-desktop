@@ -73,8 +73,9 @@ import { runExecutionService, type RunOutcome, type RunScope } from './runExecut
  * **The report rule.** A dispatched turn is not settled by how it ended
  * (`inboxService.endTurn` leaves that one run to {@link settle}). The agent
  * reported when the task is in a done, failed, waiting or cancelled category
- * at the end — `task_update` with a status, the task file's status word moving
- * on (read again, freshly, before deciding), or `handover_report` — and the
+ * at the end — `tasks_report` (on its own task or, delegated, through the bus),
+ * or the task file's status word moving on (read again, freshly, before
+ * deciding) — and the
  * queue simply continues. Back in Ready or Backlog is no report: it would only
  * run again. A normal end without a report flags the task `blocked` with a
  * dispatch note and pauses the queue;

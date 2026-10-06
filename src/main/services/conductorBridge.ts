@@ -167,12 +167,9 @@ export const conductorBridge = {
     let entry = entries.get(key)
     const binding: Binding = { input, pending: 0, calls: 0 }
     if (!nested && agent.source === 'folder' && agent.localPath) {
-      const [{ DelegationToolProvider }, { taskRepo }, { delegationRepo }] = await Promise.all([
-        import('./delegationToolProvider'), import('../db/tasks'), import('../db/delegations')
-      ])
-      const task = taskRepo.getByChatId(input.runScope.profileUserId, input.chatId)
-      const delegation = task ? delegationRepo.byTaskId(input.runScope.profileUserId, task.id) : undefined
-      binding.handovers = new DelegationToolProvider({ scope: input.runScope, chatId: input.chatId, agentId: agent.id }, delegation?.targetAgentId === agent.id)
+      // Every such session gets all eight `tasks_*`; `tasks_report` decides per call whether it is an executor's.
+      const { DelegationToolProvider } = await import('./delegationToolProvider')
+      binding.handovers = new DelegationToolProvider({ scope: input.runScope, chatId: input.chatId, agentId: agent.id })
     }
     // A follow-up the engine opened between turns carries no budget of its own; the task's checkpoint still caps it.
     const budget = input.toolCallBudget ?? taskToolCallBudgetForChat(input.chatId, input.runScope.profileUserId, agent.id)

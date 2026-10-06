@@ -249,35 +249,67 @@ describe('withCatchUp', () => {
  * handover nobody can return.
  */
 describe('buildTurnHeader', () => {
-  it('names the chat, the task and the depth, in three labelled lines', () => {
-    expect(buildTurnHeader({ chatId: 'chat-1', taskId: 'task-9', depth: 2 })).toBe(
+  const base = { agentId: 'folder:itan', chatId: 'chat-1' }
+
+  it('is the protocol’s context block: here, the current task, the counts, the skill', () => {
+    expect(buildTurnHeader({
+      ...base,
+      task: { ref: 'task-9', title: 'Add retry', reportRequired: true },
+      depth: 1,
+      openDelegations: { total: 2, waitingOnUser: 1 },
+      readyTasks: 3,
+      tasksSkill: 'cinna-tasks v1'
+    })).toBe(
       [
-        'Turn context from Cinna Desktop, not part of the conversation:',
-        '- chat id: `chat-1`',
-        '- task id: `task-9`',
-        '- handover depth: 2'
+        'Cinna task context (not part of the conversation):',
+        '- here: Cinna Desktop, folder agent `folder:itan` · chat `chat-1`',
+        '- current task: `task-9` "Add retry" (report required: yes)',
+        '- chain depth: 1 · open delegations: 2 (1 waiting on the user) · ready tasks: 3',
+        '- tasks skill: cinna-tasks v1'
       ].join('\n')
     )
   })
 
-  it('says `none` and `0` rather than dropping the lines', () => {
+  it('says `none` for no task, rather than dropping the line', () => {
     // A missing line reads as a field the agent may invent; `none` is a fact.
-    // Mutation: omit the task line when there is no task and a brief written
-    // from this turn claims the wrong origin.
-    const header = buildTurnHeader({ chatId: 'chat-1' })
-    expect(header).toContain('- task id: none')
-    expect(header).toContain('- handover depth: 0')
+    // Mutation: omit the task line when there is no task.
+    expect(buildTurnHeader(base).split('\n')).toEqual([
+      'Cinna task context (not part of the conversation):',
+      '- here: Cinna Desktop, folder agent `folder:itan` · chat `chat-1`',
+      '- current task: none'
+    ])
   })
 
-  it('counts this agent’s ready tasks in its own line, and leaves the line out at zero', () => {
-    expect(buildTurnHeader({ chatId: 'chat-1', readyTasks: 3 }).split('\n').at(-1)).toBe('- ready tasks: 3')
-    expect(buildTurnHeader({ chatId: 'chat-1', readyTasks: 0 })).not.toContain('ready tasks')
-    expect(buildTurnHeader({ chatId: 'chat-1' })).not.toContain('ready tasks')
+  it('says `report required: no` for a task nobody waits on', () => {
+    const header = buildTurnHeader({ ...base, task: { ref: 't', title: 'Tidy', reportRequired: false } })
+    expect(header).toContain('- current task: `t` "Tidy" (report required: no)')
+  })
+
+  it('keeps each count only while nonzero, and drops the line when all are zero', () => {
+    // Mutation: print the zeros and every plain chat carries a line of noise.
+    expect(buildTurnHeader({ ...base, depth: 0, readyTasks: 0, openDelegations: { total: 0, waitingOnUser: 0 } }))
+      .not.toContain('·  ')
+    expect(buildTurnHeader({ ...base, depth: 0, readyTasks: 0 }).split('\n')).toHaveLength(3)
+    expect(buildTurnHeader({ ...base, readyTasks: 3 }).split('\n').at(-1)).toBe('- ready tasks: 3')
+    expect(buildTurnHeader({ ...base, depth: 2 }).split('\n').at(-1)).toBe('- chain depth: 2')
+    expect(buildTurnHeader({ ...base, openDelegations: { total: 2, waitingOnUser: 0 } }).split('\n').at(-1))
+      .toBe('- open delegations: 2')
+  })
+
+  it('names the skill only when it is available', () => {
+    expect(buildTurnHeader({ ...base, tasksSkill: null })).not.toContain('tasks skill')
+    expect(buildTurnHeader({ ...base, tasksSkill: 'cinna-tasks v1' }).split('\n').at(-1)).toBe('- tasks skill: cinna-tasks v1')
+  })
+
+  it('keeps a title on its own line, whatever it holds', () => {
+    const header = buildTurnHeader({ ...base, task: { ref: 't', title: 'Two\nlines "quoted"', reportRequired: false } })
+    expect(header.split('\n')).toHaveLength(3)
+    expect(header).toContain('"Two\\nlines \\"quoted\\""')
   })
 
   it('reads as a block in front of the message, never as part of it', () => {
-    const wire = withCatchUp(buildTurnHeader({ chatId: 'chat-1' }), 'do the thing')
-    expect(wire.startsWith('Turn context from Cinna Desktop')).toBe(true)
+    const wire = withCatchUp(buildTurnHeader(base), 'do the thing')
+    expect(wire.startsWith('Cinna task context (not part of the conversation):')).toBe(true)
     expect(wire.endsWith('\n\ndo the thing')).toBe(true)
   })
 })

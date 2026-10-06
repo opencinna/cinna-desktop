@@ -18,6 +18,8 @@ The contract members, which the app reads:
 | `resources/cinna-agent-kit/layout.json` | Folder model: workshop and agent roles, `survives_update` flags, `scaffold_ignore_files`, `desktop_owned`, `cloud_import_excludes`, `secret_files`, `local_command_runner` |
 | `resources/cinna-agent-kit/conformance/` | `README.md` (format and matching rule) and `manifests/*.json`, the cases `conformance.test.ts` runs |
 | `resources/cinna-agent-kit/templates/root/` | Workshop skeleton: `AGENTS.md`, `CLAUDE.md`, `README.md`, dotless `gitignore` |
+| `resources/cinna-agent-kit/protocols/tasks.schema.json` | The [Cinna Task Protocol](../../jobs/tasks/task_protocol.md)'s MCP binding (contract 1.6.0): the eight `tasks_*` tools of the `cinna` server, their input schemas, the result packet prefix and the context block. Read only by `tasksProtocolParity.test.ts`, which holds `delegationToolProvider.ts`'s `TASKS_TOOL_SCHEMAS` equal to it; nothing at runtime opens it (`src/main/kit/tasksProtocol.ts` names the path) |
+| `resources/cinna-agent-kit/skills/cinna-tasks/` | The platform-owned `cinna-tasks` skill (`SKILL.md`, `references/file-protocol.md`), versioned with the protocol. Read at runtime by `tasksSkillService.ts`: copied into a desktop-owned Claude plugin under `userData`, named in OpenCode's `skills.paths`, pointed at by path for Codex. Not an agent folder's `skills/`, and never copied into one |
 | `resources/cinna-agent-kit/templates/agent/` | Agent skeleton: `cinna-agent.json` with `{{TOKEN}}` placeholders, `AGENTS.md`, `CLAUDE.md`, `README.md`, `Makefile`, `pyproject.toml`, `.python-version`, `workspace_requirements.txt`, `.claude/settings.local.json`, `docs/`, `scripts/`, `credentials/`, `knowledge/`, `skills/`, `config/`, `files/`, `app-data/{storage,cache,uploads}/` |
 
 The kit-only members, carried for the workshop copy and never read by the app (except the one path building mode names):
@@ -54,6 +56,7 @@ The kit-only members, carried for the workshop copy and never read by the app (e
 - `src/main/kit/exportTree.ts` — export file list, content hash, total size
 - `src/main/kit/miniYaml.ts` — the small YAML reader, and the one frontmatter writer
 - `src/main/kit/hash.ts` — `sha256Hex()`, the one digest both `exportTree` and `manifestIo` use
+- `src/main/kit/tasksProtocol.ts` — `TASKS_SCHEMA_KIT_PATH`, `TASKS_SCHEMA_REPO_PATH`, `TASKS_PROTOCOL_VERSION`: where the protocol schema sits in the bundle and which version this desktop implements. The skill's own paths are in `src/main/services/tasksSkillService.ts`
 - `src/main/errors.ts` — `KitError` / `KitErrorCode`
 
 ### Tests
@@ -227,7 +230,7 @@ cinna-core must be able to compute the identical value — see the handover's "S
 
 ## Configuration
 
-- **Contract version**: whatever core minted, in `CONTRACT_VERSION`, `kit.json` and `layout.json` — `contractBundle.test.ts` holds all three and the lock to one value. `1.5.0` at the time of writing. A scaffolded folder records whatever this build bundles, which is what the scanner and agents-home tests assert rather than a pinned literal. The fields the desktop introduced — `runtime.complexity`, `runtime.engine` (deliberately without an enum), `handovers[].target_kind` — are core's schema since 1.5.0; see [The Claude Engine](claude_engine.md) and [The Codex Engine](codex_engine.md) for how the engine is read
+- **Contract version**: whatever core minted, in `CONTRACT_VERSION`, `kit.json` and `layout.json` — `contractBundle.test.ts` holds all three and the lock to one value. `1.6.0` at the time of writing. A scaffolded folder records whatever this build bundles, which is what the scanner and agents-home tests assert rather than a pinned literal. The fields the desktop introduced — `runtime.complexity`, `runtime.engine` (deliberately without an enum), `handovers[].target_kind` — are core's schema since 1.5.0; see [The Claude Engine](claude_engine.md) and [The Codex Engine](codex_engine.md) for how the engine is read
 - **No refresh endpoint.** The desktop's retired `kit.json` declared a `refresh` block; core's has none, and nothing in the desktop fetches a kit or runs `kit.py`. A workshop's `.cinna-kit/` is read for [contract resolution](kit_contract.md#contract-resolution) and written only by the [workshop sync](kit_contract.md#the-workshop-copy-installed-where-missing-kept-current-only-where-the-desktop-put-it), from the bundle, and only where it is missing, broken or marked as the desktop's install. In a tree it owns the sync also keeps `.cinna-kit/.last_refresh_check` under a day old so the root `AGENTS.md` never sends an assistant to `kit.py refresh`; a kit the user downloaded gets neither
 - **`STALE_TEMP_MS`**: 60 000 ms, in `src/main/kit/manifestIo.ts`
 - No environment variables, no app settings, no user-facing configuration
@@ -250,6 +253,8 @@ Never edit `resources/cinna-agent-kit/` or the lock by hand; a change the deskto
 - if the template token set changed, re-check `SUBSTITUTED_FILES` in `scaffoldService.ts`
 - if `assistants/cinna-desktop.md` moved or was renamed, update `KIT_DESKTOP_NOTES` in `promptAssembly.ts` — building mode names the file only when it exists, so a stale path fails silently rather than loudly
 - if the root template's freshness rule changed (the `.last_refresh_check` name, its period, or `kit.py`'s stamp format), re-check `REFRESH_CHECK_FILE`, `REFRESH_CHECK_MAX_AGE_MS` and `refreshCheckStamp()` in `agentsHomeService.ts`
+- if `protocols/tasks.schema.json` changed, `tasksProtocolParity.test.ts` fails until `TASKS_TOOL_SCHEMAS` in `delegationToolProvider.ts` (and the `taskToolService` / `delegationService` code behind it) matches; a new `protocol_version` also needs `TASKS_PROTOCOL_VERSION` in `src/main/kit/tasksProtocol.ts`. The schema is cinna-core's: a disagreement is settled there, never by editing the bundle
+- if `skills/cinna-tasks/` moved or was renamed, update `TASKS_SKILL_NAME` and `tasksSkillDir` in `tasksSkillService.ts` — every delivery degrades to "no skill" rather than failing, so a stale path is silent. A changed skill needs nothing: the Claude plugin copy is rebuilt when the skill's tree hash differs, OpenCode reads the bundle in place, and Codex reads the file at its path
 - check the lock's `core_dirty`: `true` means the render came from uncommitted core work and cannot be reproduced from a commit
 
 A render with any changed file changes `VERSION`, so once the build ships every workshop `.cinna-kit/` the desktop installed is replaced on its next pass — any file in it that is not in the new render is gone. A kit the user downloaded is not affected.

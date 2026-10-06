@@ -92,6 +92,8 @@ function fixture(options: { holdSend?: boolean } = {}): Fixture {
       return { runId: `run-${f.sent.length}` }
     },
     record: (_userId, rowId, patch) => f.recorded.push({ rowId, patch: patch as Record<string, unknown> }),
+    // A display name for the first row; any other falls back to its agent id.
+    executorName: (candidate) => (candidate.id === 'row-1' ? 'Uploader' : null),
     logger: { debug() {}, info() {}, warn() {} },
     now: () => f.clock,
     // The loop's own clock: every poll advances time, so a busy chat reaches the
@@ -120,7 +122,7 @@ describe('waking an origin chat', () => {
     await f.wake.idle()
 
     expect(f.sent).toEqual([
-      { chatId: 'chat-known', content: expect.stringContaining('Handover `20260917-1200-retry` finished: Retry added') }
+      { chatId: 'chat-known', content: expect.stringMatching(/^Task result from Uploader on task-7: done — Retry added\n/) }
     ])
     expect(f.recorded).toEqual([
       { rowId: 'row-1', patch: expect.objectContaining({ wakeRunId: 'run-1', wokeAt: expect.any(Date) }) }
@@ -235,9 +237,9 @@ describe('waking an origin chat once for a whole group', () => {
 
     expect(f.sent.length).toBe(1)
     expect(f.sent[0].chatId).toBe('chat-known')
-    expect(f.sent[0].content).toContain('Handover group `release-cut` has finished — 2 handovers:')
-    expect(f.sent[0].content).toContain('`20260917-1200-api` — done: Retry added')
-    expect(f.sent[0].content).toContain('`20260917-1200-web` — failed: The build broke')
+    expect(f.sent[0].content.split('\n')[0]).toBe('Task result from Uploader, folder:external:root:. on group `release-cut`: finished — 2 tasks:')
+    expect(f.sent[0].content).toContain('`20260917-1200-api` (Uploader) — done: Retry added')
+    expect(f.sent[0].content).toContain('`20260917-1200-web` (folder:external:root:.) — failed: The build broke')
 
     // Every member, not just the first: `woke_at` is what keeps the next scan
     // from telling that chat about the same handovers again.

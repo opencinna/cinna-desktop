@@ -11,7 +11,7 @@ import { adoptFolder, openTasksTab } from '../fixtures/dispatcher'
  * and no approval card is needed). The run mode is set to One at a time on
  * the agent's Tasks tab and nothing else is driven: the queue starts the
  * higher-priority task, the agent does it and reports it done with
- * `task_update` (the task id comes from the turn header), and the queue goes
+ * `tasks_report` (on the turn's own task), and the queue goes
  * on to the second.
  *
  * Witnesses: each task's file in the agent's folder holds an answer the
@@ -47,7 +47,7 @@ const INSTRUCTIONS = [
   'Cinna hands you tasks one at a time. For each task:',
   '',
   '1. Do exactly what its goal says, with your file tools, inside your working folder.',
-  '2. Then report it: call the `task_update` tool with `id` set to the task id from the turn context and `status` set to `completed`.',
+  '2. Then report it: call the `tasks_report` tool with `status` set to `done` and a one-line `summary` of what you did.',
   '3. Then reply with the single word done.',
   '',
   'Never ask the user anything. Never work on a task you were not handed in this turn.',

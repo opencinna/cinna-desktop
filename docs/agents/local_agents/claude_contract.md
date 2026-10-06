@@ -106,6 +106,7 @@ project `.claude/skills/probeskill/`:
 | Project `CLAUDE.md` | **suppressed** — the model did not know the rule it states | loaded — the model quoted the rule verbatim |
 | Project skill (`probeskill`) | **suppressed** | listed in `skills` |
 | Project plugin (`clangd-lsp`) | **suppressed** | listed in `plugins` |
+| SDK `plugins: [{ type: 'local', path }]` (the desktop's `cinna-tasks`; 6 Oct 2026, pinned 2.1.276, adapter 0.76.0 on SDK 0.3.257) | **loaded** — the skill reaches the model as `cinna-tasks:cinna-tasks` | loaded, same name |
 | Tool count | 26 | 27 |
 | **The CLI's built-in skills** | **18, still loaded** | 19 |
 | **Slash commands** | **52, still loaded** | 53 |

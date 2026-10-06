@@ -1302,7 +1302,7 @@ describe('a run the app lost', () => {
  * it must not be destroyed if the user went and used it.
  */
 describe('an executor waiting on its own delegations', () => {
-  // The bare executor delegated onward from its chat and ended its turn, as `task_create` tells it to.
+  // The bare executor delegated onward from its chat and ended its turn, as `tasks_create` tells it to.
   let outbound: 'open' | 'settled'
   async function relaying(): Promise<void> {
     outbound = 'open'
@@ -2195,5 +2195,19 @@ describe('telling the origin twice', () => {
     expect(h.wakes.length).toBe(2)
     expect(h.wakes[1]).toMatchObject({ status: 'done', summary: 'Retry added, and the flake fixed' })
     expect(h.row().wokeAt).toBeNull()
+  })
+})
+
+/** The tool-report seam with a bus wired in: a brief with no delegation behind it takes the report itself. */
+describe('a report on a brief the bus does not own', () => {
+  it('applies the handover’s own effects when the bus says no delegation stands behind the row', async () => {
+    const applyResult = vi.fn(() => false)
+    const service = createHandoverService({ ...h.deps, applyResult })
+    h.write('20260917-1200-retry', 'brief.md', brief('origin:\n  agent: agent-known\n  chat: chat-known\n'))
+    await service.scanAgent(SCOPE, h.agent)
+    service.applyReport(SCOPE, h.row(), { status: 'done', summary: 'Retry added', question: null, artifacts: [], body: 'Body.' })
+    expect(applyResult).toHaveBeenCalledTimes(1)
+    expect(h.task().status).toBe('completed')
+    expect(h.row()).toMatchObject({ state: 'done', reportStatus: 'done', summary: 'Retry added' })
   })
 })

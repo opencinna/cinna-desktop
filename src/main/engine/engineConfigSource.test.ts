@@ -119,6 +119,10 @@ vi.mock('../services/localAgents/runtimeService', () => ({
     })
   }
 }))
+const tasksSkill = vi.hoisted(() => ({ available: false }))
+vi.mock('../services/tasksSkillService', () => ({
+  tasksSkillInfo: () => ({ available: tasksSkill.available, dir: '/kit/skills/cinna-tasks', skillFile: '/kit/skills/cinna-tasks/SKILL.md', skillsRoot: '/kit/skills', version: '1' })
+}))
 vi.mock('../services/localAgents/promptAssembly', () => ({
   assembleAgentPrompt: (agentDir: string) => `PROMPT FOR ${agentDir}`,
   resolveDesktopPromptContext: () => ({ locale: 'en-GB', timeZone: 'Europe/Berlin' })
@@ -458,6 +462,13 @@ describe('collectEngineConfigInput', () => {
     // entry with no models can address nothing.
     expect(input.providers[0].models).toEqual([{ id: 'gpt-4o', name: 'GPT-4o' }])
     expect(input.agents).toHaveLength(1)
+  })
+
+  it('names the bundled skills folder for OpenCode only while the cinna-tasks skill is there', async () => {
+    tasksSkill.available = true
+    expect((await collectEngineConfigInput('user-1')).skillPaths).toEqual(['/kit/skills'])
+    tasksSkill.available = false
+    expect((await collectEngineConfigInput('user-1')).skillPaths).toEqual([])
   })
 })
 

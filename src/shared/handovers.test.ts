@@ -11,8 +11,8 @@ import {
   TERMINAL_REPORT_STATUSES,
   handoverGateQuestion,
   handoverGateRequestId,
+  cinnaTasksSection,
   handoverProtocolParagraph,
-  handoverRequesterSection,
   isHandoverSettled,
   HANDOVER_WARNING_KINDS,
   isDepthAllowed,
@@ -481,19 +481,28 @@ describe('the words the protocol is taught in', () => {
     expect(HANDOVER_HOW_TO_REPORT).toContain('before you start')
   })
 
-  it('teaches the requester how to follow up and how to fan out', () => {
-    // Watched live on 2026-09-18: a requester that was never told either
-    // answered a `blocked` report with a second brief (a new task, a fresh
-    // conversation, the first handover left blocked) and handed the same work
-    // to two projects without a group (two wakes instead of one).
-    const section = handoverRequesterSection('folder:itan')
-    expect(section).toContain('revisions/001.md')
-    expect(section).toContain(`cinna_handover: ${HANDOVER_SCHEMA_VERSION}`)
-    expect(section).toContain('do not write a new brief')
-    expect(section).toContain('group: <id>')
-    // Every revision example it shows must parse: an origin copies it verbatim.
-    const example = /```markdown\n(---\ncinna_handover[\s\S]*?)```/.exec(section)?.[1]
-    expect(example && parseHandoverRevision(example).ok).toBe(true)
+  it('keeps the prompt stub short: the two rules, the agent id, and one way to open the skill', () => {
+    // The 60-line file protocol moved into the cinna-tasks skill. What stays in
+    // every system prompt is what must never be missed. Mutation: paste the file
+    // protocol back and the line cap fails; drop a rule and its line fails.
+    const section = cinnaTasksSection('folder:itan', { kind: 'skill' })
+    expect(section.split('\n').length).toBeLessThanOrEqual(10)
+    expect(section).toContain('`cinna` tool server')
+    expect(section).toContain('`tasks_report`')
+    expect(section).toContain('Never wait inside a turn')
+    expect(section).toContain('`folder:itan`')
+    expect(section).toContain('Open the `cinna-tasks` skill before your first `tasks_*` call.')
+    expect(section).not.toContain('revisions/001.md')
+    expect(section).not.toContain('handover_')
+  })
+
+  it('points at SKILL.md by path where no engine loads the skill, and says nothing without one', () => {
+    const pointer = cinnaTasksSection('folder:itan', { kind: 'pointer', path: '/app/skills/cinna-tasks/SKILL.md' })
+    expect(pointer).toContain('Read `/app/skills/cinna-tasks/SKILL.md` before your first `tasks_*` call.')
+    expect(pointer).not.toContain('Open the `cinna-tasks` skill')
+    const none = cinnaTasksSection('folder:itan', null)
+    expect(none).not.toContain('SKILL.md')
+    expect(none).not.toContain('skill before')
   })
 
   it('sends a Cinna-run executor to the brief, in one short paragraph', () => {
@@ -511,6 +520,7 @@ describe('the words the protocol is taught in', () => {
     // Once. The path is 90 characters of noise the second time it is read.
     expect(paragraph.split('20260917-2000-add-retry/brief.md')).toHaveLength(2)
     expect(paragraph).toContain('before you start')
+    expect(paragraph).toContain('`tasks_report`')
     expect(paragraph).not.toContain('\n')
   })
 
@@ -609,21 +619,23 @@ describe('warnings', () => {
 describe('the return packet', () => {
   const base = {
     handoverId: '20260917-1200-retry',
+    agentName: 'Uploader',
     folderPath: '/projects/uploader',
     taskId: 'task-7',
     summary: 'Retry added with backoff'
   }
 
-  it('opens with the id, what happened and the summary', () => {
+  it('opens with the protocol’s first words — who, on which task, the status and the summary — then the handover', () => {
     const done = buildHandoverReturnPacket({ ...base, status: 'done' })
-    expect(done.split('\n')[0]).toBe('Handover `20260917-1200-retry` finished: Retry added with backoff')
+    expect(done.split('\n')[0]).toBe('Task result from Uploader on task-7: done — Retry added with backoff')
+    expect(done).toContain('Handover `20260917-1200-retry` finished.')
     expect(done).toContain('Project: /projects/uploader')
     expect(done).toContain('Task: task-7')
 
     expect(buildHandoverReturnPacket({ ...base, status: 'failed', summary: 'The upload API changed' }).split('\n')[0])
-      .toBe('Handover `20260917-1200-retry` failed: The upload API changed')
+      .toBe('Task result from Uploader on task-7: failed — The upload API changed')
     expect(buildHandoverReturnPacket({ ...base, status: 'blocked' }).split('\n')[0])
-      .toBe('Handover `20260917-1200-retry` is blocked: Retry added with backoff')
+      .toBe('Task result from Uploader on task-7: blocked — Retry added with backoff')
   })
 
   it('carries the question, and says how to answer it, only when blocked', () => {
@@ -677,7 +689,8 @@ describe('the return packet', () => {
     const packet = buildHandoverReturnPacket({
       ...base, taskId: null, status: 'failed', summary: '   ', body: '   '
     })
-    expect(packet).toBe('Handover `20260917-1200-retry` failed: No summary was given.\n\nProject: /projects/uploader')
+    // No task: the handover id is the ref.
+    expect(packet).toBe('Task result from Uploader on 20260917-1200-retry: failed — No summary was given.\n\nHandover `20260917-1200-retry` failed.\nProject: /projects/uploader')
   })
 
   it('defaults the cap to the catch-up packet’s number', () => {
@@ -766,7 +779,7 @@ describe('the group packet', () => {
     handoverId: string,
     state: HandoverState,
     summary: string | null = 'Done it'
-  ): HandoverGroupMember => ({ handoverId, state, summary })
+  ): HandoverGroupMember => ({ handoverId, agentName: handoverId.endsWith('web') ? 'Web' : 'Api', state, summary })
 
   it('lists every member with its id, how it ended and its summary', () => {
     const packet = buildHandoverGroupPacket({
@@ -777,23 +790,24 @@ describe('the group packet', () => {
         member('20260917-1200-docs', 'skipped', null)
       ]
     })
-    expect(packet).toContain('Handover group `rollout-42` has finished — 3 handovers:')
-    expect(packet).toContain('- `20260917-1200-api` — done: Retry added')
-    expect(packet).toContain('- `20260917-1200-web` — failed: The build was already broken')
+    // The protocol's first words, each executor named once.
+    expect(packet.split('\n')[0]).toBe('Task result from Api, Web on group `rollout-42`: finished — 3 tasks:')
+    expect(packet).toContain('- `20260917-1200-api` (Api) — done: Retry added')
+    expect(packet).toContain('- `20260917-1200-web` (Web) — failed: The build was already broken')
     // A member with nothing to say still appears: "all of them" is the point.
-    expect(packet).toContain('- `20260917-1200-docs` — skipped')
+    expect(packet).toContain('- `20260917-1200-docs` (Api) — skipped')
   })
 
   it('counts a single member in the singular — a late arrival wakes alone', () => {
     const packet = buildHandoverGroupPacket({ groupId: 'g', members: [member('late', 'done', 'Fine')] })
-    expect(packet).toContain('1 handover:')
-    expect(packet).not.toContain('handovers:')
+    expect(packet).toContain('1 task:')
+    expect(packet).not.toContain('tasks:')
   })
 
   it('names the task when the member has one', () => {
     const packet = buildHandoverGroupPacket({
       groupId: 'g',
-      members: [{ handoverId: 'h', state: 'done', summary: 'Fine', taskId: 'task-7' }]
+      members: [{ handoverId: 'h', agentName: 'Api', state: 'done', summary: 'Fine', taskId: 'task-7' }]
     })
     expect(packet).toContain('(task task-7)')
   })

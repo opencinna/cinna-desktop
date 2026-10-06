@@ -30,6 +30,7 @@ import {
   type HandoverReportStatus
 } from '../../shared/handovers'
 import { handoverRepo, type HandoverRow } from '../db/handovers'
+import { taskRepo } from '../db/tasks'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
@@ -68,6 +69,8 @@ export interface HandoverWakeDeps {
   send(scope: RunScope, chatId: string, content: string): Promise<{ runId: string }>
   /** Record the outcome on the row — `wokeAt`/`wakeRunId`, or a warning. */
   record(userId: string, rowId: string, patch: { wokeAt?: Date; wakeRunId?: string; warning?: string }, expectedDigest?: string): void
+  /** The executor's display name for a packet's first line; null falls back to its id. */
+  executorName?(row: HandoverRow): string | null
   logger: { debug(msg: string, meta?: unknown): void; info(msg: string, meta?: unknown): void; warn(msg: string, meta?: unknown): void }
   now(): number
   delay(ms: number): Promise<void>
@@ -105,6 +108,17 @@ export interface HandoverGroupWakeInput {
 }
 
 export function createHandoverWake(deps: HandoverWakeDeps) {
+  /** Who did the work, as the packet's first line names it: display name, else agent id. */
+  function nameOf(row: HandoverRow): string {
+    let name: string | null = null
+    try {
+      name = deps.executorName?.(row) ?? null
+    } catch {
+      /* named by id below */
+    }
+    return name || row.agentId || row.folderPath
+  }
+
   /**
    * One turn per origin chat at a time.
    *
@@ -136,6 +150,7 @@ export function createHandoverWake(deps: HandoverWakeDeps) {
 
     const packet = input.packet ?? buildHandoverReturnPacket({
       handoverId: row.handoverId,
+      agentName: nameOf(row),
       folderPath: row.folderPath,
       taskId: row.taskId,
       status: input.status,
@@ -176,6 +191,7 @@ export function createHandoverWake(deps: HandoverWakeDeps) {
       groupId: input.groupId,
       members: rows.map((row) => ({
         handoverId: row.handoverId,
+        agentName: nameOf(row),
         state: row.state,
         summary: row.summary,
         taskId: row.taskId
@@ -318,6 +334,7 @@ export const handoverWake = createHandoverWake({
   record(userId, rowId, patch) {
     handoverRepo.update(userId, rowId, patch)
   },
+  executorName: (row) => (row.taskId ? taskRepo.getById(row.userId, row.taskId)?.assigneeName ?? null : null),
   logger: createLogger('handover-wake'),
   now: () => Date.now(),
   delay: (ms) =>

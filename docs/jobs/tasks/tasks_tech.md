@@ -49,7 +49,7 @@ All handlers are registered by `src/main/ipc/task.ipc.ts`, require activation an
 | `task:resolve-handoff` | task id → void after explicit recovery; works after task deletion |
 | `task:delete-preview` | task id → `TaskDeletePreview` (`deletesRun`, `chat`: `deleted_with_run` \| `kept` \| `in_trash` \| `none`, `jobStays`); a read, nudges nothing |
 | `task:delete` | task id → `TaskDeleteResult` (`success`, `jobRunId`, `jobId`, `chatId`, `chatDeleted`) after `removeWithJobRun`; marks sync dirty only after the write succeeds |
-| `task:comments` | task id → `TaskCommentDto[]`, oldest first; read-only (agents write comments with `task_comment`). See [Agent Task Tools](agent_task_tools_tech.md#ipc-channels) |
+| `task:comments` | task id → `TaskCommentDto[]`, oldest first; read-only (agents write comments with `tasks_comment`). See [Agent Task Tools](agent_task_tools_tech.md#ipc-channels) |
 | `inbox:list` | no arguments → asynchronous `InboxSnapshot` (`entries`, `unreadable` — one `{adapter, reason}` per unreachable service); a remote failure or the ten-second deadline becomes an `unreadable` entry, only a local failure rejects |
 | `inbox:answer` | `AskAnswerPayload` → asynchronous `InboxAnswerResult`; refusal codes remain result data |
 

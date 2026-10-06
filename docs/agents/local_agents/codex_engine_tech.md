@@ -189,4 +189,6 @@ JSON; authenticated automatic-review decisions remain unverified.
 Ordinary-folder MCP discovery uses Responses `tool_search_call` and definitions returned in
 `tool_search_output`. Two bearer sessions and same-process load reach their own providers.
 Keep descriptors in session RPCs, outside `CODEX_CONFIG` and the launcher's process key.
+
+The same contract measures a read outside the workspace (`codex.sandbox.read-outside-workspace`): a shell `cat` of a file outside the cwd and the system temp roots runs without an ACP ask and returns its content, in `read-only` and `agent` alike. The `cinna-tasks` skill depends on that: Codex is given no skill loader, and `developer_instructions` carries `cinnaTasksSection`'s pointer line naming the bundled `SKILL.md` by absolute path (`tasksSkillDeliveryFor('codex')`, through `resolveDesktopPromptContext('codex')` in `folderSystemPrompt`). The path is stable per build, so it does not change the launcher's process key from one chat to the next.
 See the [measured handover ledger](../../../drafts/cross_agents_handover_bus/probe_results.md).

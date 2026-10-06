@@ -8,9 +8,10 @@ import type { MessageRow } from '../db/messages'
 import type { RunEvent } from '../../shared/runEvents'
 const runnerTask = vi.hoisted(() => vi.fn())
 const openRunRequests = vi.hoisted(() => vi.fn(() => [] as { id: string; resume: 'reply' | 'next_message' }[]))
-const chatTask = vi.hoisted(() => vi.fn((): { id: string } | undefined => undefined))
+const chatTask = vi.hoisted(() => vi.fn((): { id: string; title?: string; dispatchAgentId?: string | null; jobRunId?: string | null } | undefined => undefined))
 vi.mock('../db/tasks', () => ({ taskRepo: { getById: runnerTask, getByChatId: chatTask } }))
 const handoverOfTask = vi.hoisted(() => vi.fn((): { depth: number } | undefined => undefined))
+vi.mock('../services/tasksSkillService', () => ({ tasksSkillLabel: () => 'cinna-tasks v1' }))
 vi.mock('../db/delegations', () => ({ delegationRepo: { byTaskId: handoverOfTask, listForOrigin: () => [], toDto: (row: unknown) => row } }))
 vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: { listOpenForRun: openRunRequests } }))
 vi.mock('../db/sync', () => ({ syncRepo: { getState: () => null } }))
@@ -875,16 +876,18 @@ describe('the wire-only turn header', () => {
     // chat. Mutation: drop the header and an agent asked to hand work on has
     // nothing to put in `origin`.
     caps.cwd = true
-    chatTask.mockReturnValue({ id: 'task-9' })
+    chatTask.mockReturnValue({ id: 'task-9', title: 'Add retry', dispatchAgentId: null, jobRunId: null })
     handoverOfTask.mockReturnValue({ depth: 1 })
     await send({ chatId: 'chat-1', content: 'hello' })
     const { wireContent } = await driverInput()
     expect(wireContent).toBe(
       [
-        'Turn context from Cinna Desktop, not part of the conversation:',
-        '- chat id: `chat-1`',
-        '- task id: `task-9`',
-        '- handover depth: 1',
+        'Cinna task context (not part of the conversation):',
+        '- here: Cinna Desktop, folder agent `a-1` · chat `chat-1`',
+        // A delegation's target task: whoever delegated it waits on the report.
+        '- current task: `task-9` "Add retry" (report required: yes)',
+        '- chain depth: 1',
+        '- tasks skill: cinna-tasks v1',
         '',
         'hello'
       ].join('\n')
@@ -894,10 +897,31 @@ describe('the wire-only turn header', () => {
     expect(prepareAgentSend).toHaveBeenCalledWith(expect.objectContaining({ userContent: 'hello' }))
   })
 
+  it('requires a report only on a task someone waits on: dispatched, delegated, or a job run', async () => {
+    // Mutation: drop any of the three and that task's agent is told it may end
+    // without `tasks_report`, which pauses the queue or strands the requester.
+    caps.cwd = true
+    const cases: [{ dispatchAgentId: string | null; jobRunId: string | null }, { depth: number } | undefined, string][] = [
+      [{ dispatchAgentId: 'a-1', jobRunId: null }, undefined, 'yes'],
+      [{ dispatchAgentId: null, jobRunId: 'run-1' }, undefined, 'yes'],
+      [{ dispatchAgentId: null, jobRunId: null }, { depth: 1 }, 'yes'],
+      [{ dispatchAgentId: null, jobRunId: null }, undefined, 'no']
+    ]
+    for (const [fields, delegation, expected] of cases) {
+      chatTask.mockReturnValue({ id: 'task-9', title: 'Add retry', ...fields })
+      handoverOfTask.mockReturnValue(delegation)
+      await send({ chatId: 'chat-1', content: 'hello' })
+      expect((await driverInput()).wireContent, JSON.stringify(fields)).toContain(`"Add retry" (report required: ${expected})`)
+      portGivenToTheStream().close()
+    }
+    chatTask.mockReset()
+    handoverOfTask.mockReset()
+  })
+
   it('says none and zero for a chat with no task, and nothing at all to a remote agent', async () => {
     caps.cwd = true
     await send({ chatId: 'chat-1', content: 'hello' })
-    expect((await driverInput()).wireContent).toContain('- task id: none\n- handover depth: 0')
+    expect((await driverInput()).wireContent).toContain('- current task: none\n- tasks skill: cinna-tasks v1\n\nhello')
     // The chat is busy until this turn's port closes; a second send on it would
     // be refused and read back as the first turn's own input.
     portGivenToTheStream().close()
@@ -916,7 +940,7 @@ describe('the wire-only turn header', () => {
     history = [message({ role: 'assistant', content: 'earlier answer', sourceAgentId: 'a-2' })]
     await send({ chatId: 'chat-1', content: 'and now?' })
     const { wireContent } = await driverInput()
-    expect(wireContent.indexOf('Turn context from Cinna Desktop')).toBe(0)
+    expect(wireContent.indexOf('Cinna task context (not part of the conversation):')).toBe(0)
     expect(wireContent.indexOf('earlier answer')).toBeGreaterThan(0)
     expect(wireContent.endsWith('and now?')).toBe(true)
   })
@@ -927,7 +951,7 @@ describe('the wire-only turn header', () => {
       throw new Error('the database is locked')
     })
     await send({ chatId: 'chat-1', content: 'hello' })
-    expect((await driverInput()).wireContent).toContain('- handover depth: 0')
+    expect((await driverInput()).wireContent).toContain('- current task: none')
     chatTask.mockReset()
   })
 })

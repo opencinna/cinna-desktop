@@ -808,9 +808,9 @@ export const tasks = sqliteTable('tasks', {
   trustedDigest: text('trusted_digest'),
   /** The file a folder task lives in, as last read. Never synced. */
   localFile: text('local_file', { mode: 'json' }).$type<TaskLocalFile | null>(),
-  /** The agent whose `task_create` made this task. Device-local; never synced. */
+  /** The agent whose `tasks_create` made this task. Device-local; never synced. */
   createdByAgentId: text('created_by_agent_id'),
-  /** The chat that agent called `task_create` from. Device-local; never synced. */
+  /** The chat that agent called `tasks_create` from. Device-local; never synced. */
   createdByChatId: text('created_by_chat_id'),
   /** Depth in a chain of tool-created work (0 = not tool-created, or created outside any task). Never synced. */
   chainDepth: integer('chain_depth').notNull().default(0),
@@ -857,7 +857,7 @@ export const tasks = sqliteTable('tasks', {
  * row at all — the remote is the registry and the desktop is the view.
  */
 /**
- * A comment on a task — an agent's `task_comment`, or a person's later. Device
+ * A comment on a task — an agent's `tasks_comment`, or a person's later. Device
  * local: not a synced collection. `remoteStatus` records the best-effort copy
  * to the task's home (a bound service's comments, a folder file's log section).
  */

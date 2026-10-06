@@ -476,7 +476,7 @@ export const jobService = {
       .some((request) => request.resume === 'next_message')) return
 
     // **The agent's report wins.** An agent that set this task to completed,
-    // blocked or error with `task_update` during the turn has said how the
+    // blocked or error with `tasks_report` during the turn has said how the
     // work ended; the attempt is mapped from that rather than the turn's
     // outcome overwriting it. `completed` / `error` already settled the
     // attempt in `taskService.setStatus` (so this is a fallback); `blocked`

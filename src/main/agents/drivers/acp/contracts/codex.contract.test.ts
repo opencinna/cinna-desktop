@@ -765,6 +765,12 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     expect(failureKinds(seen.rateLimitUpdates)).toEqual([])
   })
 
+  it(entry('codex.sandbox.read-outside-workspace'), () => {
+    expect(seen.handover?.reads.map(({ outputs: _outputs, ...read }) => read)).toEqual([
+      { mode: 'read-only', permissionCount: 0, kinds: [], read: true, promptError: null },
+      { mode: 'agent', permissionCount: 0, kinds: [], read: true, promptError: null }
+    ])
+  })
   it(entry('codex.sandbox.write-outside-workspace'), () => {
     expect(seen.handover?.writes).toHaveLength(4)
     for (const index of [0, 2]) {

@@ -190,7 +190,7 @@ const rawDelegationRepo = {
 
   /**
    * Delegations this chat requested, on every channel — the delegated half of
-   * the per-chat `task_create` cap. Settled and skipped ones count: the cap is
+   * the per-chat `tasks_create` cap. Settled and skipped ones count: the cap is
    * on creations.
    */
   countForOriginChat(userId: string, chatId: string): number {

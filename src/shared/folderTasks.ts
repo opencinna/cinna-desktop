@@ -58,7 +58,7 @@ export const HANDOFF_OPEN = '<!-- cinna:handoff -->'
 export const HANDOFF_CLOSE = '<!-- /cinna:handoff -->'
 
 /**
- * The comment log: Cinna appends one entry per comment (`task_comment`) and
+ * The comment log: Cinna appends one entry per comment (`tasks_comment`) and
  * never rewrites one. Export only — an edit made inside it is not read back
  * into the task's comments, and its text is never part of the description.
  */

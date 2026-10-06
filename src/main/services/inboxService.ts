@@ -429,8 +429,8 @@ export const inboxService = {
     // device offered Take over on it for ever. One per hand-opened chat that
     // ever raises an ask.
     //
-    // The agent said how its work ended (`task_update` on this chat's task:
-    // completed, blocked or error) during this very run, and the task already
+    // The agent said how its work ended (`tasks_report` on this chat's task:
+    // done, blocked or failed) during this very run, and the task already
     // says so: a normal ending must not overwrite a `blocked` or an `error`
     // with `completed`.
     if (takeAgentStatusReport(task.id, ctx.turnId) && task.status !== 'in_progress') return

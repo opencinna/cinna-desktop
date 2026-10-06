@@ -48,9 +48,9 @@ const TITLE = 'Add a retry to the uploader'
 /** In the brief body, so the executor's prompt can be proved to carry it. */
 const BRIEF_MARKER = 'quartz-5723'
 /**
- * Short on purpose: `SystemTurnBlock` caps its header at 80 characters, and
- * `Handover \`<id>\` finished: <summary>` is 79 with this one — so the row's
- * accessible name can be asserted whole rather than against an ellipsis.
+ * Short on purpose: `SystemTurnBlock` caps its header at 80 characters, and the
+ * packet's first line, `Task result from <agent> on <task>: done — <summary>`,
+ * is matched by its start, which always fits.
  */
 const SUMMARY = 'Retry added to the upload client.'
 const ARTIFACT = 'RETRY.md'
@@ -445,7 +445,8 @@ test.describe('file handovers', () => {
       await expect
         .poll(() => fake.calls.length, { message: 'the origin chat got a turn', timeout: 90_000 })
         .toBe(2)
-      expect(fake.calls[1].text).toContain(`Handover \`${HANDOVER_ID}\` finished`)
+      expect(fake.calls[1].text).toContain(`Task result from Shipping Service on ${taskId}: done — ${SUMMARY}`)
+      expect(fake.calls[1].text).toContain(`Handover \`${HANDOVER_ID}\` finished.`)
       expect(fake.calls[1].text).toContain(SUMMARY)
       fake.calls[1].release('Noted.')
     })
@@ -454,8 +455,7 @@ test.describe('file handovers', () => {
       await cinna.page.getByRole('button', { name: 'Chats', exact: true }).click()
       await cinna.page.getByText('Delivery coordination', { exact: true }).first().click()
       const row = cinna.page.getByRole('button', {
-        name: `Cinna Desktop · Handover \`${HANDOVER_ID}\` finished: ${SUMMARY}`,
-        exact: true
+        name: new RegExp(`^Cinna Desktop · Task result from Shipping Service on ${taskId}`)
       })
       await expect(row).toBeVisible({ timeout: 30_000 })
       await expect(row).toHaveAttribute('aria-expanded', 'false')

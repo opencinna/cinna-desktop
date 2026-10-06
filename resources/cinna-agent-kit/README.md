@@ -3,7 +3,7 @@
 This is the index of `.cinna-kit/`. Read this file at the start of any session that
 changes an agent. Then read only the guides whose trigger has fired.
 
-Kit version `7085a29d0ca713c0` · contract version in `CONTRACT_VERSION` · instance https://opencinna.io
+Kit version `3d407f3e5b672f36` · contract version in `CONTRACT_VERSION` · instance https://opencinna.io
 
 ## Documents
 
@@ -28,6 +28,8 @@ Kit version `7085a29d0ca713c0` · contract version in `CONTRACT_VERSION` · inst
 | `assistants/cinna-desktop.md` | You are the assistant building agents inside Cinna Desktop. |
 | `assistants/other.md` | You are anything else. |
 | `schema/cinna-agent.schema.json` | You need the exact manifest contract. |
+| `protocols/tasks.schema.json` | You implement a host's `cinna` task tools, or need their exact names and schemas — the Cinna Task Protocol. |
+| `skills/cinna-tasks/` | The skill that teaches agents the task protocol. Hosts deliver it; it is not part of an agent folder. |
 | `layout.json` | You need the folder model as data: what each folder is for, what a kit refresh may replace, what never travels to the cloud, and which file Cinna Desktop owns. |
 | `CONTRACT_VERSION` | You need the contract version this kit ships — the number `kit.py validate` gates a folder against. |
 | `templates/root/` | Setting up the root folder. |

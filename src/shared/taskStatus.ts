@@ -289,6 +289,22 @@ export function taskStatusCategory(status: TaskStatus): TaskStatusCategory | nul
 }
 
 /**
+ * The Cinna Task Protocol's word for a category (`tasks.schema.json`):
+ * the same five, with `done` for what this app calls `closed`.
+ */
+export type TaskProtocolCategory = 'backlog' | 'ready' | 'active' | 'waiting' | 'done'
+
+export const TASK_PROTOCOL_CATEGORIES: readonly TaskProtocolCategory[] = ['backlog', 'ready', 'active', 'waiting', 'done']
+
+export function toProtocolCategory(category: TaskStatusCategory): TaskProtocolCategory {
+  return category === 'closed' ? 'done' : category
+}
+
+export function fromProtocolCategory(category: TaskProtocolCategory): TaskStatusCategory {
+  return category === 'done' ? 'closed' : category
+}
+
+/**
  * The status a drop on a **user** column writes. Active and Waiting are absent
  * on purpose: a run or a question puts a task there, never a drag. The write
  * still goes through `task:set-status`, so the transition table and the claim

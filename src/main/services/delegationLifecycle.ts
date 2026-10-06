@@ -4,6 +4,8 @@ import { DELEGATION_TERMINAL_STATES, type DelegationResult } from '../../shared/
 import { canTransition, type TaskStatus } from '../../shared/taskStatus'
 import { delegationRepo, type DelegationRow, type DelegationPatch } from '../db/delegations'
 import { handoverRepo, type HandoverRow } from '../db/handovers'
+import { taskRepo } from '../db/tasks'
+import { taskResultHead } from '../../shared/handovers'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
@@ -166,7 +168,7 @@ export function createDelegationLifecycle(deps: DelegationLifecycleDeps) {
   }
 
   /**
-   * An executor that delegated onward and ended its turn — as `task_create` tells it to — is a
+   * An executor that delegated onward and ended its turn — as `tasks_create` tells it to — is a
    * relay waiting on its own delegations, not finished. Their packets resume it in its chat, and that
    * turn's outcome (`watchRelay`) settles it once nothing is owed any more.
    */
@@ -267,7 +269,7 @@ export function createDelegationLifecycle(deps: DelegationLifecycleDeps) {
     /**
      * A return packet opened a turn in `chatId`. When that chat is a local executor's, the turn is
      * the relay resuming, and its outcome settles the row by the same rules as its first turn. A
-     * relay that reports through `handover_report` has already settled it, and `applyOutcome` stops
+     * relay that reports through `tasks_report` has already settled it, and `applyOutcome` stops
      * at the terminal state.
      */
     watchRelay(scope: RunScope, chatId: string, completed: Promise<HandoverTurnOutcome>): void {
@@ -346,17 +348,29 @@ function packetRow(row: DelegationRow): HandoverRow {
   } as HandoverRow
 }
 
-/** What the requester reads when a local or cloud delegation comes back. The file channel builds its own. */
-function returnPacket(row: DelegationRow): string {
+/** The executor as the requester knows it: the delegated task's assignee name, else the target agent id. */
+function executorName(row: DelegationRow): string {
+  let name: string | null = null
+  try {
+    name = row.taskId ? taskRepo.getById(row.userId, row.taskId)?.assigneeName ?? null : null
+  } catch {
+    /* named by id */
+  }
+  return name || row.targetAgentId
+}
+
+/** What the requester reads when a local or cloud delegation comes back. The file channel builds its own. Exported for tests. */
+export function returnPacket(row: DelegationRow): string {
   const remoteTask = [row.remoteTaskKey, row.remoteUrl].filter(Boolean).join(' ')
   return [
-    `Delegation ${row.requesterKey} ${row.resultStatus ?? row.state}: ${row.summary ?? ''}`,
+    taskResultHead(executorName(row), row.taskId ?? row.requesterKey, row.resultStatus ?? row.state, row.summary || 'No summary was given.'),
+    `Delegation: ${row.requesterKey}`,
     `Target: ${row.targetAgentId}`,
     `Task: ${row.taskId}`,
     ...(row.remoteUrl ? [`Remote task: ${remoteTask}`] : []),
     ...(row.channel === 'cloud' && row.warning ? [`Note: ${row.warning}`] : []),
     ...(row.question
-      ? [`Question: ${row.question}`, `Reply with handover_reply using id "${row.id}" and your answer as message.`]
+      ? [`Question: ${row.question}`, `Reply with tasks_reply using ref "${row.taskId ?? row.id}" and your answer as message.`]
       : []),
     ...row.artifacts.map((ref) => `Artifact: ${ref}`),
     (row.resultBody ?? '').slice(0, 4000)
@@ -392,6 +406,10 @@ function getWake() {
     record(userId, id, values, expectedDigest) {
       const row = delegationRepo.recordWake(userId, id, expectedDigest, values)
       if (row?.handoverId) handoverRepo.update(userId, row.handoverId, values)
+    },
+    executorName: (row) => {
+      const delegation = delegationRepo.getById(row.userId, row.id)
+      return delegation ? executorName(delegation) : null
     },
     logger,
     now: () => Date.now(),

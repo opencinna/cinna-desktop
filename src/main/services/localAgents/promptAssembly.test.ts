@@ -1,17 +1,26 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HANDOVER_HOW_TO_REPORT } from '../../../shared/handovers'
 import {
   assembleAgentPrompt,
   assembleBareAgentPrompt,
   assembleBareNativePrompt,
   listKnowledgeTopics,
+  resolveDesktopPromptContext,
   stripHtmlComments,
   type DesktopPromptContext
 } from './promptAssembly'
 import type { CinnaAgentManifest } from '../../../shared/kit/manifest'
+
+const skill = vi.hoisted(() => ({ available: true }))
+vi.mock('../tasksSkillService', () => ({
+  tasksSkillDeliveryFor: (engine: string) => !skill.available
+    ? null
+    : engine === 'codex'
+      ? { kind: 'pointer', path: '/app/kit/skills/cinna-tasks/SKILL.md' }
+      : { kind: 'skill' }
+}))
 
 /**
  * The assembled system prompt.
@@ -667,17 +676,52 @@ describe('the agent’s own identifiers and the handover protocol', () => {
     }
   })
 
-  it('teaches the handover protocol in every prompt, with this agent as the origin', () => {
+  it('carries the Cinna tasks stub in every prompt, with this agent as the origin, and not the file protocol', () => {
+    // The 60-line file protocol moved into the cinna-tasks skill
+    // (references/file-protocol.md). Mutation: put the old requester section
+    // back and the brief example's lines reappear.
     for (const [kind, prompt] of Object.entries(prompts(dir, withId))) {
-      expect(prompt, kind).toContain('## Handing work to another project')
-      expect(prompt, kind).toContain('.cinna/handovers/<id>/brief.md')
-      expect(prompt, kind).toContain('agent: folder:invoices')
-      expect(prompt, kind).toContain('status: ready')
-      // The reporting instructions the brief has to end with, verbatim from the
-      // contract module — an executor in a terminal gets nothing else.
-      expect(prompt, kind).toContain(HANDOVER_HOW_TO_REPORT)
-      // Chat and task ids are per turn and arrive in the wire-only header.
-      expect(prompt, kind).toContain("chat: <the chat id from this turn's context>")
+      expect(prompt, kind).toContain('## Cinna tasks')
+      expect(prompt, kind).toContain('every tool starts with `tasks_`')
+      expect(prompt, kind).toContain('`tasks_report`')
+      expect(prompt, kind).toContain('Never wait inside a turn')
+      expect(prompt, kind).toContain('`folder:invoices` — the `origin.agent`')
+      expect(prompt, kind).not.toContain('## Handing work to another project')
+      expect(prompt, kind).not.toContain('status: ready')
+      // No skill line when the context does not say how to open one.
+      expect(prompt, kind).not.toContain('before your first `tasks_*` call')
+    }
+  })
+
+  it('says how to open the skill the way this engine can', () => {
+    const skillLine = 'Open the `cinna-tasks` skill before your first `tasks_*` call.'
+    const withSkill = prompts(dir, { ...withId, tasksSkill: { kind: 'skill' } })
+    for (const prompt of Object.values(withSkill)) {
+      expect(prompt).toContain(skillLine)
+    }
+    // The whole native document, which is mostly this section: its wording is
+    // what every Claude bare folder gets appended to the preset.
+    expect(withSkill.native).toMatchSnapshot()
+    const pointer = { kind: 'pointer' as const, path: '/app/kit/skills/cinna-tasks/SKILL.md' }
+    for (const prompt of Object.values(prompts(dir, { ...withId, tasksSkill: pointer }))) {
+      expect(prompt).toContain('Read `/app/kit/skills/cinna-tasks/SKILL.md` before your first `tasks_*` call.')
+      expect(prompt).not.toContain(skillLine)
+    }
+  })
+
+  it('resolves the delivery per engine, and none without an engine or a skill', () => {
+    // Claude (plugin) and OpenCode (skills.paths) load the skill; Codex gets a
+    // path. Mutation: ignore the engine and Codex is told to open a skill it
+    // has no loader for.
+    expect(resolveDesktopPromptContext('claude').tasksSkill).toEqual({ kind: 'skill' })
+    expect(resolveDesktopPromptContext('opencode').tasksSkill).toEqual({ kind: 'skill' })
+    expect(resolveDesktopPromptContext('codex').tasksSkill).toEqual({ kind: 'pointer', path: '/app/kit/skills/cinna-tasks/SKILL.md' })
+    expect('tasksSkill' in resolveDesktopPromptContext()).toBe(false)
+    skill.available = false
+    try {
+      expect(resolveDesktopPromptContext('claude').tasksSkill).toBeNull()
+    } finally {
+      skill.available = true
     }
   })
 
@@ -687,7 +731,7 @@ describe('the agent’s own identifiers and the handover protocol', () => {
     // executor that `origin.agent` is `undefined`.
     for (const [kind, prompt] of Object.entries(prompts(dir, CONTEXT))) {
       expect(prompt, kind).not.toContain('Your Cinna agent id')
-      expect(prompt, kind).not.toContain('## Handing work to another project')
+      expect(prompt, kind).not.toContain('## Cinna tasks')
       expect(prompt, kind).not.toContain('undefined')
     }
   })
@@ -697,7 +741,7 @@ describe('the agent’s own identifiers and the handover protocol', () => {
     // snapshot above pins is still there, in the same order.
     const before = assembleAgentPrompt(dir, manifest(), CONTEXT)
     const after = assembleAgentPrompt(dir, manifest(), withId)
-    const added = ['- Your Cinna agent id is', '## Handing work to another project']
+    const added = ['- Your Cinna agent id is', '## Cinna tasks']
     expect(after.startsWith(before.slice(0, before.indexOf('- Long output goes')))).toBe(true)
     for (const marker of added) expect(before).not.toContain(marker)
     // And the sections it already had survive the two insertions.

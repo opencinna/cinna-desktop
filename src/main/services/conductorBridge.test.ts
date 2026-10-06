@@ -50,10 +50,12 @@ describe('runtime tool integration', () => {
       { chatId: 'ordinary-folder', wireContent: 'Work', signal: new AbortController().signal, runScope: { profileUserId: 'user', settingsUserId: 'settings' } }, plan, vi.fn(), () => true)
     const providers = await state.options!.getProviders()
     const tools = providers.flatMap((provider) => provider.getTools()).map((tool) => tool.name)
-    expect(tools).toEqual(expect.arrayContaining(['handover_targets', 'handover_list', 'handover_reply', 'handover_report',
-      'tasks_list', 'task_create', 'task_update', 'task_comment']))
-    // `task_create` with an assignee is the only way to delegate through a tool.
-    expect(tools).not.toContain('handover_create')
+    expect(tools).toEqual(expect.arrayContaining(['tasks_targets', 'tasks_list', 'tasks_get', 'tasks_create', 'tasks_update',
+      'tasks_comment', 'tasks_report', 'tasks_reply']))
+    // `tasks_create` with an assignee is the only way to delegate through a tool; no old name survives as an alias.
+    for (const old of ['handover_create', 'handover_targets', 'handover_list', 'handover_reply', 'handover_report', 'task_create', 'task_update', 'task_comment']) {
+      expect(tools).not.toContain(old)
+    }
     expect(new Set(providers.flatMap((provider) => provider.getTools()).filter((tool) => tool.name.startsWith('task')).map((tool) => tool.mcpProviderId)))
       .toEqual(new Set(['cinna-handovers']))
     expect(plan.session.mcpServers).toEqual([expect.objectContaining({ name: 'cinna', type: 'http' })])

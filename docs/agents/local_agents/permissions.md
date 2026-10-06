@@ -89,6 +89,8 @@ A session's `location.directory` **is** the agent folder, so every resource the 
 
 This is a deliberate widening. The profile before it allowed writes only under `app-data/` and only three shapes of command, which meant the agent could not write a script it had just been asked to write without a dialog. **A permission prompt that fires constantly is not a control; it is a thing users learn to click through.** What is left asking is what the folder boundary does not cover.
 
+**Two allows reach outside the folder, both for the platform's own skill.** The `cinna-tasks` skill ([The Cinna Task Protocol](../../jobs/tasks/task_protocol.md)) lives in the app's bundled kit, which OpenCode is pointed at through `skills.paths`. Opening that skill (`skill`, pattern `cinna-tasks`) is allowed while every other skill asks, and `external_directory` allows the bundle's `skills/` folder while everything else outside the agent folder still asks. Without them every turn that used the task tools would stop at least once for a click on text the app itself ships. A manifest that sets its own `external_directory` replaces that entry whole, allow included, as any override does.
+
 ### The catch-all has to be written down
 
 `'*': 'ask'` is an explicit entry. OpenCode's own base rule is allow-everything for every permission name — read back off a running engine, not assumed — so a profile that enumerates only the tools it knows about leaves *every other tool* on allow, which is the opposite of what enumerating them was for.

@@ -62,7 +62,7 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     id: 'claude.permission.write-outside-cwd', area: 'permissions & questions', surface: 'ACP method', name: 'sibling write / session/request_permission',
     expectation: 'A sibling-directory Write in default mode raises an edit permission and allow_once writes the file. In isolated fake-provider auto mode, no ACP ask is raised and the unavailable classifier refuses the write; authenticated classifier decisions are not established.',
     owners: ['src/main/agents/drivers/acp/acpLaunchers.ts#modeId'],
-    feature: 'The file-handover requester cannot assume it can write another adopted folder unattended; task_create with an assignee supplies the main-owned alternative.',
+    feature: 'The file-handover requester cannot assume it can write another adopted folder unattended; tasks_create with an assignee supplies the main-owned alternative.',
     flow: { steps: ['none'], note: 'the whole flow does not write another adopted folder' }
   },
   {
@@ -116,6 +116,13 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     owners: [`${LAUNCHERS}#agents`, 'src/main/agents/drivers/acp/claudeAgents.ts#readFolderAgents'],
     feature: 'A kit folder’s own subagents silently disappear from its sealed session.',
     flow: { steps: ['none'], note: 'no step uses a folder with subagents' }
+  },
+  {
+    id: 'claude.session.options-plugins', area: 'session lifecycle', surface: '_meta key', name: '_meta.claudeCode.options.plugins',
+    expectation: 'A local plugin passed as `plugins: [{ type: "local", path }]` loads under `settingSources: []` as well as under the native sources: its skill is offered to the model as `cinna-tasks:cinna-tasks` (Claude Code namespaces plugin skills `<plugin>:<skill>`; the bare `cinna-tasks` is accepted too).',
+    owners: [`${LAUNCHERS}#tasksSkillPlugin`, 'src/main/services/tasksSkillService.ts#ensureTasksSkillPlugin'],
+    feature: 'Folder agents on Claude are told to open the `cinna-tasks` skill and have none, so the task verbs, delegation and the file protocol are never read.',
+    flow: { steps: ['none'], note: 'no step asserts on the skill list' }
   },
   {
     id: 'claude.session.set-mode', area: 'session lifecycle', surface: 'ACP method', name: 'session/set_mode',

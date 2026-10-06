@@ -34,7 +34,7 @@ vi.mock('../db/tasks', () => ({ taskRepo: { getByChatId: () => undefined } }))
 vi.mock('../db/delegations', () => ({ delegationRepo: { byTaskId: () => undefined } }))
 vi.mock('./delegationToolProvider', () => ({ DelegationToolProvider: class {
   providerType = 'handover'; displayName = 'Handovers'
-  getTools() { return [{ name: 'handover_list' }] }
+  getTools() { return [{ name: 'tasks_list' }] }
 } }))
 vi.mock('../tasks/toolCallBudget', () => ({ taskToolCallBudgetForChat: () => null }))
 vi.mock('../mcp/manager', () => ({ mcpManager: {
@@ -93,7 +93,7 @@ describe('agent MCP addons', () => {
     state.connected = new Set(['gh', 'shared', 'mode'])
     const { lease, chatId } = await prepare(alpha)
     const names = await tools(JSON.stringify([chatId, 'alpha']))
-    expect(names).toEqual(expect.arrayContaining(['gh_tool', 'shared_tool', 'mode_tool', 'handover_list']))
+    expect(names).toEqual(expect.arrayContaining(['gh_tool', 'shared_tool', 'mode_tool', 'tasks_list']))
     expect(names.filter((name) => name === 'shared_tool')).toHaveLength(1)
     lease?.close()
   })

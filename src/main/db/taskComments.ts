@@ -7,7 +7,7 @@ import { taskComments } from './schema'
 export type TaskCommentRow = typeof taskComments.$inferSelect
 
 /**
- * Comments on a task (`task_comment`). Device-local: not a synced collection,
+ * Comments on a task (`tasks_comment`). Device-local: not a synced collection,
  * and gone with the task row (`ON DELETE CASCADE`; a soft-deleted task keeps
  * them until it is hard-deleted). Bodies are redacted on the way in, as task
  * fields are.
