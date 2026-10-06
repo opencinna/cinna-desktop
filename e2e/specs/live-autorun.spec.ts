@@ -256,8 +256,11 @@ async function awaitAutoStart(cinna: CinnaApp, b: Brief, landedAt: number, label
 async function expectDone(cinna: CinnaApp, folder: string, b: Brief, taskId: string): Promise<void> {
   await expect.poll(() => contentOf(join(folder, b.file)), { message: `${b.file} holds the word`, timeout: TURN })
     .toBe(b.word)
-  await expect.poll(() => reportStatus(folder, b.id), { message: 'report.md says done', timeout: 120_000 })
+  // The executor has the `cinna` tools, so it reports with `tasks_report` and
+  // report.md keeps whatever it wrote before starting; the handover row is the record.
+  await expect.poll(async () => (await rowOf(cinna, taskId))?.state ?? null, { message: 'the handover reports done (tasks_report or report.md)', timeout: 120_000 })
     .toBe('done')
+  expect(['in_progress', 'done', 'no report']).toContain(reportStatus(folder, b.id))
   await expect.poll(() => statusOf(cinna, taskId), { message: 'the task completes', timeout: 120_000 })
     .toBe('completed')
   const row = await rowOf(cinna, taskId)
@@ -625,8 +628,8 @@ test('@live 5 a real coordinator delegates without execution to an auto bare fol
         return (chat?.messages ?? []).filter((m) => m.role === 'system' && m.content.startsWith('Task result from ') && m.content.split('\n')[0].endsWith('on group `autorun`: finished — 2 tasks:')).length
       }, chatId), { timeout: TURN, intervals: [2_000] }).toBe(1)
       const packet = await cinna.page.evaluate(async (id) => (await window.api.chat.get(id))!.messages.find((m) => m.role === 'system')!.content, chatId)
-      expect(packet).toContain('`auto-kit` — done')
-      expect(packet).toContain('`auto-bare` — done')
+      expect(packet).toMatch(/`auto-kit` \([^)]*\) — done/)
+      expect(packet).toMatch(/`auto-bare` \([^)]*\) — done/)
       expect(packet).toContain(WORD_K)
       expect(packet).toContain(WORD_B)
     })

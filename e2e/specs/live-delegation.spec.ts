@@ -261,8 +261,8 @@ test('@live fan-out to a kit and a bare folder: two Inbox gates, one group packe
       await expect.poll(async () => (await messagesOf(cinna, chatId)).filter((m) => m.role === 'system' && m.content.startsWith('Task result from ') && m.content.split('\n')[0].endsWith('on group `fanout`: finished — 2 tasks:')).length,
         { timeout: TURN, intervals: [5_000] }).toBe(1)
       const packet = (await messagesOf(cinna, chatId)).find((m) => m.role === 'system')!
-      expect(packet.content).toContain('`fanout-b` — done')
-      expect(packet.content).toContain('`fanout-c` — done')
+      expect(packet.content).toMatch(/`fanout-b` \([^)]*\) — done/)
+      expect(packet.content).toMatch(/`fanout-c` \([^)]*\) — done/)
       return packet.at
     })
 
