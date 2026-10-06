@@ -26,6 +26,7 @@ beforeEach(() => {
 })
 vi.mock('../../hooks/useProviders', () => ({ useProviders: () => ({ data: providers }) }))
 vi.mock('../../hooks/useModels', () => ({ useModels: () => ({ data: models }) }))
+vi.mock('../chat/voice/useSpeechStatus', () => ({ useSpeechStatus: () => ({ supported: false, engine: null, authorization: 'unknown' }) }))
 vi.mock('../../hooks/useAppSettings', () => ({
   useAiFunctionsBackend: () => ({ data: functionsBackend }),
   useAppSettings: () => ({ data: settings, isLoading: false, isError }),

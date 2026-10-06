@@ -7,6 +7,7 @@ import type { AgentEngine } from '../shared/engine'
 import type { JobExecuteResult } from '../shared/jobs'
 import { isRunWatchMessage, type RunWatchMessage } from '../shared/runWatch'
 import type { AutonomousTaskStart } from '../shared/taskRuntime'
+import type { SpeechStatus, TranscribeRequest, TranscribeResult } from '../shared/speech'
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
 import type {
@@ -1991,6 +1992,14 @@ const api = {
       ipcRenderer.on(CLAUDE_BINARY_CHANNEL, listener)
       return () => ipcRenderer.off(CLAUDE_BINARY_CHANNEL, listener)
     }
+  },
+
+  speech: {
+    /** Whether voice input works here, and through which engine. Probed once in main. */
+    status: (): Promise<SpeechStatus> => ipcRenderer.invoke('speech:status'),
+    /** A 16-bit PCM mono WAV → text. Failures are data (`success: false`, `code`). */
+    transcribe: (request: TranscribeRequest): Promise<TranscribeResult> =>
+      ipcRenderer.invoke('speech:transcribe', request)
   },
 
   tray: {

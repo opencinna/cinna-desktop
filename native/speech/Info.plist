@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>CFBundleIdentifier</key>
+    <string>io.opencinna.desktop.speech</string>
+    <key>CFBundleName</key>
+    <string>cinna-speech</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Cinna turns what you dictate into chat messages on this Mac.</string>
+  </dict>
+</plist>

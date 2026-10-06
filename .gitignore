@@ -26,3 +26,6 @@ e2e/playwright-report
 # The bundled kit is core's tree byte for byte; a global ignore (e.g. of
 # `.claude/settings.local.json`) must not drop a file of it from the repo.
 !/resources/cinna-agent-kit/**
+
+# The macOS speech helper, built by scripts/build-speech-helper.sh.
+/resources/speech/

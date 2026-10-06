@@ -8,6 +8,9 @@ export const CONTEXT_MENU_ITEM = `${MENU_ITEM} focus-visible:bg-[var(--color-bg-
 /** The menu surface, narrower than `OpenInMenu`'s. */
 export const CONTEXT_MENU_SURFACE = MENU_SURFACE.replace('w-56', 'w-44')
 
+/** Every kind of menu row takes focus and arrow-key moves: plain, radio and checkbox items. */
+const ENABLED_ITEMS = ['menuitem', 'menuitemradio', 'menuitemcheckbox'].map((role) => `[role="${role}"]:not(:disabled)`).join(',')
+
 interface ContextMenuProps {
   /** The pointer, where the menu opens; clamped to the viewport. */
   x: number
@@ -59,7 +62,7 @@ export function ContextMenu({
   }, [x, y, error])
 
   useLayoutEffect(() => {
-    ref.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true })
+    ref.current?.querySelector<HTMLButtonElement>(ENABLED_ITEMS)?.focus({ preventScroll: true })
     const outside = (event: PointerEvent): void => {
       if (!ref.current?.contains(event.target as Node)) onClose()
     }
@@ -97,7 +100,7 @@ export function ContextMenu({
     }
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
     event.preventDefault()
-    const items = Array.from(ref.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])
+    const items = Array.from(ref.current?.querySelectorAll<HTMLButtonElement>(ENABLED_ITEMS) ?? [])
     if (items.length === 0) return
     const at = items.indexOf(document.activeElement as HTMLButtonElement)
     items[(at + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus()

@@ -72,6 +72,9 @@ const ANIMATION_KEY = 'cinna-extra-ui-animation'
 // so the app always starts on the new-chat screen.
 const SIDEBAR_KEY = 'cinna-sidebar-open'
 const SIDEBAR_DOCKING_KEY = 'cinna-sidebar-docking'
+// The microphone voice input records from; absent means the system default.
+const VOICE_INPUT_DEVICE_KEY = 'cinna-voice-input-device'
+const VOICE_INPUT_SHOWN_KEY = 'cinna-show-voice-input'
 // Whether a long markdown preview opens with its Contents panel showing.
 const PREVIEW_CONTENTS_KEY = 'cinna-preview-contents-open'
 // How the Chats list is grouped, and which of its groups are collapsed.
@@ -195,6 +198,10 @@ interface UIStore {
   /** Fixed mode's open/closed state; hover mode leaves it as it was. */
   sidebarOpen: boolean
   sidebarDocking: SidebarDocking
+  /** The composer's voice-input microphone (`MediaDeviceInfo.deviceId`); null is the system default. */
+  voiceInputDeviceId: string | null
+  /** The composer's voice input button; Settings → Interface or its own menu turn it off. */
+  showVoiceInput: boolean
   /** Hover mode only: the sidebar is floating over the chat now. Not persisted. */
   sidebarPeek: boolean
   /**
@@ -250,6 +257,8 @@ interface UIStore {
   removeDraftingAgentId: (id: string) => void
   toggleSidebar: () => void
   setSidebarDocking: (docking: SidebarDocking) => void
+  setVoiceInputDeviceId: (deviceId: string | null) => void
+  setShowVoiceInput: (show: boolean) => void
   setSidebarPeek: (peek: boolean) => void
   /** Show the sidebar from code: opens it in fixed mode, peeks it in hover mode. */
   revealSidebar: () => void
@@ -293,6 +302,8 @@ export const useUIStore = create<UIStore>((set, get) => ({
   draftingAgentIds: [],
   sidebarOpen: localStorage.getItem(SIDEBAR_KEY) !== '0',
   sidebarDocking: readSidebarDocking(),
+  voiceInputDeviceId: localStorage.getItem(VOICE_INPUT_DEVICE_KEY) || null,
+  showVoiceInput: localStorage.getItem(VOICE_INPUT_SHOWN_KEY) !== '0',
   sidebarPeek: false,
   previewContentsOpen: localStorage.getItem(PREVIEW_CONTENTS_KEY) !== '0',
   theme: resolveTheme(readThemePreference()),
@@ -361,6 +372,15 @@ export const useUIStore = create<UIStore>((set, get) => ({
     set(docking === 'fixed' ? { sidebarDocking: docking, sidebarOpen: true, sidebarPeek: false } : { sidebarDocking: docking, sidebarPeek: false })
   },
   setSidebarPeek: (sidebarPeek) => set({ sidebarPeek }),
+  setVoiceInputDeviceId: (voiceInputDeviceId) => {
+    if (voiceInputDeviceId) localStorage.setItem(VOICE_INPUT_DEVICE_KEY, voiceInputDeviceId)
+    else localStorage.removeItem(VOICE_INPUT_DEVICE_KEY)
+    set({ voiceInputDeviceId })
+  },
+  setShowVoiceInput: (showVoiceInput) => {
+    localStorage.setItem(VOICE_INPUT_SHOWN_KEY, showVoiceInput ? '1' : '0')
+    set({ showVoiceInput })
+  },
   revealSidebar: () => {
     const state = get()
     if (state.sidebarDocking === 'hover') {
@@ -456,6 +476,9 @@ const syncAppearance = (event: StorageEvent): void => {
   if (event.key === TASKS_BUTTON_KEY || event.key === null) {
     const show = localStorage.getItem(TASKS_BUTTON_KEY) !== '0'
     if (show !== useUIStore.getState().showTasksButton) useUIStore.getState().setShowTasksButton(show)
+  }
+  if (event.key === VOICE_INPUT_SHOWN_KEY || event.key === null) {
+    useUIStore.setState({ showVoiceInput: localStorage.getItem(VOICE_INPUT_SHOWN_KEY) !== '0' })
   }
   if (event.key === ANIMATION_KEY || event.key === null) {
     useUIStore.setState({ extraUIAnimation: localStorage.getItem(ANIMATION_KEY) !== '0' })

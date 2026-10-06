@@ -7,6 +7,7 @@ import { AI_SPENDING_LEVELS, AI_SPENDING_LEVEL_LABEL } from '../../../../shared/
 import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
 import { useUIStore, type SidebarDocking, type ThemePreference } from '../../stores/ui.store'
 import { unwrapIpcError } from '../../utils/ipcError'
+import { useSpeechStatus } from '../chat/voice/useSpeechStatus'
 import {
   SettingsButton,
   SettingsLabel,
@@ -58,6 +59,9 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const setExtraUIAnimation = useUIStore((s) => s.setExtraUIAnimation)
   const showTasksButton = useUIStore((s) => s.showTasksButton)
   const setShowTasksButton = useUIStore((s) => s.setShowTasksButton)
+  const showVoiceInput = useUIStore((s) => s.showVoiceInput)
+  const setShowVoiceInput = useUIStore((s) => s.setShowVoiceInput)
+  const speech = useSpeechStatus()
   const { data: settings, isLoading, isError } = useAppSettings()
   const setSetting = useSetAppSetting()
   const { data: providers } = useProviders()
@@ -237,6 +241,16 @@ export function FeaturesSettingsSection(): React.JSX.Element {
             onToggle={() => setShowTasksButton(!showTasksButton)}
             title={showTasksButton ? 'The Tasks button is in the top bar' : 'The Tasks button is hidden'}
           />
+          {speech.supported && (
+            <SettingsToggleRow
+              id="feature-show-voice-input"
+              label="Show audio input"
+              description="Shows the microphone button beside Send in the composer. Click it, or the headphone button, to dictate; double-click the headphone button to send. Speech is turned into text by macOS's own speech recognition, on this Mac: Cinna sends the recording nowhere. The transcription service is provided by Apple, the maker of your device and its operating system, not by Cinna."
+              checked={showVoiceInput}
+              onToggle={() => setShowVoiceInput(!showVoiceInput)}
+              title={showVoiceInput ? 'The audio input button is in the composer' : 'The audio input button is hidden'}
+            />
+          )}
           <SettingsToggleRow
             id="feature-enable-tray-icon"
             label="Enable Tray Icon"

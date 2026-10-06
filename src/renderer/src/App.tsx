@@ -18,6 +18,7 @@ import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
 import { AgentColorsProvider } from './components/agents/AgentColorsProvider'
 import { FilePreviewModal } from './components/chat/FilePreviewModal'
 import { useAuthStore } from './stores/auth.store'
+import { fetchSpeechStatus, SPEECH_STATUS_QUERY_KEY } from './components/chat/voice/useSpeechStatus'
 import { flagReauthFromError } from './stores/reauth.store'
 import { useProviders } from './hooks/useProviders'
 import { useStartup } from './hooks/useAuth'
@@ -57,6 +58,10 @@ const queryClient = new QueryClient({
     }
   }
 })
+
+// Main's speech probe, asked once at start: the composer's mic button and the
+// Features row would otherwise appear a beat after their surface (ux_rules §1).
+void queryClient.prefetchQuery({ queryKey: SPEECH_STATUS_QUERY_KEY, queryFn: fetchSpeechStatus })
 
 function AuthGate({ children }: { children: React.ReactNode }): React.JSX.Element {
   const needsPassword = useAuthStore((s) => s.needsPassword)

@@ -54,6 +54,13 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 2. Off removes the top bar's Tasks button; the [Tasks view](../../jobs/tasks_view/tasks_view.md) is then not reachable, and turning it off while that view is open returns to the chats rather than leaving a page with no way back to it.
 3. Like the appearance preferences, it is a renderer preference saved immediately, machine-wide and shared between app windows, and stays usable while service-backed settings are unavailable.
 
+### Show audio input
+
+1. Open Features → Interface → **Show audio input**, the row right after Tasks button (on by default). It exists only where [voice input](../../chat/voice_input/voice_input.md) is supported — today, macOS with the bundled speech helper — and the speech status is fetched at app start so the row is there when the tab opens rather than arriving a beat later and pushing the rows below it down.
+2. Off removes the composer's microphone button. The button's own right-click menu has the same switch; turning it off there shows an info toast that links back to this row.
+3. Its (?) text says what the user is agreeing to: macOS's own recognition, on this Mac, the recording sent nowhere by Cinna, and the service provided by Apple rather than by Cinna. Keep that promise true: recognition is on-device only.
+4. Like the Tasks button, it is a renderer preference (`cinna-show-voice-input` in localStorage), saved immediately, machine-wide and shared between app windows.
+
 ### Agent sidebar sections
 
 1. Open Features → Interface → **Show sections in Agents sidebar** (on by default).

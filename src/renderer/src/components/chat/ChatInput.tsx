@@ -58,6 +58,8 @@ import type { NoteData } from '../../../../shared/notes'
 import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
 import { useComposerDraftStore } from '../../stores/composerDraft.store'
 import { useRunQueue } from '../../hooks/useRunQueue'
+import { VoiceInputButton } from './voice/VoiceInputButton'
+import { useVoiceErrorToast } from './voice/useVoiceErrorToast'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type TriggerChar = '@' | '#' | '/' | '?'
@@ -341,6 +343,20 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     remove: handleRemoveAttachment,
     setError: setAttachError
   } = useChatAttachments(chatId, attachScope, draftKey)
+  // Dictated text joins the draft after a space, and the cursor goes to its end.
+  // Writes the draft store, so a transcription that finishes after this
+  // composer unmounted still lands in its draft. One from a chat the user has
+  // since left must not move the caret in the chat they are in now.
+  const liveDraftKey = useRef(draftKey)
+  liveDraftKey.current = draftKey
+  const appendDictation = useCallback((text: string) => {
+    setInput((current) => (current && !/\s$/.test(current) ? `${current} ${text}` : `${current}${text}`))
+    const textarea = textareaRef.current
+    if (!textarea || liveDraftKey.current !== draftKey) return
+    textarea.focus()
+    requestAnimationFrame(() => textarea.setSelectionRange(textarea.value.length, textarea.value.length))
+  }, [setInput, draftKey])
+  const showVoiceError = useVoiceErrorToast()
   // The send. Who answers is main's decision, from `chats.router`; the composer
   // only says which agent the user addressed.
   const composer = useChatComposer(chatId)
@@ -1658,6 +1674,27 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     ? 'var(--color-accent)'
     : modeColor ? modeColor.border : 'var(--color-border)'
 
+  const sendDisabled =
+    sending ||
+    (editingId
+      ? !input.trim()
+      : blocksSend ||
+        (isStreaming
+          ? !input.trim()
+          : !input.trim() &&
+            !(
+              chatId !== null &&
+              ((targetSupportsAttachments && pendingAttachments.length > 0) ||
+                pendingNotes.length > 0)
+            )))
+  // The headphone double click: exactly what a click on Send would do, and
+  // nothing where Send is disabled or Stop stands in its place.
+  const sendFromHeadphones = (): void => {
+    if (showStop || sendDisabled) return
+    textareaRef.current?.focus()
+    void handleSend()
+  }
+
   return (
     <div data-sidebar-band-limit className="w-full max-w-3xl mx-auto px-4 relative">
       <div className="absolute bottom-full right-4 mb-2"><PendingHandoffControl chatId={chatId} /></div>
@@ -1960,6 +1997,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               turn runs: Stop on an empty input, a blue Send (into the turn or
               its queue) while there is text. Esc Esc stops the turn in either,
               except while a queued message is edited, where Esc leaves the edit. */}
+          {/* Voice input, left of Send: the transcript is appended to the
+              draft, never sent by itself; a headphone double click sends it.
+              Its errors are toasts: often heard, not watched, from the headphones.
+              Keyed by the draft, so a chat switch unmounts it: a recording is
+              discarded, and a transcription in flight lands in the old draft
+              and is never sent from the new chat. */}
+          <VoiceInputButton key={draftKey} onText={appendDictation} onError={showVoiceError} onSend={sendFromHeadphones} composerRef={textareaRef} />
           {/* Separate keys, so focus never passes from Send to Stop on one node;
               a click on Send hands focus back to the input instead. */}
           {showStop ? (
@@ -1983,20 +2027,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               aria-label={editingId ? 'Save' : 'Send'}
               aria-describedby={!editingId && readiness.text ? readinessReasonId : undefined}
               title={editingId ? 'Save queued message' : (held ? sendHold : null) ?? (readiness.refusal ? readiness.title : null) ?? (isStreaming ? 'Send a follow-up · Esc Esc to stop' : undefined)}
-              disabled={
-                sending ||
-                (editingId
-                  ? !input.trim()
-                  : blocksSend ||
-                    (isStreaming
-                      ? !input.trim()
-                      : !input.trim() &&
-                        !(
-                          chatId !== null &&
-                          ((targetSupportsAttachments && pendingAttachments.length > 0) ||
-                            pendingNotes.length > 0)
-                        )))
-              }
+              disabled={sendDisabled}
               className={`p-1.5 rounded-lg ${isStreaming ? 'bg-[var(--color-send-queued)]' : 'bg-[var(--color-success)]'} hover:opacity-80 text-white
                 disabled:opacity-20 disabled:cursor-not-allowed transition-opacity`}
             >

@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict')
-const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync } = require('node:fs')
+const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync, chmodSync } = require('node:fs')
 const { tmpdir } = require('node:os')
 const { join } = require('node:path')
 const { test } = require('node:test')
@@ -119,6 +119,12 @@ test('build hooks preserve resource patterns and reject a broken shipped tree', 
   const shipped = pkg(canvasName, { main: 'skia.darwin-x64.node' }, unpacked)
   assert.throws(() => afterPack(context), /Missing native Canvas binary/)
   writeFileSync(join(shipped, 'skia.darwin-x64.node'), 'native fixture')
+  // A mac package without the voice-input helper, or with one that cannot run.
+  assert.throws(() => afterPack(context), /speech helper .*scripts\/build-speech-helper\.sh/)
+  mkdirSync(join(root, 'speech'))
+  writeFileSync(join(root, 'speech', 'cinna-speech'), 'helper fixture', { mode: 0o644 })
+  assert.throws(() => afterPack(context), /Missing executable speech helper/)
+  chmodSync(join(root, 'speech', 'cinna-speech'), 0o755)
   assert.doesNotThrow(() => afterPack(context))
 })
 

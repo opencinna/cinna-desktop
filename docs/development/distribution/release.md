@@ -141,8 +141,8 @@ source ~/.cinna-desktop-signing.env
 npm run build:mac
 ```
 
-This script (defined in `package.json`) runs `electron-vite build && electron-builder --mac` and, with the env vars present, will:
-1. Compile main/preload/renderer.
+This script (defined in `package.json`) runs `electron-vite build && sh scripts/build-speech-helper.sh && electron-builder --mac` and, with the env vars present, will:
+1. Compile main/preload/renderer, and build the [voice input helper](#voice-input-helper).
 2. Discover ACP dependencies and prepare target-native payloads, package the app for both `x64` and `arm64`, and validate required ACP manifests and Canvas payloads in each shipped unpacked tree (hooks in `electron-builder.yml`; see [Packaged Runtime Dependencies](packaged_runtime.md)).
 3. Sign every binary with your Developer ID cert.
 4. Upload to Apple's notary service and wait (typically 2–10 min per arch).
@@ -164,9 +164,25 @@ The `notarize:dmgs` script (in `package.json`) loops over every `dist/cinna-desk
 
 > If you want a single command that does build + DMG-notarize in one go, run: `npm run build:mac && npm run notarize:dmgs`.
 
+### Voice input helper
+
+Composer [voice input](../../chat/voice_input/voice_input.md) runs a native program, `cinna-speech`, that the app ships at `Contents/Resources/speech/cinna-speech`.
+
+- **Built, not committed.** `scripts/build-speech-helper.sh` (also `make speech-helper`) compiles `native/speech/` into the gitignored `resources/speech/`. `build:mac`, `build:mac:unsigned`, `release:mac`, `release:all` and `scripts/bare-mac/package-app.sh` run it before electron-builder; off macOS it does nothing.
+- **The release machine needs Xcode 26.** The macOS 26 backend (SpeechAnalyzer) compiles only against the macOS 26 SDK, which only Xcode 26 ships; the Command Line Tools SDKs stop at 15.x. With an older SDK the script prints a `WARNING` and builds an SFSpeechRecognizer-only helper, which still works everywhere but never uses the better recognizer on macOS 26. Read the build log for that warning before publishing. Select Xcode with `xcode-select`; check with `xcrun --sdk macosx --show-sdk-version`. The deployment target stays macOS 12.
+- **Mac-only `extraResources`.** The entry lives under `mac:` in `electron-builder.yml`, so Linux and Windows builds never look for a directory only a Mac can build. `resources/speech/**` is excluded from `files`, because an executable must sit outside the asar.
+- **`afterPack` refuses a darwin package without it.** `extraResources` copies whatever the directory holds and says nothing when it is empty, so a build that skipped the script would lose voice input silently. `verifySpeechHelper` in `scripts/packaged-dependencies.cjs` fails the build unless the shipped helper is an executable file. So `release:all` and any `--mac` packaging need a Mac, since only a Mac can build the helper.
+- **Signing.** The script ad-hoc signs the helper with the identifier `io.opencinna.desktop.speech`; electron-builder re-signs it with the app's Developer ID and hardened runtime. A notarized `build:mac` with the helper inside has not been run yet; check the notary log for it on the first release that carries it.
+- **Permissions.** `build/entitlements.mac.plist` grants `com.apple.security.device.audio-input` (the hardened runtime blocks the microphone without it, whatever the user answers), and `mac.extendInfo` declares `NSSpeechRecognitionUsageDescription`. macOS charges speech recognition to the *app that launched the helper*, and kills the helper outright when that app has no such string. The helper also embeds its own copy in an `__info_plist` section.
+- **Testing needs a packaged build.** From a terminal (`npm run dev`) the terminal is the responsible process and the helper dies with SIGABRT, so voice input can only be exercised in a packaged app started with `open`. See [Voice Input — LLM Reference](../../chat/voice_input/voice_input_llm.md#testing).
+
+### Usage strings: `extendInfo` is a map
+
+`mac.extendInfo` in `electron-builder.yml` must be a YAML **map**. It used to be a list, which electron-builder wrote into `Info.plist` under numbered keys (`"0"`, `"1"`, …); macOS never saw `NSCameraUsageDescription`, `NSMicrophoneUsageDescription`, `NSDocumentsFolderUsageDescription`, `NSDownloadsFolderUsageDescription` or `NSAppleEventsUsageDescription`, and every one of those prompts showed the system's generic wording instead of Cinna's. To check a build: `plutil -p "<app>/Contents/Info.plist" | grep UsageDescription` must list the keys by name.
+
 ## Verifying the result
 
-After the build, run the [packaged runtime checks](packaged_runtime.md#commands-and-coverage) against the artifact on a compatible host before publishing. `afterPack` automatically validates the required ACP manifest tree and target Canvas payload before signing, including cross-builds; it does not execute either smoke check. The ACP check uses packaged Electron, while the main check uses project Electron by default, or an explicitly supplied matching target Electron, against copied packaged files. A cross-built artifact needs a runtime matching its architecture and Electron/native ABI. Record the tested platform/architecture and keep untested targets explicit; measured runtime coverage includes signed macOS arm64 and x64 under Rosetta, with explicit Canvas drawing passing on both. Linux CI passed the packaging tests and build guards; Linux runtime remains unverified. See the guide's [evidence table](packaged_runtime.md#evidence-and-limits) before extending that claim to another artifact.
+After the build, run the [packaged runtime checks](packaged_runtime.md#commands-and-coverage) against the artifact on a compatible host before publishing. `afterPack` automatically validates the required ACP manifest tree and target Canvas payload (and, for a macOS package, the [voice input helper](#voice-input-helper)) before signing, including cross-builds; it does not execute either smoke check. The ACP check uses packaged Electron, while the main check uses project Electron by default, or an explicitly supplied matching target Electron, against copied packaged files. A cross-built artifact needs a runtime matching its architecture and Electron/native ABI. Record the tested platform/architecture and keep untested targets explicit; measured runtime coverage includes signed macOS arm64 and x64 under Rosetta, with explicit Canvas drawing passing on both. Linux CI passed the packaging tests and build guards; Linux runtime remains unverified. See the guide's [evidence table](packaged_runtime.md#evidence-and-limits) before extending that claim to another artifact.
 
 Cross-build native validation is separate from the manifest guard: `npmRebuild: true` prepares SQLite for each target ABI/CPU, and target-specific optional Canvas payloads need their own preparation. Inspect the shipped native files and run the matching target Electron, because an ARM64 host runtime can successfully load an ARM64 binding mistakenly packaged for Intel. See [Native dependencies across targets](packaged_runtime.md#native-dependencies-across-targets).
 
@@ -614,9 +630,9 @@ A clean re-run will redownload Electron (~120 MB per arch from GitHub Releases) 
   - `notarize:dmgs` — standalone DMG notarization (NOT for auto-update release flow)
   - `release:mac` — local macOS build + sign + notarize + upload draft. Needs Apple env vars + `GH_TOKEN`.
   - `release:linux` — Linux AppImage + deb build + upload draft. Designed for CI; can also run locally on Linux/Docker.
-  - `release:all` — both platforms in one invocation (only useful from a Linux box with Apple secrets).
+  - `release:all` — both platforms in one invocation, on a Mac: the macOS package requires the [voice input helper](#voice-input-helper), which only a Mac can build.
   - Added runtime dep `electron-updater`.
 - `src/main/host/desktop/updater.ts`: auto-update wire-up. Checks on launch + every 6h, prompts user on `update-downloaded`, installs on quit. Dev-mode guard via `is.dev`.
 - `src/main/index.ts`: calls `initAutoUpdater()` after `createWindow()`. Loads dock icon from `resources/cinna-desktop-icon.png`.
 - `.github/workflows/release-linux.yml`: triggers on `v*` tag push or manual dispatch. Runs on `ubuntu-latest`, tests the packaging guard/environment fixtures, then calls `npm run release:linux` with the auto-provided `GITHUB_TOKEN`. Appends Linux assets to the same draft release the macOS build created; runtime smoke commands are manual.
-- `build/entitlements.mac.plist`: unchanged — current entitlements (JIT, unsigned exec memory, dyld env vars) are correct for Electron + hardened runtime.
+- `build/entitlements.mac.plist`: JIT, unsigned exec memory and dyld env vars for Electron under the hardened runtime, plus `com.apple.security.automation.apple-events` ([Open in tools](../../agents/local_agents/open_in_tools_tech.md)) and `com.apple.security.device.audio-input` ([voice input](#voice-input-helper)).

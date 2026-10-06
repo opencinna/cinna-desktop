@@ -21,6 +21,9 @@ files:
   # Without this it would be packed twice: once here (and unpacked again by
   # asarUnpack) and once as an extra resource.
   - '!resources/cinna-agent-kit/**'
+  # The speech helper ships via extraResources too (an executable must sit
+  # outside the asar), so it is kept out of the asar and asarUnpack here.
+  - '!resources/speech/**'
   # **The Claude Agent SDK's bundled `claude`, which we must never ship.**
   #
   # `@anthropic-ai/claude-agent-sdk` declares eight optional platform packages,
@@ -91,17 +94,31 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # macOS voice input: the `cinna-speech` helper, built into resources/speech
+  # by scripts/build-speech-helper.sh (run by every script that packages for
+  # macOS; afterPack in scripts/packaged-dependencies.cjs fails a mac package
+  # without it). Read at Resources/speech/cinna-speech by
+  # src/main/speech/engines/macosSpeech.ts. Mac-only, so Linux and Windows
+  # builds never look for a directory only a Mac can build.
+  extraResources:
+    - from: resources/speech
+      to: speech
+  # A map, not a list: a list lands in Info.plist as keys "0", "1", … and
+  # macOS never sees the usage strings.
   extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
+    NSCameraUsageDescription: Application requests access to the device's camera.
+    NSMicrophoneUsageDescription: Application requests access to the device's microphone.
     # Shown inside the system's Files-and-Folders prompt, under the app name. It
     # is the only explanation the user gets if the prompt ever arrives ahead of
     # the app's own — so it names the folder and says why it exists, rather than
     # electron-vite's default, which reads like a demand from nowhere. The
     # in-app explainer that normally comes first lives in `homeAccessService`.
-    - NSDocumentsFolderUsageDescription: Cinna keeps each of your agents in its own folder under Documents/CinnaAgents, so you can open them in an editor and keep them when you reinstall.
-    - NSDownloadsFolderUsageDescription: Cinna saves files you download from a chat to your Downloads folder.
-    - NSAppleEventsUsageDescription: Cinna needs to control Terminal or iTerm to open a terminal in your agent folder.
+    NSDocumentsFolderUsageDescription: Cinna keeps each of your agents in its own folder under Documents/CinnaAgents, so you can open them in an editor and keep them when you reinstall.
+    NSDownloadsFolderUsageDescription: Cinna saves files you download from a chat to your Downloads folder.
+    NSAppleEventsUsageDescription: Cinna needs to control Terminal or iTerm to open a terminal in your agent folder.
+    # Voice input. TCC reads this from the app that launches the speech helper,
+    # and kills the helper outright when it is missing.
+    NSSpeechRecognitionUsageDescription: Cinna turns what you dictate into chat messages on this Mac.
   notarize: true
   target:
     - target: dmg

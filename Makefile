@@ -7,7 +7,7 @@
 
 PW := npx playwright test -c e2e/playwright.config.ts
 
-.PHONY: help test test-hub typecheck build kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
+.PHONY: help test test-hub typecheck build speech-helper kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -23,6 +23,9 @@ typecheck: ## Type-check main, preload, renderer and e2e
 
 build: ## Production build into out/ (what the E2E suite launches)
 	npx electron-vite build
+
+speech-helper: ## Build the macOS voice-input helper into resources/speech/ (no-op elsewhere)
+	sh scripts/build-speech-helper.sh
 
 # The agent kit bundle (resources/cinna-agent-kit/) is a byte-exact render of
 # cinna-core's docs/local_agent_kit/, the whole kit; never edit it by hand.

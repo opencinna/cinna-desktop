@@ -161,6 +161,18 @@ function beforePack({ packager, electronPlatformName, arch }) {
   ])]
 }
 
+// The macOS voice-input helper ships through extraResources, which copies
+// whatever resources/speech holds and says nothing when it is empty. A package
+// built without it loses voice input silently, so refuse it here.
+function verifySpeechHelper(resourcesDir) {
+  const helper = join(resourcesDir, 'speech', 'cinna-speech')
+  const stat = existsSync(helper) ? statSync(helper) : null
+  if (!stat?.isFile() || (stat.mode & 0o111) === 0) {
+    throw new Error(`Missing executable speech helper ${helper}: run sh scripts/build-speech-helper.sh before electron-builder`)
+  }
+  console.log('Verified speech helper')
+}
+
 function afterPack({ packager, appOutDir, electronPlatformName, arch }) {
   // Runs for every target, including cross-builds, before signing/publishing.
   // Fail the build if file filtering or dependency collection lost a package.
@@ -176,8 +188,9 @@ function afterPack({ packager, appOutDir, electronPlatformName, arch }) {
     validateCanvasPayload(directory, target)
     console.log(`Verified unpacked ${target.name}@${target.version}`)
   }
+  if (electronPlatformName === 'darwin') verifySpeechHelper(packager.getResourcesDir(appOutDir))
   // electron-builder drops the kit's `.gitkeep` files; see packaged-kit.cjs.
   completePackagedKit(packager.info.projectDir, packager.getResourcesDir(appOutDir))
 }
 
-module.exports = { runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, beforePack, afterPack }
+module.exports = { runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, verifySpeechHelper, beforePack, afterPack }

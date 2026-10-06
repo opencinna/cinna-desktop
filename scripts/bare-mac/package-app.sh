@@ -15,6 +15,7 @@ cd "$ROOT"
 
 rm -rf "$OUT"
 npx electron-vite build >&2
+sh scripts/build-speech-helper.sh >&2
 npx electron-builder --mac dir --arm64 \
   -c.mac.identity=null -c.mac.notarize=false -c.directories.output="$OUT" >&2
 

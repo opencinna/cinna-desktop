@@ -25,6 +25,7 @@ import { taskSyncScheduler } from './services/taskSyncScheduler'
 import { localScheduleScheduler } from './services/localScheduleScheduler'
 import { handoverScheduler } from './services/handoverScheduler'
 import { trayService } from './host/desktop/trayService'
+import { speechService } from './speech/speechService'
 import { syncTrayFromSettings } from './host/desktop/traySync'
 import { createLogger } from './logger/logger'
 import { installLogBroadcast } from './host/desktop/logBroadcast'
@@ -448,6 +449,9 @@ function startup(): void {
 
   createWindow()
   initAutoUpdater()
+  // Whether voice input is available (macOS speech recognition): probed once,
+  // off the startup path; `speech:status` awaits the cached answer.
+  void speechService.startProbe()
 
   // Linux (and, later, Windows) deliver the URL by re-launching the app with it
   // appended to argv rather than through `open-url`; the E2E suite uses the
