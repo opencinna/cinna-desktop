@@ -120,3 +120,15 @@ Tests cover:
 - `service.test.ts`: `serverUrl` and `account` on account attachments, null on local and signed-out ones.
 
 A focused run of those five files passed **69 tests**. Typecheck, build and the full suite were not rerun for this section. No test covers the display-name refresh in `authService.updateUser`. The E2E selectors in `service-credentials.spec.ts` were updated to the new rows, the **Detach** accessible name and the host link, but **the spec was not run** for this section, so the isolated and live Electron cases are unverified against the new UI.
+
+## Issued Agent API keys — 2026-10-07
+
+Desktop lists and materializes issued `agent_api` keys (`?include=agent_api_keys` on both calls), fails closed on any non-active key, blocks an insecure `base_url`, polls every minute while a live key is attached, syncs at turn start within a 5 s budget, and writes a key's rotation or loss while a turn runs. The kit bundle moved to contract 1.7.0 (`make kit-sync` against a **dirty** core working tree: `kit.lock.json` records `core_source: working-tree`, `core_dirty: true`, and the same core commit as before), and the credential helper's update check compares against the bundled `HELPER_VERSION`.
+
+Tests cover:
+- `service.test.ts`: active, revoked, paused and unknown statuses (token dropped, token-less entry, no materialize call); refusal backstop and the list winning over it on the next pass; foreign or status-less `agent_api` items not cached; the address guard (https, loopback http and account-origin http accepted; anything else stored token-less until the revision changes); ISO expiry read for keys only; duplicate-slot and `current_user` rules with an unavailable key; adaptive polling; the turn-start bounded sync gated on the last attempt; a key-only write during a running turn, and a mixed change waiting for the exclusive hold;
+- `cloud.test.ts` (the opt-in query on both calls), `db/serviceCredentials.test.ts` (key facts defaulting to null, `keyStub` kept out of the DTO), `helper.test.ts` (version comparison), `localScheduleScheduler.test.ts` (interval getter, `reschedule`);
+- renderer: `credentialPresentation.test.ts` (status labels with and without issuer/producer, ownership label), `CredentialAttachModal.test.tsx`, `ServiceCredentialsTab.test.tsx`, `ServiceCredentialsSection.test.tsx`;
+- `service-credentials.spec.ts` (E2E, fake Core).
+
+No test run is recorded here for this section: rerun the files above and `npm run typecheck` before relying on it. The kit is built from an uncommitted core tree, so `make kit-sync` must be rerun once core commits contract 1.7.0.
