@@ -4,8 +4,12 @@ import { createLogger } from '../logger/logger'
 let cancelCommands = () => {}
 const logger = createLogger('local-schedule-scheduler')
 
-/** A single due-cursor pass, coalesced across focus/activation events. */
-export function createLocalScheduleScheduler(check: (scope: RunScope, current: () => boolean) => Promise<void> | void, intervalMs = 60_000, cancel: () => void = () => {}) {
+/**
+ * A single due-cursor pass, coalesced across focus/activation events. `intervalMs`
+ * may be a getter, read each time the next tick is armed, so a caller can change
+ * its cadence; after shortening it, call `reschedule()` to re-arm the pending timer.
+ */
+export function createLocalScheduleScheduler(check: (scope: RunScope, current: () => boolean) => Promise<void> | void, intervalMs: number | (() => number) = 60_000, cancel: () => void = () => {}) {
   let scope: RunScope | null = null
   let generation = 0
   let suspended = false
@@ -16,7 +20,8 @@ export function createLocalScheduleScheduler(check: (scope: RunScope, current: (
   const schedule = () => {
     clear()
     if (!scope || suspended) return
-    timer = setTimeout(() => { void api.refresh() }, Math.max(1, intervalMs - (Date.now() % intervalMs)))
+    const interval = typeof intervalMs === 'function' ? intervalMs() : intervalMs
+    timer = setTimeout(() => { void api.refresh() }, Math.max(1, interval - (Date.now() % interval)))
     timer.unref?.()
   }
   const cycle = async () => {
@@ -40,6 +45,8 @@ export function createLocalScheduleScheduler(check: (scope: RunScope, current: (
       suspended = value; clear()
       if (!value) void this.refresh()
     },
+    /** Re-arm the next tick from the current interval without running a check now. A running cycle arms it when it ends. */
+    reschedule(): void { if (!pending) schedule() },
     refresh(): Promise<void> {
       clear()
       if (!scope || suspended) return Promise.resolve()

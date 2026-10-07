@@ -6,6 +6,7 @@ import type { ServiceCredentialAttachmentDto } from '../../../../../shared/servi
 import { credentialResult, useCredentialAttachments } from '../../../hooks/useServiceCredentials'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { CredentialAttachModal } from './CredentialAttachModal'
+import { credentialTypeTitle } from '../../settings/LocalCredentialForm'
 import { CredentialsCard, useOpenCredentialsFile } from './ReadOnlyCards'
 import { AccountReferenceLabel, CredentialRow, ManageCredentialButton } from '../../settings/CredentialRow'
 import { SettingsButton, SettingsIconButton, SettingsInfoTip, SettingsSection } from '../../settings/SettingsLayout'
@@ -63,7 +64,7 @@ export function ServiceCredentialsTab({ agent }: { agent: LocalAgentDto }) {
         const name = attachmentName(a), unavailable = a.state === 'account_unavailable'
         const manage = unavailable ? null : credentialManageUrl(a.credential?.cloudId, a.serverUrl)
         const detachName = a.credential?.name ?? (unavailable ? 'credential of a signed-out account' : 'missing credential')
-        return <li key={`${a.group}:${a.ref}`}><CredentialRow name={name} type={a.credential?.type} serviceUri={a.credential?.serviceUri} health={credentialHealth(a.credential, a.state)}
+        return <li key={`${a.group}:${a.ref}`}><CredentialRow name={name} type={a.credential?.type} typeTitle={a.credential ? credentialTypeTitle(a.credential) : undefined} serviceUri={a.credential?.serviceUri} health={credentialHealth(a.credential, a.state)}
           ownership={a.credential ? credentialOwnership(a.credential) : a.origin === 'local' ? credentialOwnership({ origin: 'local', relation: 'owned', ownerEmail: null }) : null}
           actions={<>
             {manage && a.credential && <ManageCredentialButton name={a.credential.name} url={manage} onError={setError} />}
@@ -77,7 +78,7 @@ export function ServiceCredentialsTab({ agent }: { agent: LocalAgentDto }) {
       if (!helper.data?.stamp) return
       setPending(true); setError('')
       try { credentialResult(await window.api.serviceCredentials.updateHelper(agent.id, helper.data.stamp)); await helper.refetch() } catch (e) { setError(unwrapIpcError(e)) } finally { setPending(false) }
-    }}>Update credential helper</SettingsButton><p className="text-[var(--color-text-muted)]">Replaces the older kit reader with support for attached credentials.</p></div>}
+    }}>Update credential helper</SettingsButton><p className="text-[var(--color-text-muted)]">Replaces the older kit reader with support for attached credentials and Agent API keys.</p></div>}
     <CredentialAttachModal open={picking} agentId={agent.id} onClose={() => setPicking(false)} onAttach={attach} />
   </div>
 }

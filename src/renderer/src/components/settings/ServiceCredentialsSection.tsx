@@ -6,7 +6,7 @@ import { credentialResult, useServiceCredentials } from '../../hooks/useServiceC
 import { unwrapIpcError } from '../../utils/ipcError'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 import { SettingsAddButton, SettingsButton, SettingsIconButton, SettingsInfoTip, SettingsSection } from './SettingsLayout'
-import { CredentialTypePicker, LocalCredentialForm } from './LocalCredentialForm'
+import { CredentialTypePicker, LocalCredentialForm, credentialTypeTitle } from './LocalCredentialForm'
 import { AccountReferenceLabel, CredentialRow, ManageCredentialButton, openExternalUrl } from './CredentialRow'
 import { credentialHealth, credentialManageUrl, credentialOwnership, profileReference } from './credentialPresentation'
 
@@ -50,7 +50,7 @@ export function ServiceCredentialsSection({ cloud = false }: { cloud?: boolean }
   }
 
   return <SettingsSection title={cloud ? 'Remote credentials' : 'Local credentials'} info={cloud ? <SettingsInfoTip label="About remote credentials">
-    This is not the full list of credentials on the server. The server sends only those that local agents on this computer can use; the rest, such as automatic, bundle and server-driven OAuth credentials, stay on the server. Manage all of them on the remote.
+    This is not the full list of credentials on the server. The server sends only those that local agents on this computer can use, including Agent API keys other people issued to you for their agents; the rest, such as automatic, bundle, OAuth and Agent API connections, stay on the server. Manage all of them on the remote.
   </SettingsInfoTip> : undefined} action={cloud ? <div className="flex items-center gap-2">
     {profile?.cinnaServerUrl && <SettingsButton disabled={pending} onClick={() => {
       // Suffix-joined like the per-credential link, so a Core under a path prefix keeps it.
@@ -66,7 +66,7 @@ export function ServiceCredentialsSection({ cloud = false }: { cloud?: boolean }
   </div> : undefined}>
     {reference && <p className="flex text-[13px] text-[var(--color-text-muted)]"><AccountReferenceLabel reference={reference} onError={setError} /></p>}
     {items.map(c => cloud
-      ? <CredentialRow key={c.id} name={c.name} type={c.type} serviceUri={c.serviceUri} health={credentialHealth(c)} ownership={credentialOwnership(c)}
+      ? <CredentialRow key={c.id} name={c.name} type={c.type} serviceUri={c.serviceUri} typeTitle={credentialTypeTitle(c)} health={credentialHealth(c)} ownership={credentialOwnership(c)}
         actions={(() => { const url = credentialManageUrl(c.cloudId, profile?.cinnaServerUrl); return url ? <ManageCredentialButton name={c.name} url={url} onError={setError} /> : null })()} />
       : <CredentialRow key={c.id} name={c.name} type={c.type} serviceUri={c.serviceUri} health={credentialHealth(c)} ownership={credentialOwnership(c)}
         expandable={{ expanded: open?.id === c.id, onToggle: () => openRow(c.id, 'edit'), disabled: formOpen && open?.id !== c.id }}

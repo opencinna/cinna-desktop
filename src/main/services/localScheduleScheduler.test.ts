@@ -80,4 +80,27 @@ describe('local schedule clock and activation', () => {
     expect(vi.getTimerCount()).toBe(0)
     scheduler.stop()
   })
+  it('reads an interval getter per tick and re-arms on reschedule without running a check', async () => {
+    const times: string[] = []
+    let interval = 300000
+    const scheduler = createLocalScheduleScheduler(() => { times.push(new Date().toISOString()) }, () => interval)
+    scheduler.start(scope); await flush()
+    // Armed for the five-minute boundary; shortening alone changes nothing until re-armed.
+    interval = 60000
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(times).toEqual(['2026-09-12T09:00:23.000Z'])
+    scheduler.reschedule()
+    expect(times).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(7000)
+    expect(times).toEqual(['2026-09-12T09:00:23.000Z', '2026-09-12T09:01:00.000Z'])
+    // Lengthening takes effect at the next arming.
+    interval = 300000
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(times.at(-1)).toBe('2026-09-12T09:02:00.000Z')
+    await vi.advanceTimersByTimeAsync(170000)
+    expect(times).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(times.at(-1)).toBe('2026-09-12T09:05:00.000Z')
+    scheduler.stop()
+  })
 })

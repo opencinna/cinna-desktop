@@ -16,16 +16,17 @@ vi.mock('../../host/events', () => ({ publishEvent: vi.fn() }))
 vi.mock('../../auth/scope', () => ({ getProfileScopeUserId: () => world.user }))
 vi.mock('../../auth/cinna-tokens', () => ({ getStoredCinnaSubject: (id: string) => id.replace('new-', '') }))
 vi.mock('../../db/users', () => ({ userRepo: { get: (id: string) => world.users.get(id) ?? ({ id, type: id === '__default__' ? 'local_user' : 'cinna_user', cinnaServerUrl: 'http://localhost:8000', displayName: id, username: id, passwordHash: null }), list: () => [...world.users.values()] } }))
-vi.mock('../../db/serviceCredentials', () => ({ credentialDto: (r: ServiceCredentialRow) => ({ ...JSON.parse(r.metadata), id: r.id, origin: r.origin, cloudId: r.cloud_id, hasValues: !!r.payload_enc, expiresAt: r.expires_at }), serviceCredentialRepo: {
+vi.mock('../../db/serviceCredentials', () => ({ credentialDto: (r: ServiceCredentialRow) => { const { keyStub: _stub, ...m } = JSON.parse(r.metadata); return { ...m, keyStatus: m.keyStatus ?? null, agentApi: m.agentApi ?? null, keyBlocked: m.keyBlocked ?? null, id: r.id, origin: r.origin, cloudId: r.cloud_id, hasValues: !!r.payload_enc, expiresAt: r.expires_at } }, serviceCredentialRepo: {
   list: (id: string) => [...world.rows.values()].filter(r => r.user_id === id), get: (id: string) => world.rows.get(id), put: (r: any) => world.rows.set(r.id, r), remove: (id: string) => world.rows.delete(id), clearProfile: (id: string) => { for (const [key, row] of world.rows) if (row.user_id === id && row.origin === 'cloud') world.rows.delete(key) }
 } }))
 vi.mock('../localAgents/localAgentService', () => ({ localAgentService: { list: () => ({ agents: world.agents }), get: (_: string, id: string) => { const a = world.agents.find(a => a.id === id); if (!a) throw new Error('Agent missing'); return a } } }))
 vi.mock('../localAgents/scannerService', () => ({ markAllRootsDirty() {} }))
 vi.mock('../../shell/env', () => ({ getShellEnv: async () => process.env, usableTool: async (bin: string) => bin }))
 vi.mock('./cloud', () => ({ serviceCredentialCloud: { list: (...args: unknown[]) => world.list(...args), materialize: (...args: unknown[]) => world.fetch(...args) } }))
-import { serviceCredentialService as service } from './service'
+import { keyApiUrl, serviceCredentialService as service } from './service'
 import { turnLock } from '../localAgents/turnLock'
 import { clearCredentialRedaction, redactCredentialText } from '../../security/serviceCredentialRedaction'
+import { getLogEntries } from '../../logger/logger'
 const sleep = () => new Promise(resolve => setTimeout(resolve, 30))
 beforeEach(async () => {
   world.home = mkdtempSync(join(tmpdir(), 'cinna-credentials-')); world.user = '__default__'; world.rows.clear(); world.secure = true; world.agents = []; world.metadata = []; world.byUser = {}; world.identity = false; world.users.clear(); world.unlocked.clear(); world.allowed = true
@@ -484,4 +485,363 @@ it('serializes concurrent preparations of one agent, so neither acts on a stale 
   expect(world.fetch).toHaveBeenCalledTimes(1)
   expect(two.generation).toBe(one.generation)
   expect(readFileSync(one.path!, 'utf8')).toContain(world.token)
+})
+
+describe('issued Agent API keys', () => {
+  const base = 'http://localhost:8000/api/v1/agent-api/prod-1'
+  const keys = { token: 'issued-key-token-AAA111', refuse: null as null | { reason: string; key_status?: string } }
+  function key(id = 'key-1', extra: Record<string, unknown> = {}) {
+    return { id, name: 'CRM API', type: 'agent_api', notes: null, service_uri: 'crm-api', status: 'complete', is_placeholder: false, relation: 'owned', owner_email: null,
+      local_use_allowed: true, revision: 'k1', key_status: 'active', expires_at: null,
+      agent_api: { producer_agent_id: 'prod-1', producer_name: 'CRM', issuer_email: 'ana@example.test', base_url: base, spec_url: `${base}/openapi.json`, expires_at: null }, ...extra }
+  }
+  const delivered = (id: string, meta: any) => ({ id, name: meta.name, type: 'agent_api', notes: null, service_uri: meta.service_uri, is_placeholder: false,
+    credential_data: { base_url: base, spec_url: `${base}/openapi.json`, token: keys.token, label: 'CRM key', producer_agent_id: 'prod-1' } })
+  const listed = (user: string): any[] => world.byUser[user] ?? world.metadata
+  const file = (path: string) => JSON.parse(readFileSync(path, 'utf8')) as any[]
+  beforeEach(() => {
+    keys.token = 'issued-key-token-AAA111'; keys.refuse = null; world.fetch.mockClear(); world.list.mockClear()
+    world.fetch.mockImplementation(async (user: string, ids: string[]) => {
+      const refused = keys.refuse ? ids.map(id => ({ id, ...keys.refuse })) : []
+      const items = keys.refuse ? [] : ids.map(id => {
+        const meta = listed(user).find(m => m.id === id)
+        const entry = meta.type === 'agent_api' ? delivered(id, meta) : { id, name: meta.name, type: meta.type, notes: null, service_uri: meta.service_uri, is_placeholder: false, credential_data: { http_header_name: 'Authorization', http_header_value: `Bearer ${world.token}` } }
+        return { id, revision: meta.revision, entry, service_account_file: null, ssh_key: null }
+      })
+      return { items, refused, current_user: world.identity ? { id: 'current_user', name: user, type: 'current_user', notes: null, service_uri: null, is_placeholder: false, credential_data: { email: `${user}@example.test` } } : null, owner_identity: null }
+    })
+  })
+  // `key` here shadows the file's account-key helper; this is the account key.
+  const account = (id: string) => createHash('sha256').update('http://localhost:8000\n' + id).digest('hex').slice(0, 16)
+  async function setup(kind: 'kit' | 'bare' = 'kit', items: any[] = [key()], refs = ['key-1']) {
+    world.metadata = items
+    const a = addAgent(kind); await login('account-a')
+    await service.setAttachments(a.id, account('account-a'), refs)
+    return a
+  }
+  /** Sync, then let the queued regeneration (an exclusive hold) finish. */
+  async function relist(items: any[]) {
+    world.metadata = items; await service.sync(); await sleep()
+    for (let i = 0; i < 100 && world.agents.some(a => turnLock.isExclusivelyLocked(a.id)); i++) await sleep()
+  }
+
+  it('writes an active key verbatim, keeps the token out of DTOs, prompt and logs', async () => {
+    const a = await setup()
+    const p = await prepare(a.id)
+    expect(file(p.path!)).toEqual([delivered('key-1', key())])
+    expect(p.prompt).toContain('CRM API (agent_api; slot crm-api): ready')
+    expect(p.prompt).not.toContain(keys.token)
+    expect(redactCredentialText(`calling with ${keys.token}`)).toBe('calling with ***REDACTED***')
+    const [dto] = service.attachments(a.id)
+    expect(dto.credential).toMatchObject({ keyStatus: 'active', agentApi: { producerName: 'CRM', issuerEmail: 'ana@example.test' }, hasValues: true })
+    for (const value of [service.attachments(a.id), service.list(), service.attachOptions(a.id)]) {
+      expect(JSON.stringify(value)).not.toContain(keys.token)
+      expect(JSON.stringify(value)).not.toContain('base_url')
+    }
+  })
+
+  it('does not cache an agent_api item that is shared or has no key status, and prunes a cached one that turns so', async () => {
+    world.metadata = [key('k-shared', { relation: 'shared' }), key('k-bare', { key_status: undefined }), key('k-null', { key_status: null }), key()]
+    await login('account-a')
+    expect(service.list().map(c => c.cloudId)).toEqual(['key-1'])
+    await relist([key('key-1', { relation: 'shared' })])
+    expect(service.list()).toEqual([])
+  })
+
+  it('drops the token on revocation without a materialize call and writes a token-less entry', async () => {
+    const a = await setup()
+    const p = await prepare(a.id)
+    world.fetch.mockClear()
+    await relist([key('key-1', { revision: 'k2', key_status: 'revoked_by_issuer' })])
+    expect(world.fetch).not.toHaveBeenCalled()
+    expect([...world.rows.values()].every(r => !r.payload_enc)).toBe(true)
+    expect(readFileSync(p.path!, 'utf8')).not.toContain(keys.token)
+    expect(file(p.path!)).toEqual([{ id: 'key-1', name: 'CRM API', type: 'agent_api', notes: null, service_uri: 'crm-api', is_placeholder: false,
+      unavailable_reason: 'key_revoked', key_status: 'revoked_by_issuer', credential_data: { base_url: base, spec_url: `${base}/openapi.json`, label: 'CRM key', producer_agent_id: 'prod-1' } }])
+    expect(service.attachments(a.id)[0]).toMatchObject({ state: 'key_unavailable', credential: { keyStatus: 'revoked_by_issuer', hasValues: false } })
+    const again = await prepare(a.id)
+    expect(world.fetch).not.toHaveBeenCalled()
+    expect(again.prompt).toContain('CRM API (agent_api; slot crm-api): unavailable — revoked by issuer')
+    // The helper explains the reason instead of "not configured".
+    const helper = join(process.cwd(), 'resources/cinna-agent-kit/templates/agent/scripts')
+    const out = execFileSync('python3', ['-c', "from cinna_credentials import require_slot\ntry:\n  require_slot('crm-api')\nexcept Exception as e:\n  print(e)"], { env: { ...process.env, PYTHONPATH: helper, CINNA_CREDENTIALS_PATH: again.path! }, encoding: 'utf8' })
+    expect(out).toContain('unavailable')
+  })
+
+  it('keeps the delivered stub where the list reports nulls, and uses the list facts before any delivery', async () => {
+    const a = await setup()
+    const p = await prepare(a.id)
+    await relist([key('key-1', { revision: 'k2', key_status: 'producer_removed', agent_api: { producer_agent_id: null, producer_name: 'CRM', issuer_email: 'ana@example.test', base_url: null, spec_url: null, expires_at: null } })])
+    expect(file(p.path!)[0]).toMatchObject({ unavailable_reason: 'key_revoked', key_status: 'producer_removed', credential_data: { base_url: base, spec_url: `${base}/openapi.json`, label: 'CRM key', producer_agent_id: 'prod-1' } })
+    // Never delivered: list facts only, or nothing.
+    const b = addAgent('bare')
+    world.metadata = [key('key-1', { revision: 'k2', key_status: 'producer_removed' }), key('key-2', { key_status: 'expired', agent_api: null }), key('key-3', { key_status: 'issuer_removed', service_uri: 'other' })]
+    await service.sync(); await sleep()
+    await service.setAttachments(b.id, account('account-a'), ['key-2', 'key-3'])
+    const entries = file((await prepare(b.id)).path!)
+    expect(entries.map(e => [e.id, e.unavailable_reason, e.key_status, e.credential_data])).toEqual([
+      ['key-2', 'key_expired', 'expired', {}],
+      ['key-3', 'key_revoked', 'issuer_removed', { base_url: base, spec_url: `${base}/openapi.json`, producer_agent_id: 'prod-1' }]])
+    expect(JSON.stringify(entries)).not.toContain('token')
+  })
+
+  it('pauses fail-closed and recovers with one materialize when the key is active again', async () => {
+    const a = await setup()
+    const p = await prepare(a.id)
+    await relist([key('key-1', { revision: 'k2', key_status: 'external_access_paused' })])
+    expect(file(p.path!)[0]).toMatchObject({ unavailable_reason: 'key_paused', key_status: 'external_access_paused' })
+    expect(file(p.path!)[0].credential_data.token).toBeUndefined()
+    world.fetch.mockClear()
+    await relist([key('key-1', { revision: 'k3' })])
+    expect(world.fetch).toHaveBeenCalledTimes(1)
+    expect(file(p.path!)).toEqual([delivered('key-1', key())])
+    await service.sync(); await sleep()
+    expect(world.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('writes a rotated token after one sync and keeps the old one redacted', async () => {
+    const a = await setup()
+    const p = await prepare(a.id), old = keys.token
+    keys.token = 'issued-key-token-BBB222'
+    await relist([key('key-1', { revision: 'k2' })])
+    expect(readFileSync(p.path!, 'utf8')).toContain('issued-key-token-BBB222')
+    expect(readFileSync(p.path!, 'utf8')).not.toContain(old)
+    expect(redactCredentialText(`${old} ${keys.token}`)).toBe('***REDACTED*** ***REDACTED***')
+  })
+
+  it('takes a key refusal as the key status, not as the owner\'s local-use setting, and stops fetching it for that pass', async () => {
+    world.metadata = [key()]
+    const a = addAgent('kit'); await login('account-a')
+    keys.refuse = { reason: 'key_revoked', key_status: 'revoked_by_issuer' }
+    await service.setAttachments(a.id, account('account-a'), ['key-1'])
+    const [dto] = service.attachments(a.id)
+    expect(dto).toMatchObject({ state: 'key_unavailable', credential: { keyStatus: 'revoked_by_issuer', localUseAllowed: true } })
+    // No list in between: a turn start does not ask again.
+    world.fetch.mockClear()
+    await prepare(a.id)
+    expect(world.fetch).not.toHaveBeenCalled()
+    // A refusal without a status falls back by reason.
+    keys.refuse = { reason: 'key_paused' }
+    await relist([key('key-1', { revision: 'k2' })])
+    expect(world.fetch).toHaveBeenCalledTimes(1)
+    expect(service.attachments(a.id)[0].credential?.keyStatus).toBe('external_access_paused')
+  })
+
+  it('lets the list win over a refusal on the next pass, even at the same revision (pause then resume)', async () => {
+    world.metadata = [key()]
+    const a = addAgent('kit'); await login('account-a')
+    keys.refuse = { reason: 'key_paused', key_status: 'external_access_paused' }
+    await service.setAttachments(a.id, account('account-a'), ['key-1'])
+    expect(service.attachments(a.id)[0].state).toBe('key_unavailable')
+    keys.refuse = null; world.fetch.mockClear()
+    await relist([key()])
+    expect(world.fetch).toHaveBeenCalledTimes(1)
+    expect(service.attachments(a.id)[0]).toMatchObject({ state: 'ready', credential: { keyStatus: 'active' } })
+    expect(file((await prepare(a.id)).path!)).toEqual([delivered('key-1', key())])
+  })
+
+  it('lets a filled credential for the slot win over a dead key, and a dead key does not count for current_user', async () => {
+    world.identity = true
+    const a = await setup('bare', [key('key-1', { key_status: 'revoked_by_issuer' }), key('key-2')], ['key-1', 'key-2'])
+    expect(file((await prepare(a.id)).path!).map(e => e.id)).toEqual(['key-2', 'current_user'])
+    await service.setAttachments(a.id, account('account-a'), ['key-1'])
+    const entries = file((await prepare(a.id)).path!)
+    expect(entries.map(e => e.id)).toEqual(['key-1'])
+    expect(entries[0].unavailable_reason).toBe('key_revoked')
+  })
+
+  it('offers active and paused keys and hides terminal ones unless already attached', async () => {
+    const items = [key('k-active'), key('k-paused', { key_status: 'api_disabled' }), key('k-revoked', { key_status: 'revoked_by_issuer' }), key('k-expired', { key_status: 'expired' }), key('k-unknown', { key_status: 'quarantined' })]
+    const a = await setup('kit', items, ['k-expired'])
+    expect(service.attachOptions(a.id).groups[1].items.map(i => [i.cloudId, i.attached])).toEqual([['k-active', false], ['k-paused', false], ['k-expired', true]])
+    expect(service.attachments(a.id)).toMatchObject([{ ref: 'k-expired', state: 'key_unavailable', credential: { keyStatus: 'expired' } }])
+    await service.setAttachments(a.id, account('account-a'), ['k-expired', 'k-paused'])
+    expect(service.attachments(a.id).map(v => v.state)).toEqual(['key_unavailable', 'key_unavailable'])
+  })
+
+  it('treats an unknown key status as unavailable', async () => {
+    const a = await setup('kit', [key('key-1', { key_status: 'quarantined' })])
+    const p = await prepare(a.id)
+    expect(world.fetch).not.toHaveBeenCalled()
+    expect(file(p.path!)[0]).toMatchObject({ unavailable_reason: 'key_revoked', key_status: 'quarantined' })
+    expect(p.prompt).toContain('crm-api): unavailable')
+    expect(service.attachments(a.id)[0].state).toBe('key_unavailable')
+  })
+
+  it('prunes a key the recipient deleted and removes its entry', async () => {
+    const a = await setup('bare')
+    const p = await prepare(a.id)
+    await relist([])
+    expect(service.list()).toEqual([])
+    expect(existsSync(p.path!)).toBe(false)
+    expect(service.attachments(a.id)[0].state).toBe('missing')
+  })
+
+  it('accepts an ISO-8601 key expiry and ignores an invalid one', async () => {
+    world.metadata = [key('key-1', { expires_at: '2030-01-02T03:04:05Z' }), key('key-2', { expires_at: null, agent_api: { ...key().agent_api, expires_at: '2031-01-01T00:00:00Z' } }), key('key-3', { expires_at: 'not-a-date' })]
+    await login('account-a')
+    expect(service.list().map(c => [c.cloudId, c.expiresAt])).toEqual([['key-1', Date.parse('2030-01-02T03:04:05Z')], ['key-2', Date.parse('2031-01-01T00:00:00Z')], ['key-3', null]])
+  })
+
+  it('accepts a key API address over https, http to this computer, or http to its own account origin only', () => {
+    const at = (base_url: unknown) => ({ id: 'k', name: 'k', type: 'agent_api', notes: null, service_uri: 'k', is_placeholder: false, credential_data: { base_url } })
+    const own = 'http://cinna.lan:8080'
+    expect(keyApiUrl(at('https://crm.example.test/api'), own)?.href).toBe('https://crm.example.test/api')
+    expect(keyApiUrl(at('http://localhost:8000/api'), own)).not.toBeNull()
+    expect(keyApiUrl(at('http://127.0.0.1:9/api'), own)).not.toBeNull()
+    expect(keyApiUrl(at('http://cinna.lan:8080/api/v1/agent-api/p'), own)).not.toBeNull()
+    expect(keyApiUrl(at('http://cinna.lan/api'), own)).toBeNull()
+    expect(keyApiUrl(at('http://crm.example.test/api'), own)).toBeNull()
+    expect(keyApiUrl(at('ftp://cinna.lan:8080/api'), own)).toBeNull()
+    expect(keyApiUrl(at('/relative'), own)).toBeNull()
+    expect(keyApiUrl(at(undefined), own)).toBeNull()
+  })
+
+  it('does not store a key whose API address is not https or loopback, and writes it token-less until the revision changes', async () => {
+    world.identity = true
+    const insecure = (id: string) => ({ ...delivered(id, key()), credential_data: { ...delivered(id, key()).credential_data, base_url: 'http://crm.example.test/api' } })
+    const deliver = world.fetch.getMockImplementation()!
+    world.fetch.mockImplementation(async (user: string, ids: string[]) => ({ ...(await deliver(user, ids)), items: ids.map(id => ({ id, revision: 'k1', entry: insecure(id), service_account_file: null, ssh_key: null })) }))
+    const logs = () => getLogEntries().filter(e => e.scope === 'service-credentials' && e.message.startsWith('Issued key not stored')).length
+    const logged = logs()
+    const a = await setup('kit')
+    expect([...world.rows.values()].every(r => !r.payload_enc)).toBe(true)
+    expect(service.attachments(a.id)[0]).toMatchObject({ state: 'key_unavailable', credential: { keyStatus: 'active', keyBlocked: 'insecure_base_url', hasValues: false } })
+    const p = await prepare(a.id)
+    // Token-less entry; the key does not make its account contribute current_user.
+    expect(file(p.path!)).toEqual([{ id: 'key-1', name: 'CRM API', type: 'agent_api', notes: null, service_uri: 'crm-api', is_placeholder: false,
+      unavailable_reason: 'insecure_base_url', credential_data: { base_url: base, spec_url: `${base}/openapi.json`, producer_agent_id: 'prod-1' } }])
+    expect(readFileSync(p.path!, 'utf8')).not.toContain(keys.token)
+    expect(p.prompt).toContain('crm-api): unavailable — insecure API address')
+    expect(JSON.stringify(service.attachments(a.id))).not.toContain('keyStub')
+    // Same revision: not fetched again, logged once.
+    world.fetch.mockClear()
+    await relist([key()]); await prepare(a.id)
+    expect(world.fetch).not.toHaveBeenCalled()
+    expect(logs() - logged).toBe(1)
+    // A new revision clears the mark and delivers again.
+    world.fetch.mockImplementation(deliver)
+    await relist([key('key-1', { revision: 'k2' })])
+    expect(service.attachments(a.id)[0]).toMatchObject({ state: 'ready', credential: { keyBlocked: null } })
+    expect(file(p.path!).map(e => e.id)).toEqual(['key-1', 'current_user'])
+    expect(readFileSync(p.path!, 'utf8')).toContain(keys.token)
+  })
+
+  it('reads ISO-8601 expiry only for issued keys', async () => {
+    world.metadata = [{ ...metadata(), id: 'plain', expires_at: '2030-01-02T03:04:05Z' }, { ...metadata(), id: 'seconds', expires_at: 1_900_000_000 }]
+    await login('account-a')
+    expect(service.list().map(c => [c.cloudId, c.expiresAt])).toEqual([['plain', null], ['seconds', 1_900_000_000_000]])
+  })
+
+  describe('refresh', () => {
+    afterEach(() => { vi.useRealTimers() })
+    it('polls every minute while a key is attached, every five minutes otherwise, and re-arms when it shortens', async () => {
+      world.metadata = [key()]
+      const a = addAgent('bare'); await login('account-a')
+      vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-07T10:00:30Z'))
+      service.retire(); await service.activate('account-a'); await vi.advanceTimersByTimeAsync(0)
+      const calls = () => world.list.mock.calls.length
+      let before = calls()
+      // Nothing attached: the next poll is at 10:05.
+      await vi.advanceTimersByTimeAsync(5_000)
+      await service.setAttachments(a.id, account('account-a'), ['key-1'])
+      await vi.advanceTimersByTimeAsync(25_001) // 10:01:00
+      expect(calls()).toBe(before + 1)
+      before = calls()
+      await vi.advanceTimersByTimeAsync(60_000) // 10:02:00
+      expect(calls()).toBe(before + 1)
+      await service.setAttachments(a.id, account('account-a'), [])
+      before = calls()
+      await vi.advanceTimersByTimeAsync(60_000) // 10:03:00: the tick armed while fast; it then slows down
+      expect(calls()).toBe(before + 1)
+      before = calls()
+      await vi.advanceTimersByTimeAsync(110_000) // 10:04:50
+      expect(calls()).toBe(before)
+      await vi.advanceTimersByTimeAsync(10_001) // 10:05:00
+      expect(calls()).toBe(before + 1)
+    })
+    it('syncs at once on resume for an account with a key', async () => {
+      await setup('bare')
+      const before = world.list.mock.calls.length
+      service.setSuspended(true); service.setSuspended(false); await sleep()
+      expect(world.list.mock.calls.length).toBe(before + 1)
+    })
+    it('syncs a stale account at turn start within a 5 s budget, and never for an agent without keys', async () => {
+      const a = await setup('bare')
+      const first = await prepare(a.id)
+      let finish!: (v: unknown) => void
+      world.list.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      vi.useFakeTimers(); vi.setSystemTime(Date.now() + 150_000)
+      const before = world.list.mock.calls.length
+      let done = false
+      const turn = prepare(a.id).then(v => { done = true; return v })
+      await vi.advanceTimersByTimeAsync(4_900)
+      expect(world.list.mock.calls.length).toBe(before + 1)
+      expect(done).toBe(false)
+      await vi.advanceTimersByTimeAsync(200)
+      expect((await turn).path).toBe(first.path)
+      vi.useRealTimers()
+      finish({ items: world.metadata }); await sleep()
+      // An agent with only an ordinary cloud credential: no list call at turn start.
+      const b = addAgent('kit')
+      world.metadata.push({ ...metadata(), id: 'plain' })
+      await service.sync(); await sleep()
+      await service.setAttachments(b.id, account('account-a'), ['plain'])
+      vi.useFakeTimers(); vi.setSystemTime(Date.now() + 150_000)
+      const count = world.list.mock.calls.length
+      await prepare(b.id)
+      expect(world.list.mock.calls.length).toBe(count)
+    })
+    it('waits at most once per interval for a slow Core, and never for a terminal key', async () => {
+      const a = await setup('bare')
+      await prepare(a.id)
+      let finish!: (v: unknown) => void
+      world.list.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      vi.useFakeTimers(); vi.setSystemTime(Date.now() + 150_000)
+      const before = world.list.mock.calls.length
+      const first = prepare(a.id)
+      await vi.advanceTimersByTimeAsync(5_001); await first
+      // The next turn right after: the attempt is recent, so no second wait and no second list call.
+      let done = false
+      const second = prepare(a.id).then(() => { done = true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(done).toBe(true); await second
+      expect(world.list.mock.calls.length).toBe(before + 1)
+      vi.useRealTimers()
+      finish({ items: world.metadata }); await sleep()
+      // Only a terminal key attached: no turn-start sync at all.
+      await relist([key('key-1', { revision: 'k2', key_status: 'revoked_by_issuer' })])
+      vi.useFakeTimers(); vi.setSystemTime(Date.now() + 150_000)
+      const count = world.list.mock.calls.length
+      await prepare(a.id)
+      expect(world.list.mock.calls.length).toBe(count)
+    })
+  })
+
+  describe('during a running turn (D7)', () => {
+    it('writes a rotation and a revocation without waiting for the turn', async () => {
+      const a = await setup('kit')
+      const p = await prepare(a.id)
+      const turn = turnLock.acquireShared(a.id, 'running-turn')
+      try {
+        keys.token = 'issued-key-token-CCC333'
+        await relist([key('key-1', { revision: 'k2' })])
+        await vi.waitFor(() => expect(file(p.path!)[0].credential_data.token).toBe('issued-key-token-CCC333'))
+        await relist([key('key-1', { revision: 'k3', key_status: 'revoked_by_issuer' })])
+        await vi.waitFor(() => expect(file(p.path!)[0]).toMatchObject({ unavailable_reason: 'key_revoked' }))
+        expect(readFileSync(p.path!, 'utf8')).not.toContain('issued-key-token')
+        expect(turnLock.isLocked(a.id)).toBe(true)
+      } finally { turn.release() }
+    })
+    it('waits for the turn when the same pass changes anything else', async () => {
+      const a = await setup('bare', [key(), { ...metadata(), id: 'plain', service_uri: 'plain' }], ['key-1', 'plain'])
+      const p = await prepare(a.id), bytes = readFileSync(p.path!, 'utf8')
+      const turn = turnLock.acquireShared(a.id, 'running-turn')
+      keys.token = 'issued-key-token-DDD444'
+      await relist([key('key-1', { revision: 'k2' })]); await sleep(); await sleep()
+      expect(readFileSync(p.path!, 'utf8')).toBe(bytes)
+      turn.release()
+      await vi.waitFor(() => expect(file(p.path!).map(e => [e.id, e.credential_data.token])).toEqual([['key-1', 'issued-key-token-DDD444']]))
+    })
+  })
 })

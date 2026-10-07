@@ -20,6 +20,12 @@ export function CredentialStatusGlyph({ health, size = 14 }: { health: Credentia
   return <Glyph label={health.label} className={toneColor[health.tone]}><Icon size={size} aria-hidden /></Glyph>
 }
 
+/** Who holds the record, as an icon whose name is the sentence. */
+export function CredentialOwnershipGlyph({ ownership, size = 14 }: { ownership: CredentialOwnership; size?: number }): React.JSX.Element {
+  const Icon = ownershipIcon[ownership.kind]
+  return <Glyph label={ownership.label} className="text-[var(--color-text-muted)]"><Icon size={size} aria-hidden /></Glyph>
+}
+
 /**
  * An account in its standard form, "Name <email> host", everywhere a
  * credential list names one: the remote settings header and the agent's
@@ -53,14 +59,18 @@ export function ManageCredentialButton({ name, url, onError, disabled }: { name:
  * One service credential, the same in every list: type icon, name, type badge,
  * status, ownership, Service URI, then the row's actions on the right. Every
  * element is one line and fixed-size, so no state change moves a neighbour.
+ * `typeTitle` carries facts about the type (an issued key's producer) as the
+ * badge's and icon's tooltip, so every row keeps one line.
  *
  * `expandable` makes the header toggle a body below it (the local list's edit
  * form). The toggle is a real button for keyboard use; the whole header also
  * takes the click, and `actions` stop their clicks from reaching it.
  */
-export function CredentialRow({ name, type, serviceUri, health, ownership, actions, expandable, children }: {
+export function CredentialRow({ name, type, typeTitle, serviceUri, health, ownership, actions, expandable, children }: {
   name: string
   type?: string
+  /** Tooltip and accessible name of the type icon, when it says more than the badge. */
+  typeTitle?: string
   serviceUri?: string | null
   health: CredentialHealth
   ownership?: CredentialOwnership | null
@@ -70,13 +80,15 @@ export function CredentialRow({ name, type, serviceUri, health, ownership, actio
   children?: ReactNode
 }): React.JSX.Element {
   const TypeIcon = type ? credentialTypeIcon(type) : null
-  const OwnerIcon = ownership ? ownershipIcon[ownership.kind] : null
+  const typeName = type ? credentialTypeName(type) : '', titled = !!typeTitle && typeTitle !== typeName
   const content = <>
-    {TypeIcon && <TypeIcon size={16} aria-hidden className="shrink-0 text-[var(--color-accent)]" />}
+    {TypeIcon && (titled
+      ? <Glyph label={typeTitle} className="text-[var(--color-accent)]"><TypeIcon size={16} aria-hidden /></Glyph>
+      : <TypeIcon size={16} aria-hidden className="shrink-0 text-[var(--color-accent)]" />)}
     <span title={name} className="min-w-0 shrink truncate text-[14px] font-medium">{name}</span>
-    {type && <SettingsBadge>{credentialTypeName(type)}</SettingsBadge>}
+    {type && <SettingsBadge title={titled ? typeTitle : undefined}>{typeName}</SettingsBadge>}
     <CredentialStatusGlyph health={health} />
-    {ownership && OwnerIcon && <Glyph label={ownership.label} className="text-[var(--color-text-muted)]"><OwnerIcon size={14} aria-hidden /></Glyph>}
+    {ownership && <CredentialOwnershipGlyph ownership={ownership} />}
     {serviceUri && <code title={`Service URI: ${serviceUri}`} className="min-w-0 shrink-[2] truncate rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[12px] text-[var(--color-text-secondary)]">{serviceUri}</code>}
   </>
   const actionBox = actions ? <div className="flex shrink-0 items-center gap-1.5" onClick={e => e.stopPropagation()}>{actions}</div> : null

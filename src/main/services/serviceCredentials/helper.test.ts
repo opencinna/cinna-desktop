@@ -1,9 +1,13 @@
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { localBundle, validateLocal } from './transforms'
+const kit = vi.hoisted(() => ({ templateRoot: '', agents: [] as { id: string; kind: string; path: string }[] }))
+vi.mock('../../kit/contractStore', () => ({ getTemplateRoot: () => kit.templateRoot }))
+vi.mock('../localAgents/localAgentService', () => ({ localAgentService: { get: (_: string, id: string) => kit.agents.find(a => a.id === id) } }))
+import { credentialHelper } from './helper'
 const folders: string[] = []
 afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }) })
 it('reads refreshed arrays, explicit slots, placeholders and typed env fallbacks without merging', () => {
@@ -77,4 +81,20 @@ p.write_text(json.dumps([entry]))
 assert get_credential('Slack') is None
 `
   execFileSync('python3', ['-c', code], { cwd: folder, env: { ...process.env, PYTHONPATH: join(folder, 'scripts'), CINNA_CREDENTIALS_PATH: '' } })
+})
+
+it('offers the bundled credential reader to a folder whose reader is older or unversioned', () => {
+  const root = mkdtempSync(join(tmpdir(), 'credential-helper-')); folders.push(root)
+  const helperFile = (dir: string, body: string) => { mkdirSync(join(dir, 'scripts'), { recursive: true }); writeFileSync(join(dir, 'scripts/cinna_credentials.py'), body); return dir }
+  kit.templateRoot = helperFile(join(root, 'bundle'), 'import json\nHELPER_VERSION = "1.7.0"\n')
+  const agent = (id: string, body: string | null) => { const path = join(root, id); mkdirSync(path); if (body !== null) helperFile(path, body); kit.agents.push({ id, kind: 'kit', path }) }
+  agent('old', 'HELPER_VERSION = "1.4.0"\n'); agent('same', 'HELPER_VERSION = "1.7.0"\n'); agent('newer', "HELPER_VERSION = '1.8.0'\n")
+  agent('unversioned', 'def get_credential(): pass\n'); agent('absent', null)
+  kit.agents.push({ id: 'bare', kind: 'bare', path: root })
+  expect(credentialHelper.status('old')?.needsUpdate).toBe(true)
+  expect(credentialHelper.status('unversioned')?.needsUpdate).toBe(true)
+  expect(credentialHelper.status('same')?.needsUpdate).toBe(false)
+  expect(credentialHelper.status('newer')?.needsUpdate).toBe(false)
+  expect(credentialHelper.status('absent')).toBeNull()
+  expect(credentialHelper.status('bare')).toBeNull()
 })

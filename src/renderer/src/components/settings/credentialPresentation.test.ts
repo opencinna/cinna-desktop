@@ -5,7 +5,7 @@ import { accountReference, credentialHealth, credentialManageUrl, credentialOwne
 const dto: ServiceCredentialDto = {
   id: 'c', origin: 'cloud', cloudId: 'core-id', name: 'Token', type: 'api_token', serviceUri: null, notes: null,
   status: 'complete', isPlaceholder: false, relation: 'owned', ownerEmail: null, localUseAllowed: true,
-  revision: null, hasValues: true, expiresAt: null
+  revision: null, hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null
 }
 
 describe('credentialHealth', () => {
@@ -28,6 +28,56 @@ describe('credentialHealth', () => {
     expect(credentialHealth(null, 'missing')).toMatchObject({ tone: 'error' })
     expect(credentialHealth(dto, 'local_use_not_allowed')).toEqual({ tone: 'error', label: 'The owner must allow use on your computer' })
     expect(credentialHealth(null, 'account_unavailable')).toMatchObject({ tone: 'error' })
+  })
+})
+
+describe('Agent API key status', () => {
+  const key: ServiceCredentialDto = { ...dto, type: 'agent_api', keyStatus: 'active', hasValues: false, agentApi: { producerName: 'CRM agent', issuerEmail: 'bob@example.com' } }
+  const unknown = { producerName: null, issuerEmail: null }
+  // status, tone, label with both facts, label with neither
+  const labels: [string, string, string, string][] = [
+    ['api_disabled', 'warning', 'CRM agent’s API is turned off — works again when its owner turns it back on', 'API turned off by producer — works again when its owner turns it back on'],
+    ['external_access_paused', 'warning', 'External access to CRM agent is paused — works again when its owner resumes it', 'External access paused — works again when its owner resumes it'],
+    ['expired', 'error', 'Expired — ask bob@example.com for a new key', 'Expired — ask the issuer for a new key'],
+    ['revoked_by_issuer', 'error', 'Revoked by bob@example.com — ask them for a new key', 'Revoked by issuer — ask the issuer for a new key'],
+    ['producer_removed', 'error', 'CRM agent was removed — this key no longer calls anything', 'Producer removed — the agent this key called no longer exists'],
+    ['issuer_removed', 'error', 'Issuer account removed — ask the producer’s owner for a new key', 'Issuer account removed — ask the producer’s owner for a new key'],
+    ['something_new', 'error', 'Unavailable — open it on the remote for details', 'Unavailable — open it on the remote for details']
+  ]
+  it.each(labels)('reads %s the same on a settings row and an attached row, naming what Core sent', (keyStatus, tone, named, generic) => {
+    expect(credentialHealth({ ...key, keyStatus })).toEqual({ tone, label: named })
+    expect(credentialHealth({ ...key, keyStatus }, 'key_unavailable')).toEqual({ tone, label: named })
+    expect(credentialHealth({ ...key, keyStatus, agentApi: unknown })).toEqual({ tone, label: generic })
+    expect(credentialHealth({ ...key, keyStatus, agentApi: null }, 'key_unavailable')).toEqual({ tone, label: generic })
+  })
+  it('treats an active key like any other record', () => {
+    expect(credentialHealth({ ...key, hasValues: true })).toEqual({ tone: 'ok', label: 'Ready' })
+    expect(credentialHealth({ ...key, hasValues: true }, 'ready')).toEqual({ tone: 'ok', label: 'Ready' })
+    expect(credentialHealth(key)).toMatchObject({ tone: 'ok' })
+  })
+  it('falls back to unavailable when the state says unavailable but the record does not say why', () => {
+    expect(credentialHealth(key, 'key_unavailable')).toEqual({ tone: 'error', label: 'Unavailable — open it on the remote for details' })
+    expect(credentialHealth(null, 'key_unavailable')).toEqual({ tone: 'error', label: 'Unavailable — open it on the remote for details' })
+  })
+  it('puts a non-active key status before local use, missing values and expiry', () => {
+    expect(credentialHealth({ ...key, keyStatus: 'revoked_by_issuer', localUseAllowed: false, isPlaceholder: true, status: 'incomplete', expiresAt: 1 }, undefined, 1000))
+      .toEqual({ tone: 'error', label: 'Revoked by bob@example.com — ask them for a new key' })
+    expect(credentialHealth({ ...key, keyStatus: 'api_disabled', expiresAt: 1 }, undefined, 1000)).toMatchObject({ tone: 'warning', label: expect.stringMatching(/API is turned off/) })
+    // Active falls through to the record's own checks.
+    expect(credentialHealth({ ...key, expiresAt: 1 }, undefined, 1000)).toEqual({ tone: 'warning', label: 'Values expired' })
+  })
+  it('reads a blocked delivery as blocked over active, downloaded values and the unavailable fallback, but not over a dead key', () => {
+    const blocked = { tone: 'error', label: 'Blocked — this key’s API address isn’t secure (https); ask your Cinna server’s admin to fix it' }
+    expect(credentialHealth({ ...key, keyBlocked: 'insecure_base_url' })).toEqual(blocked)
+    expect(credentialHealth({ ...key, keyBlocked: 'insecure_base_url', hasValues: true })).toEqual(blocked)
+    expect(credentialHealth({ ...key, keyBlocked: 'insecure_base_url' }, 'key_unavailable')).toEqual(blocked)
+    expect(credentialHealth({ ...key, keyStatus: 'something_new', keyBlocked: 'other_reason' }, 'key_unavailable')).toEqual(blocked)
+    expect(credentialHealth({ ...key, keyStatus: 'revoked_by_issuer', keyBlocked: 'insecure_base_url' })).toMatchObject({ label: expect.stringMatching(/^Revoked by/) })
+  })
+  it('says who issued the key in its ownership glyph', () => {
+    expect(credentialOwnership(key)).toEqual({ kind: 'owned', label: 'Issued to you by bob@example.com' })
+    expect(credentialOwnership({ ...key, agentApi: unknown })).toEqual({ kind: 'owned', label: 'Issued to you' })
+    expect(credentialOwnership({ ...key, agentApi: null })).toEqual({ kind: 'owned', label: 'Issued to you' })
   })
 })
 

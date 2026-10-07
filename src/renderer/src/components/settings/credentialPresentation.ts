@@ -18,7 +18,34 @@ const attachmentHealth: Record<ServiceCredentialAttachmentState, CredentialHealt
   not_cached: { tone: 'warning', label: 'Values not downloaded yet' },
   missing: { tone: 'error', label: 'This credential no longer exists' },
   local_use_not_allowed: { tone: 'error', label: 'The owner must allow use on your computer' },
-  account_unavailable: { tone: 'error', label: 'Account not signed in' }
+  account_unavailable: { tone: 'error', label: 'Account not signed in' },
+  // The detail comes from the record's key status; this stands in when it is unknown.
+  key_unavailable: { tone: 'error', label: 'Unavailable — open it on the remote for details' }
+}
+
+type KeyFacts = Pick<ServiceCredentialDto, 'keyStatus' | 'agentApi'> & Partial<Pick<ServiceCredentialDto, 'keyBlocked'>>
+
+/** Desktop refused to store the key's delivery: Core reports it active, but no agent can use it. */
+const keyBlockedHealth: CredentialHealth = { tone: 'error', label: 'Blocked — this key’s API address isn’t secure (https); ask your Cinna server’s admin to fix it' }
+
+/**
+ * An issued Agent API key's status in plain words, with what to do next. The
+ * producer and issuer are named when Core sent them; otherwise the wording is
+ * generic. A status this build does not know reads as unavailable (fail closed).
+ * A delivery Desktop blocked outranks an active or unknown status, never a dead key's.
+ */
+export function agentApiKeyHealth(dto: KeyFacts | null | undefined): CredentialHealth {
+  const producer = dto?.agentApi?.producerName || null, issuer = dto?.agentApi?.issuerEmail || null
+  switch (dto?.keyStatus) {
+    case 'active': return dto.keyBlocked ? keyBlockedHealth : attachmentHealth.ready
+    case 'api_disabled': return { tone: 'warning', label: producer ? `${producer}’s API is turned off — works again when its owner turns it back on` : 'API turned off by producer — works again when its owner turns it back on' }
+    case 'external_access_paused': return { tone: 'warning', label: producer ? `External access to ${producer} is paused — works again when its owner resumes it` : 'External access paused — works again when its owner resumes it' }
+    case 'expired': return { tone: 'error', label: issuer ? `Expired — ask ${issuer} for a new key` : 'Expired — ask the issuer for a new key' }
+    case 'revoked_by_issuer': return { tone: 'error', label: issuer ? `Revoked by ${issuer} — ask them for a new key` : 'Revoked by issuer — ask the issuer for a new key' }
+    case 'producer_removed': return { tone: 'error', label: producer ? `${producer} was removed — this key no longer calls anything` : 'Producer removed — the agent this key called no longer exists' }
+    case 'issuer_removed': return { tone: 'error', label: 'Issuer account removed — ask the producer’s owner for a new key' }
+    default: return dto?.keyBlocked ? keyBlockedHealth : attachmentHealth.key_unavailable
+  }
 }
 
 /**
@@ -27,8 +54,11 @@ const attachmentHealth: Record<ServiceCredentialAttachmentState, CredentialHealt
  * blocking condition first.
  */
 export function credentialHealth(dto: ServiceCredentialDto | null, attachmentState?: ServiceCredentialAttachmentState, now = Date.now()): CredentialHealth {
+  if (attachmentState === 'key_unavailable') return dto?.keyStatus === 'active' && !dto.keyBlocked ? attachmentHealth.key_unavailable : agentApiKeyHealth(dto)
   if (attachmentState) return attachmentHealth[attachmentState]
   if (!dto) return attachmentHealth.missing
+  // An issued key's own status says more than anything below it.
+  if ((dto.keyStatus != null && dto.keyStatus !== 'active') || dto.keyBlocked) return agentApiKeyHealth(dto)
   if (!dto.localUseAllowed) return attachmentHealth.local_use_not_allowed
   if (dto.isPlaceholder || dto.status !== 'complete') return attachmentHealth.incomplete
   if (dto.expiresAt !== null && dto.expiresAt <= now) return attachmentHealth.expired
@@ -41,8 +71,10 @@ export function credentialHealth(dto: ServiceCredentialDto | null, attachmentSta
 export type CredentialOwnershipKind = 'owned' | 'shared' | 'local'
 export interface CredentialOwnership { kind: CredentialOwnershipKind; label: string }
 
-export function credentialOwnership(dto: Pick<ServiceCredentialDto, 'origin' | 'relation' | 'ownerEmail'>): CredentialOwnership {
+export function credentialOwnership(dto: Pick<ServiceCredentialDto, 'origin' | 'relation' | 'ownerEmail'> & Partial<Pick<ServiceCredentialDto, 'type' | 'agentApi'>>): CredentialOwnership {
   if (dto.origin === 'local') return { kind: 'local', label: 'Stored on this computer' }
+  // An issued key is owned by its recipient but was given by someone: say who.
+  if (dto.type === 'agent_api') return { kind: 'owned', label: dto.agentApi?.issuerEmail ? `Issued to you by ${dto.agentApi.issuerEmail}` : 'Issued to you' }
   return dto.relation === 'shared'
     ? { kind: 'shared', label: `Shared by ${dto.ownerEmail ?? 'owner'}` }
     : { kind: 'owned', label: 'Owned by you' }

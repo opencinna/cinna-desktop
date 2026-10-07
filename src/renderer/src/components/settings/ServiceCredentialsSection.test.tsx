@@ -8,7 +8,7 @@ import { ServiceCredentialsSection } from './ServiceCredentialsSection'
 const local: ServiceCredentialDto = {
   id: 'local', origin: 'local', cloudId: null, name: 'Local token', type: 'api_token',
   serviceUri: null, notes: null, status: 'complete', isPlaceholder: false, relation: 'owned',
-  ownerEmail: null, localUseAllowed: true, revision: null, hasValues: true, expiresAt: null
+  ownerEmail: null, localUseAllowed: true, revision: null, hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null
 }
 const remote: ServiceCredentialDto = { ...local, id: 'cloud', origin: 'cloud', cloudId: 'cloud', name: 'Cloud token' }
 const list = vi.fn(), sync = vi.fn(), save = vi.fn(), remove = vi.fn(), openExternal = vi.fn()
@@ -139,7 +139,9 @@ it('keeps a late old-host error out of the new profile and syncs its displayed s
 it('explains beside the remote title that only locally usable credentials are listed', async () => {
   show(null, true)
   fireEvent.click(await screen.findByRole('button', { name: 'About remote credentials' }))
-  expect(screen.getByRole('dialog', { name: 'About remote credentials' }).textContent).toContain('not the full list')
+  const about = screen.getByRole('dialog', { name: 'About remote credentials' }).textContent
+  expect(about).toContain('not the full list')
+  expect(about).toContain('including Agent API keys other people issued to you for their agents; the rest, such as automatic, bundle, OAuth and Agent API connections, stay on the server')
   show(null)
   expect(screen.getAllByRole('button', { name: 'About remote credentials' })).toHaveLength(1)
 })
@@ -192,6 +194,38 @@ it('edits a local record inline, locks the rest while a form is open, and confir
   expect(remove).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Delete credential' }))
   await waitFor(() => expect(remove).toHaveBeenCalledWith('local'))
+})
+
+it('lists an issued key on one line, its producer and issuer as glyph names and tooltips', async () => {
+  const key = (id: string, keyStatus: string, agentApi: ServiceCredentialDto['agentApi']): ServiceCredentialDto => ({ ...remote, id, cloudId: id, name: `Key ${id}`, type: 'agent_api', keyStatus, agentApi, hasValues: false })
+  list.mockResolvedValue({ ok: true, value: { items: [key('a', 'api_disabled', { producerName: 'CRM agent', issuerEmail: 'bob@example.com' }), key('b', 'active', { producerName: null, issuerEmail: null }), key('c', 'expired', null)], lastSync: 1, error: null, secureStorage: true } })
+  render(<QueryClientProvider client={queryClient}><ServiceCredentialsSection cloud /></QueryClientProvider>)
+  await screen.findByText('Key a')
+  expect(screen.getAllByText('Agent API key')).toHaveLength(3)
+  expect(screen.getByRole('img', { name: 'CRM agent’s API is turned off — works again when its owner turns it back on' })).toBeTruthy()
+  expect(screen.getByRole('img', { name: 'Expired — ask the issuer for a new key' })).toBeTruthy()
+  expect(screen.getByRole('img', { name: 'Agent API key for CRM agent' })).toBeTruthy()
+  expect(screen.getByRole('img', { name: 'Issued to you by bob@example.com' })).toBeTruthy()
+  expect(screen.getAllByRole('img', { name: 'Issued to you' })).toHaveLength(2)
+  // Facts never add a line of text to a row.
+  expect(screen.queryByText(/CRM agent|bob@/)).toBeNull()
+  expect(screen.getAllByText('Agent API key').map(el => el.getAttribute('title'))).toEqual(['Agent API key for CRM agent', null, null])
+  expect(screen.getByRole('button', { name: 'Manage Key c' })).toBeTruthy()
+  // Never offered as something to create here.
+  expect(screen.queryByRole('button', { name: 'Add Credential' })).toBeNull()
+  // Key b is active; the row turns red once Desktop blocks its delivery, never a green "Available".
+  expect(screen.getByRole('img', { name: 'Available — values download when an agent uses it' })).toBeTruthy()
+  list.mockResolvedValue({ ok: true, value: { items: [{ ...key('b', 'active', null), keyBlocked: 'insecure_base_url' }], lastSync: 2, error: null, secureStorage: true } })
+  await act(async () => { await queryClient.invalidateQueries() })
+  expect(await screen.findByRole('img', { name: 'Blocked — this key’s API address isn’t secure (https); ask your Cinna server’s admin to fix it' })).toBeTruthy()
+  expect(screen.queryByRole('img', { name: /^Available/ })).toBeNull()
+})
+
+it('never offers an Agent API key among the creatable types', async () => {
+  show(null)
+  fireEvent.click(await screen.findByRole('button', { name: 'Add Credential' }))
+  fireEvent.change(screen.getByRole('textbox', { name: 'Search credential types' }), { target: { value: 'agent' } })
+  expect(screen.queryByRole('button', { name: /Agent API/ })).toBeNull()
 })
 
 it('opens Core’s page for a remote credential and reports a refused open', async () => {

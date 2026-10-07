@@ -12,10 +12,10 @@ import { desktopStateService } from '../localAgents/desktopStateService'
 import { turnLock } from '../localAgents/turnLock'
 import { createLocalScheduleScheduler } from '../localScheduleScheduler'
 import { rememberCredentialSecrets } from '../../security/serviceCredentialRedaction'
-import { checkCredentialPaths, collectOrphanBareCredentials, writeCredentials } from './files'
+import { checkCredentialPaths, collectOrphanBareCredentials, compareGeneration, writeCredentials } from './files'
 import { serviceCredentialCloud } from './cloud'
 import { localBundle, validateLocal } from './transforms'
-import { SERVICE_CREDENTIALS_CHANGED, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
+import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
 import type { LocalAgentDto } from '../../../shared/localAgents'
 
 const LOCAL = '__default__', SHARED_TTL = 7 * 86400_000
@@ -32,7 +32,11 @@ interface Account {
   /** How the account is named on screen: the Cinna full name, and the email it signs in with. */
   name: string; email: string
   epoch: number; abort: AbortController; syncError: string | null; lastSync: number | null
+  /** When a sync of this account last started (poll, manual or turn start), successful or not. */
+  lastAttempt: number | null
   synthetic: ServiceCredentialEntry[]
+  /** Polls every minute while an attached issued key is active or paused (a rotation must land inside Core's 5-minute overlap). */
+  fast: boolean
   flight: { global: number; epoch: number; promise: Promise<void>; again: boolean } | null
   scheduler: ReturnType<typeof createLocalScheduleScheduler>
 }
@@ -62,6 +66,63 @@ function decrypt(row: ServiceCredentialRow): ServiceCredentialBundle | null {
   catch { throw new Error('Stored credential values could not be decrypted. Replace the local values or sync again.') }
   rememberCredentialSecrets(bundle)
   return bundle
+}
+/**
+ * Cached metadata as stored. `keyStub` keeps an issued key's non-secret file fields (main only,
+ * stripped from DTOs); `keyBlocked` marks a delivery Desktop refused to store (an insecure
+ * `base_url`) until Core's revision changes, and reaches the renderer as the row's status.
+ */
+type StoredMetadata = Omit<ServiceCredentialDto, 'keyBlocked'> & { keyStub?: Record<string, string>; keyBlocked?: string | null }
+function stored(row: ServiceCredentialRow): StoredMetadata { return JSON.parse(row.metadata) as StoredMetadata }
+const KEY_STATUS = /^[a-z0-9_]{1,64}$/
+/** Never `token`: only these fields survive into a token-less entry. */
+const KEY_STUB_FIELDS = ['base_url', 'spec_url', 'label', 'producer_agent_id'] as const
+const REFUSAL_STATUS: Record<string, string> = { key_revoked: 'revoked_by_issuer', key_expired: 'expired', key_paused: 'external_access_paused' }
+const KEY_STATUS_WORDS: Record<string, string> = { revoked_by_issuer: 'revoked by issuer', producer_removed: 'producer removed', issuer_removed: 'issuer account removed',
+  expired: 'expired', api_disabled: 'API turned off by producer', external_access_paused: 'external access paused' }
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
+const FAST_POLL = 60_000, SLOW_POLL = 300_000, TURN_SYNC_AGE = 120_000, TURN_SYNC_BUDGET = 5_000
+/** An issued key's list expiry in ms: epoch seconds, or an ISO-8601 string; anything else is no expiry. */
+function expiresAt(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value * 1000 : null
+  if (typeof value !== 'string') return null
+  const ms = Date.parse(value)
+  return Number.isNaN(ms) ? null : ms
+}
+function isKey(m: Pick<ServiceCredentialDto, 'type'>): boolean { return m.type === 'agent_api' }
+/** Fail closed: only an `active` issued key delivers a token; every other (or unknown) status is unavailable. */
+function keyUnavailable(m: Pick<ServiceCredentialDto, 'type' | 'keyStatus'>): boolean { return isKey(m) && m.keyStatus !== 'active' }
+/** Unavailable by status, or because Desktop refused its last delivery. */
+function rowKeyUnavailable(row: ServiceCredentialRow): boolean { const m = stored(row); return keyUnavailable(m) || (isKey(m) && !!m.keyBlocked) }
+/** Revoked, removed, expired or unknown: no use attaching it. Paused keys recover by themselves. */
+function keyTerminal(m: ServiceCredentialDto): boolean { return keyUnavailable(m) && !AGENT_API_KEY_PAUSED_STATUSES.includes(m.keyStatus ?? '') }
+/** An issued key that is active or paused: one worth polling for and syncing at turn start. */
+function liveKey(row: ServiceCredentialRow): boolean { const m = credentialDto(row); return isKey(m) && !keyTerminal(m) }
+function unavailableReason(status: string | null): string { return status === 'expired' ? 'key_expired' : AGENT_API_KEY_PAUSED_STATUSES.includes(status ?? '') ? 'key_paused' : 'key_revoked' }
+function keyStub(data: Record<string, unknown> | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const field of KEY_STUB_FIELDS) if (typeof data?.[field] === 'string') out[field] = data[field] as string
+  return out
+}
+/** Rows a materialize call may fetch: allowed locally and not a non-active issued key. */
+function deliverable(row: ServiceCredentialRow): boolean { return credentialDto(row).localUseAllowed && !rowKeyUnavailable(row) }
+/**
+ * An issued key's API address must be absolute http(s). Plain http only to this computer or to the
+ * very origin this account already signs in to (a local or LAN Core the user configured over http):
+ * the token goes nowhere the account's own bearer does not already go.
+ */
+export function keyApiUrl(entry: ServiceCredentialEntry, accountOrigin: string): URL | null {
+  let url: URL
+  try { url = new URL(String(entry.credential_data.base_url)) } catch { return null }
+  if (url.protocol === 'https:') return url
+  if (url.protocol === 'http:' && (LOOPBACK.has(url.hostname) || url.origin === accountOrigin)) return url
+  return null
+}
+/** The token-less entry an attached non-active key writes, so the agent can say why it cannot call the producer. */
+function unavailableBundle(row: ServiceCredentialRow): ServiceCredentialBundle {
+  const m = stored(row)
+  return { id: row.cloud_id!, revision: m.revision ?? '', service_account_file: null, ssh_key: null, entry: { id: row.cloud_id!, name: m.name, type: m.type, notes: m.notes,
+    service_uri: m.serviceUri, is_placeholder: false, unavailable_reason: m.keyStatus === 'active' && m.keyBlocked ? m.keyBlocked : unavailableReason(m.keyStatus), ...(m.keyStatus && !(m.keyStatus === 'active' && m.keyBlocked) ? { key_status: m.keyStatus } : {}), credential_data: { ...m.keyStub } } }
 }
 interface Guard { global: number; accounts: [Account, number][] }
 function guard(list: Account[]): Guard { return { global: epoch, accounts: list.map(acc => [acc, acc.epoch]) } }
@@ -103,6 +164,7 @@ function attachedAccounts(a: Pick<LocalAgentDto, 'path' | 'kind'>): Account[] { 
 function attachmentState(row?: ServiceCredentialRow): Exclude<ServiceCredentialAttachmentDto['state'], 'account_unavailable'> {
   if (!row) return 'missing'
   const m = credentialDto(row)
+  if (rowKeyUnavailable(row)) return 'key_unavailable'
   if (!m.localUseAllowed) return 'local_use_not_allowed'
   if (!row.payload_enc) return m.isPlaceholder || m.status !== 'complete' ? 'incomplete' : 'not_cached'
   if ((m.relation === 'shared' && (row.payload_fetched_at ?? 0) + SHARED_TTL <= Date.now()) || (row.expires_at && row.expires_at <= Date.now())) return 'expired'
@@ -110,6 +172,8 @@ function attachmentState(row?: ServiceCredentialRow): Exclude<ServiceCredentialA
   return 'ready'
 }
 function queue(a: LocalAgentDto): void {
+  // A running turn holds the agent shared: an issued key's rotation or loss is written now (D7), the rest waits below.
+  if (turnLock.isLocked(a.id) && !turnLock.isExclusivelyLocked(a.id)) writeKeyChanges(a)
   if (pendingAgents.has(a.id)) return
   pendingAgents.add(a.id)
   // Queued, so the exclusive hold is taken atomically once the agent is free:
@@ -136,17 +200,39 @@ async function fetchValues(account: Account, selected: ServiceCredentialRow[], g
       const current = repo.get(row.id)
       // A list may revoke access while this delivery is in flight. Never put
       // a previously authorized payload back into a changed/deleted cache row.
-      if (!current || current.metadata !== row.metadata || !credentialDto(current).localUseAllowed) continue
+      if (!current || current.metadata !== row.metadata || !deliverable(current)) continue
       const item = delivery.items.find(v => v.id === row.cloud_id)
       const refusal = delivery.refused.find(v => v.id === row.cloud_id)
       if (refusal) {
-        const m = credentialDto(row); m.localUseAllowed = false
+        const m = stored(row)
+        // Backstop for a key the list still called active: record its status; the
+        // owner's local-use setting is not what refused it. Stands until the next list pass,
+        // which takes the status from Core's list again.
+        if (isKey(m) && typeof refusal.reason === 'string' && refusal.reason.startsWith('key_')) {
+          m.keyStatus = typeof refusal.key_status === 'string' && KEY_STATUS.test(refusal.key_status) && refusal.key_status !== 'active' ? refusal.key_status : REFUSAL_STATUS[refusal.reason] ?? 'revoked_by_issuer'
+          logger.warn('Issued key refused at delivery', { userId: account.userId, cloud_id: row.cloud_id, key_status: m.keyStatus })
+        } else m.localUseAllowed = false
         repo.put({ ...row, metadata: JSON.stringify(m), payload_enc: null, payload_fetched_at: null, updated_at: Date.now() })
       } else if (item && item.entry?.id === row.cloud_id && item.entry.type === credentialDto(row).type && item.ssh_key === null && typeof item.revision === 'string') {
         rememberCredentialSecrets(item)
-        const m = credentialDto(row); m.revision = item.revision
+        const m = stored(row); m.revision = item.revision
+        const keyed = isKey(m)
+        let blocked = false
+        if (keyed) {
+          const url = keyApiUrl(item.entry, account.origin)
+          // A refused delivery's fields (its address included) do not become the stub.
+          if (url) m.keyStub = { ...m.keyStub, ...keyStub(item.entry.credential_data) }
+          // Never store a token Desktop would hand to a non-https, non-loopback API. Marked until the
+          // revision changes (base_url is part of it), so this logs once per revision.
+          if (!url) {
+            blocked = true; m.keyBlocked = 'insecure_base_url'
+            logger.warn('Issued key not stored: its API address is not https, this computer or its own server', { userId: account.userId, cloud_id: row.cloud_id })
+          } else if (url.origin !== account.origin) logger.warn('Issued key calls an API on another origin than its account', { userId: account.userId, cloud_id: row.cloud_id, apiOrigin: url.origin })
+        }
         const expiry = item.entry.credential_data.expires_at
-        repo.put({ ...row, metadata: JSON.stringify(m), payload_enc: encrypt(item, row.payload_enc), payload_fetched_at: Date.now(), expires_at: typeof expiry === 'number' ? expiry * 1000 : null, updated_at: Date.now() })
+        if (blocked) { repo.put({ ...row, metadata: JSON.stringify(m), payload_enc: null, payload_fetched_at: null, updated_at: Date.now() }); continue }
+        repo.put({ ...row, metadata: JSON.stringify(m), payload_enc: encrypt(item, row.payload_enc), payload_fetched_at: Date.now(),
+          expires_at: typeof expiry === 'number' ? expiry * 1000 : keyed ? row.expires_at : null, updated_at: Date.now() })
       } else throw new Error('Incomplete credential delivery response.')
     }
     if (delivery.current_user) account.synthetic = [...account.synthetic.filter(e => e.type !== 'current_user'), delivery.current_user]
@@ -161,20 +247,71 @@ async function fetchValues(account: Account, selected: ServiceCredentialRow[], g
  * caller — turns, commands, attachment edits, regeneration — is covered.
  */
 const materializing = new Map<string, Promise<unknown>>()
-function materialize(a: LocalAgentDto, refresh: boolean): Promise<{ path?: string; generation: string; prompt: string }> {
-  const run = (materializing.get(a.path) ?? Promise.resolve()).then(() => materializeNow(a, refresh))
+function chain<T>(path: string, fn: () => Promise<T>): Promise<T> {
+  const run = (materializing.get(path) ?? Promise.resolve()).then(fn)
   const tail = run.catch(() => undefined)
-  materializing.set(a.path, tail)
-  void tail.then(() => { if (materializing.get(a.path) === tail) materializing.delete(a.path) })
+  materializing.set(path, tail)
+  void tail.then(() => { if (materializing.get(path) === tail) materializing.delete(path) })
   return run
+}
+function materialize(a: LocalAgentDto, refresh: boolean): Promise<{ path?: string; generation: string; prompt: string }> { return chain(a.path, () => materializeNow(a, refresh)) }
+/** Await the account's sync for at most the turn-start budget; a slow or failed one leaves the cache as it is. */
+async function boundedSync(account: Account): Promise<void> {
+  const running = account.flight?.epoch === account.epoch && account.flight.global === epoch ? account.flight.promise : syncAccount(account)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try { await Promise.race([running.catch(() => undefined), new Promise<void>(resolve => { timer = setTimeout(resolve, TURN_SYNC_BUDGET) })]) }
+  finally { clearTimeout(timer) }
+}
+/** What a generation consists of: the entries in attachment order, the identity entry and the fingerprint. */
+function candidate(attached: Resolved[]): { bundles: ServiceCredentialBundle[]; identity: ServiceCredentialEntry[]; generation: string } {
+  const bundles = attached.flatMap(v => {
+    const status = attachmentState(v.row)
+    if (v.row && status === 'key_unavailable') return [{ bundle: unavailableBundle(v.row), account: v.account }]
+    if (!v.row || !['ready', 'incomplete'].includes(status)) return []
+    const bundle = decrypt(v.row)
+    return bundle ? [{ bundle, account: v.account }] : []
+  })
+  // A filled duplicate slot wins without field-level merging; a token-less key entry is never "filled".
+  // Preserve attachment order otherwise. One Core record attached under two accounts is written once
+  // (first group wins): duplicate entry ids would also collide on the service-account side file.
+  const filled = (e: ServiceCredentialEntry) => e.is_placeholder === false && !e.unavailable_reason
+  const effective = bundles.filter(({ bundle: b }) => filled(b.entry) || !bundles.some(({ bundle: other }) => filled(other.entry) && other.entry.type === b.entry.type && other.entry.service_uri === b.entry.service_uri))
+    .filter((v, i, all) => all.findIndex(o => o.bundle.entry.id === v.bundle.entry.id) === i)
+  // Only ready rows contribute, so an unavailable key does not make its account count.
+  const contributing = ordered().filter(account => attached.some(v => v.account === account && v.row && attachmentState(v.row) === 'ready'))
+  // `current_user` is the only synthetic identity entry (an issued key carries its identity in the key),
+  // and Core gives it one fixed id. With several accounts contributing it would name
+  // an arbitrary one of them, so it is written only when exactly one account does.
+  const identity = contributing.length === 1 ? contributing[0].synthetic.filter(e => e.type === 'current_user') : []
+  const keys = contributing.map(account => account.key)
+  // A single account fingerprints as its bare key, so upgraded single-account runtimes stay stable.
+  const generation = effective.length ? createHash('sha256').update(JSON.stringify([keys.length === 0 ? null : keys.length === 1 ? keys[0] : keys, effective.map(v => v.bundle), identity])).digest('hex') : 'empty'
+  return { bundles: effective.map(v => v.bundle), identity, generation }
+}
+function promptState(row: ServiceCredentialRow): string {
+  const state = attachmentState(row)
+  if (state !== 'key_unavailable') return state
+  if (credentialDto(row).keyStatus === 'active') return 'unavailable — insecure API address'
+  const words = KEY_STATUS_WORDS[credentialDto(row).keyStatus ?? '']
+  return words ? `unavailable — ${words}` : 'unavailable'
 }
 async function materializeNow(a: LocalAgentDto, refresh: boolean): Promise<{ path?: string; generation: string; prompt: string }> {
   const g = guard(attachedAccounts(a))
   check(g)
   let attached = resolve(a).filter(v => v.available)
   if (refresh) {
+    // An attached issued key may have rotated or died while the poll was not running
+    // (sleep, offline): sync its account first, bounded, and fall back to the cache.
     for (const account of attachedAccounts(a)) {
-      const stale = attached.flatMap(v => v.account === account && v.row && credentialDto(v.row).localUseAllowed &&
+      // Gated on the last attempt, not the last success: a slow or offline Core costs one budget per interval, not one per turn.
+      if ((account.lastAttempt ?? 0) >= Date.now() - TURN_SYNC_AGE || !attached.some(v => v.account === account && v.row && liveKey(v.row))) continue
+      account.lastAttempt = Date.now()
+      await boundedSync(account)
+      check(g)
+    }
+    attached = resolve(a).filter(v => v.available)
+    for (const account of attachedAccounts(a)) {
+      const stale = attached.flatMap(v => v.account === account && v.row && deliverable(v.row) &&
         (!v.row.payload_enc || (v.row.expires_at !== null && v.row.expires_at < Date.now() + 600_000) || (v.row.payload_fetched_at ?? 0) < Date.now() - 300_000) ? [v.row] : [])
       try { await fetchValues(account, stale, g) } catch { check(g) /* Same-account offline use is bounded below. */ }
     }
@@ -186,28 +323,57 @@ async function materializeNow(a: LocalAgentDto, refresh: boolean): Promise<{ pat
     if (refresh && attached.length) secure()
     return { generation: 'empty', prompt: '' }
   }
-  const bundles = attached.flatMap(v => {
-    const status = attachmentState(v.row)
-    if (!v.row || !['ready', 'incomplete'].includes(status)) return []
-    const bundle = decrypt(v.row)
-    return bundle ? [{ bundle, account: v.account }] : []
-  })
-  // A filled duplicate slot wins without field-level merging. Preserve attachment order otherwise.
-  // One Core record attached under two accounts is written once (first group wins):
-  // duplicate entry ids would also collide on the service-account side file.
-  const effective = bundles.filter(({ bundle: b }) => b.entry.is_placeholder === false || !bundles.some(({ bundle: other }) => !other.entry.is_placeholder && other.entry.type === b.entry.type && other.entry.service_uri === b.entry.service_uri))
-    .filter((v, i, all) => all.findIndex(o => o.bundle.entry.id === v.bundle.entry.id) === i)
-  const contributing = ordered().filter(account => attached.some(v => v.account === account && v.row && attachmentState(v.row) === 'ready'))
-  // `current_user` is the only identity entry (Core delivers no Agent API credentials),
-  // and Core gives it one fixed id. With several accounts contributing it would name
-  // an arbitrary one of them, so it is written only when exactly one account does.
-  const identity = contributing.length === 1 ? contributing[0].synthetic.filter(e => e.type === 'current_user') : []
-  const keys = contributing.map(account => account.key)
-  // A single account fingerprints as its bare key, so upgraded single-account runtimes stay stable.
-  const generation = effective.length ? createHash('sha256').update(JSON.stringify([keys.length === 0 ? null : keys.length === 1 ? keys[0] : keys, effective.map(v => v.bundle), identity])).digest('hex') : 'empty'
-  const path = await writeCredentials(a.path, a.kind, effective.map(v => v.bundle), identity, generation, () => check(g))
+  const { bundles, identity, generation } = candidate(attached)
+  const path = await writeCredentials(a.path, a.kind, bundles, identity, generation, () => check(g))
   check(g)
-  return { path, generation, prompt: attached.length ? '\nAttached credentials (values are private):\n' + attached.map(v => v.row ? `${credentialDto(v.row).name} (${credentialDto(v.row).type}; slot ${credentialDto(v.row).serviceUri ?? 'none'}): ${attachmentState(v.row)}` : `Missing credential: ${v.ref}`).join('\n') : '' }
+  return { path, generation, prompt: attached.length ? '\nAttached credentials (values are private):\n' + attached.map(v => v.row ? `${credentialDto(v.row).name} (${credentialDto(v.row).type}; slot ${credentialDto(v.row).serviceUri ?? 'none'}): ${promptState(v.row)}` : `Missing credential: ${v.ref}`).join('\n') : '' }
+}
+/** Same key set either way, compared field by field (Core's and Desktop's entries need not share key order). */
+function sameFields(x: Record<string, unknown>, y: Record<string, unknown>, ignore: string[]): boolean {
+  return [...new Set([...Object.keys(x), ...Object.keys(y)])].every(k => ignore.includes(k) || JSON.stringify(x[k]) === JSON.stringify(y[k]))
+}
+/**
+ * Whether the next generation differs from the one on disk only by issued keys:
+ * an active key's token changed (a rotation), or a key entry is now token-less.
+ * Same files, same entries in the same order, every other field equal.
+ */
+function keyOnlyChange(current: Map<string, string>, next: Map<string, string>): boolean {
+  if (current.size !== next.size || [...next.keys()].some(name => !current.has(name))) return false
+  for (const [name, bytes] of next) if (name !== 'credentials.json' && current.get(name) !== bytes) return false
+  const before = current.get('credentials.json'), after = next.get('credentials.json')
+  if (!before || !after || before === after) return false
+  let old: ServiceCredentialEntry[], now: ServiceCredentialEntry[]
+  try { old = JSON.parse(before); now = JSON.parse(after) } catch { return false }
+  if (!Array.isArray(old) || !Array.isArray(now) || old.length !== now.length) return false
+  return now.every((n, i) => {
+    const o = old[i]
+    if (JSON.stringify(o) === JSON.stringify(n)) return true
+    if (o?.type !== 'agent_api' || n?.type !== 'agent_api' || o.id !== n.id) return false
+    if (!sameFields(o as unknown as Record<string, unknown>, n as unknown as Record<string, unknown>, ['credential_data', 'unavailable_reason', 'key_status'])) return false
+    // Becoming (or staying) unavailable may only remove data: no token in the new entry.
+    if (n.unavailable_reason) return !('token' in (n.credential_data ?? {}))
+    // A rotation: both active, only the token differs.
+    return !o.unavailable_reason && typeof n.credential_data?.token === 'string' && sameFields(o.credential_data ?? {}, n.credential_data, ['token'])
+  })
+}
+/**
+ * D7: while a turn runs, an issued key's rotation or loss cannot wait for the
+ * exclusive hold (the old secret dies 5 minutes after a rotate). Written through
+ * the per-path chain like a turn's own preparation; atomic per file. Any other
+ * change returns here untouched and waits for the queued exclusive regeneration.
+ */
+function writeKeyChanges(a: LocalAgentDto): void {
+  void chain(a.path, async () => {
+    // Re-checked when it runs: the turn may have ended, or an exclusive holder taken over, since it was queued.
+    if (suspended || !turnLock.isLocked(a.id) || turnLock.isExclusivelyLocked(a.id) || !runtimeHost.keystore.isSecureStorageAvailable()) return
+    const g = guard(attachedAccounts(a))
+    check(g)
+    const { bundles, identity, generation } = candidate(resolve(a).filter(v => v.available))
+    const files = compareGeneration(a.path, a.kind, bundles, identity)
+    if (!files || !keyOnlyChange(files.current, files.next)) return
+    await writeCredentials(a.path, a.kind, bundles, identity, generation, () => check(g))
+    logger.info('Wrote an issued key change during a running turn', { agentId: a.id })
+  }).catch(() => { logger.warn('Issued key change waits for the running turn', { agentId: a.id }) })
 }
 function hostOf(url: string): string { try { return new URL(url).host } catch { return url } }
 /** Eligible: a Cinna profile with a server and stored tokens, not signed out this session, and either passwordless or unlocked. */
@@ -230,9 +396,19 @@ function retireAccount(account: Account): void {
   account.abort.abort(); account.epoch++; account.flight = null; account.synthetic = []; account.scheduler.stop()
   accounts.delete(account.key)
 }
+/** Whether an agent has an issued key from this account attached that can still come back or rotate. */
+function watchesKeys(account: Account): boolean {
+  return allAgents().some(a => resolve(a).some(v => v.account === account && v.row && liveKey(v.row)))
+}
+/** Recompute the poll cadence; re-arm the timer when it shortens, so the first fast tick is not 5 minutes away. */
+function updatePolling(account: Account): void {
+  const fast = watchesKeys(account), shrinks = fast && !account.fast
+  account.fast = fast
+  if (shrinks) account.scheduler.reschedule()
+}
 function createAccount(value: AccountInfo): Account {
-  const account: Account = { ...value, epoch: 0, abort: new AbortController(), syncError: null, lastSync: null, synthetic: [], flight: null,
-    scheduler: createLocalScheduleScheduler(async (_scope, current) => { if (current() && accounts.get(account.key) === account) await syncAccount(account) }, 300_000) }
+  const account: Account = { ...value, epoch: 0, abort: new AbortController(), syncError: null, lastSync: null, lastAttempt: null, synthetic: [], fast: false, flight: null,
+    scheduler: createLocalScheduleScheduler(async (_scope, current) => { if (current() && accounts.get(account.key) === account) await syncAccount(account) }, () => account.fast ? FAST_POLL : SLOW_POLL) }
   account.scheduler.setSuspended(suspended)
   return account
 }
@@ -266,6 +442,7 @@ function syncAccount(account: Account): Promise<void> {
 }
 async function syncPass(account: Account, g: Guard): Promise<void> {
   if (!live(g)) return
+  account.lastAttempt = Date.now()
   try {
     const response = await serviceCredentialCloud.list(account.userId, signal(account))
     check(g)
@@ -274,21 +451,45 @@ async function syncPass(account: Account, g: Guard): Promise<void> {
     const seen = new Set<string>(), previous = repo.list(userId)
     for (const item of response.items) {
       if (typeof item?.id !== 'string') throw new Error('Invalid credential identity.')
+      const keyed = item.type === 'agent_api'
+      // Core lists only issued keys owned by the caller. Anything else of this type is
+      // not cached, and a cached copy is pruned below, so a Core bug cannot reach a file.
+      if (keyed && (item.relation !== 'owned' || typeof item.key_status !== 'string' || !KEY_STATUS.test(item.key_status))) {
+        logger.warn('Ignored an Agent API credential Core should not list', { userId, cloud_id: item.id.slice(0, 128) })
+        continue
+      }
       // Core decides what is usable locally and lists nothing else, so the list
       // is taken as the full local set: a record it stops listing is pruned below.
       seen.add(item.id)
       if (!/^[a-zA-Z0-9_-]{1,128}$/.test(item.id) || typeof item.name !== 'string' || typeof item.type !== 'string' || typeof item.revision !== 'string' || !['owned', 'shared'].includes(item.relation) || typeof item.local_use_allowed !== 'boolean' || typeof item.is_placeholder !== 'boolean' || !['complete', 'incomplete'].includes(item.status) || [item.notes, item.service_uri, item.owner_email].some(v => v !== null && typeof v !== 'string')) continue
       const id = createHash('sha256').update(userId + '\n' + origin + '\n' + item.id).digest('hex')
-      const old = repo.get(id), allowed = item.local_use_allowed
-      const metadata: ServiceCredentialDto = { id, origin: 'cloud', cloudId: item.id, name: item.name, type: item.type, serviceUri: item.service_uri, notes: item.notes, status: item.status,
-        isPlaceholder: item.is_placeholder, relation: item.relation, ownerEmail: item.owner_email, localUseAllowed: allowed, revision: item.revision, hasValues: false, expiresAt: null }
-      repo.put({ id, user_id: userId, origin: 'cloud', cloud_id: item.id, server_origin: origin, metadata: JSON.stringify(metadata), payload_enc: allowed ? old?.payload_enc ?? null : null,
-        payload_fetched_at: old && credentialDto(old).revision === item.revision ? old.payload_fetched_at : null,
-        expires_at: typeof item.expires_at === 'number' ? item.expires_at * 1000 : null, created_at: old?.created_at ?? Date.now(), updated_at: Date.now() })
+      const old = repo.get(id), previous = old ? stored(old) : undefined
+      // The list is authoritative for key status: a delivery refusal (the backstop) holds only
+      // until this pass, since a pause and resume can leave Core's revision where it was.
+      const keyStatus: string | null = keyed ? item.key_status! : null
+      // Fail closed: a non-active key drops its cached token now and is never fetched while it stays so.
+      const allowed = item.local_use_allowed, usable = allowed && (!keyed || keyStatus === 'active')
+      const facts = keyed && item.agent_api && typeof item.agent_api === 'object' ? item.agent_api : null
+      const text = (v: unknown) => typeof v === 'string' ? v : null
+      const metadata: StoredMetadata = { id, origin: 'cloud', cloudId: item.id, name: item.name, type: item.type, serviceUri: item.service_uri, notes: item.notes, status: item.status,
+        isPlaceholder: item.is_placeholder, relation: item.relation, ownerEmail: item.owner_email, localUseAllowed: allowed, revision: item.revision, hasValues: false, expiresAt: null,
+        keyStatus, agentApi: facts ? { producerName: text(facts.producer_name), issuerEmail: text(facts.issuer_email) } : null }
+      if (keyed) {
+        // The list's non-secret facts win; the last delivery's fill the gaps (label). Never the token.
+        const listed = keyStub({ ...facts })
+        metadata.keyStub = Object.keys(listed).length ? keyStub({ ...previous?.keyStub, ...listed }) : previous?.keyStub
+        // A refused delivery stays refused for this revision only.
+        if (previous?.keyBlocked && previous.revision === item.revision) metadata.keyBlocked = previous.keyBlocked
+        if (!usable && old?.payload_enc) logger.info('Issued key is not active; its cached token was dropped', { userId, cloud_id: item.id, key_status: keyStatus })
+      }
+      const expiry = keyed ? expiresAt(item.expires_at) ?? expiresAt(facts?.expires_at) : typeof item.expires_at === 'number' ? item.expires_at * 1000 : null
+      repo.put({ id, user_id: userId, origin: 'cloud', cloud_id: item.id, server_origin: origin, metadata: JSON.stringify(metadata), payload_enc: usable ? old?.payload_enc ?? null : null,
+        payload_fetched_at: usable && old && credentialDto(old).revision === item.revision ? old.payload_fetched_at : null,
+        expires_at: expiry, created_at: old?.created_at ?? Date.now(), updated_at: Date.now() })
     }
     for (const row of previous) if (!seen.has(row.cloud_id!)) repo.remove(row.id)
     const attachedIds = new Set(allAgents().flatMap(a => resolve(a).flatMap(v => v.account === account && v.row ? [v.row.id] : [])))
-    await fetchValues(account, repo.list(userId).filter(r => attachedIds.has(r.id) && credentialDto(r).localUseAllowed && (!r.payload_enc || r.payload_fetched_at === null || (r.expires_at !== null && r.expires_at < Date.now() + 600_000))), g)
+    await fetchValues(account, repo.list(userId).filter(r => attachedIds.has(r.id) && deliverable(r) && (!r.payload_enc || r.payload_fetched_at === null || (r.expires_at !== null && r.expires_at < Date.now() + 600_000))), g)
     check(g); account.lastSync = Date.now(); account.syncError = null
   } catch (err) {
     if (!live(g)) return
@@ -300,7 +501,7 @@ async function syncPass(account: Account, g: Guard): Promise<void> {
     logger.warn('Credential sync failed for profile', { userId: account.userId, status: failure.status, code: account.syncError })
     if (account.syncError === 'reauth_required') account.scheduler.stop()
   }
-  if (live(g)) { regenerate(a => !!state(a).accounts[account.key]?.length); changed() }
+  if (live(g)) { updatePolling(account); regenerate(a => !!state(a).accounts[account.key]?.length); changed() }
 }
 function toAttachmentDto(v: Resolved): ServiceCredentialAttachmentDto {
   const account = v.group === 'local' ? undefined : accounts.get(v.group)
@@ -340,7 +541,7 @@ export const serviceCredentialService = {
     rememberCredentialSecrets(bundle)
     const metadata: ServiceCredentialDto = { id, origin: 'local', cloudId: null, name: bundle.entry.name, type: input.type, serviceUri: bundle.entry.service_uri, notes: bundle.entry.notes,
       status: bundle.entry.is_placeholder ? 'incomplete' : 'complete', isPlaceholder: bundle.entry.is_placeholder,
-      relation: 'owned', ownerEmail: null, localUseAllowed: true, revision: null, hasValues: true, expiresAt: null }
+      relation: 'owned', ownerEmail: null, localUseAllowed: true, revision: null, hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null }
     const now = Date.now()
     repo.put({ id, user_id: LOCAL, origin: 'local', cloud_id: null, server_origin: null, metadata: JSON.stringify(metadata), payload_enc: encrypt(bundle, old?.payload_enc), payload_fetched_at: now, expires_at: null, created_at: old?.created_at ?? now, updated_at: now })
     regenerate(); changed(); return metadata
@@ -351,13 +552,19 @@ export const serviceCredentialService = {
     repo.remove(id); regenerate(); changed()
   },
   attachments(id: string): ServiceCredentialAttachmentDto[] { return resolve(agent(id)).map(toAttachmentDto) },
-  /** What can be attached to one agent: local records, then each eligible account's cache. Records the owner keeps off this computer are omitted. */
+  /**
+   * What can be attached to one agent: local records, then each eligible account's cache. Records the owner
+   * keeps off this computer are omitted, and so are dead issued keys unless this agent already has them attached.
+   */
   attachOptions(id: string): ServiceCredentialAttachOptions {
     const s = state(agent(id))
     return { groups: [
       { key: 'local', label: 'This computer', detail: '', error: null, items: repo.list(LOCAL).filter(r => r.origin === 'local').map(r => ({ ...credentialDto(r), attached: s.local.some(v => v.ref === r.id) })) },
       ...ordered().map(account => ({ key: account.key, label: account.label, detail: account.detail, error: account.syncError,
-        items: repo.list(account.userId).filter(r => r.origin === 'cloud' && credentialDto(r).localUseAllowed).map(r => ({ ...credentialDto(r), attached: (s.accounts[account.key] ?? []).some(v => v.ref === r.cloud_id) })) }))
+        items: repo.list(account.userId).flatMap(r => {
+          const m = credentialDto(r), attached = (s.accounts[account.key] ?? []).some(v => v.ref === r.cloud_id)
+          return r.origin === 'cloud' && m.localUseAllowed && (attached || !keyTerminal(m)) ? [{ ...m, attached }] : []
+        }) }))
     ] }
   },
   async setAttachments(id: string, group: string, refs: string[]): Promise<ServiceCredentialAttachmentDto[]> {
@@ -388,6 +595,7 @@ export const serviceCredentialService = {
       desktopStateService.patch(a.path, a.kind, { serviceCredentials: s })
       await materialize(a, true)
     })
+    if (account) updatePolling(account)
     changed(); return this.attachments(id)
   },
   async prepare(id: string) { return materialize(agent(id), true) },

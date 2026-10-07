@@ -4,10 +4,10 @@ import { AlertTriangle, Check, Loader2, Search, X } from 'lucide-react'
 import type { ServiceCredentialAttachGroup } from '../../../../../shared/serviceCredentials'
 import { useCredentialAttachOptions } from '../../../hooks/useServiceCredentials'
 import { unwrapIpcError } from '../../../utils/ipcError'
-import { credentialTypeIcon, credentialTypeName } from '../../settings/LocalCredentialForm'
+import { credentialTypeIcon, credentialTypeName, credentialTypeTitle } from '../../settings/LocalCredentialForm'
 import { cloudErrors } from '../../settings/ServiceCredentialsSection'
-import { CredentialStatusGlyph } from '../../settings/CredentialRow'
-import { credentialHealth } from '../../settings/credentialPresentation'
+import { CredentialOwnershipGlyph, CredentialStatusGlyph } from '../../settings/CredentialRow'
+import { credentialHealth, credentialOwnership } from '../../settings/credentialPresentation'
 
 type Item = ServiceCredentialAttachGroup['items'][number]
 
@@ -113,13 +113,16 @@ export function CredentialAttachModal({ open, agentId, onClose, onAttach }: {
                       const Icon = credentialTypeIcon(item.type)
                       // Only a problem is shown: a check on every healthy card would be noise.
                       const health = credentialHealth(item)
+                      const typeTitle = credentialTypeTitle(item), titled = typeTitle !== credentialTypeName(item.type), isKey = item.type === 'agent_api'
                       return <div key={key} data-testid={`credential-card-${ref}`} className="flex flex-col p-3 rounded-lg border bg-[var(--color-bg-secondary)] border-[var(--color-border)]">
                         <div className="flex items-center gap-2">
-                          <div className="shrink-0 w-7 h-7 rounded-md flex items-center justify-center bg-[var(--color-bg)] text-[var(--color-accent)]"><Icon size={14} /></div>
+                          <div role={titled ? 'img' : undefined} aria-label={titled ? typeTitle : undefined} title={titled ? typeTitle : undefined} className="shrink-0 w-7 h-7 rounded-md flex items-center justify-center bg-[var(--color-bg)] text-[var(--color-accent)]"><Icon size={14} aria-hidden /></div>
                           <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-text)]">{item.name}</span>
                           {health.tone !== 'ok' && <CredentialStatusGlyph health={health} size={13} />}
+                          {/* Who issued a key is the one fact its card would otherwise lose. */}
+                          {isKey && <CredentialOwnershipGlyph ownership={credentialOwnership(item)} size={13} />}
                         </div>
-                        <div className="mt-1.5 text-[10px] truncate text-[var(--color-text-muted)]">{credentialTypeName(item.type)}{item.serviceUri ? ` · ${item.serviceUri}` : ''}</div>
+                        <div title={titled ? typeTitle : undefined} className="mt-1.5 text-[10px] truncate text-[var(--color-text-muted)]">{credentialTypeName(item.type)}{item.serviceUri ? ` · ${item.serviceUri}` : ''}</div>
                         {item.relation === 'shared' && <div className="mt-0.5 text-[10px] truncate text-[var(--color-text-muted)]">Shared by {item.ownerEmail ?? 'owner'}</div>}
                         <button type="button" aria-label={isAttached ? `${item.name} attached` : `Attach ${item.name}`} disabled={isAttached || busy} onClick={() => void attach(group.key, item)}
                           className={`mt-2 inline-flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors disabled:cursor-not-allowed ${isAttached

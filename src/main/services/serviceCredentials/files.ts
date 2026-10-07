@@ -44,13 +44,10 @@ function storage(agentDir: string) {
 export function generatedPath(agentDir: string, kind: LocalAgentKind): string {
   return join(kind === 'kit' ? join(agentDir, 'credentials') : storage(agentDir), 'credentials.json')
 }
-/** Only inventory-owned names can be replaced/deleted. Authored side files survive. */
-export async function writeCredentials(agentDir: string, kind: LocalAgentKind, bundles: ServiceCredentialBundle[], synthetic: ServiceCredentialEntry[], generation: string, validate: () => void = () => {}): Promise<string | undefined> {
-  const store = storage(agentDir), inventoryPath = join(store, 'inventory.json')
-  let old: Inventory = { agentDir, kind, files: [], generation: '' }
-  if (existsSync(inventoryPath)) old = JSON.parse(readFileSync(inventoryPath, 'utf8'))
-  const directory = kind === 'kit' ? join(agentDir, 'credentials') : store
-  if (old.files.length) secureDir(directory)
+/** Where a generation's files live: the kit's own `credentials/`, or Desktop storage for a bare folder. */
+function generatedDir(agentDir: string, kind: LocalAgentKind, store: string): string { return kind === 'kit' ? join(agentDir, 'credentials') : store }
+/** The exact files a generation consists of, by name. Pure: no filesystem access. */
+function renderFiles(directory: string, kind: LocalAgentKind, bundles: ServiceCredentialBundle[], synthetic: ServiceCredentialEntry[]): Map<string, string> {
   const files = new Map<string, string>()
   const entries: ServiceCredentialEntry[] = []
   for (const bundle of bundles) {
@@ -64,6 +61,37 @@ export async function writeCredentials(agentDir: string, kind: LocalAgentKind, b
     entries.push(entry)
   }
   if (entries.length) files.set('credentials.json', JSON.stringify([...entries, ...synthetic], null, 2) + '\n')
+  return files
+}
+/**
+ * The generation currently on disk (inventory-owned files and their bytes) next to
+ * the one these bundles would produce. Null when the inventory is missing or any
+ * owned file is unreadable — the caller then treats the change as not comparable.
+ */
+export function compareGeneration(agentDir: string, kind: LocalAgentKind, bundles: ServiceCredentialBundle[], synthetic: ServiceCredentialEntry[]): { current: Map<string, string>; next: Map<string, string> } | null {
+  const store = storage(agentDir), inventoryPath = join(store, 'inventory.json')
+  if (!existsSync(inventoryPath)) return null
+  const directory = generatedDir(agentDir, kind, store)
+  try {
+    const inventory = JSON.parse(readFileSync(inventoryPath, 'utf8')) as Inventory
+    if (inventory.kind !== kind || !Array.isArray(inventory.files)) return null
+    const current = new Map<string, string>()
+    for (const name of inventory.files) {
+      const path = join(directory, name)
+      if (!/^(credentials|[a-zA-Z0-9_-]+)\.json$/.test(name) || !existsSync(path) || lstatSync(path).isSymbolicLink()) return null
+      current.set(name, readFileSync(path, 'utf8'))
+    }
+    return { current, next: renderFiles(directory, kind, bundles, synthetic) }
+  } catch { return null }
+}
+/** Only inventory-owned names can be replaced/deleted. Authored side files survive. */
+export async function writeCredentials(agentDir: string, kind: LocalAgentKind, bundles: ServiceCredentialBundle[], synthetic: ServiceCredentialEntry[], generation: string, validate: () => void = () => {}): Promise<string | undefined> {
+  const store = storage(agentDir), inventoryPath = join(store, 'inventory.json')
+  let old: Inventory = { agentDir, kind, files: [], generation: '' }
+  if (existsSync(inventoryPath)) old = JSON.parse(readFileSync(inventoryPath, 'utf8'))
+  const directory = generatedDir(agentDir, kind, store)
+  if (old.files.length) secureDir(directory)
+  const files = renderFiles(directory, kind, bundles, synthetic)
   if (files.size && kind === 'kit') await checkCredentialPaths(agentDir, [...files.keys()])
   validate()
   if (files.size) secureDir(directory)

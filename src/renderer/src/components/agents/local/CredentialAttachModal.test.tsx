@@ -16,7 +16,7 @@ const { CredentialAttachModal } = await import('./CredentialAttachModal')
 
 function credential(overrides: Partial<ServiceCredentialDto>): ServiceCredentialDto & { attached: boolean } {
   return { id: 'id', origin: 'local', cloudId: null, name: 'Token', type: 'api_token', serviceUri: null, notes: null, status: 'complete', isPlaceholder: false,
-    relation: 'owned', ownerEmail: null, localUseAllowed: true, revision: null, hasValues: true, expiresAt: null, attached: false, ...overrides }
+    relation: 'owned', ownerEmail: null, localUseAllowed: true, revision: null, hasValues: true, expiresAt: null, keyStatus: null, agentApi: null, keyBlocked: null, attached: false, ...overrides }
 }
 const options: ServiceCredentialAttachOptions = { groups: [
   { key: 'local', label: 'This computer', detail: '', error: null, items: [credential({ id: 'local-1', name: 'Local API', serviceUri: 'api.local' }), credential({ id: 'local-2', name: 'Mailbox', type: 'email_imap' })] },
@@ -42,6 +42,29 @@ describe('CredentialAttachModal', () => {
     renderModal(vi.fn())
     expect(within(await screen.findByTestId('credential-card-part')).getByRole('img', { name: 'Some values are missing' })).toBeTruthy()
     expect(within(screen.getByTestId('credential-card-ok')).queryByRole('img')).toBeNull()
+  })
+
+  it('shows an issued key as an Agent API key, marking a paused one and leaving an active one unmarked', async () => {
+    attachOptions.mockResolvedValue({ ok: true, value: { groups: [{ key: 'acct', label: 'Work', detail: '', error: null, items: [
+      credential({ id: 'live', origin: 'cloud', cloudId: 'k1', name: 'CRM live', type: 'agent_api', serviceUri: 'crm', keyStatus: 'active', hasValues: false }),
+      credential({ id: 'paused', origin: 'cloud', cloudId: 'k2', name: 'CRM paused', type: 'agent_api', keyStatus: 'external_access_paused', hasValues: false, agentApi: { producerName: 'Billing agent', issuerEmail: 'bob@example.com' } })] }] } })
+    renderModal(vi.fn())
+    const live = await screen.findByTestId('credential-card-k1')
+    expect(within(live).getByText('Agent API key · crm')).toBeTruthy()
+    // Healthy: no status glyph, only who issued it (unknown here).
+    expect(within(live).getAllByRole('img').map(el => el.getAttribute('aria-label'))).toEqual(['Issued to you'])
+    const paused = screen.getByTestId('credential-card-k2')
+    expect(within(paused).getAllByRole('img').map(el => el.getAttribute('aria-label'))).toEqual([
+      'Agent API key for Billing agent', 'External access to Billing agent is paused — works again when its owner resumes it', 'Issued to you by bob@example.com'])
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search credentials' }), { target: { value: 'agent api' } })
+    expect(order()).toEqual(['credential-card-k1', 'credential-card-k2'])
+  })
+
+  it('marks an active key whose delivery Desktop blocked', async () => {
+    attachOptions.mockResolvedValue({ ok: true, value: { groups: [{ key: 'acct', label: 'Work', detail: '', error: null, items: [
+      credential({ id: 'blocked', origin: 'cloud', cloudId: 'k9', name: 'CRM blocked', type: 'agent_api', keyStatus: 'active', keyBlocked: 'insecure_base_url', hasValues: false })] }] } })
+    renderModal(vi.fn())
+    expect(within(await screen.findByTestId('credential-card-k9')).getByRole('img', { name: 'Blocked — this key’s API address isn’t secure (https); ask your Cinna server’s admin to fix it' })).toBeTruthy()
   })
 
   it('groups credentials by where they live, with account detail, sync errors and empty groups', async () => {

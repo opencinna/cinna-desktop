@@ -6,7 +6,10 @@ export interface ServiceCredentialRow {
   payload_fetched_at: number | null; expires_at: number | null; created_at: number; updated_at: number
 }
 export function credentialDto(row: ServiceCredentialRow): ServiceCredentialDto {
-  return { ...JSON.parse(row.metadata), id: row.id, origin: row.origin, cloudId: row.cloud_id,
+  // `keyStub` (an issued key's non-secret file fields) is main-only; the renderer never gets credential data.
+  // `keyBlocked` (a delivery Desktop refused to store) is not secret and is what the row shows.
+  const { keyStub: _stub, ...metadata } = JSON.parse(row.metadata) as ServiceCredentialDto & { keyStub?: unknown }
+  return { ...metadata, keyStatus: metadata.keyStatus ?? null, agentApi: metadata.agentApi ?? null, keyBlocked: metadata.keyBlocked ?? null, id: row.id, origin: row.origin, cloudId: row.cloud_id,
     hasValues: !!row.payload_enc, expiresAt: row.expires_at }
 }
 export const serviceCredentialRepo = {

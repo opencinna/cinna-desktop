@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { ArrowLeft, Database, FileKey, KeyRound, Mail, Search, Send, type LucideIcon } from 'lucide-react'
+import { ArrowLeft, Database, FileKey, KeyRound, Mail, PlugZap, Search, Send, type LucideIcon } from 'lucide-react'
 import type { LocalCredentialType, ServiceCredentialDto } from '../../../../shared/serviceCredentials'
 import { credentialResult } from '../../hooks/useServiceCredentials'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -12,9 +12,17 @@ const credentialTypes: { type: LocalCredentialType; name: string; description: s
   { type: 'odoo', name: 'Odoo', description: 'Connect to an Odoo database', icon: Database },
   { type: 'google_service_account', name: 'Google service account', description: 'Use a service account JSON key', icon: FileKey }
 ]
-export const credentialTypeName = (type: string) => credentialTypes.find(c => c.type === type)?.name ?? type.replaceAll('_', ' ')
-/** The type card's icon; cloud-only types fall back to a generic key. */
-export const credentialTypeIcon = (type: string): LucideIcon => credentialTypes.find(c => c.type === type)?.icon ?? KeyRound
+/** Types that only arrive from a Cinna account: named and drawn like the rest, never offered by Add Credential. */
+const cloudCredentialTypes: { type: string; name: string; icon: LucideIcon }[] = [
+  { type: 'agent_api', name: 'Agent API key', icon: PlugZap }
+]
+const typeEntry = (type: string) => credentialTypes.find(c => c.type === type) ?? cloudCredentialTypes.find(c => c.type === type)
+export const credentialTypeName = (type: string) => typeEntry(type)?.name ?? type.replaceAll('_', ' ')
+/** The type name with the record's facts, for the badge and icon tooltip: "Agent API key for CRM agent". */
+export const credentialTypeTitle = (c: Pick<ServiceCredentialDto, 'type' | 'agentApi'>) =>
+  c.type === 'agent_api' && c.agentApi?.producerName ? `${credentialTypeName(c.type)} for ${c.agentApi.producerName}` : credentialTypeName(c.type)
+/** The type's icon; other cloud-only types fall back to a generic key. */
+export const credentialTypeIcon = (type: string): LucideIcon => typeEntry(type)?.icon ?? KeyRound
 export const serviceUriHelp = 'A non-secret identifier for the service, such as slack.com or work-mail. Agents use it together with the credential type to match the correct credential to a required slot. Use the same Service URI on the credential and the agent’s requirement.'
 
 export function CredentialTypePicker({ onSelect, onClose }: { onSelect: (type: LocalCredentialType) => void; onClose: () => void }) {
