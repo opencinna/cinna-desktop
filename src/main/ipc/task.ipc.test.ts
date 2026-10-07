@@ -155,7 +155,8 @@ describe('a task write a person made reaches the other devices without waiting a
 
   it('captures both start scopes and nudges only after acceptance', async () => {
     await invoke('task:start', 't1', { kind: 'agent', agentId: 'a1' })
-    expect(startTask).toHaveBeenCalledWith({ profileUserId: 'profile-1', settingsUserId: 'settings-1' }, 't1', { kind: 'agent', agentId: 'a1' })
+    // The user's own start: its turns may notify (`started_by_user`).
+    expect(startTask).toHaveBeenCalledWith({ profileUserId: 'profile-1', settingsUserId: 'settings-1' }, 't1', { kind: 'agent', agentId: 'a1' }, { startedBy: 'user' })
     markDirty.mockClear()
     startTask.mockRejectedValueOnce(new Error('not ready'))
     await expect(invoke('task:start', 't1', { kind: 'model' })).rejects.toThrow('not ready')

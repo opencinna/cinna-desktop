@@ -197,7 +197,8 @@ function createGateChat(scope: RunScope, row: DelegationRow) {
     title: row.title,
     router: 'direct',
     agentId: row.channel === 'local' ? row.targetAgentId : null,
-    hiddenFromList: true
+    hiddenFromList: true,
+    origin: 'delegation'
   })
 }
 

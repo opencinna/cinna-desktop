@@ -2,6 +2,7 @@ import { jobRunRefreshMode } from '../db/jobRunRefresh'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import { getDb } from '../db/client'
 import { chatRunResultRepo } from '../db/chatRunResults'
+import { turnNotices } from './turnNotices'
 import type { ChatRunResult } from '../../shared/chatRunResult'
 import { executorFor } from './jobExecution'
 import { unresolvableAgentLabels } from './jobExecution/dependencies'
@@ -208,7 +209,7 @@ export const jobService = {
     requireJob(userId, jobId)
     const latest = jobRunsRepo.latestRunResults(userId, jobId).get(jobId)
     if (!latest?.chatId || latest.result?.runId !== runId || !visibleChat(userId, latest.chatId)) return
-    chatRunResultRepo.markRead(latest.chatId, runId)
+    if (chatRunResultRepo.markRead(latest.chatId, runId)) turnNotices.resultRead(latest.chatId, runId)
   },
 
   create(userId: string, input: JobCreateInput): JobRow {

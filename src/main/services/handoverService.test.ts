@@ -80,7 +80,7 @@ interface Harness {
   rows: Map<string, HandoverRow>
   tasks: Map<string, TaskDto>
   requests: Map<string, { status: string; input: unknown }>
-  chats: Map<string, { title: string; hidden: boolean }>
+  chats: Map<string, { title: string; hidden: boolean; origin?: string }>
   /** Chats a test says the user has talked in. */
   usedChats: Set<string>
   started: { taskId: string; agentId: string; reuseChatId?: string }[]
@@ -137,7 +137,7 @@ function harness(): Harness {
   const rows = new Map<string, HandoverRow>()
   const tasks = new Map<string, TaskDto>()
   const requests = new Map<string, { status: string; input: unknown }>()
-  const chats = new Map<string, { title: string; hidden: boolean }>()
+  const chats = new Map<string, { title: string; hidden: boolean; origin?: string }>()
   const usedChats = new Set<string>()
   const started: { taskId: string; agentId: string; reuseChatId?: string }[] = []
   const settingsWritten: string[] = []
@@ -363,7 +363,7 @@ function harness(): Harness {
     chats: {
       create(_userId, init) {
         const id = nextId('chat')
-        chats.set(id, { title: init.title, hidden: init.hiddenFromList })
+        chats.set(id, { title: init.title, hidden: init.hiddenFromList, origin: init.origin })
         return { id }
       },
       showInList(_userId, chatId) {
@@ -675,6 +675,8 @@ describe('the gate', () => {
     ])
     // The chat is created for the gate and never attached to the task.
     expect(h.chats.has(row.gateChatId as string)).toBe(true)
+    // It is the handover's chat, never the user's own.
+    expect(h.chats.get(row.gateChatId as string)).toMatchObject({ origin: 'handover' })
     expect(h.task().chatId).toBeNull()
     expect(h.task().status).toBe('new')
   })

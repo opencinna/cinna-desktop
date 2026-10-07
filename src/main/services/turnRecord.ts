@@ -1,5 +1,6 @@
 import { chatRunResultRepo } from '../db/chatRunResults'
 import { reportStandaloneTurn, type TurnOutcome } from './turnCompletion'
+import { turnNotices, type TurnRecordSource } from './turnNotices'
 import { createLogger } from '../logger/logger'
 import type { RunEvent } from '../../shared/runEvents'
 import type { ChatRunResultStatus } from '../../shared/chatRunResult'
@@ -38,10 +39,16 @@ export function runResultStatusOf(outcome: RecordedTurnOutcome, canceled: boolea
  *
  * The task a hand-opened chat created for itself is settled by the Inbox's
  * `endTurn`, from {@link terminalEventOf}, which the caller routes.
+ *
+ * `source` says who is recording: a live or follow-up result is then offered
+ * to the host as a notice (`turnNotices`); a `recovery` one never is.
  */
-export function recordTurnResult(chatId: string, runId: string, outcome: RecordedTurnOutcome, options: { canceled: boolean }): void {
+export function recordTurnResult(chatId: string, runId: string, outcome: RecordedTurnOutcome, options: { canceled: boolean; source: TurnRecordSource }): void {
+  const status = runResultStatusOf(outcome, options.canceled)
+  let recorded = false
   try {
-    chatRunResultRepo.record(chatId, runId, runResultStatusOf(outcome, options.canceled))
+    chatRunResultRepo.record(chatId, runId, status)
+    recorded = true
   } catch (error) {
     logger.warn('could not save sidebar run result', { chatId, error: String(error) })
   }
@@ -50,4 +57,7 @@ export function recordTurnResult(chatId: string, runId: string, outcome: Recorde
   } catch (error) {
     logger.warn('turn status projection failed', { chatId, error: String(error) })
   }
+  // After both writes: a notice for a result the sidebar does not have would
+  // point the user at nothing. `settled` swallows its own failures.
+  if (recorded) turnNotices.settled(chatId, runId, status, options.source)
 }

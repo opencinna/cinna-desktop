@@ -108,6 +108,31 @@ describe('desktop task start', () => {
     expect(result.runId).toBe('turn-one')
   })
 
+  it('opens the task’s new chat as a task’s chat, never as the user’s own', async () => {
+    const result = await taskExecutionService.start(SCOPE, makeTask().id, TARGET)
+    expect(chatRepo.getOwned('profile', result.chatId)).toMatchObject({ origin: 'task' })
+  })
+
+  it('marks the task started by the user only for the user’s own start, and an automatic start clears it', async () => {
+    const own = makeTask()
+    await taskExecutionService.start(SCOPE, own.id, TARGET, { startedBy: 'user' })
+    expect(taskRepo.getById('profile', own.id)?.startedByUser).toBe(true)
+
+    const automatic = makeTask()
+    // As if a run the user started earlier had left it set: a start nobody pressed clears it.
+    taskRepo.setStartedByUser('profile', automatic.id, true)
+    await taskExecutionService.start(SCOPE, automatic.id, TARGET)
+    expect(taskRepo.getById('profile', automatic.id)?.startedByUser).toBe(false)
+  })
+
+  it('leaves started_by_user alone when the start is refused before acceptance', async () => {
+    const task = makeTask()
+    taskRepo.setStartedByUser('profile', task.id, true)
+    readiness.mockResolvedValueOnce({ state: 'invalid', reason: 'Broken folder.' } as never)
+    await expect(taskExecutionService.start(SCOPE, task.id, TARGET)).rejects.toThrow('Broken folder.')
+    expect(taskRepo.getById('profile', task.id)?.startedByUser).toBe(true)
+  })
+
   it('resolves the model in captured scopes without requiring an agent', async () => {
     const task = makeTask()
     const result = await taskExecutionService.start(SCOPE, task.id, { kind: 'model', modeId: 'mode-one' })

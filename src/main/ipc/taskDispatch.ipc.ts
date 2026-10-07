@@ -59,6 +59,6 @@ export function registerTaskDispatchHandlers(): void {
   /** Run one task now, in any mode and while paused; `{ gate }` when its content needs approval first. */
   ipcHandle('taskDispatch:run-next', async (_event, agentId: unknown, taskId?: unknown): Promise<TaskDispatchRunResult> => {
     userActivation.requireActivated()
-    return taskDispatchService.runNext(scope(), agentId, taskId)
+    return taskDispatchService.runNext(scope(), agentId, taskId, { startedBy: 'user' })
   })
 }

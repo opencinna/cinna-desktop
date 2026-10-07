@@ -114,6 +114,16 @@ describe('script runtime', () => {
     expect(chatRunResultRepo.list(USER).get(writerId)).toEqual(writerResult)
   })
 
+  it('opens the job’s chat and every step’s chat as the job’s, never as the user’s own', async () => {
+    const { taskId, chatId } = start([{ id: 'write', agent: 'writer', prompt: '{{goal}}' },
+      { id: 'gate', after: ['write'], ask_user: 'Publish?' }])
+    await vi.waitFor(() => expect(scriptRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
+    const originOf = (id: string) => (state.database!.raw.prepare('SELECT origin FROM chats WHERE id = ?').get(id) as { origin: string }).origin
+    expect([chatId, child(taskId, 'write').chatId, child(taskId, 'gate').chatId].map(originOf)).toEqual(['job', 'job', 'job'])
+    scriptRuntimeService.cancel(USER, taskId)
+    await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('cancelled'))
+  })
+
   it('gives a completed script a new result identity after its human gate', async () => {
     const { taskId, chatId } = start([{ id: 'gate', ask_user: 'Proceed?' }])
     await vi.waitFor(() => expect(scriptRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))

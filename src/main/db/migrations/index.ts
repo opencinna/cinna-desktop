@@ -6,6 +6,7 @@ import { migrateMcp } from './mcp'
 import { migrateChats } from './chats'
 import { migrateChatRouter } from './chat-router'
 import { migrateChatRunResults } from './chat-run-results'
+import { migrateChatOrigin } from './chat-origin'
 import { migrateInflightTurns } from './inflight-turns'
 import { migrateRetireChatMirror } from './retire-chat-mirror'
 import { migrateMessages } from './messages'
@@ -119,6 +120,9 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // so the whole agent-runtime set reads in plan order.
   migrateChatRouter(sqlite)
   migrateRetireChatMirror(sqlite)
+  // `chats.origin` + its one-time backfill, which reads `tasks`, `delegations`
+  // and `handovers`: DML, so after every table exists.
+  migrateChatOrigin(sqlite)
   // Backfill `user_id` on legacy tables — must run AFTER table creation so
   // fresh installs don't ALTER tables that don't exist yet.
   migrateUserIdColumns(sqlite)

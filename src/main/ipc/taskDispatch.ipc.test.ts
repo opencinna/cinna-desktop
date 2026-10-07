@@ -44,7 +44,8 @@ describe('taskDispatch channels', () => {
     ['taskDispatch:get', ['agent-a'], 'get', [SCOPE, 'agent-a']],
     ['taskDispatch:set-mode', ['agent-a', 'one'], 'setMode', [SCOPE, 'agent-a', 'one']],
     ['taskDispatch:resume', ['agent-a'], 'resume', [SCOPE, 'agent-a']],
-    ['taskDispatch:run-next', ['agent-a', 't-1'], 'runNext', [SCOPE, 'agent-a', 't-1']]
+    // The user pressed Run next: the start is theirs (`started_by_user`).
+    ['taskDispatch:run-next', ['agent-a', 't-1'], 'runNext', [SCOPE, 'agent-a', 't-1', { startedBy: 'user' }]]
   ] as const)('%s requires activation and calls the dispatcher in the active profile', async (channel, args, method, expected) => {
     await invoke(channel, ...args)
     expect(requireActivated).toHaveBeenCalled()

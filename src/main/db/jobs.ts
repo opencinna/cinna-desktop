@@ -886,6 +886,7 @@ export const jobRunsRepo = {
           // Job-spawned chats are hidden from the chat list by default; the
           // user can promote them via the "Move to Chats" button on the run.
           hiddenFromList: true,
+          origin: 'job',
           deletedAt: null,
           createdAt: now,
           updatedAt: now

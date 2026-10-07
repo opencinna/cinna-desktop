@@ -25,6 +25,7 @@ import { taskSyncScheduler } from './services/taskSyncScheduler'
 import { localScheduleScheduler } from './services/localScheduleScheduler'
 import { handoverScheduler } from './services/handoverScheduler'
 import { trayService } from './host/desktop/trayService'
+import { notificationService } from './host/desktop/notificationService'
 import { speechService } from './speech/speechService'
 import { syncTrayFromSettings } from './host/desktop/traySync'
 import { createLogger } from './logger/logger'
@@ -441,6 +442,9 @@ function startup(): void {
   })
 
   initializeHubCore()
+  // OS notifications for a turn of the user's that stops while Cinna is in the
+  // background: a desktop listener on core's turn notices.
+  notificationService.install()
   registerAllIpcHandlers()
   installHtmlPreviewSession()
   clearOpenInBrowserCopiesAtStart()

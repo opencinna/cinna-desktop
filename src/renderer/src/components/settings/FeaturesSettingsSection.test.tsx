@@ -47,7 +47,7 @@ describe('FeaturesSettingsSection', () => {
 
     expect(screen.getByRole('heading', { name: 'AI Functions' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Interface' })).toBeTruthy()
-    expect(screen.getAllByRole('switch')).toHaveLength(8)
+    expect(screen.getAllByRole('switch')).toHaveLength(9)
     // The label names the switch (rule 10), not the branching title.
     expect(screen.getByRole('switch', { name: 'Auto-generate chat titles' })).toBeTruthy()
     expect(screen.queryByText(/Couldn’t load settings/)).toBeNull()
@@ -86,6 +86,31 @@ describe('FeaturesSettingsSection', () => {
     expect(tray.getAttribute('title')).toBe('Menu-bar tray icon is hidden')
     fireEvent.click(tray)
     expect(setSetting).toHaveBeenCalledWith({ key: 'enableTrayIcon', value: true })
+  })
+
+  it('has Desktop notifications on unless it was turned off, right after the tray icon row', () => {
+    const { unmount } = render(<FeaturesSettingsSection />)
+
+    const notifications = screen.getByRole('switch', { name: 'Desktop notifications' })
+    const switches = screen.getAllByRole('switch')
+    expect(switches.indexOf(notifications)).toBe(switches.indexOf(screen.getByRole('switch', { name: 'Enable Tray Icon' })) + 1)
+    // Absent from the store means the default, which is on.
+    expect(notifications.getAttribute('aria-checked')).toBe('true')
+    expect(notifications.getAttribute('title')).toBe('Desktop notifications are on')
+    expect(screen.queryByText(/while Cinna is in the background/)).toBeNull()
+    fireEvent.click(notifications)
+    expect(setSetting).toHaveBeenCalledWith({ key: 'desktopNotifications', value: false })
+    fireEvent.click(screen.getByRole('button', { name: 'About Desktop notifications' }))
+    expect(screen.getByText(/needs your input, or fails while Cinna is in the background/)).toBeTruthy()
+    unmount()
+
+    settings = { ...HEALTHY, desktopNotifications: false }
+    render(<FeaturesSettingsSection />)
+    const off = screen.getByRole('switch', { name: 'Desktop notifications' })
+    expect(off.getAttribute('aria-checked')).toBe('false')
+    expect(off.getAttribute('title')).toBe('Desktop notifications are off')
+    fireEvent.click(off)
+    expect(setSetting).toHaveBeenCalledWith({ key: 'desktopNotifications', value: true })
   })
 
   it('shows local agents and chats in all profiles unless it was turned off, right after the sidebar-sections row', () => {

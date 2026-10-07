@@ -23,6 +23,7 @@ import { registerCinnaHandlers } from './cinna.ipc'
 import { registerCatalogHandlers } from './catalog.ipc'
 import { registerSettingsHandlers } from './settings.ipc'
 import { registerTrayHandlers } from './tray.ipc'
+import { registerNotificationHandlers } from './notifications.ipc'
 import { registerSpeechHandlers } from './speech.ipc'
 import { registerSyncHandlers } from './sync.ipc'
 import { registerLocalToolsHandlers } from './local_tools.ipc'
@@ -62,6 +63,7 @@ export function registerAllIpcHandlers(): void {
   registerCatalogHandlers()
   registerSettingsHandlers()
   registerTrayHandlers()
+  registerNotificationHandlers()
   // Voice input in the composer: speech-to-text on this machine.
   registerSpeechHandlers()
   registerSyncHandlers()

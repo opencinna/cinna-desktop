@@ -22,9 +22,12 @@ export const chatRunResultRepo = {
       .where(typeof owners === 'string' ? eq(chats.userId, owners) : inArray(chats.userId, [...owners])).all()
     return new Map(rows.map(({ chatId, ...result }) => [chatId, result]))
   },
-  /** The service verifies ownership; an old view cannot mark a newer result read. */
-  markRead(chatId: string, runId: string): void {
-    getDb().update(chatRunResults).set({ unread: false })
-      .where(and(eq(chatRunResults.chatId, chatId), eq(chatRunResults.runId, runId))).run()
+  /**
+   * The service verifies ownership; an old view cannot mark a newer result
+   * read. True when `runId` is the chat's current result (already read or not).
+   */
+  markRead(chatId: string, runId: string): boolean {
+    return getDb().update(chatRunResults).set({ unread: false })
+      .where(and(eq(chatRunResults.chatId, chatId), eq(chatRunResults.runId, runId))).run().changes > 0
   }
 }

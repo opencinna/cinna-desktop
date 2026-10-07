@@ -872,3 +872,101 @@ describe('task dispatcher runs in flight on an install from before up_to', () =>
     raw.close()
   })
 })
+
+describe('chats.origin and tasks.started_by_user on an install that predates them', () => {
+  function chatsWithoutOrigin(): DatabaseSync {
+    const raw = freshDatabase()
+    raw.exec('PRAGMA foreign_keys = OFF')
+    raw.exec('ALTER TABLE chats DROP COLUMN origin')
+    raw.exec('ALTER TABLE tasks DROP COLUMN started_by_user')
+    const chat = raw.prepare(`INSERT INTO chats (id, user_id, title, router, hidden_from_list, originating_job_run_id, created_at, updated_at)
+      VALUES (?, 'u', ?, 'direct', ?, ?, 1, 1)`)
+    const task = raw.prepare(`INSERT INTO tasks (id, user_id, title, goal, chat_id, job_run_id, created_by_agent_id, dispatch_agent_id, parent_task_id, created_at, updated_at)
+      VALUES (?, 'u', ?, 'goal', ?, ?, ?, ?, ?, 1, 1)`)
+    chat.run('plain', 'Hand-opened', 0, null)
+    const message = raw.prepare(`INSERT INTO messages (id, chat_id, role, content, sort_order, created_at) VALUES (?, ?, 'user', 'x', ?, ?)`)
+    // Talked in before the Inbox attached a task on the first ask: the user's.
+    chat.run('asked', 'Hand-opened, task attached by an ask', 0, null)
+    message.run('m-asked', 'asked', 0, 0)
+    task.run('t-asked', 'Ask', 'asked', null, null, null, null)
+    // A queue run the dispatcher has released (`dispatch_agent_id` cleared):
+    // its first message is the task's own, in the second the task was made.
+    chat.run('released', 'Dispatched, then released', 0, null)
+    task.run('t-released', 'Released', 'released', null, null, null, null)
+    message.run('m-released-1', 'released', 0, 1)
+    message.run('m-released-2', 'released', 1, 5)
+    chat.run('job-hidden', 'Job run', 1, null)
+    chat.run('job-run', 'Job run, moved to Chats', 0, 'run-1')
+    chat.run('by-job', 'Task of a job', 0, null)
+    task.run('t-job', 'Job task', 'by-job', 'run-2', null, null, null)
+    chat.run('by-agent', 'Task from tasks_create', 0, null)
+    task.run('t-agent', 'Agent task', 'by-agent', null, 'agent-1', null, null)
+    chat.run('by-queue', 'Dispatched task', 0, null)
+    task.run('t-queue', 'Queued task', 'by-queue', null, null, 'agent-1', null)
+    chat.run('subtask', 'Subtask', 0, null)
+    task.run('t-sub', 'Subtask', 'subtask', null, null, null, 't-job')
+    chat.run('delegated', 'Delegated executor', 0, null)
+    task.run('t-deleg', 'Delegated', 'delegated', null, null, null, null)
+    chat.run('handed', 'Handover executor', 0, null)
+    task.run('t-hand', 'Handed over', 'handed', null, null, null, null)
+    chat.run('d-gate', 'Delegation gate', 1, null)
+    chat.run('h-gate', 'Handover gate', 1, null)
+    raw.exec(`INSERT INTO delegations (id, user_id, requester_key, origin_key, origin_kind, target_kind, target_agent_id, channel, root_delegation_id, task_id, gate_chat_id, created_at, updated_at)
+      VALUES ('d-1', 'u', 'k', '[]', 'local_chat', 'agent', 'agent-2', 'local', 'd-1', 't-deleg', 'd-gate', 1, 1)`)
+    raw.exec(`INSERT INTO handovers (id, user_id, agent_id, folder_path, handover_id, task_id, brief_digest, gate_chat_id, created_at, updated_at)
+      VALUES ('h-1', 'u', 'agent-3', '/x', 'h', 't-hand', 'digest', 'h-gate', 1, 1)`)
+    return raw
+  }
+
+  const origins = (raw: DatabaseSync): Record<string, string> =>
+    Object.fromEntries((raw.prepare('SELECT id, origin FROM chats ORDER BY id').all() as Array<{ id: string; origin: string }>)
+      .map((row) => [row.id, row.origin]))
+
+  it('backfills who opened each chat from what the row and its task say', () => {
+    const raw = chatsWithoutOrigin()
+    runAllMigrations(adaptDatabase(raw))
+    expect(origins(raw)).toEqual({
+      plain: 'user',
+      // A task an Inbox ask attached to a hand-opened chat does not make it a task's chat.
+      asked: 'user',
+      'job-hidden': 'job',
+      'job-run': 'job',
+      'by-job': 'task',
+      'by-agent': 'task',
+      'by-queue': 'task',
+      released: 'task',
+      subtask: 'task',
+      delegated: 'task',
+      handed: 'task',
+      'd-gate': 'delegation',
+      'h-gate': 'handover'
+    })
+    const cols = raw.prepare("PRAGMA table_info('chats')").all() as Array<{ name: string; notnull: number; dflt_value: string }>
+    expect(cols.find((col) => col.name === 'origin')).toMatchObject({ notnull: 1, dflt_value: "'user'" })
+    // No task was started by the user before the column existed.
+    expect(raw.prepare('SELECT DISTINCT started_by_user AS v FROM tasks').all()).toEqual([{ v: 0 }])
+    raw.close()
+  })
+
+  it('backfills once: a replay never rewrites an origin written since', () => {
+    const raw = chatsWithoutOrigin()
+    const sqlite = adaptDatabase(raw)
+    runAllMigrations(sqlite)
+    raw.exec("UPDATE chats SET origin = 'task' WHERE id = 'plain'")
+    raw.exec("UPDATE chats SET origin = 'user' WHERE id = 'job-hidden'")
+    raw.exec("UPDATE tasks SET started_by_user = 1 WHERE id = 't-asked'")
+    const before = origins(raw)
+    runAllMigrations(sqlite)
+    expect(() => runAllMigrations(sqlite)).not.toThrow()
+    expect(origins(raw)).toEqual(before)
+    expect(raw.prepare("SELECT started_by_user AS v FROM tasks WHERE id = 't-asked'").get()).toEqual({ v: 1 })
+    raw.close()
+  })
+
+  it('gives a fresh install both columns', () => {
+    const raw = freshDatabase()
+    expect(columnNames(raw, 'chats')).toContain('origin')
+    expect(columnNames(raw, 'tasks')).toContain('started_by_user')
+    raw.close()
+  })
+})

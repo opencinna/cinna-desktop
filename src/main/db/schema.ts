@@ -9,6 +9,7 @@ import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 import type { MessageAttachment } from '../../shared/attachments'
 import type { JobDepDescriptor, JobSyncManifest } from '../../shared/sync'
 import type { ChatRouter } from '../../shared/chatRouting'
+import type { ChatOrigin } from '../../shared/chatOrigin'
 import type { ChatRunResultStatus } from '../../shared/chatRunResult'
 import type { MessageTelemetry, SessionTelemetry } from '../../shared/sessionTelemetry'
 import type { InputRequest, InputResumeMode } from '../../shared/runEvents'
@@ -163,6 +164,11 @@ export const chats = sqliteTable('chats', {
    * "Move to Chats" button on the run row (which clears this flag).
    */
   hiddenFromList: integer('hidden_from_list', { mode: 'boolean' }).notNull().default(false),
+  /**
+   * Who opened the chat (`shared/chatOrigin.ts`). Written once at creation and
+   * never changed; the desktop-notification decision reads it.
+   */
+  origin: text('origin').$type<ChatOrigin>().notNull().default('user'),
   /**
    * The chat's place in the sidebar's Pinned block, higher first; null when
    * not pinned. Pinning takes the highest rank + 1, and a drag inside Pinned
@@ -828,6 +834,13 @@ export const tasks = sqliteTable('tasks', {
    * Active or Waiting is written. Device-local, never synced.
    */
   dispatchAgentId: text('dispatch_agent_id'),
+  /**
+   * The user started the task's current run (`task:start`, or Run next on its
+   * agent's queue); an automatic start clears it, and a continuation (an Inbox
+   * answer, a follow-up) leaves it. Device-local, never synced: whether a turn
+   * here notifies is this device's business.
+   */
+  startedByUser: integer('started_by_user', { mode: 'boolean' }).notNull().default(false),
   errorMessage: text('error_message'),
 
   createdAt: integer('created_at', { mode: 'timestamp' })

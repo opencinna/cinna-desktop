@@ -187,7 +187,7 @@ export interface HandoverDeps {
     settle(requestId: string, status: 'answered' | 'expired' | 'rejected', resolution?: RequestResolution | null): unknown
   }
   chats: {
-    create(userId: string, init: { title: string; router: 'direct'; agentId: string; hiddenFromList: boolean }): { id: string }
+    create(userId: string, init: { title: string; router: 'direct'; agentId: string; hiddenFromList: boolean; origin: 'handover' }): { id: string }
     /** Promote the gate's chat into the sidebar once a turn actually starts. */
     showInList(userId: string, chatId: string): boolean
     permanentDelete(userId: string, chatId: string): boolean
@@ -551,7 +551,8 @@ export function createHandoverService(deps: HandoverDeps) {
       title,
       router: 'direct',
       agentId: row.agentId,
-      hiddenFromList: true
+      hiddenFromList: true,
+      origin: 'handover'
     })
     const requestId = handoverGateRequestId(row.id)
     try {

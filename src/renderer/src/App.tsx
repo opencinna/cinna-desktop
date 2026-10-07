@@ -24,6 +24,7 @@ import { useProviders } from './hooks/useProviders'
 import { useStartup } from './hooks/useAuth'
 import { useConnectIntent } from './hooks/useConnectIntent'
 import { useTrayIcon } from './hooks/useTrayIcon'
+import { useNotificationOpenChat } from './hooks/useNotificationOpenChat'
 import { useLocalAgentWatch } from './hooks/useLocalAgents'
 import { useEngineWatch } from './hooks/useEngine'
 import { useAppShortcuts } from './hooks/useAppShortcuts'
@@ -109,6 +110,8 @@ function Shell(): React.JSX.Element {
   useAmbientButtons()
   // Drives the menu-bar tray icon (severity dot) and the popup's Start-Chat flow.
   useTrayIcon()
+  // A click on an OS notification for a stopped turn opens that chat.
+  useNotificationOpenChat()
   // App-level sync wiring (Cinna profiles only). `useSyncEvents` keeps the
   // note/job caches fresh from peer changes no matter which screen is open;
   // `useSyncOnViewOpen` pings the server when a screen whose contents sync is

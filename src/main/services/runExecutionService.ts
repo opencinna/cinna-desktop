@@ -425,7 +425,7 @@ export const runExecutionService = {
         // and its cancellation can be the controller enforcing a time limit.
         // The boot pass records a killed turn through the same function.
         if (!options.runnerTaskId && !options.nested && (accepted || !options.preserveOnRefusal)) {
-          recordTurnResult(payload.chatId, handle.id, final, { canceled: cancelRequested })
+          recordTurnResult(payload.chatId, handle.id, final, { canceled: cancelRequested, source: 'live' })
         }
         live.close()
         complete(final)

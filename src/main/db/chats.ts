@@ -4,6 +4,7 @@ import { getDb } from './client'
 import { agents, chatFiles, chats, chatOnDemandAgents, messages } from './schema'
 import type { MessageRow } from './messages'
 import type { ChatRouter } from '../../shared/chatRouting'
+import type { ChatOrigin } from '../../shared/chatOrigin'
 
 export type ChatRow = typeof chats.$inferSelect
 export type { MessageRow }
@@ -165,6 +166,11 @@ export const chatRepo = {
       router?: ChatRouter
       originatingJobRunId?: string | null
       hiddenFromList?: boolean
+      /**
+       * Who opens it (`shared/chatOrigin.ts`), fixed for the chat's life. Every
+       * production caller names it; omitted (tests, the hub spike) means `user`.
+       */
+      origin?: ChatOrigin
     }
   ): ChatRow {
     const now = new Date()
@@ -179,6 +185,7 @@ export const chatRepo = {
       router: init?.router ?? 'direct',
       originatingJobRunId: init?.originatingJobRunId ?? null,
       hiddenFromList: init?.hiddenFromList ?? false,
+      origin: init?.origin ?? 'user',
       pinnedRank: null,
       sortKey: null,
       deletedAt: null,

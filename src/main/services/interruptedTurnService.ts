@@ -93,7 +93,7 @@ export function finalizeInterrupted(marker: InflightTurnRow, outcome: TurnOutcom
       }, terminalEventOf(outcome))
     }
     recordTurnResult(marker.chatId, marker.id, parked ? { ...outcome, state: 'needs_input' } : outcome,
-      { canceled: outcome.state === 'canceled' })
+      { canceled: outcome.state === 'canceled', source: 'recovery' })
   }
   inflightTurnRepo.settle(marker, options.notice, { under: superseded ? marker.userMessageId : null })
   logger.info('an interrupted turn was finalized', {

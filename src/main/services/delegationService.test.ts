@@ -5,7 +5,7 @@ import { encodeTaskTarget, type TaskTargetRef } from '../../shared/taskTargets'
 const world = vi.hoisted(() => ({
   rows: new Map<string, DelegationRow>(), tasks: new Map<string, any>(), requests: new Map<string, any>(), parent: null as DelegationRow | null,
   task: null as { id: string } | null, active: 'profile', ownCreated: 0, handover: undefined as { id: string; taskId: string } | undefined, sourceAuto: false, targetAuto: false,
-  briefs: new Set<string>(), start: vi.fn(), cloud: vi.fn(), result: vi.fn(), scan: vi.fn(), file: vi.fn(), permission: vi.fn(), refusal: null as string | null
+  briefs: new Set<string>(), chatCreate: vi.fn((..._args: unknown[]) => ({ id: 'gate-chat' })), start: vi.fn(), cloud: vi.fn(), result: vi.fn(), scan: vi.fn(), file: vi.fn(), permission: vi.fn(), refusal: null as string | null
 }))
 vi.mock('../db/delegations', () => ({ delegationRepo: {
   createWithTask: (input: any, createTask: () => { id: string }) => { const row = delegationRepo.insert(input); const task = createTask(); return delegationRepo.update(input.userId, row.id, { taskId: task.id }) },
@@ -20,7 +20,7 @@ vi.mock('../db/delegations', () => ({ delegationRepo: {
 } }))
 vi.mock('../db/handovers', () => ({ handoverRepo: { byAgentAndHandoverId: () => world.handover } }))
 vi.mock('../db/tasks', () => ({ taskRepo: { getByChatId: () => world.task, countCreatedInChat: () => world.ownCreated, setProvenance: vi.fn(), list: () => [] } }))
-vi.mock('../db/chats', () => ({ chatRepo: { create: () => ({ id: 'gate-chat' }), getOwned: () => ({ id: 'gate-chat' }), permanentDelete: vi.fn() } }))
+vi.mock('../db/chats', () => ({ chatRepo: { create: (...args: unknown[]) => world.chatCreate(...args), getOwned: () => ({ id: 'gate-chat' }), permanentDelete: vi.fn() } }))
 vi.mock('../db/agents', () => ({ agentOverrideRepo: { get: () => undefined } }))
 vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: {
   open: (input: any) => { const row = { ...input, status: 'open' }; world.requests.set(input.requestId, row); return row },
@@ -71,6 +71,9 @@ describe('delegation bus session authority and gates', () => {
     expect([...world.tasks.values()][0].parentTaskId).toBeUndefined()
     expect([...world.rows.values()][0]).toMatchObject({ originTaskId: 'origin-task', originAgentId: 'source', depth: 1, state: 'gated' })
     expect(world.start).not.toHaveBeenCalled()
+    // The gate's chat is the delegation's, never the user's own.
+    expect(world.chatCreate).toHaveBeenCalledTimes(1)
+    expect(world.chatCreate).toHaveBeenCalledWith('profile', expect.objectContaining({ origin: 'delegation', hiddenFromList: true }))
   })
   it('records the requesting agent and the delegation depth on the task it creates', async () => {
     world.task = { id: 'parent-task' }; world.parent = { id: 'p', depth: 1, channel: 'local', rootDelegationId: 'p' } as DelegationRow

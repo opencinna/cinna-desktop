@@ -76,6 +76,7 @@ export function FeaturesSettingsSection(): React.JSX.Element {
 
   const autoChatTitles = settings?.autoChatTitles === true
   const enableTrayIcon = settings?.enableTrayIcon === true
+  const desktopNotifications = settings?.desktopNotifications !== false
   const showHints = settings?.showHints === true
   const showAgentSidebarSections = settings?.showAgentSidebarSections !== false
   const showLocalDataInAllProfiles = settings?.showLocalDataInAllProfiles !== false
@@ -261,6 +262,18 @@ export function FeaturesSettingsSection(): React.JSX.Element {
             title={
               enableTrayIcon ? 'Menu-bar tray icon is visible' : 'Menu-bar tray icon is hidden'
             }
+          />
+          <SettingsToggleRow
+            id="feature-desktop-notifications"
+            label="Desktop notifications"
+            description="Notify when a chat or task you started finishes, needs your input, or fails while Cinna is in the background."
+            checked={desktopNotifications}
+            disabled={disabled}
+            onToggle={() => {
+              if (!settings || disabled) return
+              setSetting.mutate({ key: 'desktopNotifications', value: !desktopNotifications })
+            }}
+            title={desktopNotifications ? 'Desktop notifications are on' : 'Desktop notifications are off'}
           />
           <SettingsToggleRow
             id="feature-agent-sidebar-sections"

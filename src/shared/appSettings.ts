@@ -30,6 +30,12 @@ export interface AppSettingsSchema {
    */
   enableTrayIcon: boolean
   /**
+   * When true (the default), the OS shows a notification when a chat the user
+   * started, or a task they started, stops while no Cinna window is focused.
+   * Read by main at the moment a turn settles; no restart, no main-side sync.
+   */
+  desktopNotifications: boolean
+  /**
    * When true, the new-chat screen shows a rotating one-line hint bar teaching
    * composer shortcuts. Purely a renderer feature — no main-side reaction.
    * Per-hint retirement counters live in localStorage, not here.

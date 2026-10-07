@@ -81,6 +81,7 @@ import type {
 import { CLAUDE_BINARY_CHANNEL, CODEX_BINARY_CHANNEL, ENGINE_BINARY_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
+import { NOTIFICATION_OPEN_CHAT_CHANNEL, type NotificationOpenChat } from '../shared/desktopNotifications'
 import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } from '../shared/localDevState'
 import type { CinnaCliUpdate } from '../shared/cinnaCli'
 import type { RemoteAgentMetadata, BundleVersionInfo } from '../shared/agentMetadata'
@@ -2040,6 +2041,22 @@ const api = {
       const listener = (): void => handler()
       ipcRenderer.on('tray:request-icon', listener)
       return () => ipcRenderer.off('tray:request-icon', listener)
+    }
+  },
+
+  /** OS desktop notifications, which main shows on its own; the renderer only answers a click. */
+  notifications: {
+    /** The chat a click asked for before this renderer was mounted to hear it; null when none. Clears it. */
+    takePendingOpenChat: (): Promise<NotificationOpenChat | null> =>
+      ipcRenderer.invoke('notifications:take-pending-open-chat'),
+    /**
+     * Main-window listener: the user clicked a notification, and main has
+     * raised the window. Open this chat. Returns an unsubscribe.
+     */
+    onOpenChat: (handler: (data: NotificationOpenChat) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, data: NotificationOpenChat): void => handler(data)
+      ipcRenderer.on(NOTIFICATION_OPEN_CHAT_CHANNEL, listener)
+      return () => ipcRenderer.off(NOTIFICATION_OPEN_CHAT_CHANNEL, listener)
     }
   },
 

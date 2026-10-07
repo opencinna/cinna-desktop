@@ -31,6 +31,7 @@ class UserActivation {
   /** In-flight `activate()` run, used to dedupe concurrent calls for one user. */
   private _pendingActivation?: { userId: string; promise: Promise<void> }
   private _readyListeners = new Set<(userId: string) => void>()
+  private _closingListeners = new Set<() => void>()
   /** The profile the last completed activation opened the gate for. */
   private _activeUserId: string | null = null
 
@@ -43,6 +44,25 @@ class UserActivation {
   onProfileReady(listener: (userId: string) => void): () => void {
     this._readyListeners.add(listener)
     return () => { this._readyListeners.delete(listener) }
+  }
+
+  /**
+   * Told when the open profile is about to be left: at the start of every
+   * activation (login, profile switch, logout all enter through it) and of
+   * `deactivate`. Whatever a host shows about that profile's chats goes now.
+   * A listener that throws is logged and skipped.
+   */
+  onProfileClosing(listener: () => void): () => void {
+    this._closingListeners.add(listener)
+    return () => { this._closingListeners.delete(listener) }
+  }
+
+  private _notifyClosing(): void {
+    for (const listener of [...this._closingListeners]) {
+      try { listener() } catch (err) {
+        console.error('a profile-closing listener failed', err)
+      }
+    }
   }
 
   /**
@@ -123,6 +143,7 @@ class UserActivation {
     stopAccountConfigPeriodicSync()
     const epoch = ++this._epoch
     this._activated = false
+    this._notifyClosing()
     // Login, profile switching and logout all enter through activate(), without
     // necessarily calling deactivate(). Retire the former profile before any
     // awaited reload, including when the destination has no Cinna account.
@@ -183,6 +204,7 @@ class UserActivation {
     const epoch = ++this._epoch
     this._pendingActivation = undefined
     this._activated = false
+    this._notifyClosing()
     taskSyncScheduler.stop()
     localScheduleScheduler.stop()
     handoverScheduler.stop()

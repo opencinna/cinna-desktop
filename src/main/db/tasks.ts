@@ -371,6 +371,19 @@ const rawTaskRepo = {
   },
 
   /**
+   * Whether the user started the task's current run (`started_by_user`), set
+   * when a run is accepted. Bookkeeping like {@link setDispatchAgent}:
+   * `updatedAt` stays, and nothing syncs it.
+   */
+  setStartedByUser(userId: string, taskId: string, startedByUser: boolean): void {
+    getDb()
+      .update(tasks)
+      .set({ startedByUser })
+      .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId)))
+      .run()
+  },
+
+  /**
    * Every live task a dispatcher still owns (`dispatch_agent_id`), across
    * profiles. Boot recovery: a resumed turn on one may have died with Cinna.
    */
@@ -446,6 +459,7 @@ const rawTaskRepo = {
       chainDepth: input.chainDepth ?? 0,
       dispatchNote: null,
       dispatchAgentId: null,
+      startedByUser: false,
 
       origin: input.origin ?? 'local',
       executor: input.executor ?? 'desktop',

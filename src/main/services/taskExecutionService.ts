@@ -1,6 +1,7 @@
 import { taskService } from './taskService'
 import { handingOffTasks, taskOperationKey } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
+import { taskRepo } from '../db/tasks'
 import { taskFileService } from './taskFileService'
 import { chatRepo, type ChatRow } from '../db/chats'
 import { visibleChat } from '../auth/chatScope'
@@ -67,6 +68,15 @@ export interface TaskStartOptions {
    * it runs in the message transaction.
    */
   onRunAccepted?: (run: { chatId: string; runId: string }) => void
+  /**
+   * `user` when the user started this run themselves: the task page's Start
+   * (`task:start`) or Run next on the agent's queue. Recorded on the task as
+   * `started_by_user` when the run is accepted, so its turns may raise a
+   * desktop notification; any other start — the queue's own, a delegation, a
+   * handover — clears it. Turns that continue the run (an Inbox answer, a
+   * follow-up) do not come through here and leave it as it is.
+   */
+  startedBy?: 'user'
 }
 
 /** The task's own conversation, when it may take the continuation turn; null when it is gone. */
@@ -206,7 +216,7 @@ export const taskExecutionService = {
         : options.continueInChat ? ownChat(scope, task, assignee.agentId) : null
       const chat = reused ?? chatRepo.create(scope.profileUserId, {
         title: task.title, router: 'direct', agentId: assignee.agentId,
-        modeId: model?.modeId, providerId: model?.providerId, modelId: model?.modelId
+        modeId: model?.modeId, providerId: model?.providerId, modelId: model?.modelId, origin: 'task'
       })
       // Only a chat *this* call created is deleted when the start is refused.
       // A reused one belongs to whoever handed it over, and it is that caller's
@@ -223,6 +233,7 @@ export const taskExecutionService = {
             assertAgentCurrent()
             model?.assertCurrent()
             taskService.beginDesktopChat(scope.profileUserId, taskId, chat.id, assignee)
+            taskRepo.setStartedByUser(scope.profileUserId, taskId, options.startedBy === 'user')
             if (ctx.turnId) options.onRunAccepted?.({ chatId: chat.id, runId: ctx.turnId })
           }
         })

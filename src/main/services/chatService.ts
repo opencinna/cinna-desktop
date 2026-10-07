@@ -24,6 +24,7 @@ import { sessionTelemetryService } from '../agents/telemetry/sessionTelemetrySer
 import { forgetChatSessions, releaseChatSessions } from './chatSessionRelease'
 import { conductorSessionRepo } from '../db/conductorSessions'
 import { chatRunResultRepo } from '../db/chatRunResults'
+import { turnNotices } from './turnNotices'
 import type { ChatRunResult } from '../../shared/chatRunResult'
 import type { ChatListSummary } from '../../shared/chatListSummary'
 import { buildChatListSummaries } from './chatListSummary'
@@ -140,7 +141,9 @@ export const chatService = {
 
   markResultRead(userId: string, chatId: string, runId: string): void {
     requireOwnedChat(userId, chatId)
-    chatRunResultRepo.markRead(chatId, runId)
+    // Only the chat's current result: a stale view reading an older run must
+    // not close the notification for a newer one.
+    if (chatRunResultRepo.markRead(chatId, runId)) turnNotices.resultRead(chatId, runId)
   },
 
   get(userId: string, chatId: string): (ChatRow & { messages: MessageRow[]; activeRunId: string | null; taskHeld: boolean; lastRunResult: ChatRunResult | null }) | null {
@@ -157,7 +160,7 @@ export const chatService = {
   },
 
   create(userId: string): ChatRow {
-    const chat = chatRepo.create(userId)
+    const chat = chatRepo.create(userId, { origin: 'user' })
     logger.info('chat created', { chatId: chat.id })
     return chat
   },

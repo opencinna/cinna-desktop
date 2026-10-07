@@ -59,6 +59,8 @@ interface Started {
   chatId: string
   runId: string
   continueInChat: boolean
+  /** What the dispatcher said about who started it (`taskExecutionService` `startedBy`). */
+  startedBy?: 'user'
   end(state: RunOutcome['state'], extra?: Partial<RunOutcome>): void
 }
 
@@ -99,6 +101,7 @@ function deps() {
     async start(_scope: unknown, taskId: string, agentId: string, options: {
       continueInChat: boolean
       onRunAccepted: (run: { chatId: string; runId: string }) => void
+      startedBy?: 'user'
     }) {
       if (world.startError) throw new Error(world.startError)
       const task = taskRepo.getById(USER, taskId)!
@@ -111,7 +114,7 @@ function deps() {
       let end!: (outcome: RunOutcome) => void
       const completed = new Promise<RunOutcome>((resolve) => { end = resolve })
       world.starts.push({
-        taskId, agentId, chatId, runId, continueInChat: options.continueInChat,
+        taskId, agentId, chatId, runId, continueInChat: options.continueInChat, startedBy: options.startedBy,
         end: (state, extra = {}) => end({ state, text: '', runId, accepted: true, inputRequestIds: [], ...extra })
       })
       return { chatId, runId, completed }
@@ -367,6 +370,34 @@ describe('a Ready task whose chat runs a turn', () => {
     expect(await service.runNext(SCOPE, 'agent-a', busy.id)).toMatchObject({ ok: false, code: 'live_turn' })
     expect(world.slotRequests).toBe(0)
     expect(await service.runNext(SCOPE, 'agent-a')).toMatchObject({ ok: true, taskId: other.id })
+  })
+})
+
+describe('who started the run', () => {
+  it('names the user only for their own Run next, never for the queue’s pass or an unmarked run', async () => {
+    // Mutation: pass `startedBy` for every `manual` flight → the unmarked Run next (an approval's) reads as the user's.
+    const mine = ready('agent-a', { priority: 'urgent' })
+    const queued = ready('agent-a', { priority: 'high' })
+    const approved = ready('agent-a')
+    expect(await service.runNext(SCOPE, 'agent-a', mine.id, { startedBy: 'user' })).toMatchObject({ ok: true, taskId: mine.id })
+    expect(world.starts[0]).toMatchObject({ taskId: mine.id, startedBy: 'user' })
+    taskService.setStatus(USER, mine.id, 'completed')
+    world.starts[0].end('completed')
+    await drain()
+
+    agentTaskDispatchRepo.setMode(USER, 'agent-a', 'one')
+    service.start(SCOPE)
+    await drain()
+    expect(world.starts[1]).toMatchObject({ taskId: queued.id })
+    expect(world.starts[1].startedBy).toBeUndefined()
+    taskService.setStatus(USER, queued.id, 'completed')
+    agentTaskDispatchRepo.setMode(USER, 'agent-a', 'manual')
+    world.starts[1].end('completed')
+    await drain()
+
+    expect(await service.runNext(SCOPE, 'agent-a', approved.id)).toMatchObject({ ok: true, taskId: approved.id })
+    expect(world.starts[2]).toMatchObject({ taskId: approved.id })
+    expect(world.starts[2].startedBy).toBeUndefined()
   })
 })
 
@@ -1225,6 +1256,19 @@ describe('a turn resumed after a dispatched ask', () => {
       expect(taskRepo.getById(USER, task.id)).toMatchObject({ status: 'blocked', dispatchNote: DISPATCH_NOTE_UNREPORTED, dispatchAgentId: null })
       expect(rowOf('agent-a')).toMatchObject({ pausedReason: 'unreported', pausedTaskId: task.id, activeTaskId: null })
       expect(isDispatchedRun(sent.chatId, sent.runId)).toBe(false)
+    })
+
+    it('continues the run: whoever started the task stays its starter', async () => {
+      const { task } = await dispatchedThenAsk(() => {})
+      taskRepo.setStartedByUser(USER, task.id, true)
+      expect(await inboxService.answer(USER, 'ask-r', ANSWER)).toEqual({ ok: true, queued: true })
+      service.wake()
+      await drain()
+      expect(world.answersSent).toEqual([{ requestId: 'ask-r', content: 'This one.' }])
+      expect(taskRepo.getById(USER, task.id)?.startedByUser).toBe(true)
+      endSent()
+      await drain()
+      expect(taskRepo.getById(USER, task.id)?.startedByUser).toBe(true)
     })
 
     it('goes out before the next Ready task, and the queue continues after a report', async () => {

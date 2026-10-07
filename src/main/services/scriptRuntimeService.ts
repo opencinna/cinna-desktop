@@ -430,7 +430,7 @@ export const scriptRuntimeService = {
       const steps: Record<string, ScriptStepCheckpoint> = {}
       for (const step of definition.steps) {
         const target = step.agent === undefined ? null : targets[step.agent]
-        const chat = chatRepo.create(scope.profileUserId, { title: `${job.title} · ${step.id}`, agentId: target?.agentId ?? null, router: 'direct', hiddenFromList: true })
+        const chat = chatRepo.create(scope.profileUserId, { title: `${job.title} · ${step.id}`, agentId: target?.agentId ?? null, router: 'direct', hiddenFromList: true, origin: 'job' })
         const child = taskService.create(scope.profileUserId, { title: step.id, goal: `Script step ${step.id} for: ${occurrenceGoal}`, chatId: chat.id, parentTaskId: root.id,
           assigneeKind: target ? 'agent' : 'human', assigneeAgentId: target?.agentId ?? null, assigneeName: target?.name ?? null })
         taskService.start(scope.profileUserId, child.id)

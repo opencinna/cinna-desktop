@@ -21,6 +21,7 @@ export const DEFAULTS: AppSettingsSchema = {
   aiFunctionsCredentialId: '',
   aiFunctionsModelId: '',
   enableTrayIcon: true,
+  desktopNotifications: true,
   showHints: true,
   showAgentSidebarSections: true,
   showLocalDataInAllProfiles: true,

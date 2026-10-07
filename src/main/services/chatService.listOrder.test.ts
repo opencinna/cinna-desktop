@@ -53,6 +53,30 @@ function chatAt(ago: number): string {
 }
 const row = (id: string) => chatService.list(USER).find((chat) => chat.id === id)!
 
+describe('create', () => {
+  it('opens the chat as the user’s own', () => {
+    // `chats.origin`: what the desktop-notification rule reads.
+    expect(chatService.create(USER).origin).toBe('user')
+    expect(holder.current!.raw.prepare('SELECT origin FROM chats').all()).toEqual([{ origin: 'user' }])
+  })
+})
+
+describe('markResultRead', () => {
+  it('tells notification listeners only when the run read is the chat’s current result', async () => {
+    // Mutation: emit on every read → a stale view reading an older run closes a newer notification.
+    const { turnNotices } = await import('./turnNotices')
+    const { chatRunResultRepo } = await import('../db/chatRunResults')
+    const id = chatService.create(USER).id
+    chatRunResultRepo.record(id, 'run-2', 'completed')
+    const reads: unknown[] = []
+    const stop = turnNotices.onResultRead((event) => reads.push(event))
+    chatService.markResultRead(USER, id, 'run-1')
+    chatService.markResultRead(USER, id, 'run-2')
+    stop()
+    expect(reads).toEqual([{ chatId: id, runId: 'run-2' }])
+  })
+})
+
 describe('rename', () => {
   it('trims the title and leaves updatedAt alone', () => {
     const id = chatAt(3_600_000)

@@ -139,7 +139,7 @@ function adopt(request: FollowUpRequest): RunHandle {
       state: result.state === 'completed' && remaining.inputRequestIds.length ? 'needs_input' as const : result.state,
       ...(remaining.inputRequestReadError ? { inputRequestReadError: remaining.inputRequestReadError } : {})
     }
-    recordTurnResult(chatId, runId, recorded, { canceled: io.signal.aborted })
+    recordTurnResult(chatId, runId, recorded, { canceled: io.signal.aborted, source: 'follow-up' })
     return result
   })
 }

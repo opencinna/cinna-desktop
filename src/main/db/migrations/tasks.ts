@@ -173,6 +173,11 @@ export function migrateTasks(sqlite: Database.Database): void {
   if (!hasColumn(sqlite, 'tasks', 'dispatch_note')) sqlite.exec('ALTER TABLE tasks ADD COLUMN dispatch_note TEXT')
   // The agent whose queue still owns a dispatched task across an ask (and a restart).
   if (!hasColumn(sqlite, 'tasks', 'dispatch_agent_id')) sqlite.exec('ALTER TABLE tasks ADD COLUMN dispatch_agent_id TEXT')
+  // The user started the task's current run: its turns may raise a desktop
+  // notification. Device-local and never synced; an existing row reads false.
+  if (!hasColumn(sqlite, 'tasks', 'started_by_user')) {
+    sqlite.exec('ALTER TABLE tasks ADD COLUMN started_by_user INTEGER NOT NULL DEFAULT 0')
+  }
   // A folder binding stored before the dispatcher has no `trustedDigest`, and
   // its task row took what Cinna wrote as trusted. Nobody approved that
   // content, so it is untrusted until the user approves it once in the Inbox

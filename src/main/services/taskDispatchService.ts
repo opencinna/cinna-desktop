@@ -130,6 +130,8 @@ export interface TaskDispatchDeps {
   start(scope: RunScope, taskId: string, agentId: string, options: {
     continueInChat: boolean
     onRunAccepted: (run: { chatId: string; runId: string }) => void
+    /** `user` for the user's own Run next (`taskExecutionService` `startedBy`). */
+    startedBy?: 'user'
   }): Promise<DispatchStart>
   /**
    * Send an answer stored on a `next_message` ask: the turn that answers it,
@@ -173,6 +175,12 @@ interface Flight {
   origin: 'queue' | 'manual' | 'resume'
   /** The ask whose stored answer a `resume` flight sends, and when it was stored. */
   answer: { requestId: string; queuedAt: number } | null
+  /**
+   * The user pressed Run next for this flight (the `taskDispatch:run-next`
+   * channel). Not an approval's run, which is `manual` too, and never the
+   * queue's own: only this marks the task as started by the user.
+   */
+  startedByUser: boolean
   controller: AbortController
   /** The dispatched run, once accepted: the only turn `endTurn` leaves to {@link settle}. */
   run: { chatId: string; runId: string } | null
@@ -596,7 +604,8 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
     agentTaskDispatchRepo.setActive(flight.userId, flight.agentId, flight.taskId, null)
     return deps.start(runScope, flight.taskId, flight.agentId, {
       continueInChat: !!current.chatId,
-      onRunAccepted: (run) => accepted(flight, run)
+      onRunAccepted: (run) => accepted(flight, run),
+      ...(flight.startedByUser ? { startedBy: 'user' as const } : {})
     })
   }
 
@@ -650,7 +659,7 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
    */
   function launch(
     runScope: RunScope, agent: DispatchAgent, task: { id: string; title: string }, origin: Flight['origin'],
-    answer: Flight['answer'] = null
+    answer: Flight['answer'] = null, startedByUser = false
   ): Promise<DispatchStart> {
     const flight: Flight = {
       userId: runScope.profileUserId,
@@ -663,6 +672,7 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
       launchedAt: nextLaunch++,
       origin,
       answer,
+      startedByUser,
       controller: new AbortController(),
       run: null
     }
@@ -1099,7 +1109,7 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
      * answer stored for this queue first, which it sends. A task waiting on
      * approval answers with its card instead of running.
      */
-    async runNext(runScope: RunScope, agentId: unknown, taskId?: unknown): Promise<TaskDispatchRunResult> {
+    async runNext(runScope: RunScope, agentId: unknown, taskId?: unknown, options: { startedBy?: 'user' } = {}): Promise<TaskDispatchRunResult> {
       if (taskId !== undefined && taskId !== null && (typeof taskId !== 'string' || !taskId)) {
         return { ok: false, code: 'invalid_input', message: 'That task id is not valid.' }
       }
@@ -1178,7 +1188,7 @@ export function createTaskDispatchService(deps: TaskDispatchDeps) {
         return { ok: false, code: 'slot', message: 'Every task runner slot is busy. Try again when a run finishes.' }
       }
       try {
-        const start = await launch(runScope, agent, choice.task, 'manual')
+        const start = await launch(runScope, agent, choice.task, 'manual', null, options.startedBy === 'user')
         return { ok: true, taskId: choice.task.id, chatId: start.chatId }
       } catch (error) {
         if (error instanceof LiveTurnError) return { ok: false, code: 'live_turn', message: error.message }
@@ -1260,7 +1270,8 @@ function productionDeps(): TaskDispatchDeps {
     async start(runScope, taskId, agentId, options) {
       const result = await taskExecutionService.start(runScope, taskId, { kind: 'agent', agentId }, {
         continueInChat: options.continueInChat,
-        onRunAccepted: options.onRunAccepted
+        onRunAccepted: options.onRunAccepted,
+        ...(options.startedBy ? { startedBy: options.startedBy } : {})
       })
       return { chatId: result.chatId, runId: result.runId, completed: result.completed }
     },

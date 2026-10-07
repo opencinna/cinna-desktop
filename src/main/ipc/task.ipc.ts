@@ -251,7 +251,7 @@ export function registerTaskHandlers(): void {
     // object would fail the call outright. Main-side callers that need the
     // turn's outcome call the service directly.
     const { task, chatId, runId } = await taskExecutionService.start(
-      { profileUserId, settingsUserId: getSettingsScopeUserId() }, taskId, target)
+      { profileUserId, settingsUserId: getSettingsScopeUserId() }, taskId, target, { startedBy: 'user' })
     syncService.markDirty(profileUserId)
     return { task, chatId, runId }
   })
