@@ -35,7 +35,7 @@ All handlers are registered by `src/main/ipc/task.ipc.ts`, require activation an
 | `task:run-autonomously` | `AutonomousTaskStart` → `{taskId, chatId}` after runner admission |
 | `task:resume-runtime` | task id → void after explicit checkpoint recovery |
 | `task:stop-runtime` | task id → void after requesting whole-runner cancellation |
-| `task:start` | task id, `DesktopTaskTarget` → `TaskStartResult` (`task`, `chatId`, main turn `runId`) after acceptance; captures profile and settings scopes |
+| `task:start` | task id, `DesktopTaskTarget` → `TaskStartResult` (`task`, `chatId`, main turn `runId`) after acceptance; captures profile and settings scopes. Starts with `{ startedBy: 'user' }`, so the task is marked `started_by_user` and its turns may raise a [desktop notification](../../ui/desktop_notifications/desktop_notifications.md) |
 | `task:create` | payload → `TaskDto`; a task written by hand (New task, or Add subtask with `parentTaskId`), rebuilt by `parseTaskCreatePayload`, defaulted by `taskAuthoringService.create` and its parent checked by `checkParent` |
 | `task:update` | task id, payload → updated task; title, description, priority, router and custom fields whoever runs it, and the assignee only while `assigneeEditRefusal` allows it. Rebuilt by `parseTaskUpdatePayload`, assignee resolved by `taskAuthoringService.update` |
 | `task:set-status` | task id, `TaskStatus` → updated task; a person's move, so `setStatus(…, {manual: true})`: claim, the [manual rule](../tasks_view/tasks_view_tech.md#shared-rules-srcsharedtaskstatusts), no runtime owner, no live chat turn, no manual close over a pending/running job run. Archiving and reopening are not manual moves and are refused here |

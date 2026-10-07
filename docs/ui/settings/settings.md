@@ -61,6 +61,12 @@ Settings screen for managing chat modes, installation-wide agent folders/runtime
 3. Its (?) text says what the user is agreeing to: macOS's own recognition, on this Mac, the recording sent nowhere by Cinna, and the service provided by Apple rather than by Cinna. Keep that promise true: recognition is on-device only.
 4. Like the Tasks button, it is a renderer preference (`cinna-show-voice-input` in localStorage), saved immediately, machine-wide and shared between app windows.
 
+### Desktop notifications
+
+1. Open Features → Interface → **Desktop notifications**, the row right after Enable Tray Icon (on by default). What it covers is behind the (?) tip; the switch's tooltip names the current state.
+2. On, the OS notifies when a chat the user opened, or a task they started, finishes, needs their input or fails while no Cinna window is focused. Off, nothing new is shown from that moment; main reads the boolean `desktopNotifications` when a turn ends, so there is no restart and no live reaction to the write.
+3. It is installation-wide, like Enable Tray Icon. Which stops notify is in [Desktop Notifications](../desktop_notifications/desktop_notifications.md).
+
 ### Agent sidebar sections
 
 1. Open Features → Interface → **Show sections in Agents sidebar** (on by default).
@@ -151,6 +157,7 @@ Every section is rendered with a `key` equal to its tab id (the Profile Local De
 - [Switching an AI Credential Off](../../llm/adapters/credential_enablement.md) — the AI Credentials tab's off switch: the confirm that names what stops, and the line the card keeps while it is off
 - [Auto Chat Titles](../../chat/auto_titles/auto_titles.md) — The Features tab hosts the "AI Functions" subsection where this opt-in toggle lives
 - [AI Spending Level](../../llm/ai_spending_level/ai_spending_level.md) — The Features tab's "AI Functions" group hosts the Eco / Mid / Greedy control (`aiSpendingLevel`)
+- [Desktop Notifications](../desktop_notifications/desktop_notifications.md) — The Features tab's "Interface" group hosts the `desktopNotifications` switch
 - [Hints](../hints/hints.md) — The Features tab's "Interface" group hosts the `showHints` toggle and the "Reset hints" button that clears the localStorage retirement counters
 - [Agents](../../agents/agents/agents.md) — Add an agent in the Agents sidebar creates direct A2A connections; each agent page exposes its own Settings action
 - [Local Agents](../../agents/local_agents/agents_tab.md) — Agents section (Default group): the registered agent folders, the local engine and its binary path, and the detected developer tools, in three titled sections

@@ -52,7 +52,10 @@ Parents before children; pure table-creation before backfills; legacy-table back
     - **Backfill:** `orchestrated = 1` → `router = 'coordinator'`; everything else stays on the column default `'direct'`. No row is ever backfilled to `'human'` — that value is only reached by a gesture made after the migration, so nothing has to guess which of a chat's agents was being addressed
     - **Idempotency:** the `UPDATE` is nested inside the `if (!hasColumn(…, 'router'))` block rather than gated on a data predicate. On a second boot the column exists and it never runs again, so a chat the user has since moved off `coordinator` is not dragged back onto it. This is the *other* shape of the `agent-drivers.ts` rule — guard by the schema change when the column is new, guard by `IS NULL` when it is not
     - After this guarded legacy backfill, `src/main/db/migrations/retire-chat-mirror.ts` drops orchestrated only when table/router/mirror exist. migrateChats never recreates it. Existing router values win over stale mirror values. Cover fresh/absent, populated legacy, contradictory mirror, repeated startup and foreign keys.
-20. `migrateUserIdColumns` — backfill `user_id` on legacy tables; **runs last**, every ALTER `hasTable`-guarded
+20. `migrateChatOrigin` (`migrations/chat-origin.ts`) — `chats.origin` (who opened the chat) + a one-time backfill.
+    - **Placement:** after `migrateRetireChatMirror`; its backfill is DML over `handovers`, `delegations`, `tasks` and `messages`, so every one of those must exist first (each read is `hasTable`-gated)
+    - **Idempotency:** the `ALTER` and the backfill run in one transaction inside `if (!hasColumn(…, 'origin'))`, the same shape as `migrateChatRouter`: a replay never rewrites an origin a later build recorded. Backfill order and the hand-opened-chat test are in [Desktop Notifications](../../ui/desktop_notifications/desktop_notifications_tech.md#database-schema)
+21. `migrateUserIdColumns` — backfill `user_id` on legacy tables; **runs last**, every ALTER `hasTable`-guarded
 
 ## Helpers (`migrations/helpers.ts`)
 

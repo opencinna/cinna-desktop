@@ -41,6 +41,17 @@ re-export or dynamic import. UI-dependent actions such as browser login or
 revealing a file go through host capabilities; a headless host can explicitly
 refuse them. Missing capabilities must never silently perform desktop actions.
 
+When a host must *react* to core rather than receive a DTO, core exposes a
+listener seam and the composition root installs the host's listener. Desktop
+notifications are the pattern: `services/turnNotices.ts` decides whether a
+settled turn is the user's (`onSettled`, `onResultRead`) and
+`userActivation.onProfileClosing` says the profile is being left;
+`host/desktop/notificationService.install()`, called from `index.ts` after
+`initializeHubCore()`, subscribes to both and owns everything Electron (focus,
+`Notification`, the click). With no listener installed — the plain-Node hub,
+unit tests — core reads nothing and sends nothing. See
+[Desktop Notifications](../../ui/desktop_notifications/desktop_notifications_tech.md).
+
 Local Development hooks preserve profile-switch invalidation and driver runtime
 configuration. The absent extension returns no development context and rejects
 attempts to restore a desktop build session. It does not load the desktop feature.

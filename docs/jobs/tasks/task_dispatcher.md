@@ -121,6 +121,7 @@ Cinna works a folder agent's queue of Ready tasks for it, one task at a time or 
 - **No dispatching for remote agents, the default model or unassigned tasks.** Those have their own execution path.
 - **Nothing runs while Cinna is closed**, and run modes do not travel to the user's other devices.
 - **No automatic retry** of a failed or unreported task. The user decides.
+- **No desktop notification for the queue's own runs.** A run the queue starts, or one **Approve and run** starts, is quiet when Cinna is in the background; only a **Run next** the user pressed marks the task as theirs, and its turns then notify until something else starts the task. See [Desktop Notifications](../../ui/desktop_notifications/desktop_notifications.md).
 - **No gate on native tasks.** Only a task with a file can be written outside Cinna.
 
 ## Architecture Overview

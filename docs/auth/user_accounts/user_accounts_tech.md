@@ -116,6 +116,7 @@ Added to: `llm_providers`, `mcp_providers`, `chats`, `chat_modes`, `agents`
 - `userActivation.activate(userId)` — single entry point: sets user + loads providers + opens gate
 - `userActivation.deactivate()` — tears down services + closes gate
 - `userActivation.requireActivated()` — guard for IPC handlers, throws if gate is closed
+- `userActivation.onProfileClosing(listener)` — told when the open profile is about to be left (every activation, and deactivation); the desktop closes its notifications there
 - See [Resource Activation](../../core/resource_activation/resource_activation_tech.md) for full details
 
 ### `src/main/auth/reload.ts`
