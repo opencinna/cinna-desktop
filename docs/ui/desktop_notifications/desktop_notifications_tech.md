@@ -51,7 +51,7 @@
 - `turnNotices.settled(chatId, runId, status, source)` — returns at once for `recovery` or with no settled listener installed (the plain-Node hub, unit tests: nothing is read). A read failure is logged and swallowed; each listener is called in its own try/catch.
 - `turnNotices.resultRead(chatId, runId)` — fired by callers only when `markRead` matched the current result.
 - `recordTurnResult` calls `settled` only if the sidebar write succeeded, and after `reportStandaloneTurn`: a notice for a result the sidebar does not have would point the user at nothing.
-- **Not every result passes through here.** `taskRunnerService`, `scriptRuntimeService`, `coordinatorJobService` and `jobExecution/scheduled.ts` write `chatRunResultRepo.record` directly, and `runExecutionService` skips `recordTurnResult` for `runnerTaskId` and nested turns. None of those raise a notice.
+- **Not every result passes through here.** `runExecutionService` skips `recordTurnResult` for `runnerTaskId` and nested turns, and `scriptRuntimeService`, `coordinatorJobService` and `jobExecution/scheduled.ts` write `chatRunResultRepo.record` directly; none of those raise a notice. `taskRunnerService` is the exception: its `finish` and `wait` call `turnNotices.settled(…, 'live')` after their transaction commits, so a Run autonomously task announces needs_input, completed and failed (its `interrupted` checkpoints and external-stop projections stay silent). `resume` re-parking an already-waiting gate passes `'recovery'`. `taskRunnerService.start` — the `task:run-autonomously` entry, not the `prepare` seam a coordinator job admits through — sets `started_by_user`.
 
 ### Core: `userActivation.onProfileClosing(listener)`
 

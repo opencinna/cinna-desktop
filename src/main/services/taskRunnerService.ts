@@ -30,6 +30,7 @@ import { createLogger } from '../logger/logger'
 import { canConduct } from '../../shared/chatRouting'
 import { nestedToolCallId } from './nestedContinuationService'
 import { chatConductorService } from './chatConductorService'
+import { turnNotices } from './turnNotices'
 
 const logger = createLogger('task-runner')
 const continuation = 'Continue coordinating the task from the saved conversation. Use finish only when the goal is achieved; use ask_user when a human decision is needed.'
@@ -75,6 +76,8 @@ function store(userId: string, taskId: string, value: TaskRuntimeCheckpoint): vo
 function finish(userId: string, taskId: string, state: 'completed' | 'error' | 'cancelled', reason: string | null, persistError = true, requireChat = true): void {
   const task = owned(userId, taskId, requireChat)
   const saved = checkpoint(userId, taskId)
+  const result = { runId: nanoid(), status: state === 'error' ? 'failed' as const : state === 'cancelled' ? 'canceled' as const : 'completed' as const }
+  let recorded = false
   getDb().transaction(() => {
     taskRuntimeRepo.save(userId, taskId, { ...saved, state: 'completed', activeStartedAt: null, reason })
     if (persistError && reason && state === 'error') messageRepo.saveError({ chatId: saved.chatId, short: reason, code: 'task_runtime' })
@@ -82,21 +85,26 @@ function finish(userId: string, taskId: string, state: 'completed' | 'error' | '
     // A failed/canceled task must not strand any gate from a prior invocation.
     taskInputRequestRepo.expireNextMessageForTask(task.id)
     if (visibleChat(userId, saved.chatId)) {
-      chatRunResultRepo.record(saved.chatId, nanoid(), state === 'error' ? 'failed' : state === 'cancelled' ? 'canceled' : 'completed')
+      chatRunResultRepo.record(saved.chatId, result.runId, result.status)
+      recorded = true
     }
   })
   taskRunnersByChat.delete(saved.chatId)
+  if (recorded) turnNotices.settled(saved.chatId, result.runId, result.status, 'live')
 }
-function wait(userId: string, taskId: string, value: TaskRuntimeCheckpoint, reason: string): void {
+/** `recovery` is Resume re-parking a gate that was already waiting before an interruption: it records, but announces nothing new. */
+function wait(userId: string, taskId: string, value: TaskRuntimeCheckpoint, reason: string, source: 'live' | 'recovery' = 'live'): void {
   const pendingRequestIds = taskInputRequestRepo.listOpenForTask(taskId)
     .filter((request) => request.chatId === value.chatId &&
       (request.rootRunId === value.lastRunId || value.pendingRequestIds?.includes(request.id)))
     .map((request) => request.id)
+  const runId = nanoid()
   getDb().transaction(() => {
     store(userId, taskId, { ...value, pendingRequestIds, state: 'waiting', reason, activeStartedAt: null })
     taskService.applyRunState(userId, taskId, 'needs_input')
-    chatRunResultRepo.record(value.chatId, nanoid(), 'needs_input')
+    chatRunResultRepo.record(value.chatId, runId, 'needs_input')
   })
+  turnNotices.settled(value.chatId, runId, 'needs_input', source)
 }
 function interrupted(userId: string, taskId: string, value: TaskRuntimeCheckpoint, reason: string): void {
   getDb().transaction(() => {
@@ -293,6 +301,8 @@ export const taskRunnerService = {
 
   start(scope: RunScope, input: AutonomousTaskStart): { taskId: string; chatId: string } {
     const prepared = this.prepare(scope, input)
+    // Only this entry is the user's own Run autonomously; a job admits through `prepare`.
+    taskRepo.setStartedByUser(scope.profileUserId, prepared.taskId, true)
     prepared.launch()
     return { taskId: prepared.taskId, chatId: prepared.chatId }
   },
@@ -386,7 +396,7 @@ export const taskRunnerService = {
         if (saved.lastRunId) taskInputRequestRepo.expireOpenForRun(saved.chatId, saved.lastRunId, true)
       }
       if (taskInputRequestRepo.listOpenForTask(taskId).length) {
-        wait(userId, taskId, saved, 'Waiting for a human answer in the Inbox.')
+        wait(userId, taskId, saved, 'Waiting for a human answer in the Inbox.', 'recovery')
       } else {
         store(userId, taskId, { ...saved, state: 'queued', reason: null, promptOrigin: 'runner', gateRequestId: null, gateToolCallId: null,
           prompt: 'The previous execution was interrupted. Review the saved conversation and existing work before taking new action. Do not repeat completed side effects. Continue toward the task goal.' })

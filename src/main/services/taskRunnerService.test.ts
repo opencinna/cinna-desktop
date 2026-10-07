@@ -10,7 +10,7 @@ const driverRun = vi.hoisted(() => vi.fn<AgentDriver['run']>())
 vi.mock('../db/client', () => ({ getDb: () => state.database!.db, getRawSqlite: () => state.database!.sqlite }))
 vi.mock('../db/sync', () => ({ syncRepo: { getState: () => null } }))
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ info() {}, debug() {}, warn() {}, error() {} }) }))
-vi.mock('../auth/scope', () => ({ getSettingsScopeUserId: () => '__default__', getAgentLookupScope: () => '__default__' }))
+vi.mock('../auth/scope', () => ({ getSettingsScopeUserId: () => '__default__', getProfileScopeUserId: () => '__default__', getAgentLookupScope: () => '__default__' }))
 vi.mock('../mcp/manager', () => ({ mcpManager: { getConnection: () => null } }))
 vi.mock('./fileStore', () => ({ attachmentToMediaPart: async () => null }))
 vi.mock('./chatConductorService', () => ({ chatConductorService: { remove() {}, bind: (user: string, chat: { id: string }) => {
@@ -40,6 +40,8 @@ const { chatOnDemandAgentRepo } = await import('../db/chatOnDemandAgent')
 const { taskRunnersByChat } = await import('./taskRunnerState')
 const { activeRunsByChat } = await import('./runExecutionState')
 const { messageRepo } = await import('../db/messages')
+const { turnNotices } = await import('./turnNotices')
+const { taskRepo } = await import('../db/tasks')
 const USER = '__default__'
 const scope = { profileUserId: USER, settingsUserId: USER }
 let chatId: string
@@ -296,6 +298,41 @@ describe('autonomous coordinator runner', () => {
     taskService.setStatus(USER, taskId, 'archived')
     expect(chatRunResultRepo.list(USER).get(chatId)).toMatchObject({ status: 'canceled', unread: false })
     expect(chatRunResultRepo.list(USER).get(chatId)?.runId).not.toBe(result.runId)
+  })
+
+  it('announces a Run autonomously task asking for input and finishing, and marks it started by the user', async () => {
+    const notices: { chatId: string; status: string; notify: boolean }[] = []
+    const off = turnNotices.onSettled((notice) => notices.push(notice))
+    try {
+      stream.mockResolvedValueOnce(tool('ask_user', { question: 'Which branch?' }))
+        .mockResolvedValueOnce(tool('finish', { summary: 'Done' }))
+      const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Announce me' })
+      expect(taskRepo.getById(USER, taskId)?.startedByUser).toBe(true)
+      await vi.waitFor(() => expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
+      expect(notices).toEqual([expect.objectContaining({ chatId, status: 'needs_input', notify: true })])
+      const [gate] = taskInputRequestRepo.listOpenForTask(taskId)
+      expect(await inboxService.answer(USER, gate.id, { kind: 'question', answers: [['main']] })).toEqual({ ok: true })
+      await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('completed'))
+      expect(notices.map((notice) => notice.status)).toEqual(['needs_input', 'completed'])
+      expect(notices[1].notify).toBe(true)
+    } finally { off() }
+  })
+
+  it('announces nothing new when Resume re-parks a gate that was already waiting', async () => {
+    stream.mockResolvedValueOnce(tool('ask_user', { question: 'Which branch?' }))
+    const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Re-park quietly' })
+    await vi.waitFor(() => expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    taskRuntimeRepo.save(USER, taskId, { ...taskRuntimeRepo.get(USER, taskId)!, state: 'running' })
+    taskRunnersByChat.clear()
+    taskRunnerService.recover()
+    const notices: unknown[] = []
+    const off = turnNotices.onSettled((notice) => notices.push(notice))
+    try {
+      taskRunnerService.resume(USER, taskId)
+      expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('waiting')
+      expect(notices).toEqual([])
+    } finally { off() }
   })
 
   it('preserves a durable gate and repairs an interrupted tool batch without replaying its side effects', async () => {
