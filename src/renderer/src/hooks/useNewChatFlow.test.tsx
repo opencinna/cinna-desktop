@@ -199,9 +199,17 @@ describe('startNewChat — the mode and model it stamps', () => {
     expect(written()).toMatchObject({ modeId: 'managed-mode:1', providerId: 'p-1', modelId: 'm-1' })
   })
 
-  it('stamps them on a coordinated chat', async () => {
+  it('stamps them on a coordinated chat its hidden runtime conducts', async () => {
     await start({ agentIds: ['a-1'], onDemandMcpIds: ['mcp-1'], mode })
     expect(written()).toMatchObject({ modeId: 'managed-mode:1', providerId: 'p-1', modelId: 'm-1' })
+  })
+
+  it('leaves them off a coordinated chat an agent conducts', async () => {
+    await start({ agentIds: ['a-1'], onDemandMcpIds: ['mcp-1'], conductorId: 'a-1', mode })
+    expect(written()).toMatchObject({ agentId: 'a-1', router: 'coordinator' })
+    expect(written()).not.toHaveProperty('modeId')
+    expect(written()).not.toHaveProperty('providerId')
+    expect(written()).not.toHaveProperty('modelId')
   })
 
   it('leaves them off a direct agent chat', async () => {

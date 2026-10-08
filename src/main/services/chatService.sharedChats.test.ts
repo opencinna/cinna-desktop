@@ -219,6 +219,19 @@ describe('the owner of a new chat, decided at its first binding', () => {
     expect(ownerOf(localDefault)).toBe(DEFAULT)
   })
 
+  it('shares a coordinated chat a local agent conducts whatever mode it names, and keeps one a hidden runtime conducts on an account mode', () => {
+    effectiveDefault.id = 'account-mode'
+    const conducted = chatService.create(PROFILE).id
+    chatService.update(PROFILE, conducted, { agentId: 'folder:local', router: 'coordinator', modeId: 'account-mode' })
+    expect(ownerOf(conducted)).toBe(DEFAULT)
+    const hidden = chatService.create(PROFILE).id
+    chatService.update(PROFILE, hidden, { agentId: 'hand-added', router: 'coordinator' })
+    expect(ownerOf(hidden)).toBe(PROFILE)
+    const direct = chatService.create(PROFILE).id
+    chatService.update(PROFILE, direct, { agentId: 'folder:local', router: 'direct', modeId: 'account-mode' })
+    expect(ownerOf(direct)).toBe(DEFAULT)
+  })
+
   it('never moves a chat once something was said in it', () => {
     const chat = chatService.create(PROFILE).id
     messageRepo.saveUser({ chatId: chat, content: 'hello' })

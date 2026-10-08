@@ -28,9 +28,9 @@ function upgradedInstall(setup: string): DatabaseSync {
   return raw
 }
 
-function agent(id: string, owner: string, config: Record<string, unknown> = {}): string {
-  return `INSERT INTO agents (id, user_id, name, protocol, created_at, driver_config)
-    VALUES ('${id}', '${owner}', '${id}', 'a2a', 1, '${JSON.stringify(config)}');`
+function agent(id: string, owner: string, config: Record<string, unknown> = {}, driver: string | null = null): string {
+  return `INSERT INTO agents (id, user_id, name, protocol, created_at, driver, driver_config)
+    VALUES ('${id}', '${owner}', '${id}', 'a2a', 1, ${driver ? `'${driver}'` : 'NULL'}, '${JSON.stringify(config)}');`
 }
 
 function chat(id: string, over: { owner?: string; router?: string; agentId?: string | null; origin?: string; deleted?: boolean } = {}): string {
@@ -73,6 +73,20 @@ describe('share local-agent chats migration', () => {
     const raw = upgradedInstall(AGENTS + chat('h1', { router: 'human', agentId: null }) + onDemand('h1', 'local-1') + onDemand('h1', 'local-2'))
     migrate(raw)
     expect(owner(raw, 'h1')).toBe(DEFAULT)
+    raw.close()
+  })
+
+  it('moves a coordinator chat whose root is a local agent that conducts it, not one a hidden runtime would', () => {
+    const raw = upgradedInstall(AGENTS + agent('acp-1', DEFAULT, { launcher: 'claude' }, 'acp') +
+      agent('ws-1', DEFAULT, { transport: 'websocket' }, 'acp') +
+      chat('conducted', { router: 'coordinator', agentId: 'acp-1' }) + onDemand('conducted', 'local-1') +
+      chat('ws', { router: 'coordinator', agentId: 'ws-1' }) +
+      chat('acp-mixed', { router: 'coordinator', agentId: 'acp-1' }) + agent('profile-agent', PROFILE) + onDemand('acp-mixed', 'profile-agent'))
+    migrate(raw)
+    expect(raw.prepare('SELECT user_id AS userId, mode_id AS modeId FROM chats WHERE id = ?').get('conducted'))
+      .toEqual({ userId: DEFAULT, modeId: null })
+    expect(owner(raw, 'ws')).toBe(PROFILE)
+    expect(owner(raw, 'acp-mixed')).toBe(PROFILE)
     raw.close()
   })
 

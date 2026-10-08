@@ -60,17 +60,19 @@ function listOwners(userId: string): string | string[] {
 /**
  * Who should own a new chat, from the runtime it is being bound to. Anything
  * of the account — a `remote:` agent, a profile-scoped or development agent,
- * an agent that does not resolve, a profile-managed chat mode or credential —
- * keeps it in the profile; local agents, local chat modes and local
- * credentials, or no binding at all, make it the computer's (the default
- * profile's), listed in every profile. The chat's own conductor runtime is not
- * a choice the user made and is skipped — but what it will run on is: a chat
- * the model answers, with no mode or credential of its own, runs on the
- * effective default mode, and an account default keeps it in the profile.
+ * an agent that does not resolve — keeps it in the profile; local agents, or
+ * no binding at all, make it the computer's (the default profile's), listed
+ * in every profile. The chat's own conductor runtime is not a choice the user
+ * made and is skipped — but what it will run on is. A chat a local agent
+ * answers or conducts never reads a mode or credential, so neither counts; a
+ * chat its hidden runtime answers runs on its mode and credential, or on the
+ * effective default when it names neither, and any account one keeps it in
+ * the profile.
  */
 function ownerForBinding(profileUserId: string, chatId: string, next: Pick<ChatRow, 'agentId' | 'modeId' | 'providerId' | 'router'>): string {
   const agentIds = [next.agentId, ...chatOnDemandAgentRepo.listAgentIds(chatId)].filter((id): id is string => !!id)
   let rootIsAgent = false
+  let rootConducts = false
   for (const agentId of agentIds) {
     if (agentId.startsWith('remote:')) return profileUserId
     const located = agentService.findAgent(getSettingsScopeUserId(), profileUserId, agentId)
@@ -79,8 +81,16 @@ function ownerForBinding(profileUserId: string, chatId: string, next: Pick<ChatR
     // Only machine-local agents (hand-added A2A and folder agents) resolve in
     // the default scope; a development agent is still the profile's.
     if (located.userId !== DEFAULT_USER_ID || located.row.driverConfig?.developmentProfileId) return profileUserId
-    if (agentId === next.agentId) rootIsAgent = true
+    if (agentId === next.agentId) {
+      rootIsAgent = true
+      rootConducts = canConduct(located.row)
+    }
   }
+  // Only a hidden runtime reads a mode: a coordinator chat whose root cannot
+  // conduct, or a `direct` one with no agent. A `human` chat, a `direct` one
+  // rooted on an agent and one a local agent conducts talk to agents alone.
+  const runsOnMode = next.router === 'coordinator' ? !rootConducts : next.router !== 'human' && !rootIsAgent
+  if (!runsOnMode) return DEFAULT_USER_ID
   if (next.modeId) {
     const mode = chatModeService.findMerged(next.modeId)
     if (!mode || mode.managed || mode.userId !== DEFAULT_USER_ID) return profileUserId
@@ -89,11 +99,7 @@ function ownerForBinding(profileUserId: string, chatId: string, next: Pick<ChatR
     const provider = llmProviderRepo.getOwned(DEFAULT_USER_ID, next.providerId)
     if (!provider || provider.managed) return profileUserId
   }
-  // A `human` chat, or a `direct` one rooted on a local agent, never runs a
-  // conductor; every other chat does, on the effective default when it names
-  // neither a mode nor a credential.
-  const conducted = next.router === 'coordinator' || (next.router !== 'human' && !rootIsAgent)
-  if (conducted && !next.modeId && !next.providerId) {
+  if (!next.modeId && !next.providerId) {
     const mode = chatModeService.resolveEffectiveDefault()
     if (mode && (mode.managed || mode.userId !== DEFAULT_USER_ID)) return profileUserId
   }

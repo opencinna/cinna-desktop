@@ -192,7 +192,9 @@ it('clears the previous API credential and model when switching to a CLI mode', 
   const chatId = directChat()
   chatRepo.updateMeta(USER, chatId, { providerId: 'old-api', modelId: 'old-api-model' })
   chatService.update(USER, chatId, { modeId: 'claude-mode' })
-  expect(chatRepo.getOwned(USER, chatId)).toMatchObject({ modeId: 'claude-mode', providerId: null, modelId: 'sonnet' })
+  // Read as the profile sees it: a local agent answers this chat, so the mode
+  // does not keep it in the profile and it may now be the default profile's.
+  expect(chatService.get(USER, chatId)).toMatchObject({ modeId: 'claude-mode', providerId: null, modelId: 'sonnet' })
 })
 
 describe('chatService.setRouter', () => {

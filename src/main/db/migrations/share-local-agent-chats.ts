@@ -25,7 +25,9 @@ export const SHARE_LOCAL_AGENT_CHATS_MARKER = '__migration.shareLocalAgentChats'
  *   (`origin = 'user'`); trashed chats included;
  * - `showLocalDataInAllProfiles` is not stored as `false` — with the setting
  *   off, chats stay where they were started;
- * - it is not conducted: `router = 'human'`, or `direct` with a root agent;
+ * - no hidden runtime answers it, so no mode is read: `router = 'human'`,
+ *   `direct` with a root agent, or `coordinator` with a root agent that can
+ *   conduct (an ACP agent not reached over WebSocket, `canConduct`);
  * - it has at least one agent, and every one of them (the root plus every
  *   on-demand agent) is a machine-local agent: owned by the default profile,
  *   not `remote:`, and neither a development agent nor a chat conductor.
@@ -63,6 +65,7 @@ export function shareLocalAgentChats(sqlite: Database.Database): void {
 interface CandidateChat {
   id: string
   userId: string
+  router: string
   agentId: string | null
 }
 
@@ -88,17 +91,18 @@ function schemaReady(sqlite: Database.Database): boolean {
     hasColumn(sqlite, 'chats', 'origin') &&
     hasColumn(sqlite, 'chats', 'router') &&
     hasColumn(sqlite, 'agents', 'user_id') &&
-    hasColumn(sqlite, 'agents', 'driver_config')
+    hasColumn(sqlite, 'agents', 'driver_config') &&
+    hasColumn(sqlite, 'agents', 'driver')
   )
 }
 
-/** Profile-owned, user-opened chats that never run a conductor. */
+/** Profile-owned, user-opened chats with a root agent or a human router. */
 function candidateChats(sqlite: Database.Database): CandidateChat[] {
   return sqlite
     .prepare(
-      `SELECT id, user_id AS userId, agent_id AS agentId FROM chats
+      `SELECT id, user_id AS userId, router, agent_id AS agentId FROM chats
        WHERE user_id != ? AND origin = 'user'
-         AND (router = 'human' OR (router = 'direct' AND agent_id IS NOT NULL))`
+         AND (router = 'human' OR (router IN ('direct', 'coordinator') AND agent_id IS NOT NULL))`
     )
     .all(DEFAULT_USER_ID) as CandidateChat[]
 }
@@ -109,15 +113,18 @@ function onlyLocalAgents(sqlite: Database.Database, chat: CandidateChat): boolea
     .all(chat.id) as Array<{ agentId: string }>
   const ids = [chat.agentId, ...onDemand.map((row) => row.agentId)].filter((id): id is string => !!id)
   if (ids.length === 0) return false
-  const lookup = sqlite.prepare('SELECT user_id AS userId, driver_config AS driverConfig FROM agents WHERE id = ?')
+  const lookup = sqlite.prepare('SELECT user_id AS userId, driver, driver_config AS driverConfig FROM agents WHERE id = ?')
   return ids.every((id) => {
     if (id.startsWith('remote:')) return false
-    const agent = lookup.get(id) as { userId: string; driverConfig: string | null } | undefined
+    const agent = lookup.get(id) as { userId: string; driver: string | null; driverConfig: string | null } | undefined
     if (!agent || agent.userId !== DEFAULT_USER_ID) return false
     const config = parseConfig(agent.driverConfig)
     if (config === null) return false
     // The same tests `ownerForBinding` and `isChatConductor` make.
-    return !config.developmentProfileId && typeof config.conductorChatId !== 'string'
+    if (config.developmentProfileId || typeof config.conductorChatId === 'string') return false
+    // A coordinator chat's root conducts it only when `canConduct` says so;
+    // otherwise a hidden runtime would, on a mode.
+    return chat.router !== 'coordinator' || id !== chat.agentId || (agent.driver === 'acp' && config.transport !== 'websocket')
   })
 }
 

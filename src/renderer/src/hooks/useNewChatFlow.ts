@@ -265,16 +265,17 @@ export function useNewChatFlow(): {
           router: ChatRouter
         } = { title, router }
         if (rootAgentId) updates.agentId = rootAgentId
-        // Only a chat the model answers needs a mode or a model. A `direct`
-        // chat with an agent, and every `human` chat, talk straight to their
-        // agents — that is what makes a `human` chat work with no LLM
-        // configured. Stamping the mode on them anyway is worse than useless:
-        // an account-managed default mode keeps a chat with only local agents
-        // in the profile instead of sharing it (`ownerForBinding` in main reads
-        // `conducted` the same way). A later switch to AI routing resolves the
-        // effective default mode itself.
-        const conducted = router === 'coordinator' || (router !== 'human' && !rootAgentId)
-        if (conducted) {
+        // Only a chat its hidden runtime answers needs a mode or a model. A
+        // `direct` chat with an agent, every `human` chat, and a coordinated
+        // one with a conductor picked (`ChatWorkspace` passes one only when it
+        // can conduct) talk to agents alone — that is what makes a `human`
+        // chat work with no LLM configured. Stamping the mode on them anyway
+        // is worse than useless: an account-managed default mode keeps a chat
+        // with only local agents in the profile instead of sharing it
+        // (`ownerForBinding` in main asks the same question). A hidden runtime
+        // made later resolves the effective default mode itself.
+        const runsOnMode = router === 'coordinator' ? !pickedConductor : router !== 'human' && !rootAgentId
+        if (runsOnMode) {
           const resolvedModelId = resolveModel(mode, providerId, providers, allModels)
           if (providerId && resolvedModelId) {
             updates.providerId = providerId
