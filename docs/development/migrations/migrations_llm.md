@@ -57,7 +57,7 @@ Parents before children; pure table-creation before backfills; legacy-table back
     - **Idempotency:** the `ALTER` and the backfill run in one transaction inside `if (!hasColumn(…, 'origin'))`, the same shape as `migrateChatRouter`: a replay never rewrites an origin a later build recorded. Backfill order and the hand-opened-chat test are in [Desktop Notifications](../../ui/desktop_notifications/desktop_notifications_tech.md#database-schema)
 21. `migrateUserIdColumns` — backfill `user_id` on legacy tables; every ALTER `hasTable`-guarded. Only the one-time repairs below run after it
 22. `backfillAiFunctionsCredential` (`migrations/app-settings.ts`) — one-time AI Functions credential backfill; reads `chat_modes.user_id`. See [AI Functions](../../llm/ai_functions/ai_functions.md)
-23. `shareLocalAgentChats` (`migrations/share-local-agent-chats.ts`) — one-time move of non-conducted, user-opened, local-agent-only profile chats to `__default__`. Reads `chats.origin`, `chats.router`, `agents.driver_config` and the legacy `user_id` columns, so it is last. Rules in [Settings Scope](../../core/settings_scope/settings_scope.md#business-rules)
+23. `shareLocalAgentChats` (`migrations/share-local-agent-chats.ts`) — one-time move of user-opened, local-agent-only profile chats no hidden runtime answers to `__default__`. Reads `chats.origin`, `chats.router`, `agents.driver`, `agents.driver_config` and the legacy `user_id` columns, so it is last. Rules in [Settings Scope](../../core/settings_scope/settings_scope.md#business-rules)
 
 ## Helpers (`migrations/helpers.ts`)
 
