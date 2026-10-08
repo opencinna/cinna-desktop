@@ -55,7 +55,9 @@ Parents before children; pure table-creation before backfills; legacy-table back
 20. `migrateChatOrigin` (`migrations/chat-origin.ts`) — `chats.origin` (who opened the chat) + a one-time backfill.
     - **Placement:** after `migrateRetireChatMirror`; its backfill is DML over `handovers`, `delegations`, `tasks` and `messages`, so every one of those must exist first (each read is `hasTable`-gated)
     - **Idempotency:** the `ALTER` and the backfill run in one transaction inside `if (!hasColumn(…, 'origin'))`, the same shape as `migrateChatRouter`: a replay never rewrites an origin a later build recorded. Backfill order and the hand-opened-chat test are in [Desktop Notifications](../../ui/desktop_notifications/desktop_notifications_tech.md#database-schema)
-21. `migrateUserIdColumns` — backfill `user_id` on legacy tables; **runs last**, every ALTER `hasTable`-guarded
+21. `migrateUserIdColumns` — backfill `user_id` on legacy tables; every ALTER `hasTable`-guarded. Only the one-time repairs below run after it
+22. `backfillAiFunctionsCredential` (`migrations/app-settings.ts`) — one-time AI Functions credential backfill; reads `chat_modes.user_id`. See [AI Functions](../../llm/ai_functions/ai_functions.md)
+23. `shareLocalAgentChats` (`migrations/share-local-agent-chats.ts`) — one-time move of non-conducted, user-opened, local-agent-only profile chats to `__default__`. Reads `chats.origin`, `chats.router`, `agents.driver_config` and the legacy `user_id` columns, so it is last. Rules in [Settings Scope](../../core/settings_scope/settings_scope.md#business-rules)
 
 ## Helpers (`migrations/helpers.ts`)
 
@@ -68,6 +70,7 @@ Parents before children; pure table-creation before backfills; legacy-table back
 - Add column: `if (!hasColumn(sqlite, 't', 'c')) sqlite.exec('ALTER TABLE t ADD COLUMN c …')`.
 - Drop column/table: `IF EXISTS`, or guard with `hasColumn`/`hasTable` (see `chats.ts` dropping `active_agent_id`, `chat_agent_sessions`).
 - One-time backfill that must not re-run: pair the `INSERT … SELECT` with a state change that makes the source predicate false next boot (see `jobs.ts`: copy `jobs.agent_id` → `job_agents`, then `UPDATE jobs SET agent_id = NULL`). Without the null-out the backfill resurrects rows the user deleted.
+- A one-time repair whose predicate a later boot could still match (a chat a user rebinds afterwards, a setting turned back on): gate it on a marker row in `app_settings` (`__migration.<name>`, not an `AppSettingsSchema` key, so `appSettingsRepo.getAll` never surfaces it), and write the marker on every path — fresh install and no-op included (`shareLocalAgentChats` writes it inside the same transaction as its moves). `backfillAiFunctionsCredential` and `shareLocalAgentChats` both do; a repair that skipped the marker on its no-op path would act on the first boot where its condition happened to hold.
 - Backfill INSERT against an FK target uses an existence guard (`… IN (SELECT id FROM parent)`) so a dangling ref can't throw.
 - A backfill whose value a later writer may correct: make `<column> IS NULL` part of the predicate, as `agent-drivers.ts` does. The `UPDATE` then never touches a value set after the first boot — here, the scanner's correction of a Claude folder backfilled as `opencode`.
 
