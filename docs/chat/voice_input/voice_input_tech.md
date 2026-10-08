@@ -24,7 +24,7 @@
 - `VoiceInputButton.tsx` — the button, its right-click menu (`ContextMenu` with `MicrophoneItem` radio rows and a `MenuSwitch` checkbox row), the blocked hint, the hide-and-toast action, the headphone registration and the send-after-text logic.
 - `useVoiceRecorder.ts` — `useVoiceRecorder({ deviceId, onText, onError })`: `getUserMedia`, a 16 kHz `AudioContext`, the worklet, WAV encoding and the `speech.transcribe` call. Exposes `state`, `current()` (the live state, ahead of the render) and `toggle()`.
 - `recorderWorklet.js` — the `cinna-recorder` AudioWorklet; imported with `?url&no-inline` because the renderer CSP blocks `blob:` and `data:` modules.
-- `wav.ts` — `encodeWav(samples, rate)` (16-bit PCM mono) and `concatSamples(chunks)`.
+- `wav.ts` — `encodeWav(samples, rate)` (16-bit PCM mono), `concatSamples(chunks)` and `sampleLevels(samples)` (peak and RMS, rounded to 4 places, for the log).
 - `useSpeechStatus.ts` — `useSpeechStatus()`, `fetchSpeechStatus()`, `SPEECH_STATUS_QUERY_KEY`, `speechBlocked(status)`, `SPEECH_BLOCKED_HINT`.
 - `useVoiceErrorToast.ts` — `useVoiceErrorToast()`: error toasts owned by one composer.
 - `mediaKeys.ts` + `silence.wav` — `registerMediaToggle(handlers)`: the headphone button through the Media Session API.
@@ -64,7 +64,16 @@ None. Both preferences are renderer localStorage: `cinna-voice-input-device` (ab
 - `transcribe` requests authorization when not determined (the system prompt), then picks the backend: `.ready` → SpeechAnalyzer over the file, falling back to SFSpeechRecognizer on any error (with `analyzerError` in the answer); `.needsModel` → SFSpeechRecognizer, plus `installModel: true` unless a download is already running; `.unusable` → SFSpeechRecognizer.
 - SFSpeechRecognizer runs with `requiresOnDeviceRecognition = true` and `addsPunctuation` on macOS 13+; without `supportsOnDeviceRecognition` it answers `unavailable` ("downloading, try again in a minute" while the macOS 26 model installs, otherwise "isn't available on this Mac without sending audio to Apple"). Error 1110 maps to `no-speech`.
 - The SpeechAnalyzer code is compiled only under `#if compiler(>=6.2)` and runs only under `#available(macOS 26, *)`; a helper built with an older SDK is SFSpeechRecognizer-only.
+- stdout carries only the answer; diagnostics go to stderr as `cinna-speech:` lines (`diagnose()`), so they never compete with the JSON line.
 - `probe` reports `available` from `SFSpeechRecognizer.isAvailable` and does not require an on-device model, so the button can show for a language whose every transcription will then be refused.
+
+### Diagnostic log lines
+A "No speech was detected." toast has two possible causes — the recording was silent, or the recognizer heard nothing in real audio — and the log exists to tell them apart. Both halves show in the in-app logger (⌘`).
+- **Renderer, scope `voice`** (`useVoiceRecorder`): `microphone opened` (track label, whether a device was chosen, sample rate, channel count, `muted`, `readyState`); `microphone track muted` / `unmuted` / `ended while recording`, only while the session is live; `chosen microphone failed to open, using the default`; `could not start recording`; on stop, `recording stopped` with `seconds`, `sampleRate`, `chunks`, `peak`, `rms` — logged as a warning `recording got no audio from the recorder` at 0 chunks, or `recording is silent (peak below 0.0001)` at a zero peak; `transcription failed` with `code` and `message`.
+- **Main, scope `speech-macos`** (`macosSpeech.transcribe`): one `speech transcription finished` line per run with `backend`, `seconds` (from the WAV header), `locale` (`system` when none), then `ok` + `characters` or `ok: false` + `code`, and `stderr`. A helper that did not exit 0 logs `speech transcription failed` with the same `stderr` instead. `helperStderr()` keeps every `cinna-speech:` line plus the last 3 other lines (framework noise), capped at 800 characters.
+- **Helper stderr**: the chosen backend with the locale (or the analyzer model `downloading`/`missing` when it fell back to SFSpeechRecognizer) and the input's format (`16000 Hz, 1 ch, 2.40 s`); on the analyzer path, `analyzer read to the end` or `found no audio to read`, and how many results it produced; `SpeechAnalyzer failed, using SFSpeechRecognizer: …` on a fallback.
+
+Reading them: 0 chunks or a zero peak means the audio never arrived — microphone permission, the wrong device, or a track macOS muted or ended — and the recognizer is not at fault. A non-zero peak with `backend analyzer` and `0 result(s)` points at the macOS 26 SpeechAnalyzer path. Running `cinna-speech transcribe` from Terminal does not reproduce this: it stops at the speech-permission step (Terminal is the responsible process, see Security), so the in-app log is the way to see the helper's side.
 
 ## Renderer Components
 
@@ -85,6 +94,7 @@ None. Both preferences are renderer localStorage: `cinna-voice-input-device` (ab
 ## Security
 
 - Recognition is on the device only (see the business rules); the temp WAV is deleted after every run, success or not.
+- The log never carries the transcript: main logs its character count, the renderer and the helper only levels, formats and counts.
 - **TCC charges speech recognition to the responsible process, not the helper.** The packaged app declares `NSSpeechRecognitionUsageDescription` and is responsible for the helper it launches. A development build started from a terminal (`npm run dev`) makes the terminal app responsible; it has no such string, so macOS kills the helper with SIGABRT and the toast says "no usage description". Dev mode therefore cannot transcribe — test with a packaged build launched by `open`. Crash reports land in `~/Library/Logs/DiagnosticReports/cinna-speech-*.ips`; their `responsibleProc` names the app TCC charged. A private macOS call could make the helper its own responsible process; it was deliberately not used.
 - The hardened runtime blocks the microphone without `com.apple.security.device.audio-input`, whatever the user answers in the prompt.
 - Microphone labels are empty until the Microphone permission is granted, which is why the menu numbers unlabelled inputs and shows only System default at first.

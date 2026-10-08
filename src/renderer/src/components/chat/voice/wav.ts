@@ -39,3 +39,16 @@ export function concatSamples(chunks: Float32Array[]): Float32Array {
   }
   return out
 }
+
+/** Loudest absolute sample and RMS, rounded to 4 places for a log line. */
+export function sampleLevels(samples: Float32Array): { peak: number; rms: number } {
+  let peak = 0
+  let sum = 0
+  for (let i = 0; i < samples.length; i++) {
+    const value = Math.abs(samples[i])
+    if (value > peak) peak = value
+    sum += value * value
+  }
+  const rms = samples.length ? Math.sqrt(sum / samples.length) : 0
+  return { peak: Number(peak.toFixed(4)), rms: Number(rms.toFixed(4)) }
+}

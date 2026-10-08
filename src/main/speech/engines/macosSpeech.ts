@@ -20,6 +20,8 @@ const INSTALL_TIMEOUT_MS = 15 * 60_000
 /** What a helper run produced: its stdout, or why it did not finish. */
 export interface HelperRun {
   stdout: string
+  /** What the helper wrote to stderr: its diagnostics and framework noise. */
+  stderr?: string
   /** Set when the process did not exit 0 on its own (timeout, signal, spawn failure, crash). */
   failure?: { message: string; signal?: string | null; timedOut?: boolean }
 }
@@ -46,11 +48,12 @@ function bundledHelperPath(): string {
 
 function runHelper(path: string, args: string[], timeoutMs: number): Promise<HelperRun> {
   return new Promise((resolve) => {
-    execFile(path, args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (error, stdout) => {
-      if (!error) return resolve({ stdout: `${stdout}` })
+    execFile(path, args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      if (!error) return resolve({ stdout: `${stdout}`, stderr: `${stderr ?? ''}` })
       const failure = error as NodeJS.ErrnoException & { killed?: boolean; signal?: string | null }
       resolve({
         stdout: `${stdout ?? ''}`,
+        stderr: `${stderr ?? ''}`,
         failure: { message: error.message, signal: failure.signal ?? null, timedOut: failure.killed === true && failure.signal === 'SIGTERM' }
       })
     })
@@ -94,10 +97,28 @@ function lastJsonLine(stdout: string): Record<string, unknown> | null {
  * not killed halfway. The length comes from the WAV header's byte rate.
  */
 export function transcribeTimeoutMs(wav: Buffer): number {
+  const seconds = wavSeconds(wav)
+  if (seconds === null) return TRANSCRIBE_TIMEOUT_MS
+  return TRANSCRIBE_TIMEOUT_MS + Math.ceil(2 * seconds * 1000)
+}
+
+/** A WAV's length from its header's byte rate, or null when there is no header to read. */
+function wavSeconds(wav: Buffer): number | null {
   const byteRate = wav.length >= 44 ? wav.readUInt32LE(28) : 0
-  if (byteRate <= 0) return TRANSCRIBE_TIMEOUT_MS
-  const durationMs = ((wav.length - 44) / byteRate) * 1000
-  return TRANSCRIBE_TIMEOUT_MS + Math.ceil(2 * durationMs)
+  if (byteRate <= 0) return null
+  return Number(((wav.length - 44) / byteRate).toFixed(2))
+}
+
+/**
+ * The helper's stderr for a log line, or nothing: its own `cinna-speech:`
+ * diagnostics always, then the last few lines of framework noise, capped.
+ */
+function helperStderr(stderr: string | undefined): { stderr?: string } {
+  const lines = (stderr ?? '').split('\n').map((line) => line.trim()).filter(Boolean)
+  if (!lines.length) return {}
+  const own = lines.filter((line) => line.startsWith('cinna-speech:'))
+  const noise = lines.filter((line) => !line.startsWith('cinna-speech:')).slice(-3)
+  return { stderr: [...own, ...noise].join('\n').slice(0, 800) }
 }
 
 /** `cinna-speech probe` output → a probe. Malformed output is "not supported". */
@@ -182,8 +203,9 @@ export function createMacosSpeechEngine(overrides: Partial<MacosSpeechDeps> = {}
       try {
         file = await deps.writeTemp(wav)
         const run = await deps.run(helper, ['transcribe', '--file', file, ...localeArgs(locale)], transcribeTimeoutMs(wav))
+        const stderr = helperStderr(run.stderr)
         if (run.failure) {
-          logger.warn('speech transcription failed', run.failure)
+          logger.warn('speech transcription failed', { ...run.failure, ...stderr })
           if (run.failure.timedOut) return { success: false, code: 'failed', message: 'Transcription took too long.' }
           // macOS kills a process that touches speech recognition when the app
           // that launched it declares no NSSpeechRecognitionUsageDescription —
@@ -194,9 +216,18 @@ export function createMacosSpeechEngine(overrides: Partial<MacosSpeechDeps> = {}
           return { success: false, code: 'failed', message: 'Speech recognition stopped unexpectedly.' }
         }
         if (wantsModelInstall(run.stdout)) installModel(helper, locale)
-        const analyzerError = lastJsonLine(run.stdout)?.analyzerError
+        const answer = lastJsonLine(run.stdout)
+        const analyzerError = answer?.analyzerError
         if (typeof analyzerError === 'string') logger.warn('SpeechAnalyzer failed, fell back to SFSpeechRecognizer', { analyzerError })
-        return parseTranscribeOutput(run.stdout)
+        const result = parseTranscribeOutput(run.stdout)
+        logger.info('speech transcription finished', {
+          backend: answer?.backend ?? 'unknown',
+          seconds: wavSeconds(wav),
+          locale: locale ?? 'system',
+          ...(result.success ? { ok: true, characters: result.text.length } : { ok: false, code: result.code }),
+          ...stderr
+        })
+        return result
       } finally {
         if (file) await deps.remove(file).catch((err: unknown) => logger.warn('could not delete speech temp file', { err: String(err) }))
       }

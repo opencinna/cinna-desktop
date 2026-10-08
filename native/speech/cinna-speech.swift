@@ -112,11 +112,14 @@ func analyzeFile(_ path: String, locale: Locale) async throws -> String {
   let transcriber = SpeechTranscriber(locale: locale, preset: .transcription)
   let analyzer = SpeechAnalyzer(modules: [transcriber])
   let file = try AVAudioFile(forReading: URL(fileURLWithPath: path))
-  async let collected = transcriber.results.reduce(into: "") { text, result in
-    text += String(result.text.characters)
+  async let collected = transcriber.results.reduce(into: (text: "", count: 0)) { acc, result in
+    acc.text += String(result.text.characters)
+    acc.count += 1
   }
+  var reachedEnd = false
   do {
     if let end = try await analyzer.analyzeSequence(from: file) {
+      reachedEnd = true
       try await analyzer.finalizeAndFinish(through: end)
     } else {
       await analyzer.cancelAndFinishNow()
@@ -126,7 +129,10 @@ func analyzeFile(_ path: String, locale: Locale) async throws -> String {
     await analyzer.cancelAndFinishNow()
     throw error
   }
-  return try await collected.trimmingCharacters(in: .whitespacesAndNewlines)
+  let (text, count) = try await collected
+  // Tells "the analyzer read no audio" apart from "it heard nothing in it".
+  diagnose("analyzer \(reachedEnd ? "read to the end" : "found no audio to read"), \(count) result(s)")
+  return text.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 @available(macOS 26, *)
@@ -238,9 +244,28 @@ func recognize(_ path: String, extra: [String: Any]) {
 
 var activeTask: SFSpeechRecognitionTask?
 
+/** One diagnostic line on stderr, which the app copies into its log. */
+func diagnose(_ line: String) {
+  FileHandle.standardError.write("cinna-speech: \(line)\n".data(using: .utf8)!)
+}
+
+/** The input's format as the frameworks read it, e.g. "16000 Hz, 1 ch, 2.40 s". */
+func describeFile(_ path: String) -> String {
+  guard let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path)) else { return "unreadable audio file" }
+  let format = file.processingFormat
+  let seconds = format.sampleRate > 0 ? Double(file.length) / format.sampleRate : 0
+  return String(format: "%.0f Hz, %u ch, %.2f s", format.sampleRate, format.channelCount, seconds)
+}
+
 /** Authorized: picks the backend and runs it. */
 func run(_ path: String) {
-  switch currentAnalyzerState() {
+  let state = currentAnalyzerState()
+  switch state {
+  case .ready(let locale): diagnose("backend analyzer, locale \(bcp47(locale)), \(describeFile(path))")
+  case .needsModel(let locale, let downloading): diagnose("backend sfspeech, analyzer model for \(bcp47(locale)) \(downloading ? "downloading" : "missing"), \(describeFile(path))")
+  case .unusable: diagnose("backend sfspeech, \(describeFile(path))")
+  }
+  switch state {
   case .ready(let locale):
     #if compiler(>=6.2)
     if #available(macOS 26, *) {
@@ -251,7 +276,7 @@ func run(_ path: String) {
           emit(["ok": true, "text": text, "backend": "analyzer"])
         } catch {
           // A new API on a new OS: when it fails, the older recognizer still can.
-          FileHandle.standardError.write("cinna-speech: SpeechAnalyzer failed, using SFSpeechRecognizer: \(error.localizedDescription)\n".data(using: .utf8)!)
+          diagnose("SpeechAnalyzer failed, using SFSpeechRecognizer: \(error.localizedDescription)")
           recognize(path, extra: ["analyzerError": error.localizedDescription])
         }
       }

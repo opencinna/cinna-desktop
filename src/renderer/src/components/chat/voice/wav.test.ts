@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { concatSamples, encodeWav } from './wav'
+import { concatSamples, encodeWav, sampleLevels } from './wav'
 
 const text = (bytes: Uint8Array, at: number, length: number): string =>
   String.fromCharCode(...bytes.slice(at, at + length))
@@ -33,5 +33,15 @@ describe('encodeWav', () => {
 describe('concatSamples', () => {
   it('joins chunks in order', () => {
     expect(Array.from(concatSamples([new Float32Array([1, 2]), new Float32Array([]), new Float32Array([3])]))).toEqual([1, 2, 3])
+  })
+})
+
+describe('sampleLevels', () => {
+  it('reads silence as zero', () => {
+    expect(sampleLevels(new Float32Array(4))).toEqual({ peak: 0, rms: 0 })
+  })
+
+  it('reports the loudest sample and the RMS', () => {
+    expect(sampleLevels(Float32Array.from([0.5, -0.5, 0.5, -0.5]))).toEqual({ peak: 0.5, rms: 0.5 })
   })
 })

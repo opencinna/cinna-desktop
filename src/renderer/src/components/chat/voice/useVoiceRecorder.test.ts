@@ -4,8 +4,8 @@ import type { TranscribeResult } from '../../../../../shared/speech'
 import { useVoiceRecorder } from './useVoiceRecorder'
 
 // The audio graph, as far as the hook touches it.
-const track = { stop: vi.fn() }
-const stream = { getTracks: () => [track] } as unknown as MediaStream
+const track = { stop: vi.fn(), label: 'Built-in Microphone', muted: false, readyState: 'live', getSettings: () => ({ sampleRate: 48000, channelCount: 1 }), addEventListener: vi.fn() }
+const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream
 let worklet: { port: { onmessage: ((event: MessageEvent<Float32Array>) => void) | null } } | null = null
 const contexts: Array<{ close: ReturnType<typeof vi.fn> }> = []
 
@@ -39,7 +39,7 @@ beforeEach(() => {
     configurable: true,
     value: { getUserMedia, enumerateDevices: async () => [] }
   })
-  ;(window as unknown as { api: unknown }).api = { speech: { transcribe } }
+  ;(window as unknown as { api: unknown }).api = { speech: { transcribe }, logger: { log: vi.fn(async () => ({ success: true })) } }
 })
 
 afterEach(() => {

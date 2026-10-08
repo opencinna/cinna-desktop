@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TranscribeResult } from '../../../../../shared/speech'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import workletUrl from './recorderWorklet.js?url&no-inline'
-import { concatSamples, encodeWav } from './wav'
+import { concatSamples, encodeWav, sampleLevels } from './wav'
+import { createLogger } from '../../../stores/logger.store'
+
+const logger = createLogger('voice')
 
 export type VoiceRecorderState = 'idle' | 'recording' | 'transcribing'
 
@@ -44,6 +47,7 @@ async function openMic(deviceId: string | null): Promise<MediaStream> {
   } catch (err) {
     // Unplugged between the check and the open: fall back to the default.
     if (audio !== true && err instanceof DOMException && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError')) {
+      logger.warn('chosen microphone failed to open, using the default', { error: err.name })
       return navigator.mediaDevices.getUserMedia({ audio: true })
     }
     throw err
@@ -104,6 +108,30 @@ export function useVoiceRecorder({
     move('recording')
     try {
       session.stream = await openMic(callbacks.current.deviceId)
+      const track = session.stream.getAudioTracks()[0]
+      if (track) {
+        const { sampleRate, channelCount } = track.getSettings()
+        logger.info('microphone opened', {
+          device: track.label || '(no label)',
+          chosen: callbacks.current.deviceId !== null,
+          sampleRate,
+          channelCount,
+          muted: track.muted,
+          readyState: track.readyState
+        })
+        // macOS mutes or ends the track when it cuts the mic off mid-recording.
+        track.addEventListener('mute', () => {
+          if (!session.stopped) logger.warn('microphone track muted', { device: track.label })
+        })
+        track.addEventListener('unmute', () => {
+          if (!session.stopped) logger.info('microphone track unmuted', { device: track.label })
+        })
+        track.addEventListener('ended', () => {
+          if (!session.stopped) logger.warn('microphone track ended while recording', { device: track.label })
+        })
+      } else {
+        logger.warn('microphone stream has no audio track')
+      }
       if (session.stopped) return releaseSession(session)
       const context = new AudioContext({ sampleRate: SAMPLE_RATE })
       session.context = context
@@ -120,6 +148,7 @@ export function useVoiceRecorder({
       node.connect(mute)
       mute.connect(context.destination)
     } catch (err) {
+      logger.warn('could not start recording', { error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) })
       releaseSession(session)
       if (sessionRef.current === session) sessionRef.current = null
       if (!session.stopped) {
@@ -139,6 +168,13 @@ export function useVoiceRecorder({
     const rate = session.context?.sampleRate ?? SAMPLE_RATE
     releaseSession(session)
     const samples = concatSamples(session.chunks)
+    const levels = sampleLevels(samples)
+    const recorded = { seconds: Number((samples.length / rate).toFixed(2)), sampleRate: rate, chunks: session.chunks.length, ...levels }
+    // No chunks: the audio graph never ran. A zero peak: the mic delivered
+    // (near) zeros, as macOS does without permission or from the wrong device.
+    if (recorded.chunks === 0) logger.warn('recording got no audio from the recorder', recorded)
+    else if (levels.peak === 0) logger.warn('recording is silent (peak below 0.0001)', recorded)
+    else logger.info('recording stopped', recorded)
     if (samples.length < MIN_SAMPLES) {
       move('idle')
       callbacks.current.onError('Nothing was recorded.')
@@ -150,7 +186,10 @@ export function useVoiceRecorder({
       if (typeof speech?.transcribe !== 'function') throw new Error('Audio input is not available.')
       const result = await speech.transcribe({ wav: encodeWav(samples, rate) })
       if (result.success) callbacks.current.onText(result.text)
-      else callbacks.current.onError(result.message)
+      else {
+        logger.warn('transcription failed', { code: result.code, message: result.message })
+        callbacks.current.onError(result.message)
+      }
     } catch (err) {
       callbacks.current.onError(unwrapIpcError(err, 'Transcription failed'))
     } finally {
