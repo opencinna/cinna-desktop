@@ -50,7 +50,7 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 
 ### Choosing coordination
 - Coordinate by <conductor> is a menuitem action, and the only visible path to coordination: the routing badge no longer carries it. Choosing a *particular* conductor is **Set as Coordinator** in the agent chip's menu ([Chat Routing](../chat_routing/chat_routing.md)); this row coordinates without an agent being picked first, by the rule below.
-- The name in the row is who would conduct: in a chat, the bound agent, else the first attached one, when it can conduct, else Default runtime; on the new-chat screen, the agent set as coordinator on its chip if it is still picked, else the same rule over the picks.
+- The name in the row is who would conduct: in a chat, the first of the bound agent and then the attached agents that can conduct — the order main uses ([Chat Routing](../chat_routing/chat_routing.md)) — else Default runtime; on the new-chat screen, the agent set as coordinator on its chip if it is still picked, else the first pick when it can conduct (a new chat's conductor is chosen on its chip, not promoted).
 - It moves the chat to coordinator and disappears after success. There is no uncheck/back-to-human action.
 - The candidate is an eligible Local root/participant or Default runtime; promotion does not require an API provider merely to choose a conductor.
 - Pending/error handling uses the existing mutation and chat error surface; a refusal — including "Interrupt the session before changing who answers." while a turn runs — lands in the send-error banner. See [Chat Routing](../chat_routing/chat_routing.md).
