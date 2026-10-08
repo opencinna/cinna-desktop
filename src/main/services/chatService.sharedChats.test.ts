@@ -244,6 +244,19 @@ describe('the owner of a new chat, decided at its first binding', () => {
     expect(agentRepo.list(DEFAULT).some((agent) => agent.driverConfig?.conductorChatId === chat)).toBe(false)
   })
 
+  it('turns a shared chat to AI routing on its own agent, never on another chat\'s runtime attached to it', () => {
+    const other = chatService.create(PROFILE).id
+    chatService.update(PROFILE, other, { router: 'direct' })
+    const foreign = chatRepo.getOwned(ownerOf(other)!, other)!.agentId!
+    const chat = chatService.create(PROFILE).id
+    chatService.update(PROFILE, chat, { agentId: 'hand-added', router: 'direct' })
+    chatOnDemandAgentRepo.add(chat, foreign)
+    chatOnDemandAgentRepo.add(chat, 'folder:local')
+    messageRepo.saveUser({ chatId: chat, content: 'hello' })
+    chatService.setRouter(PROFILE, chat, 'coordinator')
+    expect(chatRepo.getOwned(ownerOf(chat)!, chat)?.agentId).toBe('folder:local')
+  })
+
   it('keeps every new chat in the profile when local data stays in its own profile, and in the default profile anyway', () => {
     appSettingsRepo.set('showLocalDataInAllProfiles', false)
     const chat = chatService.create(PROFILE).id

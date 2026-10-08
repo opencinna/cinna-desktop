@@ -730,8 +730,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // A plain chat's hidden runtime is not an agent there is anything to coordinate.
     const hasAgents = attachedAgentIds.length > 0 || (!!chatRouting.rootAgentId && !boundAgent?.conductor)
     if (coordinating || !hasAgents) return undefined
-    const firstAgent = boundAgent ?? (agents ?? []).find((agent) => agent.id === attachedAgentIds[0])
-    const conductorName = firstAgent && canConduct(firstAgent) ? firstAgent.name : 'Default runtime'
+    // Main's order: the root, then the attached agents; the first that can conduct does.
+    const conductor = [boundAgent, ...attachedAgentIds.map((id) => (agents ?? []).find((agent) => agent.id === id))]
+      .find((agent) => !!agent && canConduct(agent))
+    const conductorName = conductor ? conductor.name : 'Default runtime'
     return {
       coordinating,
       conductorName,

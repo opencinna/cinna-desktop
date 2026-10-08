@@ -18,6 +18,7 @@ import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useNewChatFlow, resolveModel } from '../../hooks/useNewChatFlow'
 import { useApplyChatMode } from '../../hooks/useApplyChatMode'
+import { unwrapIpcError } from '../../utils/ipcError'
 import { useAppSettings } from '../../hooks/useAppSettings'
 import { canConduct, newChatRouter } from '../../../../shared/chatRouting'
 import { getPreset } from '../../constants/chatModeColors'
@@ -351,9 +352,12 @@ export function ChatWorkspace({ agentId, embedded = false }: { agentId?: string;
   const handleActiveChatModeChange = useCallback(
     async (mode: ChatModeData | null) => {
       if (!activeChatId) return
-      await applyChatMode(activeChatId, mode)
+      // Main can refuse a mode (a chat shared across profiles takes no
+      // account mode); nothing above this catches it.
+      await applyChatMode(activeChatId, mode).catch((error) =>
+        setSendError(unwrapIpcError(error, 'The chat mode could not be changed.')))
     },
-    [activeChatId, applyChatMode]
+    [activeChatId, applyChatMode, setSendError]
   )
 
   // Tilde-driven select: apply the mode, wipe the `~` from the textarea, and

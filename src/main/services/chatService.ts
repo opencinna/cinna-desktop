@@ -12,7 +12,7 @@ import { agentService } from './agentService'
 import { chatConductorService, canConduct, isChatConductor } from './chatConductorService'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { chatOwnerFor, chatScopesFor, localDataInAllProfiles, visibleChat } from '../auth/chatScope'
-import { agentRepo } from '../db/agents'
+import { agentRepo, type AgentRow } from '../db/agents'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
 import { ChatError, McpError, AgentError } from '../errors'
 import { routerOf, type ChatRouter } from '../../shared/chatRouting'
@@ -98,6 +98,22 @@ function ownerForBinding(profileUserId: string, chatId: string, next: Pick<ChatR
     if (mode && (mode.managed || mode.userId !== DEFAULT_USER_ID)) return profileUserId
   }
   return DEFAULT_USER_ID
+}
+
+/**
+ * The agent that conducts a chat turned to AI routing: the first of `ids` that
+ * can, never another chat's hidden runtime. None: a hidden runtime is made for
+ * the chat from a mode.
+ */
+function pickConductor(userId: string, chatId: string, ids: readonly (string | null)[]): AgentRow | null {
+  for (const id of ids) {
+    if (!id) continue
+    const located = agentService.findAgent(getSettingsScopeUserId(), userId, id)
+    if (!located || !canConduct(located.row)) continue
+    if (isChatConductor(located.row) && located.row.driverConfig?.conductorChatId !== chatId) continue
+    return located.row
+  }
+  return null
 }
 
 /**
@@ -230,8 +246,9 @@ export const chatService = {
       releaseChatSessions(chatId, bound.row.id)
     }
     if (next.router === 'coordinator') {
-      const located = next.agentId ? agentService.findAgent(getSettingsScopeUserId(), userId, next.agentId) : null
-      if (!located || !canConduct(located.row)) {
+      // Only the root is tried: a new chat's conductor is the user's pick
+      // (the chip's Set as Coordinator), never a later agent promoted for it.
+      if (!pickConductor(userId, chatId, [next.agentId])) {
         if (next.agentId) chatOnDemandAgentRepo.add(chatId, next.agentId)
         updates = { ...updates, agentId: chatConductorService.ensure(owner, { ...next, agentId: null }).id }
       }
@@ -495,13 +512,8 @@ function applyRouter(userId: string, chat: ChatRow, router: ChatRouter, conducto
     if (conductorId) {
       bindRoot = conductorId
     } else {
-      // Any agent in the chat that can conduct does, before a hidden runtime
-      // is made for it from a mode.
-      const candidate = [chat.agentId, ...attached]
-        .filter((id): id is string => !!id)
-        .map((id) => agentService.findAgent(getSettingsScopeUserId(), userId, id))
-        .find((located) => located && canConduct(located.row))
-      bindRoot = candidate ? candidate.row.id : chatConductorService.ensure(chat.userId, { ...chat, agentId: null }).id
+      const candidate = pickConductor(userId, chatId, [chat.agentId, ...attached])
+      bindRoot = candidate ? candidate.id : chatConductorService.ensure(chat.userId, { ...chat, agentId: null }).id
     }
   } else if (router === 'direct') {
     if (attached.length > 1) {

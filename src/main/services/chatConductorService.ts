@@ -77,7 +77,7 @@ export const chatConductorService = {
     // A chat the default profile owns is listed in every profile, so its
     // runtime must not carry one account's mode or credential.
     if (userId === DEFAULT_USER_ID && !runsOnLocalSettings(mode, chat.providerId ?? mode?.providerId)) {
-      throw new ChatError('not_configured', 'This chat is shared across profiles, so AI routing needs a local chat mode. Make a local mode the default, or add an agent that can coordinate.')
+      throw new ChatError('not_configured', 'This chat is shared across profiles, so it can only run on a local chat mode and credential, not your account\'s.')
     }
     const engine = isAgentEngine(mode?.engine) ? mode.engine : defaultEngineService.current()
     const providerId = chat.providerId ?? mode?.providerId
