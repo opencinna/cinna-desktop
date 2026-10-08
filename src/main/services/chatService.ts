@@ -495,9 +495,13 @@ function applyRouter(userId: string, chat: ChatRow, router: ChatRouter, conducto
     if (conductorId) {
       bindRoot = conductorId
     } else {
-      const candidateId = chat.agentId ?? attached[0]
-      const candidate = candidateId ? agentService.findAgent(getSettingsScopeUserId(), userId, candidateId) : null
-      bindRoot = candidate && canConduct(candidate.row) ? candidate.row.id : chatConductorService.ensure(chat.userId, { ...chat, agentId: null }).id
+      // Any agent in the chat that can conduct does, before a hidden runtime
+      // is made for it from a mode.
+      const candidate = [chat.agentId, ...attached]
+        .filter((id): id is string => !!id)
+        .map((id) => agentService.findAgent(getSettingsScopeUserId(), userId, id))
+        .find((located) => located && canConduct(located.row))
+      bindRoot = candidate ? candidate.row.id : chatConductorService.ensure(chat.userId, { ...chat, agentId: null }).id
     }
   } else if (router === 'direct') {
     if (attached.length > 1) {

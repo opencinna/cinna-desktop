@@ -33,6 +33,7 @@ import { migrateNotes } from './notes'
 import { migrateAppSettings, backfillAiFunctionsCredential } from './app-settings'
 import { runSyncMigrations } from './sync'
 import { runSyncDepsMigrations } from './sync-deps'
+import { shareLocalAgentChats } from './share-local-agent-chats'
 
 /**
  * The migration chain, in the order it runs on every boot.
@@ -129,4 +130,8 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // One-time AI Functions credential backfill. Reads `chat_modes.user_id`, so
   // it runs after the legacy `user_id` backfill above.
   backfillAiFunctionsCredential(sqlite)
+  // One-time move of local-agent chats a stamped account mode kept in a
+  // profile. Reads `chats.origin`, `chats.router`, `agents.driver_config` and
+  // the legacy `user_id` columns, so it runs after all of them.
+  shareLocalAgentChats(sqlite)
 }

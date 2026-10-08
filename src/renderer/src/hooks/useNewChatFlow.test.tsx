@@ -187,6 +187,38 @@ describe('startNewChat — the router it creates the chat on', () => {
   })
 })
 
+describe('startNewChat — the mode and model it stamps', () => {
+  // An account-managed default mode stamped on an agent chat kept a chat with
+  // only local agents in the signed-in profile instead of sharing it.
+  const mode = { id: 'managed-mode:1', providerId: 'p-1', modelId: 'm-1' }
+  const written = (): { modeId?: string; providerId?: string; modelId?: string } =>
+    (spies.updateChat.mock.calls.at(-1) as never as [string, { modeId?: string; providerId?: string; modelId?: string }])[1]
+
+  it('stamps them on a chat the model answers', async () => {
+    await start({ agentIds: [], mode })
+    expect(written()).toMatchObject({ modeId: 'managed-mode:1', providerId: 'p-1', modelId: 'm-1' })
+  })
+
+  it('stamps them on a coordinated chat', async () => {
+    await start({ agentIds: ['a-1'], onDemandMcpIds: ['mcp-1'], mode })
+    expect(written()).toMatchObject({ modeId: 'managed-mode:1', providerId: 'p-1', modelId: 'm-1' })
+  })
+
+  it('leaves them off a direct agent chat', async () => {
+    await start({ agentIds: ['a-1'], mode })
+    expect(written()).not.toHaveProperty('modeId')
+    expect(written()).not.toHaveProperty('providerId')
+    expect(written()).not.toHaveProperty('modelId')
+  })
+
+  it('leaves them off a human chat', async () => {
+    await start({ agentIds: ['a-1', 'a-2'], mode })
+    expect(written()).not.toHaveProperty('modeId')
+    expect(written()).not.toHaveProperty('providerId')
+    expect(written()).not.toHaveProperty('modelId')
+  })
+})
+
 describe('startNewChat — where the attachments go', () => {
   it('ingests a plain model chat’s files into the local store', async () => {
     // Reading this off `router !== 'coordinator'` sent them to the Cinna

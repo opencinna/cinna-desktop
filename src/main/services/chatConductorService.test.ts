@@ -7,7 +7,7 @@ import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
-const state = vi.hoisted(() => ({ db: null as TestDatabase | null, root: '', mode: { engine: 'claude', modelId: 'sonnet', providerId: null, systemPrompt: 'Original instructions', toolPolicy: 'connectors' } }))
+const state = vi.hoisted(() => ({ db: null as TestDatabase | null, root: '', mode: { engine: 'claude', modelId: 'sonnet', providerId: null as string | null, systemPrompt: 'Original instructions', toolPolicy: 'connectors' } as Record<string, unknown> & { providerId: string | null } }))
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }))
 vi.mock('../db/client', () => ({ getDb: () => state.db!.db, getRawSqlite: () => state.db!.sqlite }))
 vi.mock('./chatModeService', () => ({ chatModeService: { findMerged: () => state.mode, resolveEffectiveDefault: () => state.mode } }))
@@ -52,5 +52,18 @@ describe('owned chat runtimes', () => {
     expect(existsSync(conductorContext(generated).path)).toBe(false)
     expect(agentRepo.getOwned('profile', other.id)).toBeDefined()
     expect(existsSync(conductorContext(other).path)).toBe(true)
+  })
+  it('refuses to make a shared chat\'s runtime from an account mode or credential, and allows a local one', () => {
+    const chat = chatRepo.create('__default__', {})
+    Object.assign(state.mode, { managed: true, userId: 'profile' })
+    expect(() => chatConductorService.ensure('__default__', chat)).toThrow('shared across profiles')
+    Object.assign(state.mode, { managed: false, userId: '__default__', providerId: 'managed:account-key' })
+    expect(() => chatConductorService.ensure('__default__', chat)).toThrow('shared across profiles')
+    expect(agentRepo.list('__default__')).toHaveLength(0)
+    state.mode.providerId = null
+    expect(conductorContext(chatConductorService.ensure('__default__', chat)).modelId).toBe('sonnet')
+    // A profile's own chat may run on its account mode.
+    Object.assign(state.mode, { managed: true, userId: 'profile' })
+    expect(() => chatConductorService.ensure('profile', chatRepo.create('profile', {}))).not.toThrow()
   })
 })

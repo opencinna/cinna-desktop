@@ -61,6 +61,7 @@ const { chatService } = await import('./chatService')
 const { chatRepo } = await import('../db/chats')
 const { agentRepo } = await import('../db/agents')
 const { messageRepo } = await import('../db/messages')
+const { chatOnDemandAgentRepo } = await import('../db/chatOnDemandAgent')
 const { appSettingsRepo } = await import('../db/appSettings')
 const { handoverOriginProfile } = await import('./handoverOrigin')
 
@@ -229,6 +230,18 @@ describe('the owner of a new chat, decided at its first binding', () => {
     messageRepo.saveUser({ chatId: shared, content: 'hello' })
     chatService.update(PROFILE, shared, { agentId: 'remote:account' })
     expect(ownerOf(shared)).toBe(DEFAULT)
+  })
+
+  it('lets any agent in a shared chat conduct it when AI routing is turned on, before making a runtime', () => {
+    // Rooted on an agent that cannot conduct; the one that can is attached.
+    const chat = chatService.create(PROFILE).id
+    chatService.update(PROFILE, chat, { agentId: 'hand-added', router: 'direct' })
+    chatOnDemandAgentRepo.add(chat, 'folder:local')
+    messageRepo.saveUser({ chatId: chat, content: 'hello' })
+    expect(ownerOf(chat)).toBe(DEFAULT)
+    chatService.setRouter(PROFILE, chat, 'coordinator')
+    expect(chatRepo.getOwned(DEFAULT, chat)?.agentId).toBe('folder:local')
+    expect(agentRepo.list(DEFAULT).some((agent) => agent.driverConfig?.conductorChatId === chat)).toBe(false)
   })
 
   it('keeps every new chat in the profile when local data stays in its own profile, and in the default profile anyway', () => {

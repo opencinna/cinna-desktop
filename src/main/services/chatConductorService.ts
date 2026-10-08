@@ -4,9 +4,13 @@ import { join } from 'node:path'
 import { agentRepo, agentSessionRepo, type AgentRow } from '../db/agents'
 import { chatRepo, type ChatRow } from '../db/chats'
 import { chatModeService } from './chatModeService'
+import type { ChatModeRow } from '../db/chatModes'
 import { defaultEngineService } from './localAgents/defaultEngineService'
 import { runtimeService } from './localAgents/runtimeService'
 import { providerService } from './providerService'
+import { llmProviderRepo } from '../db/llmProviders'
+import { ChatError } from '../errors'
+import { DEFAULT_USER_ID } from '../../shared/userIds'
 import { isAgentEngine, type AgentEngine } from '../../shared/engine'
 import type { AcpRuntimeView } from '../agents/drivers/acp/acpRuntime'
 
@@ -45,6 +49,14 @@ export function conductorContext(agent: AgentRow): ConductorContext {
   }
 }
 
+/** Whether a mode and credential belong to this computer rather than an account. */
+function runsOnLocalSettings(mode: Pick<ChatModeRow, 'managed' | 'userId'> | null, providerId: string | null | undefined): boolean {
+  if (mode && (mode.managed || mode.userId !== DEFAULT_USER_ID)) return false
+  if (!providerId) return true
+  const provider = llmProviderRepo.getOwned(DEFAULT_USER_ID, providerId)
+  return !!provider && !provider.managed
+}
+
 export const chatConductorService = {
   remove(userId: string, chatId: string): void {
     // Only generated rows own these folders. User-added local agents are never
@@ -62,6 +74,11 @@ export const chatConductorService = {
     const existing = agentRepo.list(userId).find((agent) => agent.driverConfig?.conductorChatId === chat.id)
     if (existing && !refresh) return existing
     const mode = chat.modeId ? chatModeService.findMerged(chat.modeId) : chatModeService.resolveEffectiveDefault()
+    // A chat the default profile owns is listed in every profile, so its
+    // runtime must not carry one account's mode or credential.
+    if (userId === DEFAULT_USER_ID && !runsOnLocalSettings(mode, chat.providerId ?? mode?.providerId)) {
+      throw new ChatError('not_configured', 'This chat is shared across profiles, so AI routing needs a local chat mode. Make a local mode the default, or add an agent that can coordinate.')
+    }
     const engine = isAgentEngine(mode?.engine) ? mode.engine : defaultEngineService.current()
     const providerId = chat.providerId ?? mode?.providerId
     const modelId = chat.modelId ?? mode?.modelId
