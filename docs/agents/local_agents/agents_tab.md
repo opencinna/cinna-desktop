@@ -21,12 +21,13 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 ## Core Concepts
 
 - **Agents tab** — Fourth entry in the sidebar tab strip (`Chats | Jobs | Notes | Agents`). Folder agents, active-server agents, direct A2A connections, ACP connections and managed agents share name-only rows with stable type icons and a hover/focus chat shortcut. A row's icon is muted unless the user gave the agent a [color](../agents/agent_colors.md), which then tints it. An `invalid` folder has no shortcut; the page explains its readiness
-- **Agent page** — A shared header (type icon, name, description, folder path, **Open in**, **Settings / Start chat**, **⋯**) over two modes. Chat mode shows a compact runtime summary and the shared new-chat composer. Settings mode shows the full **Runs with** panel, whose first picker is **Runs on**, and eight tabs: **Overview**, **Addons**, **Credentials**, **Commands**, **Schedules**, **Permissions**, **Folder** and, last, **Interface** — the agent's `⌘1`–`⌘9` keyboard shortcut and its color preset, the same tab every other agent page ends with (see [Keyboard Shortcuts](../../ui/keyboard_shortcuts/keyboard_shortcuts.md) and [Agent Colors](../agents/agent_colors.md)). Readiness and action feedback remain available in either mode
+- **Agent page** — A shared header (type icon, name, description, folder path, **Open in**, **Settings / Start chat**, **⋯**) over two modes. Chat mode shows a compact runtime summary and the shared new-chat composer. Settings mode shows the full **Runs with** panel, whose first picker is **Runs on**, and nine tabs: **Overview**, **Addons**, **Credentials**, **Commands**, **Schedules**, **Tasks**, **Permissions**, **Folder** and **Interface** — the agent's `⌘1`–`⌘9` keyboard shortcut and its color preset, the same tab every other agent page ends with (see [Keyboard Shortcuts](../../ui/keyboard_shortcuts/keyboard_shortcuts.md) and [Agent Colors](../agents/agent_colors.md)). A [shared](team_sharing.md) folder agent has one more, **Sharing**, after Interface. Readiness and action feedback remain available in either mode
 - **Bare agent page** — The same chat/settings shell for an adopted folder (one holding `AGENT.md`, `AGENTS.md` or `CLAUDE.md`), with six Settings tabs (no **Commands** or **Schedules**; **Interface** stays). Overview contains the locally stored **Name**, the folder's read-only `Readme` when present, and **Instructions**; Addons is the same tab a kit agent has. Runtime choices are stored in Cinna rather than in the folder
 - **Prompt card** — One prompt document on Overview — a kit agent's Workflow, Entrypoint and Refiner prompts, a bare agent's Instructions — rendered as markdown, clipped to ten lines, and edited in place
 - **Addons** — What the agent runs with beyond its folder: today, MCP connectors attached to it and offered to every one of its sessions. See [Agent Addons](addons.md)
 - **⋯ menu** — What a user does to an agent *occasionally*: Rescan folder, Reveal folder, Open terminal here, Stamp identity (legacy folders only), **Share with the team…** (a kit agent not yet shared, or one whose team version the library no longer has, on a Cinna account with a Team library), and **Delete agent…** — **Remove agent…** for a bare agent, **Remove from this computer…** for a [shared](team_sharing.md) one — which always confirms
-- **Share line** — A [shared agent](team_sharing.md)'s one-line state with the team under the page header ("Up to date with the team", "N changes you haven't shared", …) with **Update** and **Share changes…** beside it. Absent for every other agent
+- **Share badge** — A [shared agent](team_sharing.md)'s state with the team, first in chat mode's row of runtime badges ("Up to date with the team", "N changes not shared", …), with **Update** and **Share changes…** beside it at the badges' height. A click opens Settings → **Sharing**. Absent for every other agent
+- **Sharing tab** — A shared agent's Settings tab: where it is shared, **People**, **History** and **Remove sharing**. See [Team Sharing](team_sharing.md#the-sharing-tab)
 - **Default tool** — The `cli-assistant` or `editor` the Open-in button launches in one click, remembered in the `localAgentsDefaultTool` setting and rewritten by the last pick. Owned by [Open in… (Local Agent Tools)](open_in_tools.md); this page and the New-agent flow are its two writers
 - **File editor** — One in-place editor over one file. A pure state machine in `src/renderer/src/utils/localAgents.ts` plus a thin React shell in `src/renderer/src/hooks/useLocalAgents.ts`
 - **Stamp** — `{mtimeMs, size, hash}` for an editable file, round-tripped through a save so a write over a file that changed underneath is refused. Defined in `src/shared/localAgents.ts`
@@ -43,7 +44,7 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 
 1. Click **Agents** in the sidebar tab strip. Switching to the tab clears the selection and shows its empty pane; it does not choose an arbitrary agent
 2. Groups appear in this order: default local folders (**Local**), enabled agents from the active Cinna server (its host name), other registered folder roots in registration order, **A2A agents**, **ACP agents**, **Managed**. Existing ordering within each group is retained
-3. Rows show the name and type icon only. Folder agents use `SquareTerminal`; Cinna/A2A and WebSocket ACP use `Waypoints`; other ACP and managed agents use `Bot`. Readiness dots, descriptions and credential sublines are absent; runtime and readiness belong on the page. The one addition is a [shared agent](team_sharing.md)'s small people glyph after the name, with a dot inside it when there is something to share or to update; its space exists only on shared rows and the dot sits inside it, so a state change never moves the name
+3. Rows show the name and type icon only. Folder agents use `SquareTerminal`; Cinna/A2A and WebSocket ACP use `Waypoints`; other ACP and managed agents use `Bot`. Readiness dots, descriptions, credential sublines and a [shared agent](team_sharing.md)'s state are absent; runtime, readiness and sharing belong on the page
 4. **Settings → Features → Interface → Show sections in Agents sidebar** defaults on. Turning it off removes headings, section spacing and empty-group placeholders without changing row order or profile membership. With sections enabled, the default root is labelled **Local**; a lone present non-default root retains the existing rule that omits its heading. See [Features Settings](../../ui/settings/settings.md)
 5. Clicking a row explicitly enters chat mode with that agent selected. **Settings** opens the runtime controls and detail tabs; **Start chat** returns to that page's composer. Neither mode switch creates a chat or sends a message. The composer stays mounted while hidden; choosing a different agent remounts it. Draft text and pending selections are also stored by profile and agent surface, so navigating away and returning restores them after remount, independently of the dashboard draft. See [Composer drafts](../../chat/conversation_ui/conversation_ui.md#leaving-and-returning-to-a-draft)
 6. The trailing chat shortcut instead opens the main new-chat screen, selects the agent, focuses its composer and moves the sidebar to **Chats**. It stops propagation, so it does not also navigate to the agent page. Folder shortcuts exclude `invalid` folders; external shortcuts require `enabled`. A successful send from the page's embedded composer moves to the resulting conversation and the Chats sidebar
@@ -113,8 +114,10 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 
 ### A shared agent's page
 
-1. The share line sits under the header from the first frame — whether the agent is shared is read from the list the sidebar already holds, so the line never appears under content that was already there
-2. **Update**, **Share changes…**, the conflict choice and the kept copy's note are described in [Team Sharing](team_sharing.md)
+1. In chat mode the share badge leads the row of runtime badges from the first frame. Whether the agent is shared is read from the list the sidebar already holds (the sidebar still loads it, though its rows no longer show it), so the badge never pushes in ahead of badges already on screen. The **Sharing** tab exists or not from the first frame by the same rule
+2. Clicking the badge opens Settings on the Sharing tab and moves focus to the tab. Update and Share changes, and the dialogs they open, belong to the page rather than to the badge, so a collision that lands after the click still opens its dialog
+3. Once **Remove sharing** has run, the agent's status leaves that list: the badge and the tab go, and a page left on Sharing falls back to Overview
+4. **Update**, **Share changes…**, the conflict choice, the kept copy's note, People, History and Remove sharing are described in [Team Sharing](team_sharing.md)
 
 ### Editing a prompt in place
 
@@ -451,7 +454,7 @@ Sidebar tab strip ── Agents ──► LocalAgentsList ──► LocalAgentPa
                                      │                    │          Settings / Start chat · AgentActionsMenu (rescan, reveal,
                                      │                    │          terminal, stamp, Delete… → local-agent:delete*)
                                      │                    ├─ ReadinessStrip (only when not ok / legacy / drafting)
-                                     │                    ├─ chat: compact RuntimePanel + embedded ChatWorkspace
+                                     │                    ├─ chat: compact RuntimePanel (AgentShareBadge first, shared only) + embedded ChatWorkspace
                                      │                    ├─ Settings: full RuntimePanel (credential, model, engine, secrets)
                                      │                    └─ Settings tabs: Overview ─ StatusCard, ManifestCards,  ┐
                                      │                                       PromptDocCard ×3 (clipped)   ├─ InlineFileEditor
@@ -459,6 +462,7 @@ Sidebar tab strip ── Agents ──► LocalAgentsList ──► LocalAgentPa
                                      │                            Addons   ─ AgentAddonsTab  (see addons.md)
                                      │                            Folder   ─ FolderTab (validation, identity,
                                      │                                       credentials, files, published, runs)
+                                     │                            Sharing  ─ SharingTab (shared only; see team_sharing.md)
                                      │
 NewLocalAgentModal ─┬─ New agent ── name ─► local-agent:create ─► close ─► agent page (chat mode)
                     ├─ Install from catalog ─► CatalogBrowserModal ─► catalogInstall.store
@@ -499,7 +503,7 @@ Settings ── Agents ──► LocalAgentsSettingsSection (roots, readiness, t
 - [Bare Agents & External Roots](bare_agents.md) — the Add-a-folder half of the + dialog, and every difference on the page of an agent adopted that way
 - [Bundles Catalog](../bundles_catalog/bundles_catalog.md) — the catalog, quick install and setup dialog behind **Install from catalog**; the install store is shared with its [inline install](../bundles_catalog/inline_install.md) in the chat picker
 - [Agents Folder Updates](folder_updates.md) — the update line under a settings root that is a git working tree
-- [Team Sharing](team_sharing.md) — the sidebar glyph, the share line, **Share with the team…** and **Remove from this computer…** on a shared agent
+- [Team Sharing](team_sharing.md) — the share badge, the Sharing tab, **Share with the team…** and **Remove from this computer…** on a shared agent
 - [Kit Contract & Manifest Layer](kit_contract.md) — the manifest schema and validator behind every card, and the templates the scaffold and the draft's "untouched?" check read
 - [Open in… (Local Agent Tools)](open_in_tools.md) — the Open-in split button on the agent page, the default tool it writes, and the Developer Tools section in Settings
 - [Agent Addons](addons.md) — the Addons tab: MCP connectors attached to the agent, its count badge, and how they reach every session of the agent
