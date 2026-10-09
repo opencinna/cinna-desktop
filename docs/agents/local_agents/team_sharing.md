@@ -126,7 +126,18 @@ A repository or global git config that names someone keeps it — a developer's 
 
 A Cinna remote is authenticated with the active profile's access token as an `Authorization: Bearer` header, **minted immediately before each git child** and passed as `GIT_CONFIG_*` environment variables scoped to the remote's origin — never in argv, where any process listing shows it, and never in `.git/config`, where it outlives the operation. **Redirects are switched off** for those children: git's default follows a first-request redirect and then sends the rest of the operation, header included, to the new location. A Cinna git endpoint has no reason to redirect, so one that does fails as unreachable rather than handing over the token. Anything git prints is scrubbed of bearer headers, JWTs and URL passwords before it is logged or shown.
 
-Get and Share with the team also refuse a `clone_url` the library answers with on another origin than the profile's server.
+### An instance's git may live on another origin
+
+cinna-core builds `clone_url` from its **backend** address, while a profile is often signed in through the web app's origin that proxies the API — `localhost:5173` against `localhost:8000` in development, an `app.` against an `api.` host in a deployment. So the git origin is **whatever the instance itself says**, and nothing else:
+
+- A `clone_url` from a library listing or from the answer to creating an entry, fetched over that profile's session, teaches this machine that the instance's git lives at that origin. The list is kept **in main**, in `<userData>/team-library-trust.json`, so it holds from the first launch before any listing has loaded — not in the settings store, which the renderer can write, and never read from the folder
+- A remote is the instance's (`cinna`), and takes its profile's token, only when its git origin is the instance's own or one that instance named. The header is scoped to that origin
+- The folder records its instance in `.git/config` as `cinna.server`, which only **chooses between** instances that already trust the origin. `.git/config` is writable by anything running in the folder — an agent's own turn included — so a remote URL on its word alone would send the token wherever it pointed; such a remote is `external` and gets no token
+- **Plain http** carries a token only when the instance itself is on http or the address is this machine (loopback). Anything but http(s) is refused
+
+### A retry finishes the entry this machine left empty
+
+The library entry is created before the folder is first sent, and its id is recorded in the same main-only file until that send succeeds. If the send fails, a retry hits the name already taken (`409`); when the entry with that name is **the one recorded**, still empty and still maintained by this account, the retry sends there. Any other entry under the name — a teammate's, one created elsewhere, one with content — stays a refusal with the server's sentence. An entry left empty by a build of the app before this rule has no record and has to be removed on the server.
 
 ### Get refuses anything already here
 
@@ -182,6 +193,6 @@ Catalog (Team library) / status line / ⋯ menu / Inbox card / blocked-job row
 
 ## Not verified
 
-- **Never run against a real Cinna server.** The server half — the git host at `/git/<repo_id>.git` and the library API (`GET /api/v1/library`, `POST /api/v1/library/agents`) — does not exist in cinna-core yet. The desktop is built against the agreed interface; its field names (`repo_id`, `clone_url`, `head_sha`, `updated_at`, `access`, `maintainers`, `manifest`, `pushed_by`) and its auth (Bearer header on git-over-HTTPS) are what was agreed, not what was observed. Until it ships, every Cinna account sees an empty Team library and **Share with the team** fails at the `POST`
+- **Barely run against a real Cinna server.** The server half — the git host at `/git/<repo_id>.git` and the library API (`GET /api/v1/library`, `POST /api/v1/library/agents`) — was built in parallel against the agreed interface. One run of Share with the team against a local cinna-core found the git-origin mismatch above; the rest of the flow (send, Get, Update, push refusals) has not been observed end to end
 - The git verbs are covered by unit tests over real repositories (bare remotes, two clones, the real binary) and a local HTTP server that checks the header scoping and the redirect refusal. The service is tested over real folders with the library and token mocked. No end-to-end spec drives these surfaces yet
 - That a `403` from the listing means "this role has no library" rather than "this session is broken" is an assumption about the server's behaviour

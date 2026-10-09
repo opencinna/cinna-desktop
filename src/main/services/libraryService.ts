@@ -19,6 +19,7 @@ import { userRepo } from '../db/users'
 import { cinnaFetch } from './cinna-http'
 import { CinnaApiError } from '../errors'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
+import { libraryTrust } from './libraryTrust'
 import { createLogger } from '../logger/logger'
 import { SHARING_CHANGED_CHANNEL } from '../../shared/agentSharing'
 import type { LibraryAccess, LibraryMaintainer } from '../../shared/agentSharing'
@@ -198,6 +199,8 @@ export const libraryService = {
         throw err
       }
     }
+    // This instance, answering this profile's session, says where its git is.
+    for (const agent of agents) libraryTrust.learn(host, agent.cloneUrl)
     const listing: CachedListing = { host, agents, fetchedAt: new Date() }
     const before = signature(cache.get(userId))
     cache.set(userId, listing)

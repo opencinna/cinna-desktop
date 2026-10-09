@@ -820,14 +820,47 @@ const NOT_SHARED_COUNTS: ShareCounts = {
  * Whether a folder is its own repository with an `origin`, without counting
  * anything. Cheap: two local git reads.
  */
-export async function readShareRemote(
-  dir: string
-): Promise<{ ownRepo: boolean; originUrl: string | null; refusal: ShareRefusal | null }> {
+export async function readShareRemote(dir: string): Promise<{
+  ownRepo: boolean
+  originUrl: string | null
+  /** The Cinna instance this folder was shared through, as {@link setCinnaServer} recorded it. */
+  cinnaServer: string | null
+  refusal: ShareRefusal | null
+}> {
   const gitPath = await resolveGit()
-  if (!gitPath) return { ownRepo: false, originUrl: null, refusal: 'git_missing' }
-  if (!(await isOwnRepo(gitPath, dir))) return { ownRepo: false, originUrl: null, refusal: 'not_shared' }
-  const originUrl = await originUrlOf(gitPath, dir)
-  return { ownRepo: true, originUrl, refusal: originUrl === null ? 'not_shared' : null }
+  if (!gitPath) return { ownRepo: false, originUrl: null, cinnaServer: null, refusal: 'git_missing' }
+  if (!(await isOwnRepo(gitPath, dir))) {
+    return { ownRepo: false, originUrl: null, cinnaServer: null, refusal: 'not_shared' }
+  }
+  const [originUrl, server] = await Promise.all([
+    originUrlOf(gitPath, dir),
+    run(gitPath, dir, ['config', '--get', CINNA_SERVER_KEY], LOCAL_TIMEOUT_MS)
+  ])
+  const cinnaServer = server.ok && server.stdout.trim() !== '' ? server.stdout.trim() : null
+  return { ownRepo: true, originUrl, cinnaServer, refusal: originUrl === null ? 'not_shared' : null }
+}
+
+/**
+ * The `.git/config` key naming the Cinna instance (its API origin) a folder
+ * was shared through or got from.
+ *
+ * Needed because an instance's git may live on a different origin from its
+ * API — cinna-core builds `clone_url` from its backend address, while a
+ * profile is often signed in through the web app's origin that proxies the
+ * API (`localhost:5173` against `localhost:8000` in development, `app.` against
+ * `api.` in a deployment). Without it, which profile's token a remote takes
+ * would be known only once that profile's library listing had loaded. In
+ * `.git/config`, so it is per machine, never part of what is shared, and not a
+ * secret.
+ */
+const CINNA_SERVER_KEY = 'cinna.server'
+
+/** Record which Cinna instance a shared folder belongs to. False when git refused. */
+export async function setCinnaServer(dir: string, serverOrigin: string): Promise<boolean> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return false
+  const out = await run(gitPath, dir, ['config', CINNA_SERVER_KEY, serverOrigin], LOCAL_TIMEOUT_MS)
+  return out.ok
 }
 
 /**
@@ -1489,6 +1522,7 @@ export const gitService = {
   updateGitRepo,
   looksLikeGitRepo,
   readShareRemote,
+  setCinnaServer,
   readShareStatus,
   commitAll,
   pullRebaseClean,

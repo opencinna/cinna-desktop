@@ -29,6 +29,8 @@ const PROFILE = 'profile-cinna'
 const OTHER = 'profile-other'
 const HOST = 'https://cinna.test'
 const OTHER_HOST = 'https://other.test'
+/** Where the HOST instance's git lives — its backend, not the origin the profile signed in through. */
+const GIT_HOST = 'https://api.cinna.test'
 
 const holder = vi.hoisted(() => ({ current: null as TestDatabase | null }))
 const cinnaFetch = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>())
@@ -109,7 +111,10 @@ const { scaffoldService } = await import('./scaffoldService')
 const { scannerService } = await import('./scannerService')
 const { turnLock } = await import('./turnLock')
 const { libraryService } = await import('../libraryService')
-const { sharingService, commitIdentity } = await import('./sharingService')
+const { sharingService, commitIdentity, parseRemote } = await import('./sharingService')
+const { gitService } = await import('./gitService')
+const { libraryTrust, acceptableGitOrigin } = await import('../libraryTrust')
+const { CinnaApiError } = await import('../../errors')
 const { folderAgentId } = await import('../../../shared/localAgents')
 const { CinnaReauthRequired } = await import('../../auth/cinna-oauth')
 
@@ -167,6 +172,7 @@ beforeEach(async () => {
   libraryService._reset()
   cinnaFetch.mockReset()
   getCinnaAccessToken.mockClear()
+  libraryTrust._reset(join(mkdtempSync(join(tmpdir(), 'cinna-trust-')), 'trust.json'))
   publishEvent.mockClear()
   manifestWrite.fail = false
   workshop = mkdtempSync(join(tmpdir(), 'cinna-sharing-'))
@@ -404,12 +410,78 @@ describe('get', () => {
     expect((await sharingService.get(USER, 'gone')).refusal).toBe('not_in_library')
   }, 30_000)
 
-  it('refuses a listing whose address is on another server, so the token never goes there', async () => {
-    listed({ ...libraryAgent('r5', 'delta', null), clone_url: 'https://evil.test/git/r5.git' })
+  it('refuses a listing whose address is not a web one, so the token never goes there', async () => {
+    listed({ ...libraryAgent('r5', 'delta', null), clone_url: 'file:///tmp/r5.git' })
     const result = await sharingService.get(USER, 'r5')
     expect(result.refusal).toBe('failed')
     expect(getCinnaAccessToken).not.toHaveBeenCalled()
   }, 30_000)
+
+  it('clones from the git origin the instance names, scoping the token to it, and records the instance', async () => {
+    // cinna-core builds clone_url from its backend address; the profile signed
+    // in through the web app's origin. Both are the same instance.
+    listed({ ...libraryAgent('r6', 'delta', null), clone_url: `${GIT_HOST}/git/r6.git` })
+    const clone = vi.spyOn(gitService, 'clone').mockImplementation(async (_url, target) => {
+      mkdirSync(target, { recursive: true })
+      git(target, 'init', '-q', '-b', 'main', '.')
+      writeFileSync(join(target, 'cinna-agent.json'), JSON.stringify({ id: 'delta-id', name: 'Delta' }))
+      return { done: true, refusal: null, detail: null }
+    })
+    try {
+      await sharingService.get(USER, 'r6')
+      expect(clone).toHaveBeenCalledTimes(1)
+      const [url, , auth] = clone.mock.calls[0]
+      expect(url).toBe(`${GIT_HOST}/git/r6.git`)
+      expect(auth).toMatchObject({ kind: 'cinna', origin: GIT_HOST })
+      expect(git(join(workshop, 'Local', 'delta'), 'config', '--get', 'cinna.server').trim()).toBe(HOST)
+    } finally {
+      clone.mockRestore()
+    }
+  }, 30_000)
+})
+
+describe('an instance whose git is on another origin', () => {
+  it('is the instance\'s from launch, before any listing, once that instance has named the origin', async () => {
+    // An earlier session's listing (persisted by libraryTrust) named GIT_HOST.
+    libraryTrust.learn(HOST, `${GIT_HOST}/git/r0.git`)
+    makeOwnRepo(`${GIT_HOST}/git/r7.git`)
+    git(agentDir, 'config', 'cinna.server', HOST)
+    const status = await sharingService.status(USER, agentId, false)
+    expect(status?.remote).toMatchObject({ kind: 'cinna', repoId: 'r7', host: HOST })
+    expect(status?.state).not.toBe('other_account')
+  }, 30_000)
+
+  it('never sends the token to an origin only the folder\'s own config vouches for', async () => {
+    // What an agent running in the folder could write: its instance, and a remote elsewhere.
+    makeOwnRepo('https://evil.test/git/r7.git')
+    git(agentDir, 'config', 'cinna.server', HOST)
+    const status = await sharingService.status(USER, agentId, false)
+    expect(status?.remote.kind).toBe('external')
+    await sharingService.update(USER, agentId)
+    await sharingService.shareChanges(USER, agentId, 'x')
+    expect(getCinnaAccessToken).not.toHaveBeenCalled()
+  }, 60_000)
+
+  it('sends a token over plain http only for an http instance or this machine', () => {
+    expect(acceptableGitOrigin('https://cinna.test', 'http://api.cinna.test/git/r.git')).toBeNull()
+    expect(acceptableGitOrigin('https://cinna.test', 'https://api.cinna.test/git/r.git')).toBe('https://api.cinna.test')
+    expect(acceptableGitOrigin('http://localhost:5173', 'http://localhost:8000/git/r.git')).toBe('http://localhost:8000')
+    expect(acceptableGitOrigin('https://cinna.test', 'http://127.0.0.1:8000/git/r.git')).toBe('http://127.0.0.1:8000')
+    expect(acceptableGitOrigin('https://cinna.test', 'file:///tmp/r.git')).toBeNull()
+  })
+
+  it('is learned from the instance\'s own listing for a folder that recorded nothing', async () => {
+    makeOwnRepo(`${GIT_HOST}/git/r8.git`)
+    expect((await sharingService.status(USER, agentId, false))?.remote.kind).toBe('external')
+    listed({ ...libraryAgent('r8', 'alpha', null), clone_url: `${GIT_HOST}/git/r8.git` })
+    await sharingService.library(USER, true)
+    expect((await sharingService.status(USER, agentId, false))?.remote).toMatchObject({ kind: 'cinna', host: HOST })
+  }, 30_000)
+
+  it('stays external when no instance on this machine named that origin', () => {
+    expect(parseRemote(`${GIT_HOST}/git/r9.git`, new Set([HOST])).kind).toBe('external')
+    expect(parseRemote(`${GIT_HOST}/git/r9.git`, new Set([HOST]), 'https://unknown.test').kind).toBe('external')
+  })
 })
 
 describe('which account a remote belongs to', () => {
@@ -474,6 +546,55 @@ describe('which account a remote belongs to', () => {
 })
 
 describe('share with the team', () => {
+  it('finishes an entry an earlier attempt created and never sent to, instead of failing on the name', async () => {
+    const empty = { ...libraryAgent('r10', 'alpha', null), clone_url: `${GIT_HOST}/git/r10.git`, head_sha: null, access: 'maintain' }
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { method?: string } | undefined)?.method === 'POST') {
+        throw new CinnaApiError('request_failed', 'Cinna API 409', 'An agent called alpha is already in the team library.', 409)
+      }
+      return { agents: [empty], mirrors: [] }
+    })
+    const init = vi.spyOn(gitService, 'initWithRemote').mockResolvedValue({ done: true, refusal: null, detail: null })
+    // The earlier attempt on this machine recorded the entry it created.
+    libraryTrust.setPending(HOST, 'alpha', 'r10')
+    try {
+      const result = await sharingService.shareWithTeam(USER, agentId, {})
+      expect(result.done).toBe(true)
+      expect(init.mock.calls[0][1]).toBe(`${GIT_HOST}/git/r10.git`)
+      expect(init.mock.calls[0][2]).toMatchObject({ kind: 'cinna', origin: GIT_HOST })
+      expect(libraryTrust.pending(HOST, 'alpha')).toBeNull()
+    } finally {
+      init.mockRestore()
+    }
+  }, 30_000)
+
+  it('does not take over an empty entry under the same name that this machine did not create', async () => {
+    const empty = { ...libraryAgent('r12', 'alpha', null), head_sha: null, access: 'maintain' }
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { method?: string } | undefined)?.method === 'POST') {
+        throw new CinnaApiError('request_failed', 'Cinna API 409', 'An agent called alpha is already in the team library.', 409)
+      }
+      return { agents: [empty], mirrors: [] }
+    })
+    const result = await sharingService.shareWithTeam(USER, agentId, {})
+    expect(result.refusal).toBe('failed')
+    expect(existsSync(join(agentDir, '.git'))).toBe(false)
+  }, 30_000)
+
+  it('keeps refusing a taken name that already has content', async () => {
+    const taken = { ...libraryAgent('r11', 'alpha', null), access: 'maintain' }
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { method?: string } | undefined)?.method === 'POST') {
+        throw new CinnaApiError('request_failed', 'Cinna API 409', 'An agent called alpha is already in the team library.', 409)
+      }
+      return { agents: [taken], mirrors: [] }
+    })
+    const result = await sharingService.shareWithTeam(USER, agentId, {})
+    expect(result.refusal).toBe('failed')
+    expect(result.detail).toBe('An agent called alpha is already in the team library.')
+    expect(existsSync(join(agentDir, '.git'))).toBe(false)
+  }, 30_000)
+
   it('refuses a folder that already records a secret before any library entry is created', async () => {
     git(agentDir, 'init', '-q', '-b', 'main', '.')
     writeFileSync(join(agentDir, '.env'), 'API_KEY=mine\n')

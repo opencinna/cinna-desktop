@@ -33,6 +33,7 @@ import { CinnaReauthRequired } from '../../auth/cinna-oauth'
 import { manifestPath, readManifest, writeManifest } from '../../kit/manifestIo'
 import { aiFunctions } from '../aiFunctionsService'
 import { SHARE_SUMMARY_SYSTEM_PROMPT } from '../aiFunctionPrompts'
+import { libraryTrust } from '../libraryTrust'
 import { libraryService, toLibraryEntry, type CachedListing, type LibraryEntry } from '../libraryService'
 import { createLogger } from '../../logger/logger'
 import { AGENTS_SUBDIR, folderAgentId } from '../../../shared/localAgents'
@@ -91,11 +92,33 @@ function realOrSelf(path: string): string {
   }
 }
 
+/** Which instances may claim a git origin — `libraryTrust` in the app, a stub in tests. */
+export interface GitOriginTrust {
+  trusts: (serverOrigin: string, gitOrigin: string) => boolean
+  serversFor: (gitOrigin: string) => string[]
+}
+
+const NO_TRUST: GitOriginTrust = { trusts: (server, origin) => server === origin, serversFor: () => [] }
+
 /**
  * Read `origin` as a remote. `cinna` when the URL is `…/git/<repo_id>.git` on
- * the origin of a Cinna profile this machine has; anything else is `external`.
+ * a git origin a Cinna instance this machine has a profile for **has itself
+ * named** — its own origin, or one its listing or create answer gave
+ * (`libraryTrust`). Anything else is `external`. `host` is the instance's API
+ * origin, which is what picks the profile.
+ *
+ * The folder's recorded `cinna.server` only chooses *between* instances that
+ * trust the origin; it can never make an origin trusted. `.git/config` is
+ * writable by anything running in the folder, and a remote URL taken on its
+ * word would send the profile's token wherever it pointed.
  */
-export function parseRemote(originUrl: string, cinnaHosts: Set<string>): AgentRemote {
+export function parseRemote(
+  originUrl: string,
+  cinnaHosts: Set<string>,
+  recordedServer: string | null = null,
+  trust: GitOriginTrust = NO_TRUST,
+  preferredServer: string | null = null
+): AgentRemote {
   const external: AgentRemote = {
     kind: 'external',
     url: redactRemoteUrl(originUrl),
@@ -111,8 +134,27 @@ export function parseRemote(originUrl: string, cinnaHosts: Set<string>): AgentRe
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return external
   const match = parsed.pathname.match(/\/git\/([^/]+)\.git\/?$/)
-  if (!match || !cinnaHosts.has(parsed.origin)) return external
-  return { ...external, kind: 'cinna', repoId: decodeURIComponent(match[1]), host: parsed.origin }
+  if (!match) return external
+  const candidates = [parsed.origin, ...trust.serversFor(parsed.origin)].filter(
+    (server, index, all) => all.indexOf(server) === index && cinnaHosts.has(server) && trust.trusts(server, parsed.origin)
+  )
+  if (candidates.length === 0) return external
+  const server =
+    (recordedServer !== null && candidates.includes(recordedServer) ? recordedServer : null) ??
+    (preferredServer !== null && candidates.includes(preferredServer) ? preferredServer : null) ??
+    candidates[0]
+  return { ...external, kind: 'cinna', repoId: decodeURIComponent(match[1]), host: server }
+}
+
+/** {@link parseRemote} with this machine's profiles and what their instances have said. */
+function remoteOf(originUrl: string, recordedServer: string | null): AgentRemote {
+  return parseRemote(
+    originUrl,
+    libraryService.knownHosts(),
+    recordedServer,
+    libraryTrust,
+    libraryService.hostOf(getProfileScopeUserId())
+  )
 }
 
 function result(
@@ -153,7 +195,7 @@ async function locateShared(userId: string, agentId: string): Promise<SharedAgen
   return {
     ...kit,
     originUrl: remote.originUrl,
-    remote: parseRemote(remote.originUrl, libraryService.knownHosts())
+    remote: remoteOf(remote.originUrl, remote.cinnaServer)
   }
 }
 
@@ -162,11 +204,19 @@ async function locateShared(userId: string, agentId: string): Promise<SharedAgen
  * `other_account` when that profile is not signed in to the remote's
  * instance — in which case nothing reaches the network.
  */
-function authFor(remote: AgentRemote): RemoteAuth | 'other_account' {
+function authFor(shared: Pick<SharedAgent, 'remote' | 'originUrl'>): RemoteAuth | 'other_account' {
+  const { remote } = shared
   if (remote.kind !== 'cinna' || remote.host === null) return { kind: 'external' }
   const profile = getProfileScopeUserId()
   if (libraryService.hostOf(profile) !== remote.host) return 'other_account'
-  return { kind: 'cinna', origin: remote.host, token: () => getCinnaAccessToken(profile) }
+  // The header is scoped to where git actually goes, which may not be the
+  // instance's API origin; `parseRemote` only calls it `cinna` when this
+  // instance recorded or listed that origin.
+  const gitOrigin = originOf(shared.originUrl)
+  // `parseRemote` already required this; checked again where the token is
+  // handed out, so no later caller can build a `cinna` remote around it.
+  if (gitOrigin === null || !libraryTrust.trusts(remote.host, gitOrigin)) return { kind: 'external' }
+  return { kind: 'cinna', origin: gitOrigin, token: () => getCinnaAccessToken(profile) }
 }
 
 /** The active profile's listing when it is for `host`. */
@@ -226,7 +276,7 @@ function buildStatus(
 
 /** The status of an already-located shared agent. */
 async function statusOf(agentId: string, shared: SharedAgent, fetch: boolean): Promise<AgentShareStatus> {
-  const auth = authFor(shared.remote)
+  const auth = authFor(shared)
   if (auth === 'other_account') {
     // Counts from what is on disk; no listing, no network, no token.
     const counts = await gitService.readShareStatus(shared.dir, null, false)
@@ -372,6 +422,29 @@ function freeMineDir(dir: string): string {
 }
 
 /**
+ * The library entry an earlier Share with the team **on this machine**
+ * created and never sent anything to, so a retry finishes it instead of
+ * failing on the name. Only the exact repo id that attempt recorded
+ * (`libraryTrust.setPending`), still empty and still maintained by this
+ * account: a teammate's entry under the same name, or one that has content,
+ * stays a refusal.
+ */
+async function unfinishedEntry(profile: string, host: string, slug: string): Promise<LibraryEntry | null> {
+  const repoId = libraryTrust.pending(host, slug)
+  if (repoId === null) return null
+  let listing: CachedListing | null
+  try {
+    listing = await libraryService.refresh(profile)
+  } catch {
+    return null
+  }
+  const entry = listing?.agents.find((agent) => agent.repoId === repoId) ?? null
+  if (!entry || entry.access !== 'maintain' || entry.headSha !== '') return null
+  logger.info('finishing a library entry an earlier share created and never sent to')
+  return entry
+}
+
+/**
  * Share with the team, once the folder has cleared its preflight: create the
  * library entry, then record the folder in place and send it there.
  */
@@ -392,20 +465,27 @@ async function createAndSend(
     entry = toLibraryEntry(created ?? {})
   } catch (err) {
     if (err instanceof CinnaApiError && err.code !== 'reauth_required') {
-      return refused('failed', err.detail ?? err.message)
+      entry = err.status === 409 ? await unfinishedEntry(profile, host, input.slug) : null
+      if (!entry) return refused('failed', err.detail ?? err.message)
+    } else {
+      throw err
     }
-    throw err
   }
   if (!entry) return refused('failed', 'The team library did not answer with a place to send the agent.')
-  if (originOf(entry.cloneUrl) !== host) {
-    return refused('failed', 'The team library answered with an address on another server.')
-  }
+  const gitOrigin = libraryTrust.learn(host, entry.cloneUrl)
+  if (gitOrigin === null) return refused('failed', UNSAFE_ADDRESS)
+  // Until the first send lands, a retry may finish this entry — and only this one.
+  libraryTrust.setPending(host, input.slug, entry.repoId)
 
-  const auth: RemoteAuth = { kind: 'cinna', origin: host, token: () => getCinnaAccessToken(profile) }
+  const auth: RemoteAuth = { kind: 'cinna', origin: gitOrigin, token: () => getCinnaAccessToken(profile) }
   const action = await gitService.initWithRemote(kit.dir, entry.cloneUrl, auth, {
     workshopRoot: kit.root.path,
     identity: commitIdentity({ kind: 'cinna', host })
   })
+  // Recorded whether or not the first send went through: once `origin` is
+  // set the folder is this instance's, and a retry is a Share changes.
+  if (existsSync(join(kit.dir, '.git'))) await recordServer(kit.dir, host)
+  if (action.done) libraryTrust.clearPending(host, input.slug)
   await refreshListing()
   settle(userId, kit.root.id)
   return result(action, await sharingService.status(userId, agentId, false))
@@ -461,7 +541,7 @@ export const sharingService = {
   async shareChanges(userId: string, agentId: string, message: string): Promise<AgentShareResult> {
     const shared = await locateShared(userId, agentId)
     if (!shared) return refused('not_shared')
-    const auth = authFor(shared.remote)
+    const auth = authFor(shared)
     if (auth === 'other_account') return result({ done: false, refusal: 'other_account' }, await statusOf(agentId, shared, false))
     const lock = lockOrRefuse(agentId)
     if (!lock) return result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false))
@@ -488,7 +568,7 @@ export const sharingService = {
   async update(userId: string, agentId: string): Promise<AgentShareResult> {
     const shared = await locateShared(userId, agentId)
     if (!shared) return refused('not_shared')
-    const auth = authFor(shared.remote)
+    const auth = authFor(shared)
     if (auth === 'other_account') return result({ done: false, refusal: 'other_account' }, await statusOf(agentId, shared, false))
     const lock = lockOrRefuse(agentId)
     if (!lock) return result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false))
@@ -515,7 +595,7 @@ export const sharingService = {
   async useTeamVersion(userId: string, agentId: string): Promise<AgentShareResult> {
     const shared = await locateShared(userId, agentId)
     if (!shared) return refused('not_shared')
-    const auth = authFor(shared.remote)
+    const auth = authFor(shared)
     if (auth === 'other_account') return result({ done: false, refusal: 'other_account' }, await statusOf(agentId, shared, false))
     const lock = lockOrRefuse(agentId)
     if (!lock) return result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false))
@@ -687,9 +767,8 @@ export const sharingService = {
     }
     if (!entry) return refused('not_in_library')
     if (!SLUG_PATTERN.test(entry.slug)) return refused('failed', 'The library names this agent with an unusable folder name.')
-    if (originOf(entry.cloneUrl) !== host) {
-      return refused('failed', 'The team library answered with an address on another server.')
-    }
+    const gitOrigin = libraryTrust.learn(host, entry.cloneUrl)
+    if (gitOrigin === null) return refused('failed', UNSAFE_ADDRESS)
 
     const root = agentsHomeService.requireRoot(userId)
     const target = join(root.path, AGENTS_SUBDIR, entry.slug)
@@ -703,9 +782,10 @@ export const sharingService = {
       if (same) return refused('exists', same.name)
     }
 
-    const auth: RemoteAuth = { kind: 'cinna', origin: host, token: () => getCinnaAccessToken(profile) }
+    const auth: RemoteAuth = { kind: 'cinna', origin: gitOrigin, token: () => getCinnaAccessToken(profile) }
     const cloned = await gitService.clone(entry.cloneUrl, target, auth, root.path)
     if (!cloned.done) return result(cloned, null)
+    await recordServer(target, host)
 
     let manifestId: string | undefined
     try {
@@ -778,8 +858,8 @@ async function teamChangeOf(
 ): Promise<TeamChangedInboxItem | null> {
   const remote = await gitService.readShareRemote(agent.path)
   if (!remote.ownRepo || remote.originUrl === null) return null
-  const parsed = parseRemote(remote.originUrl, new Set([host]))
-  if (parsed.kind !== 'cinna' || parsed.repoId === null) return null
+  const parsed = remoteOf(remote.originUrl, remote.cinnaServer)
+  if (parsed.kind !== 'cinna' || parsed.repoId === null || parsed.host !== host) return null
   const entry = byRepo.get(parsed.repoId)
   if (!entry || entry.headSha === '') return null
   if (!(await gitService.isBehindLibrary(agent.path, entry.headSha))) return null
@@ -835,6 +915,16 @@ function originOf(url: string): string | null {
   }
 }
 
+const UNSAFE_ADDRESS =
+  'The team library answered with an address this app will not send your sign-in to (not https).'
+
+/** Remember which instance a folder is shared through; a failure only costs recognition until the listing loads. */
+async function recordServer(dir: string, serverOrigin: string): Promise<void> {
+  if (!(await gitService.setCinnaServer(dir, serverOrigin))) {
+    logger.warn('could not record the Cinna instance of a shared folder')
+  }
+}
+
 /** This machine's copies of library agents: by repository (from `origin`) and by manifest id. */
 async function localCopies(
   userId: string,
@@ -852,8 +942,8 @@ async function localCopies(
   for (const agent of repoCandidates(userId)) {
     const remote = await gitService.readShareRemote(agent.path)
     if (!remote.ownRepo || remote.originUrl === null) continue
-    const parsed = parseRemote(remote.originUrl, new Set([listing.host]))
-    if (parsed.kind === 'cinna' && parsed.repoId !== null) {
+    const parsed = remoteOf(remote.originUrl, remote.cinnaServer)
+    if (parsed.kind === 'cinna' && parsed.repoId !== null && parsed.host === listing.host) {
       byRepo.set(parsed.repoId, { agentId: agent.id, dir: agent.path })
       if (agent.manifestId) byManifest.set(agent.manifestId, { agentId: agent.id, dir: agent.path })
     }
