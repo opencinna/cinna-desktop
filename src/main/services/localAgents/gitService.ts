@@ -865,6 +865,72 @@ export async function setCinnaServer(dir: string, serverOrigin: string): Promise
 }
 
 /**
+ * Forget which Cinna instance a folder was shared through — Remove sharing.
+ * Best effort: an unset key is the end state either way.
+ */
+export async function unsetCinnaServer(dir: string): Promise<boolean> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return false
+  const out = await run(gitPath, dir, ['config', '--unset-all', CINNA_SERVER_KEY], LOCAL_TIMEOUT_MS)
+  if (out.ok) return true
+  // Exit 5 — the key was not set — is not a failure; anything else may be.
+  const still = await run(gitPath, dir, ['config', '--get', CINNA_SERVER_KEY], LOCAL_TIMEOUT_MS)
+  return !still.ok
+}
+
+/** One version of a folder's history as the Sharing tab lists it. */
+export interface FolderVersion {
+  note: string
+  author: string
+  date: string
+  unsent: boolean
+}
+
+/** Most versions the Sharing tab lists. */
+export const HISTORY_LIMIT = 30
+
+/**
+ * `<sha>\x1f<subject>\x1f<author>\x1f<iso date>\x1e` per version. Written with
+ * git's own `%x1f`/`%x1e` escapes, so argv carries no control characters, and
+ * split on the record separator rather than on newlines: a subject is one
+ * line, but nothing else about a version's fields is promised.
+ */
+const HISTORY_FORMAT = '--format=%H%x1f%s%x1f%an%x1f%aI%x1e'
+
+/**
+ * A folder's versions, newest first, at most {@link HISTORY_LIMIT}. Each is
+ * marked `unsent` when it is in `origin/main..HEAD` — recorded here, not on
+ * the team version. Without an `origin/main` (never fetched, or not shared)
+ * none is marked: there is nothing to measure against. Empty for a folder
+ * that is not its own repository or has recorded nothing.
+ */
+export async function readHistory(dir: string, limit = HISTORY_LIMIT): Promise<FolderVersion[]> {
+  const gitPath = await resolveGit()
+  if (!gitPath || !(await isOwnRepo(gitPath, dir))) return []
+  if ((await headOf(gitPath, dir)) === null) return []
+  const log = await run(gitPath, dir, ['log', '-n', String(limit), HISTORY_FORMAT, 'HEAD'], LOCAL_TIMEOUT_MS)
+  if (!log.ok) return []
+  const team = await run(
+    gitPath,
+    dir,
+    ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main'],
+    LOCAL_TIMEOUT_MS
+  )
+  const unsent = new Set<string>()
+  if (team.ok && team.stdout.trim() !== '') {
+    const ahead = await run(gitPath, dir, ['rev-list', 'refs/remotes/origin/main..HEAD'], LOCAL_TIMEOUT_MS)
+    if (ahead.ok) for (const sha of lines(ahead.stdout)) unsent.add(sha.trim())
+  }
+  const out: FolderVersion[] = []
+  for (const record of log.stdout.split('\x1e')) {
+    const [sha, note, author, date] = record.replace(/^\n/, '').split('\x1f')
+    if (!sha || sha.trim() === '') continue
+    out.push({ note: note ?? '', author: author ?? '', date: (date ?? '').trim(), unsent: unsent.has(sha.trim()) })
+  }
+  return out
+}
+
+/**
  * A shared folder's counts against the team version.
  *
  * `fetch` reaches the network; without it the counts are as of the last
@@ -1837,6 +1903,8 @@ export const gitService = {
   looksLikeGitRepo,
   readShareRemote,
   setCinnaServer,
+  unsetCinnaServer,
+  readHistory,
   readShareStatus,
   commitAll,
   pullRebaseClean,

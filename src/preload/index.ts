@@ -86,10 +86,16 @@ import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } 
 import type { CinnaCliUpdate } from '../shared/cinnaCli'
 import {
   SHARING_CHANGED_CHANNEL,
+  type AgentPeopleDto,
   type AgentShareResult,
   type AgentShareStatus,
+  type AgentVersionDto,
+  type LibraryGrantInput,
   type LibraryListingDto,
+  type PersonSearchResult,
+  type SetPeopleResult,
   type ShareWithTeamDraft,
+  type ShareWithTeamInput,
   type SharingOutcome
 } from '../shared/agentSharing'
 import type { RemoteAgentMetadata, BundleVersionInfo } from '../shared/agentMetadata'
@@ -1968,12 +1974,30 @@ const api = {
     /** Name and description from the manifest, for the Share with the team dialog. */
     shareWithTeamDraft: (agentId: string): Promise<SharingOutcome<ShareWithTeamDraft>> =>
       ipcRenderer.invoke('sharing:share-with-team-draft', { agentId }),
-    /** Create the agent in the active profile's team library and send this folder there. */
+    /**
+     * Create the agent in the active profile's team library, give the chosen
+     * people access, and send this folder there.
+     */
     shareWithTeam: (
       agentId: string,
-      input: ShareWithTeamDraft
+      input: ShareWithTeamInput
     ): Promise<SharingOutcome<AgentShareResult>> =>
       ipcRenderer.invoke('sharing:share-with-team', { agentId, ...input }),
+    /** Who has access to a shared agent; null when the active account cannot speak for its library entry. */
+    people: (agentId: string): Promise<SharingOutcome<AgentPeopleDto | null>> =>
+      ipcRenderer.invoke('sharing:people', { agentId }),
+    /** Replace who has access with this whole list. */
+    setPeople: (agentId: string, people: LibraryGrantInput[]): Promise<SharingOutcome<SetPeopleResult>> =>
+      ipcRenderer.invoke('sharing:set-people', { agentId, people }),
+    /** People on the active account's server, by name or email (two characters at least). */
+    searchPeople: (query: string): Promise<SharingOutcome<PersonSearchResult[]>> =>
+      ipcRenderer.invoke('sharing:search-people', { query }),
+    /** This folder's versions, newest first, at most 30. */
+    history: (agentId: string): Promise<SharingOutcome<AgentVersionDto[]>> =>
+      ipcRenderer.invoke('sharing:history', { agentId }),
+    /** Disconnect this folder from the team; optionally delete it from the team library first. */
+    unshare: (agentId: string, deleteFromLibrary: boolean): Promise<SharingOutcome<AgentShareResult>> =>
+      ipcRenderer.invoke('sharing:unshare', { agentId, deleteFromLibrary }),
     /** The active Cinna profile's team library; null for a profile that is not a Cinna one. */
     library: (refresh?: boolean): Promise<SharingOutcome<LibraryListingDto | null>> =>
       ipcRenderer.invoke('sharing:library', { refresh }),

@@ -25,7 +25,7 @@ import { basename, dirname, join } from 'node:path'
 import { realpathSync } from 'node:fs'
 import { publishEvent } from '../../host/events'
 import { userRepo } from '../../db/users'
-import { getCinnaAccessToken } from '../../auth/cinna-tokens'
+import { getCinnaAccessToken, getStoredCinnaSubject } from '../../auth/cinna-tokens'
 import { getProfileScopeUserId } from '../../auth/scope'
 import { cinnaFetch } from '../cinna-http'
 import { CinnaApiError, LocalAgentError } from '../../errors'
@@ -41,14 +41,23 @@ import { AGENTS_SUBDIR, folderAgentId } from '../../../shared/localAgents'
 import { MANIFEST_FILE, SLUG_PATTERN } from '../../../shared/kit/manifest'
 import {
   SHARING_CHANGED_CHANNEL,
+  type AgentPeopleDto,
   type AgentRemote,
   type AgentShareResult,
   type AgentShareState,
   type AgentShareStatus,
+  type AgentVersionDto,
+  type LibraryAccess,
   type LibraryAgentDto,
+  type LibraryGrantInput,
   type LibraryListingDto,
+  type LibraryPerson,
+  type LibraryPrincipal,
+  type PersonSearchResult,
   type ShareRefusal,
-  type ShareWithTeamDraft
+  type ShareWithTeamDraft,
+  type SetPeopleResult,
+  type ShareWithTeamPerson
 } from '../../../shared/agentSharing'
 import type { TeamChangedInboxItem } from '../../../shared/inbox'
 import type { AgentRootRow } from '../../db/agentRoots'
@@ -469,6 +478,172 @@ async function removedFromLibrary(
   return listing !== null && listing.available && !listing.agents.some((agent) => agent.repoId === remote.repoId)
 }
 
+const ACCESS_VALUES: readonly LibraryAccess[] = ['read', 'write', 'maintain']
+const isAccess = (value: unknown): value is LibraryAccess =>
+  typeof value === 'string' && (ACCESS_VALUES as readonly string[]).includes(value)
+const text = (value: unknown): string => (typeof value === 'string' ? value : '')
+
+/** A library agent's grants, under the profile's API. */
+function grantsPath(repoId: string): string {
+  return `/api/v1/library/agents/${encodeURIComponent(repoId)}/grants`
+}
+
+/** Core's principal: `{ user_id }`, `{ role }` or `"everyone"`. */
+type CorePrincipal = { user_id: string } | { role: string } | 'everyone'
+export interface CoreGrant {
+  principal: CorePrincipal
+  access: LibraryAccess
+}
+
+/** The renderer's grants → the body core's `PUT …/grants` takes. */
+export function toCoreGrants(people: LibraryGrantInput[]): CoreGrant[] {
+  return people.map(({ principal, access }) => ({
+    principal:
+      principal.kind === 'user'
+        ? { user_id: principal.userId }
+        : principal.kind === 'role'
+          ? { role: principal.role }
+          : 'everyone',
+    access
+  }))
+}
+
+/**
+ * Core's grants (`GET …/grants`) → what the People list shows. Read loosely —
+ * a bare array or one under `grants`/`data`, a principal as `"everyone"`, an
+ * object with `user_id` or `role`, the name on the row or on the principal —
+ * and a row this cannot place is dropped rather than shown as someone else.
+ */
+export function fromCoreGrants(body: unknown): LibraryPerson[] {
+  const container = body && typeof body === 'object' ? (body as Record<string, unknown>) : {}
+  const rows = Array.isArray(body)
+    ? body
+    : Array.isArray(container.grants)
+      ? container.grants
+      : Array.isArray(container.data)
+        ? container.data
+        : []
+  return rows.flatMap((raw): LibraryPerson[] => {
+    if (!raw || typeof raw !== 'object') return []
+    const row = raw as Record<string, unknown>
+    const p = row.principal
+    const obj = p && typeof p === 'object' ? (p as Record<string, unknown>) : {}
+    let principal: LibraryPrincipal | null = null
+    if (p === 'everyone' || obj.kind === 'everyone' || obj.everyone === true) principal = { kind: 'everyone' }
+    else if (text(obj.user_id) !== '') principal = { kind: 'user', userId: text(obj.user_id) }
+    else if (text(obj.role) !== '') principal = { kind: 'role', role: text(obj.role) }
+    if (!principal) return []
+    const displayName =
+      text(row.display_name) || text(obj.display_name) || text(row.full_name) || text(obj.full_name) ||
+      text(row.email) || text(obj.email)
+    return [{ principal, access: isAccess(row.access) ? row.access : 'read', displayName }]
+  })
+}
+
+/** The renderer's desired list, checked field by field; null when any row is not a grant. */
+function parseGrantInputs(raw: unknown): LibraryGrantInput[] | null {
+  if (!Array.isArray(raw)) return null
+  const out: LibraryGrantInput[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') return null
+    const row = item as Record<string, unknown>
+    const p = row.principal && typeof row.principal === 'object' ? (row.principal as Record<string, unknown>) : null
+    if (!p || !isAccess(row.access)) return null
+    if (p.kind === 'user' && text(p.userId) !== '') out.push({ principal: { kind: 'user', userId: text(p.userId) }, access: row.access })
+    else if (p.kind === 'role' && text(p.role) !== '') out.push({ principal: { kind: 'role', role: text(p.role) }, access: row.access })
+    else if (p.kind === 'everyone') out.push({ principal: { kind: 'everyone' }, access: row.access })
+    else return null
+  }
+  return out
+}
+
+/** The people Share with the team was given, keeping only well-formed ones. */
+function parseSharePeople(raw: unknown): ShareWithTeamPerson[] {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  return raw.flatMap((item): ShareWithTeamPerson[] => {
+    if (!item || typeof item !== 'object') return []
+    const row = item as Record<string, unknown>
+    const userId = text(row.userId)
+    if (userId === '' || seen.has(userId)) return []
+    seen.add(userId)
+    return [{ userId, access: isAccess(row.access) ? row.access : 'read' }]
+  })
+}
+
+/**
+ * A new entry's grants: whoever maintains it (the creator, on a fresh entry)
+ * as `maintain`, then each chosen person who is not already one of them.
+ */
+function initialGrants(entry: LibraryEntry, people: ShareWithTeamPerson[]): CoreGrant[] {
+  const maintainers = new Set(entry.maintainers.map((m) => m.userId))
+  return toCoreGrants([
+    ...entry.maintainers.map((m) => ({ principal: { kind: 'user' as const, userId: m.userId }, access: 'maintain' as const })),
+    ...people
+      .filter((person) => !maintainers.has(person.userId))
+      .map((person) => ({ principal: { kind: 'user' as const, userId: person.userId }, access: person.access }))
+  ])
+}
+
+/**
+ * A write to the library API, answered as a refusal or the body it returned.
+ *
+ * A 2xx with no JSON body (`invalid_response`) is a write that happened. A
+ * `403` is `no_access` — `cinnaFetch` calls it `reauth_required`, but on a
+ * grant or a delete it is a role, not a dead session. `goneIsDone` makes a
+ * `404` a success (deleting what is already gone). Any other refusal carries
+ * the server's own sentence. A real re-auth still throws, for the prompt.
+ */
+async function libraryWrite(
+  profile: string,
+  path: string,
+  method: 'PUT' | 'DELETE',
+  body?: unknown,
+  goneIsDone = false
+): Promise<{ refusal: ShareRefusal; detail: string | null } | { body: unknown }> {
+  try {
+    return { body: await cinnaFetch<unknown>(profile, path, body === undefined ? { method } : { method, body }) }
+  } catch (err) {
+    if (!(err instanceof CinnaApiError)) throw err
+    if (err.code === 'invalid_response') return { body: null }
+    if (err.status === 404 && goneIsDone) return { body: null }
+    if (err.status === 403) return { refusal: 'no_access', detail: null }
+    if (err.code === 'reauth_required') throw err
+    return { refusal: 'failed', detail: err.detail || err.message }
+  }
+}
+
+/**
+ * The active profile's own account id on its instance, when it is one of
+ * `people` — the stored token's `sub`, read without the network. Null when it
+ * cannot be read or is not in the list, so a wrong guess never marks anyone
+ * as "You".
+ */
+function selfIn(profile: string, people: LibraryPerson[]): string | null {
+  let sub: string
+  try {
+    sub = getStoredCinnaSubject(profile)
+  } catch {
+    return null
+  }
+  return people.some((p) => p.principal.kind === 'user' && p.principal.userId === sub) ? sub : null
+}
+
+/**
+ * The library entry behind a shared agent, when the active profile can speak
+ * for it: a Cinna remote on the active profile's own instance.
+ */
+async function libraryTarget(
+  userId: string,
+  agentId: string
+): Promise<{ shared: SharedAgent; profile: string; repoId: string } | null> {
+  const shared = await locateShared(userId, agentId)
+  if (!shared || shared.remote.kind !== 'cinna' || shared.remote.repoId === null) return null
+  const auth = authFor(shared)
+  if (auth === 'other_account' || auth.kind !== 'cinna') return null
+  return { shared, profile: getProfileScopeUserId(), repoId: shared.remote.repoId }
+}
+
 /**
  * Share with the team, once the folder has cleared its preflight: create the
  * library entry, then record the folder in place and send it there.
@@ -479,7 +654,7 @@ async function createAndSend(
   kit: NonNullable<ReturnType<typeof locateKit>>,
   profile: string,
   host: string,
-  input: { slug: string; name: string; description: string },
+  input: { slug: string; name: string; description: string; people: ShareWithTeamPerson[] },
   /** The folder's old `origin` is a team version the library no longer lists: dropped once the new entry exists. */
   replaceOrigin: boolean
 ): Promise<AgentShareResult> {
@@ -487,7 +662,15 @@ async function createAndSend(
   try {
     const created = await cinnaFetch<Record<string, unknown>>(profile, '/api/v1/library/agents', {
       method: 'POST',
-      body: input
+      body: {
+        slug: input.slug,
+        name: input.name,
+        description: input.description,
+        // Sent for a core that takes grants on create. Core today ignores
+        // it and gives every new entry `everyone: read`; the PUT below is
+        // what restricts access until it does.
+        grants: input.people.map((person) => ({ principal: { user_id: person.userId }, access: person.access }))
+      }
     })
     entry = toLibraryEntry(created ?? {})
   } catch (err) {
@@ -503,6 +686,24 @@ async function createAndSend(
   if (gitOrigin === null) return refused('failed', UNSAFE_ADDRESS)
   // Until the first send lands, a retry may finish this entry — and only this one.
   libraryTrust.setPending(host, input.slug, entry.repoId)
+  /*
+   * Who may get it is settled before anything is sent: the creator as
+   * maintainer plus the people chosen, and nobody else. Core today gives
+   * every new entry `everyone: read` and ignores `grants` on create, so this
+   * PUT is what restricts access. If it fails, the folder is not sent, but
+   * the entry's name and description stay visible to everyone on the server
+   * until a retry — the entry stays pending, so a retry finishes it and runs
+   * this PUT again.
+   */
+  if (entry.maintainers.length === 0) {
+    return refused('failed', 'The agent wasn’t sent: the team library did not say who maintains it.')
+  }
+  const grants = initialGrants(entry, input.people)
+  const grantsWrite = await libraryWrite(profile, grantsPath(entry.repoId), 'PUT', grants)
+  if ('refusal' in grantsWrite) {
+    const why = grantsWrite.detail ? ` (${grantsWrite.detail})` : ''
+    return refused('failed', `The agent wasn’t sent: who can get it couldn’t be limited yet${why}.`)
+  }
   if (replaceOrigin) {
     // Only now that the new entry exists: a refused or failed create leaves
     // the folder linked to its old team version, as it was. The history here
@@ -724,7 +925,7 @@ export const sharingService = {
   async shareWithTeam(
     userId: string,
     agentId: string,
-    input: { name?: unknown; description?: unknown }
+    input: { name?: unknown; people?: unknown }
   ): Promise<AgentShareResult> {
     const profile = getProfileScopeUserId()
     const host = libraryService.hostOf(profile)
@@ -741,10 +942,9 @@ export const sharingService = {
 
     const draft = sharingService.shareWithTeamDraft(userId, agentId)
     const name = typeof input?.name === 'string' && input.name.trim() !== '' ? input.name.trim() : draft.name
-    const description =
-      typeof input?.description === 'string' && input.description.trim() !== ''
-        ? input.description.trim()
-        : draft.description
+    // Not asked for in the dialog: the manifest's, sent as it is.
+    const description = draft.description
+    const people = parseSharePeople(input?.people)
     const slug = basename(kit.dir)
 
     // Under the turn lock, like every other action that records the folder:
@@ -761,11 +961,148 @@ export const sharingService = {
       // A folder whose team version is gone from the library starts over; its
       // old link is dropped only once the new entry exists.
       const replaceOrigin = existing.ownRepo && existing.originUrl !== null
-      return await createAndSend(userId, agentId, kit, profile, host, { slug, name, description }, replaceOrigin)
+      return await createAndSend(
+        userId,
+        agentId,
+        kit,
+        profile,
+        host,
+        { slug, name, description, people },
+        replaceOrigin
+      )
     } finally {
       lock.release()
     }
   },
+
+  /**
+   * Who has access to a shared agent: `GET …/grants`. Null when there is no
+   * library entry the active profile can speak for (not shared, an external
+   * team version, another account's, or an entry the server no longer has).
+   * A `403` — the caller is not a maintainer — is `visible: false`, never the
+   * re-auth prompt: the session is fine, the list is just not theirs to see.
+   */
+  async people(userId: string, agentId: string): Promise<AgentPeopleDto | null> {
+    const target = await libraryTarget(userId, agentId)
+    if (!target) return null
+    try {
+      const body = await cinnaFetch<unknown>(target.profile, grantsPath(target.repoId))
+      const list = fromCoreGrants(body)
+      return { visible: true, people: list, selfUserId: selfIn(target.profile, list) }
+    } catch (err) {
+      if (err instanceof CinnaApiError && err.status === 403) return { visible: false, people: [], selfUserId: null }
+      if (err instanceof CinnaApiError && err.status === 404) return null
+      throw err
+    }
+  },
+
+  /**
+   * Replace who has access with `people`, the whole desired list
+   * (`PUT …/grants`). The server's refusal — at least one maintainer, say —
+   * comes back as its own sentence in `detail`.
+   */
+  async setPeople(userId: string, agentId: string, people: unknown): Promise<SetPeopleResult> {
+    const target = await libraryTarget(userId, agentId)
+    if (!target) return { ...refused('not_shared'), people: null }
+    const grants = parseGrantInputs(people)
+    if (grants === null) return { ...refused('failed', 'That list of people could not be read.'), people: null }
+    const write = await libraryWrite(target.profile, grantsPath(target.repoId), 'PUT', toCoreGrants(grants))
+    if ('refusal' in write) return { ...refused(write.refusal, write.detail), people: null }
+    // The list as the server now has it: what the PUT answered, or a fresh
+    // read when it answered nothing usable — never the list sent, which
+    // lacks the names.
+    const answered = fromCoreGrants(write.body)
+    const now: AgentPeopleDto | null =
+      answered.length > 0
+        ? { visible: true, people: answered, selfUserId: selfIn(target.profile, answered) }
+        : await sharingService.people(userId, agentId).catch(() => null)
+    // The listing's maintainers and the caller's own access may have moved.
+    await refreshListing()
+    publishEvent(SHARING_CHANGED_CHANNEL)
+    return { done: true, refusal: null, detail: null, status: null, agentId, people: now }
+  },
+
+  /**
+   * People on the active profile's instance, by name or email, for the people
+   * picker. Fewer than two characters finds no one; an instance without the
+   * route (or one that keeps it from this role) finds no one too.
+   */
+  async searchPeople(query: unknown): Promise<PersonSearchResult[]> {
+    const q = text(query).trim()
+    if (q.length < 2) return []
+    const profile = getProfileScopeUserId()
+    if (libraryService.hostOf(profile) === null) return []
+    let body: unknown
+    try {
+      body = await cinnaFetch<unknown>(profile, `/api/v1/users/search?q=${encodeURIComponent(q)}&limit=10`)
+    } catch (err) {
+      if (err instanceof CinnaApiError && (err.status === 403 || err.status === 404)) return []
+      throw err
+    }
+    const rows = body && typeof body === 'object' ? (body as Record<string, unknown>).data : null
+    if (!Array.isArray(rows)) return []
+    return rows.flatMap((raw): PersonSearchResult[] => {
+      if (!raw || typeof raw !== 'object') return []
+      const row = raw as Record<string, unknown>
+      const id = text(row.id)
+      if (id === '') return []
+      const email = text(row.email)
+      return [{ userId: id, email, name: text(row.full_name) || email }]
+    })
+  },
+
+  /** This folder's versions, newest first — the Sharing tab's History. Empty when it is not shared. */
+  async history(userId: string, agentId: string): Promise<AgentVersionDto[]> {
+    const shared = await locateShared(userId, agentId)
+    if (!shared) return []
+    return gitService.readHistory(shared.dir)
+  },
+
+  /**
+   * Remove sharing: this folder stops being a team agent and becomes an
+   * ordinary local one, shareable again later. `origin`, the `shared_remote`
+   * link and `cinna.server` go; the folder, its files and its own history
+   * stay. Unshared changes do not block it — nothing here is lost.
+   *
+   * `deleteFromLibrary` first deletes the entry on the server (a maintainer
+   * of a Cinna team version on the active profile's instance). If the server
+   * refuses — another person has it, say — nothing local changes and its
+   * sentence comes back in `detail`. An entry already gone counts as deleted.
+   * Under the turn lock, like every verb that writes the folder's `.git`.
+   */
+  async unshare(userId: string, agentId: string, deleteFromLibrary: boolean): Promise<AgentShareResult> {
+    const shared = await locateShared(userId, agentId)
+    if (!shared) return refused('not_shared')
+    const lock = lockOrRefuse(agentId)
+    if (!lock) return result({ done: false, refusal: 'turn_in_progress' }, await statusOf(agentId, shared, false))
+    try {
+      if (deleteFromLibrary) {
+        const target = await libraryTarget(userId, agentId)
+        if (!target) return refused('other_account')
+        const refusal = await libraryWrite(
+          target.profile,
+          `/api/v1/library/agents/${encodeURIComponent(target.repoId)}`,
+          'DELETE',
+          undefined,
+          true
+        )
+        if ('refusal' in refusal) return refused(refusal.refusal, refusal.detail)
+      }
+      if (!(await gitService.removeOrigin(shared.dir))) {
+        return refused('failed', 'The link to the team could not be removed.')
+      }
+      writeLocalLink(shared.dir, null)
+      if (!(await gitService.unsetCinnaServer(shared.dir))) {
+        logger.warn('the folder still names the Cinna instance it was shared through')
+      }
+    } finally {
+      lock.release()
+    }
+    await refreshListing()
+    settle(userId, shared.root.id)
+    return { done: true, refusal: null, detail: null, status: null, agentId }
+  },
+
   /**
    * The active Cinna profile's team library, with this machine's copies
    * matched in. Null for a profile that is not a Cinna one.
@@ -795,6 +1132,7 @@ export const sharingService = {
         maintainers: entry.maintainers,
         engine: entry.engine,
         manifestId: entry.manifestId,
+        pushedBy: entry.pushedBy,
         localAgentId: copy?.agentId ?? null,
         updateAvailable
       })

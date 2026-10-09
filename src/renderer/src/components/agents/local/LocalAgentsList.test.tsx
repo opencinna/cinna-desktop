@@ -116,7 +116,6 @@ vi.mock('../CatalogBrowserModal', () => ({
 const { useAuthStore } = await import('../../../stores/auth.store')
 const { useCatalogInstallStore } = await import('../../../stores/catalogInstall.store')
 const { LocalAgentsList } = await import('./LocalAgentsList')
-const { SHARE_UI_TEXT } = await import('../../../utils/shareText')
 
 function renderList(): ReturnType<typeof render> {
   const client = new QueryClient()
@@ -349,62 +348,33 @@ describe('LocalAgentsList — Install from catalog', () => {
   })
 })
 
-
 /**
- * A shared row carries a small glyph, and a dot inside it when there is
- * something to share or to update. The glyph's space exists only on shared
- * rows and the dot lives inside it, so a state change moves nothing; it sits
- * beside the row's button, so the row is still named by the agent alone.
+ * A shared row is drawn like any other: the sharing state is a badge on the
+ * agent's page now, not a glyph in the sidebar.
  */
 describe('LocalAgentsList — shared rows', () => {
-  const BETA = { ...AGENT, id: 'folder:beta', name: 'Beta' } as LocalAgentDto
-  function share(overrides: Partial<AgentShareStatus> = {}): AgentShareStatus {
-    return {
-      agentId: 'folder:alpha',
-      remote: { kind: 'cinna', url: 'u', repoId: 'r', host: 'h', access: 'write' },
-      state: 'up_to_date',
-      headSha: 'a',
-      remoteHeadSha: 'a',
-      ahead: 0,
-      behind: 0,
-      changedFiles: 0,
-      unshared: false,
-      fetched: false,
-      refusal: null,
-      ...overrides
-    }
-  }
-
-  beforeEach(() => {
+  it('draws a shared row like any other, named by the agent alone', () => {
     vi.clearAllMocks()
-    AGENTS = [AGENT, BETA]
+    AGENTS = [AGENT]
     externalAgents = []
     showAgentSidebarSections = true
     useAuthStore.setState({ currentUser: null })
+    shareStatuses = [{
+      agentId: 'folder:alpha',
+      remote: { kind: 'cinna', url: 'u', repoId: 'r', host: 'h', access: 'write' },
+      state: 'unshared',
+      headSha: 'a',
+      remoteHeadSha: 'a',
+      ahead: 1,
+      behind: 0,
+      changedFiles: 1,
+      unshared: true,
+      fetched: false,
+      refusal: null
+    }]
+    renderList()
+    expect(screen.getByRole('button', { name: 'Alpha' })).toBeTruthy()
+    expect(screen.queryAllByRole('img')).toHaveLength(0)
     shareStatuses = []
-  })
-
-  it('marks only the shared row, and keeps it named by the agent alone', () => {
-    shareStatuses = [share()]
-    renderList()
-    const glyphs = screen.getAllByRole('img', { name: /^Shared with the team/ })
-    expect(glyphs).toHaveLength(1)
-    expect(glyphs[0].getAttribute('aria-label')).toBe(SHARE_UI_TEXT.sharedGlyph)
-    expect(document.querySelector('[data-shared-dot]')).toBeNull()
-    const row = screen.getByRole('button', { name: 'Alpha' })
-    expect(row.contains(glyphs[0])).toBe(false)
-    expect(row.parentElement?.contains(glyphs[0])).toBe(true)
-  })
-
-  it.each<[string, Partial<AgentShareStatus>, boolean]>([
-    ['unshared changes', { state: 'unshared', unshared: true, changedFiles: 1 }, true],
-    ['the team moved', { state: 'behind', behind: -1 }, true],
-    ['up to date', {}, false],
-    ['no longer shared', { state: 'removed', behind: -1 }, false]
-  ])('a dot inside the glyph for %s: %s', (_label, overrides, dot) => {
-    shareStatuses = [share(overrides)]
-    renderList()
-    const glyph = screen.getByRole('img', { name: /^Shared with the team/ })
-    expect(glyph.querySelector('[data-shared-dot]') !== null).toBe(dot)
   })
 })

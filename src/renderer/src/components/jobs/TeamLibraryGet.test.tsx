@@ -28,6 +28,7 @@ function libraryAgent(overrides: Partial<LibraryAgentDto> = {}): LibraryAgentDto
     maintainers: [],
     engine: null,
     manifestId: 'm-1',
+    pushedBy: null,
     localAgentId: null,
     updateAvailable: false,
     ...overrides

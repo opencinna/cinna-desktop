@@ -1,15 +1,20 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Loader2 } from 'lucide-react'
+import { AlertTriangle, Loader2, X } from 'lucide-react'
 import { useDialogChrome } from '../../../settings/SettingsLayout'
 import { unwrapIpcError } from '../../../../utils/ipcError'
 import { unwrapCatalogOutcome } from '../../../../../../shared/catalog'
-import type { ShareWithTeamDraft } from '../../../../../../shared/agentSharing'
-import { SHARE_UI_TEXT } from '../../../../utils/shareText'
+import type {
+  LibraryAccess,
+  PersonSearchResult,
+  ShareWithTeamInput,
+  ShareWithTeamPerson
+} from '../../../../../../shared/agentSharing'
+import { SHARE_ACCESS_TEXT, SHARE_UI_TEXT } from '../../../../utils/shareText'
 
 /**
- * The three sharing dialogs: Share changes, the two-button conflict (plan S8)
- * and Share with the team.
+ * The sharing dialogs: Share changes, the two-button conflict (plan S8),
+ * Share with the team, Share with a person and Remove sharing.
  *
  * None of them owns its action. The mutation lives in the component that opens
  * the dialog and outlives it — the status line, the ⋯ menu — so a result that
@@ -36,12 +41,15 @@ function DialogShell({
   pending,
   onDismiss,
   initialFocusRef,
+  danger = false,
   children
 }: {
   title: string
   pending: boolean
   onDismiss: () => void
   initialFocusRef: React.RefObject<HTMLElement | null>
+  /** A destructive dialog's heading: danger-toned, with the warning glyph. */
+  danger?: boolean
   children: ReactNode
 }): React.JSX.Element {
   const modalRef = useRef<HTMLDivElement>(null)
@@ -56,7 +64,14 @@ function DialogShell({
         aria-label={title}
         className="app-popover-surface w-[28rem] space-y-3 rounded-lg border border-[var(--color-border)] p-5 shadow-xl"
       >
-        <div className="text-sm font-medium text-[var(--color-text)]">{title}</div>
+        {danger ? (
+          <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-danger)]">
+            <AlertTriangle size={16} aria-hidden="true" />
+            {title}
+          </div>
+        ) : (
+          <div className="text-sm font-medium text-[var(--color-text)]">{title}</div>
+        )}
         {children}
       </div>
     </div>,
@@ -209,10 +224,177 @@ export function ShareConflictDialog({
   )
 }
 
+const ACCESS_CHOICES: LibraryAccess[] = ['read', 'write', 'maintain']
+
+/** The access select every people list uses: Can use / Can edit / Maintainer. */
+export function AccessSelect({
+  value,
+  label,
+  disabled,
+  onChange,
+  className = ''
+}: {
+  value: LibraryAccess
+  /** The accessible name — "Access for Bob". */
+  label: string
+  disabled?: boolean
+  onChange: (access: LibraryAccess) => void
+  className?: string
+}): React.JSX.Element {
+  return (
+    <select
+      aria-label={label}
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value as LibraryAccess)}
+      className={`${FIELD} w-auto ${className}`}
+    >
+      {ACCESS_CHOICES.map((access) => (
+        <option key={access} value={access}>
+          {SHARE_ACCESS_TEXT[access]}
+        </option>
+      ))}
+    </select>
+  )
+}
+
+/** How long typing settles before the server is asked. */
+const SEARCH_DEBOUNCE_MS = 250
+
+type SearchState =
+  | { kind: 'idle' }
+  | { kind: 'searching'; results: PersonSearchResult[] }
+  | { kind: 'done'; results: PersonSearchResult[] }
+  | { kind: 'failed'; why: string | null }
+
 /**
- * Share with the team: name and description, pre-filled from the manifest.
- * The fields are there from the first frame; the draft fills each one the
- * user has not typed into.
+ * People on the server, by name or email, asked for once typing settles. A
+ * slower answer to an older query never replaces a newer one.
+ */
+function usePeopleSearch(query: string): SearchState {
+  const [state, setState] = useState<SearchState>({ kind: 'idle' })
+  const latest = useRef(0)
+  useEffect(() => {
+    const q = query.trim()
+    const ticket = ++latest.current
+    if (q.length < 2) {
+      setState({ kind: 'idle' })
+      return
+    }
+    // The list on screen stays while the next answer is on its way.
+    setState((prev) => ({ kind: 'searching', results: 'results' in prev ? prev.results : [] }))
+    const timer = setTimeout(() => {
+      void window.api.sharing
+        .searchPeople(q)
+        .then((outcome) => {
+          if (ticket === latest.current) setState({ kind: 'done', results: unwrapCatalogOutcome(outcome) })
+        })
+        .catch((err: unknown) => {
+          if (ticket === latest.current) setState({ kind: 'failed', why: err instanceof Error ? unwrapIpcError(err) : null })
+        })
+    }, SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [query])
+  return state
+}
+
+/** `Name <email>`, dropping the email when it would repeat the name (ux_rules rule 13). */
+function personLabel(person: Pick<PersonSearchResult, 'name' | 'email'>): string {
+  if (!person.email || person.email === person.name) return person.name
+  return `${person.name} <${person.email}>`
+}
+
+/**
+ * A search field over the server's people and the answers under it.
+ *
+ * **The answers live in a fixed-height area**, scrolled inside itself: a hint,
+ * "Searching…", "No one found" or the list all take the same space, so
+ * nothing below the field moves while the user types (ux_rules rule 1).
+ */
+function PeopleSearch({
+  disabled,
+  exclude,
+  selectedId,
+  onPick,
+  inputRef
+}: {
+  disabled?: boolean
+  /** People already on the list, left out of the answers. */
+  exclude: ReadonlySet<string>
+  /** The person picked, marked in the list. */
+  selectedId?: string | null
+  onPick: (person: PersonSearchResult) => void
+  inputRef?: React.RefObject<HTMLInputElement | null>
+}): React.JSX.Element {
+  const [query, setQuery] = useState('')
+  const search = usePeopleSearch(query)
+  const results = 'results' in search ? search.results.filter((person) => !exclude.has(person.userId)) : []
+  let message: string | null = null
+  if (search.kind === 'idle') message = SHARE_UI_TEXT.peopleSearchHint
+  else if (search.kind === 'failed')
+    message = search.why ? SHARE_UI_TEXT.peopleSearchFailedBecause(search.why) : SHARE_UI_TEXT.peopleSearchFailed
+  else if (results.length === 0) message = search.kind === 'searching' ? SHARE_UI_TEXT.peopleSearching : SHARE_UI_TEXT.peopleNoneFound
+  return (
+    <div className="space-y-1">
+      <label className="block space-y-1">
+        <span className="block text-[11px] text-[var(--color-text-muted)]">{SHARE_UI_TEXT.peopleSearchLabel}</span>
+        <input
+          ref={inputRef}
+          type="search"
+          value={query}
+          disabled={disabled}
+          placeholder={SHARE_UI_TEXT.peopleSearchPlaceholder}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            // Enter picks nothing by surprise and submits nothing either.
+            if (event.key === 'Enter') event.preventDefault()
+          }}
+          className={FIELD}
+        />
+      </label>
+      <div
+        role="listbox"
+        aria-label={SHARE_UI_TEXT.peopleSearchLabel}
+        data-people-results
+        className="h-[7.5rem] overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]"
+      >
+        {message !== null ? (
+          <p className="px-2.5 py-2 text-[11px] text-[var(--color-text-muted)]">{message}</p>
+        ) : (
+          results.map((person) => (
+            <button
+              key={person.userId}
+              type="button"
+              role="option"
+              aria-selected={selectedId === person.userId}
+              disabled={disabled}
+              onClick={() => onPick(person)}
+              className={`block w-full truncate px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-[var(--color-bg-hover)] ${
+                selectedId === person.userId ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text)]' : 'text-[var(--color-text-secondary)]'
+              }`}
+            >
+              {personLabel(person)}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** A person chosen in Share with the team, with the name to show. */
+interface ChosenPerson extends ShareWithTeamPerson {
+  label: string
+}
+
+/**
+ * Share with the team: a name, and who may get it.
+ *
+ * No description: main sends the manifest's. The name is there from the first
+ * frame and the draft fills it unless the user has typed. People are picked
+ * from a search; each starts as "Can use", and an empty list means only the
+ * sharer — never everyone. The chosen list has a fixed height, filled in
+ * every state, so a pick moves nothing below it (ux_rules rule 1).
  */
 export function ShareWithTeamDialog({
   agentId,
@@ -224,15 +406,15 @@ export function ShareWithTeamDialog({
   agentId: string
   pending: boolean
   error: string | null
-  onShare: (input: ShareWithTeamDraft) => void
+  onShare: (input: ShareWithTeamInput) => void
   onCancel: () => void
 }): React.JSX.Element {
   const nameRef = useRef<HTMLInputElement>(null)
   const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
+  const [people, setPeople] = useState<ChosenPerson[]>([])
   const [loading, setLoading] = useState(true)
   const [draftError, setDraftError] = useState<string | null>(null)
-  const touched = useRef({ name: false, description: false })
+  const touched = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -241,8 +423,7 @@ export function ShareWithTeamDialog({
       .then((outcome) => {
         if (cancelled) return
         const draft = unwrapCatalogOutcome(outcome)
-        if (!touched.current.name) setName(draft.name)
-        if (!touched.current.description) setDescription(draft.description)
+        if (!touched.current) setName(draft.name)
       })
       .catch((err) => {
         if (!cancelled) setDraftError(unwrapIpcError(err))
@@ -257,7 +438,7 @@ export function ShareWithTeamDialog({
 
   const submit = (): void => {
     if (pending || name.trim() === '') return
-    onShare({ name: name.trim(), description: description.trim() })
+    onShare({ name: name.trim(), people: people.map(({ userId, access }) => ({ userId, access })) })
   }
 
   return (
@@ -272,7 +453,7 @@ export function ShareWithTeamDialog({
           disabled={pending}
           placeholder={loading ? SHARE_UI_TEXT.loadingDraft : undefined}
           onChange={(event) => {
-            touched.current.name = true
+            touched.current = true
             setName(event.target.value)
           }}
           onKeyDown={(event) => {
@@ -284,20 +465,51 @@ export function ShareWithTeamDialog({
           className={FIELD}
         />
       </label>
-      <label className="block space-y-1">
-        <span className="block text-[11px] text-[var(--color-text-muted)]">{SHARE_UI_TEXT.descriptionLabel}</span>
-        <textarea
-          rows={3}
-          value={description}
-          disabled={pending}
-          placeholder={loading ? SHARE_UI_TEXT.loadingDraft : undefined}
-          onChange={(event) => {
-            touched.current.description = true
-            setDescription(event.target.value)
-          }}
-          className={`${FIELD} resize-none`}
-        />
-      </label>
+      <PeopleSearch
+        disabled={pending}
+        exclude={new Set(people.map((person) => person.userId))}
+        onPick={(person) =>
+          setPeople((list) => [...list, { userId: person.userId, access: 'read', label: personLabel(person) }])
+        }
+      />
+      <div className="space-y-1">
+        <span className="block text-[11px] text-[var(--color-text-muted)]">{SHARE_UI_TEXT.peopleLabel}</span>
+        <ul
+          aria-label={SHARE_UI_TEXT.peopleLabel}
+          data-chosen-people
+          className="h-[5.5rem] space-y-1 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] p-1.5"
+        >
+          {people.length === 0 ? (
+            <li className="px-1 py-0.5 text-[11px] text-[var(--color-text-muted)]">{SHARE_UI_TEXT.peopleOnlyMe}</li>
+          ) : (
+            people.map((person) => (
+              <li key={person.userId} className="flex items-center gap-2 px-1">
+                <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text)]" title={person.label}>
+                  {person.label}
+                </span>
+                <AccessSelect
+                  value={person.access}
+                  label={SHARE_UI_TEXT.accessFor(person.label)}
+                  disabled={pending}
+                  onChange={(access) =>
+                    setPeople((list) => list.map((p) => (p.userId === person.userId ? { ...p, access } : p)))
+                  }
+                />
+                <button
+                  type="button"
+                  aria-label={SHARE_UI_TEXT.removePerson(person.label)}
+                  title={SHARE_UI_TEXT.removePerson(person.label)}
+                  disabled={pending}
+                  onClick={() => setPeople((list) => list.filter((p) => p.userId !== person.userId))}
+                  className="shrink-0 rounded p-1 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:opacity-50"
+                >
+                  <X size={12} aria-hidden="true" />
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+      </div>
       <ErrorLine error={error ?? draftError} />
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} disabled={pending} className={CANCEL}>
@@ -318,6 +530,136 @@ export function ShareWithTeamDialog({
           ) : (
             SHARE_UI_TEXT.share
           )}
+        </button>
+      </div>
+    </DialogShell>
+  )
+}
+
+/**
+ * Share with a person (Sharing tab → People): find someone, choose what they
+ * may do — "Can use" unless changed — and Add. The chosen person sits in a
+ * one-line slot that is there before anyone is picked, so picking moves
+ * nothing. A refusal from the server stays here and closes nothing.
+ */
+export function ShareWithPersonDialog({
+  exclude,
+  pending,
+  error,
+  onAdd,
+  onCancel
+}: {
+  /** Who already has access, left out of the answers. */
+  exclude: ReadonlySet<string>
+  pending: boolean
+  error: string | null
+  onAdd: (person: PersonSearchResult, access: LibraryAccess) => void
+  onCancel: () => void
+}): React.JSX.Element {
+  const searchRef = useRef<HTMLInputElement>(null)
+  const [person, setPerson] = useState<PersonSearchResult | null>(null)
+  const [access, setAccess] = useState<LibraryAccess>('read')
+  return (
+    <DialogShell title={SHARE_UI_TEXT.shareWithPersonTitle} pending={pending} onDismiss={onCancel} initialFocusRef={searchRef}>
+      <PeopleSearch
+        disabled={pending}
+        exclude={exclude}
+        selectedId={person?.userId ?? null}
+        onPick={setPerson}
+        inputRef={searchRef}
+      />
+      <div className="flex items-center gap-2">
+        <span
+          data-chosen-person
+          className={`min-w-0 flex-1 truncate text-xs ${person ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}
+        >
+          {person ? personLabel(person) : null}
+        </span>
+        <AccessSelect value={access} label={SHARE_UI_TEXT.accessLabel} disabled={pending} onChange={setAccess} />
+      </div>
+      <ErrorLine error={error} />
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onCancel} disabled={pending} className={CANCEL}>
+          {SHARE_UI_TEXT.cancel}
+        </button>
+        <button
+          type="button"
+          onClick={() => person && onAdd(person, access)}
+          disabled={pending || person === null}
+          aria-busy={pending}
+          className={PRIMARY}
+        >
+          {pending && <Loader2 size={11} className="animate-spin" aria-hidden="true" />}
+          {SHARE_UI_TEXT.addPerson}
+        </button>
+      </div>
+    </DialogShell>
+  )
+}
+
+/**
+ * Remove sharing: confirm before this folder is disconnected from the team,
+ * in the ⋯ menu's "Remove from this computer…" style. The recoverable part is
+ * said first — the folder and its history stay. `offerDelete` adds an
+ * unchecked "also delete it from the team library", for a maintainer of an
+ * entry the library still lists. Undismissable while it runs; a refusal stays
+ * here and closes nothing.
+ */
+export function RemoveSharingDialog({
+  agentName,
+  offerDelete,
+  pending,
+  error,
+  onConfirm,
+  onCancel
+}: {
+  agentName: string
+  offerDelete: boolean
+  pending: boolean
+  error: string | null
+  onConfirm: (deleteFromLibrary: boolean) => void
+  onCancel: () => void
+}): React.JSX.Element {
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const [alsoDelete, setAlsoDelete] = useState(false)
+  return (
+    <DialogShell
+      title={SHARE_UI_TEXT.removeSharingTitle}
+      pending={pending}
+      onDismiss={onCancel}
+      initialFocusRef={cancelRef}
+      danger
+    >
+      <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
+        {SHARE_UI_TEXT.removeSharingBody(agentName)}
+      </p>
+      {offerDelete && (
+        <label className="flex cursor-pointer items-start gap-2 rounded-md border border-[var(--color-border)] p-2.5 text-xs text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)]">
+          <input
+            type="checkbox"
+            className="mt-0.5 accent-[var(--color-danger)]"
+            checked={alsoDelete}
+            disabled={pending}
+            onChange={(event) => setAlsoDelete(event.target.checked)}
+          />
+          <span className="min-w-0">{SHARE_UI_TEXT.alsoDeleteFromLibrary}</span>
+        </label>
+      )}
+      <ErrorLine error={error} />
+      <div className="flex justify-end gap-2">
+        <button ref={cancelRef} type="button" onClick={onCancel} disabled={pending} className={CANCEL}>
+          {SHARE_UI_TEXT.cancel}
+        </button>
+        <button
+          type="button"
+          onClick={() => onConfirm(offerDelete && alsoDelete)}
+          disabled={pending}
+          aria-busy={pending}
+          // A fixed width, so the shorter "Removing…" does not pull Cancel sideways.
+          className="inline-flex min-w-[7.5rem] items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-[var(--color-danger)] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
+        >
+          {pending && <Loader2 size={11} className="animate-spin" aria-hidden="true" />}
+          {pending ? SHARE_UI_TEXT.removingSharing : SHARE_UI_TEXT.removeSharingConfirm}
         </button>
       </div>
     </DialogShell>

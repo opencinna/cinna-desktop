@@ -260,7 +260,8 @@ export function SettingsStatusRow({
 }: {
   tone: 'ok' | 'warning' | 'neutral'
   label: string
-  detail: ReactNode
+  /** One line under the label; omitted when there is nothing true to add. */
+  detail?: ReactNode
   action?: ReactNode
 }): React.JSX.Element {
   return (
@@ -284,9 +285,11 @@ export function SettingsStatusRow({
       )}
       <div className="min-w-0 flex-1">
         <div className="text-[14px] font-medium text-[var(--color-text)]">{label}</div>
-        <div className="mt-0.5 text-[13px] leading-relaxed text-[var(--color-text-muted)]">
-          {detail}
-        </div>
+        {detail != null && (
+          <div className="mt-0.5 text-[13px] leading-relaxed text-[var(--color-text-muted)]">
+            {detail}
+          </div>
+        )}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
     </div>

@@ -161,6 +161,8 @@ export interface LibraryAgentDto {
   /** The manifest's `runtime.engine`, when the manifest has one. */
   engine: string | null
   manifestId: string | null
+  /** Who sent the latest version, when the listing says. */
+  pushedBy: string | null
   /**
    * This machine's copy: the local agent whose `origin` is this repository, or
    * whose manifest id matches it. Null when there is none.
@@ -183,6 +185,83 @@ export interface LibraryListingDto {
 export interface ShareWithTeamDraft {
   name: string
   description: string
+}
+
+/** A person given access when an agent is first shared with the team. */
+export interface ShareWithTeamPerson {
+  userId: string
+  access: LibraryAccess
+}
+
+/**
+ * What the Share with the team dialog sends. The description is not asked
+ * for: main sends the manifest's. `people` may be empty — only the sharer
+ * (as maintainer) can then get it; never "everyone" by default.
+ */
+export interface ShareWithTeamInput {
+  name: string
+  people: ShareWithTeamPerson[]
+}
+
+/** Who a library grant is for: one account, everyone with a role, or everyone on the instance. */
+export type LibraryPrincipal =
+  | { kind: 'user'; userId: string }
+  | { kind: 'role'; role: string }
+  | { kind: 'everyone' }
+
+/** One grant on a library agent, as the Sharing tab's People list shows it. */
+export interface LibraryPerson {
+  principal: LibraryPrincipal
+  access: LibraryAccess
+  /** The person's name as the server gives it; '' when it gives none. */
+  displayName: string
+}
+
+/** One grant as the renderer sends it back: the whole desired list replaces the server's. */
+export interface LibraryGrantInput {
+  principal: LibraryPrincipal
+  access: LibraryAccess
+}
+
+/**
+ * Who has access to a shared agent. `visible: false` when the server will not
+ * say (the caller is not a maintainer): the tab then lists the maintainers
+ * from the listing only.
+ */
+export interface AgentPeopleDto {
+  visible: boolean
+  people: LibraryPerson[]
+  /**
+   * The caller's own account id when it is in `people` (shown as "You", with
+   * no remove). Null when it cannot be told.
+   */
+  selfUserId: string | null
+}
+
+/** What `sharing:set-people` answers: the action, and the list as the server now has it. */
+export interface SetPeopleResult extends AgentShareResult {
+  people: AgentPeopleDto | null
+}
+
+/** A person found by name or email, for the people picker. */
+export interface PersonSearchResult {
+  userId: string
+  email: string
+  name: string
+}
+
+/**
+ * One version in a shared folder's history, newest first. No identifier is
+ * carried: the Sharing tab lists versions, it never restores one.
+ */
+export interface AgentVersionDto {
+  /** The version's note — its first line. */
+  note: string
+  author: string
+  /** ISO 8601. */
+  date: string
+  /** Recorded here and not on the team version yet. */
+  unsent: boolean
 }
 
 /**

@@ -7,11 +7,15 @@ import {
   type UseQueryResult
 } from '@tanstack/react-query'
 import type {
+  AgentPeopleDto,
   AgentRemoteKind,
   AgentShareResult,
   AgentShareStatus,
+  AgentVersionDto,
+  LibraryGrantInput,
   LibraryListingDto,
-  ShareWithTeamDraft
+  SetPeopleResult,
+  ShareWithTeamInput
 } from '../../../shared/agentSharing'
 import { unwrapCatalogOutcome } from '../../../shared/catalog'
 import { useAuthStore } from '../stores/auth.store'
@@ -55,6 +59,16 @@ export function sharingStatusKey(profileId: string | null, agentId: string): rea
 /** Same reason as {@link sharingStatusesKey}: the library is the active profile's. */
 export function sharingLibraryKey(profileId: string | null): readonly unknown[] {
   return ['sharing', 'library', profileId] as const
+}
+
+/** Who has access to one shared agent, under the active profile — the Sharing tab's People. */
+export function sharingPeopleKey(profileId: string | null, agentId: string): readonly unknown[] {
+  return ['sharing', 'people', profileId, agentId] as const
+}
+
+/** One shared folder's versions — the Sharing tab's History. */
+export function sharingHistoryKey(profileId: string | null, agentId: string): readonly unknown[] {
+  return ['sharing', 'history', profileId, agentId] as const
 }
 
 /** `useAgents`' key; a Get or an Update can add or rename a folder agent row. */
@@ -150,6 +164,32 @@ export function useTeamLibrary(options: { refresh?: boolean } = {}): UseQueryRes
 }
 
 /**
+ * Who has access to a shared agent, for the Sharing tab. Null when the
+ * active account cannot speak for its library entry; `visible: false` when
+ * it may not see the list (not a maintainer).
+ */
+export function useSharePeople(agentId: string, enabled: boolean): UseQueryResult<AgentPeopleDto | null> {
+  const profileId = useProfileId()
+  return useQuery<AgentPeopleDto | null>({
+    queryKey: sharingPeopleKey(profileId, agentId),
+    queryFn: async () => unwrapCatalogOutcome(await window.api.sharing.people(agentId)),
+    enabled,
+    staleTime: 30_000,
+    retry: (failures, err) => !isReauthRequiredError(err) && failures < 1
+  })
+}
+
+/** A shared folder's versions, newest first, for the Sharing tab. */
+export function useShareHistory(agentId: string): UseQueryResult<AgentVersionDto[]> {
+  const profileId = useProfileId()
+  return useQuery<AgentVersionDto[]>({
+    queryKey: sharingHistoryKey(profileId, agentId),
+    queryFn: async () => unwrapCatalogOutcome(await window.api.sharing.history(agentId)),
+    staleTime: 30_000
+  })
+}
+
+/**
  * Subscribe to main's `sharing:changed` for the app's lifetime. Mount once,
  * beside `useLocalAgentWatch`.
  */
@@ -157,6 +197,8 @@ export function useSharingWatch(): void {
   const queryClient = useQueryClient()
   useEffect(() => {
     return window.api.sharing.onChanged(() => {
+      // Every sharing read — statuses, each agent's status, the library, and
+      // the Sharing tab's People and History — sits under this prefix.
       void queryClient.invalidateQueries({ queryKey: SHARING_KEY })
       // The Inbox's "The team changed X" cards are derived from the same
       // listing, on every read.
@@ -179,6 +221,9 @@ function applyResult(queryClient: QueryClient, agentId: string, result: AgentSha
   else void queryClient.invalidateQueries({ queryKey: sharingStatusKey(profileId, agentId) })
   void queryClient.invalidateQueries({ queryKey: ['sharing', 'statuses'] })
   void queryClient.invalidateQueries({ queryKey: ['sharing', 'library'] })
+  // An Update or a Share adds versions; a Remove sharing ends the list.
+  void queryClient.invalidateQueries({ queryKey: ['sharing', 'history'] })
+  void queryClient.invalidateQueries({ queryKey: ['sharing', 'people'] })
   void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
 }
 
@@ -248,10 +293,10 @@ export function useUseTeamVersion(options: ShareMutationOptions<string> = {}) {
 
 /** Put a not-yet-shared agent in the active profile's Team library. */
 export function useShareWithTeam(
-  options: ShareMutationOptions<{ agentId: string; input: ShareWithTeamDraft }> = {}
+  options: ShareMutationOptions<{ agentId: string; input: ShareWithTeamInput }> = {}
 ) {
   const queryClient = useQueryClient()
-  return useMutation<AgentShareResult, Error, { agentId: string; input: ShareWithTeamDraft }>({
+  return useMutation<AgentShareResult, Error, { agentId: string; input: ShareWithTeamInput }>({
     mutationFn: async ({ agentId, input }) =>
       unwrapCatalogOutcome(await window.api.sharing.shareWithTeam(agentId, input)),
     onSuccess: (result, variables) => {
@@ -272,6 +317,55 @@ export function useGetFromLibrary(options: ShareMutationOptions<string> = {}) {
       void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
       if (result.done) invalidateRescanned(queryClient, [result.agentId])
       options.onResult?.(result, repoId)
+    }
+  })
+}
+
+/** Replace who has access to a shared agent with this whole list. */
+export function useSetSharePeople(
+  options: ShareMutationOptions<{ agentId: string; people: LibraryGrantInput[] }> = {}
+) {
+  const queryClient = useQueryClient()
+  return useMutation<SetPeopleResult, Error, { agentId: string; people: LibraryGrantInput[] }>({
+    mutationFn: async ({ agentId, people }) =>
+      unwrapCatalogOutcome(await window.api.sharing.setPeople(agentId, people)),
+    onSuccess: (result, variables) => {
+      const profileId = useAuthStore.getState().currentUser?.id ?? null
+      const key = sharingPeopleKey(profileId, variables.agentId)
+      // The list as the server now has it, at once: the next edit builds on
+      // it rather than on the list before this one, and a select does not
+      // snap back while the refetch is on its way.
+      if (result.done && result.people) queryClient.setQueryData(key, result.people)
+      void queryClient.invalidateQueries({ queryKey: key })
+      if (result.done) void queryClient.invalidateQueries({ queryKey: ['sharing', 'library'] })
+      options.onResult?.(result, variables)
+    }
+  })
+}
+
+/**
+ * Remove sharing: the folder stops being a team agent. Its status leaves the
+ * list, which is what takes the badge and the Sharing tab away.
+ */
+export function useUnshare(
+  options: ShareMutationOptions<{ agentId: string; deleteFromLibrary: boolean }> = {}
+) {
+  const queryClient = useQueryClient()
+  return useMutation<AgentShareResult, Error, { agentId: string; deleteFromLibrary: boolean }>({
+    mutationFn: async ({ agentId, deleteFromLibrary }) =>
+      unwrapCatalogOutcome(await window.api.sharing.unshare(agentId, deleteFromLibrary)),
+    onSuccess: (result, variables) => {
+      if (result.done) {
+        // Gone, not refetched: the next read of this agent says "not shared".
+        const profileId = useAuthStore.getState().currentUser?.id ?? null
+        queryClient.setQueryData(sharingStatusKey(profileId, variables.agentId), null)
+        queryClient.setQueriesData<AgentShareStatus[]>({ queryKey: ['sharing', 'statuses'] }, (list) =>
+          list?.filter((entry) => entry.agentId !== variables.agentId)
+        )
+      }
+      applyResult(queryClient, variables.agentId, result)
+      if (result.done) invalidateRescanned(queryClient, [variables.agentId])
+      options.onResult?.(result, variables)
     }
   })
 }

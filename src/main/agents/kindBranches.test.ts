@@ -407,7 +407,7 @@ const NOT_A_KIND_BRANCH: { file: string; category: Category; value: string; why:
     why: "`remoteKind` is an AgentRemoteKind ('cinna' | 'external') — where a shared agent's team version lives; only an external one may fetch when its page opens, since a cinna one is counted from the library listing"
   },
   {
-    file: 'src/renderer/src/components/agents/local/sharing/AgentShareLine.tsx',
+    file: 'src/renderer/src/components/agents/local/sharing/useShareActions.tsx',
     category: 'kind',
     value: 'external',
     why: "`status.remote.kind` is an AgentRemoteKind ('cinna' | 'external') — an external team version has no library listing to say the caller's access, so Share changes is offered and the server answers"

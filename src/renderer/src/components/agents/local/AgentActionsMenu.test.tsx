@@ -182,7 +182,7 @@ describe('AgentActionsMenu — Share with the team', () => {
     expect(screen.queryByRole('menuitem', { name: SHARE_UI_TEXT.shareWithTeam })).toBeNull()
   })
 
-  it('pre-fills the draft, shares it, keeps a refusal in the dialog and closes on success', async () => {
+  it('pre-fills the name, asks for no description, shares with only me by default, keeps a refusal in the dialog and closes on success', async () => {
     library = LIBRARY
     const draft = vi.fn().mockResolvedValue({ success: true, value: { name: 'Alpha', description: 'Watches.' } })
     ;(window as unknown as { api: unknown }).api = { sharing: { shareWithTeamDraft: draft } }
@@ -191,10 +191,14 @@ describe('AgentActionsMenu — Share with the team', () => {
     const dialog = screen.getByRole('dialog', { name: SHARE_UI_TEXT.shareWithTeamTitle })
     await act(async () => {})
     expect((screen.getByLabelText(SHARE_UI_TEXT.nameLabel) as HTMLInputElement).value).toBe('Alpha')
+    // No description field: main sends the manifest's.
+    expect(dialog.querySelector('textarea')).toBeNull()
+    expect(dialog.textContent).not.toContain('Watches.')
+    expect(dialog.querySelector('[data-chosen-people]')?.textContent).toBe(SHARE_UI_TEXT.peopleOnlyMe)
 
     fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.share }))
     expect(shareWithTeam).toHaveBeenCalledWith(
-      { agentId: 'folder:alpha', input: { name: 'Alpha', description: 'Watches.' } },
+      { agentId: 'folder:alpha', input: { name: 'Alpha', people: [] } },
       expect.anything()
     )
     act(() =>
@@ -206,6 +210,58 @@ describe('AgentActionsMenu — Share with the team', () => {
       shareWithTeamOptions?.onResult?.({ done: true, refusal: null, detail: null, status: null, agentId: null })
     )
     expect(screen.queryByRole('dialog', { name: SHARE_UI_TEXT.shareWithTeamTitle })).toBeNull()
+  })
+})
+
+describe('AgentActionsMenu — Share with the team’s people', () => {
+  it('finds people as the user types, without moving the list, and sends each one picked with the access chosen', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      library = LIBRARY
+      const draft = vi.fn().mockResolvedValue({ success: true, value: { name: 'Alpha', description: '' } })
+      const searchPeople = vi.fn().mockResolvedValue({
+        success: true,
+        value: [
+          { userId: 'u2', email: 'bob@x.test', name: 'Bob' },
+          { userId: 'u3', email: 'cy@x.test', name: 'Cy' }
+        ]
+      })
+      ;(window as unknown as { api: unknown }).api = { sharing: { shareWithTeamDraft: draft, searchPeople } }
+      openMenu()
+      fireEvent.click(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.shareWithTeam }))
+      await act(async () => {})
+      const results = (): HTMLElement => document.querySelector('[data-people-results]') as HTMLElement
+      const search = screen.getByLabelText(SHARE_UI_TEXT.peopleSearchLabel, { selector: 'input' })
+      expect(results().textContent).toBe(SHARE_UI_TEXT.peopleSearchHint)
+      // One letter asks nothing.
+      fireEvent.change(search, { target: { value: 'b' } })
+      await act(async () => { vi.advanceTimersByTime(400) })
+      expect(searchPeople).not.toHaveBeenCalled()
+      // Typing settles, then the server is asked once — and the results live
+      // in the same fixed-height area the hint did.
+      fireEvent.change(search, { target: { value: 'bo' } })
+      fireEvent.change(search, { target: { value: 'bob' } })
+      await act(async () => { vi.advanceTimersByTime(400) })
+      expect(searchPeople).toHaveBeenCalledTimes(1)
+      expect(searchPeople).toHaveBeenCalledWith('bob')
+      expect(results().className).toContain('h-[7.5rem]')
+      fireEvent.click(screen.getByRole('option', { name: 'Bob <bob@x.test>' }))
+      // Picked people leave the answers and join the list, as "Can use".
+      expect(screen.queryByRole('option', { name: 'Bob <bob@x.test>' })).toBeNull()
+      const access = screen.getByLabelText(SHARE_UI_TEXT.accessFor('Bob <bob@x.test>')) as HTMLSelectElement
+      expect(access.value).toBe('read')
+      fireEvent.change(access, { target: { value: 'write' } })
+      fireEvent.click(screen.getByRole('option', { name: 'Cy <cy@x.test>' }))
+      fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.removePerson('Cy <cy@x.test>') }))
+
+      fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.share }))
+      expect(shareWithTeam).toHaveBeenCalledWith(
+        { agentId: 'folder:alpha', input: { name: 'Alpha', people: [{ userId: 'u2', access: 'write' }] } },
+        expect.anything()
+      )
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

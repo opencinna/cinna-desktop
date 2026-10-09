@@ -1,6 +1,8 @@
 import type {
+  AgentShareResult,
   AgentShareState,
   AgentShareStatus,
+  LibraryAccess,
   ShareRefusal
 } from '../../../shared/agentSharing'
 
@@ -85,10 +87,60 @@ export function shareStatusSentence(status: AgentShareStatus): string {
   return SHARE_STATE_TEXT[status.state](status)
 }
 
+/**
+ * The badge beside the runtime badges: a short form of each state. The full
+ * sentence ({@link shareStatusSentence}) is its tooltip.
+ */
+export const SHARE_BADGE_TEXT: Record<AgentShareState, (status: AgentShareStatus) => string> = {
+  up_to_date: () => 'Up to date with the team',
+  unshared: (status) => {
+    const count = unsharedCount(status)
+    return count === 1 ? '1 change not shared' : `${count} changes not shared`
+  },
+  behind: () => 'The team changed this agent',
+  diverged: () => 'You and the team both changed it',
+  removed: () => 'No longer shared',
+  other_account: () => 'Shared on another account'
+}
+
+/** The badge's words: a failed read's short form, else the state's. */
+export function shareBadgeText(status: AgentShareStatus): string {
+  if (status.refusal) return SHARE_UI_TEXT.badgeReadFailed
+  return SHARE_BADGE_TEXT[status.state](status)
+}
+
+/** Whether the badge (and the Sharing tab's status) takes the warning tone. */
+export function shareStatusWarns(status: AgentShareStatus): boolean {
+  return status.refusal !== null || status.state === 'diverged' || status.state === 'removed'
+}
+
+/** A library grant, as the People list and the pickers name it. */
+export const SHARE_ACCESS_TEXT: Record<LibraryAccess, string> = {
+  read: 'Can use',
+  write: 'Can edit',
+  maintain: 'Maintainer'
+}
+
+/**
+ * A refusal from a surface that talks to the team library itself (People,
+ * Remove sharing): the server's own sentence when it gave one, since "try
+ * again" in front of "another person has it" would say the wrong thing;
+ * `no_access` as the sentence for what was being done.
+ */
+export function libraryRefusalSentence(
+  result: Pick<AgentShareResult, 'refusal' | 'detail'>,
+  noAccess: string
+): string {
+  const refusal = result.refusal ?? 'failed'
+  if (refusal === 'no_access') return noAccess
+  if (refusal === 'failed' && result.detail?.trim()) return result.detail.trim()
+  return shareRefusalSentence(refusal, result.detail)
+}
+
 /** Labels, headings and fixed sentences of the sharing surfaces. */
 export const SHARE_UI_TEXT = {
-  sharedGlyph: 'Shared with the team',
-  unsharedDot: 'Has changes to share or update',
+  badgeReadFailed: 'Couldn’t check with the team',
+  openSharing: 'Open this agent’s sharing settings',
   update: 'Update',
   updating: 'Updating…',
   shareChanges: 'Share changes…',
@@ -111,10 +163,68 @@ export const SHARE_UI_TEXT = {
   shareWithTeam: 'Share with the team…',
   shareWithTeamTitle: 'Share with the team',
   shareWithTeamBody:
-    'Put this agent in your Team library, so teammates can Get it and you can share changes with them.',
+    'Put this agent in your Team library. Only you and the people you choose here can get it — you can add more people later.',
   nameLabel: 'Name',
-  descriptionLabel: 'Description',
   loadingDraft: 'Loading…',
+  peopleLabel: 'People',
+  peopleSearchLabel: 'Find a person',
+  peopleSearchPlaceholder: 'Name or email',
+  peopleSearchHint: 'Type at least two letters of a name or email.',
+  peopleSearching: 'Searching…',
+  peopleNoneFound: 'No one found.',
+  peopleSearchFailed: 'People couldn’t be searched.',
+  peopleSearchFailedBecause: (why: string) => `People couldn’t be searched: ${why}`,
+  removePersonConfirm: (name: string) => `Remove ${name}’s access?`,
+  removePersonAction: 'Remove',
+  peopleOnlyMe: 'Only you, for now.',
+  accessLabel: 'Access',
+  addPerson: 'Add',
+  removePerson: (name: string) => `Remove ${name}`,
+  accessFor: (name: string) => `Access for ${name}`,
+  // The Sharing tab.
+  tabLabel: 'Sharing',
+  whereShared: 'Where it’s shared',
+  whereSharedInfo:
+    'This agent’s folder is linked to a team version. Update brings the team’s changes in; Share changes sends yours. Nothing is sent until you choose to.',
+  serverLabel: 'Server',
+  ownServer: 'Your own server',
+  libraryNameLabel: 'Name in the library',
+  libraryFolderLabel: 'Folder name',
+  yourAccessLabel: 'Your access',
+  maintainersLabel: 'Maintainers',
+  lastSharedLabel: 'Last shared',
+  lastShared: (when: string) => when,
+  lastSharedBy: (when: string, who: string) => `${when} by ${who}`,
+  peopleSection: 'People',
+  peopleInfo:
+    'Only the people listed here can get this agent from the Team library. A maintainer can change who has access and what they may do.',
+  peopleOnlyMaintainer: 'Only a maintainer can change who has access.',
+  peopleNoAccess: 'Only a maintainer can change who has access to this agent.',
+  peopleLoading: 'Loading…',
+  peopleLoadFailed: 'Who has access couldn’t be read.',
+  everyone: 'Everyone on this server',
+  roleMembers: (role: string) => `Everyone with the ${role} role`,
+  you: 'You',
+  shareWithPerson: 'Share with a person…',
+  shareWithPersonTitle: 'Share with a person',
+  historySection: 'History',
+  historyInfo:
+    'The versions of this agent recorded in its folder, newest first. Each has the note it was shared with.',
+  historyEmpty: 'Nothing recorded yet.',
+  historyLoading: 'Loading…',
+  historyFailed: 'The history couldn’t be read.',
+  notSharedYet: 'Not shared yet',
+  removeSharingSection: 'Remove sharing',
+  removeSharingHint: 'Disconnect this folder from the team. It stays on this computer as an ordinary agent.',
+  removeSharingMenu: 'Remove sharing…',
+  removeSharingTitle: 'Remove sharing',
+  removeSharingConfirm: 'Remove sharing',
+  removingSharing: 'Removing…',
+  removeSharingBody: (name: string) =>
+    `Stop sharing ${name} with the team? Its folder, files and history stay on this computer, and it becomes an ordinary agent you can share again later. Teammates keep their own copies.`,
+  alsoDeleteFromLibrary: 'Also delete it from the team library — teammates can no longer get it',
+  deleteNoAccess: 'Only a maintainer can delete it from the team library.',
+  noLongerSharedNote: (name: string) => `${name} is no longer shared with the team.`,
   removeFromComputer: 'Remove from this computer',
   removeFromComputerMenu: 'Remove from this computer…',
   removeFromComputerBody: (name: string) =>

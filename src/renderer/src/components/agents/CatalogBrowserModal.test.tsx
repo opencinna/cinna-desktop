@@ -340,6 +340,7 @@ function libraryAgent(overrides: Partial<LibraryAgentDto>): LibraryAgentDto {
     maintainers: [],
     engine: null,
     manifestId: null,
+    pushedBy: null,
     localAgentId: null,
     updateAvailable: false,
     ...overrides

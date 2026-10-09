@@ -5,14 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentShareResult, AgentShareStatus } from '../../../../../../shared/agentSharing'
 
 /**
- * A shared agent's status line on its page: whether it exists at all (decided
- * from the statuses list, so it is there at first paint), what it says (one
- * entry of the state or refusal map), which buttons it offers, and the two
- * dialogs it opens — Share changes, and the two-button conflict.
+ * A shared agent's badge in the chat header's summary row: whether it exists
+ * at all (decided from the statuses list, so it is there at first paint), what
+ * it says (a short form, with the full sentence as its tooltip), its tone,
+ * that a click opens the Sharing tab, which buttons sit after it, where their
+ * refusals go (the page's one-line slot), and the two dialogs they open —
+ * Share changes, and the two-button conflict.
  */
 
-const { AgentShareLine } = await import('./AgentShareLine')
-const { SHARE_REFUSAL_TEXT, SHARE_STATE_TEXT, SHARE_UI_TEXT } = await import('../../../../utils/shareText')
+const { AgentShareBadge } = await import('./AgentShareBadge')
+const { useShareActions } = await import('./useShareActions')
+const { SHARE_BADGE_TEXT, SHARE_REFUSAL_TEXT, SHARE_STATE_TEXT, SHARE_UI_TEXT } = await import('../../../../utils/shareText')
 const { resetSharingFetchClock, sharingStatusesKey } = await import('../../../../hooks/useSharing')
 const { useAuthStore } = await import('../../../../stores/auth.store')
 
@@ -68,34 +71,61 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-/** Mount with the statuses list already loaded, as the sidebar leaves it. */
-function mount(listed: AgentShareStatus[], onNote = vi.fn()): { client: QueryClient; onNote: typeof onNote } {
+interface Mounted {
+  client: QueryClient
+  onNote: ReturnType<typeof vi.fn>
+  onError: ReturnType<typeof vi.fn>
+  onOpenSharing: ReturnType<typeof vi.fn>
+}
+
+/** Mount with the statuses list already loaded, as the sidebar leaves it, inside a row like the runtime summary. */
+function mount(listed: AgentShareStatus[], onNote = vi.fn()): Mounted {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   client.setQueryData(sharingStatusesKey(null), listed)
   sharing.statuses.mockResolvedValue(ok(listed))
-  render(createElement(QueryClientProvider, { client }, createElement(AgentShareLine, { agentId: AGENT, onNote })))
-  return { client, onNote }
+  const onError = vi.fn()
+  const onOpenSharing = vi.fn()
+  // As the page has it: one actions instance owning the mutations and the
+  // dialogs, handed to the badge.
+  function Page(): React.JSX.Element {
+    const actions = useShareActions(AGENT, { onError, onNote })
+    return createElement(
+      'div',
+      null,
+      createElement('div', { 'data-row': '' }, createElement(AgentShareBadge, { agentId: AGENT, actions, onOpenSharing })),
+      actions.dialogs
+    )
+  }
+  render(createElement(QueryClientProvider, { client }, createElement(Page)))
+  return { client, onNote, onError, onOpenSharing }
 }
 
-function line(): HTMLElement | null {
-  return document.querySelector('[data-share-line]')
+function badge(): HTMLElement | null {
+  return document.querySelector('[data-share-badge]')
 }
 
 function sentence(): string {
-  return (line()?.querySelector('[role="status"], [role="alert"]')?.textContent ?? '').trim()
+  return (badge()?.textContent ?? '').trim()
 }
 
-describe('AgentShareLine — the slot', () => {
+describe('AgentShareBadge — the slot', () => {
   it('is there at first paint for a shared agent, before its own status lands', () => {
     mount([status()])
-    expect(line()).not.toBeNull()
-    expect(sentence()).toBe(SHARE_STATE_TEXT.up_to_date(status()))
+    expect(badge()).not.toBeNull()
+    expect(sentence()).toBe(SHARE_BADGE_TEXT.up_to_date(status()))
   })
 
   it('is absent for an agent that is not shared', () => {
     mount([status({ agentId: 'folder:other' })])
-    expect(line()).toBeNull()
+    expect(badge()).toBeNull()
+    expect(document.querySelector('[data-row]')?.childElementCount).toBe(0)
     expect(sharing.status).not.toHaveBeenCalled()
+  })
+
+  it('opens the Sharing tab when clicked', () => {
+    const { onOpenSharing } = mount([status()])
+    fireEvent.click(badge()!)
+    expect(onOpenSharing).toHaveBeenCalledTimes(1)
   })
 
   it('reads a cinna agent without reaching the network, and an external one with a fetch', () => {
@@ -119,11 +149,11 @@ describe('AgentShareLine — the slot', () => {
   })
 })
 
-describe('AgentShareLine — across a profile switch', () => {
+describe('AgentShareBadge — across a profile switch', () => {
   it('re-reads the agent’s status under the new account instead of keeping the last one’s', async () => {
     sharing.status.mockResolvedValue(ok(status({ state: 'unshared', unshared: true, changedFiles: 1 })))
     mount([status()])
-    await waitFor(() => expect(sentence()).toBe(SHARE_STATE_TEXT.unshared(status({ changedFiles: 1 }))))
+    await waitFor(() => expect(sentence()).toBe(SHARE_BADGE_TEXT.unshared(status({ changedFiles: 1 }))))
     expect(sharing.status).toHaveBeenCalledTimes(1)
 
     sharing.status.mockResolvedValue(ok(status({ state: 'other_account' })))
@@ -132,45 +162,49 @@ describe('AgentShareLine — across a profile switch', () => {
         currentUser: { id: 'p2', type: 'cinna_user', username: 'b', displayName: 'B', hasPassword: false } as never
       })
     )
-    await waitFor(() => expect(sentence()).toBe(SHARE_STATE_TEXT.other_account(status())))
+    await waitFor(() => expect(sentence()).toBe(SHARE_BADGE_TEXT.other_account(status())))
     expect(sharing.status).toHaveBeenCalledTimes(2)
   })
 })
 
-describe('AgentShareLine — what it says', () => {
-  it.each<[string, Partial<AgentShareStatus>]>([
-    ['up_to_date', {}],
-    ['unshared', { state: 'unshared', unshared: true, changedFiles: 3 }],
-    ['behind', { state: 'behind', behind: -1 }],
-    ['diverged', { state: 'diverged', ahead: 1, behind: 2, unshared: true }],
-    ['removed', { state: 'removed' }],
-    ['other_account', { state: 'other_account' }]
-  ])('%s → its state sentence', (state, overrides) => {
+describe('AgentShareBadge — what it says', () => {
+  it.each<[string, Partial<AgentShareStatus>, boolean]>([
+    ['up_to_date', {}, false],
+    ['unshared', { state: 'unshared', unshared: true, changedFiles: 3 }, false],
+    ['behind', { state: 'behind', behind: -1 }, false],
+    ['diverged', { state: 'diverged', ahead: 1, behind: 2, unshared: true }, true],
+    ['removed', { state: 'removed' }, true],
+    ['other_account', { state: 'other_account' }, false]
+  ])('%s → its short form, the full sentence as its tooltip; warning-toned: %s', (state, overrides, warn) => {
     const s = status(overrides)
     mount([s])
-    expect(sentence()).toBe(SHARE_STATE_TEXT[state as AgentShareStatus['state']](s))
+    expect(sentence()).toBe(SHARE_BADGE_TEXT[state as AgentShareStatus['state']](s))
+    expect(badge()!.title).toContain(SHARE_STATE_TEXT[state as AgentShareStatus['state']](s))
+    expect(badge()!.className.includes('--color-warning')).toBe(warn)
   })
 
   it('counts unshared changes', () => {
-    expect(SHARE_STATE_TEXT.unshared(status({ changedFiles: 1 }))).toMatch(/^1 change /)
-    expect(SHARE_STATE_TEXT.unshared(status({ changedFiles: 2 }))).toMatch(/^2 changes /)
+    expect(SHARE_BADGE_TEXT.unshared(status({ changedFiles: 1 }))).toBe('1 change not shared')
+    expect(SHARE_BADGE_TEXT.unshared(status({ changedFiles: 3 }))).toBe('3 changes not shared')
   })
 
-  it('a failed read shows its refusal instead of the state', () => {
+  it('a failed read says so, warning-toned, with its refusal as the tooltip', () => {
     mount([status({ refusal: 'fetch_failed' })])
-    expect(sentence()).toBe(SHARE_REFUSAL_TEXT.fetch_failed)
+    expect(sentence()).toBe(SHARE_UI_TEXT.badgeReadFailed)
+    expect(badge()!.title).toContain(SHARE_REFUSAL_TEXT.fetch_failed)
+    expect(badge()!.className).toContain('--color-warning')
   })
 
-  it('switches to the agent’s own status once it lands, in the same slot', async () => {
+  it('switches to the agent’s own status once it lands, in the same badge', async () => {
     sharing.status.mockResolvedValue(ok(status({ state: 'behind', behind: 2 })))
     mount([status()])
-    await waitFor(() => expect(sentence()).toBe(SHARE_STATE_TEXT.behind(status())))
+    await waitFor(() => expect(sentence()).toBe(SHARE_BADGE_TEXT.behind(status())))
   })
 })
 
-describe('AgentShareLine — which buttons', () => {
+describe('AgentShareBadge — which buttons', () => {
   const buttons = (): string[] =>
-    Array.from(line()?.querySelectorAll('button') ?? []).map((b) => b.textContent ?? '')
+    Array.from(document.querySelectorAll('[data-row] button:not([data-share-badge])')).map((b) => b.textContent ?? '')
 
   it.each<[string, Partial<AgentShareStatus>, string[]]>([
     ['up to date', {}, []],
@@ -186,16 +220,31 @@ describe('AgentShareLine — which buttons', () => {
     mount([status(overrides)])
     expect(buttons()).toEqual(expected)
   })
+
+  it('sits beside the badge in one unit that never wraps, at the badge’s height', () => {
+    mount([status({ state: 'behind', behind: 1, unshared: true, changedFiles: 1 })])
+    const unit = document.querySelector('[data-share-unit]') as HTMLElement
+    expect(unit.parentElement).toBe(document.querySelector('[data-row]'))
+    expect(unit.className).toContain('flex-nowrap')
+    const update = screen.getByRole('button', { name: SHARE_UI_TEXT.update })
+    expect(update.parentElement).toBe(unit)
+    expect(badge()!.parentElement).toBe(unit)
+    expect(update.className).toContain('py-0.5')
+    expect(update.className).toContain('text-[10px]')
+  })
 })
 
-describe('AgentShareLine — Update', () => {
-  it('a dirty refusal says to share first, on the line', async () => {
+describe('AgentShareBadge — Update', () => {
+  it('a dirty refusal says to share first, in the page’s one-line slot', async () => {
     sharing.update.mockResolvedValue(ok(result({ done: false, refusal: 'dirty' })))
-    mount([status({ state: 'behind', behind: 1 })])
+    const { onError } = mount([status({ state: 'behind', behind: 1 })])
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.update }))
     })
-    expect(sentence()).toBe(SHARE_REFUSAL_TEXT.dirty)
+    expect(onError).toHaveBeenCalledWith(null)
+    expect(onError).toHaveBeenLastCalledWith(SHARE_REFUSAL_TEXT.dirty)
+    // The badge keeps saying the state; no line of its own appears.
+    expect(sentence()).toBe(SHARE_BADGE_TEXT.behind(status()))
   })
 
   it('a conflict opens the two-button dialog', async () => {
@@ -208,7 +257,34 @@ describe('AgentShareLine — Update', () => {
   })
 })
 
-describe('AgentShareLine — Share changes dialog', () => {
+describe('AgentShareBadge — actions owned by the page', () => {
+  it('a collision that lands after the badge is gone still opens the two-button dialog', async () => {
+    let answer: (value: unknown) => void = () => {}
+    sharing.update.mockReturnValue(new Promise((r) => { answer = r }))
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const listed = [status({ state: 'behind', behind: 1 })]
+    client.setQueryData(sharingStatusesKey(null), listed)
+    sharing.statuses.mockResolvedValue(ok(listed))
+    // Clicking the badge switches the page to settings, which unmounts it.
+    function Page({ chat }: { chat: boolean }): React.JSX.Element {
+      const actions = useShareActions(AGENT, { onError: vi.fn() })
+      return createElement(
+        'div',
+        null,
+        chat ? createElement(AgentShareBadge, { agentId: AGENT, actions, onOpenSharing: vi.fn() }) : null,
+        actions.dialogs
+      )
+    }
+    const view = render(createElement(QueryClientProvider, { client }, createElement(Page, { chat: true })))
+    fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.update }))
+    view.rerender(createElement(QueryClientProvider, { client }, createElement(Page, { chat: false })))
+    expect(badge()).toBeNull()
+    await act(async () => answer(ok(result({ done: false, refusal: 'diverged_conflict' }))))
+    expect(screen.getByRole('dialog', { name: SHARE_UI_TEXT.conflictTitle })).toBeTruthy()
+  })
+})
+
+describe('AgentShareBadge — Share changes dialog', () => {
   const unshared = (): AgentShareStatus => status({ state: 'unshared', unshared: true, changedFiles: 2 })
   const field = (): HTMLTextAreaElement => screen.getByLabelText(SHARE_UI_TEXT.shareChangesLabel) as HTMLTextAreaElement
 
@@ -266,7 +342,7 @@ describe('AgentShareLine — Share changes dialog', () => {
   })
 })
 
-describe('AgentShareLine — the conflict dialog', () => {
+describe('AgentShareBadge — the conflict dialog', () => {
   async function openConflict(): Promise<ReturnType<typeof mount>> {
     sharing.update.mockResolvedValue(ok(result({ done: false, refusal: 'diverged_conflict' })))
     const mounted = mount([status({ state: 'behind', behind: 1 })])

@@ -30,9 +30,13 @@ import { SchedulesTab } from './SchedulesTab'
 import { AgentInterfaceTab } from '../AgentInterfaceTab'
 import { AgentAddonsTab, useAddonsBadge } from './AgentAddonsTab'
 import { AgentTasksTab, useTasksTabBadge } from './AgentTasksTab'
-import { AgentShareLine } from './sharing/AgentShareLine'
+import { AgentShareBadge } from './sharing/AgentShareBadge'
+import { SharingTab } from './sharing/SharingTab'
+import { useShareActions } from './sharing/useShareActions'
+import { useListedShareStatus } from '../../../hooks/useSharing'
+import { SHARE_UI_TEXT } from '../../../utils/shareText'
 
-export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 'tasks' | 'permissions' | 'folder' | 'credentials' | 'interface'
+export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 'tasks' | 'permissions' | 'folder' | 'credentials' | 'interface' | 'sharing'
 
 const TABS: { id: AgentPageTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -54,7 +58,10 @@ const TABS: { id: AgentPageTab; label: string }[] = [
   // that has grants.
   { id: 'permissions', label: 'Permissions' },
   { id: 'folder', label: 'Folder' },
-  { id: 'interface', label: 'Interface' }
+  { id: 'interface', label: 'Interface' },
+  // Only for a shared agent: where it is shared, who has access, its
+  // versions, and Remove sharing. Filtered out below for any other.
+  { id: 'sharing', label: SHARE_UI_TEXT.tabLabel }
 ]
 
 
@@ -93,6 +100,9 @@ export function LocalAgentPage(): React.JSX.Element {
   const { data: grants } = useLocalAgentGrants(activeLocalAgentId)
   const addons = useAddonsBadge(activeLocalAgentId)
   const tasksBadge = useTasksTabBadge(activeLocalAgentId)
+  // From the statuses list the sidebar already holds, so whether the Sharing
+  // tab and the chat header's badge exist is decided at first paint.
+  const listedShare = useListedShareStatus(activeLocalAgentId)
   const draft = useDraftLocalAgent()
   const rescan = useRescanLocalAgents()
   const openPath = useOpenAgentPath()
@@ -121,6 +131,28 @@ export function LocalAgentPage(): React.JSX.Element {
     setActionError(null)
     setActionNote(message)
   }, [])
+  /**
+   * Update / Share changes and their dialogs, owned here rather than by the
+   * badge or the Sharing tab: clicking the badge switches to settings mode and
+   * unmounts it, and a result landing after that — a collision from Update —
+   * must still open the conflict dialog. A refusal goes to the Sharing tab's
+   * own line while it is open (it registers itself), else to the page's slot.
+   */
+  const shareErrorSink = useRef<((message: string | null) => void) | null>(null)
+  const shareActions = useShareActions(activeLocalAgentId ?? '', {
+    onError: (message) => (shareErrorSink.current ?? reportError)(message),
+    onNote: reportNote
+  })
+  const bindShareErrors = useCallback((sink: ((message: string | null) => void) | null): void => {
+    shareErrorSink.current = sink
+  }, [])
+  // After the badge's click: focus follows the user to the tab it opened.
+  const [focusSharingTab, setFocusSharingTab] = useState(false)
+  useEffect(() => {
+    if (!focusSharingTab || mode !== 'settings') return
+    document.getElementById('agent-tab-sharing')?.focus()
+    setFocusSharingTab(false)
+  }, [focusSharingTab, mode, tab])
 
   // A freshly scaffolded agent asks for its one-shot draft here rather than in
   // the form that created it: the call outlives that form, and this is the
@@ -226,7 +258,11 @@ export function LocalAgentPage(): React.JSX.Element {
   // folder was never asked to have. Every other tab still has something true to
   // show: Overview its name and `AGENT.md`, Addons its connectors, Permissions the
   // profile it runs under, Folder the findings that explain what it is.
-  const tabs = agent.kind === 'bare' ? TABS.filter((entry) => !['commands', 'schedules'].includes(entry.id)) : TABS
+  const tabs = TABS.filter(
+    (entry) =>
+      !(agent.kind === 'bare' && ['commands', 'schedules'].includes(entry.id)) &&
+      (entry.id !== 'sharing' || listedShare != null)
+  )
   // The selected tab persists across agents, so someone on Commands who clicks
   // a bare agent would land on a tab that is not there and see an empty panel.
   // Falling back for the render only — `setTab` is untouched, so going back to
@@ -272,7 +308,31 @@ export function LocalAgentPage(): React.JSX.Element {
             >
               {agent.path}
             </button>
-            {mode === 'chat' && <RuntimePanel agent={agent} compact />}
+            {mode === 'chat' && (
+              <RuntimePanel
+                agent={agent}
+                compact
+                leading={
+                  /*
+                    A shared agent's state with the team, and its Update /
+                    Share changes, first in the row of runtime badges.
+                    Present from the first frame for a shared agent and absent
+                    for any other, so nothing in the row moves when the
+                    agent's own status lands.
+                  */
+                  <AgentShareBadge
+                    key={agent.id}
+                    agentId={agent.id}
+                    actions={shareActions}
+                    onOpenSharing={() => {
+                      setMode('settings')
+                      setTab('sharing')
+                      setFocusSharingTab(true)
+                    }}
+                  />
+                }
+              />
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             <OpenInMenu agent={agent} onError={reportError} onNote={reportNote} />
@@ -294,13 +354,6 @@ export function LocalAgentPage(): React.JSX.Element {
             <AgentActionsMenu agent={agent} onError={reportError} />
           </div>
         </header>
-        {/*
-          A shared agent's state with the team, and its Update / Share changes.
-          Present from the first frame for a shared agent and absent for any
-          other — decided from the statuses list the sidebar already holds —
-          so nothing below it moves when the agent's own status lands.
-        */}
-        <AgentShareLine key={agent.id} agentId={agent.id} onNote={reportNote} />
         {/*
           Always rendered, exactly one line: a refusal appearing here must not
           push the panel below it down, and the macOS automation message wraps
@@ -358,6 +411,7 @@ export function LocalAgentPage(): React.JSX.Element {
             return (
               <button
                 key={entry.id}
+                id={`agent-tab-${entry.id}`}
                 type="button"
                 role="tab"
                 aria-selected={active}
@@ -508,8 +562,18 @@ export function LocalAgentPage(): React.JSX.Element {
           {activeTab === 'permissions' && <PermissionsCard agent={agent} />}
           {activeTab === 'folder' && <FolderTab agent={agent} />}
           {activeTab === 'interface' && <AgentInterfaceTab key={agent.id} agent={agent} />}
+          {activeTab === 'sharing' && (
+            <SharingTab
+              key={agent.id}
+              agent={agent}
+              actions={shareActions}
+              bindActionErrors={bindShareErrors}
+              onNote={reportNote}
+            />
+          )}
         </div>
         </>}
+        {shareActions.dialogs}
       </div>
     </div>
   )

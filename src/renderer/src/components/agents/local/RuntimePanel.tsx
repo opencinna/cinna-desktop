@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Check, Circle, Loader2, Minus } from 'lucide-react'
 import {
   useOpenAgentCredentials,
@@ -32,7 +32,7 @@ import {
   loginFailureLead,
   loginPendingText
 } from '../../../../../shared/engine'
-import { FIELD, LABEL } from './fieldClasses'
+import { FIELD, LABEL, SUMMARY_BADGE } from './fieldClasses'
 import { SettingsInfoTip } from '../../settings/SettingsLayout'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isStaleWriteError } from '../../../../../shared/localAgents'
@@ -611,7 +611,20 @@ function SecretsLine({
   )
 }
 
-export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto; compact?: boolean }): React.JSX.Element {
+export function RuntimePanel({
+  agent,
+  compact = false,
+  leading
+}: {
+  agent: LocalAgentDto
+  compact?: boolean
+  /**
+   * Compact only: a unit for the same row, before the runtime's badges (the
+   * team-sharing state). First, so the runtime label settling and the model
+   * and issue badges arriving late never move it.
+   */
+  leading?: ReactNode
+}): React.JSX.Element {
   const { data: providers } = useProviders()
   const { data: models, isError: modelsFailed } = useModels()
   const { data: defaultMode } = useDefaultChatMode()
@@ -1724,8 +1737,9 @@ export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto;
       : onClaude ? (claudeFailure ? claudeFailure.badge : claudeAuth?.state === 'logged_out' ? 'Sign-in required' : null)
       : credentialMissing || (providers !== undefined && !effectiveProvider) ? 'AI credential needed'
       : status?.tone === DANGER || status?.tone === WARN ? 'Setup needed' : null
-    const badge = 'max-w-full truncate rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)]'
+    const badge = SUMMARY_BADGE
     return <div role="group" aria-label="Runtime summary" className="mt-2 flex flex-wrap items-center gap-1.5">
+      {leading}
       <span className={badge} title={onClaude && claudeAuth?.state === 'logged_in'
         ? `Claude Code${accountSuffix(claudeAuth.email, claudeAuth.subscriptionType)}` : label}>{label}</span>
       {model && <span className={badge} title={`Model: ${model}`}>{model}</span>}

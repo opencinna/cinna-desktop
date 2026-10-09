@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Plus, Users } from 'lucide-react'
+import { MessageSquare, Plus } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import { useAgentsHomeStore } from '../../../stores/agentsHome.store'
 import {
@@ -24,8 +24,8 @@ import { useCatalogInstall } from '../../../hooks/useCatalogInstall'
 import { landCatalogInstall } from '../../../stores/catalogInstall.store'
 import { useGetFromLibrary, useShareStatuses, useUpdateShared } from '../../../hooks/useSharing'
 import { useOpenAgentPage } from '../../../hooks/useOpenAgentPage'
-import type { AgentShareResult, AgentShareStatus } from '../../../../../shared/agentSharing'
-import { SHARE_UI_TEXT, shareRefusalSentence } from '../../../utils/shareText'
+import type { AgentShareResult } from '../../../../../shared/agentSharing'
+import { shareRefusalSentence } from '../../../utils/shareText'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import type { TeamLibraryActions } from '../TeamLibraryPanel'
 
@@ -60,43 +60,9 @@ function AgentChatShortcut({ agentId, name, available = true }: {
   )
 }
 
-/**
- * A shared row's glyph, with a dot when there is something to share or to
- * update. Its space exists only on shared rows, and the dot sits inside it,
- * so a state change never moves the name or the trailing slot.
- */
-function SharedGlyph({ status }: { status: AgentShareStatus }): React.JSX.Element {
-  const attention =
-    status.state !== 'removed' &&
-    status.state !== 'other_account' &&
-    (status.unshared || status.behind !== 0)
-  const label = attention
-    ? `${SHARE_UI_TEXT.sharedGlyph} — ${SHARE_UI_TEXT.unsharedDot.toLowerCase()}`
-    : SHARE_UI_TEXT.sharedGlyph
-  return (
-    <span
-      role="img"
-      aria-label={label}
-      title={label}
-      data-shared-glyph
-      className="relative ml-1 mt-2 inline-flex h-3 w-3 shrink-0 items-center justify-center text-[var(--color-text-muted)]"
-    >
-      <Users size={10} aria-hidden="true" />
-      {attention && (
-        <span
-          data-shared-dot
-          className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]"
-        />
-      )}
-    </span>
-  )
-}
-
-function AgentRow({ agent, color, share }: {
+function AgentRow({ agent, color }: {
   agent: LocalAgentDto
   color: string | null
-  /** The agent's team status when it is shared; undefined for any other row. */
-  share?: AgentShareStatus
 }): React.JSX.Element {
   const activeLocalAgentId = useUIStore((s) => s.activeLocalAgentId)
   const setAgentPageMode = useUIStore((s) => s.setAgentPageMode)
@@ -144,9 +110,6 @@ function AgentRow({ agent, color, share }: {
         <AgentTypeIcon agent={{ source: 'folder' }} color={color} className="mt-0.5" />
         <span className="min-w-0 flex-1 truncate text-xs">{agent.name}</span>
       </button>
-      {/* Beside the row's button, not inside it, so the row is still named by
-          the agent's name alone (the locator every spec uses). */}
-      {share && <SharedGlyph status={share} />}
       {/*
         A trailing 16x16 slot the row always has, so the name truncates at the
         same point whether or not the chat button is in it: nothing shifts under
@@ -300,11 +263,10 @@ export function LocalAgentsList(): React.JSX.Element {
     }
   }
   const { data: agentData } = useAgents()
-  const { data: shareStatuses } = useShareStatuses()
-  const shareByAgent = useMemo(
-    () => new Map((shareStatuses ?? []).map((status) => [status.agentId, status])),
-    [shareStatuses]
-  )
+  // Read here, though the rows no longer show it: the agent page decides
+  // whether its sharing badge and Sharing tab exist from this list at first
+  // paint, and the sidebar is what has it loaded before any page opens.
+  useShareStatuses()
   const allAgents = agentData?.filter((agent) => !agent.conductor && (agent.source !== 'remote' || agent.enabled !== false))
   const remoteAgents = profile?.type === 'cinna_user' ? (allAgents ?? []).filter((agent) => agent.source === 'remote') : []
   const a2aAgents = (allAgents ?? []).filter((agent) => agent.source === 'local' && agent.protocol === 'a2a')
@@ -343,7 +305,6 @@ export function LocalAgentsList(): React.JSX.Element {
                         key={agent.id}
                         agent={agent}
                         color={colorOf(agent.id)}
-                        share={shareByAgent.get(agent.id)}
                       />
                     ))}
                   </div>

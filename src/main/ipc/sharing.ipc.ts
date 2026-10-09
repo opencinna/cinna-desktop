@@ -108,16 +108,45 @@ export function registerSharingHandlers(): void {
 
   ipcHandle(
     'sharing:share-with-team',
-    (_event, input?: { agentId?: unknown; name?: unknown; description?: unknown }) => {
+    (_event, input?: { agentId?: unknown; name?: unknown; people?: unknown }) => {
       userActivation.requireActivated()
       return outcome('sharing:share-with-team', () =>
         sharingService.shareWithTeam(getSettingsScopeUserId(), str(input?.agentId), {
           name: input?.name,
-          description: input?.description
+          people: input?.people
         })
       )
     }
   )
+
+  ipcHandle('sharing:people', (_event, input?: { agentId?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('sharing:people', () => sharingService.people(getSettingsScopeUserId(), str(input?.agentId)))
+  })
+
+  ipcHandle('sharing:set-people', (_event, input?: { agentId?: unknown; people?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('sharing:set-people', () =>
+      sharingService.setPeople(getSettingsScopeUserId(), str(input?.agentId), input?.people)
+    )
+  })
+
+  ipcHandle('sharing:search-people', (_event, input?: { query?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('sharing:search-people', () => sharingService.searchPeople(input?.query))
+  })
+
+  ipcHandle('sharing:history', (_event, input?: { agentId?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('sharing:history', () => sharingService.history(getSettingsScopeUserId(), str(input?.agentId)))
+  })
+
+  ipcHandle('sharing:unshare', (_event, input?: { agentId?: unknown; deleteFromLibrary?: unknown }) => {
+    userActivation.requireActivated()
+    return outcome('sharing:unshare', () =>
+      sharingService.unshare(getSettingsScopeUserId(), str(input?.agentId), input?.deleteFromLibrary === true)
+    )
+  })
 
   ipcHandle('sharing:library', (_event, input?: { refresh?: unknown }) => {
     userActivation.requireActivated()

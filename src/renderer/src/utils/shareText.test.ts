@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest'
 import type { AgentShareStatus, ShareRefusal } from '../../../shared/agentSharing'
 import {
   FORBIDDEN_SHARE_WORDS,
+  SHARE_ACCESS_TEXT,
+  SHARE_BADGE_TEXT,
   SHARE_REFUSAL_TEXT,
   SHARE_STATE_TEXT,
   SHARE_UI_TEXT,
+  libraryRefusalSentence,
+  shareBadgeText,
   shareRefusalSentence,
   shareStatusSentence
 } from './shareText'
@@ -41,8 +45,10 @@ function everyString(): string[] {
   const out: string[] = []
   out.push(...Object.values(SHARE_REFUSAL_TEXT))
   for (const fn of Object.values(SHARE_STATE_TEXT)) out.push(fn(STATUS), fn({ ...STATUS, changedFiles: 1 }))
+  for (const fn of Object.values(SHARE_BADGE_TEXT)) out.push(fn(STATUS), fn({ ...STATUS, changedFiles: 1 }))
+  out.push(...Object.values(SHARE_ACCESS_TEXT))
   for (const value of Object.values(SHARE_UI_TEXT)) {
-    out.push(typeof value === 'function' ? (value as (x: string) => string)('Alpha') : value)
+    out.push(typeof value === 'function' ? (value as (x: string, y: string) => string)('Alpha', 'Bob') : value)
   }
   for (const refusal of Object.keys(SHARE_REFUSAL_TEXT) as ShareRefusal[]) {
     out.push(shareRefusalSentence(refusal, 'Alpha'))
@@ -84,5 +90,17 @@ describe('the sharing vocabulary', () => {
       'A file that can hold a secret is already in the team’s version (credentials/.env). Ask whoever maintains this agent to remove it before sharing.'
     )
     expect(shareRefusalSentence('secrets_tracked', null)).toBe(SHARE_REFUSAL_TEXT.secrets_tracked)
+  })
+
+  it('the badge says a short form of each state, and a failed read as such', () => {
+    for (const fn of Object.values(SHARE_BADGE_TEXT)) expect(fn(STATUS).trim()).not.toBe('')
+    expect(shareBadgeText({ ...STATUS, refusal: 'fetch_failed' })).toBe(SHARE_UI_TEXT.badgeReadFailed)
+    expect(shareBadgeText(STATUS)).toBe('3 changes not shared')
+  })
+
+  it('a library refusal is the server’s own sentence, or the surface’s own for no access', () => {
+    expect(libraryRefusalSentence({ refusal: 'failed', detail: 'Another person has it.' }, 'x')).toBe('Another person has it.')
+    expect(libraryRefusalSentence({ refusal: 'no_access', detail: null }, 'Only a maintainer.')).toBe('Only a maintainer.')
+    expect(libraryRefusalSentence({ refusal: 'turn_in_progress', detail: null }, 'x')).toBe(SHARE_REFUSAL_TEXT.turn_in_progress)
   })
 })

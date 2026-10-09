@@ -21,7 +21,7 @@ import type { LocalAgentDto } from '../../../../../shared/localAgents'
 let pageMode: 'chat' | 'settings' = 'settings'
 let draftingAgentIds: string[] = []
 const setAgentPageMode = vi.fn((mode: 'chat' | 'settings') => { pageMode = mode })
-beforeEach(() => { pageMode = 'settings'; draftingAgentIds = []; vi.clearAllMocks() })
+beforeEach(() => { pageMode = 'settings'; draftingAgentIds = []; listedShare = null; vi.clearAllMocks() })
 const setActiveView = vi.fn()
 const setPendingAgentId = vi.fn()
 const setSidebarTab = vi.fn()
@@ -73,14 +73,29 @@ vi.mock('../../layout/ChatWorkspace', () => ({
 }))
 
 const marker = (name: string) => () => createElement('div', { 'data-marker': name }, name)
-vi.mock('./RuntimePanel', () => ({ RuntimePanel: marker('runtime') }))
+// The compact row renders what it is given after the runtime badges — the
+// sharing badge — so the marker does too.
+vi.mock('./RuntimePanel', () => ({
+  RuntimePanel: ({ leading }: { leading?: unknown }) =>
+    createElement('div', { 'data-marker': 'runtime' }, leading as never, 'runtime')
+}))
 vi.mock('./ReadinessStrip', () => ({
   ReadinessStrip: ({ drafting }: { drafting: boolean }) =>
     createElement('div', { 'data-marker': 'readiness-strip', 'data-drafting': String(drafting) })
 }))
 vi.mock('./OpenInMenu', () => ({ OpenInMenu: marker('open-in') }))
 vi.mock('./AgentActionsMenu', () => ({ AgentActionsMenu: marker('actions') }))
-vi.mock('./sharing/AgentShareLine', () => ({ AgentShareLine: marker('share-line') }))
+vi.mock('./sharing/AgentShareBadge', () => ({
+  AgentShareBadge: ({ onOpenSharing }: { onOpenSharing: () => void }) =>
+    createElement('button', { type: 'button', 'data-marker': 'share-badge', onClick: onOpenSharing }, 'share-badge')
+}))
+vi.mock('./sharing/SharingTab', () => ({ SharingTab: marker('sharing-tab') }))
+vi.mock('./sharing/useShareActions', () => ({
+  useShareActions: () => ({ update: vi.fn(), updatePending: false, openShareChanges: vi.fn(), dialogs: null })
+}))
+/** The agent's entry in the statuses list: null = not shared. */
+let listedShare: unknown = null
+vi.mock('../../../hooks/useSharing', () => ({ useListedShareStatus: () => listedShare }))
 vi.mock('./ManifestCards', () => ({
   DescriptionCard: marker('description-card'),
   ExamplePromptsCard: marker('prompts-card')
@@ -154,6 +169,56 @@ describe('LocalAgentPage — chat and settings modes', () => {
     expect(setActiveView).not.toHaveBeenCalled()
     expect(setPendingAgentId).not.toHaveBeenCalled()
     expect(setSidebarTab).not.toHaveBeenCalled()
+  })
+})
+
+describe('LocalAgentPage — sharing', () => {
+  const SHARED = { agentId: 'folder:alpha', state: 'up_to_date', remote: { kind: 'cinna' } }
+
+  it('has a Sharing tab only for a shared agent, from the first paint', () => {
+    renderPage()
+    expect(screen.queryByRole('tab', { name: 'Sharing' })).toBeNull()
+    cleanupPage()
+    listedShare = SHARED
+    renderPage()
+    fireEvent.click(screen.getByRole('tab', { name: 'Sharing' }))
+    expect(screen.getByText('sharing-tab')).toBeTruthy()
+    expect(screen.queryByText('status-card')).toBeNull()
+  })
+
+  it('falls back to Overview once the agent is no longer shared', () => {
+    listedShare = SHARED
+    const { rerender } = renderPage()
+    fireEvent.click(screen.getByRole('tab', { name: 'Sharing' }))
+    expect(screen.getByText('sharing-tab')).toBeTruthy()
+    listedShare = null
+    rerender(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(LocalAgentPage)))
+    expect(screen.queryByRole('tab', { name: 'Sharing' })).toBeNull()
+    expect(screen.queryByText('sharing-tab')).toBeNull()
+    expect(screen.getByText('status-card')).toBeTruthy()
+  })
+
+  it('puts the sharing badge in the chat header’s runtime row, and its click opens Settings', () => {
+    pageMode = 'chat'
+    renderPage()
+    const runtime = document.querySelector('[data-marker="runtime"]')!
+    const badge = runtime.querySelector('[data-marker="share-badge"]') as HTMLElement
+    expect(badge).not.toBeNull()
+    // No separate share line under the header any more.
+    expect(document.querySelector('[data-share-line]')).toBeNull()
+    fireEvent.click(badge)
+    expect(setAgentPageMode).toHaveBeenCalledWith('settings')
+  })
+
+  it('moves focus to the Sharing tab after the badge opened it', () => {
+    listedShare = SHARED
+    pageMode = 'chat'
+    const { rerender } = renderPage()
+    fireEvent.click(document.querySelector('[data-marker="share-badge"]') as HTMLElement)
+    // The store mock is not reactive; render the mode the click asked for.
+    rerender(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(LocalAgentPage)))
+    expect(document.activeElement?.id).toBe('agent-tab-sharing')
+    expect(screen.getByText('sharing-tab')).toBeTruthy()
   })
 })
 
