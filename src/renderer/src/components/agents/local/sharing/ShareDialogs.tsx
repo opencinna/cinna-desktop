@@ -32,9 +32,12 @@ const SECONDARY =
   'text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50'
 const CANCEL =
   'rounded-md px-3 py-1.5 text-xs font-medium text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-secondary)] disabled:opacity-50'
-const FIELD =
-  'w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2.5 py-1.5 text-xs text-[var(--color-text)] ' +
+// Without a width, so a field can set its own: `w-full` beside a second
+// width class wins or loses on stylesheet order, not on the class string.
+const FIELD_BASE =
+  'rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2.5 py-1.5 text-xs text-[var(--color-text)] ' +
   'placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-60'
+const FIELD = `w-full ${FIELD_BASE}`
 
 function DialogShell({
   title,
@@ -247,7 +250,7 @@ export function AccessSelect({
       value={value}
       disabled={disabled}
       onChange={(event) => onChange(event.target.value as LibraryAccess)}
-      className={`${FIELD} w-auto ${className}`}
+      className={`${FIELD_BASE} w-auto ${className}`}
     >
       {ACCESS_CHOICES.map((access) => (
         <option key={access} value={access}>

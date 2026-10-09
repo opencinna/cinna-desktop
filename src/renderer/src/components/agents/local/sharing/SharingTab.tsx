@@ -233,6 +233,10 @@ function WhereSection({
   )
 }
 
+// The settings input without its `w-full`, which otherwise beats `w-36` and
+// takes the whole row, leaving the person's name no width at all.
+const ACCESS_SELECT = settingsInputClass.replace(/\bw-full\b\s*/, '')
+
 function personName(person: LibraryPerson, entry: LibraryAgentDto | null): string {
   const { principal } = person
   if (principal.kind === 'everyone') return SHARE_UI_TEXT.everyone
@@ -360,7 +364,7 @@ function PeopleSection({ agentId, entry }: { agentId: string; entry: LibraryAgen
                             )
                           )
                         }
-                        className={`${settingsInputClass} w-36 shrink-0 disabled:opacity-50`}
+                        className={`${ACCESS_SELECT} w-36 shrink-0 disabled:opacity-50`}
                       >
                         {(['read', 'write', 'maintain'] as const).map((access) => (
                           <option key={access} value={access}>

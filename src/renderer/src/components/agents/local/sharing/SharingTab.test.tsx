@@ -175,6 +175,16 @@ describe('SharingTab — people', () => {
     expect(within(people).getByRole('button', { name: SHARE_UI_TEXT.removePerson(SHARE_UI_TEXT.everyone) })).toBeTruthy()
   })
 
+  it('gives the access select a fixed width, never the whole row the name needs', async () => {
+    mount(status())
+    const people = section(SHARE_UI_TEXT.peopleSection)
+    await waitFor(() => expect(people.textContent).toContain(SHARE_UI_TEXT.everyone))
+    // `w-full` beside `w-36` wins on stylesheet order and leaves the name no width.
+    for (const select of within(people).getAllByRole('combobox')) {
+      expect(select.className.split(/\s+/)).not.toContain('w-full')
+    }
+  })
+
   it('builds each change on the list the server answered, and holds the controls while one is saving', async () => {
     let answer: (value: unknown) => void = () => {}
     sharing.setPeople.mockReturnValueOnce(new Promise((r) => { answer = r }))
@@ -255,6 +265,7 @@ describe('SharingTab — people', () => {
       await act(async () => { vi.advanceTimersByTime(400) })
       fireEvent.click(within(dialog).getByRole('option', { name: 'Bob <bob@x.test>' }))
       expect((within(dialog).getByLabelText(SHARE_UI_TEXT.accessLabel) as HTMLSelectElement).value).toBe('read')
+      expect(within(dialog).getByLabelText(SHARE_UI_TEXT.accessLabel).className.split(/\s+/)).not.toContain('w-full')
       await act(async () => {
         fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.addPerson }))
       })
