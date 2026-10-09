@@ -9,7 +9,7 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 - **Shared agent** — A kit agent directly under a root's `Local/` whose folder is **its own** git working tree with an `origin`. That is the whole definition: an agent a developer cloned by hand is recognised exactly like one the app fetched. A folder inside an enclosing repository (the workshop's), a bare agent, and an agent outside `Local/` are never shared
 - **Team version** — What the team has: `origin`'s `main`. For a Cinna remote, the team-library listing's `head_sha` says where it is without a fetch
 - **Team library** — Every agent shared with the active Cinna account's team, as `GET /api/v1/library` lists it, with the caller's access (`read`, `write`, `maintain`) and maintainers. Shown as a second source of the Agent catalog dialog
-- **Remote kind** — `cinna` when `origin` is `https://<host>/git/<repo_id>.git` on the server of a Cinna profile this machine has; `external` for anything else (the user's own GitHub, GitLab or SSH remote, authenticated by their own git setup)
+- **Remote kind** — `cinna` when `origin` is `…/git/<repo_id>.git` on a git origin that the instance of a Cinna profile on this machine uses: either its own origin or one it named itself (see [An instance's git may live on another origin](#an-instances-git-may-live-on-another-origin)). `external` covers anything else (the user's own GitHub, GitLab or SSH remote, authenticated by their own git setup)
 - **Get** — Fetch a library agent into the agents home's `Local/<slug>/`
 - **Update** — Bring the team's changes in, when they apply cleanly
 - **Share changes** — Record everything this machine changed under one note (pre-filled by an AI summary) and send it to the team
@@ -49,8 +49,13 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 
 1. **⋯ → Share with the team…** on a kit agent that is not shared yet, on a Cinna account whose Team library answered
 2. Name and description are pre-filled from the manifest; **Share** creates the agent in the library and sends this folder as its first version. The folder stays where it is
-3. An agent whose team version was **deleted from the library** (its status line reads "This agent is no longer shared") is offered Share with the team again. Only after a fresh read of the library confirms the entry is gone does main drop the old link (`origin`) and start over; the folder's own history stays, and the first send folds whatever the server would refuse
-3. A folder that cannot be sent — busy with a turn, or already tracking a file that can hold a secret — is refused **before** the library entry is created, so a refusal leaves nothing on the server
+3. An agent whose team version was **deleted from the library** is offered Share with the team again. Its status line reads "This agent is no longer shared". Main first re-reads the library rather than trusting the cache. The restart goes ahead only when all three hold:
+   - that read was a real listing, not a `404`/`403` standing in as empty
+   - it does not list the entry
+   - the old link is a Cinna remote of the active profile's instance
+
+   The old link (`origin`, and the `shared_remote` link in `desktop.json`) is dropped **only once the new library entry exists**. A refused preflight or a failed create therefore leaves the folder linked to its old team version, exactly as it was. The folder's history stays: each version keeps its note, author and date, and only `credentials/` and `app-data/` are taken out of it (see [never travel](#the-credentials-and-app-data-folders-never-travel-to-a-team-library-whole))
+4. A folder that cannot be sent — busy with a turn, or already tracking a file that can hold a secret — is refused **before** the library entry is created, so a refusal leaves nothing on the server
 
 ### Removing a shared agent
 
@@ -69,9 +74,15 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 
 ## Business Rules
 
-### Nothing about sharing is stored
+### Whether an agent is shared is never stored
 
-Whether an agent is shared, where its team version lives, and which repository it is are read back from `origin` every time; the caller's access and the team's latest version come from the cached library listing, which is itself never persisted. There is no table and no column. The contract (1.8.0, `shared_remote.local_state`) names a per-machine link in the agent's `app-data/desktop.json` — `shared_remote: {kind, repo_id, clone_url}` — and the app writes it on Get and Share with the team and clears it on a kept copy, for other hosts reading the folder; the desktop itself never reads it back. A stored "is shared" would disagree with the folder the first time a developer ran `git remote remove` in a terminal — and the folder is what the agent runs from.
+Every time, the app reads back from `origin` whether an agent is shared, where its team version lives and which repository it is. The caller's access and the team's latest version come from the cached library listing, and that listing is never persisted. There is no table and no column. A stored "is shared" would disagree with the folder the first time a developer ran `git remote remove` in a terminal, and the folder is what the agent runs from.
+
+Three things are written down, and none of them is the answer to "is this shared":
+
+- **`cinna.server` in the folder's `.git/config`**: the instance a folder was shared through or came from. It is a hint for choosing a profile and never makes a remote trusted (see [below](#an-instances-git-may-live-on-another-origin))
+- **The trust file in main**: which git origins each instance has named, and which library entry a first share created but has not yet sent to
+- **`shared_remote: {kind, repo_id, clone_url}` in the agent's `app-data/desktop.json`**: the per-machine link that contract 1.8.0 names in `shared_remote.local_state`. It is written on Get and Share with the team, and cleared on a kept copy and when Share with the team starts over. It is there for other hosts that read the folder. The desktop never reads it back to decide anything, because a developer's own clone has `origin` and no such link
 
 ### The library is polled, not pushed
 
@@ -91,8 +102,8 @@ The sharing surfaces never say branch, commit, push, pull, merge, rebase, remote
 
 The status line shows one state, with this precedence: **other account**, **no longer shared**, **both changed**, **team changed**, **changes to share**, **up to date**. Main decides it; the renderer only chooses the sentence.
 
-- **Shared on another account** — a Cinna remote on a server the *active* profile is not signed in to. Counts come from disk; no listing is read, no token is minted, nothing reaches the network. A token is only ever sent to the server that issued it
-- **No longer shared** — the listing for that server loaded and no longer has the repository
+- **Shared on another account** — a Cinna remote on a server the *active* profile is not signed in to. Counts come from disk; no listing is read, no token is minted, nothing reaches the network. A token is only ever sent to the server that issued it, or to a git origin that server named
+- **No longer shared** — a real listing for that server loaded and no longer has the repository. A `404`/`403` listing stands in as empty and says nothing about any entry, so it never makes an agent "no longer shared"
 - **N changes you haven't shared** — files that differ from what the team has: recorded-but-unsent versions and working-tree edits measured from the **merge base**, so a file only the team changed is never counted as the user's, plus new files the ignore rules do not exclude. A new file is a change to share; `credentials/.env` is not
 - **The team changed this agent** — when the listing's head is not in this folder's history. Without a fetch the app may know only that the team moved, not by how much; the sentence is the same either way
 
@@ -113,18 +124,21 @@ A refusal from the server carries the server's own sentence; a `403` reads as "a
 Before anything is recorded, two things are made true:
 
 - **The kit's agent ignore rules are in the folder's own `.git/info/exclude`**, in one marked block, rewritten only when the kit's rules change. What `add -A` records must not depend on a `.gitignore` a teammate (or a developer's own repository) left in the folder. The same block is written into every clone before it becomes visible
-- **No file that can hold a credential is already tracked** — anything the contract's `secret_files` rules call secret, and the desktop-owned `app-data/desktop.json`, which holds a bearer token. An ignore rule cannot untrack a file, so such a folder is refused (`secrets_tracked`), nothing is recorded or sent, and up to three of the files are named. The sentence asks whoever maintains the agent to remove them, because a non-developer cannot take a file out of the team's version
+- **No file that can hold a credential is already tracked.** That covers anything the contract's `secret_files` rules call secret, and the desktop-owned `app-data/desktop.json`, which holds a bearer token. For a Cinna team library, a tracked secret under `credentials/` or `app-data/` is not a refusal, because the app takes those folders out itself ([below](#the-credentials-and-app-data-folders-never-travel-to-a-team-library-whole)). An ignore rule cannot untrack a file, so the folder is refused (`secrets_tracked`) when a secret is tracked anywhere else (a `.env` at the agent's root, say), or anywhere at all for an `external` remote. Nothing is recorded or sent, and up to three of the files are named. The sentence asks whoever maintains the agent to remove them, because a non-developer cannot take a file out of the team's version
 
 Sharing for the first time also writes the kit's agent ignore files the folder lacks, so an agent made before it was a repository does not send its secrets with the first share. A folder that is already its own repository is checked for tracked secrets **before** the library entry is created: a refusal after the entry existed would leave an empty agent in the team's library.
 
 The AI share summary is held to the same line. Its text is built from the folder's differences with every tracked secret file left out, because the summary goes to whatever backend AI Functions resolves to — and the dialog drafts it *before* Share has had the chance to refuse the folder.
 
-### The credentials and app-data folders never travel, whole
+### The credentials and app-data folders never travel to a team library, whole
 
-The contract's `shared_remote.never_travels` (1.8.0; for a workshop whose own `.cinna-kit/` predates it, the same `credentials/` and `app-data/` the server enforces) names folders that never go to a shared remote **in full** — not just their secret files: the template's own `credentials/README.md` and `.env.example` included. The team library's server refuses any send carrying a file under them, in **any** new version, not only the latest.
+This applies to **Cinna team libraries only**. An `external` remote, such as a developer's own GitHub, gets the kit's ordinary ignore rules and nothing more: what goes into their repository is theirs to decide.
 
-- They are in the exclude block as `/credentials/` and `/app-data/`, and anything already recorded under them is dropped from what is recorded before every recording. The files stay on disk
-- Before a send, when a version not yet sent recorded one of them — a first send the server refused, a developer's own history — the unsent versions are **folded into one** on top of the team's version (or as the first version), from what is recorded now. Only history nobody else has is rewritten; the working tree is untouched
+The contract's `shared_remote.never_travels` (1.8.0) names folders that never go to a shared remote **in full**, not just their secret files. That includes the template's own `credentials/README.md` and `.env.example`. When a workshop's own `.cinna-kit/` predates 1.8.0, the app uses the same two folders, `credentials/` and `app-data/`, because the server enforces them whatever the folder's contract says. The team library's server refuses any send that carries a file under them in **any** new version, not only the latest. A first share once failed on exactly this: the template's `credentials/README.md` went with the first version and the server refused all of it.
+
+- They are in the exclude block as `/credentials/` and `/app-data/`. Before every recording, anything already recorded under them is dropped from what is recorded, and the files stay on disk. Share with the team's preflight only checks and changes nothing, because a preflight that then refuses must leave the folder as it found it
+- **Before a send, the versions not yet sent are cleaned, not squashed.** A version may have recorded one of these folders: a first send the server refused, say, or a developer's own history. First the app fetches, so "not yet sent" is measured against the team's version as it is now. Every unsent version then has those paths taken out and keeps its note, author, dates and place. Then, if the team has moved on, the cleaned versions are rebased onto it. Clean first and rebase second, because replaying a version that untracked a file would delete that file from disk. Nothing the team already has is rewritten. The working tree and the index are untouched, and the branch moves only if nothing else moved it meanwhile. A folder on a detached HEAD is refused with a sentence saying to switch to its branch. A fetch that fails refuses the send (`fetch_failed`)
+- **Update** cleans the same way before it rebases this machine's unsent versions, for the same reason: otherwise the rebase could delete a credential from disk. A send that is rejected because a teammate shared first is cleaned again after its one Update
 - **Get** gives the fetched agent the template's `credentials/` and `app-data/` folders locally, only what is missing, since the team's version never has them
 
 ### Who a version is from
@@ -195,13 +209,14 @@ Catalog (Team library) / status line / ⋯ menu / Inbox card / blocked-job row
 - [The Inbox](../../jobs/tasks/inbox.md) — the **The team changed *X*** cards
 - [Jobs](../../jobs/jobs/jobs.md) — the blocked-job row's **Get *X* from the team library**
 - [AI Functions](../../llm/ai_functions/ai_functions.md) — the share summary
-- [Kit Contract & Manifest Layer](kit_contract.md) — the agent ignore template and `secret_files` rules sharing enforces
+- [Kit Contract & Manifest Layer](kit_contract.md) — the agent ignore template, the `secret_files` rules and `shared_remote` (`never_travels`, `local_state`) that sharing enforces
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the rescan every action ends with, and the turn lock the writing verbs take
 - [Native Client Data Sync](../../sync/data_sync/data_sync.md) — a different thing: profile data, end-to-end encrypted. Team-library agents are not
 - Sub-doc: [Technical Details](team_sharing_tech.md)
 
 ## Not verified
 
-- **Barely run against a real Cinna server.** The server half — the git host at `/git/<repo_id>.git` and the library API (`GET /api/v1/library`, `POST /api/v1/library/agents`) — was built in parallel against the agreed interface. One run of Share with the team against a local cinna-core found the git-origin mismatch above; the rest of the flow (send, Get, Update, push refusals) has not been observed end to end
+- **Only Share with the team has been run against a real Cinna server**, a local cinna-core. Its server half, the git host at `/git/<repo_id>.git` and the library API (`GET /api/v1/library`, `POST /api/v1/library/agents`), was built in parallel against the agreed interface. That run found two failures, both now fixed. The first was the git origin: `clone_url` was on the backend origin and was refused as another server's. The second was the server refusing the template's `credentials/` folder. **Get, Update, Share changes, Use the team's version and the Inbox's *The team changed X* card have not been observed end to end against core.** Their field names and the server's push refusals are still what was agreed, not what was seen
+- Three paths are tested only against fakes: the retry that finishes an entry left empty (it relies on core answering `409` with an empty `head_sha` for the taken name), the restart of an agent whose entry was deleted, and the cleaning of unsent versions before a send or an Update
 - The git verbs are covered by unit tests over real repositories (bare remotes, two clones, the real binary) and a local HTTP server that checks the header scoping and the redirect refusal. The service is tested over real folders with the library and token mocked. No end-to-end spec drives these surfaces yet
 - That a `403` from the listing means "this role has no library" rather than "this session is broken" is an assumption about the server's behaviour
