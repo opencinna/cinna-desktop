@@ -49,6 +49,7 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 
 1. **⋯ → Share with the team…** on a kit agent that is not shared yet, on a Cinna account whose Team library answered
 2. Name and description are pre-filled from the manifest; **Share** creates the agent in the library and sends this folder as its first version. The folder stays where it is
+3. An agent whose team version was **deleted from the library** (its status line reads "This agent is no longer shared") is offered Share with the team again. Only after a fresh read of the library confirms the entry is gone does main drop the old link (`origin`) and start over; the folder's own history stays, and the first send folds whatever the server would refuse
 3. A folder that cannot be sent — busy with a turn, or already tracking a file that can hold a secret — is refused **before** the library entry is created, so a refusal leaves nothing on the server
 
 ### Removing a shared agent
@@ -70,7 +71,7 @@ Let a team work on the same folder agent from several machines. A `Local/<slug>/
 
 ### Nothing about sharing is stored
 
-Whether an agent is shared, where its team version lives, and which repository it is are read back from `origin` every time; the caller's access and the team's latest version come from the cached library listing, which is itself never persisted. There is no table, no column, no flag in the agent's desktop state. A stored "is shared" would disagree with the folder the first time a developer ran `git remote remove` in a terminal — and the folder is what the agent runs from.
+Whether an agent is shared, where its team version lives, and which repository it is are read back from `origin` every time; the caller's access and the team's latest version come from the cached library listing, which is itself never persisted. There is no table and no column. The contract (1.8.0, `shared_remote.local_state`) names a per-machine link in the agent's `app-data/desktop.json` — `shared_remote: {kind, repo_id, clone_url}` — and the app writes it on Get and Share with the team and clears it on a kept copy, for other hosts reading the folder; the desktop itself never reads it back. A stored "is shared" would disagree with the folder the first time a developer ran `git remote remove` in a terminal — and the folder is what the agent runs from.
 
 ### The library is polled, not pushed
 
@@ -120,7 +121,7 @@ The AI share summary is held to the same line. Its text is built from the folder
 
 ### The credentials and app-data folders never travel, whole
 
-The contract's `shared_remote.never_travels` (1.8.0; until the bundled kit is synced to it, the same `credentials/` and `app-data/` the server enforces) names folders that never go to a shared remote **in full** — not just their secret files: the template's own `credentials/README.md` and `.env.example` included. The team library's server refuses any send carrying a file under them, in **any** new version, not only the latest.
+The contract's `shared_remote.never_travels` (1.8.0; for a workshop whose own `.cinna-kit/` predates it, the same `credentials/` and `app-data/` the server enforces) names folders that never go to a shared remote **in full** — not just their secret files: the template's own `credentials/README.md` and `.env.example` included. The team library's server refuses any send carrying a file under them, in **any** new version, not only the latest.
 
 - They are in the exclude block as `/credentials/` and `/app-data/`, and anything already recorded under them is dropped from what is recorded before every recording. The files stay on disk
 - Before a send, when a version not yet sent recorded one of them — a first send the server refused, a developer's own history — the unsent versions are **folded into one** on top of the team's version (or as the first version), from what is recorded now. Only history nobody else has is rewritten; the working tree is untouched

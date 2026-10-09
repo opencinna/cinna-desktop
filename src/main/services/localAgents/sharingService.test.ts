@@ -546,6 +546,37 @@ describe('which account a remote belongs to', () => {
 })
 
 describe('share with the team', () => {
+  it('starts over on a folder whose team version the library no longer has, and links the new one', async () => {
+    makeOwnRepo(`${HOST}/git/gone.git`)
+    git(agentDir, 'config', 'cinna.server', HOST)
+    const fresh = { ...libraryAgent('r20', 'alpha', null), head_sha: null, access: 'maintain' }
+    cinnaFetch.mockImplementation(async (...args: unknown[]) => {
+      if ((args[2] as { method?: string } | undefined)?.method === 'POST') return fresh
+      return { agents: [], mirrors: [] }
+    })
+    const init = vi.spyOn(gitService, 'initWithRemote').mockImplementation(async (dir, url) => {
+      git(dir, 'remote', 'add', 'origin', url)
+      return { done: true, refusal: null, detail: null }
+    })
+    try {
+      const result = await sharingService.shareWithTeam(USER, agentId, {})
+      expect(result.done).toBe(true)
+      expect(init).toHaveBeenCalledTimes(1)
+      expect(git(agentDir, 'config', '--get', 'remote.origin.url').trim()).toBe(`${HOST}/git/r20.git`)
+      const state = JSON.parse(readFileSync(join(agentDir, 'app-data', 'desktop.json'), 'utf8'))
+      expect(state.shared_remote).toEqual({ kind: 'cinna', repo_id: 'r20', clone_url: `${HOST}/git/r20.git` })
+    } finally {
+      init.mockRestore()
+    }
+  }, 30_000)
+
+  it('still refuses a folder whose team version the library has', async () => {
+    makeOwnRepo(`${HOST}/git/r21.git`)
+    listed(libraryAgent('r21', 'alpha', null))
+    const result = await sharingService.shareWithTeam(USER, agentId, {})
+    expect(result.refusal).toBe('remote_exists')
+    expect(git(agentDir, 'config', '--get', 'remote.origin.url').trim()).toBe(`${HOST}/git/r21.git`)
+  }, 30_000)
   it('finishes an entry an earlier attempt created and never sent to, instead of failing on the name', async () => {
     const empty = { ...libraryAgent('r10', 'alpha', null), clone_url: `${GIT_HOST}/git/r10.git`, head_sha: null, access: 'maintain' }
     cinnaFetch.mockImplementation(async (...args: unknown[]) => {

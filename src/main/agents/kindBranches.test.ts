@@ -411,6 +411,12 @@ const NOT_A_KIND_BRANCH: { file: string; category: Category; value: string; why:
     category: 'kind',
     value: 'external',
     why: "`status.remote.kind` is an AgentRemoteKind ('cinna' | 'external') — an external team version has no library listing to say the caller's access, so Share changes is offered and the server answers"
+  },
+  {
+    file: 'src/main/services/localAgents/desktopStateService.ts',
+    category: 'kind',
+    value: 'external',
+    why: "`raw.kind` in `shared_remote` is the contract's remote kind ('cinna' | 'external', layout.json shared_remote.local_state) — validating a stored link, not who owns an agent row"
   }
 ]
 

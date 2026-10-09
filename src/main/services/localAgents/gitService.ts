@@ -1239,9 +1239,10 @@ export async function excludeFromEnclosingRepo(dir: string): Promise<void> {
 }
 
 /**
- * What cinna-core's push policy enforces today for contract 1.8.0, used only
- * while the bundled kit predates `shared_remote.never_travels`. Remove once
- * `make kit-sync` brings 1.8.0 in: then the contract is the only source.
+ * Contract 1.8.0's `never_travels`, for a contract that predates it: the
+ * layout is read from the workshop's own `.cinna-kit/` when it has one, and a
+ * workshop made before 1.8.0 still has an older copy. The server enforces
+ * these whatever the folder's contract says.
  */
 const NEVER_TRAVELS_FALLBACK = ['credentials/', 'app-data/']
 

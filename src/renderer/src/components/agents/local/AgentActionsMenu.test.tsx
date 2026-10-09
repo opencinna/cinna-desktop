@@ -163,6 +163,13 @@ describe('AgentActionsMenu — Share with the team', () => {
     expect(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.shareWithTeam })).toBeTruthy()
   })
 
+  it('is offered again when the library no longer has the agent\'s team version', () => {
+    library = LIBRARY
+    listed = { ...sharedStatus(), state: 'removed' }
+    openMenu()
+    expect(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.shareWithTeam })).toBeTruthy()
+  })
+
   it.each([
     ['already shared', () => { library = LIBRARY; listed = sharedStatus() }, agent()],
     ['no Team library', () => { library = null }, agent()],

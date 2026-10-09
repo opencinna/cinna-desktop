@@ -40,6 +40,13 @@ export interface DesktopSessionState {
   updatedAt: number
 }
 
+/** `shared_remote` in `app-data/desktop.json`, as contract 1.8.0 names its fields. */
+export interface DesktopSharedRemote {
+  kind: 'cinna' | 'external'
+  repo_id: string | null
+  clone_url: string
+}
+
 export interface DesktopState {
   serviceCredentials?: ServiceCredentialAttachments
   /** Loopback base URL the engine last served this agent's API on. */
@@ -144,6 +151,14 @@ export interface DesktopState {
   handovers: HandoverSetting | null
   delegations?: HandoverSetting | null
   cloudDelegations?: HandoverSetting | null
+  /**
+   * The contract's per-machine link to a shared remote (`layout.json` →
+   * `shared_remote.local_state`, 1.8.0): written when this machine shares or
+   * gets the agent, snake_case because the contract names the fields. Kept
+   * for other hosts reading the folder; the desktop itself reads a shared
+   * agent's remote from `origin`, which a developer's own clone also has.
+   */
+  shared_remote?: DesktopSharedRemote | null
 }
 
 const EMPTY_STATE: DesktopState = {
@@ -245,8 +260,16 @@ function coerce(raw: unknown): DesktopState {
     // something that merely looks affirmative.
     handovers: raw.handovers === 'auto' || raw.handovers === 'ask' ? raw.handovers : null,
     delegations: raw.delegations === 'auto' || raw.delegations === 'ask' ? raw.delegations : null,
-    cloudDelegations: raw.cloudDelegations === 'auto' || raw.cloudDelegations === 'ask' ? raw.cloudDelegations : null
+    cloudDelegations: raw.cloudDelegations === 'auto' || raw.cloudDelegations === 'ask' ? raw.cloudDelegations : null,
+    shared_remote: coerceSharedRemote(raw.shared_remote)
   }
+}
+
+function coerceSharedRemote(raw: unknown): DesktopSharedRemote | null {
+  if (!isRecord(raw)) return null
+  const cloneUrl = asString(raw.clone_url)
+  if (!cloneUrl || (raw.kind !== 'cinna' && raw.kind !== 'external')) return null
+  return { kind: raw.kind, repo_id: asString(raw.repo_id), clone_url: cloneUrl }
 }
 
 /**

@@ -34,6 +34,7 @@ import { manifestPath, readManifest, writeManifest } from '../../kit/manifestIo'
 import { aiFunctions } from '../aiFunctionsService'
 import { SHARE_SUMMARY_SYSTEM_PROMPT } from '../aiFunctionPrompts'
 import { libraryTrust } from '../libraryTrust'
+import { desktopStateService, type DesktopSharedRemote } from './desktopStateService'
 import { libraryService, toLibraryEntry, type CachedListing, type LibraryEntry } from '../libraryService'
 import { createLogger } from '../../logger/logger'
 import { AGENTS_SUBDIR, folderAgentId } from '../../../shared/localAgents'
@@ -445,6 +446,28 @@ async function unfinishedEntry(profile: string, host: string, slug: string): Pro
 }
 
 /**
+ * Whether a folder's `origin` is a team version of the active profile's
+ * instance that the library — read fresh, not from the cache — no longer
+ * lists: removed on the server, so Share with the team may start it over.
+ */
+async function removedFromLibrary(
+  profile: string,
+  host: string,
+  originUrl: string,
+  recordedServer: string | null
+): Promise<boolean> {
+  const remote = remoteOf(originUrl, recordedServer)
+  if (remote.kind !== 'cinna' || remote.host !== host || remote.repoId === null) return false
+  let listing: CachedListing | null
+  try {
+    listing = await libraryService.refresh(profile)
+  } catch {
+    return false
+  }
+  return listing !== null && !listing.agents.some((agent) => agent.repoId === remote.repoId)
+}
+
+/**
  * Share with the team, once the folder has cleared its preflight: create the
  * library entry, then record the folder in place and send it there.
  */
@@ -484,7 +507,10 @@ async function createAndSend(
   })
   // Recorded whether or not the first send went through: once `origin` is
   // set the folder is this instance's, and a retry is a Share changes.
-  if (existsSync(join(kit.dir, '.git'))) await recordServer(kit.dir, host)
+  if (existsSync(join(kit.dir, '.git'))) {
+    await recordServer(kit.dir, host)
+    writeLocalLink(kit.dir, { kind: 'cinna', repo_id: entry.repoId, clone_url: entry.cloneUrl })
+  }
   if (action.done) libraryTrust.clearPending(host, input.slug)
   await refreshListing()
   settle(userId, kit.root.id)
@@ -653,6 +679,8 @@ export const sharingService = {
           await statusOf(agentId, shared, false).catch(() => null)
         )
       }
+      // The copy is nobody's team agent: no link in its own state either.
+      writeLocalLink(mineDir, null)
       if (!(await gitService.removeOrigin(mineDir))) {
         logger.warn('the kept copy still has the team version as origin')
       }
@@ -694,7 +722,11 @@ export const sharingService = {
     if (!kit) return refused('failed', 'Only an agent in your Local agents folder can be shared.')
     const existing = await gitService.readShareRemote(kit.dir)
     if (existing.refusal === 'git_missing') return refused('git_missing')
-    if (existing.ownRepo && existing.originUrl !== null) return refused('remote_exists')
+    if (existing.ownRepo && existing.originUrl !== null) {
+      if (!(await removedFromLibrary(profile, host, existing.originUrl, existing.cinnaServer))) {
+        return refused('remote_exists')
+      }
+    }
 
     const draft = sharingService.shareWithTeamDraft(userId, agentId)
     const name = typeof input?.name === 'string' && input.name.trim() !== '' ? input.name.trim() : draft.name
@@ -709,6 +741,13 @@ export const sharingService = {
     const lock = lockOrRefuse(agentId)
     if (!lock) return refused('turn_in_progress')
     try {
+      if (existing.ownRepo && existing.originUrl !== null) {
+        // Its team version is gone from the library: start over. The history
+        // here stays; only the link to the deleted entry goes, and the first
+        // send folds whatever it would refuse.
+        if (!(await gitService.removeOrigin(kit.dir))) return refused('failed', 'The old team link could not be removed.')
+        writeLocalLink(kit.dir, null)
+      }
       // Refused before the library entry exists, so a folder that cannot be
       // sent does not leave an empty entry behind on the server.
       const preflight = await gitService.preflightShare(kit.dir, kit.root.path)
@@ -788,6 +827,7 @@ export const sharingService = {
     await recordServer(target, host)
     try {
       gitService.restoreLocalOnlyFolders(target, root.path)
+      writeLocalLink(target, { kind: 'cinna', repo_id: entry.repoId, clone_url: entry.cloneUrl })
     } catch (err) {
       logger.warn('could not give a fetched agent its local credentials folder', { error: String(err) })
     }
@@ -927,6 +967,15 @@ const UNSAFE_ADDRESS =
 async function recordServer(dir: string, serverOrigin: string): Promise<void> {
   if (!(await gitService.setCinnaServer(dir, serverOrigin))) {
     logger.warn('could not record the Cinna instance of a shared folder')
+  }
+}
+
+/** The contract's `shared_remote` in the agent's own `app-data/desktop.json`; null clears it. */
+function writeLocalLink(dir: string, link: DesktopSharedRemote | null): void {
+  try {
+    desktopStateService.patch(dir, 'kit', { shared_remote: link })
+  } catch (err) {
+    logger.warn('could not write the shared_remote link into desktop.json', { error: String(err) })
   }
 }
 

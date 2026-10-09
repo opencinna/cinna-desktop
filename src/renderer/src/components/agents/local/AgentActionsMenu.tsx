@@ -279,12 +279,13 @@ export function AgentActionsMenu({ agent, onError }: AgentActionsMenuProps): Rea
   const shared = listed != null && isKit
   const isCinna = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   const library = useTeamLibrary()
-  // Offered only where it can work: a kit folder known not to be shared, on a
-  // Cinna profile whose Team library answered. Main refuses anything else
-  // (a folder outside `Local/`, one with a team version already), and the
+  // Offered only where it can work: a kit folder known not to be shared — or
+  // whose team version the library no longer has, which starts it over — on
+  // a Cinna profile whose Team library answered. Main refuses anything else
+  // (a folder outside `Local/`, one with a live team version), and the
   // dialog shows why.
   const canShareWithTeam =
-    isKit && listed === null && isCinna && library.data != null
+    isKit && (listed === null || listed?.state === 'removed') && isCinna && library.data != null
   const [sharingWithTeam, setSharingWithTeam] = useState(false)
   const [shareTeamError, setShareTeamError] = useState<string | null>(null)
   // Owned here, not in the dialog, for the same reason as the delete: the
