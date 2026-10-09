@@ -227,6 +227,13 @@ export interface JobDependencyStatus {
   localId: string | null
   /** MCP transport, present when kind === 'mcp' (drives the settings link). */
   transport?: McpTransport
+  /**
+   * A folder agent dependency's manifest id (`cinna-agent.json` `id`), so a
+   * missing one can be matched against the team library ("Get *X* from the
+   * team library"). Absent for every other kind, and for a never-stamped
+   * folder whose positional `legacy:` id names a directory on another machine.
+   */
+  manifestId?: string
 }
 
 /** Events the engine pushes to the renderer over the sync broadcast channel. */

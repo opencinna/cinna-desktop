@@ -213,6 +213,14 @@ describe('the Jobs detail dependency list for a folder agent', () => {
     // no local row to read one from.
     expect(dep.label).toBe('Invoice Checker')
     expect(dep.localId).toBeNull()
+    // The id the blocked-job panel looks up in the team library.
+    expect(dep.manifestId).toBe('6f1a-uuid')
+  })
+
+  it('never offers a positional legacy id as a manifest id', () => {
+    applyIncomingJob([{ ...folderDep, manifestId: 'legacy:root-1:Invoice Checker' }])
+    const [dep] = jobService.getDependencyStatus(USER, JOB_ID)
+    expect(dep.manifestId).toBeUndefined()
   })
 
   it('resolves it, and points at the real row, where the workshop is present', () => {

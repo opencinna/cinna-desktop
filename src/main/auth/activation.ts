@@ -4,6 +4,7 @@ import { reloadUserProviders } from './reload'
 import { clearAllAdapters } from '../llm/registry'
 import { mcpManager } from '../mcp/manager'
 import { runSyncOnce, startPeriodicSync, stopPeriodicSync } from '../agents/remote-sync'
+import { libraryService } from '../services/libraryService'
 import {
   runAccountConfigSyncOnce,
   startAccountConfigPeriodicSync,
@@ -141,6 +142,7 @@ class UserActivation {
     // delivering across profile switches; activate() recomputes that set.
     stopPeriodicSync()
     stopAccountConfigPeriodicSync()
+    libraryService.stop()
     const epoch = ++this._epoch
     this._activated = false
     this._notifyClosing()
@@ -186,6 +188,9 @@ class UserActivation {
       // reloadUserProviders; this refreshes them against the server.
       startAccountConfigPeriodicSync(userId)
       void runAccountConfigSyncOnce(userId)
+      // The team library: listed now and every five minutes, which is how a
+      // shared agent learns the team moved without a fetch per folder.
+      libraryService.start(userId)
       // Activate cloud data-sync (silent device-key unlock + periodic push/pull).
       void syncService.ensureActivated(userId)
       // Bring local development to its target state: the managed toolchain and
@@ -201,6 +206,7 @@ class UserActivation {
   async deactivate(): Promise<void> {
     stopPeriodicSync()
     stopAccountConfigPeriodicSync()
+    libraryService.stop()
     const epoch = ++this._epoch
     this._pendingActivation = undefined
     this._activated = false
@@ -215,6 +221,7 @@ class UserActivation {
     desktopFeatures.clearDevelopment()
     stopPeriodicSync()
     stopAccountConfigPeriodicSync()
+    libraryService.stop()
     // Zero all UMKs + clear sync timers on profile switch / sign-out.
     void syncService.onProfileSwitch()
     clearAllAdapters()

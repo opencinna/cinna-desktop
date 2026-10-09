@@ -7,6 +7,7 @@ import { installCommandCredentialPreparation } from '../services/localAgents/com
  */
 import { serviceCredentialService } from '../services/serviceCredentials/service'
 import { stopPeriodicSync } from '../agents/remote-sync'
+import { libraryService } from '../services/libraryService'
 import { stopAccountConfigPeriodicSync } from '../services/account-config-sync'
 import { initDatabase } from '../db/client'
 import { getCurrentUserId, initSession } from '../auth/session'
@@ -66,6 +67,7 @@ export async function shutdownHubCore(reason = 'Execution stopped when the app c
   serviceCredentialService.retire()
   stopPeriodicSync()
   stopAccountConfigPeriodicSync()
+  libraryService.stop()
   a2aStreamingService.saveInFlight()
   localScheduleScheduler.stop()
   handoverScheduler.stop()

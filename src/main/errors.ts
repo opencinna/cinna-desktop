@@ -288,6 +288,12 @@ export type LocalAgentErrorCode =
    * warning beside a switch that already flipped.
    */
   | 'handovers_not_ignored'
+  /**
+   * Remove from this computer, refused: the agent is shared with a team and
+   * has changes the team does not have yet. Trashing the folder would lose
+   * them; the message says how many.
+   */
+  | 'unshared_changes'
 
 /**
  * The local developer tooling around an agent folder: detecting installed

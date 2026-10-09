@@ -84,6 +84,14 @@ import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectInt
 import { NOTIFICATION_OPEN_CHAT_CHANNEL, type NotificationOpenChat } from '../shared/desktopNotifications'
 import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } from '../shared/localDevState'
 import type { CinnaCliUpdate } from '../shared/cinnaCli'
+import {
+  SHARING_CHANGED_CHANNEL,
+  type AgentShareResult,
+  type AgentShareStatus,
+  type LibraryListingDto,
+  type ShareWithTeamDraft,
+  type SharingOutcome
+} from '../shared/agentSharing'
 import type { RemoteAgentMetadata, BundleVersionInfo } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import {
@@ -1924,6 +1932,59 @@ const api = {
         handler(payload)
       ipcRenderer.on(LOCAL_AGENT_CHANGED_CHANNEL, listener)
       return () => ipcRenderer.off(LOCAL_AGENT_CHANGED_CHANNEL, listener)
+    }
+  },
+
+  /**
+   * Sharing folder agents with a team: the Team library, and the four verbs on
+   * a `Local/<slug>/` agent — Get, Update, Share changes, and Share with the
+   * team. Only ids cross; main resolves every folder itself and mints any
+   * token immediately before the git child that needs it. See
+   * `src/shared/agentSharing.ts`.
+   */
+  sharing: {
+    /** Every shared agent on this machine, without reaching the network. */
+    statuses: (): Promise<SharingOutcome<AgentShareStatus[]>> =>
+      ipcRenderer.invoke('sharing:statuses'),
+    /** One agent's status; null when it is not shared. `fetch` reaches the network. */
+    status: (agentId: string, fetch?: boolean): Promise<SharingOutcome<AgentShareStatus | null>> =>
+      ipcRenderer.invoke('sharing:status', { agentId, fetch }),
+    /** An AI summary of what would be shared, for the Share changes field. '' when none could be written. */
+    draftMessage: (agentId: string): Promise<SharingOutcome<string>> =>
+      ipcRenderer.invoke('sharing:draft-message', { agentId }),
+    /** Record everything unshared under `message` and send it to the team. */
+    shareChanges: (agentId: string, message: string): Promise<SharingOutcome<AgentShareResult>> =>
+      ipcRenderer.invoke('sharing:share-changes', { agentId, message }),
+    /** Bring in the team's changes when they apply cleanly; rescan. */
+    update: (agentId: string): Promise<SharingOutcome<AgentShareResult>> =>
+      ipcRenderer.invoke('sharing:update', { agentId }),
+    /**
+     * The two-button answer to `diverged_conflict`: this folder becomes the
+     * team's version, and what was here is kept as `<slug>-mine` with a fresh
+     * id and no team version. `agentId` in the result is the copy.
+     */
+    useTeamVersion: (agentId: string): Promise<SharingOutcome<AgentShareResult>> =>
+      ipcRenderer.invoke('sharing:use-team-version', { agentId }),
+    /** Name and description from the manifest, for the Share with the team dialog. */
+    shareWithTeamDraft: (agentId: string): Promise<SharingOutcome<ShareWithTeamDraft>> =>
+      ipcRenderer.invoke('sharing:share-with-team-draft', { agentId }),
+    /** Create the agent in the active profile's team library and send this folder there. */
+    shareWithTeam: (
+      agentId: string,
+      input: ShareWithTeamDraft
+    ): Promise<SharingOutcome<AgentShareResult>> =>
+      ipcRenderer.invoke('sharing:share-with-team', { agentId, ...input }),
+    /** The active Cinna profile's team library; null for a profile that is not a Cinna one. */
+    library: (refresh?: boolean): Promise<SharingOutcome<LibraryListingDto | null>> =>
+      ipcRenderer.invoke('sharing:library', { refresh }),
+    /** Get a library agent into `Local/<slug>/`. `agentId` in the result is the new row. */
+    get: (repoId: string): Promise<SharingOutcome<AgentShareResult>> =>
+      ipcRenderer.invoke('sharing:get', { repoId }),
+    /** Fires when main learns the team library or a shared agent's state moved. */
+    onChanged: (handler: () => void): (() => void) => {
+      const listener = (): void => handler()
+      ipcRenderer.on(SHARING_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(SHARING_CHANGED_CHANNEL, listener)
     }
   },
 

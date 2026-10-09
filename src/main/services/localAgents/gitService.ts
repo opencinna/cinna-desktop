@@ -40,8 +40,19 @@
  */
 
 import { execFile } from 'node:child_process'
-import { realpathSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import type {
   GitCommit,
   GitDetail,
@@ -50,6 +61,10 @@ import type {
   GitStatus,
   GitUpdateResult
 } from '../../../shared/agentGit'
+import type { AgentShareState, ShareRefusal } from '../../../shared/agentSharing'
+import { MANIFEST_FILE } from '../../../shared/kit/manifest'
+import { getLayoutView, getTemplateRoot } from '../../kit/contractStore'
+import { isSecretFile } from '../../kit/validator'
 import { getShellEnv, shellEnvForChild, usableTool } from '../../shell/env'
 import { createLogger } from '../../logger/logger'
 
@@ -135,7 +150,15 @@ async function run(
   gitPath: string,
   cwd: string,
   args: string[],
-  timeout: number
+  timeout: number,
+  /**
+   * Added last, so it wins. Only the sharing verbs use it, for the
+   * `GIT_CONFIG_*` variables that carry a Cinna token (see {@link authEnv}) —
+   * the one way a credential reaches a git child without being in its argv,
+   * where any process listing shows it, or in `.git/config`, where it outlives
+   * the operation.
+   */
+  extraEnv: Record<string, string> = {}
 ): Promise<RunResult> {
   const shellEnv = await getShellEnv()
   const env = {
@@ -153,7 +176,8 @@ async function run(
     GIT_TERMINAL_PROMPT: '0',
     GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new',
     // Porcelain output in a stable language, whatever the user's locale is.
-    LC_ALL: 'C'
+    LC_ALL: 'C',
+    ...extraEnv
   }
   return new Promise<RunResult>((resolve) => {
     execFile(
@@ -529,5 +553,953 @@ export async function updateGitRepo(dir: string): Promise<GitUpdateResult> {
   return { updated: true, applied: before.incoming, refusal: null, status: after }
 }
 
-export const gitService = { readGitStatus, readGitDetail, updateGitRepo, looksLikeGitRepo }
+// ---------------------------------------------------------------------------
+// Sharing one agent folder with a team
+// ---------------------------------------------------------------------------
+//
+// Everything above acts on a *root* and never writes history. What follows
+// acts on one `Local/<slug>/` folder that is its **own** working tree with an
+// `origin` — a shared agent — and does write: it records the folder's changes
+// and sends them, and it brings the team's in. The rule that survives is the
+// one that matters: it still never resolves a conflict. An update is a
+// fast-forward, or a rebase that applies cleanly, or nothing at all
+// (`rebase --abort`), and the user is offered two buttons instead.
+//
+// Every function takes a directory main has already resolved from an agent
+// id, never a path from the renderer.
+
+/**
+ * How a sharing verb authenticates to `origin`.
+ *
+ * `external` keeps the user's own git setup (SSH agent, credential helper).
+ * `cinna` carries the signed-in account's token, **minted by `token()`
+ * immediately before each network child** rather than held as a string, so a
+ * fetch and the push after it each get a token that is fresh at the moment
+ * git opens the connection. `origin` is `scheme://host[:port]`: the only place
+ * the header is sent.
+ */
+export type RemoteAuth =
+  | { kind: 'external' }
+  | { kind: 'cinna'; origin: string; token: () => Promise<string> }
+
+/** Who a commit is from when the repository itself does not say. */
+export interface CommitIdentity {
+  name: string
+  email: string
+}
+
+/** What one sharing verb did, before main dresses it as an `AgentShareResult`. */
+export interface ShareActionResult {
+  done: boolean
+  refusal: ShareRefusal | null
+  /** The server's own sentence, or what failed. Credential-scrubbed. */
+  detail: string | null
+}
+
+/** A shared folder's counts, read from git. `state` is derived by {@link shareStateOf}. */
+export interface ShareCounts {
+  /** The folder is the top of its own working tree (not inside an ancestor's). */
+  ownRepo: boolean
+  /** `remote.origin.url` as configured, or null. May carry a credential: redact before showing. */
+  originUrl: string | null
+  headSha: string | null
+  remoteHeadSha: string | null
+  ahead: number
+  /** -1 when the library says the team moved but the commit is not here yet. */
+  behind: number
+  changedFiles: number
+  /** The paths behind `changedFiles`, in the order git listed them: new files first. */
+  changedPaths: string[]
+  fetched: boolean
+  refusal: ShareRefusal | null
+}
+
+/** Most of the server's own words carried back in a refusal. */
+const MAX_DETAIL_CHARS = 300
+
+/** What the AI summary of a diff gets to read. */
+const MAX_SUMMARY_DIFF_CHARS = 16_000
+
+const done = (): ShareActionResult => ({ done: true, refusal: null, detail: null })
+const refuse = (refusal: ShareRefusal, detail: string | null = null): ShareActionResult => ({
+  done: false,
+  refusal,
+  detail
+})
+
+/**
+ * The environment that carries a Cinna token to one git child (README §4.4 of
+ * the team-sharing plan). Config through the environment: not argv, where a
+ * process listing shows it, and not `.git/config`, where it outlives the
+ * operation. The header is scoped to the remote's origin, so a submodule on
+ * another host never receives it.
+ *
+ * **Redirects are switched off.** The URL scoping alone does not cover them:
+ * git's default `http.followRedirects=initial` follows a redirect on the first
+ * request and then sends every later request of the operation to the new base
+ * URL — with the header the original origin's config matched. A Cinna remote
+ * is the instance's own git endpoint and has no reason to redirect, so one
+ * that does fails as `fetch_failed` rather than handing the token to wherever
+ * it points.
+ *
+ * May throw: `token()` is `getCinnaAccessToken`, and an expired session is a
+ * `CinnaReauthRequired` the caller turns into the app-wide prompt.
+ */
+async function authEnv(auth: RemoteAuth | null): Promise<Record<string, string>> {
+  if (!auth || auth.kind !== 'cinna') return {}
+  const token = await auth.token()
+  return {
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: `http.${auth.origin}/.extraHeader`,
+    GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
+    GIT_CONFIG_KEY_1: 'http.followRedirects',
+    GIT_CONFIG_VALUE_1: 'false'
+  }
+}
+
+/** One git child that reaches `origin`: the long timeout, and the auth env. */
+async function runNet(
+  gitPath: string,
+  cwd: string,
+  args: string[],
+  auth: RemoteAuth | null
+): Promise<RunResult> {
+  return run(gitPath, cwd, args, NETWORK_TIMEOUT_MS, await authEnv(auth))
+}
+
+/**
+ * Remove anything credential-shaped from text that may reach a log or the
+ * renderer: a bearer header, a JWT, a password in a URL.
+ */
+export function scrubCredentials(text: string): string {
+  return text
+    .replace(/Bearer\s+\S+/gi, 'Bearer ***')
+    .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, '***')
+    .replace(/([a-z][\w+.-]*:\/\/[^/\s:@]*):[^/\s@]*@/gi, '$1@')
+}
+
+/** The `remote:` lines of a git stderr — the server's own words — joined and capped. */
+function remoteLines(stderr: string): string | null {
+  const lines = stderr
+    .split('\n')
+    .filter((line) => line.startsWith('remote:'))
+    .map((line) => line.replace(/^remote:\s?/, '').trim())
+    .filter((line) => line !== '' && !/^(Counting|Compressing|Resolving|Total|Enumerating)/.test(line))
+  if (lines.length === 0) return null
+  return scrubCredentials(lines.join(' ')).slice(0, MAX_DETAIL_CHARS)
+}
+
+const NETWORK_FAILURE =
+  /Could not resolve host|Failed to connect|Connection refused|Connection timed out|Operation timed out|unable to access|Could not read from remote repository|early EOF|RPC failed|SSL|timed out/i
+
+const ACCESS_DENIED = /returned error: 403|\b403 Forbidden|Permission denied|not allowed to push|no write access/i
+
+/** Why a push failed, from its stderr. `non_ff` is the one a retry may fix. */
+function classifyPush(stderr: string): ShareActionResult | 'non_ff' {
+  if (/\[rejected\][^\n]*\((non-fast-forward|fetch first)\)/.test(stderr)) return 'non_ff'
+  if (/returned error: 403|\b403 Forbidden/i.test(stderr)) return refuse('no_access')
+  if (/\[remote rejected\]|hook declined/i.test(stderr)) {
+    const said = remoteLines(stderr)
+    if (said && /permission denied|not allowed to push|no write access/i.test(said)) {
+      return refuse('no_access', said)
+    }
+    return refuse('push_rejected', said)
+  }
+  if (ACCESS_DENIED.test(stderr)) return refuse('no_access')
+  if (NETWORK_FAILURE.test(stderr) || stderr.trim() === '') return refuse('fetch_failed')
+  const said = remoteLines(stderr)
+  return refuse('push_rejected', said ?? scrubCredentials(lastLine(stderr)).slice(0, MAX_DETAIL_CHARS))
+}
+
+function lastLine(text: string): string {
+  const lines = text.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+  return lines[lines.length - 1] ?? ''
+}
+
+function lines(stdout: string): string[] {
+  return stdout.split('\n').filter((line) => line !== '')
+}
+
+function count(stdout: string): number {
+  return Number.parseInt(stdout.trim(), 10) || 0
+}
+
+/** True when `dir` is the top of its own working tree — not a folder inside an ancestor repository. */
+async function isOwnRepo(gitPath: string, dir: string): Promise<boolean> {
+  const top = await run(gitPath, dir, ['rev-parse', '--show-toplevel'], LOCAL_TIMEOUT_MS)
+  if (!top.ok || top.stdout.trim() === '') return false
+  return realOrSelf(top.stdout.trim()) === realOrSelf(dir)
+}
+
+/** `remote.origin.url` as written — not `get-url`, which applies `insteadOf` rewrites. */
+async function originUrlOf(gitPath: string, dir: string): Promise<string | null> {
+  const out = await run(gitPath, dir, ['config', '--get', 'remote.origin.url'], LOCAL_TIMEOUT_MS)
+  const url = out.ok ? out.stdout.trim() : ''
+  return url === '' ? null : url
+}
+
+async function headOf(gitPath: string, dir: string): Promise<string | null> {
+  const out = await run(gitPath, dir, ['rev-parse', '--verify', '--quiet', 'HEAD'], LOCAL_TIMEOUT_MS)
+  const sha = out.ok ? out.stdout.trim() : ''
+  return sha === '' ? null : sha
+}
+
+/**
+ * The team version's ref: `origin/main`, which every push here targets, or
+ * whatever the branch tracks. Null before the first fetch of an empty remote.
+ */
+async function teamRef(gitPath: string, dir: string): Promise<string | null> {
+  const main = await run(
+    gitPath,
+    dir,
+    ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main'],
+    LOCAL_TIMEOUT_MS
+  )
+  if (main.ok && main.stdout.trim() !== '') return 'origin/main'
+  const upstream = await run(
+    gitPath,
+    dir,
+    ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
+    LOCAL_TIMEOUT_MS
+  )
+  const name = upstream.ok ? upstream.stdout.trim() : ''
+  return name === '' ? null : name
+}
+
+/**
+ * The paths that differ from what the team has, counted as "N changes you
+ * haven't shared": recorded-but-unsent versions and working-tree edits
+ * (both relative to the **merge base**, so files only the team changed do not
+ * count as this user's), plus untracked files the ignore rules do not exclude
+ * — a new file is a change to share, `.env` and `app-data/` are not.
+ */
+async function changedPaths(
+  gitPath: string,
+  dir: string,
+  head: string | null,
+  ref: string | null
+): Promise<Set<string>> {
+  const paths = new Set<string>()
+  const add = (out: RunResult): void => {
+    if (out.ok) for (const path of lines(out.stdout)) paths.add(path)
+  }
+  add(await run(gitPath, dir, ['ls-files', '--others', '--exclude-standard'], LOCAL_TIMEOUT_MS))
+  if (head === null) {
+    // Nothing recorded yet: everything staged is unshared.
+    add(await run(gitPath, dir, ['ls-files'], LOCAL_TIMEOUT_MS))
+    return paths
+  }
+  let base: string | null = null
+  if (ref !== null) {
+    const mergeBase = await run(gitPath, dir, ['merge-base', 'HEAD', ref], LOCAL_TIMEOUT_MS)
+    base = mergeBase.ok && mergeBase.stdout.trim() !== '' ? mergeBase.stdout.trim() : ref
+  }
+  if (base === null) {
+    // Never shared: every tracked file is a change the team does not have.
+    add(await run(gitPath, dir, ['ls-files'], LOCAL_TIMEOUT_MS))
+    return paths
+  }
+  add(await run(gitPath, dir, ['diff', '--name-only', base], LOCAL_TIMEOUT_MS))
+  return paths
+}
+
+const NOT_SHARED_COUNTS: ShareCounts = {
+  ownRepo: false,
+  originUrl: null,
+  headSha: null,
+  remoteHeadSha: null,
+  ahead: 0,
+  behind: 0,
+  changedFiles: 0,
+  changedPaths: [],
+  fetched: false,
+  refusal: 'not_shared'
+}
+
+/**
+ * Whether a folder is its own repository with an `origin`, without counting
+ * anything. Cheap: two local git reads.
+ */
+export async function readShareRemote(
+  dir: string
+): Promise<{ ownRepo: boolean; originUrl: string | null; refusal: ShareRefusal | null }> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return { ownRepo: false, originUrl: null, refusal: 'git_missing' }
+  if (!(await isOwnRepo(gitPath, dir))) return { ownRepo: false, originUrl: null, refusal: 'not_shared' }
+  const originUrl = await originUrlOf(gitPath, dir)
+  return { ownRepo: true, originUrl, refusal: originUrl === null ? 'not_shared' : null }
+}
+
+/**
+ * A shared folder's counts against the team version.
+ *
+ * `fetch` reaches the network; without it the counts are as of the last
+ * fetch — except `behind` for a Cinna remote, which `libraryHeadSha` (the
+ * library listing's `head_sha`) answers without one: when the listing's head
+ * is not in this folder's history the team has moved, by the counted amount
+ * when the commit is already here and by -1 ("some") when it is not.
+ */
+export async function readShareStatus(
+  dir: string,
+  auth: RemoteAuth | null,
+  fetch: boolean,
+  libraryHeadSha?: string | null
+): Promise<ShareCounts> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return { ...NOT_SHARED_COUNTS, refusal: 'git_missing' }
+  if (!(await isOwnRepo(gitPath, dir))) return { ...NOT_SHARED_COUNTS }
+  const originUrl = await originUrlOf(gitPath, dir)
+  if (originUrl === null) return { ...NOT_SHARED_COUNTS, ownRepo: true }
+
+  const counts: ShareCounts = {
+    ...NOT_SHARED_COUNTS,
+    ownRepo: true,
+    originUrl,
+    refusal: null
+  }
+
+  if (fetch) {
+    const fetched = await runNet(gitPath, dir, ['fetch', '--quiet', 'origin'], auth)
+    if (fetched.ok) counts.fetched = true
+    else {
+      logger.warn('share status fetch failed', { stderr: scrubCredentials(fetched.stderr).slice(0, 400) })
+      counts.refusal = 'fetch_failed'
+    }
+  }
+
+  const head = await headOf(gitPath, dir)
+  const ref = await teamRef(gitPath, dir)
+  counts.headSha = head
+
+  if (ref !== null) {
+    const refSha = await run(gitPath, dir, ['rev-parse', '--verify', '--quiet', ref], LOCAL_TIMEOUT_MS)
+    counts.remoteHeadSha = refSha.ok && refSha.stdout.trim() !== '' ? refSha.stdout.trim() : null
+    if (head !== null) {
+      const lr = await run(
+        gitPath,
+        dir,
+        ['rev-list', '--left-right', '--count', `HEAD...${ref}`],
+        LOCAL_TIMEOUT_MS
+      )
+      if (lr.ok) {
+        const [ahead, behind] = lr.stdout.trim().split(/\s+/)
+        counts.ahead = Number.parseInt(ahead ?? '0', 10) || 0
+        counts.behind = Number.parseInt(behind ?? '0', 10) || 0
+      }
+    } else {
+      counts.behind = count((await run(gitPath, dir, ['rev-list', '--count', ref], LOCAL_TIMEOUT_MS)).stdout)
+    }
+  } else if (head !== null) {
+    counts.ahead = count((await run(gitPath, dir, ['rev-list', '--count', 'HEAD'], LOCAL_TIMEOUT_MS)).stdout)
+  }
+
+  if (libraryHeadSha) {
+    counts.remoteHeadSha = libraryHeadSha
+    if (libraryHeadSha !== head) {
+      const inHistory =
+        head !== null &&
+        (await run(gitPath, dir, ['merge-base', '--is-ancestor', libraryHeadSha, 'HEAD'], LOCAL_TIMEOUT_MS)).ok
+      if (!inHistory) {
+        const present = (
+          await run(gitPath, dir, ['cat-file', '-e', `${libraryHeadSha}^{commit}`], LOCAL_TIMEOUT_MS)
+        ).ok
+        if (present) {
+          const range = head === null ? [libraryHeadSha] : [`HEAD..${libraryHeadSha}`]
+          const n = count((await run(gitPath, dir, ['rev-list', '--count', ...range], LOCAL_TIMEOUT_MS)).stdout)
+          counts.behind = Math.max(counts.behind, n)
+        } else {
+          counts.behind = -1
+        }
+      }
+    }
+  }
+
+  counts.changedPaths = [...(await changedPaths(gitPath, dir, head, ref))]
+  counts.changedFiles = counts.changedPaths.length
+  return counts
+}
+
+/**
+ * The status line's state from git alone. `other_account` and `removed`
+ * outrank all of these and are decided by main, which knows the accounts and
+ * the listing.
+ */
+export function shareStateOf(counts: Pick<ShareCounts, 'ahead' | 'behind' | 'changedFiles'>): AgentShareState {
+  const unshared = counts.ahead > 0 || counts.changedFiles > 0
+  if (counts.behind !== 0 && unshared) return 'diverged'
+  if (counts.behind !== 0) return 'behind'
+  if (unshared) return 'unshared'
+  return 'up_to_date'
+}
+
+/**
+ * Who a commit is from when neither the repository nor the caller says. The
+ * `.invalid` top-level domain is reserved: the address can never reach anyone.
+ */
+export const ANONYMOUS_IDENTITY: CommitIdentity = {
+  name: 'Cinna Desktop user',
+  email: 'cinna-desktop@users.noreply.invalid'
+}
+
+/**
+ * `-c` flags that make a commit possible in a repository with no identity.
+ *
+ * A repository (or the user's global config) that names someone keeps it: a
+ * developer's commits stay theirs. Otherwise `identity` (main's, from the
+ * Cinna profile), else {@link ANONYMOUS_IDENTITY} — never this machine's login
+ * name and host name, which would publish both to the whole team in every
+ * version. Signing is switched off for commits the app makes:
+ * a `commit.gpgsign` from the user's global config would otherwise wait on a
+ * pinentry this process has no terminal for.
+ */
+async function commitFlags(
+  gitPath: string,
+  dir: string,
+  identity: CommitIdentity | null | undefined
+): Promise<string[]> {
+  const flags = ['-c', 'commit.gpgsign=false']
+  const email = await run(gitPath, dir, ['config', '--get', 'user.email'], LOCAL_TIMEOUT_MS)
+  const name = await run(gitPath, dir, ['config', '--get', 'user.name'], LOCAL_TIMEOUT_MS)
+  const fallback: CommitIdentity = identity ?? ANONYMOUS_IDENTITY
+  if (!name.ok || name.stdout.trim() === '') flags.push('-c', `user.name=${fallback.name}`)
+  if (!email.ok || email.stdout.trim() === '') flags.push('-c', `user.email=${fallback.email}`)
+  return flags
+}
+
+/**
+ * Record everything in the folder as one version under `message`.
+ *
+ * `add -A -- .` honours the ignore rules, and the kit's are made sure of first
+ * ({@link guardSecrets}): a folder whose own `.gitignore` is missing or does
+ * not cover secrets — a developer's own repository — still keeps
+ * `credentials/.env` and `app-data/` out, and one that already tracks a secret
+ * is refused `secrets_tracked` before anything is recorded.
+ */
+export async function commitAll(
+  dir: string,
+  message: string,
+  identity?: CommitIdentity | null,
+  workshopRoot?: string
+): Promise<ShareActionResult> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return refuse('git_missing')
+  const guarded = await guardSecrets(gitPath, dir, workshopRoot)
+  if (guarded) return guarded
+  const add = await run(gitPath, dir, ['add', '-A', '--', '.'], LOCAL_TIMEOUT_MS)
+  if (!add.ok) return refuse('failed', scrubCredentials(lastLine(add.stderr)).slice(0, MAX_DETAIL_CHARS))
+  const head = await headOf(gitPath, dir)
+  const staged =
+    head === null
+      ? (await run(gitPath, dir, ['ls-files'], LOCAL_TIMEOUT_MS)).stdout.trim() !== ''
+      : !(await run(gitPath, dir, ['diff', '--cached', '--quiet'], LOCAL_TIMEOUT_MS)).ok
+  if (!staged) return refuse('nothing_to_share')
+  const text = message.trim() === '' ? 'Changes shared from Cinna Desktop' : message.trim()
+  const commit = await run(
+    gitPath,
+    dir,
+    [...(await commitFlags(gitPath, dir, identity)), 'commit', '--quiet', '-m', text],
+    LOCAL_TIMEOUT_MS
+  )
+  if (!commit.ok) {
+    logger.warn('commit failed', { stderr: scrubCredentials(commit.stderr).slice(0, 400) })
+    return refuse('failed', scrubCredentials(lastLine(commit.stderr)).slice(0, MAX_DETAIL_CHARS))
+  }
+  return done()
+}
+
+/**
+ * Bring in the team's changes when they apply cleanly.
+ *
+ * Fetch; nothing to do when not behind. Refuses `dirty` while tracked files
+ * have edits, or while an untracked file sits where an incoming one would
+ * land — either would be overwritten or block. Fast-forwards when nothing
+ * here is recorded-but-unsent; otherwise rebases those versions onto the
+ * team's, and when that does not apply cleanly aborts it (the tree is exactly
+ * as it was) and answers `diverged_conflict`.
+ */
+export async function pullRebaseClean(
+  dir: string,
+  auth: RemoteAuth | null,
+  identity?: CommitIdentity | null
+): Promise<ShareActionResult> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return refuse('git_missing')
+  const fetched = await runNet(gitPath, dir, ['fetch', '--quiet', 'origin'], auth)
+  if (!fetched.ok) {
+    logger.warn('share fetch failed', { stderr: scrubCredentials(fetched.stderr).slice(0, 400) })
+    return refuse('fetch_failed')
+  }
+  const ref = await teamRef(gitPath, dir)
+  if (ref === null) return { done: false, refusal: null, detail: null }
+  const head = await headOf(gitPath, dir)
+  const behind =
+    head === null
+      ? count((await run(gitPath, dir, ['rev-list', '--count', ref], LOCAL_TIMEOUT_MS)).stdout)
+      : count((await run(gitPath, dir, ['rev-list', '--count', `HEAD..${ref}`], LOCAL_TIMEOUT_MS)).stdout)
+  if (behind === 0) return { done: false, refusal: null, detail: null }
+
+  const status = await run(gitPath, dir, ['status', '--porcelain', '--untracked-files=no'], LOCAL_TIMEOUT_MS)
+  if (status.ok && status.stdout.trim() !== '') return refuse('dirty')
+  const untracked = new Set(
+    lines((await run(gitPath, dir, ['ls-files', '--others', '--exclude-standard'], LOCAL_TIMEOUT_MS)).stdout)
+  )
+  if (untracked.size > 0) {
+    const incoming = head === null
+      ? lines((await run(gitPath, dir, ['ls-tree', '-r', '--name-only', ref], LOCAL_TIMEOUT_MS)).stdout)
+      : lines((await run(gitPath, dir, ['diff', '--name-only', `HEAD...${ref}`], LOCAL_TIMEOUT_MS)).stdout)
+    if (incoming.some((path) => untracked.has(path))) return refuse('dirty')
+  }
+
+  const ahead = head === null ? 0 : count((await run(gitPath, dir, ['rev-list', '--count', `${ref}..HEAD`], LOCAL_TIMEOUT_MS)).stdout)
+  if (ahead === 0) {
+    const merge = await run(gitPath, dir, ['merge', '--ff-only', '--quiet', ref], LOCAL_TIMEOUT_MS)
+    if (!merge.ok) {
+      logger.warn('share fast-forward refused', { stderr: scrubCredentials(merge.stderr).slice(0, 400) })
+      return refuse('failed', scrubCredentials(lastLine(merge.stderr)).slice(0, MAX_DETAIL_CHARS))
+    }
+    return done()
+  }
+  const rebase = await run(
+    gitPath,
+    dir,
+    [...(await commitFlags(gitPath, dir, identity)), 'rebase', '--quiet', '--no-autostash', ref],
+    LOCAL_TIMEOUT_MS
+  )
+  if (!rebase.ok) {
+    await run(gitPath, dir, ['rebase', '--abort'], LOCAL_TIMEOUT_MS)
+    logger.info('share rebase did not apply cleanly; aborted')
+    return refuse('diverged_conflict')
+  }
+  return done()
+}
+
+/**
+ * Send what is recorded here to the team, as `main`.
+ *
+ * A non-fast-forward means a teammate shared first: one clean
+ * {@link pullRebaseClean} and one more push, never a force. Its refusals —
+ * `dirty`, `diverged_conflict` — are the answer when it cannot.
+ */
+export async function push(
+  dir: string,
+  auth: RemoteAuth | null,
+  identity?: CommitIdentity | null
+): Promise<ShareActionResult> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return refuse('git_missing')
+  const args = ['push', '--quiet', '-u', 'origin', 'HEAD:main']
+  let attempt = await runNet(gitPath, dir, args, auth)
+  if (attempt.ok) return done()
+  let verdict = classifyPush(attempt.stderr)
+  if (verdict === 'non_ff') {
+    const pulled = await pullRebaseClean(dir, auth, identity)
+    if (pulled.refusal !== null) return pulled
+    attempt = await runNet(gitPath, dir, args, auth)
+    if (attempt.ok) return done()
+    verdict = classifyPush(attempt.stderr)
+    if (verdict === 'non_ff') {
+      return refuse('push_rejected', 'The team version changed again while sending.')
+    }
+  }
+  logger.warn('share push refused', {
+    refusal: verdict.refusal,
+    stderr: scrubCredentials(attempt.stderr).slice(0, 400)
+  })
+  return verdict
+}
+
+/**
+ * Share changes: record anything unrecorded under `message`, then send
+ * whatever the team does not have. `nothing_to_share` when there is neither.
+ */
+export async function shareChanges(
+  dir: string,
+  message: string,
+  auth: RemoteAuth | null,
+  identity?: CommitIdentity | null,
+  workshopRoot?: string
+): Promise<ShareActionResult> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return refuse('git_missing')
+  const committed = await commitAll(dir, message, identity, workshopRoot)
+  if (committed.refusal !== null && committed.refusal !== 'nothing_to_share') return committed
+  const ref = await teamRef(gitPath, dir)
+  const head = await headOf(gitPath, dir)
+  if (head === null) return refuse('nothing_to_share')
+  const ahead =
+    ref === null
+      ? count((await run(gitPath, dir, ['rev-list', '--count', 'HEAD'], LOCAL_TIMEOUT_MS)).stdout)
+      : count((await run(gitPath, dir, ['rev-list', '--count', `${ref}..HEAD`], LOCAL_TIMEOUT_MS)).stdout)
+  if (ahead === 0) return refuse('nothing_to_share')
+  return push(dir, auth, identity)
+}
+
+/** What would be shared, as text for the AI summary: the diff from the team version and the new files' names. */
+export async function diffForSummary(dir: string): Promise<string> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return ''
+  const head = await headOf(gitPath, dir)
+  const ref = await teamRef(gitPath, dir)
+  let base: string | null = null
+  if (head !== null && ref !== null) {
+    const mergeBase = await run(gitPath, dir, ['merge-base', 'HEAD', ref], LOCAL_TIMEOUT_MS)
+    base = mergeBase.ok && mergeBase.stdout.trim() !== '' ? mergeBase.stdout.trim() : ref
+  } else if (head !== null) {
+    base = null
+  }
+  // A tracked secret would be refused at Share, but this runs when the dialog
+  // opens and its text goes to an AI backend: leave those files out.
+  const secrets = head !== null ? await trackedSecrets(gitPath, dir, undefined) : []
+  const excluded = Array.isArray(secrets) ? secrets.map((rel) => `:(exclude,literal)${rel}`) : []
+  const parts: string[] = []
+  if (base !== null) {
+    const diff = await run(gitPath, dir, ['diff', '--no-color', base, '--', '.', ...excluded], LOCAL_TIMEOUT_MS)
+    if (diff.ok && diff.stdout.trim() !== '') parts.push(diff.stdout)
+  } else if (head !== null) {
+    const tracked = await run(gitPath, dir, ['ls-files'], LOCAL_TIMEOUT_MS)
+    if (tracked.ok && tracked.stdout.trim() !== '') parts.push(`Files:\n${tracked.stdout}`)
+  }
+  const untracked = await run(gitPath, dir, ['ls-files', '--others', '--exclude-standard'], LOCAL_TIMEOUT_MS)
+  if (untracked.ok && untracked.stdout.trim() !== '') parts.push(`New files:\n${untracked.stdout}`)
+  return parts.join('\n\n').slice(0, MAX_SUMMARY_DIFF_CHARS)
+}
+
+/**
+ * Keep an enclosing repository from seeing a nested one.
+ *
+ * A workshop root is often itself a repository; a `Local/<slug>/` that
+ * becomes its own repo would otherwise show up there as an untracked
+ * directory (or a stray gitlink once somebody runs `git add -A`). The path,
+ * relative to that repository's top, goes into its `.git/info/exclude` —
+ * per clone, never committed, and only once.
+ */
+export async function excludeFromEnclosingRepo(dir: string): Promise<void> {
+  const parent = dirname(dir)
+  if (!looksLikeGitRepo(parent)) return
+  const gitPath = await resolveGit()
+  if (!gitPath) return
+  const top = await run(gitPath, parent, ['rev-parse', '--show-toplevel'], LOCAL_TIMEOUT_MS)
+  if (!top.ok || top.stdout.trim() === '') return
+  const common = await run(
+    gitPath,
+    parent,
+    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    LOCAL_TIMEOUT_MS
+  )
+  if (!common.ok || common.stdout.trim() === '') return
+  const rel = relative(realOrSelf(top.stdout.trim()), realOrSelf(dir)).split(sep).join('/')
+  if (rel === '' || rel.startsWith('..')) return
+  const line = `/${rel}/`
+  const file = join(common.stdout.trim(), 'info', 'exclude')
+  try {
+    const existing = existsSync(file) ? readFileSync(file, 'utf8') : ''
+    if (existing.split('\n').some((entry) => entry.trim() === line)) return
+    mkdirSync(dirname(file), { recursive: true })
+    const prefix = existing === '' || existing.endsWith('\n') ? '' : '\n'
+    appendFileSync(file, `${prefix}${line}\n`)
+  } catch (err) {
+    logger.warn('could not exclude a nested agent repository', { error: String(err) })
+  }
+}
+
+/** The first and last line of the block {@link ensureAgentExcludes} keeps in `.git/info/exclude`. */
+const EXCLUDE_BEGIN = '# >>> Cinna Desktop: the agent kit\'s ignore rules (managed; edits here are replaced)'
+const EXCLUDE_END = '# <<< Cinna Desktop'
+
+/**
+ * The rules of the kit's agent `.gitignore` template — secrets, Python
+ * environments, runtime data — read from the contract through
+ * `layout.json`'s `scaffold_ignore_files`, never hard-coded. Comments and
+ * blank lines dropped.
+ */
+function kitAgentIgnoreRules(workshopRoot: string | undefined): string[] {
+  const pair = getLayoutView(workshopRoot)
+    .scaffoldIgnoreFiles('agent')
+    .find(([, to]) => to === '.gitignore')
+  if (!pair) throw new Error('the kit names no agent .gitignore')
+  const source = join(getTemplateRoot('agent', workshopRoot), ...pair[0].split('/'))
+  return readFileSync(source, 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'))
+}
+
+/**
+ * Make sure the folder's own `.git/info/exclude` carries the kit's agent
+ * ignore rules, so what `add -A` records never depends on the `.gitignore` a
+ * developer (or a teammate) left in the folder. Per clone, never committed,
+ * and idempotent: one marked block, rewritten only when the kit's rules
+ * changed. False when it could not be made sure of — a caller about to record
+ * must not go on.
+ */
+async function ensureAgentExcludes(gitPath: string, dir: string, workshopRoot: string | undefined): Promise<boolean> {
+  try {
+    const block = [EXCLUDE_BEGIN, ...kitAgentIgnoreRules(workshopRoot), EXCLUDE_END].join('\n')
+    const at = await run(
+      gitPath,
+      dir,
+      ['rev-parse', '--path-format=absolute', '--git-path', 'info/exclude'],
+      LOCAL_TIMEOUT_MS
+    )
+    if (!at.ok || at.stdout.trim() === '') return false
+    const file = at.stdout.trim()
+    const existing = existsSync(file) ? readFileSync(file, 'utf8') : ''
+    const begin = existing.indexOf(EXCLUDE_BEGIN)
+    const end = begin < 0 ? -1 : existing.indexOf(EXCLUDE_END, begin)
+    let next: string
+    if (begin >= 0 && end >= 0) {
+      if (existing.slice(begin, end + EXCLUDE_END.length) === block) return true
+      next = existing.slice(0, begin) + block + existing.slice(end + EXCLUDE_END.length)
+    } else {
+      const prefix = existing === '' || existing.endsWith('\n') ? '' : '\n'
+      next = `${existing}${prefix}${block}\n`
+    }
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, next)
+    return true
+  } catch (err) {
+    logger.warn('could not write the kit ignore rules into info/exclude', { error: String(err) })
+    return false
+  }
+}
+
+/**
+ * Tracked files that can hold a credential value — `secret_files` (through
+ * the validator's `isSecretFile`, which applies the contract's rules) and the
+ * desktop-owned `app-data/desktop.json`, which holds a bearer token. A string
+ * is the reason `ls-files` could not answer.
+ */
+async function trackedSecrets(
+  gitPath: string,
+  dir: string,
+  workshopRoot: string | undefined
+): Promise<string[] | string> {
+  const tracked = await run(gitPath, dir, ['ls-files', '-z'], LOCAL_TIMEOUT_MS)
+  if (!tracked.ok) return scrubCredentials(lastLine(tracked.stderr)).slice(0, MAX_DETAIL_CHARS)
+  let layout: ReturnType<typeof getLayoutView> | undefined
+  try {
+    layout = getLayoutView(workshopRoot)
+  } catch {
+    layout = undefined
+  }
+  const owned = new Set(layout?.desktopOwned() ?? ['app-data/desktop.json'])
+  return tracked.stdout
+    .split('\0')
+    .filter((rel) => rel !== '' && (owned.has(rel) || isSecretFile(rel, layout)))
+}
+
+/**
+ * Share with the team's check before the library entry is created, so a
+ * folder that would be refused does not leave an entry behind with nothing
+ * sent to it. Only a folder that is already its own repository can track a
+ * secret; any other is cleared here and guarded again when it is recorded.
+ */
+export async function preflightShare(dir: string, workshopRoot?: string): Promise<ShareActionResult | null> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return refuse('git_missing')
+  if (!(await isOwnRepo(gitPath, dir))) return null
+  return guardSecrets(gitPath, dir, workshopRoot)
+}
+
+/**
+ * Before anything is recorded: the kit's ignore rules in place, and no file
+ * that can hold a credential value already tracked — `secret_files` (through
+ * the validator's `isSecretFile`, which applies the contract's rules) and the
+ * desktop-owned `app-data/desktop.json`, which holds a bearer token. An
+ * ignore rule cannot untrack a file, so such a folder is refused
+ * `secrets_tracked` and nothing is recorded or sent. Null when clear.
+ */
+async function guardSecrets(
+  gitPath: string,
+  dir: string,
+  workshopRoot: string | undefined
+): Promise<ShareActionResult | null> {
+  if (!(await ensureAgentExcludes(gitPath, dir, workshopRoot))) {
+    return refuse('failed', 'The ignore rules could not be written.')
+  }
+  const secrets = await trackedSecrets(gitPath, dir, workshopRoot)
+  if (typeof secrets === 'string') return refuse('failed', secrets)
+  if (secrets.length === 0) return null
+  logger.warn('refusing to record a folder that tracks secret files', { count: secrets.length })
+  return refuse('secrets_tracked', secrets.slice(0, 3).join(', '))
+}
+
+/**
+ * Write the kit's agent ignore files that are missing, from the contract's
+ * own template through `layout.json`'s `scaffold_ignore_files` — so an agent
+ * made before the folder was a repository does not send its secrets with the
+ * first share. Only the folder-level pairs; one that exists is never touched.
+ */
+function writeMissingIgnoreFiles(dir: string, workshopRoot: string | undefined): void {
+  const templateRoot = getTemplateRoot('agent', workshopRoot)
+  for (const [from, to] of getLayoutView(workshopRoot).scaffoldIgnoreFiles('agent')) {
+    if (to.includes('/')) continue
+    const target = join(dir, to)
+    if (existsSync(target)) continue
+    const source = join(templateRoot, ...from.split('/'))
+    if (!existsSync(source)) continue
+    writeFileSync(target, readFileSync(source))
+  }
+}
+
+/**
+ * Make a folder the first version of a team agent at `url`, in place.
+ *
+ * `git init -b main` when the folder is not already its own repository (a
+ * developer's existing repo keeps its history), the kit's ignore file when
+ * absent, `origin`, one version of everything, and the first send.
+ */
+export async function initWithRemote(
+  dir: string,
+  url: string,
+  auth: RemoteAuth | null,
+  options: { workshopRoot?: string; identity?: CommitIdentity | null } = {}
+): Promise<ShareActionResult> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return refuse('git_missing')
+  const own = await isOwnRepo(gitPath, dir)
+  if (own && (await originUrlOf(gitPath, dir)) !== null) return refuse('remote_exists')
+  if (!own) {
+    const init = await run(gitPath, dir, ['init', '--quiet', '-b', 'main'], LOCAL_TIMEOUT_MS)
+    if (!init.ok) return refuse('failed', scrubCredentials(lastLine(init.stderr)).slice(0, MAX_DETAIL_CHARS))
+    await excludeFromEnclosingRepo(dir)
+  }
+  try {
+    writeMissingIgnoreFiles(dir, options.workshopRoot)
+  } catch (err) {
+    return refuse('failed', `The ignore file could not be written: ${String(err)}`.slice(0, MAX_DETAIL_CHARS))
+  }
+  // Before `origin` is added, so a folder refused here is not left looking shared.
+  const guarded = await guardSecrets(gitPath, dir, options.workshopRoot)
+  if (guarded) return guarded
+  const remote = await run(gitPath, dir, ['remote', 'add', 'origin', url], LOCAL_TIMEOUT_MS)
+  if (!remote.ok) return refuse('failed', scrubCredentials(lastLine(remote.stderr)).slice(0, MAX_DETAIL_CHARS))
+  const committed = await commitAll(dir, 'Shared with the team', options.identity, options.workshopRoot)
+  if (committed.refusal !== null && committed.refusal !== 'nothing_to_share') return committed
+  return push(dir, auth, options.identity)
+}
+
+/**
+ * A full clone of the team version into `targetDir`, which must not exist.
+ *
+ * Cloned into a hidden staging sibling and renamed into place, so the
+ * scanner and the watcher never see half an agent and a failure leaves
+ * nothing. What arrives must have `cinna-agent.json` at its root.
+ */
+export async function clone(
+  url: string,
+  targetDir: string,
+  auth: RemoteAuth | null,
+  workshopRoot?: string
+): Promise<ShareActionResult> {
+  if (existsSync(targetDir)) return refuse('exists')
+  const gitPath = await resolveGit()
+  if (!gitPath) return refuse('git_missing')
+  const parent = dirname(targetDir)
+  const staging = join(parent, `.${basename(targetDir)}.clone-${randomBytes(4).toString('hex')}`)
+  const cleanup = (): void => {
+    try {
+      rmSync(staging, { recursive: true, force: true })
+    } catch {
+      /* already gone */
+    }
+  }
+  try {
+    mkdirSync(parent, { recursive: true })
+  } catch (err) {
+    return refuse('failed', String(err).slice(0, MAX_DETAIL_CHARS))
+  }
+  const cloned = await runNet(
+    gitPath,
+    parent,
+    ['clone', '--quiet', '--single-branch', '--', url, staging],
+    auth
+  )
+  if (!cloned.ok) {
+    cleanup()
+    logger.warn('share clone failed', { stderr: scrubCredentials(cloned.stderr).slice(0, 400) })
+    return refuse('fetch_failed')
+  }
+  if (!existsSync(join(staging, MANIFEST_FILE))) {
+    cleanup()
+    return refuse('not_an_agent')
+  }
+  // The team's `.gitignore` is whatever someone pushed; the kit's rules hold
+  // here regardless, from before the folder is ever visible.
+  if (!(await ensureAgentExcludes(gitPath, staging, workshopRoot))) {
+    cleanup()
+    return refuse('failed', 'The ignore rules could not be written.')
+  }
+  if (existsSync(targetDir)) {
+    cleanup()
+    return refuse('exists')
+  }
+  try {
+    renameSync(staging, targetDir)
+  } catch (err) {
+    cleanup()
+    return refuse('failed', String(err).slice(0, MAX_DETAIL_CHARS))
+  }
+  await excludeFromEnclosingRepo(targetDir)
+  return done()
+}
+
+/**
+ * The ignored files and folders in a working tree, relative to it — this
+ * machine's own state (`credentials/.env`, `app-data/`), which no clone
+ * carries. A wholly ignored directory is one entry, ending in `/`.
+ */
+export async function ignoredPaths(dir: string): Promise<string[]> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return []
+  const out = await run(
+    gitPath,
+    dir,
+    ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory'],
+    LOCAL_TIMEOUT_MS
+  )
+  return out.ok ? lines(out.stdout) : []
+}
+
+/** Drop `origin`: the copy Use the team's version keeps is nobody's team agent. */
+export async function removeOrigin(dir: string): Promise<boolean> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return false
+  return (await run(gitPath, dir, ['remote', 'remove', 'origin'], LOCAL_TIMEOUT_MS)).ok
+}
+
+/**
+ * True when the library's head is not in this folder's history — the cheap
+ * check the Inbox runs on every read: one `rev-parse`, at most one
+ * `merge-base`, no network.
+ */
+export async function isBehindLibrary(dir: string, libraryHeadSha: string): Promise<boolean> {
+  const gitPath = await resolveGit()
+  if (!gitPath) return false
+  const head = await headOf(gitPath, dir)
+  if (head === libraryHeadSha) return false
+  if (head === null) return true
+  return !(await run(gitPath, dir, ['merge-base', '--is-ancestor', libraryHeadSha, 'HEAD'], LOCAL_TIMEOUT_MS)).ok
+}
+
+export const gitService = {
+  preflightShare,
+  readGitStatus,
+  readGitDetail,
+  updateGitRepo,
+  looksLikeGitRepo,
+  readShareRemote,
+  readShareStatus,
+  commitAll,
+  pullRebaseClean,
+  push,
+  shareChanges,
+  diffForSummary,
+  initWithRemote,
+  clone,
+  removeOrigin,
+  ignoredPaths,
+  isBehindLibrary,
+  excludeFromEnclosingRepo
+}
 export type { GitCommit, GitDetail, GitRefusal, GitRemote, GitStatus, GitUpdateResult }

@@ -277,6 +277,7 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   { file: 'src/main/services/localAgents/localAgentService.ts', category: 'kind', count: 11, why: 'owns folder schema, instruction edits, adoption and trash semantics' },
   { file: 'src/main/services/handoverService.ts', category: 'kind', count: 1, why: 'handover targets are bare folders by definition: a kit folder is published and Cinna writes into it, so a .cinna/handovers there would travel' },
   { file: 'src/main/services/localAgents/scannerService.ts', category: 'kind', count: 1, why: 'owns root layout traversal' },
+  { file: 'src/main/services/localAgents/sharingService.ts', category: 'kind', count: 2, why: 'owns which folder agents can be shared with a team: kit agents directly under a workshop root\'s Local/' },
   { file: 'src/main/services/localAgents/watcherService.ts', category: 'kind', count: 3, why: 'owns folder layout event classification and watch paths' },
   { file: 'src/renderer/src/components/agents/local/AgentActionsMenu.tsx', category: 'kind', count: 5, why: 'owns folder Remove versus Trash actions and consent' },
   { file: 'src/renderer/src/components/agents/local/FolderTab.tsx', category: 'kind', count: 6, why: 'presents actual file and state ownership' },
@@ -398,6 +399,18 @@ const NOT_A_KIND_BRANCH: { file: string; category: Category; value: string; why:
     category: 'source',
     value: 'remote',
     why: "`entry.source` is an InboxSource ('local' | 'remote') — which side an ask is answered on, not who owns an agent row; the retention rule it selects is about a cache main deliberately does not keep"
+  },
+  {
+    file: 'src/renderer/src/hooks/useSharing.ts',
+    category: 'kind',
+    value: 'external',
+    why: "`remoteKind` is an AgentRemoteKind ('cinna' | 'external') — where a shared agent's team version lives; only an external one may fetch when its page opens, since a cinna one is counted from the library listing"
+  },
+  {
+    file: 'src/renderer/src/components/agents/local/sharing/AgentShareLine.tsx',
+    category: 'kind',
+    value: 'external',
+    why: "`status.remote.kind` is an AgentRemoteKind ('cinna' | 'external') — an external team version has no library listing to say the caller's access, so Share changes is offered and the server answers"
   }
 ]
 

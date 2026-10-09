@@ -33,6 +33,7 @@ import { registerHtmlPreviewHandlers } from './html_preview.ipc'
 import { registerEngineHandlers } from './engine.ipc'
 import { registerConnectHandlers } from './connect.ipc'
 import { registerLocalDevHandlers } from './localdev.ipc'
+import { registerSharingHandlers } from './sharing.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
@@ -69,6 +70,8 @@ export function registerAllIpcHandlers(): void {
   registerSyncHandlers()
   registerLocalToolsHandlers()
   registerLocalAgentHandlers()
+  // Team sharing of folder agents: Get, Update, Share changes, the team library.
+  registerSharingHandlers()
   registerServiceCredentialHandlers()
   registerAgentFileHandlers()
   registerHtmlPreviewHandlers()

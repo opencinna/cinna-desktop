@@ -14,6 +14,7 @@ import {
   utimesSync,
   writeFileSync
 } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -700,6 +701,64 @@ describe('delete', () => {
       code: 'not_found'
     })
     expect(trash).not.toHaveBeenCalled()
+  })
+
+  describe('a shared agent', () => {
+    const GIT_ENV = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Tester',
+      GIT_AUTHOR_EMAIL: 'tester@example.test',
+      GIT_COMMITTER_NAME: 'Tester',
+      GIT_COMMITTER_EMAIL: 'tester@example.test',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_SYSTEM: '/dev/null'
+    }
+    const git = (cwd: string, ...args: string[]): string =>
+      execFileSync('git', args, { cwd, encoding: 'utf8', env: GIT_ENV })
+
+    /** Make the agent its own repository with an origin the team has caught up with. */
+    function share(): void {
+      const team = join(workshop, '.team.git')
+      mkdirSync(team)
+      git(team, 'init', '--bare', '-q', '-b', 'main', '.')
+      git(agentDir, 'init', '-q', '-b', 'main', '.')
+      git(agentDir, 'remote', 'add', 'origin', team)
+      git(agentDir, 'add', '-A')
+      git(agentDir, 'commit', '-q', '-m', 'shared')
+      git(agentDir, 'push', '-q', '-u', 'origin', 'main')
+    }
+
+    it('refuses Remove from this computer while changes are unshared, naming how many', async () => {
+      share()
+      writeFileSync(join(agentDir, 'notes.md'), 'not sent yet\n')
+      writeFileSync(join(agentDir, 'more.md'), 'nor this\n')
+      const refusal = localAgentService.delete(USER, { agentId, trashFolder: true })
+      await expect(refusal).rejects.toMatchObject({ code: 'unshared_changes' })
+      await expect(refusal).rejects.toThrow(
+        "2 changes on this agent haven't been shared with the team yet (more.md and notes.md). " +
+          'Share them first, or they will be lost when it is removed from this computer.'
+      )
+      expect(trash).not.toHaveBeenCalled()
+      expect(agentRepo.getOwned(USER, agentId)).toBeDefined()
+    }, 30_000)
+
+    it('names three of the unshared files, then how many more', async () => {
+      share()
+      writeFileSync(join(agentDir, 'AGENT.md'), '# Edited\n')
+      for (const name of ['a.md', 'b.md', 'c.md', 'd.md']) writeFileSync(join(agentDir, name), 'x\n')
+      const refusal = localAgentService.delete(USER, { agentId, trashFolder: true })
+      await expect(refusal).rejects.toMatchObject({ code: 'unshared_changes' })
+      await expect(refusal).rejects.toThrow(
+        /^5 changes on this agent haven't been shared with the team yet \(AGENT\.md, a\.md, b\.md, and 2 more\)\. Share them first/
+      )
+    }, 30_000)
+
+    it('removes a shared agent that is up to date with the team', async () => {
+      share()
+      const result = await localAgentService.delete(USER, { agentId, trashFolder: true })
+      expect(result).toEqual({ agentId, trashed: true })
+      expect(trash).toHaveBeenCalledWith(agentDir)
+    }, 30_000)
   })
 })
 

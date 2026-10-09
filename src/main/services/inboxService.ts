@@ -21,12 +21,13 @@ import { remoteInboxService } from './remoteInboxService'
 import { runExecutionService, type RunHandle, type RunScope } from './runExecutionService'
 import { agentService } from './agentService'
 import { completeNestedContinuation, nestedToolCallId } from './nestedContinuationService'
-import { getSettingsScopeUserId } from '../auth/scope'
+import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
+import { libraryService } from './libraryService'
 import { createLogger } from '../logger/logger'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { RunEvent, RunState } from '../../shared/runEvents'
 import { ASK_NO_LONGER_WAITING } from '../../shared/inbox'
-import type { InboxAnswerResult, InboxEntry, InboxSnapshot } from '../../shared/inbox'
+import type { InboxAnswerResult, InboxEntry, InboxSnapshot, TeamChangedInboxItem } from '../../shared/inbox'
 import type { TaskInputRequestStatus } from '../../shared/tasks'
 
 const logger = createLogger('inbox')
@@ -204,6 +205,25 @@ function taskForChat(ctx: RunEventContext): TaskRow | null {
     taskId: created.id
   })
   return taskService.getRow(ctx.userId, created.id)
+}
+
+/**
+ * "The team changed *X*" items: shared agents (machine-local, settings scope)
+ * the active profile's cached team-library listing is ahead of. Imported
+ * lazily, because the sharing service sits on top of the local-agent services
+ * this module's own dependencies reach; a failure is an empty list, never a
+ * failed Inbox.
+ */
+async function teamChangedItems(): Promise<TeamChangedInboxItem[]> {
+  try {
+    // Nothing listed, nothing to compare: the common case costs no import and no git.
+    if (!libraryService.cached(getProfileScopeUserId())?.agents.length) return []
+    const { sharingService } = await import('./localAgents/sharingService')
+    return await sharingService.teamChanges(getSettingsScopeUserId())
+  } catch (err) {
+    logger.warn('team change notices could not be read', { error: err instanceof Error ? err.message : String(err) })
+    return []
+  }
 }
 
 export const inboxService = {
@@ -545,12 +565,15 @@ export const inboxService = {
       })
       .map(({ row, taskTitle }) => toEntry(row, taskTitle, folders))
     const dispatchPending = taskDispatchInboxItems(userId)
+    const teamChangesPending = teamChangedItems()
     const remote = await pending
     const dispatch = await dispatchPending
+    const teamChanges = await teamChangesPending
     return {
       entries: [...local, ...remote.entries].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
       unreadable: remote.unreadable,
-      dispatch
+      dispatch,
+      teamChanges
     }
   },
 

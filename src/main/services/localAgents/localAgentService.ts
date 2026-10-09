@@ -99,6 +99,7 @@ import { agentsHomeService } from './agentsHomeService'
 import { scaffoldService } from './scaffoldService'
 import { ENV_FILE, folderIndexLauncher, scannerService } from './scannerService'
 import { turnLock } from './turnLock'
+import { gitService } from './gitService'
 import { watcherService } from './watcherService'
 import { resolveWithinRoot } from './pathRules'
 import { runtimeService } from './runtimeService'
@@ -494,6 +495,40 @@ function reseedEngineSessions(userId: string, root: AgentRootRow, agentDir: stri
     }
   }
   if (seeded > 0) logger.info('restored engine sessions for a bare agent', { agentId, seeded })
+}
+
+/**
+ * Refuse Remove from this computer on a shared agent — its own repository,
+ * with an `origin` — while it has changes the team does not have. Any other
+ * folder, or a machine without git, passes: there is nothing to compare with.
+ *
+ * @throws LocalAgentError `unshared_changes`
+ */
+async function refuseUnsharedChanges(agentDir: string): Promise<void> {
+  if (!existsSync(join(agentDir, '.git'))) return
+  const counts = await gitService.readShareStatus(agentDir, null, false)
+  if (!counts.ownRepo || counts.originUrl === null) return
+  if (counts.ahead === 0 && counts.changedFiles === 0) return
+  const n = Math.max(counts.changedFiles, 1)
+  const named = unsharedFileList(counts.changedPaths)
+  throw new LocalAgentError(
+    'unshared_changes',
+    `${n === 1 ? '1 change' : `${n} changes`} on this agent ${n === 1 ? "hasn't" : "haven't"} been shared with the team yet` +
+      `${named ? ` (${named})` : ''}. Share them first, or they will be lost when it is removed from this computer.`
+  )
+}
+
+/** Most files a refusal names before "and N more". */
+const MAX_NAMED_FILES = 3
+
+/** `a`, `a and b`, `a, b, and c`, `a, b, c, and 2 more` — or '' with nothing to name. */
+function unsharedFileList(paths: string[]): string {
+  const shown = paths.slice(0, MAX_NAMED_FILES)
+  const rest = paths.length - shown.length
+  const parts = rest > 0 ? [...shown, `${rest} more`] : shown
+  if (parts.length <= 1) return parts[0] ?? ''
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`
+  return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`
 }
 
 export const localAgentService = {
@@ -1159,6 +1194,11 @@ export const localAgentService = {
         'An agent in your agents folder is its folder, so it cannot be removed from the list on its own.'
       )
     }
+
+    // A shared agent's folder is the only copy of what it has not sent to the
+    // team yet. Read without a fetch: this is about what is on disk here, and a
+    // removal must not wait on (or fail with) the network.
+    if (!bare && trashFolder) await refuseUnsharedChanges(agentDir)
 
     // Both branches take the lock, and for the same reason: forgetting an agent
     // mid-turn would leave a stream writing into a chat whose agent has gone,

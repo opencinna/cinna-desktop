@@ -99,6 +99,28 @@ export interface InboxSnapshot {
    * main; optional only so surfaces built before the dispatcher still type.
    */
   dispatch?: TaskDispatchInboxItem[]
+  /**
+   * Shared agents on this machine the team has moved past, derived on every
+   * read from the cached team-library listing and the folders' own heads — no
+   * table, so an Update (or the folder catching up any other way) clears it.
+   * Optional for the same reason as `dispatch`.
+   */
+  teamChanges?: TeamChangedInboxItem[]
+}
+
+/**
+ * "The team changed *X*", with an Update action that runs `sharing:update`.
+ * One per shared agent whose team version is ahead of this folder's.
+ */
+export interface TeamChangedInboxItem {
+  kind: 'team_changed'
+  agentId: string
+  agentName: string
+  repoId: string
+  /** Who sent the team's latest version, when the listing says. */
+  changedBy: string | null
+  /** The listing's `updated_at` for the repository. */
+  changedAt: Date | null
 }
 
 /**

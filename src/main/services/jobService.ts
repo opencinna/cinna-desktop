@@ -357,7 +357,12 @@ export const jobService = {
           kind: 'agent',
           label: row?.name ?? desc.name ?? 'Agent',
           state: row ? (row.enabled ? 'resolved' : 'needs-setup') : 'unavailable',
-          localId: row?.id ?? null
+          localId: row?.id ?? null,
+          // What the blocked-job panel matches against the team library. A
+          // positional `legacy:` id is not an identity anywhere else.
+          ...(desc.manifestId && !desc.manifestId.startsWith('legacy:')
+            ? { manifestId: desc.manifestId }
+            : {})
         })
       } else {
         const row = findLocalAgent(desc)

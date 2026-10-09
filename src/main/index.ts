@@ -2,6 +2,7 @@ import { userRepo } from './db/users'
 import { serviceCredentialService } from './services/serviceCredentials/service'
 import { stopPeriodicSync, startPeriodicSync, runSyncOnce } from './agents/remote-sync'
 import { stopAccountConfigPeriodicSync, startAccountConfigPeriodicSync, runAccountConfigSyncOnce } from './services/account-config-sync'
+import { libraryService } from './services/libraryService'
 import { initializeHubCore, shutdownHubCore } from './hub/core'
 import { installDesktopFeatures } from './host/desktopFeatures'
 import { developmentAgentContext, contextForDevelopmentAgent, restoreDevelopmentContext } from './localdev/developmentSessionService'
@@ -476,6 +477,7 @@ function startup(): void {
     serviceCredentialService.setSuspended(true)
     stopPeriodicSync()
     stopAccountConfigPeriodicSync()
+    libraryService.stop()
     localScheduleScheduler.setSuspended(true)
     handoverScheduler.setSuspended(true)
     taskRuntimeService.interruptAll('Execution paused when this device went to sleep. Review the conversation before resuming.')
@@ -487,6 +489,7 @@ function startup(): void {
     if (userActivation.isActivated() && userRepo.get(getCurrentUserId())?.type === 'cinna_user') {
       startPeriodicSync(getCurrentUserId()); void runSyncOnce(getCurrentUserId())
       startAccountConfigPeriodicSync(getCurrentUserId()); void runAccountConfigSyncOnce(getCurrentUserId())
+      libraryService.start(getCurrentUserId())
     }
     localScheduleScheduler.setSuspended(false)
     handoverScheduler.setSuspended(false)
