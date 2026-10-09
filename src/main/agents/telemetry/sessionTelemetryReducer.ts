@@ -44,6 +44,13 @@ import {
   type TokenTally
 } from '../../../shared/sessionTelemetry'
 
+/**
+ * The window `claude-agent-acp` streams when it knows none: no result has
+ * confirmed one and the model id does not name 1M (`DEFAULT_CONTEXT_WINDOW`
+ * in its `acp-agent.js`, 0.76.0).
+ */
+const CLAUDE_ADAPTER_DEFAULT_WINDOW = 200_000
+
 export function emptySessionTelemetry(chatId: string, engine: TelemetryEngine, now: number): SessionTelemetry {
   return {
     chatId,
@@ -150,6 +157,7 @@ export function applyTelemetryChange(
         // Another model, another window: the size stands as a guess until
         // a reading under the new model corrects it.
         next.context = { ...base.context, sizeAuthoritative: false }
+        delete next.context.sizeNamed
         // And another cache: nothing the old model wrote is read by the new one.
         invalidate(next, 'model_change', now)
       }
@@ -165,16 +173,27 @@ export function applyTelemetryChange(
       // switch until a result corrects it, and a costed reading can still
       // carry that guess. A proven size is kept: only the turn's own window
       // (`result.modelUsage`) moves it. Codex reports the real window always.
-      const proven = sameContext && base.context.sizeAuthoritative && change.engine !== 'codex'
+      // Only the adapter's 200K default is a guess. Any other size it streams
+      // is a window a result already confirmed, or one the model id names
+      // (`opus[1m]`), so a long first turn shows its budget before it ends.
+      const named = change.engine === 'claude' && change.size !== undefined && change.size > 0 && change.size !== CLAUDE_ADAPTER_DEFAULT_WINDOW
+      // A size the model id named can still be wrong (a 200K lane under a
+      // `[1m]` id), so the turn's costed reading, which carries the window the
+      // result reported, still moves it; a confirmed size it does not.
+      const held = sameContext && base.context.sizeAuthoritative && change.engine !== 'codex'
+      const proven = held && !(base.context.sizeNamed && change.costed)
+      const confirmed = (proven && !base.context.sizeNamed) || change.costed || change.engine === 'codex'
       next.context = {
         ...base.context,
         used,
         size: proven ? base.context.size : change.size ?? base.context.size,
-        // Claude's size is a guess until a result corrects it, which is the
+        // Claude's 200K is a guess until a result corrects it, which is the
         // costed reading; Codex reports the model's window from the start.
-        sizeAuthoritative: proven || change.costed || change.engine === 'codex',
+        sizeAuthoritative: confirmed || proven || named,
         sessionId: change.sessionId
       }
+      if (next.context.sizeAuthoritative && !confirmed) next.context.sizeNamed = true
+      else delete next.context.sizeNamed
       if (model !== undefined) next.context.model = model
       else delete next.context.model
       // Categories measured on another session say nothing about this one.
@@ -299,6 +318,7 @@ export function applyTelemetryChange(
         : { ...base.model, ...(selected ? { selected } : {}) }
       if (change.contextWindow !== undefined && change.contextWindow > 0) {
         next.context = { ...base.context, size: change.contextWindow, sizeAuthoritative: true }
+        delete next.context.sizeNamed
       }
       if (change.maxOutputTokens !== undefined && change.maxOutputTokens > 0) {
         next.context = { ...next.context, maxOutput: change.maxOutputTokens }

@@ -90,6 +90,22 @@ describe('the session telemetry reducer', () => {
     expect(fold([{ type: 'context', engine: 'codex', sessionId: 's', used: 5, size: 258_400, costed: false, at: 1 }]).context.sizeAuthoritative).toBe(true)
   })
 
+  it('trusts a Claude size other than the adapter’s 200K default before the first turn ends', () => {
+    // `opus[1m]` mid-way through a long first turn: no result, no costed
+    // reading, yet the adapter already streams the 1M the model id names.
+    const named = fold([{ type: 'model', engine: 'claude', selected: 'opus[1m]' }, context(160_186, 1_000_000)])
+    expect(named.context).toMatchObject({ used: 160_186, size: 1_000_000, sizeAuthoritative: true })
+    // The 200K default stays a guess, and a later one does not unseat the 1M.
+    expect(fold([context(10, 200_000)]).context.sizeAuthoritative).toBe(false)
+    expect(applyTelemetryChange(named, 'chat', context(170_000, 200_000), 9).context).toMatchObject({ size: 1_000_000, sizeAuthoritative: true })
+    // A named size can be wrong (a 200K lane under a `[1m]` id): the costed
+    // reading's window moves it and confirms it, so a later guess cannot.
+    const corrected = applyTelemetryChange(named, 'chat', context(165_000, 200_000, true), 9)
+    expect(corrected.context).toMatchObject({ size: 200_000, sizeAuthoritative: true })
+    expect(corrected.context.sizeNamed).toBeUndefined()
+    expect(applyTelemetryChange(corrected, 'chat', context(166_000, 1_000_000), 10).context.size).toBe(200_000)
+  })
+
   it('treats the size as a guess again when the context’s session or model changes', () => {
     const proven = fold([{ type: 'model', engine: 'claude', selected: 'default' }, context(30, 1_000_000, true)])
     expect(proven.context).toMatchObject({ sizeAuthoritative: true, sessionId: 's1', model: 'default' })

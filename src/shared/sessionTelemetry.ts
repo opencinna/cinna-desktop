@@ -154,6 +154,12 @@ export interface SessionTelemetry {
      * result). Reset when the context's session or model changes.
      */
     sizeAuthoritative: boolean
+    /**
+     * Claude: `size` is authoritative only because the adapter streamed a
+     * window other than its 200K default (the model id names it, `opus[1m]`).
+     * Unlike a confirmed size, the turn's costed reading still moves it.
+     */
+    sizeNamed?: true
     maxOutput?: number
     /** The ACP session the reading is from. */
     sessionId?: string
